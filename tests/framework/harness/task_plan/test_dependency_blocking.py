@@ -17,6 +17,7 @@ from framework.harness.task_plan.models import (
     TaskPlanProjection,
 )
 from framework.harness.task_plan.store import InMemoryTaskPlanStore
+from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler, task_instance_for_attempt
 from tests.framework.harness.task_plan.test_task_plan_runtime import (
     _candidate,
     _setup,
@@ -121,14 +122,10 @@ def test_blocking_closure_uses_recorded_block_as_the_next_causal_predecessor():
 def test_ready_dependency_block_releases_its_unconsumed_reservation_exactly_once():
     plan, projection = _accepted_plan()
     failed = _terminal_failure(projection)
-    ready = _with_task(
-        failed,
-        "b",
-        status=TaskLifecycle.READY,
-        attempts=1,
-        active_instance_id="instance-b",
+    instance = task_instance_for_attempt(plan, "b", 1)
+    reserved = TaskPlanScheduler().reserve_ready_tasks(
+        failed, TaskPlanReadyDecision((instance,)),
     )
-    reserved = replace(ready, consumed_budget={"reserved_max_turns": 1})
 
     blocked = block_dependency_task(plan, reserved, "b")
     state = next(item for item in blocked.tasks if item.task_id == "b")
@@ -137,6 +134,10 @@ def test_ready_dependency_block_releases_its_unconsumed_reservation_exactly_once
     assert state.result is None
     assert state.failure_reason_code == TASK_BLOCKED_UPSTREAM_FAILURE
     assert blocked.consumed_budget["reserved_max_turns"] == 0
+    assert blocked.consumed_budget["released_max_turns"] == 1
+    record = blocked.consumed_budget["ledger"]["records"][instance.idempotency_key]
+    assert record["status"] == "RELEASED"
+    assert record["instance"]["task_instance_id"] == instance.task_instance_id
     assert block_dependency_task(plan, blocked, "b") is blocked
 
 

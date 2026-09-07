@@ -384,6 +384,8 @@ def _bounded_budget_metrics(value: Mapping[str, Any]) -> tuple[tuple[str, int], 
             metric = "harness_task_plan_budget_reserved"
         elif key.startswith("consumed_"):
             metric = "harness_task_plan_budget_consumed"
+        elif key.startswith("released_"):
+            metric = "harness_task_plan_budget_released"
         else:
             continue
         totals.append((metric, item))

@@ -206,11 +206,9 @@ class TaskPlanPatchValidator:
             for name, value in resolved.normalized_budget.to_dict().items():
                 previous_totals[name] += value
         incremental = {name: max(totals[name] - previous_totals[name], 0) for name in totals}
-        reserved = {
-            name: int(projection.consumed_budget.get(f"consumed_{name}", 0))
-            + int(projection.consumed_budget.get(f"reserved_{name}", 0))
-            for name in totals
-        }
+        from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+
+        reserved = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget).allocated_totals()
         incremental_exceeded = [
             name
             for name in totals

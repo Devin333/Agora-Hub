@@ -207,6 +207,65 @@ and terminal child-result repair, not successful whole-stage completion after
 every crash.
 G1-G5, rollout, and production readiness remain unproven.
 
+### Per-Attempt TaskBudget Ledger Increment
+
+This increment implements part of 1.7. It does not complete the expanded
+token/time/tool/cost contract. Task 2.4 has been reopened: readiness ledger
+reservation and wave/intent admission still use separate commits. The current
+checklist is 11/46; the earlier 12/46 count overstated that atomic boundary.
+
+- `TaskPlanBudgetLedger` is the sole authority for the four existing TaskBudget
+  dimensions: turns, tool calls, memory operations and output tokens. Its
+  versioned, checksummed records retain full TaskInstance identity, deterministic
+  reservation keys, actual reservation/settlement revisions and terminal result
+  checksums. It does not reinterpret the separate LLM BudgetLedger dimensions.
+- Every dimension enforces consumed + released + outstanding <= the pinned
+  stage allocation. Batch reservations are pure and all-or-nothing. Retry uses
+  a new attempt and cannot reuse settled/released allocation; failure history
+  remains present. Missing usage is conservatively charged at its allocation.
+- Reservation and result settlement travel through the existing TaskPlan
+  event/projection transactions. Durable write-failure/reopen tests prove no
+  partial readiness/result accounting. In-memory result commits now roll back
+  both events, result indexing and projection after injected append failure.
+- Duplicate reservation, result and unstarted dependency-block release are
+  idempotent only for identical evidence. Wrong attempt/owner/allocation,
+  conflicting aliases, overage, inconsistent usage partitions, overlapping
+  retry histories, invalid revisions and corrupt checksums fail closed.
+- READY recovery reuses existing budget and parallelism admission, including
+  single-slot and exactly-full-envelope cases. It cannot use slots reserved by
+  another READY attempt to admit new tasks.
+- Offline replay and checkpoint roundtrips retain identical attempt ledger
+  contents without invoking workers. Replay reducer is now v3 because budget
+  projection semantics changed; v2 reports/checkpoints are rejected. Golden
+  checksum updates include new field-level accounting assertions. Existing
+  v2 checkpoints need canonical-history rebuild, not a version-label rewrite.
+- Released-budget counters are available to bounded observability; full ledger
+  records are not added as metric labels or parent-observation content.
+
+Increment checks:
+
+- Full TaskPlan regression: `272 passed` in 122.18 seconds.
+- Canonical event/deterministic replay regression: `463 passed` in 50.75 seconds.
+- Required repository smoke: exit 0; compilation passed and the full
+  Harness/Research/API/service/composition/architecture suite reported
+  `2678 passed, 23 deselected, 23 warnings` in 1107.45 seconds.
+- Offline AgentLoop smoke passed with 3 fixture LLM calls, 1 tool call and
+  0 network calls. Evidence manifest:
+  `.newsroom/smoke/test-agent-loop-da0d102d4ad04bd88c65a408fad2b997/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors and 0 warnings.
+- Strict OpenSpec validation and `git diff --check`: passed.
+
+These checks qualify this scoped code increment for commit, not PRD completion
+or production release. The 23 suite warnings concern existing FastAPI/Starlette
+deprecations; the CLI also reports its existing PyMuPDF import deprecation.
+
+Remaining scope: time/cost allocation, shared child-envelope/TaskPlan ledger
+authority, atomic ledger + wave + intent admission, and complete cancellation,
+indeterminate, lease/reclaim and rollback settlement across group histories.
+Unknown outcomes are not accepted as terminal ledger results. This increment
+does not prove complete cancellation or side-effect recovery accounting.
+No G1-G5 gate or production rollout approval is claimed.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

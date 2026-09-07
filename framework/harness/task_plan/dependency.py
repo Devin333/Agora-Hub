@@ -20,12 +20,6 @@ from framework.harness.task_plan.models import (
 
 
 TASK_BLOCKED_UPSTREAM_FAILURE = "TASK_BLOCKED_UPSTREAM_FAILURE"
-_RESERVATION_DIMENSIONS = (
-    "max_turns",
-    "max_tool_calls",
-    "max_memory_ops",
-    "max_output_tokens",
-)
 
 
 def terminal_task_failure(plan: ValidatedTaskPlan, task_projection: TaskProjection) -> bool:
@@ -134,9 +128,14 @@ def block_dependency_task(
             details={"task_id": task_id},
         )
 
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+
     budget = dict(projection.consumed_budget)
     if state.status is TaskLifecycle.READY:
-        _release_unconsumed_reservation(budget, definition, task_id)
+        budget = TaskPlanBudgetLedger.from_snapshot(budget).release_unstarted(
+            state.active_instance_id, task_id, state.attempts,
+            reason_code=TASK_BLOCKED_UPSTREAM_FAILURE,
+        ).snapshot()
     blocked = replace(
         state,
         status=TaskLifecycle.BLOCKED_DEPENDENCY,
@@ -247,30 +246,6 @@ def _is_unadmitted_for_dependency_block(state: TaskProjection) -> bool:
     ) or (
         state.status is TaskLifecycle.READY and state.attempts == 1
     )
-
-
-def _release_unconsumed_reservation(
-    budget: dict[str, object],
-    definition: ResolvedTaskSpec,
-    task_id: str,
-) -> None:
-    for dimension in _RESERVATION_DIMENSIONS:
-        reservation_key = f"reserved_{dimension}"
-        raw_reserved = budget.get(reservation_key, 0)
-        if isinstance(raw_reserved, bool) or not isinstance(raw_reserved, int) or raw_reserved < 0:
-            raise HarnessValidationError(
-                "TaskPlan reserved budget is invalid",
-                code="task_plan_budget_reservation_missing",
-                details={"task_id": task_id, "field": dimension},
-            )
-        required = getattr(definition.normalized_budget, dimension)
-        if raw_reserved < required:
-            raise HarnessValidationError(
-                "dependency-blocked task has no matching budget reservation",
-                code="task_plan_budget_reservation_missing",
-                details={"task_id": task_id, "field": dimension},
-            )
-        budget[reservation_key] = raw_reserved - required
 
 
 __all__ = [

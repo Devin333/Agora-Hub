@@ -38,7 +38,7 @@ from framework.harness.task_plan import (
     GRAPH_ONLY_TASK_PROJECTION_SCHEMA,
     InMemoryTaskPlanStore,
     TASK_PLAN_EVENT_SCHEMA_V2,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V2,
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
     TASK_PLAN_QUEUE_METADATA_KEY,
     TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2,
     TASK_PLAN_QUEUE_READBACK_SCHEMA_V2,
@@ -915,9 +915,18 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
         events,
         results=(result,),
     )
-    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V2
+    assert report.projection == projection
+    record = projection.consumed_budget["ledger"]["records"][instance.idempotency_key]
+    assert record["instance"] == instance.to_dict()
+    assert record["status"] == "SETTLED"
+    assert record["result_checksum"] == result.result_checksum
+    assert record["consumed"] == instance.budget_snapshot.to_dict()
+    assert record["released"] == dict.fromkeys(instance.budget_snapshot.to_dict(), 0)
+    assert record["reserved_revision"] == 1
+    assert record["settled_revision"] == 2
+    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
     assert report.replay_checksum == (
-        "sha256:6a164149e774cc1788ba67ade5d75258fbd3a71f0cd1f6a2e2cff6d1d70b0baa"
+        "sha256:79656d0d41070d0bbd923a1d3b34732d1ba2a8f4eb71dbd67c4406038ec3866a"
     )
     assert report.projection.projection_checksum == projection.projection_checksum
     assert report.projection.matches_plan_identity(plan)
@@ -929,7 +938,8 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     )
     checkpoint_payload = checkpoint.to_dict()
     assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
-    assert checkpoint.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V2
+    assert checkpoint.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+    assert checkpoint.budget_snapshot == projection.consumed_budget
     assert checkpoint.checkpoint_checksum.startswith("sha256:")
     assert checkpoint.graph_ref == plan.graph_ref
     assert "workflow_id" not in checkpoint_payload

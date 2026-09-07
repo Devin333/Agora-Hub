@@ -1721,6 +1721,15 @@ class TaskPlanProjection:
             )
         object.__setattr__(self, "tasks", tuple(sorted(tasks, key=lambda item: item.task_id)))
         object.__setattr__(self, "consumed_budget", frozen_mapping(self.consumed_budget, "consumed_budget"))
+        if "ledger" in self.consumed_budget:
+            from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+
+            ledger = TaskPlanBudgetLedger.from_snapshot(self.consumed_budget)
+            if (ledger.run_id, ledger.stage_id, ledger.policy_ref) != (self.run_id, self.stage_id, self.policy_ref):
+                raise HarnessValidationError(
+                    "TaskPlan budget owner differs from projection identity",
+                    code="task_plan_budget_identity_conflict",
+                )
         object.__setattr__(self, "last_sequence", non_negative_int(self.last_sequence, "last_sequence"))
         object.__setattr__(self, "projection_checksum", canonical_payload_checksum(self.checksum_projection()))
 

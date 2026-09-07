@@ -13,6 +13,7 @@ from framework.harness.task_plan.canonical import (
     task_reference_producer,
 )
 from framework.harness.task_plan.dag import task_dependency_depths
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.models import (
     ResolvedTaskSpec,
     TaskInstance,
@@ -104,7 +105,7 @@ class TaskPlanScheduler:
             for state in projection.tasks
         )
         parallelism = policy.max_parallelism if policy is not None else plan.limits.max_parallelism
-        maximum = min(maximum, max(parallelism - active, 0))
+        new_slots = max(parallelism - active, 0)
         available = set(available_input_refs.values()) if isinstance(available_input_refs, Mapping) else set(available_input_refs)
         depths = _task_depths(definitions)
         candidates: list[ResolvedTaskSpec] = []
@@ -147,17 +148,20 @@ class TaskPlanScheduler:
             if len(selected) >= maximum:
                 break
             requested = definition.normalized_budget
+            state = states[definition.task_id]
+            already_reserved = state.status is TaskLifecycle.READY and state.active_instance_id is not None
+            if not already_reserved and new_slots == 0:
+                continue
             proposed = {
-                "max_turns": reservations["max_turns"] + requested.max_turns,
-                "max_tool_calls": reservations["max_tool_calls"] + requested.max_tool_calls,
-                "max_memory_ops": reservations["max_memory_ops"] + requested.max_memory_ops,
-                "max_output_tokens": reservations["max_output_tokens"] + requested.max_output_tokens,
+                name: reservations[name] + (0 if already_reserved else getattr(requested, name))
+                for name in reservations
             }
             if any(proposed[name] > getattr(aggregate_limit, name) for name in proposed):
                 budget_blocked = True
                 continue
             reservations = proposed
-            state = states[definition.task_id]
+            if not already_reserved:
+                new_slots -= 1
             attempt = state.attempts if state.status is TaskLifecycle.READY and state.active_instance_id else state.attempts + 1
             selected.append(
                 task_instance_for_attempt(
@@ -223,14 +227,10 @@ class TaskPlanScheduler:
             else state
             for state in projection.tasks
         )
-        budget = dict(projection.consumed_budget)
-        for instance in decision.task_instances:
-            state = states[instance.task_id]
-            if state.status is TaskLifecycle.READY and state.active_instance_id == instance.task_instance_id and state.attempts == instance.attempt:
-                continue
-            for name in ("max_turns", "max_tool_calls", "max_memory_ops", "max_output_tokens"):
-                key = f"reserved_{name}"
-                budget[key] = int(budget.get(key, 0)) + getattr(instance.budget_snapshot, name)
+        ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+        if (ledger.run_id, ledger.stage_id, ledger.policy_ref) != (projection.run_id, projection.stage_id, projection.policy_ref):
+            raise HarnessValidationError("budget ledger owner differs from projection", code="task_plan_budget_identity_conflict")
+        budget = ledger.reserve(decision.task_instances).snapshot()
         return replace(projection, tasks=tasks, consumed_budget=budget)
 
     @staticmethod
@@ -441,10 +441,7 @@ def _inputs_available(
 
 
 def _reservation_totals(value: Mapping[str, Any]) -> dict[str, int]:
-    return {
-        name: int(value.get(f"consumed_{name}", 0)) + int(value.get(f"reserved_{name}", 0))
-        for name in ("max_turns", "max_tool_calls", "max_memory_ops", "max_output_tokens")
-    }
+    return TaskPlanBudgetLedger.from_snapshot(value).allocated_totals()
 
 
 def _policy_from_plan_limits(plan: ValidatedTaskPlan):

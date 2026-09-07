@@ -1253,10 +1253,18 @@ class InMemoryTaskPlanStore:
             # The in-memory implementation models the same atomic boundary as
             # the durable adapter: result evidence, both causal events, and the
             # authoritative projection become visible together.
-            self._results[key] = result
-            self._append_event(result_event)
-            self._append_event(terminal_event)
-            self._projections[(result.run_id, result.stage_id)] = next_projection
+            scope = (result.run_id, result.stage_id)
+            previous_events = list(self._events.get(scope, ()))
+            try:
+                self._append_event(result_event)
+                self._append_event(terminal_event)
+                self._results[key] = result
+                self._projections[scope] = next_projection
+            except BaseException:
+                self._events[scope] = previous_events
+                self._results.pop(key, None)
+                self._projections[scope] = projection
+                raise
             return result.result_checksum
 
     def load_projection(self, run_id: str, stage_id: str) -> TaskPlanProjection:
@@ -1624,6 +1632,8 @@ def _require_live_graph_only(value: Any, model: str) -> None:
 
 
 def _projection_for_plan(plan: ValidatedTaskPlan, *, sequence: int, previous: TaskPlanProjection | None = None) -> TaskPlanProjection:
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+
     previous_by_id = {item.task_id: item for item in previous.tasks} if previous is not None else {}
     states = []
     for item in plan.tasks:
@@ -1652,7 +1662,7 @@ def _projection_for_plan(plan: ValidatedTaskPlan, *, sequence: int, previous: Ta
         plan_checksum=plan.plan_checksum,
         policy_ref=plan.policy_ref,
         tasks=tuple(states),
-        consumed_budget=previous.consumed_budget if previous is not None else {},
+        consumed_budget=(previous.consumed_budget if previous is not None else TaskPlanBudgetLedger.for_plan(plan).snapshot()),
         last_sequence=sequence,
         schema_version=GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA,
         **graph_identity,
@@ -1924,33 +1934,9 @@ def _terminal_result_event(
 
 
 def _validate_result_usage(result: TaskResultRecord, definition: Any) -> None:
-    aliases = {
-        "turns": "max_turns",
-        "tool_calls": "max_tool_calls",
-        "memory_ops": "max_memory_ops",
-        "output_tokens": "max_output_tokens",
-        "max_turns": "max_turns",
-        "max_tool_calls": "max_tool_calls",
-        "max_memory_ops": "max_memory_ops",
-        "max_output_tokens": "max_output_tokens",
-    }
-    for raw_name, raw_value in result.usage.items():
-        name = aliases.get(str(raw_name))
-        if name is None:
-            continue
-        if isinstance(raw_value, bool) or not isinstance(raw_value, int) or raw_value < 0:
-            raise HarnessValidationError(
-                "task result usage must be a non-negative integer",
-                code="task_plan_result_usage_invalid",
-                details={"field": str(raw_name)},
-            )
-        limit = getattr(definition.normalized_budget, name)
-        if raw_value > limit:
-            raise HarnessValidationError(
-                "task result usage exceeds the accepted task budget",
-                code="task_plan_result_budget_exceeded",
-                details={"field": str(raw_name), "used": raw_value, "limit": limit},
-            )
+    from framework.harness.task_plan.budget_ledger import result_budget_usage
+
+    result_budget_usage(result.usage, definition.normalized_budget.to_dict())
 
 
 def _require_subagent_result_evidence(
@@ -1980,34 +1966,13 @@ def _settle_result_budget(
     snapshot: Mapping[str, Any],
     definition: Any,
     result: TaskResultRecord,
-) -> dict[str, int]:
-    budget = {
-        str(key): int(value)
-        for key, value in snapshot.items()
-        if isinstance(value, int) and not isinstance(value, bool)
-    }
-    usage_aliases = {
-        "max_turns": ("turns", "max_turns"),
-        "max_tool_calls": ("tool_calls", "max_tool_calls"),
-        "max_memory_ops": ("memory_ops", "max_memory_ops"),
-        "max_output_tokens": ("output_tokens", "max_output_tokens"),
-    }
-    for name, aliases in usage_aliases.items():
-        reserved_key = f"reserved_{name}"
-        consumed_key = f"consumed_{name}"
-        reservation = getattr(definition.normalized_budget, name)
-        current_reserved = int(budget.get(reserved_key, 0))
-        if current_reserved < reservation:
-            raise HarnessValidationError(
-                "task result has no matching budget reservation",
-                code="task_plan_budget_reservation_missing",
-                details={"task_id": result.task_id, "field": name},
-            )
-        budget[reserved_key] = current_reserved - reservation
-        supplied = next((result.usage[key] for key in aliases if key in result.usage), None)
-        consumed = reservation if supplied is None else int(supplied)
-        budget[consumed_key] = int(budget.get(consumed_key, 0)) + consumed
-    return dict(sorted(budget.items()))
+) -> dict[str, Any]:
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+
+    _validate_result_usage(result, definition)
+    return TaskPlanBudgetLedger.from_snapshot(snapshot).settle(
+        result, expected_allocation=definition.normalized_budget.to_dict(),
+    ).snapshot()
 
 
 def _require_projection_transition_identity(

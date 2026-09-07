@@ -29,7 +29,7 @@ from framework.harness.task_plan.models import (
 )
 from framework.harness.task_plan.replay import (
     TASK_PLAN_REPLAY_REDUCER_VERSION,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V2,
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
     TaskPlanReplayReport,
     _freeze_parallel_projection_mapping,
     _validate_parallel_report_projection,
@@ -360,7 +360,7 @@ class TaskPlanCheckpoint:
         object.__setattr__(self, "parallel_reservations", parallel_reservations)
         object.__setattr__(self, "parallel_diagnostics", parallel_diagnostics)
         object.__setattr__(self, "parallel_event_sequence", parallel_event_sequence)
-        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V2
+        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
         if self.reducer_version != expected_reducer_version:
             raise HarnessValidationError(
                 "unsupported TaskPlan checkpoint reducer",

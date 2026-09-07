@@ -111,7 +111,7 @@ from framework.harness.task_plan.durable_store import (
 )
 from framework.harness.task_plan.replay import (
     TASK_PLAN_REPLAY_REDUCER_VERSION,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V2,
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
     TASK_PLAN_REPLAY_REDUCER_VERSIONS,
     TaskPlanReplayReducer,
     TaskPlanReplayReport,
@@ -269,7 +269,7 @@ __all__ = [
     "TaskPlanReplayReducer",
     "TaskPlanReplayReport",
     "TASK_PLAN_REPLAY_REDUCER_VERSION",
-    "TASK_PLAN_REPLAY_REDUCER_VERSION_V2",
+    "TASK_PLAN_REPLAY_REDUCER_VERSION_V3",
     "TASK_PLAN_REPLAY_REDUCER_VERSIONS",
     "InMemoryTaskPlanCheckpointStore",
     "JsonlTaskPlanCheckpointStore",

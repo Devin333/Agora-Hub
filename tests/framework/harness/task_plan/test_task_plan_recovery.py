@@ -23,7 +23,7 @@ from framework.harness.task_plan import (
     TaskPlanReplayReducer,
     TaskPlanStageIdentity,
     TaskPlanQueueProjection,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V2,
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
     TaskPlanValidationContext,
     TaskPlanValidator,
     TaskResultRecord,
@@ -222,9 +222,16 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
     )
     restored = TaskPlanCheckpoint.from_dict(checkpoint.to_dict())
 
-    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V2
+    assert restored.budget_snapshot == report.projection.consumed_budget
+    record = restored.budget_snapshot["ledger"]["records"][instance.idempotency_key]
+    assert record["instance"] == instance.to_dict()
+    assert record["status"] == "RESERVED"
+    assert record["reserved_revision"] == 1
+    assert record["settled_revision"] is None
+    assert restored.budget_snapshot["reserved_max_turns"] == instance.budget_snapshot.max_turns
+    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
     assert report.replay_checksum == (
-        "sha256:4d95e40b4480ffaaec41cc40668dd9e7d6e2fc3a316e74613257702c47d8f5c1"
+        "sha256:f482a5d455994b92862a6c3c2221bd77328c1487df12bdb730297813f9685382"
     )
     assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
     assert checkpoint.checkpoint_checksum.startswith("sha256:")

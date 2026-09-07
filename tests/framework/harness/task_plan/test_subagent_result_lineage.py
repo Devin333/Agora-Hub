@@ -73,7 +73,7 @@ from framework.harness.subagents.transcript import (
 )
 from framework.harness.subagents.models import SUBAGENT_INVOCATION_SCHEMA_V3
 from framework.harness.task_plan import task_plan_subagent_attempt_identity
-from framework.harness.task_plan import TASK_PLAN_REPLAY_REDUCER_VERSION_V2
+from framework.harness.task_plan import TASK_PLAN_REPLAY_REDUCER_VERSION_V3
 from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
 from infrastructure.storage.events import SQLiteEventStore
@@ -965,7 +965,7 @@ def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(
         results=(record,),
     )
 
-    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V2
+    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
     assert report.projection.matches_plan_identity(plan)
     assert report.projection.tasks[0].status is TaskLifecycle.SUCCEEDED
     assert fixture["worker"].calls == worker_calls == 0

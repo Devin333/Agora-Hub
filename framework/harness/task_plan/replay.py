@@ -54,9 +54,9 @@ from framework.harness.task_plan.submission import CandidateSubmission, submissi
 from framework.harness.task_plan.submission_result import submission_result_from_event
 
 
-TASK_PLAN_REPLAY_REDUCER_VERSION_V2 = "newsroom.harness-task-plan-replay/v2"
-TASK_PLAN_REPLAY_REDUCER_VERSION = TASK_PLAN_REPLAY_REDUCER_VERSION_V2
-TASK_PLAN_REPLAY_REDUCER_VERSIONS = (TASK_PLAN_REPLAY_REDUCER_VERSION_V2,)
+TASK_PLAN_REPLAY_REDUCER_VERSION_V3 = "newsroom.harness-task-plan-replay/v3"
+TASK_PLAN_REPLAY_REDUCER_VERSION = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+TASK_PLAN_REPLAY_REDUCER_VERSIONS = (TASK_PLAN_REPLAY_REDUCER_VERSION_V3,)
 _GRAPH_REPLAY_IDENTITY_FIELDS = (
     "graph_id",
     "graph_version",
@@ -177,7 +177,7 @@ class TaskPlanReplayReport:
             identifier(task_id, "retry_counts.task_id"): non_negative_int(count, "retry_counts.count")
             for task_id, count in self.retry_counts.items()
         }
-        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V2
+        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
         if self.reducer_version != expected_reducer_version:
             raise HarnessValidationError(
                 "unsupported TaskPlan replay reducer",
@@ -787,7 +787,7 @@ class TaskPlanReplayReducer:
             event_history_checksum=history_checksum,
             aggregate_ref=aggregate_ref,
             aggregate_checksum=aggregate_checksum,
-            reducer_version=TASK_PLAN_REPLAY_REDUCER_VERSION_V2,
+            reducer_version=TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
             parallel_groups=parallel_groups,
             parallel_waves=parallel_waves,
             parallel_reservations=parallel_reservations,
@@ -2858,7 +2858,7 @@ def _subagent_identity_matches_result(identity: Any, result: TaskResultRecord) -
 
 __all__ = [
     "TASK_PLAN_REPLAY_REDUCER_VERSION",
-    "TASK_PLAN_REPLAY_REDUCER_VERSION_V2",
+    "TASK_PLAN_REPLAY_REDUCER_VERSION_V3",
     "TASK_PLAN_REPLAY_REDUCER_VERSIONS",
     "TaskPlanReplayReducer",
     "TaskPlanReplayReport",
