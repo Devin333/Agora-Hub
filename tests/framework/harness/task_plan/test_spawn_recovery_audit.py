@@ -12,7 +12,7 @@ from framework.harness.task_plan.parallel import (
 from framework.harness.task_plan.replay import _apply_parallel_event, _projection_for_plan
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
 from framework.harness.task_plan.stage import TaskPlanStageRunner
-from tests.framework.harness.task_plan.test_parallel_orchestration import _accepted_parallel_plan, _request, _result
+from tests.framework.harness.task_plan.test_parallel_orchestration import _accepted_parallel_plan, _request, _result, _admitted_request
 from tests.framework.harness.agent_loop.test_orchestration_runtime import _runtime, _request as _parent_request
 from tests.framework.harness.task_plan.test_durable_task_plan_store import _store, _EventStore, _ArtifactStore
 
@@ -41,7 +41,7 @@ def crashed_wave():
     session = next(iter(coordinator._sessions.values()))
     intents = tuple(item for item in events if item["event_type"] == "TASK_ATTEMPT_SPAWN_INTENT")
     try:
-        yield SimpleNamespace(plan=plan, request=request, events=events, calls=calls,
+        yield SimpleNamespace(plan=plan, request=_admitted_request(request), events=events, calls=calls,
                               supervisor=supervisor, coordinator=coordinator, session=session,
                               intents=intents, wave=session.waves[0], invoke=invoke)
     finally:

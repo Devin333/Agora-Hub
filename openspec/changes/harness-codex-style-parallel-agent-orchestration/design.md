@@ -122,6 +122,8 @@ online recovery 可执行已审计的 supervisor status/termination/reconcile，
 
 每个 attempt 的 `spawn_operation_key = group_id + wave_id + task_instance_id + attempt`。`TASK_WAVE_ADMITTED`、reservation ledger 与 `TASK_ATTEMPT_SPAWN_INTENT` 必须同一事务或等价 durable batch 提交；supervisor 按 operation key 幂等接受并保存 `SPAWN_CONFIRMED`/`SPAWN_UNKNOWN` receipt。batch 部分成功时逐 task reconcile。完整 attempt history 保留 failed、rejected、cancelled、indeterminate、reclaimed、quarantined，accepted projection 不能替代 `result_history_for()`。checkpoint 包含 spawn intent/receipt、完整历史索引、ledger、aggregate/observation checksum 和 stream sequence。
 
+TaskPlan 的原子 transition port 为每个 event 固定同序号 projection，并以提交前 projection checksum 做 CAS。选中 wave 的 `TASK_READY`、预算预留、`TASK_WAVE_ADMITTED` 和全部 intent 同批发布；未选中 task 不预扣 attempt budget。wave event 的 `budget_before_checksum`、`budget_after_checksum` 绑定账本前后状态，child envelope 的 `ledger_version` 指向该 attempt 的实际 reservation revision。已确认所有 child 后，wave dispatch 与 task dispatch/start facts 再提交。完整批次重投只校验原事件引用的历史 projection，不能用最新 projection 替代，也不能修复或覆盖缺失的历史 artifact。离线 replay 拒绝不完整或交错的 intent batch，以及与 ledger identity/allocation/revision 不符的预算凭据。
+
 ### 9. 通用 AgentLoop 生产交付与 Research opt-in 验证
 
 本变更必须完成通用 `AgentLoop` production composition：`delegate_batch` candidate、`AgentOrchestrationPort`、joined observation、配置/availability diagnostics、入口 smoke 和旧单 child compatibility。Research dynamic 是首个业务 opt-in，用于验证固定角色和 publication boundary；它不能替代通用 AgentLoop 的生产接线。

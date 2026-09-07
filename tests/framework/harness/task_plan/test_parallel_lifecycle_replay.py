@@ -19,6 +19,7 @@ from framework.harness.task_plan.replay import (
     _projection_for_plan,
     _validate_parallel_report_projection,
 )
+from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
 from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _accepted_parallel_plan,
     _request,
@@ -31,6 +32,12 @@ def _event(value: dict[str, object], sequence: int) -> SimpleNamespace:
         event_type=value["event_type"],
         payload=value,
         sequence=sequence,
+    )
+
+
+def _reserved_projection(plan):
+    return TaskPlanScheduler().reserve_ready_tasks(
+        _projection_for_plan(plan, sequence=1), TaskPlanReadyDecision(_request(plan).task_instances),
     )
 
 
@@ -55,7 +62,7 @@ def _coordinator_events(*, status: TaskLifecycle = TaskLifecycle.SUCCEEDED, with
 
 def test_capacity_policy_evidence_survives_terminal_replay() -> None:
     plan, raw_events = _coordinator_events(with_capacity=True)
-    projection = _projection_for_plan(plan, sequence=1)
+    projection = _reserved_projection(plan)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}
@@ -78,7 +85,7 @@ def test_capacity_policy_evidence_survives_terminal_replay() -> None:
 
 def test_coordinator_wave_events_replay_to_terminal_reservation_checksum() -> None:
     plan, raw_events = _coordinator_events()
-    projection = _projection_for_plan(plan, sequence=1)
+    projection = _reserved_projection(plan)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}
@@ -119,7 +126,7 @@ def test_coordinator_wave_events_replay_to_terminal_reservation_checksum() -> No
 
 def test_replay_rejects_group_terminal_event_with_wrong_snapshot_target() -> None:
     plan, raw_events = _coordinator_events()
-    projection = _projection_for_plan(plan, sequence=1)
+    projection = _reserved_projection(plan)
     group_event = next(item for item in raw_events if item["event_type"] == "TASK_GROUP_ADMITTED")
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
@@ -138,7 +145,7 @@ def test_replay_rejects_group_terminal_event_with_wrong_snapshot_target() -> Non
 
 def test_replay_rejects_wave_completion_with_success_outcome_for_failed_child() -> None:
     plan, raw_events = _coordinator_events(status=TaskLifecycle.FAILED)
-    projection = _projection_for_plan(plan, sequence=1)
+    projection = _reserved_projection(plan)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}
@@ -181,7 +188,7 @@ def test_replay_rejects_wave_completion_with_success_outcome_for_failed_child() 
 
 def test_replay_rejects_second_terminal_group_transition() -> None:
     plan, raw_events = _coordinator_events()
-    projection = _projection_for_plan(plan, sequence=1)
+    projection = _reserved_projection(plan)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}

@@ -52,11 +52,13 @@ from framework.harness.task_plan.parallel_lifecycle import (
     _WAVE_TRANSITIONS,
 )
 from framework.harness.task_plan.capacity import CapacityPool, TaskCapacityDemand, pack_first_fit
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.store import TaskResultRecord
 from framework.shared.graph_identity import GraphExecutionIdentity
 
 
-PARALLEL_DISPATCH_REQUEST_SCHEMA = "agora.harness-parallel-dispatch-request/v1"
+PARALLEL_DISPATCH_REQUEST_SCHEMA = "agora.harness-parallel-dispatch-request/v2"
 PARALLEL_DISPATCH_RESULT_SCHEMA = "agora.harness-parallel-dispatch-result/v1"
 DISPATCH_GROUP_SCHEMA = "agora.harness-dispatch-group/v1"
 DISPATCH_WAVE_SCHEMA = "agora.harness-dispatch-wave/v3"
@@ -485,6 +487,7 @@ class DispatchWave:
 class ParallelDispatchRequest:
     plan: ValidatedTaskPlan
     task_instances: tuple[TaskInstance, ...]
+    budget_snapshot: Mapping[str, Any]
     requested_parallelism: int | None = None
     capability_capacity: int | None = None
     supervisor_capacity: int | None = None
@@ -507,9 +510,19 @@ class ParallelDispatchRequest:
     def __post_init__(self) -> None:
         if not isinstance(self.plan, ValidatedTaskPlan):
             raise TypeError("plan must be ValidatedTaskPlan")
+        ledger = TaskPlanBudgetLedger.from_snapshot(self.budget_snapshot)
+        if (
+            (ledger.run_id, ledger.stage_id, ledger.policy_ref)
+            != (self.plan.run_id, self.plan.stage_id, self.plan.policy_ref)
+            or dict(ledger.parent_allocation) != self.plan.limits.aggregate_task_budget.to_dict()
+        ):
+            raise HarnessValidationError("dispatch budget owner differs from plan", code="task_plan_budget_identity_conflict")
+        object.__setattr__(self, "budget_snapshot", frozen_mapping(ledger.snapshot(), "budget_snapshot"))
         instances = tuple(self.task_instances)
         if any(not isinstance(item, TaskInstance) for item in instances):
             raise HarnessValidationError("dispatch request must contain TaskInstance values", code="PLAN_SCHEMA_INVALID")
+        if any(item != task_instance_for_attempt(self.plan, item.task_id, item.attempt) for item in instances):
+            raise HarnessValidationError("dispatch attempt differs from accepted task", code="task_plan_task_instance_mismatch")
         ids = tuple(item.task_id for item in instances)
         if len(ids) != len(set(ids)):
             raise HarnessValidationError("duplicate task identities in dispatch request", code="PLAN_SCHEMA_INVALID")
@@ -866,14 +879,20 @@ class SerialTaskExecutorAdapter:
         return _validated_task_result(invoke(task_instance), task_instance)
 
 
-def _child_budget_reservation(
-    task_budget: Mapping[str, Any],
-    aggregate_budget: Mapping[str, Any],
+def child_budget_reservation(
+    ledger: TaskPlanBudgetLedger,
+    instance: TaskInstance,
     *,
-    owner_scope: str,
-    reservation_key: str,
+    group_id: str,
+    wave_id: str,
 ) -> dict[str, Any]:
-    """Encode one versioned child charge alongside aggregate limits."""
+    """Bind the child envelope to the immutable accepted attempt charge."""
+
+    record = ledger.records.get(instance.idempotency_key)
+    if record is None or thaw_mapping(record["instance"]) != instance.to_dict():
+        raise HarnessValidationError("child has no matching attempt reservation", code="task_plan_budget_identity_conflict")
+    task_budget = instance.budget_snapshot.to_dict()
+    aggregate_budget = ledger.parent_allocation
 
     dimensions = (
         ("turns", "max_turns"),
@@ -883,9 +902,9 @@ def _child_budget_reservation(
     )
     reservation: dict[str, Any] = {
         "schema_version": "agora.harness-budget-reservation/v1",
-        "ledger_version": 1,
-        "owner_scope": identifier(owner_scope, "budget_owner_scope"),
-        "reservation_key": identifier(reservation_key, "budget_reservation_key"),
+        "ledger_version": record["reserved_revision"],
+        "owner_scope": f"{ledger.run_id}:{ledger.stage_id}:{group_id}",
+        "reservation_key": spawn_operation_key(group_id, wave_id, instance.task_instance_id, instance.attempt),
         "parent_allocation": {},
         "attempt_allocation": {},
     }
@@ -1496,6 +1515,8 @@ class ParallelAgentCoordinator:
             spawn = self._spawn_request(request, wave, item)
             if raw.get("operation_key") != spawn.operation_id or raw.get("idempotency_key") != spawn.operation_id:
                 raise HarnessValidationError("spawn intent operation key is invalid", code="TASK_GROUP_RECOVERY_INTENT_INVALID")
+            if raw.get("budget_reservation") != dict(spawn.budget):
+                raise HarnessValidationError("spawn intent differs from attempt ledger", code="TASK_GROUP_RECOVERY_INTENT_INVALID")
             validated.append((item, spawn))
         return wave, tuple(validated)
 
@@ -1682,6 +1703,7 @@ class ParallelAgentCoordinator:
                 self._emit("DEGRADED_SERIAL", event_sink=event_sink, group_id=group.group_id, reason_code=session.degraded_reason)
 
         pending_work = list(pending)
+        ledger = TaskPlanBudgetLedger.from_snapshot(request.budget_snapshot)
         pool_state = {pool.pool_id: pool for pool in request.capacity_pools}
         while pending_work:
             with self._lock:
@@ -1744,8 +1766,10 @@ class ParallelAgentCoordinator:
                         else "SUPERVISED"
                     ),
                 )
+                admitted_ledger = ledger.reserve(batch)
+                admitted_request = replace(request, budget_snapshot=admitted_ledger.snapshot())
                 spawn_requests = (
-                    tuple(self._spawn_request(request, wave, item) for item in batch)
+                    tuple(self._spawn_request(admitted_request, wave, item) for item in batch)
                     if wave.execution_mode == "SUPERVISED" else ()
                 )
                 admission = {
@@ -1753,6 +1777,8 @@ class ParallelAgentCoordinator:
                     "group": session.group.to_dict(), "wave": wave.to_dict(),
                     "requested_parallelism": request.requested_parallelism or group.max_parallelism,
                     "effective_parallelism": wave.effective_parallelism,
+                    "budget_before_checksum": ledger.to_dict()["ledger_checksum"],
+                    "budget_after_checksum": admitted_ledger.to_dict()["ledger_checksum"],
                     "queue_wait_ms": _elapsed_ms(session.started_at),
                     "idempotency_key": wave.wave_id,
                 }
@@ -1771,6 +1797,7 @@ class ParallelAgentCoordinator:
                 # The embedded reservations and every spawn intent are one
                 # durable commit. No local admission or child precedes it.
                 self._emit_batch((admission, *intents), event_sink=event_sink)
+                ledger = admitted_ledger
                 pending_work = [item for item in pending_work if item.task_id not in {entry.task_id for entry in batch}]
                 session.next_wave_ordinal += 1
                 session.reserved.update(wave.task_ids)
@@ -2086,11 +2113,9 @@ class ParallelAgentCoordinator:
             attempt=item.attempt,
             allowed_tools=tuple(definition.allowed_tools),
             allowed_memory_namespaces=tuple(definition.allowed_memory_namespaces),
-            budget=_child_budget_reservation(
-                item.budget_snapshot.to_dict(),
-                request.plan.limits.aggregate_task_budget.to_dict(),
-                owner_scope=f"{request.plan.run_id}:{request.plan.stage_id}:{wave.group_id}",
-                reservation_key=operation_id,
+            budget=child_budget_reservation(
+                TaskPlanBudgetLedger.from_snapshot(request.budget_snapshot), item,
+                group_id=wave.group_id, wave_id=wave.wave_id,
             ),
             operation_id=operation_id,
             child_id=f"parallel-{item.task_instance_id}",
@@ -2168,6 +2193,7 @@ class ParallelAgentCoordinator:
             released: set[str] = set()
             consumed: set[str] = set()
             quarantined: set[str] = set()
+            self._mark_wave_dispatched(session, wave, event_sink=event_sink)
             with ThreadPoolExecutor(max_workers=wave.effective_parallelism, thread_name_prefix="newsroom-dispatch") as pool:
                 futures = [(item, pool.submit(invoke, item)) for item in batch]
                 pending = {future: item for item, future in futures}

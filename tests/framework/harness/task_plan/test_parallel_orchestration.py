@@ -178,8 +178,11 @@ def _parent_identity(plan) -> GraphExecutionIdentity:
 
 
 def _request(plan, *, join_policy: JoinPolicy = JoinPolicy.WAIT_ALL) -> ParallelDispatchRequest:
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+
     return ParallelDispatchRequest(
         plan=plan,
+        budget_snapshot=TaskPlanBudgetLedger.for_plan(plan).snapshot(),
         task_instances=tuple(
             task_instance_for_attempt(plan, task.task_id, 1) for task in plan.tasks
         ),
@@ -190,6 +193,13 @@ def _request(plan, *, join_policy: JoinPolicy = JoinPolicy.WAIT_ALL) -> Parallel
         join_policy=join_policy,
         parent_graph_identity=_parent_identity(plan),
     )
+
+
+def _admitted_request(request):
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+
+    ledger = TaskPlanBudgetLedger.from_snapshot(request.budget_snapshot).reserve(request.task_instances)
+    return replace(request, budget_snapshot=ledger.snapshot())
 
 
 def _result(plan, instance, *, status: TaskLifecycle = TaskLifecycle.SUCCEEDED) -> TaskResultRecord:
@@ -504,7 +514,7 @@ def test_reconcile_spawn_intents_reuses_confirmed_children_without_spawn() -> No
             child_supervisor=supervisor,
         )
         recovered = restarted.reconcile_spawn_intents(
-            request,
+            _admitted_request(request),
             intents,
             invoke,
             admitted_waves=(admitted_wave,),
@@ -564,7 +574,7 @@ def test_reconcile_spawn_intents_fails_closed_when_supervisor_status_is_unknown(
         recovery_events: list[dict[str, object]] = []
         restarted = ParallelAgentCoordinator(max_workers=2, child_supervisor=supervisor)
         first = restarted.reconcile_spawn_intents(
-            request,
+            _admitted_request(request),
             (intent,),
             lambda instance: _result(plan, instance),
             admitted_waves=(admitted_wave,),
@@ -577,7 +587,7 @@ def test_reconcile_spawn_intents_fails_closed_when_supervisor_status_is_unknown(
         assert unknown_count == 1
 
         second = restarted.reconcile_spawn_intents(
-            request,
+            _admitted_request(request),
             (intent,),
             lambda instance: _result(plan, instance),
             admitted_waves=(admitted_wave,),
@@ -863,7 +873,7 @@ def test_supervised_spawn_budget_carries_versioned_reservation_identity() -> Non
         DispatchWaveState.ADMITTED,
     )
     item = request.task_instances[0]
-    spawn = ParallelAgentCoordinator._spawn_request(request, wave, item)
+    spawn = ParallelAgentCoordinator._spawn_request(_admitted_request(request), wave, item)
     assert spawn.budget["schema_version"] == "agora.harness-budget-reservation/v1"
     assert spawn.budget["ledger_version"] == 1
     assert spawn.budget["reservation_key"] == spawn.operation_id

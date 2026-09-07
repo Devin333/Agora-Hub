@@ -1316,6 +1316,8 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "recovery_outcome": _TEXT,
         "recovery_id": _TEXT,
         "operation_key": _TEXT,
+        "budget_before_checksum": _CHECKSUM_TEXT,
+        "budget_after_checksum": _CHECKSUM_TEXT,
         "budget_reservation": {
             "type": "object", "additionalProperties": False,
             "required": [
@@ -1343,7 +1345,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
     }
     required_by_type = {
         "TASK_GROUP_ADMITTED": ["group", "requested_parallelism", "effective_parallelism", "idempotency_key"],
-        "TASK_WAVE_ADMITTED": ["group", "wave", "idempotency_key"],
+        "TASK_WAVE_ADMITTED": ["group", "wave", "idempotency_key", "budget_before_checksum", "budget_after_checksum"],
         "TASK_ATTEMPT_SPAWN_INTENT": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "idempotency_key", "budget_reservation"],
         "TASK_ATTEMPT_SPAWN_CONFIRMED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "spawn_status", "child_id", "idempotency_key"],
         "TASK_ATTEMPT_SPAWN_UNKNOWN": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "spawn_status", "idempotency_key"],

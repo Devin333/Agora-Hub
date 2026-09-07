@@ -8,7 +8,8 @@ from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.scheduler import HarnessScheduler
 from framework.harness.task_plan.aggregator import TaskPlanAggregator
 from framework.harness.task_plan.binding import TaskPlanCapabilityRegistry
-from framework.harness.task_plan.models import TaskLifecycle, ValidatedTaskPlan, TaskInstance
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.models import TaskLifecycle, ValidatedTaskPlan, TaskInstance, TaskPlanProjection
 from framework.harness.task_plan.ports import (
     PlanBuildRequest,
     PlanCandidateBuilderPort,
@@ -55,6 +56,7 @@ from framework.harness.task_plan.parallel import (
     ParallelEventSink,
     ParentObservationLimits,
     SideEffectClass,
+    child_budget_reservation,
 )
 from framework.harness.task_plan.planning_observation import (
     PlanningObservationPort,
@@ -803,29 +805,6 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     )
                 return
 
-            # Reserve and materialize every selected task before any worker is
-            # submitted. The coordinator then applies the physical capacity
-            # bound and creates one or more waves for this ready set.
-            for task_request in decision.task_requests:
-                current = self.store.load_projection(request.run_id, request.stage_id)
-                reserved = self.scheduler.reserve_task_plan_tasks(
-                    current,
-                    TaskPlanReadyDecision((task_request,)),
-                )
-                self._commit_task_transition(request, plan, task_request, "TASK_READY", reserved)
-            for task_request in decision.task_requests:
-                projection = self.scheduler.mark_task_plan_dispatched(
-                    self.store.load_projection(request.run_id, request.stage_id),
-                    task_request,
-                )
-                self._commit_task_transition(request, plan, task_request, "TASK_DISPATCHED", projection)
-            for task_request in decision.task_requests:
-                projection = self.scheduler.mark_task_plan_started(
-                    self.store.load_projection(request.run_id, request.stage_id),
-                    task_request,
-                )
-                self._commit_task_transition(request, plan, task_request, "TASK_STARTED", projection)
-
             dispatched = self.parallel_coordinator.dispatch(
                 self._parallel_request(
                     request,
@@ -978,6 +957,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         return ParallelDispatchRequest(
             plan=plan,
             task_instances=tuple(task_instances),
+            budget_snapshot=self.store.load_projection(request.run_id, request.stage_id).consumed_budget,
             requested_parallelism=policy.max_parallelism,
             capability_capacity=policy.capability_capacity,
             supervisor_capacity=self.child_supervisor_capacity,
@@ -1174,8 +1154,126 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             if batch:
                 raise HarnessValidationError("atomic admission is partially present", code="task_plan_event_history_conflict")
             return
-        self.store.append_events(tuple(batch))
+        if not batch:
+            return
+        current = self.store.load_projection(request.run_id, request.stage_id)
+        transitions: list[TaskPlanEvent] = []
+        projections: list[TaskPlanProjection] = []
+        projected = current
+
+        def append_transition(instance: TaskInstance, event_type: str, next_projection: TaskPlanProjection) -> None:
+            nonlocal projected
+            sequence = len(history) + len(transitions) + 1
+            transitions.append(TaskPlanEvent.for_plan(
+                event_type, plan, task_id=instance.task_id,
+                task_instance_id=instance.task_instance_id, attempt=instance.attempt,
+                input_checksum=instance.task_definition_checksum, sequence=sequence,
+            ))
+            projected = replace(next_projection, last_sequence=sequence)
+            projections.append(projected)
+
+        admissions = [event for event in batch if event.event_type == "TASK_WAVE_ADMITTED"]
+        if admissions:
+            instances = self._validate_wave_admission(plan, tuple(batch), current)
+            for instance in instances:
+                reserved = self.scheduler.reserve_task_plan_tasks(projected, TaskPlanReadyDecision((instance,)))
+                if next(state for state in projected.tasks if state.task_id == instance.task_id).status is not TaskLifecycle.READY:
+                    append_transition(instance, "TASK_READY", reserved)
+                else:
+                    projected = reserved
+        elif any(event.event_type == "TASK_ATTEMPT_SPAWN_INTENT" for event in batch):
+            raise HarnessValidationError("spawn intent requires atomic wave admission", code="task_plan_parallel_event_invalid")
+        for event in batch:
+            sequence = len(history) + len(transitions) + 1
+            transitions.append(replace(event, sequence=sequence))
+            projected = replace(projected, last_sequence=sequence)
+            projections.append(projected)
+            if event.event_type == "TASK_WAVE_DISPATCHED":
+                for instance in self._dispatched_wave_instances(plan, event, history, projected):
+                    append_transition(instance, "TASK_DISPATCHED", self.scheduler.mark_task_plan_dispatched(projected, instance))
+                    append_transition(instance, "TASK_STARTED", self.scheduler.mark_task_plan_started(projected, instance))
+        self.store.commit_events(
+            tuple(transitions), tuple(projections),
+            expected_projection_checksum=current.projection_checksum,
+        )
         self._persist_checkpoint(request, plan)
+
+    @staticmethod
+    def _validate_wave_admission(
+        plan: ValidatedTaskPlan,
+        events: tuple[TaskPlanEvent, ...],
+        projection: TaskPlanProjection,
+    ) -> tuple[TaskInstance, ...]:
+        admission = events[0]
+        if admission.event_type != "TASK_WAVE_ADMITTED" or any(event.event_type != "TASK_ATTEMPT_SPAWN_INTENT" for event in events[1:]):
+            raise HarnessValidationError("wave admission requires one complete intent batch", code="task_plan_parallel_event_invalid")
+        payload = admission.payload
+        group = DispatchGroup.from_dict(thaw_mapping(payload["group"]))
+        wave = DispatchWave.from_dict(thaw_mapping(payload["wave"]))
+        if wave.state.value != "ADMITTED":
+            raise HarnessValidationError("wave admission requires an admitted snapshot", code="task_plan_parallel_event_invalid")
+        if (
+            (group.run_id, group.stage_id, group.plan_id, group.plan_version)
+            != (plan.run_id, plan.stage_id, plan.plan_id, plan.version)
+            or wave.group_id != group.group_id
+            or dict(group.budget_envelope) != plan.limits.aggregate_task_budget.to_dict()
+        ):
+            raise HarnessValidationError("wave admission owner differs from plan", code="task_plan_parallel_event_invalid")
+        ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+        if payload.get("budget_before_checksum") != ledger.to_dict()["ledger_checksum"]:
+            raise HarnessValidationError("wave admission uses a stale ledger", code="task_plan_budget_checksum_mismatch")
+        states = {state.task_id: state for state in projection.tasks}
+        if not set(wave.task_ids).issubset(states) or any(states[task_id].status not in {TaskLifecycle.PENDING, TaskLifecycle.READY} for task_id in wave.task_ids):
+            raise HarnessValidationError("wave admission requires ready candidates", code="task_plan_parallel_event_invalid")
+        instances = tuple(task_instance_for_attempt(
+            plan, task_id,
+            states[task_id].attempts + int(states[task_id].status is TaskLifecycle.PENDING),
+        ) for task_id in wave.task_ids)
+        for instance, reservation in zip(instances, wave.reservations, strict=True):
+            if reservation.task_id != instance.task_id or reservation.idempotency_key != instance.idempotency_key or dict(reservation.budget) != instance.budget_snapshot.to_dict() or reservation.state.value != "RESERVED":
+                raise HarnessValidationError("wave reservation differs from accepted attempt", code="task_plan_budget_identity_conflict")
+        admitted = ledger.reserve(instances)
+        if payload.get("budget_after_checksum") != admitted.to_dict()["ledger_checksum"]:
+            raise HarnessValidationError("wave admission budget checksum differs", code="task_plan_budget_checksum_mismatch")
+        expected = instances if wave.execution_mode == "SUPERVISED" else ()
+        if len(events) - 1 != len(expected):
+            raise HarnessValidationError("wave admission has incomplete spawn intents", code="task_plan_parallel_event_invalid")
+        for instance, event in zip(expected, events[1:], strict=True):
+            budget = child_budget_reservation(admitted, instance, group_id=group.group_id, wave_id=wave.wave_id)
+            identity = {
+                "group_id": group.group_id, "wave_id": wave.wave_id,
+                "task_id": instance.task_id, "task_instance_id": instance.task_instance_id,
+                "attempt": instance.attempt, "operation_key": budget["reservation_key"],
+                "idempotency_key": budget["reservation_key"], "budget_reservation": budget,
+            }
+            if any(event.payload.get(name) != value for name, value in identity.items()):
+                raise HarnessValidationError("spawn intent differs from wave ledger", code="task_plan_budget_identity_conflict")
+        return instances
+
+    @staticmethod
+    def _dispatched_wave_instances(
+        plan: ValidatedTaskPlan,
+        event: TaskPlanEvent,
+        history: tuple[TaskPlanEvent, ...],
+        projection: TaskPlanProjection,
+    ) -> tuple[TaskInstance, ...]:
+        matching = [item for item in history if item.event_type == "TASK_WAVE_ADMITTED" and item.payload["wave"]["wave_id"] == event.payload.get("wave_id")]
+        if len(matching) != 1:
+            raise HarnessValidationError("dispatch has no unique admitted wave", code="task_plan_parallel_event_invalid")
+        wave = DispatchWave.from_dict(thaw_mapping(matching[0].payload["wave"]))
+        if tuple(event.payload.get("task_ids", ())) != wave.task_ids or event.payload.get("group_id") != wave.group_id:
+            raise HarnessValidationError("dispatch differs from admitted wave", code="task_plan_parallel_event_invalid")
+        states = {state.task_id: state for state in projection.tasks}
+        instances = tuple(task_instance_for_attempt(plan, task_id, states[task_id].attempts) for task_id in wave.task_ids)
+        if wave.execution_mode == "SUPERVISED":
+            for instance in instances:
+                receipts = [item for item in history if item.event_type == "TASK_ATTEMPT_SPAWN_CONFIRMED"
+                            and item.payload.get("wave_id") == wave.wave_id and item.payload.get("task_id") == instance.task_id
+                            and item.payload.get("task_instance_id") == instance.task_instance_id and item.payload.get("attempt") == instance.attempt
+                            and item.payload.get("child_id")]
+                if len(receipts) != 1:
+                    raise HarnessValidationError("dispatch requires confirmed spawn receipts", code="task_plan_parallel_event_invalid")
+        return instances
 
     def _recover_failed_task_retries(
         self,

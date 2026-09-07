@@ -266,6 +266,61 @@ Unknown outcomes are not accepted as terminal ledger results. This increment
 does not prove complete cancellation or side-effect recovery accounting.
 No G1-G5 gate or production rollout approval is claimed.
 
+### Atomic Attempt Admission Increment
+
+This increment completes task 2.4 with the required repository smoke passing.
+The checklist is now 12/46; no complete delivery gate is claimed.
+
+- `TaskPlanStorePort.commit_events` commits typed event/projection pairs in
+  one batch with a projection-checksum CAS. Each historical prefix keeps its
+  own projection reference; a duplicate batch remains idempotent after later
+  transitions. Partial histories and mismatched projections fail closed.
+- Stage reservation now occurs only for the coordinator's selected wave.
+  `TASK_READY`, the per-attempt ledger updates, `TASK_WAVE_ADMITTED`, and all
+  supervised spawn intents are one transaction. Failure at readiness, wave,
+  intent or projection-artifact publication leaves the prior event history,
+  task states and ledger unchanged and starts no child.
+- `ParallelDispatchRequest` v2 requires the authoritative budget snapshot and
+  exact accepted TaskInstances. Child budget envelopes use each attempt's
+  actual immutable reservation revision. Wave admission binds the before/after
+  ledger checksums; live recovery verifies its intent budget against that ledger.
+- Task dispatch/start facts follow the confirmed per-task spawn receipts.
+  Serial and explicitly test-only transports also record wave dispatch before
+  invoking their worker. Result settlement remains owned by TaskPlan result
+  transactions, not a second coordinator accounting implementation.
+- Offline replay checks the complete contiguous wave/intent batch and its
+  READY ledger evidence. Recomputed but unbacked budget checksums, changed
+  allocation/revision, missing intents and interleaved history are rejected.
+  Historical batch retry validates original immutable artifacts without writes;
+  it cannot silently recreate a missing committed projection.
+
+Increment checks:
+
+- TaskPlan and AgentLoop regression: `280 passed` in 214.70 seconds.
+- Atomic transition, spawn admission and canonical event regression:
+  `491 passed` in 136.93 seconds.
+- Coordinator and audited recovery regression: `66 passed` in 38.04 seconds.
+- Final spawn-admission negative/real-stage regression: `22 passed` in
+  15.59 seconds.
+- Required repository smoke: exit 0; compilation passed and the complete
+  Harness/Research/API/service/composition/architecture suite reported
+  `2697 passed, 23 deselected, 23 warnings` in 1493.92 seconds.
+- Offline AgentLoop smoke passed with 3 fixture LLM calls, 1 tool call and
+  0 network calls. Evidence manifest:
+  `.newsroom/smoke/test-agent-loop-ea1e3cf470274cda9119827ff2b0df98/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors and 0 warnings.
+- Strict OpenSpec validation and `git diff --check`: passed.
+
+The 23 suite warnings are existing FastAPI/Starlette deprecations; the CLI
+also reports the existing PyMuPDF import deprecation.
+
+This is not completion of 1.7, G1-G5 or release approval. The four existing
+TaskBudget dimensions are covered; time/cost allocation, complete cancellation,
+indeterminate/lease/reclaim settlement, durable capacity-wait readiness, parent
+continuations and production gates remain separately tracked. Pre-increment
+non-atomic parallel histories are not promoted into verified atomic evidence.
+No production defaults or Research feature flags are enabled by this increment.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

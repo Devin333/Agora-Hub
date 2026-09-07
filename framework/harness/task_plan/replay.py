@@ -18,6 +18,7 @@ from framework.harness.task_plan.canonical import (
     task_reference_producer,
     thaw_mapping,
 )
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.models import (
     TaskInstance,
     TaskLifecycle,
@@ -393,6 +394,7 @@ class TaskPlanReplayReducer:
             plan_history[0],
             through_sequence=through_sequence,
         )
+        _validate_atomic_wave_intents(ordered_events)
         results_by_attempt = _validated_results(results, plan_history)
         patches_by_checksum = _validated_patches(patches, plan_history)
         submissions = submissions_from_events(ordered_events)
@@ -418,8 +420,17 @@ class TaskPlanReplayReducer:
         parallel_diagnostics: list[dict[str, Any]] = []
         parallel_spawn_operations: dict[str, dict[str, Any]] = {}
         parallel_event_sequence = 0
+        ready_batch_budget_checksum: str | None = None
+        ready_batch_tasks: list[str] = []
 
         for event in ordered_events:
+            if event.event_type == "TASK_READY" and projection is not None:
+                if not ready_batch_tasks:
+                    ready_batch_budget_checksum = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget).to_dict()["ledger_checksum"]
+                ready_batch_tasks.append(event.task_id)
+            elif event.event_type != "TASK_WAVE_ADMITTED":
+                ready_batch_budget_checksum = None
+                ready_batch_tasks = []
             if accepted_patch is not None and event.event_type != "PLAN_ACCEPTED":
                 raise HarnessValidationError(
                     "accepted TaskPlan patch is not followed by its new plan",
@@ -686,6 +697,10 @@ class TaskPlanReplayReducer:
                     )
             elif event.event_type in _PARALLEL_EVENT_TYPES:
                 projection = _require_projection(projection, event)
+                if event.event_type == "TASK_WAVE_ADMITTED":
+                    before = ready_batch_budget_checksum or TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget).to_dict()["ledger_checksum"]
+                    if event.payload.get("budget_before_checksum") != before or not set(ready_batch_tasks).issubset(event.payload.get("wave", {}).get("task_ids", ())):
+                        _parallel_error("wave admission budget predecessor differs from history", event)
                 _apply_parallel_event(
                     event,
                     projection,
@@ -881,6 +896,26 @@ def _validate_parallel_report_projection(
                 _validate_reservation_checksum(embedded)
 
 
+def _validate_atomic_wave_intents(events: tuple[TaskPlanEvent, ...]) -> None:
+    admitted_intents: set[int] = set()
+    for index, event in enumerate(events):
+        if event.event_type == "TASK_ATTEMPT_SPAWN_INTENT" and index not in admitted_intents:
+            _parallel_error("spawn intent is outside atomic wave admission", event)
+        if event.event_type != "TASK_WAVE_ADMITTED":
+            continue
+        wave = event.payload.get("wave", {})
+        tasks = tuple(wave.get("task_ids", ())) if wave.get("execution_mode") == "SUPERVISED" else ()
+        intents = events[index + 1:index + 1 + len(tasks)]
+        if len(intents) != len(tasks) or any(
+            intent.event_type != "TASK_ATTEMPT_SPAWN_INTENT"
+            or intent.payload.get("wave_id") != wave.get("wave_id")
+            or intent.payload.get("task_id") != task_id
+            for intent, task_id in zip(intents, tasks, strict=True)
+        ):
+            _parallel_error("wave admission is missing its complete intent batch", event)
+        admitted_intents.update(range(index + 1, index + 1 + len(tasks)))
+
+
 def _apply_parallel_event(
     event: TaskPlanEvent,
     projection: TaskPlanProjection,
@@ -971,6 +1006,15 @@ def _apply_parallel_event(
             if task is None or task.active_instance_id != task_instance_id or task.attempts != attempt:
                 _parallel_error("spawn intent differs from admitted task attempt", event)
             _validate_spawn_budget_reservation(budget_reservation, operation_key, event)
+            from framework.harness.task_plan.parallel import child_budget_reservation
+
+            ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+            record = next((record for record in ledger.records.values() if record["instance"]["task_instance_id"] == task_instance_id), None)
+            if record is None or record["status"] != "RESERVED":
+                _parallel_error("spawn intent has no outstanding ledger reservation", event)
+            expected_budget = child_budget_reservation(ledger, TaskInstance.from_dict(record["instance"]), group_id=group_id, wave_id=wave_id)
+            if budget_reservation != expected_budget:
+                _parallel_error("spawn intent budget differs from attempt ledger", event)
             if any(item["wave_id"] == wave_id and item["task_id"] == task_id for item in spawn_operations.values()):
                 _parallel_error("wave task has multiple spawn attempts", event)
             spawn_operations[key] = {
@@ -1009,6 +1053,18 @@ def _apply_parallel_event(
         if wave["state"] != DispatchWaveState.ADMITTED.value:
             _parallel_error("wave admission snapshot is not admitted", event)
         wave_id = wave["wave_id"]
+        ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+        if payload.get("budget_after_checksum") != ledger.to_dict()["ledger_checksum"] or group["budget_envelope"] != dict(ledger.parent_allocation):
+            _parallel_error("wave admission budget differs from ledger", event)
+        states = {state.task_id: state for state in projection.tasks}
+        for reservation in wave_payload.get("reservations", ()):
+            record = ledger.records.get(reservation["idempotency_key"])
+            state = states.get(reservation["task_id"])
+            if record is None or record["status"] != "RESERVED" or state is None or state.status is not TaskLifecycle.READY:
+                _parallel_error("wave task has no ready ledger reservation", event)
+            instance = record["instance"]
+            if instance["task_id"] != state.task_id or instance["task_instance_id"] != state.active_instance_id or instance["attempt"] != state.attempts or instance["budget_snapshot"] != reservation["budget"]:
+                _parallel_error("wave reservation differs from attempt ledger", event)
         if wave_id in waves:
             _parallel_error("parallel wave was admitted more than once", event)
         if any(

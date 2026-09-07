@@ -71,6 +71,7 @@ from framework.harness.task_plan.store import (
     _terminal_result_event,
     _classify_atomic_event_batch_history,
     _validate_atomic_event_batch,
+    _validate_transition_projections,
     _validate_result_usage,
 )
 from framework.shared.time import utc_now
@@ -1214,60 +1215,96 @@ class DurableTaskPlanStore:
         self._publish(batch, tuple(refs))
         return tuple(event.event_checksum for event in batch)
 
-    def commit_event(
+    def commit_events(
         self,
-        event: TaskPlanEvent,
-        projection: TaskPlanProjection,
-    ) -> str:
-        if not isinstance(event, TaskPlanEvent):
-            raise TypeError("event must be TaskPlanEvent")
-        if not isinstance(projection, TaskPlanProjection):
-            raise TypeError("projection must be TaskPlanProjection")
-        _require_live_graph_only(event, "event")
-        _require_live_graph_only(projection, "projection")
-        events = self.read_events(event.run_id, event.stage_id)
-        if event.sequence <= len(events):
-            existing = events[event.sequence - 1]
-            if existing.event_checksum != event.event_checksum:
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+    ) -> tuple[str, ...]:
+        """Atomically publish a transition batch and its prefix projections."""
+
+        batch = _validate_atomic_event_batch(events)
+        _validate_transition_projections(batch, projections)
+        expected_checksum = checksum(
+            expected_projection_checksum,
+            "expected_projection_checksum",
+        )
+        first = batch[0]
+        history = self.read_events(first.run_id, first.stage_id)
+        replayed = _classify_atomic_event_batch_history(batch, history)
+        if not replayed:
+            current = self.load_projection(first.run_id, first.stage_id)
+            if current.projection_checksum != expected_checksum:
                 raise HarnessValidationError(
-                    "event sequence contains different TaskPlan content",
-                    code="task_plan_sequence_conflict",
-                )
-            recovered = self.load_projection(event.run_id, event.stage_id)
-            if recovered.projection_checksum != projection.projection_checksum:
-                raise HarnessValidationError(
-                    "committed event projection differs from retry",
+                    "projection CAS precondition differs from current state",
                     code="task_plan_projection_mismatch",
                 )
-            return event.event_checksum
-        if event.sequence != len(events) + 1:
-            raise HarnessValidationError(
-                "event sequence is not monotonic",
-                code="task_plan_sequence_conflict",
-                details={"expected": len(events) + 1, "actual": event.sequence},
-            )
-        current = self.load_projection(event.run_id, event.stage_id)
-        plan = self.plan(event.run_id, event.stage_id)
+        plan = self.plan(
+            first.run_id,
+            first.stage_id,
+            first.plan_version if replayed else None,
+        )
         if plan is None:
             raise HarnessValidationError(
                 "TaskPlan transition requires an accepted plan",
                 code="task_plan_projection_missing",
             )
-        _require_event_matches_plan(event, plan)
-        if not projection.matches_plan_identity(plan):
-            raise HarnessValidationError(
-                "projection does not match the accepted plan",
-                code="task_plan_projection_mismatch",
-            )
-        _require_projection_transition_identity(current, projection)
-        if projection.last_sequence != event.sequence:
-            raise HarnessValidationError(
-                "projection sequence must match its causal event",
-                code="task_plan_sequence_conflict",
-            )
-        projection_ref = self._put_projection(projection)
-        self._publish((event,), ({"projection": projection_ref},))
-        return event.event_checksum
+        for event, projection in zip(batch, projections, strict=True):
+            _require_event_matches_plan(event, plan)
+            if not projection.matches_plan_identity(plan):
+                raise HarnessValidationError(
+                    "projection does not match the accepted plan",
+                    code="task_plan_projection_mismatch",
+                )
+            if not replayed:
+                _require_projection_transition_identity(current, projection)
+
+        if replayed:
+            stored, _watermark = self._read_snapshot(first.run_id)
+            committed = {
+                domain.sequence: canonical
+                for canonical in stored
+                if (domain := self._stored_to_domain(canonical)).stage_id == first.stage_id
+            }
+            historical_refs = []
+            for event, projection in zip(batch, projections, strict=True):
+                reference = self._reference_from_event(committed[event.sequence], "projection")
+                if reference is None:
+                    raise HarnessValidationError("committed projection artifact is missing", code="task_plan_artifact_missing")
+                persisted = self._read_reference(reference, TaskPlanProjection)
+                if persisted.projection_checksum != projection.projection_checksum:
+                    raise HarnessValidationError("committed projection differs from retry", code="task_plan_projection_mismatch")
+                historical_refs.append({"projection": reference})
+            refs = tuple(historical_refs)
+        else:
+            # Immutable artifacts become authoritative only with their event batch.
+            refs = tuple({"projection": self._put_projection(projection)} for projection in projections)
+        self._publish(batch, refs)
+        return tuple(event.event_checksum for event in batch)
+
+    def commit_event(
+        self,
+        event: TaskPlanEvent,
+        projection: TaskPlanProjection,
+    ) -> str:
+        """Commit one event through the atomic transition boundary."""
+
+        if not isinstance(event, TaskPlanEvent):
+            raise TypeError("event must be TaskPlanEvent")
+        if not isinstance(projection, TaskPlanProjection):
+            raise TypeError("projection must be TaskPlanProjection")
+        history = self.read_events(event.run_id, event.stage_id)
+        expected = (
+            projection.projection_checksum
+            if event.sequence <= len(history)
+            else self.load_projection(event.run_id, event.stage_id).projection_checksum
+        )
+        return self.commit_events(
+            (event,),
+            (projection,),
+            expected_projection_checksum=expected,
+        )[0]
 
     def plan(
         self,

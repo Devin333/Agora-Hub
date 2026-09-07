@@ -230,6 +230,24 @@ Each attempt MUST have `spawn_operation_key = group_id + wave_id + task_instance
 - **THEN** it MUST query the supervisor operation status and record the audited recovery decision
 - **AND** unknown status MUST become `SPAWN_UNKNOWN`, not permission to blindly repeat spawn
 
+#### Scenario: Admission publication fails after preparing readiness
+
+- **WHEN** any selected-task readiness, ledger projection, wave or intent write fails before the atomic batch commits
+- **THEN** the canonical history, visible task states and ledger MUST remain at the prior committed projection
+- **AND** no child may start and no unselected task may acquire an attempt reservation
+
+#### Scenario: A child budget envelope is not backed by its attempt ledger
+
+- **WHEN** an intent carries a valid self-checksum but its allocation or reservation revision differs from the committed attempt record
+- **THEN** live admission, recovery and offline replay MUST reject that intent
+- **AND** wave `budget_before_checksum` and `budget_after_checksum` MUST bind the actual ledger transition, not an independently constructed counter snapshot
+
+#### Scenario: An old committed batch is delivered again
+
+- **WHEN** an identical event/projection batch is redelivered after later transitions
+- **THEN** the store MUST verify each original event's historical projection reference and return without appending events or charging budget
+- **AND** partial batches, different projections and missing historical artifacts MUST fail closed without recreating or overwriting committed evidence
+
 #### Scenario: Child started before dispatch event was saved
 
 - **WHEN** the supervisor confirms an existing child but the dispatch event is absent

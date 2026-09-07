@@ -13,6 +13,9 @@ from framework.harness.task_plan.parallel import (
     spawn_operation_key,
 )
 from framework.harness.task_plan.replay import _apply_parallel_event, _projection_for_plan
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.canonical import canonical_payload_checksum
+from framework.harness.task_plan.models import TaskLifecycle
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
 from tests.framework.harness.agent_loop.test_orchestration_runtime import (
     _request as _parent_request,
@@ -22,12 +25,13 @@ from tests.framework.harness.task_plan.test_durable_task_plan_store import _Arti
 from tests.framework.harness.task_plan.test_parallel_orchestration import _accepted_parallel_plan, _request, _result
 
 
-@pytest.mark.parametrize("failed_event", ["TASK_WAVE_ADMITTED", "TASK_ATTEMPT_SPAWN_INTENT"])
+@pytest.mark.parametrize("failed_event", ["TASK_READY", "TASK_WAVE_ADMITTED", "TASK_ATTEMPT_SPAWN_INTENT"])
 def test_durable_admission_failure_exposes_no_wave_intent_or_child(failed_event):
     events = _EventStore(fail_on_event_type=failed_event)
+    store = _store(events, _ArtifactStore())
     calls = []
     runtime, identity = _runtime(
-        store=_store(events, _ArtifactStore()),
+        store=store,
         worker_executor=lambda *args: calls.append(args),
     )
 
@@ -36,9 +40,56 @@ def test_durable_admission_failure_exposes_no_wave_intent_or_child(failed_event)
     assert result.status != "succeeded"
     assert calls == []
     assert not any(event.event_type in {
+        "TASK_READY", "TASK_DISPATCHED", "TASK_STARTED",
         "TASK_WAVE_ADMITTED", "TASK_ATTEMPT_SPAWN_INTENT", "TASK_ATTEMPT_SPAWN_CONFIRMED",
         "TASK_WAVE_DISPATCHED",
     } for event in events._events)
+    projection = store.load_projection(identity.run_id, "delegate_stage")
+    ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+    assert ledger.ledger_version == 0 and not ledger.records
+    assert not any(ledger.counters().values())
+    assert all(task.status is TaskLifecycle.PENDING and task.attempts == 0 for task in projection.tasks)
+    runtime._child_supervisor.shutdown()
+
+
+def test_real_stage_commits_ready_budget_wave_and_intents_before_supervisor(monkeypatch):
+    events = _EventStore()
+    store = _store(events, _ArtifactStore())
+    runtime, identity = _runtime(store=store)
+    supervisor = runtime._child_supervisor
+    original = supervisor.spawn_batch
+    admissions = []
+
+    def spawn_batch(requests, *, workers):
+        history = store.read_events(identity.run_id, "delegate_stage")
+        projection = store.load_projection(identity.run_id, "delegate_stage")
+        ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+        assert [event.event_type for event in history[-5:]] == [
+            "TASK_READY", "TASK_READY", "TASK_WAVE_ADMITTED",
+            "TASK_ATTEMPT_SPAWN_INTENT", "TASK_ATTEMPT_SPAWN_INTENT",
+        ]
+        assert ledger.ledger_version == len(ledger.records) == len(requests) == 2
+        assert all(task.status is TaskLifecycle.READY for task in projection.tasks)
+        assert all(record["status"] == "RESERVED" for record in ledger.records.values())
+        assert sorted(item.budget["ledger_version"] for item in requests) == [1, 2]
+        assert history[-3].payload["budget_after_checksum"] == ledger.to_dict()["ledger_checksum"]
+        assert [dict(item.budget) for item in requests] == [dict(event.payload["budget_reservation"]) for event in history[-2:]]
+        admissions.append(ledger.to_dict())
+        return original(requests, workers=workers)
+
+    monkeypatch.setattr(supervisor, "spawn_batch", spawn_batch)
+    try:
+        assert runtime.dispatch(_parent_request(identity)).status == "succeeded"
+        assert len(admissions) == 1
+        ledger = TaskPlanBudgetLedger.from_snapshot(store.load_projection(identity.run_id, "delegate_stage").consumed_budget)
+        assert ledger.ledger_version == 4
+        assert ledger.counters()["consumed_max_turns"] == 2
+        assert ledger.counters()["reserved_max_turns"] == 0
+        history = store.read_events(identity.run_id, "delegate_stage")
+        last_receipt = max(event.sequence for event in history if event.event_type == "TASK_ATTEMPT_SPAWN_CONFIRMED")
+        assert all(event.sequence > last_receipt for event in history if event.event_type in {"TASK_DISPATCHED", "TASK_STARTED"})
+    finally:
+        supervisor.shutdown()
 
 
 def test_admission_commits_all_reservations_and_intents_before_spawn_and_dispatch_before_wait():
@@ -189,9 +240,6 @@ def spawn_history():
     projection = TaskPlanScheduler().reserve_ready_tasks(
         _projection_for_plan(plan, sequence=1), TaskPlanReadyDecision(request.task_instances),
     )
-    for instance in request.task_instances:
-        projection = TaskPlanScheduler.mark_dispatched(projection, instance)
-        projection = TaskPlanScheduler.mark_started(projection, instance)
     return projection, [dict(item) for item in events if item["event_type"] in {
         "TASK_GROUP_ADMITTED", "TASK_WAVE_ADMITTED", "TASK_WAVE_DISPATCHED",
         "TASK_ATTEMPT_SPAWN_INTENT", "TASK_ATTEMPT_SPAWN_CONFIRMED",
@@ -258,3 +306,41 @@ def test_replay_rejects_tampered_spawn_budget_reservation(spawn_history):
     intent["budget_reservation"]["reservation_checksum"] = "sha256:" + "0" * 64
     with pytest.raises(HarnessValidationError, match="budget reservation checksum"):
         _replay(projection, events)
+
+
+@pytest.mark.parametrize("field", ["ledger_version", "parent_allocation", "attempt_allocation"])
+def test_replay_rejects_self_consistent_budget_not_backed_by_ledger(spawn_history, field):
+    projection, events = spawn_history
+    intent = next(item for item in events if item["event_type"] == "TASK_ATTEMPT_SPAWN_INTENT")
+    budget = dict(intent["budget_reservation"])
+    budget[field] = 99 if field == "ledger_version" else {"turns": 99}
+    budget["reservation_checksum"] = canonical_payload_checksum({name: value for name, value in budget.items() if name != "reservation_checksum"})
+    intent["budget_reservation"] = budget
+    with pytest.raises(HarnessValidationError, match="differs from attempt ledger"):
+        _replay(projection, events)
+
+
+def test_dispatch_request_rejects_an_instance_with_unaccepted_budget():
+    from framework.harness.task_plan.models import TaskBudget
+
+    request = _request(_accepted_parallel_plan(("task-1",)))
+    fabricated = replace(request.task_instances[0], budget_snapshot=TaskBudget(max_turns=7))
+    with pytest.raises(HarnessValidationError, match="differs from accepted task"):
+        replace(request, task_instances=(fabricated,))
+
+
+@pytest.mark.parametrize("missing", ["last_intent", "admission", "interleaved"])
+def test_replay_rejects_non_atomic_intent_history(spawn_history, missing):
+    from framework.harness.task_plan.replay import _validate_atomic_wave_intents
+
+    _projection, events = spawn_history
+    intent_indices = [index for index, event in enumerate(events) if event["event_type"] == "TASK_ATTEMPT_SPAWN_INTENT"]
+    if missing == "last_intent":
+        events = events[:intent_indices[-1]]
+    elif missing == "admission":
+        events = [event for event in events if event["event_type"] != "TASK_WAVE_ADMITTED"]
+    else:
+        events.insert(intent_indices[-1], {"event_type": "TASK_STARTED"})
+    history = tuple(SimpleNamespace(event_type=event["event_type"], payload=event, sequence=index) for index, event in enumerate(events, 1))
+    with pytest.raises(HarnessValidationError):
+        _validate_atomic_wave_intents(history)

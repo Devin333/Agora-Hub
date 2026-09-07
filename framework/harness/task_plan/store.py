@@ -749,6 +749,13 @@ class TaskPlanStorePort(Protocol):
     def result_history_for(self, run_id: str, stage_id: str, plan_id: str, plan_version: int) -> tuple[TaskResultRecord, ...]: ...
     def append_event(self, event: TaskPlanEvent) -> str: ...
     def append_events(self, events: tuple[TaskPlanEvent, ...]) -> tuple[str, ...]: ...
+    def commit_events(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+    ) -> tuple[str, ...]: ...
     def commit_event(self, event: TaskPlanEvent, projection: TaskPlanProjection) -> str: ...
     def plan(self, run_id: str, stage_id: str, version: int | None = None) -> ValidatedTaskPlan | None: ...
     def patches_for(self, run_id: str, stage_id: str) -> tuple[PlanPatch, ...]: ...
@@ -766,6 +773,7 @@ class InMemoryTaskPlanStore:
         self._results: dict[tuple[str, str, str, int, int], TaskResultRecord] = {}
         self._projections: dict[tuple[str, str], TaskPlanProjection] = {}
         self._events: dict[tuple[str, str], list[TaskPlanEvent]] = {}
+        self._transition_projections: dict[tuple[str, str, str], TaskPlanProjection] = {}
 
     def append_candidate(self, candidate: PlanCandidate, *, event_type: str = "PLAN_CANDIDATE_BUILT") -> str:
         if not isinstance(candidate, PlanCandidate):
@@ -1411,20 +1419,23 @@ class InMemoryTaskPlanStore:
                 )
             return tuple(event.event_checksum for event in batch)
 
-    def commit_event(
+    def commit_events(
         self,
-        event: TaskPlanEvent,
-        projection: TaskPlanProjection,
-    ) -> str:
-        """Atomically append one decision event and its resulting projection."""
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+    ) -> tuple[str, ...]:
+        """Atomically append a transition batch and all of its projections."""
 
-        if not isinstance(event, TaskPlanEvent):
-            raise TypeError("event must be TaskPlanEvent")
-        if not isinstance(projection, TaskPlanProjection):
-            raise TypeError("projection must be TaskPlanProjection")
-        _require_live_graph_only(event, "event")
-        _require_live_graph_only(projection, "projection")
-        key = (event.run_id, event.stage_id)
+        batch = _validate_atomic_event_batch(events)
+        _validate_transition_projections(batch, projections)
+        expected_checksum = checksum(
+            expected_projection_checksum,
+            "expected_projection_checksum",
+        )
+        first = batch[0]
+        key = (first.run_id, first.stage_id)
         with self._lock:
             current = self._projections.get(key)
             if current is None:
@@ -1432,38 +1443,104 @@ class InMemoryTaskPlanStore:
                     "TaskPlan transition requires an accepted projection",
                     code="task_plan_projection_missing",
                 )
-            expected_sequence = self._next_sequence(event.run_id, event.stage_id)
-            if event.sequence != expected_sequence:
+            history = tuple(self._events.get(key, ()))
+            if _classify_atomic_event_batch_history(batch, history):
+                for event, projection in zip(batch, projections, strict=True):
+                    committed = self._transition_projections.get(
+                        (event.run_id, event.stage_id, event.event_checksum)
+                    )
+                    if committed is None or committed.projection_checksum != projection.projection_checksum:
+                        raise HarnessValidationError(
+                            "committed event projection differs from retry",
+                            code="task_plan_projection_mismatch",
+                        )
+                return tuple(event.event_checksum for event in batch)
+            if current.projection_checksum != expected_checksum:
+                raise HarnessValidationError(
+                    "projection CAS precondition differs from current state",
+                    code="task_plan_projection_mismatch",
+                )
+            expected_sequence = self._next_sequence(first.run_id, first.stage_id)
+            if batch[0].sequence != expected_sequence:
                 raise HarnessValidationError(
                     "event sequence is not monotonic",
                     code="task_plan_sequence_conflict",
-                    details={"expected": expected_sequence, "actual": event.sequence},
+                    details={"expected": expected_sequence, "actual": batch[0].sequence},
                 )
-            plan = self._current_plan(event.run_id, event.stage_id)
+            plan = self._current_plan(first.run_id, first.stage_id)
             if plan is None:
                 raise HarnessValidationError(
                     "TaskPlan transition requires an accepted plan",
                     code="task_plan_projection_missing",
                 )
-            _require_event_matches_plan(event, plan)
-            if not projection.matches_plan_identity(plan):
-                raise HarnessValidationError(
-                    "projection does not match the accepted plan",
-                    code="task_plan_projection_mismatch",
-                )
-            _require_projection_transition_identity(current, projection)
-            if projection.last_sequence != event.sequence:
-                raise HarnessValidationError(
-                    "projection sequence must match its causal event",
-                    code="task_plan_sequence_conflict",
-                    details={
-                        "event_sequence": event.sequence,
-                        "projection_sequence": projection.last_sequence,
-                    },
-                )
-            self._append_event(event)
-            self._projections[key] = projection
-            return event.event_checksum
+            for event, projection in zip(batch, projections, strict=True):
+                _require_event_matches_plan(event, plan)
+                if not projection.matches_plan_identity(plan):
+                    raise HarnessValidationError(
+                        "projection does not match the accepted plan",
+                        code="task_plan_projection_mismatch",
+                    )
+                _require_projection_transition_identity(current, projection)
+
+            prior_events = (
+                None
+                if key not in self._events
+                else list(self._events[key])
+            )
+            prior_projection = current
+            committed_keys = [
+                (event.run_id, event.stage_id, event.event_checksum)
+                for event in batch
+            ]
+            prior_committed = {
+                item: self._transition_projections.get(item)
+                for item in committed_keys
+            }
+            try:
+                self._events.setdefault(key, []).extend(batch)
+                for event, projection in zip(batch, projections, strict=True):
+                    self._transition_projections[
+                        (event.run_id, event.stage_id, event.event_checksum)
+                    ] = projection
+                self._projections[key] = projections[-1]
+            except BaseException:
+                if prior_events is None:
+                    self._events.pop(key, None)
+                else:
+                    self._events[key] = prior_events
+                self._projections[key] = prior_projection
+                for item, previous in prior_committed.items():
+                    if previous is None:
+                        self._transition_projections.pop(item, None)
+                    else:
+                        self._transition_projections[item] = previous
+                raise
+            return tuple(event.event_checksum for event in batch)
+
+    def commit_event(
+        self,
+        event: TaskPlanEvent,
+        projection: TaskPlanProjection,
+    ) -> str:
+        """Commit one event through the atomic transition boundary."""
+
+        if not isinstance(event, TaskPlanEvent):
+            raise TypeError("event must be TaskPlanEvent")
+        if not isinstance(projection, TaskPlanProjection):
+            raise TypeError("projection must be TaskPlanProjection")
+        key = (event.run_id, event.stage_id)
+        with self._lock:
+            history = tuple(self._events.get(key, ()))
+            expected = (
+                projection.projection_checksum
+                if event.sequence <= len(history)
+                else self._projections.get(key, projection).projection_checksum
+            )
+        return self.commit_events(
+            (event,),
+            (projection,),
+            expected_projection_checksum=expected,
+        )[0]
 
     def candidate(self, candidate_ref: str) -> PlanCandidate | None:
         with self._lock:
@@ -1575,6 +1652,32 @@ def _validate_atomic_event_batch(
                 details={"expected": expected_sequence, "actual": event.sequence},
             )
     return events
+
+
+def _validate_transition_projections(
+    events: tuple[TaskPlanEvent, ...],
+    projections: tuple[TaskPlanProjection, ...],
+) -> None:
+    """Validate the immutable event-to-projection correspondence of a batch."""
+
+    if not isinstance(projections, tuple) or len(projections) != len(events):
+        raise HarnessValidationError(
+            "TaskPlan transition batch requires one projection per event",
+            code="task_plan_projection_mismatch",
+        )
+    for event, projection in zip(events, projections, strict=True):
+        if not isinstance(projection, TaskPlanProjection):
+            raise TypeError("projections must contain only TaskPlanProjection values")
+        _require_live_graph_only(projection, "projection")
+        if projection.last_sequence != event.sequence:
+            raise HarnessValidationError(
+                "projection sequence must match its causal event",
+                code="task_plan_sequence_conflict",
+                details={
+                    "event_sequence": event.sequence,
+                    "projection_sequence": projection.last_sequence,
+                },
+            )
 
 
 def _classify_atomic_event_batch_history(
