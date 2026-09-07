@@ -599,7 +599,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                         and result.attempt < resolved.normalized_retry_policy.max_attempts
                     ):
                         current = self.store.load_projection(request.run_id, request.stage_id)
-                        retry_tasks = tuple(replace(item, status=TaskLifecycle.PENDING, active_instance_id=None, failure_reason_code=None) if item.task_id == result.task_id else item for item in current.tasks)
+                        retry_tasks = tuple(item.transitioned(TaskLifecycle.PENDING, active_instance_id=None, failure_reason_code=None) if item.task_id == result.task_id else item for item in current.tasks)
                         sequence = self._next_sequence(request)
                         retry_projection = replace(
                             current,
@@ -740,13 +740,25 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             dispatch_capacity = self.parallel_coordinator.dispatch_parallelism(admission)
             if self._recover_failed_task_retries(request, plan, projection):
                 continue
-            decision = self.scheduler.next_task_plan_decision(
-                projection,
-                dispatch_capacity,
-                plan=plan,
-                policy=policy,
-                available_input_refs=tuple(request.context_refs.values()),
+            admitted_instances = tuple(
+                task_instance_for_attempt(
+                    plan, item.task_id, item.attempts,
+                    task_instance_id=item.active_instance_id,
+                )
+                for item in projection.tasks
+                if item.status is TaskLifecycle.ADMITTED
             )
+            # Resume the durable wave without allocating another attempt or queue message.
+            if admitted_instances:
+                decision = TaskPlanReadyDecision(admitted_instances)
+            else:
+                decision = self.scheduler.next_task_plan_decision(
+                    projection,
+                    dispatch_capacity,
+                    plan=plan,
+                    policy=policy,
+                    available_input_refs=tuple(request.context_refs.values()),
+                )
             if not decision.task_requests:
                 pending = [
                     item.task_id
@@ -755,6 +767,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     in {
                         TaskLifecycle.PENDING,
                         TaskLifecycle.READY,
+                        TaskLifecycle.ADMITTED,
                         TaskLifecycle.DISPATCHED,
                         TaskLifecycle.RUNNING,
                     }
@@ -881,9 +894,8 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         if result.error_code in retryable_codes and result.attempt < resolved.normalized_retry_policy.max_attempts:
             current = self.store.load_projection(request.run_id, request.stage_id)
             retry_tasks = tuple(
-                replace(
-                    item,
-                    status=TaskLifecycle.PENDING,
+                item.transitioned(
+                    TaskLifecycle.PENDING,
                     active_instance_id=None,
                     failure_reason_code=None,
                 )
@@ -1198,6 +1210,9 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         for event in batch:
             sequence = len(history) + len(transitions) + 1
             transitions.append(replace(event, sequence=sequence))
+            if event.event_type == "TASK_WAVE_ADMITTED":
+                for instance in instances:
+                    projected = self.scheduler.mark_task_plan_admitted(projected, instance)
             projected = replace(projected, last_sequence=sequence)
             projections.append(projected)
             if event.event_type == "TASK_WAVE_DISPATCHED":
@@ -1344,9 +1359,8 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 )
             current = self.store.load_projection(request.run_id, request.stage_id)
             retry_tasks = tuple(
-                replace(
-                    item,
-                    status=TaskLifecycle.PENDING,
+                item.transitioned(
+                    TaskLifecycle.PENDING,
                     active_instance_id=None,
                     failure_reason_code=None,
                 )

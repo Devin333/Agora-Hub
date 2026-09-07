@@ -54,6 +54,7 @@ from framework.harness.task_plan.parallel_state import (
 from framework.harness.task_plan.submission import CandidateSubmission, submissions_from_events
 from framework.harness.task_plan.submission_result import submission_result_from_event
 from framework.harness.task_plan.parallel_admission import validate_group_plan_binding, validate_wave_admission_slot
+from framework.harness.task_plan.task_lifecycle import ACTIVE_TASK_STATES as _ACTIVE_TASK_STATES
 
 
 TASK_PLAN_REPLAY_REDUCER_VERSION_V3 = "newsroom.harness-task-plan-replay/v3"
@@ -70,9 +71,6 @@ _GRAPH_REPLAY_IDENTITY_FIELDS = (
     "stage_binding_checksum",
     "stage_identity_schema",
     "stage_identity_checksum",
-)
-_ACTIVE_TASK_STATES = frozenset(
-    {TaskLifecycle.READY, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
 )
 _TASK_RESULT_EVENTS = frozenset(
     {"TASK_RESULT_ACCEPTED", "TASK_RESULT_REJECTED"}
@@ -714,6 +712,11 @@ class TaskPlanReplayReducer:
                     parallel_spawn_operations,
                 )
                 if event.event_type == "TASK_WAVE_ADMITTED":
+                    for task_id in event.payload["wave"]["task_ids"]:
+                        state = next(item for item in projection.tasks if item.task_id == task_id)
+                        projection = TaskPlanScheduler.mark_admitted(
+                            projection, task_instance_for_attempt(current_plan, task_id, state.attempts),
+                        )
                     ready_batch_budget_checksum = None
                     ready_batch_tasks = []
                 parallel_event_sequence = event.sequence
@@ -2451,7 +2454,7 @@ def _apply_terminal_result(
         state is None
         or state.active_instance_id != result.task_instance_id
         or state.attempts != result.attempt
-        or state.status not in {TaskLifecycle.READY, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
+        or state.status not in {TaskLifecycle.READY, TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
     ):
         raise HarnessValidationError(
             "TaskPlan terminal result does not match active projection",
@@ -2509,9 +2512,8 @@ def _apply_terminal_result(
             output_role=result.output_roles[0],
             output_schema_ref=result.output_schema_ref,
         )
-        updated = replace(
-            state,
-            status=TaskLifecycle.SUCCEEDED,
+        updated = state.transitioned(
+            TaskLifecycle.SUCCEEDED,
             active_instance_id=None,
             result=reference_value,
             failure_reason_code=None,
@@ -2522,9 +2524,8 @@ def _apply_terminal_result(
                 "TASK_FAILED requires failed result evidence",
                 code="task_plan_replay_result_mismatch",
             )
-        updated = replace(
-            state,
-            status=TaskLifecycle.FAILED,
+        updated = state.transitioned(
+            TaskLifecycle.FAILED,
             active_instance_id=result.task_instance_id,
             failure_reason_code=result.error_code or event.reason_code or "task_failed",
         )
@@ -2606,9 +2607,8 @@ def _schedule_retry(
                 "actual": event.input_checksum,
             },
         )
-    updated = replace(
-        state,
-        status=TaskLifecycle.PENDING,
+    updated = state.transitioned(
+        TaskLifecycle.PENDING,
         active_instance_id=None,
         failure_reason_code=None,
     )

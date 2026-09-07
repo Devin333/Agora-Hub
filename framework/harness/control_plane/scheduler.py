@@ -286,6 +286,9 @@ class HarnessScheduler:
     def mark_task_plan_dispatched(self, projection: Any, instance: Any) -> Any:
         return self._task_plan_scheduler.mark_dispatched(projection, instance)
 
+    def mark_task_plan_admitted(self, projection: Any, instance: Any) -> Any:
+        return self._task_plan_scheduler.mark_admitted(projection, instance)
+
     def mark_task_plan_started(self, projection: Any, instance: Any) -> Any:
         return self._task_plan_scheduler.mark_started(projection, instance)
 

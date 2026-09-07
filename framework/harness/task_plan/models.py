@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Self
 
@@ -28,6 +28,7 @@ from framework.harness.task_plan.canonical import (
 )
 from framework.harness.task_plan.forbidden import ensure_candidate_only
 from framework.harness.task_plan.identity import TaskPlanStageIdentity
+from framework.harness.task_plan.task_lifecycle import TaskLifecycle, validate_task_transition
 from framework.harness.task_plan.schema import (
     DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
     GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA,
@@ -1423,7 +1424,24 @@ class TaskInstance:
         object.__setattr__(self, "idempotency_key", identifier(self.idempotency_key, "idempotency_key"))
         object.__setattr__(self, "fencing_token", identifier(self.fencing_token, "fencing_token"))
         object.__setattr__(self, "budget_snapshot", _model(self.budget_snapshot, TaskBudget, "budget_snapshot"))
+        digest = canonical_payload_checksum(self.attempt_identity()).removeprefix("sha256:")
+        for name, prefix in (
+            ("task_instance_id", "ti_"), ("idempotency_key", "idem_"), ("fencing_token", "fence_"),
+        ):
+            if getattr(self, name) != prefix + digest:
+                raise HarnessValidationError(
+                    "task instance does not match deterministic attempt identity",
+                    code="task_plan_task_instance_mismatch", details={"field": name, "task_id": self.task_id},
+                )
         object.__setattr__(self, "instance_checksum", canonical_payload_checksum(self.checksum_projection()))
+
+    def attempt_identity(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id, "stage_id": self.stage_id, "plan_id": self.plan_id,
+            "plan_version": self.plan_version, "plan_checksum": self.plan_checksum,
+            "task_id": self.task_id, "task_definition_checksum": self.task_definition_checksum,
+            "attempt": self.attempt,
+        }
 
     def checksum_projection(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -1540,18 +1558,6 @@ class TaskInstance:
         return instance
 
 
-class TaskLifecycle(StrEnum):
-    PENDING = "pending"
-    READY = "ready"
-    DISPATCHED = "dispatched"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-    BLOCKED = "blocked"
-    BLOCKED_DEPENDENCY = "blocked_dependency"
-
-
 @dataclass(frozen=True, slots=True)
 class TaskProjection:
     task_id: str
@@ -1575,7 +1581,10 @@ class TaskProjection:
             "task_definition_checksum",
             checksum(self.task_definition_checksum, "task_definition_checksum"),
         )
-        status = TaskLifecycle(self.status)
+        try:
+            status = TaskLifecycle(self.status)
+        except (TypeError, ValueError) as exc:
+            raise HarnessValidationError("unknown task projection state", code="invalid_task_projection") from exc
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "attempts", non_negative_int(self.attempts, "attempts"))
         object.__setattr__(
@@ -1592,6 +1601,17 @@ class TaskProjection:
             "failure_reason_code",
             identifier(self.failure_reason_code, "failure_reason_code") if self.failure_reason_code is not None else None,
         )
+        if self.active_instance_id is not None and self.attempts == 0:
+            raise HarnessValidationError("active task requires an allocated attempt", code="invalid_task_projection")
+        if status in {TaskLifecycle.READY, TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING} and self.active_instance_id is None:
+            raise HarnessValidationError("executing task requires an active instance", code="invalid_task_projection")
+        if status in {
+            TaskLifecycle.PENDING, TaskLifecycle.SUCCEEDED, TaskLifecycle.BLOCKED_DEPENDENCY,
+            TaskLifecycle.CANCELLED, TaskLifecycle.INDETERMINATE, TaskLifecycle.QUARANTINED,
+        } and self.active_instance_id is not None:
+            raise HarnessValidationError("task state cannot retain an active instance", code="invalid_task_projection")
+        if status in {TaskLifecycle.INDETERMINATE, TaskLifecycle.QUARANTINED} and self.attempts == 0:
+            raise HarnessValidationError("attempt outcome requires an allocated attempt", code="invalid_task_projection")
         if status is TaskLifecycle.SUCCEEDED and result is None:
             raise HarnessValidationError(
                 "succeeded task projection requires a committed result reference",
@@ -1605,6 +1625,21 @@ class TaskProjection:
                 details={"task_id": self.task_id},
             )
         object.__setattr__(self, "projection_checksum", canonical_payload_checksum(self.checksum_projection()))
+
+    def transitioned(self, status: TaskLifecycle | str, **changes: Any) -> Self:
+        if set(changes) - {"attempts", "active_instance_id", "result", "failure_reason_code"}:
+            raise HarnessValidationError("task transition cannot change definition identity", code="invalid_task_projection")
+        validate_task_transition(self.status, status)
+        updated = replace(self, status=status, **changes)
+        if updated.attempts < self.attempts or updated.attempts > self.attempts + 1:
+            raise HarnessValidationError("task transition has invalid attempt sequence", code="invalid_task_projection")
+        if updated.attempts != self.attempts and updated.status not in {TaskLifecycle.READY, TaskLifecycle.ADMITTED}:
+            raise HarnessValidationError("only admission may allocate an attempt", code="invalid_task_projection")
+        if self.active_instance_id is not None and updated.active_instance_id not in {None, self.active_instance_id}:
+            raise HarnessValidationError("task transition cannot substitute its active attempt", code="invalid_task_projection")
+        if updated.status is self.status and self.status not in {TaskLifecycle.PENDING, TaskLifecycle.READY} and updated != self:
+            raise HarnessValidationError("repeated task transition cannot rewrite evidence", code="invalid_task_projection")
+        return updated
 
     def checksum_projection(self) -> dict[str, Any]:
         return {

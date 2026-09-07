@@ -50,8 +50,8 @@ from framework.harness.task_plan.parallel_lifecycle import (
     ReservationState,
     SideEffectClass,
     _GROUP_TRANSITIONS,
-    _WAVE_TRANSITIONS,
 )
+from framework.harness.task_plan.parallel_state import validate_group_transition, validate_wave_transition
 from framework.harness.task_plan.capacity import CapacityPool, TaskCapacityDemand, pack_first_fit
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
@@ -373,15 +373,10 @@ class DispatchGroup:
         return group
 
     def transitioned(self, state: DispatchGroupState | str) -> "DispatchGroup":
+        validate_group_transition(self.state, state)
         target = DispatchGroupState(state)
         if target is self.state:
             return self
-        if target not in _GROUP_TRANSITIONS[self.state]:
-            raise HarnessValidationError(
-                "DispatchGroup transition is not allowed",
-                code="TASK_GROUP_INVALID_TRANSITION",
-                details={"from_state": self.state.value, "to_state": target.value},
-            )
         return replace(self, state=target)
 
 
@@ -509,6 +504,7 @@ class DispatchWave:
         *,
         terminal_outcome: DispatchWaveTerminalOutcome | str | None = None,
     ) -> "DispatchWave":
+        validate_wave_transition(self.state, state)
         target = DispatchWaveState(state)
         if target is not DispatchWaveState.TERMINAL and terminal_outcome is not None:
             raise HarnessValidationError(
@@ -522,12 +518,6 @@ class DispatchWave:
                     code="TASK_WAVE_INVALID_TRANSITION",
                 )
             return self
-        if target not in _WAVE_TRANSITIONS[self.state]:
-            raise HarnessValidationError(
-                "DispatchWave transition is not allowed",
-                code="TASK_WAVE_INVALID_TRANSITION",
-                details={"from_state": self.state.value, "to_state": target.value},
-            )
         return replace(self, state=target, terminal_outcome=terminal_outcome)
 
 

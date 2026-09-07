@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.dag import task_dependency_depths
+from framework.harness.task_plan.task_lifecycle import DEPENDENCY_FAILURE_STATES
 from framework.harness.task_plan.models import (
     ResolvedTaskSpec,
     TaskLifecycle,
@@ -31,8 +32,10 @@ def terminal_task_failure(plan: ValidatedTaskPlan, task_projection: TaskProjecti
     """
 
     definition = _definition_for_projection(plan, task_projection)
-    if task_projection.status is not TaskLifecycle.FAILED:
+    if task_projection.status not in DEPENDENCY_FAILURE_STATES:
         return False
+    if task_projection.status is not TaskLifecycle.FAILED:
+        return True
     retry_policy = definition.normalized_retry_policy
     return (
         task_projection.failure_reason_code
@@ -136,9 +139,8 @@ def block_dependency_task(
             state.active_instance_id, task_id, state.attempts,
             reason_code=TASK_BLOCKED_UPSTREAM_FAILURE,
         ).snapshot()
-    blocked = replace(
-        state,
-        status=TaskLifecycle.BLOCKED_DEPENDENCY,
+    blocked = state.transitioned(
+        TaskLifecycle.BLOCKED_DEPENDENCY,
         active_instance_id=None,
         result=None,
         failure_reason_code=TASK_BLOCKED_UPSTREAM_FAILURE,

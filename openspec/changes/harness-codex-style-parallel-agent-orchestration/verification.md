@@ -372,6 +372,62 @@ shared RefAuthority, authoritative expiring capacity reservations, capacity-wait
 READY without an attempt allocation, and full cancellation/reclaim settlement
 remain outside this increment. Production defaults and feature flags are unchanged.
 
+## Task 1.3: Versioned Lifecycle Contracts (2026-09-07)
+
+Task 1.3 is complete; task 1.4 is the next unchecked item. This is contract
+acceptance only, not completion of G1-G5 or permission to enable production
+parallel orchestration. Earlier task 2.3 readiness/order edits remain deferred
+in a separate Git stash and are not part of this increment.
+
+- `TaskInstance`, `TaskProjection`, and their containing `TaskPlanProjection`
+  use v3 live contracts. Old v2 payloads are rejected explicitly, including a
+  checksummed old parent/child snapshot; no live compatibility reader or
+  automatic migration is introduced. Graph identity remains Graph v2.
+- Task-instance, idempotency, and fencing identifiers retain their established
+  deterministic derivation, but both construction and readback now validate
+  them. Recomputed envelope checksums do not authorize identity substitution.
+  Existing instance identity has a retained v2 golden checksum proving the
+  schema tag is the intended serialized change.
+- Canonical task states now include `ADMITTED`, `CANCELLED`, `INDETERMINATE`,
+  `QUARANTINED`, and existing `BLOCKED_DEPENDENCY`. Shared transition validation
+  enforces state edges, active-attempt coherence, attempt sequencing, immutable
+  task definition identity and terminal evidence. Scheduler, result commit,
+  retry, dependency blocking, and replay use that validation.
+- Real Stage wave admission persists selected tasks as `ADMITTED` in the same
+  batch as the wave, budget and spawn intents. Dispatch/start advance the same
+  attempt; replay and checkpoint reconstruct identical admission projections.
+  Recovery retains wave-coordinator ownership instead of producing a new queue
+  message or queue reclaim. Crash recovery regressions retain child counts.
+- All non-success dependency terminal states share one classification, so
+  cancelled, indeterminate and quarantined predecessors close unadmitted
+  transitive descendants without creating attempts. Retryable `FAILED` below
+  the pinned limit remains non-terminal for dependency propagation.
+- Group and wave models share their transition validators with replay. Tests
+  cover every `REPLAN_PENDING` successor, all seven typed wave terminal
+  outcomes, stable admission identity, and rejection of terminal rewrites.
+
+Final validation on the completed code:
+
+- Lifecycle, dependency, admission, coordinator, spawn recovery, durable store
+  and queue/checkpoint recovery focused suite: `383 passed` in 79.78 seconds.
+- Independent canonical event suite: `463 passed` in 48.98 seconds.
+- Required repository smoke: exit 0; compile passed;
+  `2969 passed, 23 deselected, 23 warnings` in 1106.03 seconds.
+- Offline AgentLoop smoke: succeeded, 3 fixture LLM calls, 1 tool call,
+  0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-9ceb7a373dcc4c5a98c62eeaa14787f6/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings.
+- Strict OpenSpec validation and `git diff --check`: passed.
+- One earlier smoke was stopped to address review findings and does not count
+  as passing evidence. Existing FastAPI/Starlette and PyMuPDF deprecations remain.
+- Independent read-only re-review confirmed the dependency closure, malformed
+  READY projection and schema-version findings are fixed, with no new confirmed
+  regression in the bounded state/identity/admission/replay review surface.
+
+Full cancellation/quarantine attempt history, expanded budget settlement,
+shared RefAuthority, authoritative capacity, and parent continuation remain in
+their later unchecked tasks. Static Research and feature defaults are unchanged.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

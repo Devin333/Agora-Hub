@@ -23,6 +23,7 @@ from framework.harness.task_plan.models import (
     ValidatedTaskPlan,
 )
 from framework.harness.task_plan.policy import TaskPlanPolicy
+from framework.harness.task_plan.task_lifecycle import DEPENDENCY_FAILURE_STATES
 from framework.harness.task_plan.queue import TaskPlanQueueProjection
 from framework.harness.task_plan.schema import (
     GRAPH_ONLY_TASK_INSTANCE_SCHEMA,
@@ -99,6 +100,7 @@ class TaskPlanScheduler:
             state.status
             in {
                 TaskLifecycle.READY,
+                TaskLifecycle.ADMITTED,
                 TaskLifecycle.DISPATCHED,
                 TaskLifecycle.RUNNING,
             }
@@ -117,12 +119,7 @@ class TaskPlanScheduler:
                 continue
             dependency_states = tuple(states[dependency].status for dependency in definition.depends_on)
             if any(
-                status in {
-                    TaskLifecycle.FAILED,
-                    TaskLifecycle.BLOCKED,
-                    TaskLifecycle.BLOCKED_DEPENDENCY,
-                    TaskLifecycle.SKIPPED,
-                }
+                status in DEPENDENCY_FAILURE_STATES
                 for status in dependency_states
             ):
                 blocked.append(task_id)
@@ -210,6 +207,16 @@ class TaskPlanScheduler:
                     code="task_plan_task_not_pending",
                     details={"task_id": task_id, "status": state.status.value},
                 )
+            elif instance.attempt != state.attempts + 1:
+                raise HarnessValidationError(
+                    "pending task must allocate the next attempt",
+                    code="task_plan_task_instance_mismatch", details={"task_id": task_id},
+                )
+            if instance.task_definition_checksum != state.task_definition_checksum:
+                raise HarnessValidationError(
+                    "ready decision differs from accepted task definition",
+                    code="task_plan_task_instance_mismatch", details={"task_id": task_id},
+                )
             if not instance.matches_plan_projection_identity(projection):
                 raise HarnessValidationError(
                     "ready decision task instance is outside the accepted projection",
@@ -217,9 +224,8 @@ class TaskPlanScheduler:
                     details={"task_id": task_id},
                 )
         tasks = tuple(
-            replace(
-                state,
-                status=TaskLifecycle.READY,
+            state.transitioned(
+                TaskLifecycle.READY,
                 attempts=selected[state.task_id].attempt,
                 active_instance_id=selected[state.task_id].task_instance_id,
             )
@@ -232,6 +238,10 @@ class TaskPlanScheduler:
             raise HarnessValidationError("budget ledger owner differs from projection", code="task_plan_budget_identity_conflict")
         budget = ledger.reserve(decision.task_instances).snapshot()
         return replace(projection, tasks=tasks, consumed_budget=budget)
+
+    @staticmethod
+    def mark_admitted(projection: TaskPlanProjection, instance: TaskInstance) -> TaskPlanProjection:
+        return _transition_task(projection, instance, TaskLifecycle.ADMITTED)
 
     @staticmethod
     def mark_dispatched(projection: TaskPlanProjection, instance: TaskInstance) -> TaskPlanProjection:
@@ -260,7 +270,7 @@ class TaskPlanScheduler:
                 raise HarnessValidationError("only dispatched or running tasks may be reclaimed", code="task_plan_task_not_stale")
             if task_instance_id is not None and state.active_instance_id != task_instance_id:
                 raise HarnessValidationError("stale task instance does not match projection", code="task_plan_task_instance_mismatch")
-            tasks.append(replace(state, status=TaskLifecycle.READY))
+            tasks.append(state.transitioned(TaskLifecycle.READY))
         if not found:
             raise HarnessValidationError("task is missing from projection", code="task_plan_projection_incomplete")
         return replace(projection, tasks=tuple(tasks))
@@ -392,7 +402,11 @@ def _transition_task(
             tasks.append(state)
             continue
         found = True
-        if state.active_instance_id != instance.task_instance_id or state.attempts != instance.attempt:
+        if (
+            state.active_instance_id != instance.task_instance_id
+            or state.attempts != instance.attempt
+            or state.task_definition_checksum != instance.task_definition_checksum
+        ):
             raise HarnessValidationError(
                 "task instance does not match reserved projection",
                 code="task_plan_task_instance_mismatch",
@@ -401,17 +415,7 @@ def _transition_task(
         if state.status is status:
             tasks.append(state)
             continue
-        allowed_previous = {
-            TaskLifecycle.DISPATCHED: {TaskLifecycle.READY},
-            TaskLifecycle.RUNNING: {TaskLifecycle.DISPATCHED},
-        }.get(status, frozenset())
-        if state.status not in allowed_previous:
-            raise HarnessValidationError(
-                "invalid TaskPlan task state transition",
-                code="task_plan_invalid_task_transition",
-                details={"task_id": instance.task_id, "from": state.status.value, "to": status.value},
-            )
-        tasks.append(replace(state, status=status))
+        tasks.append(state.transitioned(status))
     if not found:
         raise HarnessValidationError("task is missing from projection", code="task_plan_projection_incomplete")
     return replace(projection, tasks=tuple(tasks))

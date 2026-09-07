@@ -22,6 +22,19 @@ The TaskPlan scheduler SHALL mark a task ready only when all required dependenci
 - **THEN** Harness MUST reserve their task identities, capacity, and normalized budgets before creating child attempts
 - **AND** every child attempt MUST reference the same accepted plan version, group id, and wave id
 
+#### Scenario: Admitted attempt is not a fresh ready task
+
+- **WHEN** the durable wave admission and spawn intent batch has committed but dispatch is not yet confirmed
+- **THEN** selected task projections MUST carry `ADMITTED` with their original active attempt and reservation
+- **AND** checkpoint and offline replay MUST reconstruct that state without allocating another attempt
+- **AND** recovery MUST retain coordinator ownership rather than enqueue or reclaim the admitted attempt as an ordinary queue task
+
+#### Scenario: Versioned task state rejects identity substitution
+
+- **WHEN** a task projection or attempt payload is deserialized or transitioned
+- **THEN** Harness MUST reject unsupported schemas, inconsistent state/attempt fields, changed deterministic instance/idempotency/fencing identity, illegal state transitions and rewritten terminal evidence
+- **AND** re-computing an envelope checksum MUST NOT authorize replacing the accepted attempt identity
+
 #### Scenario: Budget reservation fails
 
 - **WHEN** a ready task cannot reserve its normalized budget

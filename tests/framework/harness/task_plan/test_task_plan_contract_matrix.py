@@ -265,7 +265,7 @@ def test_contracts_are_immutable_canonical_and_fail_closed_on_tamper():
                 task_definition_checksum=plan.tasks[0].task_definition_checksum,
                 status=TaskLifecycle.SUCCEEDED,
                 attempts=1,
-                active_instance_id="instance-1",
+                active_instance_id=None,
                 result=result_ref,
             ),
         ),

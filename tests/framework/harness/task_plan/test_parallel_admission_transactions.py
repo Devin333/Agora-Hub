@@ -59,7 +59,8 @@ def _wave_batch(store, plan, group, index, ordinal):
             "budget_after_checksum": TaskPlanBudgetLedger.from_snapshot(ready.consumed_budget).to_dict()["ledger_checksum"],
         }),
     )
-    return initial, wave, events, (ready, replace(ready, last_sequence=events[-1].sequence))
+    admitted_projection = TaskPlanScheduler.mark_admitted(ready, instance)
+    return initial, wave, events, (ready, replace(admitted_projection, last_sequence=events[-1].sequence))
 
 
 def test_second_active_wave_cannot_commit_even_from_latest_projection(admitted):

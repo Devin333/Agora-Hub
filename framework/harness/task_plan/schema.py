@@ -20,10 +20,10 @@ GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA = "newsroom.harness-task-plan-candidate/v2"
 GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA = "newsroom.harness-task-plan/v2"
 GRAPH_ONLY_TASK_PLAN_PATCH_SCHEMA = "newsroom.harness-task-plan-patch/v2"
 TASK_PLAN_POLICY_SCHEMA = "newsroom.harness-task-plan-policy/v1"
-GRAPH_ONLY_TASK_INSTANCE_SCHEMA = "newsroom.harness-task-instance/v2"
-GRAPH_ONLY_TASK_PROJECTION_SCHEMA = "newsroom.harness-task-projection/v2"
+GRAPH_ONLY_TASK_INSTANCE_SCHEMA = "newsroom.harness-task-instance/v3"
+GRAPH_ONLY_TASK_PROJECTION_SCHEMA = "newsroom.harness-task-projection/v3"
 GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA = (
-    "newsroom.harness-task-plan-projection/v2"
+    "newsroom.harness-task-plan-projection/v3"
 )
 TASK_RESULT_REFERENCE_SCHEMA = "newsroom.harness-task-result-reference/v1"
 TASK_CAPABILITY_BINDING_SCHEMA = "newsroom.harness-task-capability-binding/v1"

@@ -332,6 +332,7 @@ class TaskPlanRecoveryService:
             in {
                 TaskLifecycle.PENDING,
                 TaskLifecycle.READY,
+                TaskLifecycle.ADMITTED,
                 TaskLifecycle.DISPATCHED,
                 TaskLifecycle.RUNNING,
             }

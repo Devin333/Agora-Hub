@@ -98,6 +98,10 @@ predecessor 不可恢复失败后，coordinator 按 stable DAG order 将未 admi
 
 ### 7. State machine and event contract
 
+G1 task contract 使用 `TaskProjection`、`TaskInstance`、`TaskPlanProjection` v3，包含 `ADMITTED`、`CANCELLED`、`INDETERMINATE`、`QUARANTINED` 和既有 `BLOCKED_DEPENDENCY`；Graph-only `TaskInstance` 保留既有 deterministic ID 算法，但构造和反序列化均验证 task-instance/idempotency/fencing identity，不能用重算 envelope checksum 掩盖身份替换。旧 v2 只属于离线 migration 范围，不由 live reader 静默解释。task transition 不得改变 task definition、跳过 attempt 序号、替换 active attempt 或改写终态证据。`READY`、`ADMITTED`、`DISPATCHED`、`RUNNING` 必须持有已分配的 active attempt。成功状态只携带已提交 result；`PENDING`、`BLOCKED_DEPENDENCY`、`CANCELLED`、`INDETERMINATE`、`QUARANTINED` 不携带 active instance。所有失败终态共享 dependency failure 分类，关闭未 admission 的后继；只有 policy 尚允许的 `FAILED` retry 暂不传播终态。
+
+真实 Stage 在 `TASK_WAVE_ADMITTED` 对应 projection 中将选中任务从 `READY` 转为 `ADMITTED`，与 wave、预算和 spawn intents 同批持久化；确认 dispatch 后再进入 `DISPATCHED` / `RUNNING`。scheduler 不把 `ADMITTED` 当作新 ready 候选，checkpoint/replay 保留其 active attempt；恢复交还既有 wave coordinator，不生成普通 queue message 或 queue reclaim。共享 task/group/wave transition validators 仅验证合同，retry policy、完整 cancellation/quarantine receipt history 和授权仍由各自后续任务的 owner 实现。
+
 每个 `DispatchGroup` 使用 canonical 状态：`PLANNED -> ADMITTED -> DISPATCHING -> RUNNING -> JOINING -> SUCCEEDED | FAILED | CANCELLED | INDETERMINATE | HALTED`。尚有 READY task 时允许 `RUNNING -> DISPATCHING -> RUNNING`。`JOINING -> REPLAN_PENDING -> SUPERSEDED | FAILED | HALTED` 是 durable 状态分支，不是隐式诊断；`REPLAN_PENDING` 为非终态，不向 parent 暴露为最终 outcome。`DispatchWave` 使用 `PLANNED -> ADMITTED -> DISPATCHING -> RUNNING -> TERMINAL`，terminal outcome 为 `SUCCEEDED | PARTIAL_FAILED | FAILED | CANCELLED | INDETERMINATE | RECLAIMED | DEADLINE_EXCEEDED`。每个 transition 必须声明唯一 owner、规范 event name、幂等 key、允许后继、terminality 和 recovery 行为。同一 group 只允许一个 active wave admission transaction。
 
 | Group transition | Canonical event | 唯一 owner | Recovery / terminal rule |

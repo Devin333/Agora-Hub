@@ -12,10 +12,12 @@ from framework.harness.task_plan.parallel import (
     ParallelEventSink,
     spawn_operation_key,
 )
-from framework.harness.task_plan.replay import _apply_parallel_event, _projection_for_plan
+from framework.harness.task_plan.replay import TaskPlanReplayReducer, _apply_parallel_event, _projection_for_plan
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.task_plan.models import TaskLifecycle
+from framework.harness.task_plan.recovery import TaskPlanRecoveryService
+from framework.harness.task_plan.checkpoint import TaskPlanCheckpoint
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
 from tests.framework.harness.agent_loop.test_orchestration_runtime import (
     _request as _parent_request,
@@ -69,7 +71,28 @@ def test_real_stage_commits_ready_budget_wave_and_intents_before_supervisor(monk
             "TASK_ATTEMPT_SPAWN_INTENT", "TASK_ATTEMPT_SPAWN_INTENT",
         ]
         assert ledger.ledger_version == len(ledger.records) == len(requests) == 2
-        assert all(task.status is TaskLifecycle.READY for task in projection.tasks)
+        assert all(task.status is TaskLifecycle.ADMITTED for task in projection.tasks)
+        plan = store.plan(identity.run_id, "delegate_stage")
+        report = TaskPlanReplayReducer().replay((plan,), history, require_terminal_events=False)
+        assert report.projection == projection
+        assert {item.task_instance_id for item in report.active_task_instances} == {
+            item.active_instance_id for item in projection.tasks
+        }
+        class QueueReader:
+            def read_task_plan_queue(self, *, queue_name, task_instance_ids):
+                assert task_instance_ids == ()
+                return ()
+
+        checkpoint = TaskPlanCheckpoint.from_replay(
+            "admitted-checkpoint", plan, report, created_at="2026-09-07T00:00:00Z",
+        )
+        recovered = TaskPlanRecoveryService(queue_reader=QueueReader()).recover(
+            (plan,), history, checkpoint=TaskPlanCheckpoint.from_dict(checkpoint.to_dict()),
+        )
+        assert recovered.checkpoint_verified
+        assert recovered.report.projection == projection
+        assert recovered.missing_queue_projections == ()
+        assert recovered.reclaim_continuations == ()
         assert all(record["status"] == "RESERVED" for record in ledger.records.values())
         assert sorted(item.budget["ledger_version"] for item in requests) == [1, 2]
         assert history[-3].payload["budget_after_checksum"] == ledger.to_dict()["ledger_checksum"]

@@ -1224,11 +1224,11 @@ class InMemoryTaskPlanStore:
                 if not result.output_roles:
                     raise HarnessValidationError("successful task result requires an output role", code="task_plan_result_invalid")
                 reference = TaskResultReference(result_ref=result.result_ref or "task-result:" + result.result_checksum, result_checksum=result.result_checksum, output_role=result.output_roles[0], output_schema_ref=result.output_schema_ref)
-                updated = replace(task, status=TaskLifecycle.SUCCEEDED, attempts=result.attempt, active_instance_id=None, result=reference)
+                updated = task.transitioned(TaskLifecycle.SUCCEEDED, attempts=result.attempt, active_instance_id=None, result=reference, failure_reason_code=None)
                 result_event_type = "TASK_RESULT_ACCEPTED"
                 terminal_event_type = "TASK_COMPLETED"
             else:
-                updated = replace(task, status=TaskLifecycle.FAILED, attempts=result.attempt, active_instance_id=result.task_instance_id, failure_reason_code=result.error_code or "task_failed")
+                updated = task.transitioned(TaskLifecycle.FAILED, attempts=result.attempt, active_instance_id=result.task_instance_id, failure_reason_code=result.error_code or "task_failed")
                 result_event_type = "TASK_RESULT_REJECTED"
                 terminal_event_type = "TASK_FAILED"
             tasks = tuple(updated if item.task_id == result.task_id else item for item in projection.tasks)

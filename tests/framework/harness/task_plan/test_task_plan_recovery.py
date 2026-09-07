@@ -231,7 +231,7 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
     assert restored.budget_snapshot["reserved_max_turns"] == instance.budget_snapshot.max_turns
     assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
     assert report.replay_checksum == (
-        "sha256:f482a5d455994b92862a6c3c2221bd77328c1487df12bdb730297813f9685382"
+        "sha256:5a6cc8001a7772c85321715bc124c1878f2c55c7f2f11c9ee9da38cd1b71111f"
     )
     assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
     assert checkpoint.checkpoint_checksum.startswith("sha256:")

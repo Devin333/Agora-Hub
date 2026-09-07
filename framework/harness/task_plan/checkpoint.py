@@ -35,6 +35,7 @@ from framework.harness.task_plan.replay import (
     _validate_parallel_report_projection,
 )
 from framework.harness.task_plan.store import TaskResultRecord
+from framework.harness.task_plan.task_lifecycle import ACTIVE_TASK_STATES as _ACTIVE_TASK_STATES
 from framework.shared.time import format_datetime, parse_datetime
 
 
@@ -55,9 +56,6 @@ _GRAPH_CHECKPOINT_IDENTITY_FIELDS = (
     "stage_binding_checksum",
     "stage_identity_schema",
     "stage_identity_checksum",
-)
-_ACTIVE_TASK_STATES = frozenset(
-    {TaskLifecycle.READY, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
 )
 
 

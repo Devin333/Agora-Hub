@@ -12,8 +12,11 @@ from framework.harness.task_plan.parallel_lifecycle import (
 
 
 def validate_group_transition(current: str, target: str, *, code: str = "TASK_GROUP_INVALID_TRANSITION") -> None:
-    source = DispatchGroupState(current)
-    destination = DispatchGroupState(target)
+    try:
+        source = DispatchGroupState(current)
+        destination = DispatchGroupState(target)
+    except (TypeError, ValueError) as exc:
+        raise HarnessValidationError("unknown DispatchGroup state", code=code) from exc
     if destination is source:
         return
     if destination not in _GROUP_TRANSITIONS[source]:
@@ -25,8 +28,11 @@ def validate_group_transition(current: str, target: str, *, code: str = "TASK_GR
 
 
 def validate_wave_transition(current: str, target: str, *, code: str = "TASK_WAVE_INVALID_TRANSITION") -> None:
-    source = DispatchWaveState(current)
-    destination = DispatchWaveState(target)
+    try:
+        source = DispatchWaveState(current)
+        destination = DispatchWaveState(target)
+    except (TypeError, ValueError) as exc:
+        raise HarnessValidationError("unknown DispatchWave state", code=code) from exc
     if destination is source:
         return
     if destination not in _WAVE_TRANSITIONS[source]:

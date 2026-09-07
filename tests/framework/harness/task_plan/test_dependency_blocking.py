@@ -105,6 +105,26 @@ def test_retryable_failure_below_pinned_limit_does_not_block_descendants():
     assert dependency_blocked_task_ids(plan, failed) == ()
 
 
+@pytest.mark.parametrize("status", (
+    TaskLifecycle.FAILED, TaskLifecycle.CANCELLED,
+    TaskLifecycle.INDETERMINATE, TaskLifecycle.QUARANTINED,
+))
+def test_all_terminal_failure_states_close_transitive_dependency_wait(status):
+    plan, projection = _accepted_plan()
+    failed = _with_task(
+        projection, "a", status=status, attempts=1,
+        active_instance_id=None, failure_reason_code="fatal",
+    )
+    assert dependency_blocked_task_ids(plan, failed) == ("b", "c")
+    decision = TaskPlanScheduler().next_ready_tasks(failed, 4, plan=plan)
+    assert "b" in decision.blocked_task_ids
+    assert all(item.task_id not in {"a", "b", "c"} for item in decision.task_instances)
+    closed = block_dependency_task(plan, block_dependency_task(plan, failed, "b"), "c")
+    assert dependency_blocked_task_ids(plan, closed) == ()
+    assert all(item.attempts == 0 and item.active_instance_id is None for item in closed.tasks if item.task_id in {"b", "c"})
+    assert all(item.status is TaskLifecycle.BLOCKED_DEPENDENCY for item in closed.tasks if item.task_id in {"b", "c"})
+
+
 def test_blocking_closure_uses_recorded_block_as_the_next_causal_predecessor():
     plan, projection = _accepted_plan()
     failed = _terminal_failure(projection)

@@ -824,6 +824,11 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
 
     assert instance.schema_version == GRAPH_ONLY_TASK_INSTANCE_SCHEMA
     assert instance.instance_checksum == (
+        "sha256:206ef6152ec2f2395e2c69796a9f0f3e610758a00bbf7cf93129bc430bbf05c0"
+    )
+    old_instance_identity = instance.checksum_projection()
+    old_instance_identity["schema_version"] = "newsroom.harness-task-instance/v2"
+    assert canonical_payload_checksum(old_instance_identity) == (
         "sha256:d88ed9b0ca23952947d1b058a4d5c214480df195721bf17f3812542a6d3698a5"
     )
     assert instance.matches_plan_identity(plan)
@@ -845,7 +850,7 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     assert set(queue_task.metadata) == {TASK_PLAN_QUEUE_METADATA_KEY}
     assert queue_projection.schema_version == TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2
     assert queue_projection.projection_checksum == (
-        "sha256:9f8c1638e2e8abb0f89a5ab7e7c9cb092110d38cb40fa45407054da13911bcbd"
+        "sha256:d55982fcbee76961a5e08dced0df8d1b1bd20abb212f29f434822b1e7b229708"
     )
     assert queue_projection.task_instance == instance
     assert "workflow_id" not in queue_projection.to_dict()["task_instance"]
@@ -926,7 +931,7 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     assert record["settled_revision"] == 2
     assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
     assert report.replay_checksum == (
-        "sha256:79656d0d41070d0bbd923a1d3b34732d1ba2a8f4eb71dbd67c4406038ec3866a"
+        "sha256:80e1a892f5ab03807f230a281b84c2490e9427210fc39b6e99f91cecbfba2546"
     )
     assert report.projection.projection_checksum == projection.projection_checksum
     assert report.projection.matches_plan_identity(plan)
@@ -1117,7 +1122,7 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
     assert continuation.task_instance == instance
     assert continuation.queue_name == "framework:queue:default"
     assert continuation.continuation_checksum == (
-        "sha256:5c15369b510d3cb62f8e5d3c6b861d3418db25736b32ce3695ba31ab016ebdf7"
+        "sha256:9d2c2854aaa4f191224eeb9df588ae363f300eff69dc25b7f1323b2a216f6b7e"
     )
     assert (
         TaskPlanQueueReclaimContinuation.from_dict(continuation.to_dict())
@@ -1290,7 +1295,7 @@ def test_graph_only_queue_projection_survives_redis_transport_readback():
 
     assert readback.schema_version == TASK_PLAN_QUEUE_READBACK_SCHEMA_V2
     assert readback.readback_checksum == (
-        "sha256:9fecbee0bb65075ec82bfb7014ddd9765a39653dc6e6fafb186bc1cf11c75cf0"
+        "sha256:9e10cf1a1ec1ca84e70aa5a6258ea1b4ce504ab6e660d1b2941e9aa2975be5aa"
     )
     assert readback.projection.task_instance == instance
     assert TaskPlanQueueReadback.from_dict(readback.to_dict()) == readback
