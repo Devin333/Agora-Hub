@@ -6,6 +6,16 @@ from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.ref_authority import (
+    REF_KIND_INPUT,
+    REF_KIND_PLANNING,
+    RefAccessPolicy,
+    RefAuthority,
+    RefDescriptor,
+    RefResolutionPort,
+    normalize_ref_descriptors,
+    validate_ref_configuration,
+)
 from framework.harness.task_plan.binding import TaskPlanCapabilityRegistry
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
@@ -43,6 +53,10 @@ class TaskPlanValidationContext:
     registered_gate_refs: tuple[str, ...] = ()
     registered_aggregator_refs: tuple[str, ...] = ()
     remaining_task_budget: TaskBudget | Mapping[str, Any] | None = None
+    ref_authority: RefAuthority | None = None
+    ref_policy: RefAccessPolicy | None = None
+    ref_resolution: RefResolutionPort | None = None
+    ref_descriptors: Mapping[str, RefDescriptor] = dataclass_field(default_factory=dict)
     stage_identity: TaskPlanStageIdentity = dataclass_field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -58,6 +72,11 @@ class TaskPlanValidationContext:
         object.__setattr__(self, "future_stage_input_refs", stable_text_tuple(self.future_stage_input_refs, "future_stage_input_refs", item_kind="reference"))
         object.__setattr__(self, "registered_gate_refs", stable_text_tuple(self.registered_gate_refs, "registered_gate_refs", item_kind="exact_reference"))
         object.__setattr__(self, "registered_aggregator_refs", stable_text_tuple(self.registered_aggregator_refs, "registered_aggregator_refs", item_kind="exact_reference"))
+        descriptors = normalize_ref_descriptors(self.ref_descriptors)
+        validate_ref_configuration(self.ref_authority, self.ref_policy, self.ref_resolution, descriptors)
+        if self.ref_authority is not None:
+            self.ref_authority.require_scope(self.ref_policy, run_id=self.run_id, stage_id=self.stage_id)
+        object.__setattr__(self, "ref_descriptors", descriptors)
         budget = self.remaining_task_budget
         if budget is not None and not isinstance(budget, TaskBudget):
             if not isinstance(budget, Mapping):
@@ -227,6 +246,28 @@ class TaskPlanValidator:
             diagnostics.append(_diag("plan_build_budget_exceeded", "candidate exceeds plan-builder budget", "policy"))
         if not set(candidate.input_context_refs).issubset(set(policy.allowed_input_refs)):
             diagnostics.append(_diag("candidate_input_not_allowed", "candidate requests context outside policy", "dataflow", details={"refs": sorted(set(candidate.input_context_refs) - set(policy.allowed_input_refs))}))
+        if context.ref_authority is not None:
+            if context.ref_policy is None:
+                diagnostics.append(_diag("ref_authority_policy_required", "reference authority requires a pinned access policy", "refs"))
+            else:
+                for ref in candidate.input_context_refs:
+                    self._authorize_ref(
+                        ref,
+                        expected_kind=REF_KIND_INPUT,
+                        policy=context.ref_policy,
+                        context=context,
+                        diagnostics=diagnostics,
+                        field="input_context_refs",
+                    )
+                for ref in candidate.source_observation_refs:
+                    self._authorize_ref(
+                        ref,
+                        expected_kind=REF_KIND_PLANNING,
+                        policy=context.ref_policy,
+                        context=context,
+                        diagnostics=diagnostics,
+                        field="source_observation_refs",
+                    )
         candidate_roles = set(candidate.required_output_roles)
         missing = sorted(set(policy.required_output_roles) - candidate_roles)
         extra = sorted(candidate_roles - set(policy.allowed_output_roles))
@@ -244,6 +285,7 @@ class TaskPlanValidator:
         aggregate = {"max_turns": 0, "max_tool_calls": 0, "max_memory_ops": 0, "max_output_tokens": 0}
         for task in candidate.tasks:
             self._validate_task(task, by_id, policy, capabilities, context, diagnostics)
+            self._validate_task_refs(task, by_id, context, diagnostics)
             if task.task_id in resolved:
                 continue
             try:
@@ -363,6 +405,79 @@ class TaskPlanValidator:
         for ref in task.output_contract.metadata.values():
             if isinstance(ref, str) and ref in {"route", "quality_passed", "publish_artifact", "write_memory", "halt_graph"}:
                 diagnostics.append(_diag("forbidden_control_field", "task output metadata contains a control field", "forbidden", task_id=task.task_id))
+
+    def _validate_task_refs(
+        self,
+        task: TaskSpec,
+        by_id: Mapping[str, TaskSpec],
+        context: TaskPlanValidationContext,
+        diagnostics: list[TaskPlanDiagnostic],
+    ) -> None:
+        if context.ref_authority is None or context.ref_policy is None:
+            return
+        for ref in task.input_refs:
+            if task_reference_producer(ref, tuple(by_id)) is None:
+                self._authorize_ref(
+                    ref,
+                    expected_kind=REF_KIND_INPUT,
+                    policy=context.ref_policy,
+                    context=context,
+                    diagnostics=diagnostics,
+                    task_id=task.task_id,
+                    field="input_refs",
+                )
+        for namespace in task.requested_memory_namespaces:
+            try:
+                descriptor = context.ref_authority.authorize_memory_namespace_ref(
+                    namespace,
+                    context.ref_policy,
+                    resolver=context.ref_resolution,
+                    descriptors=context.ref_descriptors,
+                )
+                if descriptor.namespace != namespace:
+                    raise HarnessValidationError("task memory namespace does not match its descriptor", code="REF_IDENTITY_CONFLICT")
+            except HarnessValidationError as exc:
+                diagnostics.append(
+                    _diag(
+                        exc.code or "REF_UNAUTHORIZED",
+                        str(exc),
+                        "refs",
+                        task_id=task.task_id,
+                        field="requested_memory_namespaces",
+                        details=exc.details or {"namespace": namespace},
+                    )
+                )
+
+    @staticmethod
+    def _authorize_ref(
+        ref: str,
+        *,
+        expected_kind: str,
+        policy: RefAccessPolicy,
+        context: TaskPlanValidationContext,
+        diagnostics: list[TaskPlanDiagnostic],
+        task_id: str | None = None,
+        field: str,
+    ) -> None:
+        try:
+            context.ref_authority.authorize_ref(
+                ref,
+                policy,
+                resolver=context.ref_resolution,
+                descriptors=context.ref_descriptors,
+                expected_kind=expected_kind,
+            )
+        except HarnessValidationError as exc:
+            diagnostics.append(
+                _diag(
+                    exc.code or "REF_UNAUTHORIZED",
+                    str(exc),
+                    "refs",
+                    task_id=task_id,
+                    field=field,
+                    details=exc.details or {"ref": ref},
+                )
+            )
 
     @staticmethod
     def _validate_outputs(by_id: Mapping[str, TaskSpec], depths: Mapping[str, int], policy: TaskPlanPolicy, context: TaskPlanValidationContext, diagnostics: list[TaskPlanDiagnostic]) -> None:

@@ -15,6 +15,15 @@ from typing import Any, Protocol, runtime_checkable
 from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.context.models import ContextEnvelope
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.ref_authority import (
+    REF_KIND_RESULT,
+    RefAccessPolicy,
+    RefAuthority,
+    RefDescriptor,
+    RefResolutionPort,
+    normalize_ref_descriptors,
+    validate_ref_configuration,
+)
 from framework.harness.subagents.transcript import (
     SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
     SubAgentAttemptIdentity,
@@ -237,6 +246,10 @@ class TaskPlanResultVerifier:
         *,
         transcript_store: SubAgentTranscriptStorePort | None = None,
         artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
+        ref_authority: RefAuthority | None = None,
+        ref_policy: RefAccessPolicy | None = None,
+        ref_resolution: RefResolutionPort | None = None,
+        ref_descriptors: Mapping[str, RefDescriptor] | None = None,
     ) -> None:
         self._gates = gates or TaskPlanGateRegistry()
         if not isinstance(self._gates, TaskPlanGateEvaluatorPort):
@@ -256,6 +269,17 @@ class TaskPlanResultVerifier:
                 "ArtifactReferenceVerifierPort"
             )
         self._artifact_reference_verifier = artifact_reference_verifier
+        normalized_descriptors = normalize_ref_descriptors(ref_descriptors)
+        validate_ref_configuration(
+            ref_authority,
+            ref_policy,
+            ref_resolution,
+            normalized_descriptors,
+        )
+        self._ref_authority = ref_authority
+        self._ref_policy = ref_policy
+        self._ref_resolution = ref_resolution
+        self._ref_descriptors = normalized_descriptors
 
     @property
     def registered_gate_refs(self) -> tuple[str, ...]:
@@ -276,6 +300,12 @@ class TaskPlanResultVerifier:
 
         return self._artifact_reference_verifier
 
+    @property
+    def ref_authority(self) -> RefAuthority | None:
+        """Expose the shared reference authority for composition checks."""
+
+        return self._ref_authority
+
     def verify(
         self,
         result: HarnessWorkerResult,
@@ -292,6 +322,12 @@ class TaskPlanResultVerifier:
             )
         plan = request.plan
         instance = request.instance
+        if self._ref_authority is not None:
+            self._ref_authority.require_scope(
+                self._ref_policy,
+                run_id=plan.run_id,
+                stage_id=plan.stage_id,
+            )
         if result.effect_intent is not None:
             raise HarnessValidationError(
                 "dynamic TaskPlan workers cannot propose side effects",
@@ -305,6 +341,12 @@ class TaskPlanResultVerifier:
             instance=instance,
             execution_identity=request.execution_identity,
         )
+        if receipt is None:
+            self._authorize_result_ref(
+                result.candidate_result_ref,
+                expected_checksum=result.candidate_result_ref,
+            )
+            self._authorize_result_refs(result.artifacts)
 
         if result.status is not HarnessWorkerStatus.SUCCEEDED:
             return _failure_record(
@@ -408,6 +450,15 @@ class TaskPlanResultVerifier:
                 code="task_plan_subagent_evidence_required",
             )
         receipt = _receipt_from_evidence(entries[0])
+        self._authorize_result_ref(
+            receipt.output_ref,
+            expected_checksum=receipt.output_checksum,
+        )
+        self._authorize_result_ref(
+            receipt.transcript_ref,
+            expected_checksum=receipt.transcript_checksum,
+        )
+        self._authorize_result_refs(result.artifacts)
         self._transcript_store.verify(receipt)
         transcript = self._transcript_store.read(receipt.transcript_ref)
         output = self._transcript_store.read_output(receipt.output_ref)
@@ -449,6 +500,27 @@ class TaskPlanResultVerifier:
                 code="task_plan_subagent_output_mismatch",
             )
         return receipt, output
+
+    def _authorize_result_refs(self, refs: tuple[str, ...]) -> None:
+        for ref in dict.fromkeys(ref for ref in refs if ref):
+            self._authorize_result_ref(ref)
+
+    def _authorize_result_ref(
+        self,
+        ref: str,
+        *,
+        expected_checksum: str | None = None,
+    ) -> None:
+        if self._ref_authority is None:
+            return
+        self._ref_authority.authorize_ref(
+            ref,
+            self._ref_policy,
+            resolver=self._ref_resolution,
+            descriptors=self._ref_descriptors,
+            expected_kind=REF_KIND_RESULT,
+            expected_checksum=expected_checksum,
+        )
 
 
 def _verify_artifact_references(

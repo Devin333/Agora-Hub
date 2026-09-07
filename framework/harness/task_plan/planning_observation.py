@@ -15,6 +15,16 @@ from threading import RLock
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.ref_authority import (
+    REF_KIND_PLANNING,
+    REF_KIND_RESULT,
+    RefAccessPolicy,
+    RefAuthority,
+    RefDescriptor,
+    RefResolutionPort,
+    normalize_ref_descriptors,
+    validate_ref_configuration,
+)
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     checksum,
@@ -327,6 +337,10 @@ class HarnessPlanningObservationService:
         registry: ToolRegistry,
         store: PlanningObservationStorePort,
         policy: PlanningObservationPolicy,
+        ref_authority: RefAuthority | None = None,
+        ref_policy: RefAccessPolicy | None = None,
+        ref_resolution: RefResolutionPort | None = None,
+        ref_descriptors: Mapping[str, RefDescriptor] | None = None,
     ) -> None:
         if not isinstance(executor, ToolExecutor):
             raise TypeError("executor must be ToolExecutor")
@@ -336,10 +350,21 @@ class HarnessPlanningObservationService:
             raise TypeError("store must implement PlanningObservationStorePort")
         if not isinstance(policy, PlanningObservationPolicy):
             raise TypeError("policy must be PlanningObservationPolicy")
+        normalized_descriptors = normalize_ref_descriptors(ref_descriptors)
+        validate_ref_configuration(
+            ref_authority,
+            ref_policy,
+            ref_resolution,
+            normalized_descriptors,
+        )
         self._executor = executor
         self._registry = registry
         self._store = store
         self._policy = policy
+        self._ref_authority = ref_authority
+        self._ref_policy = ref_policy
+        self._ref_resolution = ref_resolution
+        self._ref_descriptors = normalized_descriptors
 
     @property
     def store(self) -> PlanningObservationStorePort:
@@ -362,6 +387,8 @@ class HarnessPlanningObservationService:
         return getattr(self._store, "is_durable", False) is True
 
     def observe(self, request: PlanningObservationRequest) -> PlanningObservationReceipt:
+        if self._ref_authority is not None:
+            self._ref_authority.require_scope(self._ref_policy, run_id=request.run_id, stage_id=request.stage_id)
         existing = self._store.by_request(request.request_checksum)
         if existing is not None:
             return existing
@@ -413,6 +440,8 @@ class HarnessPlanningObservationService:
     def replay(self, request: PlanningObservationRequest) -> PlanningObservationReceipt:
         """Return recorded evidence only. This method must never invoke the executor."""
 
+        if self._ref_authority is not None:
+            self._ref_authority.require_scope(self._ref_policy, run_id=request.run_id, stage_id=request.stage_id)
         receipt = self._store.by_request(request.request_checksum)
         if receipt is None:
             raise HarnessValidationError("planning observation receipt is unavailable for replay", code="planning_observation_receipt_missing")
@@ -432,16 +461,48 @@ class HarnessPlanningObservationService:
         """Fail closed before plan acceptance when a candidate cites stale evidence."""
 
         refs = stable_text_tuple(source_observation_refs, "source_observation_refs", item_kind="reference")
+        if self._ref_authority is not None:
+            self._ref_authority.require_scope(
+                self._ref_policy,
+                run_id=run_id,
+                stage_id=stage_id,
+            )
         receipts: list[PlanningObservationReceipt] = []
         for source_ref in refs:
+            descriptor = None
+            if self._ref_authority is not None:
+                descriptor = self._ref_authority.authorize_ref(
+                    source_ref,
+                    self._ref_policy,
+                    resolver=self._ref_resolution,
+                    descriptors=self._ref_descriptors,
+                    expected_kind=REF_KIND_PLANNING,
+                )
             receipt = self._store.by_source_ref(source_ref)
             if receipt is None:
                 raise HarnessValidationError("planning observation receipt is missing", code="planning_observation_receipt_missing", details={"source_ref": source_ref})
+            if receipt.source_ref != source_ref:
+                raise HarnessValidationError(
+                    "planning observation store returned a mismatched receipt",
+                    code="planning_observation_receipt_corrupt",
+                    details={"source_ref": source_ref},
+                )
             request = receipt.request
             if (request.run_id, request.stage_id, request.planner_turn_id, request.policy_checksum) != (run_id, stage_id, planner_turn_id, policy_checksum):
                 raise HarnessValidationError("planning observation receipt is outside candidate scope", code="planning_observation_receipt_scope_mismatch", details={"source_ref": source_ref})
             if receipt.status != "SUCCEEDED":
                 raise HarnessValidationError("planning observation receipt is not successful", code="planning_observation_receipt_unusable", details={"source_ref": source_ref, "reason_code": receipt.reason_code})
+            if self._ref_authority is not None:
+                if descriptor.source_checksum != receipt.receipt_checksum:
+                    raise HarnessValidationError("planning source checksum does not match the stored receipt", code="REF_CHECKSUM_MISMATCH")
+                for artifact_ref in receipt.artifact_refs:
+                    self._ref_authority.authorize_ref(
+                        artifact_ref,
+                        self._ref_policy,
+                        resolver=self._ref_resolution,
+                        descriptors=self._ref_descriptors,
+                        expected_kind=REF_KIND_RESULT,
+                    )
             receipts.append(receipt)
         return tuple(receipts)
 

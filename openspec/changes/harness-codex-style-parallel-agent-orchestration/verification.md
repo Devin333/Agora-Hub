@@ -499,6 +499,99 @@ Task 1.4 is complete within the generic AgentLoop submission boundary. This incr
 
 Focused validation after this increment: submission/redelivery and AgentLoop observation regression passed (`91 passed` before the final schema/tamper additions; the focused additions passed `4 passed`), compile and `git diff --check` passed. Full repository smoke and strict OpenSpec validation remain required before commit.
 
+### RefAuthority Increment
+
+Task 1.5 remains incomplete. The shared Harness reference contract and optional
+entrypoint checks are under implementation. Production composition has not yet
+bound the same authority across generic AgentLoop, dynamic Research, child
+execution, and recovered results; existing passing suites do not prove that
+requirement. No Research-specific authorization implementation is introduced.
+
+- `framework/harness/ref_authority.py` defines versioned, checksummed
+  `RefDescriptor` and `RefAccessPolicy` records. Authorization binds every
+  input/result/planning/memory reference to run, stage, tenant, owner, access
+  mode, artifact type, source checksum, pinned allowlist, and memory namespace.
+- Cross-scope or cross-owner references are rejected by default. They can be
+  used only when the pinned policy names the reference as
+  `SHARED_READ_ONLY`, the descriptor has the same scope, and the request is
+  read-only. Candidates and child contexts cannot grant that sharing policy.
+- TaskPlan candidate/task admission, planning observation source validation,
+  result verification, plan/stage request construction, and sub-agent context
+  construction all delegate to the same `RefAuthority` when configured.
+  Missing policies, resolvers, descriptors, type mismatches, stale checksums,
+  and sibling-private references fail closed.
+- Independent authority and focused regressions cover descriptor/policy
+  tamper checks, pinned writes, cross-scope read-only sharing, memory namespace
+  enforcement and resolver failures. Existing TaskPlan/planning/sub-agent
+  regression suites passed, but most use no configured authority and are not
+  proof of the new authorization boundary.
+- Policy checksum mappings and descriptor snapshots are immutable. Ambiguous
+  namespace aliases and partial authority configuration are rejected; an empty
+  artifact-type allowlist grants no access. Consumer run/stage scope is checked
+  independently from the descriptor-to-policy comparison.
+- Configured child policies must identify the child run as their owner. Both
+  memory URIs and namespace lookup pass through the authority, then intersect
+  with the child's own namespace allowlist. Shared references remain read-only.
+- StageRunner forwards the authority configuration to builder and validator.
+  A new regression adds a sibling-private context reference that the ordinary
+  TaskPlan string allowlist permits, and proves `REF_UNAUTHORIZED` with no
+  accepted plan. This does not claim the configuration is produced by the
+  generic or Research composition roots yet.
+- Planning source authorization occurs before receipt lookup. The actual
+  receipt checksum is then compared with authorized evidence. Result output,
+  transcript and artifact authorization precedes transcript reads and gates
+  for success, worker failure and gate failure. Denial tests assert zero
+  subsequent transcript/gate calls and no extra planning receipt reads.
+
+Validation after this increment:
+
+- TaskPlan/sub-agent/authority and result-adapter regressions: `678 passed`
+  in 223.94 seconds. Final focused authority and boundary checks: `64 passed`
+  in 2.09 seconds; the final planning read-denial assertions: `9 passed`
+  in 1.51 seconds.
+- Required repository `python -m scripts.dev smoke`: exit 0. Compile passed;
+  `3039 passed, 23 deselected, 23 warnings` in 1193.16 seconds. This run started
+  after the final code and test edits and supersedes earlier smoke results for
+  this increment.
+- Offline AgentLoop smoke: succeeded, 3 fixture LLM calls, 1 tool call,
+  0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-b29a80a6547244a8b733d2168f0a546c/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings.
+- Strict OpenSpec validation and scoped/staged `git diff --check`: passed.
+- Existing FastAPI/Starlette and PyMuPDF deprecations remain outside this change.
+
+Remaining task 1.5 closure evidence includes production-owned descriptor
+provenance, pinned input and newly-produced output grants, mandatory binding
+through child execution and replacement plans, and authorization in recovered
+result readback. Optional framework parameters are not a production security
+boundary, and this checklist item must stay unchecked until those paths are
+implemented and verified. No candidate-derived automatic grant is permitted.
+
+The read-only production binding review identifies these next steps within
+task 1.5, before proceeding to task 1.6:
+
+- Create the admission snapshot from trusted Graph execution inputs. Research
+  already computes checksums from the actual `document` and `evidence_pack`
+  values in `ResearchAnalysisTaskPlanStageWorker.run()`. Generic AgentLoop's
+  `_context_refs_for_candidate()` contains candidate-selected names only and
+  must not be used as descriptor provenance.
+- Forward a child-owned policy through
+  `ResolvedSubAgentTaskAdapter.build_invocation()`. Its current context-builder
+  call does not forward authority configuration. Parent inputs require explicit
+  read-only sharing in the pinned child policy; a candidate cannot create that
+  permission.
+- After durable output persistence, issue a separate immutable result-grant
+  snapshot from the trusted attempt receipt and verified artifact metadata.
+  Bind it to the admission snapshot and exact plan/task/attempt identity. Do not
+  mutate the admission policy or preauthorize unknown result checksums.
+- Resolve the same persisted grant during verification and recovery, before
+  payload reads. Artifact type/checksum and transcript receipt metadata need a
+  trusted metadata-only resolution path. Allowed memory namespace names alone
+  are not evidence of a materialized, versioned memory descriptor.
+
+Capacity, ledger, parent continuation, and full retry/recovery remain separately
+unchecked as well. Static Research and feature defaults are unchanged.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

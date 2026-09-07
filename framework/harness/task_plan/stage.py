@@ -382,6 +382,10 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 policy=request.policy,
                 budget=request.budget,
                 metadata=request.metadata,
+                ref_authority=request.ref_authority,
+                ref_policy=request.ref_policy,
+                ref_resolution=request.ref_resolution,
+                ref_descriptors=request.ref_descriptors,
                 execution_identity=request.execution_identity,
             ))
         if not candidate.matches_stage_identity(request.stage_identity):
@@ -410,6 +414,10 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 fallback=request.policy.allowed_gate_refs,
             ),
             registered_aggregator_refs=self.aggregator.registry.refs,
+            ref_authority=request.ref_authority,
+            ref_policy=request.ref_policy,
+            ref_resolution=request.ref_resolution,
+            ref_descriptors=request.ref_descriptors,
         )
         missing_aggregators = sorted({ref for ref in request.policy.deterministic_aggregator_refs.values() if not self.aggregator.registry.contains(ref)})
         if missing_aggregators:

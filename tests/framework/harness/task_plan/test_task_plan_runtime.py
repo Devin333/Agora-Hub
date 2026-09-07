@@ -6,6 +6,13 @@ import pytest
 
 from framework.agent.models.orchestration import ParentObservationLimits
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.ref_authority import (
+    REF_KIND_INPUT,
+    RefAccessMode,
+    RefAccessPolicy,
+    RefAuthority,
+    RefDescriptor,
+)
 from framework.harness.task_plan import (
     FakePlanCandidateBuilder,
     InMemoryTaskPlanStore,
@@ -102,6 +109,17 @@ class _FailOnceResultVerifier(_AcceptingResultVerifier):
         return super().verify(result, task=task, request=request)
 
 
+class _RecordingValidator(TaskPlanValidator):
+    def __init__(self) -> None:
+        self.context = None
+        self.result = None
+
+    def validate(self, candidate, *, policy, capabilities, context):
+        self.context = context
+        self.result = super().validate(candidate, policy=policy, capabilities=capabilities, context=context)
+        return self.result
+
+
 def _setup(*, roles=("role",), capabilities=("cap",)):
     policy = TaskPlanPolicy(
         policy_id="test.task-plan",
@@ -166,6 +184,90 @@ def test_task_plan_policy_observation_defaults_and_checksum_roundtrip() -> None:
     changed = replace(policy, parent_observation_limits={**expected, "max_summary_bytes": 1024})
     assert changed.policy_checksum != policy.policy_checksum
     assert TaskPlanPolicy.from_dict(changed.to_dict()).policy_checksum == changed.policy_checksum
+
+
+def test_stage_runner_forwards_shared_ref_authority_into_plan_validation() -> None:
+    stage_binding, task_policy, registry = _setup()
+    candidate = _candidate(stage_binding, (_task("task-1"),))
+    source_checksum = canonical_payload_checksum({"source": "document"})
+    descriptor = RefDescriptor(
+        ref="document",
+        run_id="run",
+        stage_id="dynamic_stage",
+        tenant_id="tenant-1",
+        owner_id="owner-1",
+        access_mode=RefAccessMode.READ_ONLY,
+        artifact_type="document",
+        source_checksum=source_checksum,
+        ref_kind=REF_KIND_INPUT,
+    )
+    ref_policy = RefAccessPolicy(
+        policy_id="refs.task-plan",
+        version="1",
+        run_id="run",
+        stage_id="dynamic_stage",
+        tenant_id="tenant-1",
+        owner_id="owner-1",
+        allowed_refs=("document",),
+        allowed_artifact_types=("document",),
+        pinned_checksums={"document": source_checksum},
+    )
+    authority = RefAuthority()
+    validator = _RecordingValidator()
+    runner = TaskPlanStageRunner(
+        candidate_builder=FakePlanCandidateBuilder(candidate),
+        capability_registry=registry,
+        store=InMemoryTaskPlanStore(),
+        validator=validator,
+        result_verifier=_AcceptingResultVerifier(),
+    )
+
+    result = runner.run(
+        TaskPlanStageRequest(
+            run_id="run",
+            stage_binding=stage_binding,
+            context_refs={"document": "document"},
+            policy=task_policy,
+            accepted_at="2026-08-17T00:00:00Z",
+            ref_authority=authority,
+            ref_policy=ref_policy,
+            ref_descriptors={"document": descriptor},
+        )
+    )
+
+    assert result.status.value == "succeeded"
+    assert validator.context is not None
+    assert validator.context.ref_authority is authority
+    assert validator.context.ref_policy == ref_policy
+
+    sibling = replace(descriptor, ref="sibling", owner_id="sibling-owner")
+    candidate_with_private_context = replace(candidate, input_context_refs=("document", "sibling"))
+    builder = FakePlanCandidateBuilder(candidate_with_private_context)
+    rejected_store = InMemoryTaskPlanStore()
+    denied_runner = TaskPlanStageRunner(
+        candidate_builder=builder,
+        capability_registry=registry,
+        store=rejected_store,
+        validator=validator,
+        result_verifier=_AcceptingResultVerifier(),
+    )
+    denied = denied_runner.run(TaskPlanStageRequest(
+        run_id="run", stage_binding=stage_binding,
+        context_refs={"document": "document"},
+        policy=replace(task_policy, allowed_input_refs=("document", "sibling")),
+        accepted_at="2026-08-17T00:00:00Z",
+        ref_authority=authority,
+        ref_policy=replace(ref_policy, allowed_refs=("document", "sibling"), pinned_checksums={
+            "document": source_checksum, "sibling": source_checksum,
+        }),
+        ref_descriptors={"document": descriptor, "sibling": sibling},
+    ))
+    assert denied.status.value == "blocked"
+    assert [item.code for item in validator.result.diagnostics] == ["REF_UNAUTHORIZED"]
+    assert rejected_store.plan("run", stage_binding.stage_id) is None
+    assert builder.calls[0].ref_authority is authority
+    assert builder.calls[0].ref_policy == validator.context.ref_policy
+    assert builder.calls[0].ref_descriptors == validator.context.ref_descriptors
 
 
 @pytest.mark.parametrize("field", ["max_total_bytes", "max_observaton_bytes"])

@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Protocol, runtime_checkable
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.policy import HarnessBudgetSnapshot
+from framework.harness.ref_authority import (
+    REF_KIND_INPUT,
+    RefAccessPolicy,
+    RefAuthority,
+    RefDescriptor,
+    RefResolutionPort,
+    normalize_ref_descriptors,
+    validate_ref_configuration,
+)
 from framework.harness.task_plan.canonical import (
     checksum,
     exact_reference,
@@ -38,6 +47,10 @@ class PlanBuildRequest:
     budget: HarnessBudgetSnapshot | Mapping[str, Any] | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     execution_identity: GraphExecutionIdentity | None = None
+    ref_authority: RefAuthority | None = None
+    ref_policy: RefAccessPolicy | None = None
+    ref_resolution: RefResolutionPort | None = None
+    ref_descriptors: Mapping[str, RefDescriptor] = field(default_factory=dict)
     stage_identity: TaskPlanStageIdentity = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -72,6 +85,16 @@ class PlanBuildRequest:
                 code="task_plan_input_reference_unavailable",
                 details={"refs": denied},
             )
+        _authorize_context_references(
+            context_refs.values(),
+            run_id=self.run_id,
+            stage_id=self.stage_id,
+            authority=self.ref_authority,
+            ref_policy=self.ref_policy,
+            resolver=self.ref_resolution,
+            descriptors=self.ref_descriptors,
+        )
+        object.__setattr__(self, "ref_descriptors", normalize_ref_descriptors(self.ref_descriptors))
         object.__setattr__(
             self,
             "context_refs",
@@ -239,6 +262,10 @@ class TaskPlanStageRequest:
     policy_ref: str | None = None
     submission_identity: CandidateDedupIdentity | None = None
     source_candidate_checksum: str | None = None
+    ref_authority: RefAuthority | None = None
+    ref_policy: RefAccessPolicy | None = None
+    ref_resolution: RefResolutionPort | None = None
+    ref_descriptors: Mapping[str, RefDescriptor] = field(default_factory=dict)
     stage_identity: TaskPlanStageIdentity = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -283,6 +310,16 @@ class TaskPlanStageRequest:
                 code="task_plan_input_reference_unavailable",
                 details={"refs": denied},
             )
+        _authorize_context_references(
+            normalized_context.values(),
+            run_id=self.run_id,
+            stage_id=self.stage_id,
+            authority=self.ref_authority,
+            ref_policy=self.ref_policy,
+            resolver=self.ref_resolution,
+            descriptors=self.ref_descriptors,
+        )
+        object.__setattr__(self, "ref_descriptors", normalize_ref_descriptors(self.ref_descriptors))
         object.__setattr__(
             self,
             "context_refs",
@@ -447,6 +484,31 @@ def _require_stage_policy_binding(
                 ),
                 "actual_required_output_roles": list(policy.required_output_roles),
             },
+        )
+
+
+def _authorize_context_references(
+    refs: Iterable[str],
+    *,
+    run_id: str,
+    stage_id: str,
+    authority: RefAuthority | None,
+    ref_policy: RefAccessPolicy | None,
+    resolver: RefResolutionPort | None,
+    descriptors: Mapping[str, RefDescriptor],
+) -> None:
+    descriptors = normalize_ref_descriptors(descriptors)
+    validate_ref_configuration(authority, ref_policy, resolver, descriptors)
+    if authority is None:
+        return
+    authority.require_scope(ref_policy, run_id=run_id, stage_id=stage_id)
+    for ref in refs:
+        authority.authorize_ref(
+            ref,
+            ref_policy,
+            resolver=resolver,
+            descriptors=descriptors,
+            expected_kind=REF_KIND_INPUT,
         )
 
 

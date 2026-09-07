@@ -3,6 +3,27 @@ from __future__ import annotations
 from framework.harness.task_plan import *
 from framework.harness.task_plan import __all__ as _TASK_PLAN_EXPORTS
 
+from framework.harness.ref_authority import (
+    REF_ACCESS_READ_ONLY,
+    REF_ACCESS_READ_WRITE,
+    REF_DESCRIPTOR_SCHEMA,
+    REF_KIND_INPUT,
+    REF_KIND_MEMORY,
+    REF_KIND_PLANNING,
+    REF_KIND_RESULT,
+    REF_KINDS,
+    REF_POLICY_SCHEMA,
+    REF_SCOPE_PRIVATE,
+    REF_SCOPE_SHARED_READ_ONLY,
+    InMemoryRefResolutionPort,
+    RefAccessMode,
+    RefAccessPolicy,
+    RefAuthority,
+    RefDescriptor,
+    RefResolutionPort,
+    RefScope,
+)
+
 from framework.harness.artifacts import (
     ArtifactPort,
     ArtifactReferenceVerifierPort,
@@ -1227,6 +1248,24 @@ __all__ = [
     "skill_promotion_gate_ref",
     "skill_release_evidence_payload",
     "skill_rollback_plan_ref",
+    "REF_ACCESS_READ_ONLY",
+    "REF_ACCESS_READ_WRITE",
+    "REF_DESCRIPTOR_SCHEMA",
+    "REF_KIND_INPUT",
+    "REF_KIND_MEMORY",
+    "REF_KIND_PLANNING",
+    "REF_KIND_RESULT",
+    "REF_KINDS",
+    "REF_POLICY_SCHEMA",
+    "REF_SCOPE_PRIVATE",
+    "REF_SCOPE_SHARED_READ_ONLY",
+    "InMemoryRefResolutionPort",
+    "RefAccessMode",
+    "RefAccessPolicy",
+    "RefAuthority",
+    "RefDescriptor",
+    "RefResolutionPort",
+    "RefScope",
 ]
 
 __all__ += _TASK_PLAN_EXPORTS
