@@ -66,9 +66,9 @@ export function DesignDemoPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#fbf8ff] font-papers-research text-[#211a3c]">
-      <header className="border-b border-[#eee8f5] bg-white">
-        <nav className="mx-auto flex h-[72px] max-w-[1280px] items-center justify-between px-10" aria-label="主导航">
+    <div className="min-h-screen bg-[#fbf8ff] font-papers-research text-[#211a3c] [--header-height:73px]">
+      <header className="h-[var(--header-height)] border-b border-[#eee8f5] bg-white">
+        <nav className="mx-auto flex h-full max-w-[1280px] items-center justify-between px-10" aria-label="主导航">
           <a href="/design-demo" className="flex items-center gap-2.5">
             <span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span>
             <span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span>
@@ -84,12 +84,12 @@ export function DesignDemoPage() {
         </nav>
       </header>
 
-      <main>
-        <section id="workspace" className="mx-auto max-w-[1080px] px-10 pb-24 pt-36">
-          <h1 className="mx-auto mb-14 max-w-[900px] text-center text-[40px] font-semibold leading-[1.35] tracking-normal [font-family:'STXinwei','STKaiti','KaiTi','Microsoft_YaHei',serif]">
-            <span className="text-[#35274f]">从一个问题开始，</span><span className="text-[#7c3aed]">找到值得深入的研究线索。</span>
+      {/* Subtract both header offsets so the middle row aligns with the viewport center. */}
+      <main id="workspace" className="grid h-[calc(100svh-var(--header-height)-var(--header-height))] min-h-[520px] scroll-mt-[var(--header-height)] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+          <h1 className="mx-auto mb-14 w-[calc(100%-80px)] max-w-[900px] self-end text-center font-sans text-[48px] font-bold leading-[1.2] tracking-normal">
+            <span className="text-[#35274f]">Ask.</span>{" "}<span className="text-[#7c3aed]">Discover.</span>
           </h1>
-          <div className="mx-auto w-full max-w-[960px] overflow-visible rounded-3xl border border-[#e7dff1] bg-white p-8 shadow-[0_18px_45px_rgba(86,58,127,0.13)]">
+          <div className="mx-auto w-[calc(100%-80px)] max-w-[960px] overflow-visible rounded-3xl border border-[#e7dff1] bg-white p-8 shadow-[0_18px_45px_rgba(86,58,127,0.13)]">
             <div className="flex items-center justify-between px-1 text-base text-[#8b7fa0]">
               <span className="inline-flex items-center gap-2 font-semibold uppercase tracking-[0.12em]"><Sparkles className="size-5 text-[#7c3aed]" />Agora AI</span>
               <span className="inline-flex items-center gap-2 text-[#7c3aed]"><span className="size-2 rounded-full bg-[#8b5cf6]" />准备回答</span>
@@ -113,17 +113,16 @@ export function DesignDemoPage() {
             {hasSubmitted ? <div className="mt-6 flex items-center justify-between gap-4 rounded-xl border border-[#e0d3f4] bg-[#faf7ff] px-4 py-3 text-base"><span className="inline-flex min-w-0 items-center gap-2 text-[#695d7d]"><span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[#f0e9ff] text-[#7c3aed]">{intent.icon}</span><span className="truncate">将带着你的问题进入 <strong className="font-semibold text-[#382758]">{intent.module}</strong></span></span><a href={intent.href} className="inline-flex shrink-0 items-center gap-1 font-semibold text-[#7042cc] hover:text-[#5425b5]">进入模块<ChevronRight className="size-4" /></a></div> : null}
           </div>
 
-          <div id="modules" className="mt-12 grid grid-cols-2 gap-6">
+        <div className="mt-12 min-h-0 self-start bg-[#fbf8ff]">
+          <div id="modules" className="mx-auto grid w-[calc(100%-80px)] max-w-[960px] grid-cols-2 gap-6 pb-24">
             <ModuleCard icon={<BookOpen className="size-8" />} title="论文研究" description="论文、方法、证据" href="/papers" />
             <ModuleCard icon={<Github className="size-8" />} title="项目雷达" description="仓库、工具、活跃度" href="/projects" />
             <ModuleCard icon={<Quote className="size-8" />} title="社区信号" description="讨论、主题、动态" href="/community" />
             <ModuleCard icon={<ClipboardCheck className="size-8" />} title="研究报告" description="整理、比较、输出" href="/reports" />
           </div>
-        </section>
-
+          <footer className="px-10 py-10"><div className="mx-auto flex max-w-[1280px] items-center justify-between text-base text-[#9389a2]"><span>Agora Hub Research</span><span>用 AI 开始你的下一次研究</span></div></footer>
+        </div>
       </main>
-
-      <footer className="bg-[#fbf8ff] px-10 py-10"><div className="mx-auto flex max-w-[1280px] items-center justify-between text-base text-[#9389a2]"><span>Agora Hub Research</span><span>用 AI 开始你的下一次研究</span></div></footer>
     </div>
   )
 }
