@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { BarChart3, ChevronLeft, ChevronRight, FileText, Github, Quote } from "lucide-react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { PapersDomainSidebar } from "@/components/papers/papers-domain-sidebar"
@@ -16,14 +16,39 @@ import { fetchPapers } from "@/lib/papers/api"
 import { localizedResearchNotice, papersCopy, t } from "@/lib/papers/copy"
 import { paperFeatureFilters, paperMatchesFeatureFilters, parsePaperFeatureFilters, serializePaperFeatureFilters, type PaperFeatureFilter } from "@/lib/papers/filters"
 import { sortPapers } from "@/lib/papers/format"
-import { buildPaperPortalMetrics, deriveMethodAreaDomains, deriveTopPaperDomains } from "@/lib/papers/metrics"
+import { buildPaperPortalMetrics, deriveMethodAreaDomains, deriveTopPaperDomains, type PaperPortalMetrics } from "@/lib/papers/metrics"
 import type { Locale, Paper, PaperListResult, PaperPeriod, PaperSort } from "@/lib/papers/types"
 
 const PAPER_DASHBOARD_LIMIT = 5000
 const PAPER_PAGE_SIZE = 15
 type PaperDataContext = { source?: string; collectedAt?: string }
 
-export function TrendingPapersPage({ locale, papers }: { locale: Locale; papers: Paper[] }) {
+export type PapersDiscoveryViewModel = {
+  locale: Locale
+  papers: Paper[]
+  metrics: PaperPortalMetrics
+  query: string
+  period: PaperPeriod
+  sort: PaperSort
+  filters: PaperFeatureFilter[]
+  isLoading: boolean
+  emptyDescription: string
+  notice: ReactNode
+  pagination: ReactNode
+  drawer: ReactNode
+  onSearch: (query: string) => void
+  onPeriodChange: (period: PaperPeriod) => void
+  onSortChange: (sort: PaperSort) => void
+  onFilterToggle: (filter: PaperFeatureFilter) => void
+  onReset: () => void
+  onPreview: (paper: Paper) => void
+}
+
+export function TrendingPapersPage({ locale, papers, renderView }: {
+  locale: Locale
+  papers: Paper[]
+  renderView?: (model: PapersDiscoveryViewModel) => ReactNode
+}) {
   const router = useRouter()
   const routerReplace = router.replace
   const pathname = usePathname()
@@ -33,7 +58,7 @@ export function TrendingPapersPage({ locale, papers }: { locale: Locale; papers:
   const sort = parseSort(searchParams.get("sort"))
   const page = parsePage(searchParams.get("page"))
   const query = searchParams.get("q") ?? ""
-  const featureFilters = useMemo(() => parsePaperFeatureFilters(searchParams.get("has")), [searchText])
+  const featureFilters = useMemo(() => parsePaperFeatureFilters(new URLSearchParams(searchText).get("has")), [searchText])
   const deepLinkedPaperId = searchParams.get("paper")
   const initialPublishedPapers = useMemo(() => fallbackPaperQuery(papers, { query, period, sort, has: featureFilters }), [featureFilters, papers, period, query, sort])
   const [dashboardPapers, setDashboardPapers] = useState(initialPublishedPapers)
@@ -199,6 +224,23 @@ export function TrendingPapersPage({ locale, papers }: { locale: Locale; papers:
     nextParams.delete("paper")
     const nextQuery = nextParams.toString()
     return nextQuery ? `${pathname}?${nextQuery}` : pathname
+  }
+
+  if (renderView) {
+    return renderView({
+      locale, papers: visiblePapers, metrics: portalMetrics, query, period, sort,
+      filters: featureFilters, isLoading,
+      emptyDescription: paperEmptyDescription({ query, hasFilters: featureFilters.length > 0, notices, hasDataIssue, locale }),
+      notice: notices.length || hasDataIssue ? <ResearchStatusNotice notices={notices} context={dataContext} locale={locale} /> : null,
+      pagination: <PaperPagination currentPage={page} totalCount={paperTotalCount} pageSize={PAPER_PAGE_SIZE} visibleCount={visiblePapers.length} locale={locale} onPageChange={updatePage} />,
+      drawer: <PaperDetailDrawer paper={selectedPaper} paperId={selectedPaperId} locale={locale} open={Boolean(selectedPaperId)} closeHref={closeDrawerHref()} onOpenChange={(open) => { if (!open) closeDrawer() }} />,
+      onSearch: (value) => updateQuery({ q: value.trim(), page: null, paper: null }),
+      onPeriodChange: updatePeriod,
+      onSortChange: updateSort,
+      onFilterToggle: updateFeatureFilter,
+      onReset: () => updateQuery({ q: null, has: null, period: null, sort: null, page: null, paper: null }),
+      onPreview: previewPaper
+    })
   }
 
   return (

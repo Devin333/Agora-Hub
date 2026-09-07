@@ -12,6 +12,7 @@ import { translate } from "@/lib/i18n"
 import { papersCopy, t } from "@/lib/papers/copy"
 import { formatCompactNumber, formatPaperDate, paperPdfUrl, paperSnippet, paperTitle } from "@/lib/papers/format"
 import { papersRoutes } from "@/lib/papers/routes"
+import { cn } from "@/lib/utils"
 import type { Locale, Paper } from "@/lib/papers/types"
 import { usePaperWorkspaceStore, type PaperWorkspaceList } from "@/stores/paper-workspace-store"
 
@@ -19,22 +20,24 @@ export function PaperRow({
   paper,
   locale,
   onPreview,
-  renderPdfPreview = true
+  renderPdfPreview = true,
+  className
 }: {
   paper: Paper
   locale: Locale
   onPreview: (paper: Paper) => void
   renderPdfPreview?: boolean
+  className?: string
 }) {
   const pdfHref = paperPdfUrl(paper)
   const repoHref = paper.repoUrl?.startsWith("https://github.com/") && paper.repoUrl !== "https://github.com/" ? paper.repoUrl : undefined
   const tasks = paper.taskRefs ?? []
   const methods = paper.methodRefs ?? []
-  const tags = paper.tags ?? []
+  const tags = [...new Set(paper.tags ?? [])]
   const metadata = [paper.authors?.slice(0, 3).join(", "), formatPaperDate(paper.publishedAt, locale), paper.venue].filter(Boolean)
-  const readingListActive = usePaperWorkspaceStore((state) => state.hasPaper("readingList", paper.id))
-  const compareActive = usePaperWorkspaceStore((state) => state.hasPaper("compare", paper.id))
-  const laterActive = usePaperWorkspaceStore((state) => state.hasPaper("later", paper.id))
+  const readingListActive = usePaperWorkspaceStore((state) => state.readingList.includes(paper.id))
+  const compareActive = usePaperWorkspaceStore((state) => state.compare.includes(paper.id))
+  const laterActive = usePaperWorkspaceStore((state) => state.later.includes(paper.id))
   const togglePaper = usePaperWorkspaceStore((state) => state.togglePaper)
 
   function handleRowClick(event: MouseEvent<HTMLElement>) {
@@ -48,7 +51,7 @@ export function PaperRow({
   return (
     <article
       data-testid="paper-row"
-      className="group cursor-pointer rounded-xl px-3 py-5 transition-colors first:pt-5 last:pb-3 hover:bg-white/70 sm:px-4 dark:hover:bg-card/45"
+      className={cn("group cursor-pointer rounded-xl px-3 py-5 transition-colors first:pt-5 last:pb-3 hover:bg-white/70 sm:px-4 dark:hover:bg-card/45", className)}
       onClick={handleRowClick}
     >
       <div className="grid gap-5 lg:grid-cols-[8.5rem_minmax(0,1fr)] xl:gap-6">
@@ -75,7 +78,7 @@ export function PaperRow({
             </h2>
           </Link>
 
-          <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm text-[#334155]/55 dark:text-muted-foreground">
+          <p data-paper-field="metadata" className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm text-[#334155]/55 dark:text-muted-foreground">
             {metadata.map((item, index) => (
               <Fragment key={`${paper.id}-meta-${index}`}>
                 {index > 0 ? <PaperMetaSeparator /> : null}
@@ -84,7 +87,7 @@ export function PaperRow({
             ))}
           </p>
 
-          <p className="line-clamp-3 max-w-4xl text-[0.95rem] leading-6 text-[#334155]/72 dark:text-muted-foreground">
+          <p data-paper-field="abstract" className="line-clamp-3 max-w-4xl text-[0.95rem] leading-6 text-[#334155]/72 dark:text-muted-foreground">
             {paperSnippet(paper, locale)}
           </p>
 
@@ -92,7 +95,7 @@ export function PaperRow({
             <PaperTags tasks={tasks} methods={methods} tags={tags} locale={locale} />
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div data-paper-field="actions" className="flex flex-wrap items-center gap-2.5">
             <PaperActionButton
               type="button"
               ariaLabel={`${translate(locale, "papers.previewPaper")} ${paper.title}`}
@@ -133,7 +136,7 @@ export function PaperRow({
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div data-paper-field="workspace" className="flex flex-wrap items-center gap-2">
             <WorkspaceActionButton
               list="readingList"
               active={readingListActive}

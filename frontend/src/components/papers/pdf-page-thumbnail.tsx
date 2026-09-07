@@ -53,7 +53,7 @@ export function PdfPageThumbnail({ className, locale, pdfUrl, title }: PdfPageTh
     }
 
     let cancelled = false
-    let cleanup: (() => void) | undefined
+    let cleanup: (() => Promise<void>) | undefined
 
     async function renderPdfPage() {
       setFailed(false)
@@ -66,6 +66,7 @@ export function PdfPageThumbnail({ className, locale, pdfUrl, title }: PdfPageTh
 
       try {
         const pdfjs = await import("pdfjs-dist")
+        if (cancelled) return
         pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
 
         const proxyUrl = `/api/papers/pdf?url=${encodeURIComponent(pdfUrl)}`
@@ -76,7 +77,16 @@ export function PdfPageThumbnail({ className, locale, pdfUrl, title }: PdfPageTh
           url: proxyUrl,
           withCredentials: false
         })
-        cleanup = () => loadingTask.destroy()
+        let destruction: Promise<void> | undefined
+        let renderTask: import("pdfjs-dist").RenderTask | undefined = undefined
+        // Rendering, unmounting and completion share one resource release.
+        cleanup = () => {
+          if (!destruction) {
+            renderTask?.cancel()
+            destruction = loadingTask.destroy()
+          }
+          return destruction
+        }
 
         const pdf = await loadingTask.promise
         const page = await pdf.getPage(1)
@@ -88,7 +98,6 @@ export function PdfPageThumbnail({ className, locale, pdfUrl, title }: PdfPageTh
         const context = canvas?.getContext("2d")
 
         if (!canvas || !context || cancelled) {
-          await pdf.destroy()
           return
         }
 
@@ -97,25 +106,26 @@ export function PdfPageThumbnail({ className, locale, pdfUrl, title }: PdfPageTh
         canvas.style.width = ""
         canvas.style.height = ""
 
-        const renderTask = page.render({
+        renderTask = page.render({
           canvasContext: context,
           viewport: scaledViewport
         })
-        cleanup = () => {
-          renderTask.cancel()
-          void pdf.destroy()
-        }
         await renderTask.promise
 
         if (!cancelled) {
           setReady(true)
-          void pdf.destroy()
         }
       } catch {
         if (!cancelled) {
           setFailed(true)
         }
       } finally {
+        await cleanup?.().catch(() => {
+          if (!cancelled) {
+            setReady(false)
+            setFailed(true)
+          }
+        })
         releaseRenderSlot()
       }
     }
@@ -124,7 +134,7 @@ export function PdfPageThumbnail({ className, locale, pdfUrl, title }: PdfPageTh
 
     return () => {
       cancelled = true
-      cleanup?.()
+      void cleanup?.().catch(() => undefined)
     }
   }, [pdfUrl, shouldRender])
 

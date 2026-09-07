@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react"
+import { renderToString } from "react-dom/server"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PaperRow } from "@/components/papers/paper-row"
 import type { Paper } from "@/lib/papers/types"
@@ -48,6 +49,19 @@ describe("PaperRow", () => {
 
     expect(screen.queryByText("N/A")).not.toBeInTheDocument()
     expect(screen.queryByText("Cites")).not.toBeInTheDocument()
+  })
+
+  it("renders a repeated source tag only once", () => {
+    render(<PaperRow paper={{ ...paper, tags: ["agents", "agents"] }} locale="en" onPreview={vi.fn()} />)
+    expect(screen.getAllByText("agents", { exact: true })).toHaveLength(1)
+  })
+
+  it("uses the server snapshot before hydrating persisted workspace lists", () => {
+    usePaperWorkspaceStore.setState({ readingList: [paper.id], compare: [paper.id], later: [paper.id] })
+    const html = renderToString(<PaperRow paper={paper} locale="en" onPreview={vi.fn()} renderPdfPreview={false} />)
+    expect(html).toContain("Add to reading list")
+    expect(html).toContain("Add to compare")
+    expect(html).not.toContain('aria-pressed="true"')
   })
 
   it("uses product typography for paper metadata and abstract copy", () => {

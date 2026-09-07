@@ -24,7 +24,7 @@ type Intent = {
 }
 
 const intents: Intent[] = [
-  { command: "找论文", module: "论文研究", description: "检索论文、方法和可验证的证据", href: "/papers", icon: <BookOpen className="size-[18px]" />, keywords: ["论文", "文献", "研究", "方法", "评测", "引用"] },
+  { command: "找论文", module: "论文研究", description: "检索论文、方法和可验证的证据", href: "/design-demo/papers", icon: <BookOpen className="size-[18px]" />, keywords: ["论文", "文献", "研究", "方法", "评测", "引用"] },
   { command: "找项目", module: "项目雷达", description: "查看项目活跃度、仓库和工具链", href: "/projects", icon: <Github className="size-[18px]" />, keywords: ["项目", "仓库", "github", "工具", "开源", "代码"] },
   { command: "看社区", module: "社区信号", description: "追踪讨论、主题和行业动态", href: "/community", icon: <Quote className="size-[18px]" />, keywords: ["社区", "讨论", "动态", "趋势", "新闻", "行业"] },
   { command: "写报告", module: "研究报告", description: "整理研究结果并形成可读报告", href: "/reports", icon: <FileText className="size-[18px]" />, keywords: ["报告", "总结", "整理", "结论", "对比"] },
@@ -74,7 +74,7 @@ export function DesignDemoPage() {
           </a>
           <div className="flex items-center gap-8 text-base text-[#6d6286]">
             <a href="#modules" className="transition-colors hover:text-[#6735d3]">研究模块</a>
-            <a href="/papers" className="transition-colors hover:text-[#6735d3]">论文研究</a>
+            <a href="/design-demo/papers" className="transition-colors hover:text-[#6735d3]">论文研究</a>
           </div>
           <div className="flex items-center gap-3">
             <button type="button" className="text-base font-medium text-[#594f71] transition-colors hover:text-[#6735d3]">登录</button>
@@ -113,7 +113,7 @@ export function DesignDemoPage() {
 
         <div className="mt-12 min-h-0 self-start bg-[#fbf8ff]">
           <div id="modules" className="mx-auto grid w-[calc(100%-80px)] max-w-[960px] grid-cols-2 gap-6 pb-24">
-            <ModuleCard icon={<BookOpen className="size-8" />} title="论文研究" description="论文、方法、证据" href="/papers" />
+            <ModuleCard icon={<BookOpen className="size-8" />} title="论文研究" description="论文、方法、证据" href="/design-demo/papers" />
             <ModuleCard icon={<Github className="size-8" />} title="项目雷达" description="仓库、工具、活跃度" href="/projects" />
             <ModuleCard icon={<Quote className="size-8" />} title="社区信号" description="讨论、主题、动态" href="/community" />
             <ModuleCard icon={<ClipboardCheck className="size-8" />} title="研究报告" description="整理、比较、输出" href="/reports" />
