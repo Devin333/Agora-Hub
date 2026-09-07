@@ -488,6 +488,17 @@ This guarded rejection is not a `PENDING` receipt or automatic same-parent-turn
 continuation. Feature defaults and the static Research path remain unchanged;
 no G1-G5 closure or production rollout approval is claimed.
 
+### Candidate Receipt Integrity Increment
+
+Task 1.4 is complete within the generic AgentLoop submission boundary. This increment does not claim task 3.2/3.3 `PENDING` wait or same-parent-turn continuation, and it does not wire the dynamic Research entrypoint to a second submission ingress.
+
+- `AgentSubmissionReceipt` is a versioned immutable projection of the accepted `CandidateSubmission`. It carries the stable run/stage/parent-turn/action identity, candidate and record checksums, admission nonce, plan identity and optional admitted group identity.
+- Receipt construction and deserialization fail closed when the canonical dedup key, submission id, plan id, candidate reference/checksum, or record checksum cannot be recomputed from the receipt projection. Receipt transport includes a self checksum and round-trip/tamper regressions.
+- Terminal redelivery returns the same receipt and terminal observation without worker execution or new durable events. Active redelivery returns the original receipt with `task_plan_submission_resume_required` and no synthetic group identity; checksum conflicts return the original submission receipt and do not expose old result refs.
+- Rejected observations with no group/plan identity use an explicit rejected observation schema. `parent-observation/v1` still requires non-null group and plan identity, so old readers fail closed on the new rejected payload rather than silently accepting changed v1 semantics.
+
+Focused validation after this increment: submission/redelivery and AgentLoop observation regression passed (`91 passed` before the final schema/tamper additions; the focused additions passed `4 passed`), compile and `git diff --check` passed. Full repository smoke and strict OpenSpec validation remain required before commit.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

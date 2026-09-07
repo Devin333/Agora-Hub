@@ -7,10 +7,12 @@ from framework.agent.models import DelegateBatchCandidate, DelegateBatchProposal
 from framework.agent.models.orchestration import (
     AGENT_ORCHESTRATION_REQUEST_SCHEMA,
     AGENT_ORCHESTRATION_RESULT_SCHEMA,
+    PARENT_OBSERVATION_REJECTED_SCHEMA,
     PARENT_OBSERVATION_SCHEMA,
     AgentOrchestrationPort,
     AgentOrchestrationRequest,
     AgentOrchestrationResult,
+    AgentSubmissionReceipt,
     ParentObservation,
     ParentObservationLimits,
     ParentTaskSummary,
@@ -208,9 +210,15 @@ class HarnessAgentOrchestrationRuntime:
         source_checksum = canonical_payload_checksum(request.candidate.to_dict())
         original = self._store.candidate_submission(submission_identity)
         if original is not None and original.candidate_checksum != source_checksum:
-            raise HarnessValidationError(
-                "candidate checksum conflicts with the original submission",
-                code="CANDIDATE_IDEMPOTENCY_CONFLICT",
+            return _rejected_orchestration_result(
+                request,
+                "CANDIDATE_IDEMPOTENCY_CONFLICT",
+                submission_receipt=self._submission_receipt(
+                    request,
+                    original,
+                    dedup_status="conflict",
+                    wait_status="rejected",
+                ),
             )
         if recover and original is None:
             raise HarnessValidationError("recovery requires an existing submission", code="task_plan_submission_missing")
@@ -245,7 +253,16 @@ class HarnessAgentOrchestrationRuntime:
         if not created and not recover:
             run_result = self._stage_runner.recorded_submission_result(stage_request)
             if run_result is None:
-                return _rejected_orchestration_result(request, "task_plan_submission_resume_required")
+                return _rejected_orchestration_result(
+                    request,
+                    "task_plan_submission_resume_required",
+                    submission_receipt=self._submission_receipt(
+                        request,
+                        original,
+                        dedup_status="accepted",
+                        wait_status="pending",
+                    ),
+                )
         else:
             run_result = self._stage_runner.run(stage_request)
         if _reason_from_worker_result(run_result, "") in {
@@ -257,9 +274,63 @@ class HarnessAgentOrchestrationRuntime:
             "task_plan_submission_result_invalid",
         }:
             return _rejected_orchestration_result(
-                request, _reason_from_worker_result(run_result, "")
+                request,
+                _reason_from_worker_result(run_result, ""),
+                submission_receipt=self._submission_receipt(
+                    request,
+                    original,
+                    dedup_status="accepted",
+                    wait_status="rejected",
+                ),
             )
-        return self._joined_result(request, run_result)
+        return self._joined_result(
+            request,
+            run_result,
+            submission_receipt=self._submission_receipt(
+                request,
+                original,
+                dedup_status="accepted",
+                wait_status="terminal",
+            ),
+        )
+
+    def _submission_receipt(
+        self,
+        request: AgentOrchestrationRequest,
+        submission: Any,
+        *,
+        dedup_status: str,
+        wait_status: str,
+    ) -> AgentSubmissionReceipt:
+        plan = self._store.plan(request.run_id or "", self._stage_binding.stage_id)
+        group_id = group_checksum = None
+        if plan is not None:
+            for event in self._store.read_events(plan.run_id, plan.stage_id):
+                payload = getattr(event, "payload", {})
+                snapshot = payload.get("group") if isinstance(payload, Mapping) else None
+                if isinstance(snapshot, Mapping) and snapshot.get("plan_id") == plan.plan_id and snapshot.get("plan_version") == plan.version:
+                    group_id = snapshot.get("group_id")
+                    group_checksum = snapshot.get("group_checksum")
+        return AgentSubmissionReceipt(
+            submission_id=submission.submission_id,
+            dedup_key=submission.identity.dedup_key,
+            candidate_ref=submission.candidate_ref,
+            record_checksum=submission.record_checksum,
+            group_id=group_id,
+            group_checksum=group_checksum,
+            plan_id=submission.plan_id,
+            plan_version=str(plan.version) if plan is not None else None,
+            plan_checksum=plan.plan_checksum if plan is not None else None,
+            dedup_status=dedup_status,
+            wait_status=wait_status,
+            accepted_at=submission.accepted_at,
+            candidate_checksum=submission.candidate_checksum,
+            run_id=submission.identity.run_id,
+            stage_id=submission.identity.stage_id,
+            parent_turn_id=submission.identity.parent_turn_id,
+            action_correlation_id=submission.identity.action_correlation_id,
+            admission_id=submission.admission_id,
+        )
 
     def _require_parent_graph(self, identity: GraphExecutionIdentity) -> None:
         expected = (
@@ -405,11 +476,17 @@ class HarnessAgentOrchestrationRuntime:
         self,
         request: AgentOrchestrationRequest,
         run_result: Any,
+        *,
+        submission_receipt: AgentSubmissionReceipt | None = None,
     ) -> AgentOrchestrationResult:
         plan = self._store.plan(request.run_id or "", self._stage_binding.stage_id)
         if plan is None:
             reason = _reason_from_worker_result(run_result, "agent_orchestration_plan_unavailable")
-            return _rejected_orchestration_result(request, reason)
+            return _rejected_orchestration_result(
+                request,
+                reason,
+                submission_receipt=submission_receipt,
+            )
         results = self._store.results_for(
             plan.run_id,
             plan.stage_id,
@@ -488,6 +565,7 @@ class HarnessAgentOrchestrationRuntime:
             status="succeeded" if succeeded else "partial_failure",
             observation=observation,
             reason_code=None if succeeded else _reason_from_worker_result(run_result, "agent_orchestration_group_not_succeeded"),
+            submission_receipt=submission_receipt,
         )
 
 
@@ -588,16 +666,20 @@ def _context_refs_for_candidate(candidate: DelegateBatchCandidate) -> dict[str, 
 def _rejected_orchestration_result(
     request: AgentOrchestrationRequest,
     reason_code: str,
+    *,
+    submission_receipt: AgentSubmissionReceipt | None = None,
 ) -> AgentOrchestrationResult:
     return AgentOrchestrationResult(
         status="rejected",
         reason_code=reason_code,
         observation=ParentObservation(
-            group_id=f"rejected:{request.candidate.correlation_id}",
+            group_id=None,
             group_status="rejected",
-            plan_version="0",
+            plan_version=None,
             diagnostics=(reason_code,),
+            schema_version=PARENT_OBSERVATION_REJECTED_SCHEMA,
         ),
+        submission_receipt=submission_receipt,
     )
 
 

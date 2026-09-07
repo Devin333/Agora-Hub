@@ -7,6 +7,12 @@ from time import monotonic, sleep
 
 import pytest
 
+from framework.agent.models.orchestration import (
+    PARENT_OBSERVATION_REJECTED_SCHEMA,
+    PARENT_OBSERVATION_SCHEMA,
+    AgentOrchestrationResult,
+    ParentObservation,
+)
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.canonical import canonical_payload_checksum, thaw_mapping
 from framework.harness.task_plan.ports import TaskPlanStageRequest
@@ -114,6 +120,12 @@ def test_active_resubmission_cannot_recover_or_halt_original_execution(store_fac
         repeated = restarted.dispatch(request)
         assert repeated.reason_code == "task_plan_submission_resume_required"
         assert repeated.status == "rejected"
+        assert repeated.observation.group_id is None
+        assert repeated.submission_receipt is not None
+        assert repeated.submission_receipt.wait_status == "pending"
+        assert repeated.submission_receipt.dedup_status == "accepted"
+        assert repeated.submission_receipt.submission_id.startswith("candidate-submission-")
+        assert repeated.submission_receipt.group_id is not None
         assert store.read_events(identity.run_id, "delegate_stage") == before
         assert restarted._stage_runner.parallel_coordinator._sessions == {}
         assert len(calls) == 2
@@ -128,6 +140,44 @@ def test_active_resubmission_cannot_recover_or_halt_original_execution(store_fac
     assert replayed.to_dict() == original_results[0].to_dict()
     assert store.read_events(identity.run_id, "delegate_stage") == final_events
     assert len(calls) == 2
+
+
+def test_terminal_redelivery_returns_the_same_submission_receipt(store_factory):
+    store = store_factory()
+    runtime, identity = _runtime(store=store)
+    request = _request(identity)
+
+    first = runtime.dispatch(request)
+    repeated = runtime.dispatch(request)
+
+    assert first.status == repeated.status == "succeeded"
+    assert first.submission_receipt is not None
+    assert repeated.submission_receipt is not None
+    assert repeated.submission_receipt.to_dict() == first.submission_receipt.to_dict()
+    assert repeated.submission_receipt.wait_status == "terminal"
+    assert repeated.submission_receipt.dedup_status == "accepted"
+
+    restored = AgentOrchestrationResult.from_dict(first.to_dict())
+    assert restored == first
+    tampered = first.to_dict()
+    tampered["submission_receipt"]["candidate_checksum"] = "sha256:" + "0" * 64
+    with pytest.raises(ValueError, match="submission receipt"):
+        AgentOrchestrationResult.from_dict(tampered)
+
+
+def test_rejected_observation_uses_a_new_schema_boundary():
+    payload = ParentObservation(
+        group_id=None,
+        group_status="rejected",
+        plan_version=None,
+        diagnostics=("CANDIDATE_IDEMPOTENCY_CONFLICT",),
+        schema_version=PARENT_OBSERVATION_REJECTED_SCHEMA,
+    ).to_dict()
+
+    assert payload["schema_version"] == PARENT_OBSERVATION_REJECTED_SCHEMA
+    assert ParentObservation.from_dict(payload).group_id is None
+    with pytest.raises(ValueError, match="v1 requires"):
+        ParentObservation.from_dict({**payload, "schema_version": PARENT_OBSERVATION_SCHEMA})
 
 
 def test_racing_first_submissions_start_only_one_execution(store_factory):
@@ -267,7 +317,9 @@ def test_conflicting_candidate_never_receives_old_group_results(store_factory, c
 
     assert rejected.reason_code == "CANDIDATE_IDEMPOTENCY_CONFLICT"
     assert rejected.status != "succeeded"
-    assert rejected.observation.group_id != original.observation.group_id
+    assert rejected.observation.group_id is None
+    assert rejected.submission_receipt is not None
+    assert rejected.submission_receipt.submission_id == original.submission_receipt.submission_id
     assert rejected.observation.result_refs == ()
     assert rejected.observation.task_summaries == ()
     assert rejected.observation.aggregate_ref is None

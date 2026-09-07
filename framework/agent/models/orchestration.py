@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from framework.agent.models.action import DelegateBatchCandidate
+from framework.events.canonical import checksum_for
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.redaction import redact_sensitive_values
+from framework.shared.time import parse_datetime
 
 
 AGENT_ORCHESTRATION_REQUEST_SCHEMA = "newsroom.agent-orchestration-request/v2"
 AGENT_ORCHESTRATION_RESULT_SCHEMA = "newsroom.agent-orchestration-result/v1"
 PARENT_OBSERVATION_SCHEMA = "newsroom.parent-observation/v1"
+PARENT_OBSERVATION_REJECTED_SCHEMA = "newsroom.parent-observation/rejected/v2"
+AGENT_SUBMISSION_RECEIPT_SCHEMA = "newsroom.agent-submission-receipt/v1"
+_CANDIDATE_DEDUP_IDENTITY_SCHEMA = "newsroom.harness-candidate-dedup-identity/v1"
+_CANDIDATE_SUBMISSION_SCHEMA = "newsroom.harness-candidate-submission/v2"
+_CHECKSUM_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]*\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +162,9 @@ class ParentWaveSummary:
 class ParentObservation:
     """Only security-projected, bounded child evidence may cross to the parent."""
 
-    group_id: str
+    group_id: str | None
     group_status: str
-    plan_version: str
+    plan_version: str | None
     task_summaries: tuple[ParentTaskSummary, ...] = ()
     wave_summaries: tuple[ParentWaveSummary, ...] = ()
     aggregate_ref: str | None = None
@@ -178,12 +187,21 @@ class ParentObservation:
     schema_version: str = PARENT_OBSERVATION_SCHEMA
 
     def __post_init__(self) -> None:
-        for field_name in ("group_id", "group_status", "plan_version"):
+        for field_name in ("group_status",):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field_name} must be a non-empty string")
-        if self.schema_version != PARENT_OBSERVATION_SCHEMA:
+        for field_name in ("group_id", "plan_version"):
+            value = getattr(self, field_name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{field_name} must be a non-empty string or None")
+        if self.schema_version not in {PARENT_OBSERVATION_SCHEMA, PARENT_OBSERVATION_REJECTED_SCHEMA}:
             raise ValueError("unsupported parent observation schema")
+        if self.schema_version == PARENT_OBSERVATION_SCHEMA:
+            if self.group_id is None or self.plan_version is None:
+                raise ValueError("parent observation v1 requires group_id and plan_version")
+        elif self.group_status != "rejected":
+            raise ValueError("rejected parent observation schema requires rejected group_status")
         task_summaries = tuple(self.task_summaries)
         waves = tuple(self.wave_summaries)
         diagnostics = tuple(self.diagnostics)
@@ -365,6 +383,168 @@ class ParentObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentSubmissionReceipt:
+    """Durable identity returned for both first admission and redelivery.
+
+    ``group_id`` is optional because a candidate may be durably recorded before
+    plan/group admission.  Callers must never synthesize a group identity for
+    that state; the receipt is an inspection handle, not a terminal outcome.
+    """
+
+    submission_id: str
+    dedup_key: str
+    candidate_ref: str
+    record_checksum: str
+    group_id: str | None
+    group_checksum: str | None
+    plan_id: str
+    plan_version: str | None
+    plan_checksum: str | None
+    dedup_status: str
+    wait_status: str
+    accepted_at: str
+    candidate_checksum: str
+    run_id: str
+    stage_id: str
+    parent_turn_id: str
+    action_correlation_id: str
+    admission_id: str
+    schema_version: str = AGENT_SUBMISSION_RECEIPT_SCHEMA
+    receipt_checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        for name in ("submission_id", "dedup_key", "candidate_ref", "record_checksum"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        for name in ("dedup_key", "candidate_ref", "record_checksum", "candidate_checksum"):
+            if _CHECKSUM_PATTERN.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"{name} must be a canonical checksum")
+        for name in ("group_checksum", "plan_checksum"):
+            value = getattr(self, name)
+            if value is not None and _CHECKSUM_PATTERN.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a canonical checksum or None")
+        for name in ("run_id", "stage_id", "parent_turn_id", "action_correlation_id", "admission_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or _IDENTIFIER_PATTERN.fullmatch(value) is None:
+                raise ValueError(f"{name} must be a stable identifier")
+        for name in ("group_id", "group_checksum", "plan_version", "plan_checksum"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name} must be a non-empty string or None")
+        if not isinstance(self.plan_id, str) or _IDENTIFIER_PATTERN.fullmatch(self.plan_id) is None:
+            raise ValueError("plan_id must be a stable identifier")
+        if self.dedup_status not in {"accepted", "reused", "conflict"}:
+            raise ValueError("unsupported dedup_status")
+        if self.wait_status not in {"pending", "terminal", "rejected"}:
+            raise ValueError("unsupported wait_status")
+        if self.schema_version != AGENT_SUBMISSION_RECEIPT_SCHEMA:
+            raise ValueError("unsupported submission receipt schema")
+        for name in ("accepted_at", "candidate_checksum"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        parsed_accepted_at = parse_datetime(self.accepted_at)
+        if (
+            parsed_accepted_at is None
+            or parsed_accepted_at.tzinfo is None
+            or parsed_accepted_at.utcoffset() is None
+        ):
+            raise ValueError("accepted_at must be an RFC3339 timestamp")
+        if (self.group_id is None) != (self.group_checksum is None):
+            raise ValueError("group_id and group_checksum must appear together")
+        if (self.plan_version is None) != (self.plan_checksum is None):
+            raise ValueError("plan_version and plan_checksum must appear together")
+        identity_projection = {
+            "schema_version": _CANDIDATE_DEDUP_IDENTITY_SCHEMA,
+            "run_id": self.run_id,
+            "stage_id": self.stage_id,
+            "parent_turn_id": self.parent_turn_id,
+            "action_correlation_id": self.action_correlation_id,
+        }
+        expected_dedup_key = checksum_for(identity_projection)
+        if self.dedup_key != expected_dedup_key:
+            raise ValueError("submission receipt dedup_key does not match canonical identity")
+        expected_submission_id = f"candidate-submission-{expected_dedup_key.removeprefix('sha256:')}"
+        if self.submission_id != expected_submission_id:
+            raise ValueError("submission receipt submission_id does not match canonical identity")
+        expected_plan_id = (
+            f"candidate-plan-{checksum_for({'dedup_key': expected_dedup_key, 'candidate_ref': self.candidate_ref}).removeprefix('sha256:')}"
+        )
+        if self.plan_id != expected_plan_id:
+            raise ValueError("submission receipt plan_id does not match canonical identity")
+        expected_record_checksum = checksum_for(
+            {
+                "schema_version": _CANDIDATE_SUBMISSION_SCHEMA,
+                "identity": {**identity_projection, "dedup_key": expected_dedup_key},
+                "candidate_checksum": self.candidate_checksum,
+                "candidate_ref": self.candidate_ref,
+                "accepted_at": self.accepted_at,
+                "admission_id": self.admission_id,
+                "submission_id": expected_submission_id,
+                "plan_id": expected_plan_id,
+            }
+        )
+        if self.record_checksum != expected_record_checksum:
+            raise ValueError("submission receipt record_checksum does not match canonical submission")
+        object.__setattr__(self, "receipt_checksum", checksum_for(self.checksum_projection()))
+
+    def checksum_projection(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "submission_id": self.submission_id,
+            "dedup_key": self.dedup_key,
+            "candidate_ref": self.candidate_ref,
+            "record_checksum": self.record_checksum,
+            "group_id": self.group_id,
+            "group_checksum": self.group_checksum,
+            "plan_id": self.plan_id,
+            "plan_version": self.plan_version,
+            "plan_checksum": self.plan_checksum,
+            "dedup_status": self.dedup_status,
+            "wait_status": self.wait_status,
+            "accepted_at": self.accepted_at,
+            "candidate_checksum": self.candidate_checksum,
+            "run_id": self.run_id,
+            "stage_id": self.stage_id,
+            "parent_turn_id": self.parent_turn_id,
+            "action_correlation_id": self.action_correlation_id,
+            "admission_id": self.admission_id,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "submission_id": self.submission_id,
+            "dedup_key": self.dedup_key,
+            "candidate_ref": self.candidate_ref,
+            "record_checksum": self.record_checksum,
+            "group_id": self.group_id,
+            "group_checksum": self.group_checksum,
+            "plan_id": self.plan_id,
+            "plan_version": self.plan_version,
+            "plan_checksum": self.plan_checksum,
+            "dedup_status": self.dedup_status,
+            "wait_status": self.wait_status,
+            "accepted_at": self.accepted_at,
+            "candidate_checksum": self.candidate_checksum,
+            "run_id": self.run_id,
+            "stage_id": self.stage_id,
+            "parent_turn_id": self.parent_turn_id,
+            "action_correlation_id": self.action_correlation_id,
+            "admission_id": self.admission_id,
+            "receipt_checksum": self.receipt_checksum,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "AgentSubmissionReceipt":
+        payload = _strict_fields(value, set(cls.__dataclass_fields__))
+        supplied_checksum = payload.pop("receipt_checksum")
+        receipt = cls(**payload)
+        if supplied_checksum != receipt.receipt_checksum:
+            raise ValueError("submission receipt checksum does not match canonical content")
+        return receipt
+
+
+@dataclass(frozen=True, slots=True)
 class AgentOrchestrationRequest:
     parent_agent_id: str
     parent_turn_id: str
@@ -445,6 +625,7 @@ class AgentOrchestrationResult:
     status: str
     observation: ParentObservation
     reason_code: str | None = None
+    submission_receipt: AgentSubmissionReceipt | None = None
     schema_version: str = AGENT_ORCHESTRATION_RESULT_SCHEMA
 
     def __post_init__(self) -> None:
@@ -454,21 +635,28 @@ class AgentOrchestrationResult:
             raise TypeError("observation must be ParentObservation")
         if self.reason_code is not None and not isinstance(self.reason_code, str):
             raise TypeError("reason_code must be a string or None")
+        if self.submission_receipt is not None and not isinstance(self.submission_receipt, AgentSubmissionReceipt):
+            raise TypeError("submission_receipt must be AgentSubmissionReceipt or None")
         if self.schema_version != AGENT_ORCHESTRATION_RESULT_SCHEMA:
             raise ValueError("unsupported orchestration result schema")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "status": self.status,
             "observation": self.observation.to_dict(),
             "reason_code": self.reason_code,
         }
+        if self.submission_receipt is not None:
+            payload["submission_receipt"] = self.submission_receipt.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "AgentOrchestrationResult":
-        payload = _strict_fields(value, set(cls.__dataclass_fields__))
+        payload = _strict_fields(value, set(cls.__dataclass_fields__), optional={"submission_receipt"})
         payload["observation"] = ParentObservation.from_dict(payload["observation"])
+        if payload.get("submission_receipt") is not None:
+            payload["submission_receipt"] = AgentSubmissionReceipt.from_dict(payload["submission_receipt"])
         return cls(**payload)
 
 
@@ -575,10 +763,13 @@ def _encoded_bytes(value: dict[str, Any]) -> int:
 __all__ = [
     "AGENT_ORCHESTRATION_REQUEST_SCHEMA",
     "AGENT_ORCHESTRATION_RESULT_SCHEMA",
+    "AGENT_SUBMISSION_RECEIPT_SCHEMA",
     "PARENT_OBSERVATION_SCHEMA",
+    "PARENT_OBSERVATION_REJECTED_SCHEMA",
     "AgentOrchestrationPort",
     "AgentOrchestrationRequest",
     "AgentOrchestrationResult",
+    "AgentSubmissionReceipt",
     "ParentObservation",
     "ParentObservationLimits",
     "truncate_observation_text",
