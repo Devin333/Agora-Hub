@@ -33,6 +33,7 @@ from framework.harness import (
     HarnessSideEffectOutcome,
 )
 from framework.harness.artifacts import (
+    ArtifactReferenceDescriptor,
     GraphTerminalArtifact,
     GraphTerminalManifestV2,
     GraphTerminalManifestCommitRequest,
@@ -338,6 +339,128 @@ class FilesystemHarnessArtifactPort:
             run_id=run_id,
         )
 
+    def describe_artifact_ref(
+        self,
+        ref: str,
+        *,
+        expected_run_id: str,
+        expected_tenant_id: str | None = None,
+    ) -> ArtifactReferenceDescriptor:
+        """Return verified authority metadata without reading artifact payload."""
+
+        run_id: str | None = None
+        try:
+            run_id, artifact_type = self._parse_ref(ref)
+            expected = validate_artifact_path_segment(
+                expected_run_id,
+                field="expected artifact ref run_id",
+            )
+            if run_id != expected:
+                raise ArtifactRunBindingError(
+                    "artifact ref run_id does not match the expected parent run"
+                )
+            try:
+                terminal = self.terminal_store.read_terminal_manifest(run_id)
+            except ArtifactNotFoundError:
+                terminal = None
+                artifact = self.terminal_store.read_staged_artifact(
+                    run_id=run_id,
+                    artifact_key=artifact_type,
+                )
+                manifest = _artifact_projection(
+                    run_id,
+                    (artifact,),
+                    staging_only=True,
+                )
+            else:
+                artifact = terminal.artifact(artifact_type)
+                if artifact is None:
+                    raise ArtifactNotFoundError(
+                        f"artifact is not present in terminal manifest: {ref}"
+                    )
+                manifest = _terminal_manifest_projection(terminal)
+
+            if (
+                artifact.ref != ref
+                or artifact.artifact_key != artifact_type
+                or artifact.artifact_id != artifact_type
+            ):
+                raise ArtifactStoreMetadataError(
+                    f"artifact authority identity mismatch: {artifact_type}"
+                )
+            tenant_id = terminal.tenant_id if terminal is not None else None
+            if expected_tenant_id is not None:
+                if (
+                    not isinstance(expected_tenant_id, str)
+                    or not expected_tenant_id.strip()
+                ):
+                    raise ArtifactRunBindingError(
+                        "expected artifact tenant_id is required"
+                    )
+                if tenant_id is None:
+                    raise ArtifactRunBindingError(
+                        "trusted artifact tenant ownership is unavailable"
+                    )
+                if tenant_id != expected_tenant_id:
+                    raise ArtifactRunBindingError(
+                        "artifact tenant_id does not match the expected tenant"
+                    )
+
+            storage_ref = self._validated_artifact_storage_ref(
+                manifest,
+                run_id=run_id,
+                artifact_type=artifact_type,
+            )
+            if (
+                f"sha256:{storage_ref.checksum}" != artifact.content_checksum
+                or storage_ref.size_bytes != artifact.byte_size
+                or storage_ref.content_type != artifact.media_type
+            ):
+                raise ArtifactStoreMetadataError(
+                    f"artifact authority metadata mismatch: {artifact_type}"
+                )
+
+            publication = terminal.publication if terminal is not None else None
+            descriptor = ArtifactReferenceDescriptor(
+                ref=artifact.ref,
+                run_id=run_id,
+                artifact_type=artifact.artifact_key,
+                checksum=artifact.content_checksum,
+                byte_size=artifact.byte_size,
+                media_type=artifact.media_type,
+                tenant_id=tenant_id,
+                graph_id=terminal.graph_id if terminal is not None else None,
+                node_id=artifact.node_id,
+                attempt_id=artifact.attempt_id,
+                identity_scope_ref=(
+                    publication.identity_scope_ref
+                    if publication is not None
+                    else None
+                ),
+                subject_scope_ref=(
+                    publication.subject_scope_ref
+                    if publication is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            emit_research_persistence_diagnostic(
+                component="artifact_store",
+                operation="artifact_read",
+                outcome="failed",
+                reason=_artifact_failure_reason(exc),
+                run_id=run_id,
+            )
+            raise
+        emit_research_persistence_diagnostic(
+            component="artifact_store",
+            operation="artifact_read",
+            outcome="succeeded",
+            reason="completed",
+            run_id=run_id,
+        )
+        return descriptor
+
     def read_graph_result_artifact(
         self,
         ref: str,
@@ -497,6 +620,48 @@ class FilesystemHarnessArtifactPort:
         run_id: str,
         artifact_type: str,
     ) -> dict[str, Any]:
+        storage_ref = self._validated_artifact_storage_ref(
+            manifest,
+            run_id=run_id,
+            artifact_type=artifact_type,
+        )
+        content = self.store.read(storage_ref)
+        try:
+            payload = json.loads(
+                content.decode("utf-8"),
+                parse_constant=_reject_nonfinite_json,
+            )
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ArtifactStoreMetadataError(
+                f"invalid artifact JSON: {artifact_type}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ArtifactStoreMetadataError(
+                f"invalid artifact JSON shape: {artifact_type}"
+            )
+        if payload.get("artifact_type") != artifact_type:
+            raise ArtifactStoreMetadataError(
+                f"artifact type mismatch: {artifact_type}"
+            )
+        payload_metadata = payload.get("metadata")
+        if not isinstance(payload_metadata, dict):
+            raise ArtifactStoreMetadataError(
+                f"artifact metadata shape is invalid: {artifact_type}"
+            )
+        payload_run_id = payload_metadata.get("run_id")
+        if payload_run_id is not None and payload_run_id != run_id:
+            raise ArtifactStoreMetadataError(
+                f"artifact payload run identity mismatch: {artifact_type}"
+            )
+        return payload
+
+    def _validated_artifact_storage_ref(
+        self,
+        manifest: dict[str, Any],
+        *,
+        run_id: str,
+        artifact_type: str,
+    ) -> StorageArtifactRef:
         if (
             not isinstance(manifest.get("manifest_hash"), str)
             and manifest.get("authority_mode") != "staging_only"
@@ -533,45 +698,15 @@ class FilesystemHarnessArtifactPort:
                 f"invalid artifact manifest content_type: {artifact_type}"
             )
         self._enforce_size(size_bytes, artifact_type)
-        content = self.store.read(
-            StorageArtifactRef(
-                artifact_id=artifact_type,
-                run_id=run_id,
-                artifact_type=artifact_type,
-                path=relative_path,
-                content_type=content_type,
-                size_bytes=size_bytes,
-                checksum=checksum,
-            )
+        return StorageArtifactRef(
+            artifact_id=artifact_type,
+            run_id=run_id,
+            artifact_type=artifact_type,
+            path=relative_path,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            checksum=checksum,
         )
-        try:
-            payload = json.loads(
-                content.decode("utf-8"),
-                parse_constant=_reject_nonfinite_json,
-            )
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise ArtifactStoreMetadataError(
-                f"invalid artifact JSON: {artifact_type}"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise ArtifactStoreMetadataError(
-                f"invalid artifact JSON shape: {artifact_type}"
-            )
-        if payload.get("artifact_type") != artifact_type:
-            raise ArtifactStoreMetadataError(
-                f"artifact type mismatch: {artifact_type}"
-            )
-        payload_metadata = payload.get("metadata")
-        if not isinstance(payload_metadata, dict):
-            raise ArtifactStoreMetadataError(
-                f"artifact metadata shape is invalid: {artifact_type}"
-            )
-        payload_run_id = payload_metadata.get("run_id")
-        if payload_run_id is not None and payload_run_id != run_id:
-            raise ArtifactStoreMetadataError(
-                f"artifact payload run identity mismatch: {artifact_type}"
-            )
-        return payload
 
     def _validated_v2_publication_claim(
         self,

@@ -45,6 +45,9 @@ from framework.execution_environment import (
     RuntimeExecutionComposition,
 )
 from framework.harness import ArtifactReferenceVerifierPort, ContextAssembler
+from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_snapshot_store import DurableRefAuthoritySnapshotStore
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.control_plane.durable_events import (
@@ -509,6 +512,34 @@ def test_valid_settings_compose_full_durable_production_graph(
             == dynamic_stage._child_agent_supervisor.capacity
             == dynamic_stage._policy.max_parallelism
         )
+        admission = dynamic_stage._ref_admission_service
+        assert isinstance(admission, HarnessRefAdmissionService)
+        assert isinstance(admission.store, DurableRefAuthoritySnapshotStore)
+        assert admission.store.is_durable is True
+        assert admission.store._artifacts is runtime.artifact_port.store
+        stage_worker_type = research_composition.ResearchAnalysisTaskPlanStageWorker
+        volatile_admission = HarnessRefAdmissionService(SimpleNamespace(
+            commit=admission.store.commit,
+            get=admission.store.get,
+            find=admission.store.find,
+        ))
+        for unavailable_admission in (None, volatile_admission):
+            def stage_without_durable_authority(**kwargs):
+                return stage_worker_type(**{
+                    **kwargs, "ref_admission_service": unavailable_admission,
+                })
+
+            with monkeypatch.context() as scope:
+                scope.setattr(
+                    research_composition,
+                    "ResearchAnalysisTaskPlanStageWorker",
+                    stage_without_durable_authority,
+                )
+                with pytest.raises(HarnessValidationError) as error:
+                    runtime.dynamic_task_plan_runner_factory(
+                        workspace=candidate_workspace, dependencies=object(),
+                    )
+                assert error.value.code == "research_task_plan_ref_authority_required"
         configured_verifier = dynamic_stage._runner.result_verifier
         while hasattr(configured_verifier, "_verifier"):
             configured_verifier = configured_verifier._verifier

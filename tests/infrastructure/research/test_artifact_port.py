@@ -21,6 +21,7 @@ from framework.agent.artifacts import (
 from framework.events.canonical import checksum_for
 from framework.harness import ArtifactWriteRequest
 from framework.harness.artifacts import (
+    ArtifactReferenceDescriptorPort,
     GraphTerminalArtifact,
     GraphTerminalManifest,
     GraphTerminalManifestV2,
@@ -104,6 +105,80 @@ def test_unpublished_member_is_hidden_but_reference_verification_is_available(
 
     assert hidden.value.disposition == "staging_only"
     assert publication_calls == []
+
+
+def test_staged_artifact_descriptor_is_exact_and_payload_free(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    port = FilesystemHarnessArtifactPort(tmp_path)
+    request = _context_request({"status": "candidate"})
+    with port.bind_run("run-1"):
+        ref = port.write_artifact(request)
+    monkeypatch.setattr(
+        port.store,
+        "read",
+        lambda _ref: pytest.fail("descriptor attempted to read artifact payload bytes"),
+    )
+
+    descriptor = port.describe_artifact_ref(
+        ref.ref,
+        expected_run_id="run-1",
+    )
+
+    assert isinstance(port, ArtifactReferenceDescriptorPort)
+    assert descriptor.ref == ref.ref
+    assert descriptor.run_id == "run-1"
+    assert descriptor.artifact_type == request.artifact_type
+    assert descriptor.checksum == ref.checksum
+    assert descriptor.byte_size == len(
+        stable_json_dumps(request.to_dict()).encode("utf-8")
+    )
+    assert descriptor.media_type == "application/json"
+    assert descriptor.tenant_id is None
+    assert descriptor.graph_id is None
+    assert descriptor.node_id == "context"
+    assert descriptor.attempt_id == "context-1"
+    assert descriptor.identity_scope_ref is None
+    assert descriptor.subject_scope_ref is None
+    assert not hasattr(descriptor, "payload")
+
+
+def test_terminal_artifact_descriptor_binds_trusted_tenant_and_graph(tmp_path) -> None:
+    port = FilesystemHarnessArtifactPort(tmp_path)
+    with port.bind_run("run-1"):
+        ref = port.write_artifact(_context_request({"status": "accepted"}))
+    terminal = _commit_terminal_manifest(port, "run-1")
+
+    descriptor = port.describe_artifact_ref(
+        ref.ref,
+        expected_run_id="run-1",
+        expected_tenant_id="tenant-1",
+    )
+
+    assert descriptor.tenant_id == "tenant-1"
+    assert descriptor.graph_id == terminal.graph_id
+    artifact_path = tmp_path / "run-1" / terminal.artifacts[0].relative_path
+    artifact_path.write_bytes(b"tampered-after-authority-check")
+    with pytest.raises(ArtifactRunBindingError, match="expected tenant"):
+        port.describe_artifact_ref(
+            ref.ref,
+            expected_run_id="run-1",
+            expected_tenant_id="tenant-2",
+        )
+
+
+def test_staged_descriptor_rejects_unverifiable_tenant_ownership(tmp_path) -> None:
+    port = FilesystemHarnessArtifactPort(tmp_path)
+    with port.bind_run("run-1"):
+        ref = port.write_artifact(_context_request({"status": "candidate"}))
+
+    with pytest.raises(ArtifactRunBindingError, match="ownership is unavailable"):
+        port.describe_artifact_ref(
+            ref.ref,
+            expected_run_id="run-1",
+            expected_tenant_id="tenant-1",
+        )
 
 
 def test_artifact_ref_verifier_rejects_missing_and_cross_run_refs(tmp_path) -> None:
@@ -272,6 +347,24 @@ def test_artifact_byte_tamper_is_detected(tmp_path) -> None:
         port.read_artifact(ref.ref)
     with pytest.raises(ArtifactChecksumMismatchError):
         port.verify_artifact_ref(ref.ref, expected_run_id="run-1")
+    assert (
+        port.describe_artifact_ref(ref.ref, expected_run_id="run-1").checksum
+        == ref.checksum
+    )
+
+
+def test_artifact_descriptor_rejects_missing_authority_record(tmp_path) -> None:
+    port = FilesystemHarnessArtifactPort(tmp_path)
+    with port.bind_run("run-1"):
+        ref = port.write_artifact(_context_request({"status": "candidate"}))
+    staging_record = port.terminal_store._staging_record_path(
+        "run-1",
+        _context_request({}).artifact_type,
+    )
+    staging_record.unlink()
+
+    with pytest.raises(ArtifactNotFoundError):
+        port.describe_artifact_ref(ref.ref, expected_run_id="run-1")
 
 
 def test_graph_terminal_manifest_hash_is_required(tmp_path) -> None:

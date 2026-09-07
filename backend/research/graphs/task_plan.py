@@ -19,6 +19,9 @@ from framework.harness.task_plan.aggregator import (
     TaskPlanAggregatorRegistry,
 )
 from framework.harness.task_plan.canonical import canonical_payload_checksum
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_authority import RefAuthority
+from framework.harness.ref_snapshot import SnapshotRefResolutionPort
 from framework.harness.task_plan.capability import (
     TaskCapabilityRegistration,
     TaskCapabilityRegistry,
@@ -376,6 +379,7 @@ class ResearchAnalysisTaskPlanStageWorker:
         child_agent_supervisor: ChildAgentSupervisor | None = None,
         checkpoint_store: TaskPlanCheckpointStorePort | None = None,
         planning_observation_port: PlanningObservationPort | None = None,
+        ref_admission_service: HarnessRefAdmissionService | None = None,
         allow_test_store: bool = False,
     ) -> None:
         if not isinstance(store, TaskPlanStorePort):
@@ -486,6 +490,17 @@ class ResearchAnalysisTaskPlanStageWorker:
                     "Research TaskPlan coordinator must use the configured child supervisor",
                     code="research_task_plan_parallel_supervisor_mismatch",
                 )
+        if ref_admission_service is not None and not isinstance(ref_admission_service, HarnessRefAdmissionService):
+            raise TypeError("ref_admission_service must be HarnessRefAdmissionService")
+        if not allow_test_store and (
+            ref_admission_service is None
+            or getattr(ref_admission_service.store, "is_durable", False) is not True
+        ):
+            raise HarnessValidationError(
+                "Research production TaskPlan requires durable reference admission",
+                code="research_task_plan_ref_authority_required",
+            )
+        self._ref_admission_service = ref_admission_service
         self._stage_binding = stage_binding
         self._accepted_at = str(accepted_at)
         self._policy = actual_policy
@@ -590,6 +605,18 @@ class ResearchAnalysisTaskPlanStageWorker:
             name: canonical_payload_checksum({"name": name, "value": inputs[name]})
             for name in RESEARCH_DYNAMIC_INPUT_REFS
         }
+        ref_options = {}
+        ref_metadata = {}
+        if self._ref_admission_service is not None:
+            snapshot = self._ref_admission_service.admit_graph_inputs(
+                task, stage_binding=self._stage_binding, task_policy=self._policy,
+            )
+            ref_options = {
+                "ref_authority": RefAuthority(),
+                "ref_policy": snapshot.policy,
+                "ref_resolution": SnapshotRefResolutionPort(snapshot),
+            }
+            ref_metadata = {"ref_authority_snapshot_ref": snapshot.snapshot_ref}
         return self._runner.run(
             TaskPlanStageRequest(
                 run_id=run_id,
@@ -602,7 +629,9 @@ class ResearchAnalysisTaskPlanStageWorker:
                 metadata={
                     "accepted_at": self._accepted_at,
                     "input_ref_checksums": input_checksums,
+                    **ref_metadata,
                 },
+                **ref_options,
             )
         )
 

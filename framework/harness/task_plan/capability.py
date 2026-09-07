@@ -12,6 +12,9 @@ from framework.harness.context.models import (
 )
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.policy import HarnessBudgetSnapshot
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_authority import RefAuthority
+from framework.harness.ref_snapshot import RefAuthoritySnapshot, SnapshotRefResolutionPort
 from framework.harness.subagents.context import SubAgentContextBuilder
 from framework.harness.subagents.models import (
     SUBAGENT_INVOCATION_SCHEMA_V3,
@@ -350,11 +353,15 @@ class ResolvedSubAgentTaskAdapter:
         runtime: SubAgentRuntime,
         *,
         context_builder: SubAgentContextBuilder | None = None,
+        ref_admission_service: "HarnessRefAdmissionService | None" = None,
     ) -> None:
         if not isinstance(runtime, SubAgentRuntime):
             raise TypeError("runtime must be SubAgentRuntime")
         self._runtime = runtime
         self._context_builder = context_builder or SubAgentContextBuilder()
+        if ref_admission_service is not None and not isinstance(ref_admission_service, HarnessRefAdmissionService):
+            raise TypeError("ref_admission_service must be HarnessRefAdmissionService")
+        self._ref_admission_service = ref_admission_service
 
     def invoke(
         self,
@@ -475,15 +482,6 @@ class ResolvedSubAgentTaskAdapter:
         child_run_id = (
             f"{plan.run_id}:{plan.stage_id}:{instance.task_instance_id}"
         )
-        envelope = self._context_builder.build(
-            parent_run_id=plan.run_id,
-            child_run_id=child_run_id,
-            spec=bounded_spec,
-            context_pack=context_pack,
-            input_refs=resolved_task.task.input_refs,
-            memory_context_refs=(),
-            budget_snapshot=budget_snapshot,
-        )
         invocation_id = f"invocation://{child_run_id}"
         attempt_identity = task_plan_subagent_attempt_identity(
             plan,
@@ -492,6 +490,38 @@ class ResolvedSubAgentTaskAdapter:
             child_run_id=child_run_id,
             subagent_id=bounded_spec.subagent_id,
             context_pack=context_pack,
+        )
+        ref_options = {}
+        if self._ref_admission_service is not None:
+            root = self._ref_admission_service.store.find(
+                run_id=plan.run_id,
+                binding_key=RefAuthoritySnapshot.admission_binding_key(
+                    execution_identity, plan.stage_id, plan.stage_binding_checksum,
+                ),
+            )
+            if root is None or root.task_policy_checksum != plan.policy_checksum:
+                raise HarnessValidationError(
+                    "child input admission grant is missing or outside the accepted policy",
+                    code="REF_SNAPSHOT_MISSING",
+                )
+            child_grant = self._ref_admission_service.admit_child_inputs(
+                root, attempt_identity=attempt_identity,
+                input_refs=resolved_task.task.input_refs,
+            )
+            ref_options = {
+                "ref_authority": RefAuthority(),
+                "ref_policy": child_grant.policy,
+                "ref_resolution": SnapshotRefResolutionPort(child_grant),
+            }
+        envelope = self._context_builder.build(
+            parent_run_id=plan.run_id,
+            child_run_id=child_run_id,
+            spec=bounded_spec,
+            context_pack=context_pack,
+            input_refs=resolved_task.task.input_refs,
+            memory_context_refs=(),
+            budget_snapshot=budget_snapshot,
+            **ref_options,
         )
         metadata = {
             "input_refs": list(resolved_task.task.input_refs),

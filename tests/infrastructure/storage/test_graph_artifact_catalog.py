@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 
 from framework.events.canonical import checksum_for
-from framework.harness.artifacts import ArtifactCatalogPort
+from framework.harness.artifacts import (
+    ArtifactCatalogPort,
+    ArtifactReferenceDescriptorPort,
+)
 from framework.harness.artifacts.catalog import (
     ArtifactCatalogGcAction,
     ArtifactCatalogGcDetachRequest,
@@ -161,6 +164,100 @@ def test_adapter_satisfies_port_and_deduplicates_across_runs_after_restart(tmp_p
             ref="artifact://run-1/artifact-a",
         )
     assert wrong_tenant.value.error_code is (
+        GraphArtifactResultErrorCode.ARTIFACT_CATALOG_NOT_FOUND
+    )
+
+
+def test_catalog_describes_exact_trusted_artifact_metadata(tmp_path) -> None:
+    catalog = LocalJsonArtifactCatalog(tmp_path)
+    record = _record()
+    catalog.register(_request(record))
+
+    descriptor = catalog.describe_artifact_ref(
+        record.ref,
+        expected_run_id="run-1",
+        expected_tenant_id="tenant-1",
+    )
+
+    assert isinstance(catalog, ArtifactReferenceDescriptorPort)
+    assert descriptor.ref == record.ref
+    assert descriptor.run_id == record.run_id
+    assert descriptor.artifact_type == record.artifact_type
+    assert descriptor.checksum == record.content_checksum
+    assert descriptor.byte_size == record.byte_size
+    assert descriptor.media_type == record.media_type
+    assert descriptor.tenant_id == record.tenant_id
+    assert descriptor.graph_id == record.graph_id
+    assert descriptor.node_id == record.node_id
+    assert descriptor.attempt_id == record.attempt_id
+    assert descriptor.identity_scope_ref is None
+    assert descriptor.subject_scope_ref is None
+    assert not hasattr(descriptor, "payload")
+
+
+def test_catalog_descriptor_rejects_wrong_ownership(tmp_path) -> None:
+    catalog = LocalJsonArtifactCatalog(tmp_path)
+    record = _record()
+    catalog.register(_request(record))
+
+    with pytest.raises(GraphArtifactResultError) as wrong_run:
+        catalog.describe_artifact_ref(
+            record.ref,
+            expected_run_id="run-2",
+            expected_tenant_id="tenant-1",
+        )
+    assert wrong_run.value.error_code is GraphArtifactResultErrorCode.ARTIFACT_SCOPE_MISMATCH
+
+    with pytest.raises(GraphArtifactResultError) as wrong_tenant:
+        catalog.describe_artifact_ref(
+            record.ref,
+            expected_run_id="run-1",
+            expected_tenant_id="tenant-2",
+        )
+    assert wrong_tenant.value.error_code is (
+        GraphArtifactResultErrorCode.ARTIFACT_CATALOG_NOT_FOUND
+    )
+
+    with pytest.raises(GraphArtifactResultError) as missing_tenant:
+        catalog.describe_artifact_ref(
+            record.ref,
+            expected_run_id="run-1",
+        )
+    assert missing_tenant.value.error_code is (
+        GraphArtifactResultErrorCode.ARTIFACT_SCOPE_MISMATCH
+    )
+
+
+def test_catalog_descriptor_rejects_corrupt_state_checksum(tmp_path) -> None:
+    catalog = LocalJsonArtifactCatalog(tmp_path)
+    record = _record()
+    catalog.register(_request(record))
+    state = _read_state(tmp_path)
+    state["state_checksum"] = checksum_for({"tampered": True})
+    _state_path(tmp_path).write_text(
+        json.dumps(state, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(GraphArtifactResultError) as raised:
+        catalog.describe_artifact_ref(
+            record.ref,
+            expected_run_id="run-1",
+            expected_tenant_id="tenant-1",
+        )
+    assert raised.value.error_code is GraphArtifactResultErrorCode.ARTIFACT_CATALOG_CORRUPT
+
+
+def test_catalog_descriptor_rejects_missing_catalog_record(tmp_path) -> None:
+    catalog = LocalJsonArtifactCatalog(tmp_path)
+
+    with pytest.raises(GraphArtifactResultError) as raised:
+        catalog.describe_artifact_ref(
+            "artifact://run-1/artifact-1",
+            expected_run_id="run-1",
+            expected_tenant_id="tenant-1",
+        )
+    assert raised.value.error_code is (
         GraphArtifactResultErrorCode.ARTIFACT_CATALOG_NOT_FOUND
     )
 

@@ -735,6 +735,27 @@ def default_event_schema_catalog(
                 current=event_type not in HARNESS_GRAPH_COMMIT_EVENT_TYPES,
             )
         )
+    catalog.register(
+        EventSchemaRegistration(
+            event_type="harness_ref_authority_committed",
+            data_schema="newsroom.harness-ref-authority-committed/v1",
+            json_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["snapshot_ref", "binding_key", "stage_id", "phase", "artifact_checksum", "artifact_size_bytes"],
+                "properties": {
+                    "snapshot_ref": _CHECKSUM_TEXT,
+                    "binding_key": _CHECKSUM_TEXT,
+                    "stage_id": _TEXT,
+                    "phase": {"enum": ["INPUT_ADMISSION", "CHILD_INPUT", "RESULT_ACCEPTANCE"]},
+                    "artifact_checksum": _CHECKSUM_TEXT,
+                    "artifact_size_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+                },
+            },
+            sensitivity_policy=SensitivityPolicy(),
+            current=True,
+        )
+    )
     for event_type in TASK_PLAN_EVENT_TYPES:
         catalog.register(
             EventSchemaRegistration(

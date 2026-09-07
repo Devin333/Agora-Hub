@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.shared.json import to_jsonable
+
+
+_SHA256_CHECKSUM_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,63 @@ class ArtifactRef:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactReferenceDescriptor:
+    """Trusted immutable metadata for one exact artifact reference.
+
+    The descriptor deliberately excludes artifact payload and arbitrary artifact
+    metadata. Optional ownership fields are populated only when the backing
+    manifest or catalog records them as integrity-protected authority data.
+    """
+
+    ref: str
+    run_id: str
+    artifact_type: str
+    checksum: str
+    byte_size: int
+    media_type: str
+    tenant_id: str | None = None
+    graph_id: str | None = None
+    node_id: str | None = None
+    attempt_id: str | None = None
+    identity_scope_ref: str | None = None
+    subject_scope_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("ref", "run_id", "artifact_type", "media_type"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise HarnessValidationError(f"{field_name} is required")
+        if (
+            not isinstance(self.checksum, str)
+            or _SHA256_CHECKSUM_PATTERN.fullmatch(self.checksum) is None
+        ):
+            raise HarnessValidationError(
+                "checksum must be a lowercase sha256 checksum"
+            )
+        if (
+            isinstance(self.byte_size, bool)
+            or not isinstance(self.byte_size, int)
+            or self.byte_size < 0
+        ):
+            raise HarnessValidationError("byte_size must be a non-negative integer")
+        for field_name in ("tenant_id", "graph_id", "node_id", "attempt_id"):
+            value = getattr(self, field_name)
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise HarnessValidationError(f"{field_name} must be non-empty")
+        for field_name in ("identity_scope_ref", "subject_scope_ref"):
+            value = getattr(self, field_name)
+            if value is not None and (
+                not isinstance(value, str)
+                or _SHA256_CHECKSUM_PATTERN.fullmatch(value) is None
+            ):
+                raise HarnessValidationError(
+                    f"{field_name} must be a lowercase sha256 checksum"
+                )
+
+
 @runtime_checkable
 class ArtifactPort(Protocol):
     def write_artifact(self, request: ArtifactWriteRequest) -> ArtifactRef:
@@ -92,6 +153,20 @@ class ArtifactReferenceVerifierPort(Protocol):
     """Verify one canonical artifact ref without returning its payload."""
 
     def verify_artifact_ref(self, ref: str, *, expected_run_id: str) -> None:
+        ...
+
+
+@runtime_checkable
+class ArtifactReferenceDescriptorPort(Protocol):
+    """Describe one artifact through trusted metadata without returning payload."""
+
+    def describe_artifact_ref(
+        self,
+        ref: str,
+        *,
+        expected_run_id: str,
+        expected_tenant_id: str | None = None,
+    ) -> ArtifactReferenceDescriptor:
         ...
 
 
@@ -231,6 +306,8 @@ class ArtifactCatalogPort(Protocol):
 __all__ = [
     "ArtifactPort",
     "ArtifactCatalogPort",
+    "ArtifactReferenceDescriptor",
+    "ArtifactReferenceDescriptorPort",
     "ArtifactReferenceVerifierPort",
     "GraphResultArtifactReadPort",
     "ArtifactRef",

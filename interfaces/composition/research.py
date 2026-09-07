@@ -1567,6 +1567,17 @@ def _build_configured_composition(
             artifact_store=artifact_port.store,
             tenant_id=_RESEARCH_EVENT_TENANT_ID,
         )
+        from framework.harness.ref_admission import HarnessRefAdmissionService
+        from framework.harness.ref_snapshot_store import DurableRefAuthoritySnapshotStore
+
+        dynamic_ref_admission_service = HarnessRefAdmissionService(
+            DurableRefAuthoritySnapshotStore(
+                durable_events.event_runtime,
+                durable_events.event_store,
+                artifact_store=artifact_port.store,
+                tenant_id=_RESEARCH_EVENT_TENANT_ID,
+            )
+        )
         dynamic_checkpoint_store = JsonlTaskPlanCheckpointStore(
             settings.artifact.root / "task-plan-checkpoints.jsonl"
         )
@@ -1625,7 +1636,10 @@ def _build_configured_composition(
                 },
                 transcript_store=subagent_transcript_store,
             )
-            subagent_adapter = ResolvedSubAgentTaskAdapter(subagent_runtime)
+            subagent_adapter = ResolvedSubAgentTaskAdapter(
+                subagent_runtime,
+                ref_admission_service=dynamic_ref_admission_service,
+            )
             gate_registry = build_paper_analysis_gate_registry()
 
             def gate_context(request):
@@ -1837,6 +1851,7 @@ def _build_configured_composition(
                 parallel_coordinator=dynamic_parallel_coordinator,
                 child_agent_supervisor=dynamic_child_agent_supervisor,
                 checkpoint_store=dynamic_checkpoint_store,
+                ref_admission_service=dynamic_ref_admission_service,
             )
         owned_resources.extend(
             resource

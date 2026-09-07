@@ -592,6 +592,80 @@ task 1.5, before proceeding to task 1.6:
 Capacity, ledger, parent continuation, and full retry/recovery remain separately
 unchecked as well. Static Research and feature defaults are unchanged.
 
+### Task 1.5 Durable Input Admission Increment
+
+Task 1.5 is still unchecked. This increment implements trusted input admission
+and child input grants; it does not claim complete result/planning/memory
+authorization or generic AgentLoop production binding.
+
+- `RefAuthoritySnapshot` freezes the full Graph execution identity, stage
+  binding, TaskPlan policy checksum, actual input source checksum, exact
+  descriptors and access policy. Child grants bind the accepted attempt and
+  inherit an explicitly shared read-only subset of the original descriptors.
+- `DurableRefAuthoritySnapshotStore` uses immutable artifacts and the existing
+  canonical run event stream. Only `harness_ref_authority_committed` exposes a
+  grant; a file without its event grants no access. Bounded CAS retries reuse
+  equal admissions and reject conflicting source/policy/descriptor contents.
+  Reopening the store preserves the original grant and its prior parent chain.
+- Recovery checks event and artifact checksums, sizes, canonical serialization,
+  business context, event identity, subject, correlation and exact producer.
+  Missing/corrupt committed artifacts are not repaired from current policy.
+  Independent review reproduced acceptance of a self-consistent but substituted
+  event envelope; the production fix now rejects all four envelope mutations.
+- `HarnessRefAdmissionService` derives descriptors from the actual Graph input
+  document after verifying its activity input checksum and pinned binding.
+  Research production composition supplies the same durable service to its
+  stage worker and `ResolvedSubAgentTaskAdapter`. Candidate-selected names are
+  not descriptor provenance, and missing/non-durable admission dependencies
+  reject production stage construction.
+- The real Research Graph fixture executes its three analysis children using
+  persisted `document` and `evidence_pack` grants. A reopened store reuses the
+  original snapshot; changed policy, extra private refs or tampered input
+  values cannot add events or trigger another planner/child call.
+- `ArtifactReferenceDescriptorPort` returns only integrity-protected manifest
+  or catalog metadata. Payload readers are replaced with fail-fast sentinels in
+  the metadata-only tests. Unknown tenant/owner fields remain unknown; staged
+  artifacts cannot satisfy a requested tenant without trustworthy evidence.
+  Actual artifact verification still checks bytes, size, checksum and JSON.
+
+Focused validation for this increment:
+
+- Input/snapshot/artifact/catalog tests: `83 passed, 3 skipped` in 44.64 seconds.
+  The first direct pytest run exposed a subprocess import-environment failure;
+  rerunning the complete group with the repository in `PYTHONPATH` passed.
+- TaskPlan/sub-agent/Research/composition/architecture regressions:
+  `925 passed, 4 warnings` in 346.90 seconds.
+- Final production-dependency and input/snapshot regressions: `30 passed`
+  in 54.25 seconds. The additional store envelope and full-parent-chain tests
+  then passed independently: `14 passed`.
+- Event contracts, runtime and SQLite regressions: `504 passed` in 58.08 seconds.
+- Required final repository `.venv/Scripts/python.exe -m scripts.dev smoke`:
+  exit 0. Compile passed; `3060 passed, 23 deselected, 23 warnings` in
+  1240.63 seconds. This smoke started after the final code/test edits.
+- Offline AgentLoop smoke: succeeded, 3 fixture LLM calls, 1 tool call,
+  0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-67b8df9836944eb3b91d71e90a5c665d/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings. Strict OpenSpec and
+  scoped/staged `git diff --check` passed. Existing FastAPI/Starlette/PyMuPDF
+  deprecations are unchanged. Focused artifact tests retain three
+  platform-dependent symlink skips; no assertions were weakened.
+
+Next, still within task 1.5: issue result grants from the trusted bundle writer,
+and authorize before `SubAgentRuntime.invoke()` / `recover()` read any existing
+bundle. `find_by_identity()` currently reads the bundle to obtain a receipt, so
+post-return adapter authorization alone cannot close that boundary. A separate
+result-grant snapshot model and durable parent-chain tests are not evidence that
+this production result path is wired. Generic input provenance, planning,
+versioned memory descriptors, replacement/dependency grants and recovered
+result consumers remain pending. `ResearchTaskPlanResultMaterializer` and the
+TaskPlan replay reader also consume committed bundles and require the same
+pre-read authorization. Common materialized artifact ownership can be checked
+against `subagent_result_attempt_id(identity)`, which derives its value from the
+full accepted child identity checksum, rather than inferred from a worker ref.
+No task 1.6 work or feature-default change is included in this increment.
+The passing checks qualify this increment, not the still-open G1-G5 release
+contracts.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

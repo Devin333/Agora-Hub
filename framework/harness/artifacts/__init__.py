@@ -30,6 +30,8 @@ from framework.harness.artifacts.governance import (
 from framework.harness.artifacts.ports import (
     ArtifactCatalogPort,
     ArtifactPort,
+    ArtifactReferenceDescriptor,
+    ArtifactReferenceDescriptorPort,
     ArtifactReferenceVerifierPort,
     GraphResultArtifactReadPort,
     ArtifactRef,
@@ -75,6 +77,8 @@ from framework.harness.artifacts.terminal_manifest import (
 __all__ = [
     "ArtifactCatalogPort",
     "ArtifactPort",
+    "ArtifactReferenceDescriptor",
+    "ArtifactReferenceDescriptorPort",
     "ArtifactReferenceVerifierPort",
     "GraphResultArtifactReadPort",
     "ArtifactRef",

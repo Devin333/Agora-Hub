@@ -160,10 +160,12 @@ class _DynamicTaskPlanFactory:
         outline_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         transcript_root: Path | None = None,
         crash_after_receipt_once: bool = False,
+        ref_admission_service=None,
     ) -> None:
         self.outline_transform = outline_transform
         self.transcript_root = transcript_root
         self.crash_after_receipt_once = crash_after_receipt_once
+        self.ref_admission_service = ref_admission_service
         self._crashed_after_receipt = False
         self.stores: list[InMemoryTaskPlanStore] = []
         self.transcript_stores: list[Any] = []
@@ -209,7 +211,9 @@ class _DynamicTaskPlanFactory:
             },
             transcript_store=transcript_store,
         )
-        adapter = ResolvedSubAgentTaskAdapter(runtime)
+        adapter = ResolvedSubAgentTaskAdapter(
+            runtime, ref_admission_service=self.ref_admission_service,
+        )
         store = InMemoryTaskPlanStore()
         outline_worker = _PlanOutlineWorker(
             dependencies.llm_worker,
@@ -380,6 +384,7 @@ class _DynamicTaskPlanFactory:
             parallel_coordinator=parallel_coordinator,
             child_agent_supervisor=child_supervisor,
             allow_test_store=True,
+            ref_admission_service=self.ref_admission_service,
         )
         self.stores.append(store)
         self.transcript_stores.append(transcript_store)

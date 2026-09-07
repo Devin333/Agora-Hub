@@ -50,6 +50,10 @@ candidate durable dedup key 固定为 `run_id + stage_id + parent_turn_id + acti
 
 所有 input/result/planning refs 和 memory namespace 统一通过 `RefAuthority`，校验 run、stage、tenant/owner、读写权限、artifact type、source checksum 和 pinned allowlist。跨作用域默认拒绝；共享必须由 policy 声明只读范围，candidate 不能自行授权，child 不得读取 sibling private refs。
 
+任务 1.5 的输入授权增量使用 `newsroom.harness-ref-authority-snapshot/v1`，将完整 Graph execution identity、stage binding、TaskPlan policy、实际输入文档 checksum、精确 descriptor allowlist 和 access policy 固定在不可变 artifact 中。`harness_ref_authority_committed` 是 canonical run stream 内唯一授权提交证据；artifact 写入成功但 event 未提交时不产生可读取的 grant。同一 execution binding 重复提交复用原 snapshot，改变输入、policy 或 descriptor 则拒绝冲突；已提交 artifact 丢失或损坏时不以当前配置重建授权。child input grant 必须绑定原 admission snapshot 和完整 accepted attempt identity，只能继承原 descriptor 的只读子集。
+
+Research production composition 已为真实 `document` / `evidence_pack` 输入和子任务 context 注入同一个持久化 admission service。artifact descriptor 端口只解析完整性受保护的 manifest/catalog 元数据，不预读业务 payload，也不从 worker 提供的 ref 字符串推断 owner；缺少可信 tenant 数据时不得伪造。此增量不代表结果授权已完成：新输出需要在可信持久化路径提交独立 result grant；`SubAgentRuntime.invoke()` 内部也会尝试恢复既有 transcript，结果恢复入口必须先加载原 grant 再读取 bundle，不能在读取后补授权。generic AgentLoop、planning、memory、replacement/dependency refs 和 result recovery 的完整生产接线仍属于未完成的任务 1.5。
+
 ### 2. Harness 作为唯一 fan-out/fan-in coordinator
 
 新增或扩展 `TaskPlanBatchCoordinator`，由 `TaskPlanStageRunner` 和 `AgentLoop` 共同调用的 Harness-owned port。其顺序固定为：

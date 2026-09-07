@@ -19,6 +19,7 @@ from framework.agent.artifacts.stores.fs_safety import (
 )
 from framework.agent.artifacts.stores.errors import ArtifactStoreMetadataError
 from framework.events.canonical import checksum_for
+from framework.harness.artifacts.ports import ArtifactReferenceDescriptor
 from framework.harness.artifacts.catalog import (
     ArtifactCatalogClaim,
     ArtifactCatalogEntry,
@@ -261,6 +262,42 @@ class LocalJsonArtifactCatalog:
         raise result_error(
             GraphArtifactResultErrorCode.ARTIFACT_CATALOG_CORRUPT,
             field="catalog.ref",
+        )
+
+    def describe_artifact_ref(
+        self,
+        ref: str,
+        *,
+        expected_run_id: str,
+        expected_tenant_id: str | None = None,
+    ) -> ArtifactReferenceDescriptor:
+        """Describe a physical ref from the checksum-protected catalog state."""
+
+        if expected_tenant_id is None:
+            raise result_error(
+                GraphArtifactResultErrorCode.ARTIFACT_SCOPE_MISMATCH,
+                field="catalog.expected_tenant_id",
+            )
+        tenant = identifier(expected_tenant_id, "catalog.expected_tenant_id")
+        expected_run = identifier(expected_run_id, "catalog.expected_run_id")
+        entry = self.get_by_ref(tenant_id=tenant, ref=ref)
+        record = entry.record
+        if record.run_id != expected_run:
+            raise result_error(
+                GraphArtifactResultErrorCode.ARTIFACT_SCOPE_MISMATCH,
+                field="catalog.expected_run_id",
+            )
+        return ArtifactReferenceDescriptor(
+            ref=record.ref,
+            run_id=record.run_id,
+            artifact_type=record.artifact_type,
+            checksum=record.content_checksum,
+            byte_size=record.byte_size,
+            media_type=record.media_type,
+            tenant_id=record.tenant_id,
+            graph_id=record.graph_id,
+            node_id=record.node_id,
+            attempt_id=record.attempt_id,
         )
 
     def get_claim(

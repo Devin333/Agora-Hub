@@ -26,6 +26,8 @@ from framework.harness.ref_authority import (
 
 from framework.harness.artifacts import (
     ArtifactPort,
+    ArtifactReferenceDescriptor,
+    ArtifactReferenceDescriptorPort,
     ArtifactReferenceVerifierPort,
     GraphResultArtifactReadPort,
     ArtifactRef,
@@ -668,6 +670,8 @@ __all__ = [
     "HARNESS_NODE_OUTPUT_RESOURCE_SCHEMA",
     "HARNESS_NODE_OUTPUT_STAGED_WRITE_SCHEMA",
     "ArtifactPort",
+    "ArtifactReferenceDescriptor",
+    "ArtifactReferenceDescriptorPort",
     "ArtifactReferenceVerifierPort",
     "GraphResultArtifactReadPort",
     "ArtifactRef",
