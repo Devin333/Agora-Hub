@@ -10,7 +10,6 @@ import {
   FileText,
   Github,
   Quote,
-  Sparkles,
   WandSparkles,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -86,12 +85,11 @@ export function DesignDemoPage() {
 
       {/* Subtract both header offsets so the middle row aligns with the viewport center. */}
       <main id="workspace" className="grid h-[calc(100svh-var(--header-height)-var(--header-height))] min-h-[520px] scroll-mt-[var(--header-height)] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-          <h1 className="mx-auto mb-14 w-[calc(100%-80px)] max-w-[900px] self-end text-center font-sans text-[48px] font-bold leading-[1.2] tracking-normal">
+          <h1 className="mx-auto w-[calc(100%-80px)] max-w-[900px] self-start pt-[clamp(5rem,12vh,9rem)] text-center font-sans text-[56px] font-bold leading-[1.2] tracking-normal">
             <span className="text-[#35274f]">Ask.</span>{" "}<span className="text-[#7c3aed]">Discover.</span>
           </h1>
           <div className="mx-auto w-[calc(100%-80px)] max-w-[960px] overflow-visible rounded-3xl border border-[#e7dff1] bg-white p-8 shadow-[0_18px_45px_rgba(86,58,127,0.13)]">
-            <div className="flex items-center justify-between px-1 text-base text-[#8b7fa0]">
-              <span className="inline-flex items-center gap-2 font-semibold uppercase tracking-[0.12em]"><Sparkles className="size-5 text-[#7c3aed]" />Agora AI</span>
+            <div className="flex items-center justify-end px-1 text-base text-[#8b7fa0]">
               <span className="inline-flex items-center gap-2 text-[#7c3aed]"><span className="size-2 rounded-full bg-[#8b5cf6]" />准备回答</span>
             </div>
 
@@ -132,5 +130,5 @@ function ModeMenu({ activeIntent, onSelect }: { activeIntent: Intent; onSelect: 
 }
 
 function ModuleCard({ icon, title, description, href }: { icon: ReactNode; title: string; description: string; href: string }) {
-  return <a href={href} className="group flex min-h-[250px] flex-col items-center rounded-2xl border border-[#e9e2f0] bg-[#fefeff] p-8 text-center transition-colors hover:border-[#c7acef] hover:bg-[#fcfaff]"><span className="flex size-[72px] items-center justify-center rounded-2xl bg-[#f0e9ff] text-[#7c3aed]">{icon}</span><h3 className="mt-6 text-[22px] font-semibold text-[#372b51]">{title}</h3><p className="mt-2 text-[17px] text-[#8e839b]">{description}</p><span className="mt-auto flex items-center justify-center gap-1 pt-7 text-base font-medium text-[#7650c6]">进入模块<ChevronRight className="size-5 transition-transform group-hover:translate-x-0.5" /></span></a>
+  return <a href={href} className="group flex min-h-[250px] flex-col items-center rounded-2xl border border-white/75 bg-white/50 p-8 text-center shadow-[0_18px_45px_rgba(86,58,127,0.08)] backdrop-blur-xl transition-colors hover:border-white hover:bg-white/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60 focus-visible:ring-offset-2"><span className="flex size-[72px] items-center justify-center rounded-2xl bg-[#f0e9ff]/85 text-[#7c3aed]">{icon}</span><h3 className="mt-6 text-[22px] font-semibold text-[#372b51]">{title}</h3><p className="mt-2 text-[17px] text-[#8e839b]">{description}</p></a>
 }
