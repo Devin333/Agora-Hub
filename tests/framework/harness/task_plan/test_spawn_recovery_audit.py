@@ -1,4 +1,6 @@
 from dataclasses import replace
+
+from framework.harness.task_plan.models import TaskLifecycle
 from types import SimpleNamespace
 
 import pytest
@@ -273,6 +275,41 @@ def test_durable_receipt_conflict_is_audited_before_recovery_stops(crashed_wave)
     assert fixture.events[-1]["event_type"] == "RECOVERY_HALTED"
     assert fixture.events[-1]["reason_code"] == "SPAWN_IDENTITY_CONFLICT"
     replay(fixture)
+
+
+def test_restart_finishes_active_wave_before_join_without_spawning_again(monkeypatch):
+    events, artifacts = _EventStore(), _ArtifactStore()
+    runtime, identity = _runtime(store=_store(events, artifacts))
+    runner = runtime._stage_runner
+    record = runner._record_parallel_events
+    captured = {}
+
+    class ProcessCrash(BaseException):
+        pass
+
+    def crash(request, plan, batch):
+        captured.update(request=request, plan=plan)
+        record(request, plan, batch)
+        if any(event["event_type"] == "TASK_WAVE_DISPATCHED" for event in batch):
+            raise ProcessCrash()
+
+    monkeypatch.setattr(runner, "_record_parallel_events", crash)
+    try:
+        with pytest.raises(ProcessCrash):
+            runtime.dispatch(_parent_request(identity))
+        monkeypatch.setattr(runner, "_record_parallel_events", record)
+        runner.parallel_coordinator = ParallelAgentCoordinator(max_workers=2, child_supervisor=runtime._child_supervisor)
+        monkeypatch.setattr(runtime._child_supervisor, "spawn_batch", lambda *args, **kwargs: pytest.fail("duplicate child"))
+        request, plan = captured["request"], captured["plan"]
+        runner._execute_plan_parallel(request, plan)
+        report = runner._replay_history(request, plan)
+        assert all(task.status is TaskLifecycle.SUCCEEDED for task in report.projection.tasks)
+        assert all(wave["state"] == "TERMINAL" for wave in report.parallel_waves.values())
+        assert all(group["state"] == "SUCCEEDED" for group in report.parallel_groups.values())
+        assert sum(event.event_type == "TASK_GROUP_ADMITTED" for event in events._events) == 1
+        assert sum(event.event_type == "TASK_WAVE_COMPLETED" for event in events._events) == 1
+    finally:
+        runtime._child_supervisor.shutdown()
 
 
 @pytest.mark.parametrize("failed_point", ["receipt", "before-dispatch", "after-dispatch"])

@@ -1252,9 +1252,18 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "capacity_policy_checksums": ["capacity_allocations"],
     }
     group = object_schema({
-        "schema_version": {"const": "agora.harness-dispatch-group/v1"},
+        "schema_version": {"const": "agora.harness-dispatch-group/v2"},
         "group_id": _TEXT, "group_checksum": _CHECKSUM_TEXT,
         "run_id": _TEXT, "stage_id": _TEXT, "plan_id": _TEXT,
+        "plan_checksum": _CHECKSUM_TEXT,
+        "policy_ref": _TEXT, "policy_checksum": _CHECKSUM_TEXT,
+        "admission_policy_checksum": _CHECKSUM_TEXT,
+        "parent_graph_identity": object_schema({
+            "run_id": _TEXT, "graph_id": _TEXT, "graph_version": _TEXT,
+            "graph_ref": _TEXT, "graph_checksum": _CHECKSUM_TEXT,
+            "node_id": _TEXT, "node_instance_id": _TEXT,
+            "activity_id": _TEXT, "attempt": _POSITIVE_INTEGER,
+        }),
         "plan_version": _POSITIVE_INTEGER, "task_ids": _ARRAY_OF_TEXT,
         "required_output_roles": _ARRAY_OF_TEXT, "join_policy": {"enum": ["wait_all", "fail_fast"]},
         "max_waves": _POSITIVE_INTEGER, "max_parallelism": _POSITIVE_INTEGER,

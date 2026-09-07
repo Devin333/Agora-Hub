@@ -29,6 +29,7 @@ from framework.harness.subagents.supervisor import (
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     checksum,
+    exact_reference,
     exact_keys,
     frozen_mapping,
     identifier,
@@ -60,7 +61,7 @@ from framework.shared.graph_identity import GraphExecutionIdentity
 
 PARALLEL_DISPATCH_REQUEST_SCHEMA = "agora.harness-parallel-dispatch-request/v2"
 PARALLEL_DISPATCH_RESULT_SCHEMA = "agora.harness-parallel-dispatch-result/v1"
-DISPATCH_GROUP_SCHEMA = "agora.harness-dispatch-group/v1"
+DISPATCH_GROUP_SCHEMA = "agora.harness-dispatch-group/v2"
 DISPATCH_WAVE_SCHEMA = "agora.harness-dispatch-wave/v3"
 TASK_RESERVATION_SCHEMA = "agora.harness-task-reservation/v1"
 PARENT_OBSERVATION_SCHEMA = "agora.harness-parent-observation/v1"
@@ -223,6 +224,11 @@ class DispatchGroup:
     stage_id: str
     plan_id: str
     plan_version: int
+    plan_checksum: str
+    policy_ref: str
+    policy_checksum: str
+    parent_graph_identity: GraphExecutionIdentity
+    admission_policy_checksum: str
     task_ids: tuple[str, ...]
     required_output_roles: tuple[str, ...]
     join_policy: JoinPolicy | str = JoinPolicy.WAIT_ALL
@@ -241,6 +247,20 @@ class DispatchGroup:
         object.__setattr__(self, "plan_id", identifier(self.plan_id, "plan_id"))
         if isinstance(self.plan_version, bool) or not isinstance(self.plan_version, int) or self.plan_version < 1:
             raise HarnessValidationError("plan_version must be positive", code="PLAN_SCHEMA_INVALID")
+        object.__setattr__(self, "plan_checksum", checksum(self.plan_checksum, "plan_checksum"))
+        object.__setattr__(self, "policy_ref", exact_reference(self.policy_ref, "policy_ref"))
+        object.__setattr__(self, "policy_checksum", checksum(self.policy_checksum, "policy_checksum"))
+        if not isinstance(self.parent_graph_identity, GraphExecutionIdentity):
+            raise TypeError("parent_graph_identity must be GraphExecutionIdentity")
+        if self.parent_graph_identity.run_id != self.run_id:
+            raise HarnessValidationError(
+                "parent Graph identity does not match dispatch group run",
+                code="TASK_GROUP_SCOPE_MISMATCH",
+            )
+        object.__setattr__(self, "admission_policy_checksum", checksum(
+            self.admission_policy_checksum,
+            "admission_policy_checksum",
+        ))
         ids = tuple(identifier(item, "task_id") for item in self.task_ids)
         if not ids or len(ids) != len(set(ids)):
             raise HarnessValidationError("group task ids must be unique and non-empty", code="PLAN_SCHEMA_INVALID")
@@ -262,6 +282,11 @@ class DispatchGroup:
             "stage_id": self.stage_id,
             "plan_id": self.plan_id,
             "plan_version": self.plan_version,
+            "plan_checksum": self.plan_checksum,
+            "policy_ref": self.policy_ref,
+            "policy_checksum": self.policy_checksum,
+            "parent_graph_identity": self.parent_graph_identity.to_dict(),
+            "admission_policy_checksum": self.admission_policy_checksum,
             "task_ids": list(self.task_ids),
             "required_output_roles": list(self.required_output_roles),
             "join_policy": self.join_policy.value,
@@ -271,7 +296,15 @@ class DispatchGroup:
             "correlation_id": self.correlation_id,
         }
         object.__setattr__(self, "group_checksum", canonical_payload_checksum(projection))
-        object.__setattr__(self, "group_id", f"dg_{self.group_checksum.removeprefix('sha256:')[:32]}")
+        group_identity = canonical_payload_checksum({
+            "run_id": self.run_id,
+            "stage_id": self.stage_id,
+            "plan_id": self.plan_id,
+            "plan_version": self.plan_version,
+            "plan_checksum": self.plan_checksum,
+            "correlation_id": self.correlation_id,
+        })
+        object.__setattr__(self, "group_id", f"dg_{group_identity.removeprefix('sha256:')[:32]}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -282,6 +315,11 @@ class DispatchGroup:
             "stage_id": self.stage_id,
             "plan_id": self.plan_id,
             "plan_version": self.plan_version,
+            "plan_checksum": self.plan_checksum,
+            "policy_ref": self.policy_ref,
+            "policy_checksum": self.policy_checksum,
+            "parent_graph_identity": self.parent_graph_identity.to_dict(),
+            "admission_policy_checksum": self.admission_policy_checksum,
             "task_ids": list(self.task_ids),
             "required_output_roles": list(self.required_output_roles),
             "join_policy": self.join_policy.value,
@@ -298,13 +336,23 @@ class DispatchGroup:
             value,
             required=frozenset({
                 "schema_version", "group_id", "group_checksum", "run_id", "stage_id",
-                "plan_id", "plan_version", "task_ids", "required_output_roles", "join_policy",
+                "plan_id", "plan_version", "plan_checksum", "policy_ref", "policy_checksum",
+                "parent_graph_identity", "admission_policy_checksum", "task_ids", "required_output_roles", "join_policy",
                 "max_waves", "max_parallelism", "budget_envelope", "correlation_id", "state",
             }),
             model=cls.__name__,
         )
         supplied_group_id = identifier(payload.pop("group_id"), "group_id")
         supplied_checksum = checksum(payload.pop("group_checksum"), "group_checksum")
+        try:
+            payload["parent_graph_identity"] = GraphExecutionIdentity.from_dict(
+                payload["parent_graph_identity"],
+            )
+        except (TypeError, ValueError) as exc:
+            raise HarnessValidationError(
+                "DispatchGroup parent Graph identity is invalid",
+                code="TASK_GROUP_SCHEMA_INVALID",
+            ) from exc
         try:
             group = cls(**payload)
         except (TypeError, ValueError) as exc:
@@ -538,7 +586,7 @@ class ParallelDispatchRequest:
         demands = dict(self.task_capacity_demands)
         if any(not isinstance(value, TaskCapacityDemand) or key != value.task_id for key, value in demands.items()):
             raise HarnessValidationError("task capacity demands must be keyed by task id", code="CAPACITY_DEMAND_INVALID")
-        task_id_set = set(ids)
+        task_id_set = {item.task_id for item in self.plan.tasks}
         demand_task_ids = set(demands)
         if demands and not pools:
             raise HarnessValidationError(
@@ -547,7 +595,7 @@ class ParallelDispatchRequest:
             )
         if pools and demand_task_ids != task_id_set:
             raise HarnessValidationError(
-                "capacity policy must define one demand for every dispatched task",
+                "capacity policy must define one demand for every accepted plan task",
                 code="CAPACITY_DEMAND_INVALID",
                 details={
                     "missing_task_ids": sorted(task_id_set - demand_task_ids),
@@ -805,6 +853,15 @@ class _GroupSession:
     terminal_diagnostics: tuple[str, ...] = ()
 
 
+@dataclass
+class _PendingGroupAdmission:
+    """Coordinates concurrent attempts before an admission becomes visible."""
+
+    group_checksum: str
+    completed: Event = field(default_factory=Event)
+    failure: BaseException | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class _WaveRunOutcome:
     results: tuple[TaskResultRecord, ...]
@@ -959,6 +1016,7 @@ class ParallelAgentCoordinator:
         self._allow_test_executor = allow_test_executor
         self._lock = RLock()
         self._sessions: dict[str, _GroupSession] = {}
+        self._pending_admissions: dict[str, _PendingGroupAdmission] = {}
 
     def _group_parallelism_limit(self, request: ParallelDispatchRequest) -> int:
         """Return the immutable admission ceiling used in group identity."""
@@ -1042,16 +1100,31 @@ class ParallelAgentCoordinator:
         group_parallelism = self._group_parallelism_limit(request)
         if group_parallelism < 1:
             raise HarnessValidationError("parallel capacity limit is unavailable", code="CAPACITY_EXHAUSTED")
-        task_ids = request.group_task_ids or tuple(item.task_id for item in request.plan.tasks)
+        task_ids = tuple(item.task_id for item in request.plan.tasks)
+        if request.group_task_ids is not None and request.group_task_ids != task_ids:
+            raise HarnessValidationError(
+                "dispatch group membership must equal the complete accepted plan",
+                code="TASK_GROUP_SCOPE_MISMATCH",
+            )
         if len(task_ids) > request.plan.limits.max_tasks:
             raise HarnessValidationError("group exceeds TaskPlan max_tasks", code="TASK_GROUP_LIMIT_EXCEEDED")
         if request.max_tasks_per_group is not None and len(task_ids) > request.max_tasks_per_group:
             raise HarnessValidationError("group exceeds max_tasks_per_group", code="TASK_GROUP_LIMIT_EXCEEDED")
+        if request.parent_graph_identity is None:
+            raise HarnessValidationError(
+                "dispatch group requires the parent Graph identity",
+                code="TASK_GROUP_PARENT_IDENTITY_REQUIRED",
+            )
         group = DispatchGroup(
             run_id=request.plan.run_id,
             stage_id=request.plan.stage_id,
             plan_id=request.plan.plan_id,
             plan_version=request.plan.version,
+            plan_checksum=request.plan.plan_checksum,
+            policy_ref=request.plan.policy_ref,
+            policy_checksum=request.plan.policy_checksum,
+            parent_graph_identity=request.parent_graph_identity,
+            admission_policy_checksum=_admission_policy_checksum(request),
             task_ids=tuple(task_ids),
             required_output_roles=request.plan.required_output_roles,
             join_policy=request.join_policy,
@@ -1072,15 +1145,47 @@ class ParallelAgentCoordinator:
     ) -> DispatchGroup:
         group = self._group_definition(request)
         with self._lock:
-            if group.group_id in self._sessions:
-                return self._sessions[group.group_id].group
+            session = self._sessions.get(group.group_id)
+            if session is not None:
+                if session.group.group_checksum != group.group_checksum:
+                    raise HarnessValidationError(
+                        "dispatch group identity conflicts with immutable admission",
+                        code="TASK_GROUP_ADMISSION_CONFLICT",
+                    )
+                return session.group
+            pending = self._pending_admissions.get(group.group_id)
+            if pending is None:
+                pending = _PendingGroupAdmission(group_checksum=group.group_checksum)
+                self._pending_admissions[group.group_id] = pending
+                admission_owner = True
+            else:
+                if pending.group_checksum != group.group_checksum:
+                    raise HarnessValidationError(
+                        "dispatch group identity conflicts with immutable admission",
+                        code="TASK_GROUP_ADMISSION_CONFLICT",
+                    )
+                admission_owner = False
+
+        if not admission_owner:
+            if not pending.completed.wait(timeout=request.max_group_runtime_seconds):
+                raise HarnessValidationError("group admission wait exceeded its bound", code="TASK_GROUP_ADMISSION_TIMEOUT")
+            with self._lock:
+                if pending.failure is not None:
+                    raise pending.failure
+                session = self._sessions.get(group.group_id)
+                if session is None or session.group.group_checksum != group.group_checksum:
+                    raise HarnessValidationError(
+                        "dispatch group admission completed without its immutable session",
+                        code="TASK_GROUP_ADMISSION_CONFLICT",
+                    )
+                return session.group
+
+        try:
             admitted_parallelism = (
                 self._dispatch_parallelism(request)[0]
                 if check_capacity
                 else group.max_parallelism
             )
-            self._sessions[group.group_id] = _GroupSession(group=group, request=request)
-        try:
             self._emit(
                 "TASK_GROUP_ADMITTED",
                 event_sink=event_sink,
@@ -1090,15 +1195,57 @@ class ParallelAgentCoordinator:
                 effective_parallelism=admitted_parallelism,
                 idempotency_key=group.group_id,
             )
-        except BaseException:
-            # Admission is not visible to this coordinator until its durable
-            # fact is accepted. A failed append must be retryable without a
-            # ghost session suppressing the next admission attempt.
+        except BaseException as exc:
             with self._lock:
-                session = self._sessions.get(group.group_id)
-                if session is not None and session.group == group:
-                    self._sessions.pop(group.group_id, None)
+                pending.failure = exc
+                self._pending_admissions.pop(group.group_id, None)
+                pending.completed.set()
             raise
+
+        with self._lock:
+            self._sessions[group.group_id] = _GroupSession(group=group, request=request)
+            self._pending_admissions.pop(group.group_id, None)
+            pending.completed.set()
+        return group
+
+    def restore_group(
+        self,
+        request: ParallelDispatchRequest,
+        group: DispatchGroup,
+        waves: tuple[DispatchWave, ...],
+    ) -> DispatchGroup:
+        """Restore canonical replay snapshots without repeating admission or spawn."""
+        definition = self._group_definition(request)
+        if not isinstance(group, DispatchGroup) or group.group_checksum != definition.group_checksum:
+            raise HarnessValidationError("durable group differs from immutable admission", code="TASK_GROUP_ADMISSION_CONFLICT")
+        if any(not isinstance(wave, DispatchWave) for wave in waves):
+            raise TypeError("waves must contain DispatchWave values")
+        ordered = tuple(sorted(waves, key=lambda wave: wave.ordinal))
+        if (
+            tuple(wave.ordinal for wave in ordered) != tuple(range(1, len(ordered) + 1))
+            or len(ordered) > group.max_waves
+            or any(wave.group_id != group.group_id or not set(wave.task_ids).issubset(group.task_ids) for wave in ordered)
+            or any(wave.state is not DispatchWaveState.TERMINAL for wave in ordered[:-1])
+        ):
+            raise HarnessValidationError("durable wave history differs from group sequence", code="TASK_GROUP_RECOVERY_WAVE_INVALID")
+        with self._lock:
+            existing = self._sessions.get(group.group_id)
+            if existing is not None:
+                if existing.group.group_checksum != group.group_checksum:
+                    raise HarnessValidationError("restored group conflicts with local admission", code="TASK_GROUP_ADMISSION_CONFLICT")
+                if tuple(existing.waves) != ordered or existing.next_wave_ordinal != len(ordered) + 1:
+                    raise HarnessValidationError("restored waves conflict with local admission history", code="TASK_GROUP_RECOVERY_WAVE_INVALID")
+                return existing.group
+            if group.group_id in self._pending_admissions:
+                raise HarnessValidationError("group admission is still being committed", code="TASK_GROUP_DISPATCH_BUSY")
+            session = _GroupSession(group=group, request=request)
+            session.waves = list(ordered)
+            session.next_wave_ordinal = len(ordered) + 1
+            session.reserved.update(
+                reservation.task_id for wave in ordered for reservation in wave.reservations
+                if reservation.state is ReservationState.RESERVED
+            )
+            self._sessions[group.group_id] = session
         return group
 
     def recover(
@@ -1205,7 +1352,11 @@ class ParallelAgentCoordinator:
                     "indeterminate group has no active receipt to reconcile",
                     code="TASK_GROUP_RECOVERY_STATE_INVALID",
                 )
-            needs_recovery = bool(missing_results or active)
+            needs_recovery = bool(missing_results or active or any(
+                wave.state is not DispatchWaveState.TERMINAL
+                and set(wave.task_ids).issubset(set(by_task) | set(session.results))
+                for wave in session.waves
+            ))
             if not needs_recovery:
                 return self._result_for_session(session, request, limits=limits)
 
@@ -1270,12 +1421,9 @@ class ParallelAgentCoordinator:
                     worker_result = recovered_result
             if worker_result is not None:
                 try:
-                    admitted_instance = next(
-                        item
-                        for item in request.task_instances
-                        if item.task_id == handle.task_id
-                        and item.task_instance_id == handle.task_instance_id
-                        and item.attempt == handle.attempt
+                    admitted_instance = task_instance_for_attempt(
+                        request.plan, handle.task_id, handle.attempt,
+                        task_instance_id=handle.task_instance_id,
                     )
                     recovered_worker_results[task_id] = _validated_supervised_task_result(
                         worker_result,
@@ -1313,6 +1461,24 @@ class ParallelAgentCoordinator:
                 session.group = replace(session.group, state=DispatchGroupState.RUNNING)
             elif session.group.state is not DispatchGroupState.SUCCEEDED:
                 session.group = session.group.transitioned(DispatchGroupState.RUNNING)
+            for wave in tuple(session.waves):
+                if wave.state is DispatchWaveState.TERMINAL or not set(wave.task_ids).issubset(session.results):
+                    continue
+                wave_results = tuple(session.results[task_id] for task_id in wave.task_ids)
+                outcome = _WaveRunOutcome(wave_results)
+                terminal = replace(
+                    wave.transitioned(DispatchWaveState.TERMINAL, terminal_outcome=_terminal_wave_outcome(outcome)),
+                    reservations=tuple(replace(item, state=ReservationState.CONSUMED) for item in wave.reservations),
+                )
+                self._emit(
+                    "TASK_WAVE_COMPLETED", event_sink=event_sink,
+                    group_id=group.group_id, wave_id=wave.wave_id, task_ids=list(wave.task_ids),
+                    terminal_outcome=terminal.terminal_outcome.value,
+                    reservation_states={item.task_id: item.state.value for item in terminal.reservations},
+                    child_states={item.task_id: item.status.value for item in wave_results},
+                )
+                session.waves = [terminal if item.wave_id == wave.wave_id else item for item in session.waves]
+                session.reserved.difference_update(wave.task_ids)
             recovered_projection = tuple(
                 {
                     "task_id": item.task_id,
@@ -1677,6 +1843,8 @@ class ParallelAgentCoordinator:
                 DispatchGroupState.SUPERSEDED,
             }:
                 return self._result_for_session(session, request, limits=limits)
+            if any(wave.state is not DispatchWaveState.TERMINAL for wave in session.waves):
+                return self._result_for_session(session, request, limits=limits, diagnostics=("ACTIVE_WAVE_PENDING",))
             ordered = tuple(sorted(request.task_instances, key=lambda item: item.task_id))
             pending = tuple(
                 item
@@ -2745,6 +2913,37 @@ class ParallelAgentCoordinator:
                 code="TASK_WAVE_ATOMIC_SINK_REQUIRED",
             )
         sink.append_batch(events)
+
+
+def _admission_policy_checksum(request: ParallelDispatchRequest) -> str:
+    """Bind admission policy while deliberately excluding live availability."""
+
+    return canonical_payload_checksum({
+        "requested_parallelism": request.requested_parallelism,
+        "capability_capacity": request.capability_capacity,
+        "supervisor_capacity": request.supervisor_capacity,
+        "serial_fallback": request.serial_fallback,
+        "join_policy": request.join_policy.value,
+        "side_effect_class": request.side_effect_class.value,
+        "resource_conflict_key": request.resource_conflict_key,
+        "max_waves": request.max_waves,
+        "max_tasks_per_group": request.max_tasks_per_group,
+        "max_group_runtime_seconds": request.max_group_runtime_seconds,
+        "max_join_wait_seconds": request.max_join_wait_seconds,
+        "capacity_pools": [
+            {
+                "pool_id": pool.pool_id,
+                "capacity": pool.capacity,
+                "policy_version": pool.policy_version,
+                "policy_checksum": pool.policy_checksum,
+            }
+            for pool in sorted(request.capacity_pools, key=lambda item: item.pool_id)
+        ],
+        "task_capacity_demands": [
+            request.task_capacity_demands[task_id].to_dict()
+            for task_id in sorted(request.task_capacity_demands)
+        ],
+    })
 
 
 def _elapsed_ms(started_at: float, *, now: float | None = None) -> int:

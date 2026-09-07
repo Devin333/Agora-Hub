@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from threading import Barrier, Event, Lock
+from threading import Barrier, Event, Lock, Thread
 from time import monotonic, sleep
 
 import pytest
@@ -44,9 +44,10 @@ from framework.harness.task_plan.parallel import (
     ParentObservationLimits,
     ReservationState,
     SerialTaskExecutorAdapter,
+    SideEffectClass,
     TaskReservation,
 )
-from framework.harness.task_plan.capacity import CapacityPool
+from framework.harness.task_plan.capacity import CapacityPool, TaskCapacityDemand
 from framework.shared.graph_identity import GraphExecutionIdentity
 from tests.fixtures.task_plan import build_task_plan_stage_binding
 
@@ -354,6 +355,303 @@ def test_group_admission_append_failure_does_not_leave_ghost_session() -> None:
         assert calls == 2
     finally:
         supervisor.shutdown()
+
+
+def test_group_admission_requires_complete_accepted_plan_membership() -> None:
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    request = replace(
+        _request(plan),
+        task_instances=(),
+        group_task_ids=("task-1",),
+    )
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        coordinator.create_group(request, check_capacity=False)
+
+    assert exc_info.value.code == "TASK_GROUP_SCOPE_MISMATCH"
+    assert coordinator._sessions == {}
+
+
+def test_group_admission_rejects_policy_and_resource_binding_drift() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = replace(
+        _request(plan),
+        side_effect_class=SideEffectClass.FENCED_MUTATION,
+        resource_conflict_key="resource-a",
+    )
+    changed = replace(request, resource_conflict_key="resource-b")
+    events: list[dict[str, object]] = []
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+        event_sink=ParallelEventSink(events.append, events.extend),
+    )
+
+    admitted = coordinator.create_group(request, check_capacity=False)
+    proposed = coordinator._group_definition(changed)
+    with pytest.raises(HarnessValidationError) as exc_info:
+        coordinator.create_group(changed, check_capacity=False)
+
+    assert proposed.group_id == admitted.group_id
+    assert proposed.group_checksum != admitted.group_checksum
+    assert exc_info.value.code == "TASK_GROUP_ADMISSION_CONFLICT"
+    assert [event["event_type"] for event in events] == ["TASK_GROUP_ADMITTED"]
+    assert coordinator._sessions[admitted.group_id].group == admitted
+
+
+def test_group_admission_identity_ignores_live_capacity_availability() -> None:
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    demand = {
+        task.task_id: TaskCapacityDemand(task.task_id, {"cpu": 1})
+        for task in plan.tasks
+    }
+    request = replace(
+        _request(plan),
+        available_concurrency_reservations=2,
+        capacity_pools=(CapacityPool("cpu", 3, reserved=0, policy_version="v1"),),
+        task_capacity_demands=demand,
+    )
+    availability_changed = replace(
+        request,
+        available_concurrency_reservations=1,
+        capacity_pools=(CapacityPool("cpu", 3, reserved=1, policy_version="v1"),),
+    )
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+
+    admitted = coordinator.create_group(request, check_capacity=False)
+    repeated = coordinator.create_group(availability_changed, check_capacity=False)
+
+    assert repeated.group_id == admitted.group_id
+    assert repeated.group_checksum == admitted.group_checksum
+    assert repeated.admission_policy_checksum == admitted.admission_policy_checksum
+
+
+def _restore_snapshots(plan, request) -> tuple[DispatchGroup, tuple[DispatchWave, ...]]:
+    definition = ParallelAgentCoordinator(
+        max_workers=2,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )._group_definition(request)
+    first, second = request.task_instances
+    terminal = DispatchWave(
+        definition.group_id,
+        1,
+        (first.task_id,),
+        1,
+        (
+            TaskReservation(
+                first.task_id,
+                first.idempotency_key,
+                first.budget_snapshot.to_dict(),
+                ReservationState.CONSUMED,
+            ),
+        ),
+        DispatchWaveState.TERMINAL,
+        terminal_outcome=DispatchWaveTerminalOutcome.SUCCEEDED,
+    )
+    active = DispatchWave(
+        definition.group_id,
+        2,
+        (second.task_id,),
+        1,
+        (
+            TaskReservation(
+                second.task_id,
+                second.idempotency_key,
+                second.budget_snapshot.to_dict(),
+                ReservationState.RESERVED,
+            ),
+        ),
+        DispatchWaveState.ADMITTED,
+    )
+    return definition, (terminal, active)
+
+
+def test_restore_group_preserves_terminal_and_active_waves_without_admission_event() -> None:
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    request = _request(plan)
+    group, waves = _restore_snapshots(plan, request)
+    events: list[dict[str, object]] = []
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        serial_executor=SerialTaskExecutorAdapter(),
+        event_sink=ParallelEventSink(events.append, events.extend),
+    )
+
+    restored = coordinator.restore_group(request, group, waves)
+    restored_again = coordinator.restore_group(request, group, waves)
+    session = coordinator._sessions[group.group_id]
+
+    assert restored == group
+    assert restored_again == group
+    assert events == []
+    assert session.waves == list(waves)
+    assert session.next_wave_ordinal == 3
+    assert session.reserved == {waves[1].task_ids[0]}
+    assert session.waves[0].reservations[0].state is ReservationState.CONSUMED
+    assert session.waves[1].reservations[0].state is ReservationState.RESERVED
+
+
+def test_restore_group_rejects_a_changed_history_instead_of_silently_ignoring_it() -> None:
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    request = _request(plan)
+    group, waves = _restore_snapshots(plan, request)
+    coordinator = ParallelAgentCoordinator(max_workers=2, serial_executor=SerialTaskExecutorAdapter())
+    coordinator.restore_group(request, group, waves[:1])
+    with pytest.raises(HarnessValidationError, match="local admission history"):
+        coordinator.restore_group(request, group, waves)
+    assert coordinator._sessions[group.group_id].waves == list(waves[:1])
+
+
+@pytest.mark.parametrize("drift", ("scope", "policy"))
+def test_restore_group_rejects_scope_or_policy_drift(drift: str) -> None:
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    request = _request(plan)
+    group, waves = _restore_snapshots(plan, request)
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+    if drift == "scope":
+        group = replace(group, task_ids=("task-1",))
+    else:
+        request = replace(
+            request,
+            side_effect_class=SideEffectClass.FENCED_MUTATION,
+            resource_conflict_key="restored-resource",
+        )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        coordinator.restore_group(request, group, waves)
+
+    assert exc_info.value.code == "TASK_GROUP_ADMISSION_CONFLICT"
+    assert coordinator._sessions == {}
+
+
+@pytest.mark.parametrize("invalid_history", ("ordinal_gap", "two_active"))
+def test_restore_group_rejects_ordinal_gap_or_multiple_active_waves(invalid_history: str) -> None:
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    request = _request(plan)
+    group, waves = _restore_snapshots(plan, request)
+    if invalid_history == "ordinal_gap":
+        invalid = (waves[0], replace(waves[1], ordinal=3))
+    else:
+        invalid = (
+            replace(
+                waves[0],
+                state=DispatchWaveState.ADMITTED,
+                terminal_outcome=None,
+            ),
+            waves[1],
+        )
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        coordinator.restore_group(request, group, invalid)
+
+    assert exc_info.value.code == "TASK_GROUP_RECOVERY_WAVE_INVALID"
+    assert coordinator._sessions == {}
+
+
+def test_concurrent_group_admission_waits_for_durable_success_before_publishing_session() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = replace(_request(plan), serial_fallback=True)
+    append_started = Event()
+    release_append = Event()
+    events: list[dict[str, object]] = []
+
+    def append(event):
+        append_started.set()
+        assert coordinator._sessions == {}
+        assert release_append.wait(timeout=2)
+        events.append(dict(event))
+
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+        event_sink=ParallelEventSink(append, lambda _events: None),
+    )
+    results: list[DispatchGroup] = []
+    errors: list[BaseException] = []
+
+    def admit() -> None:
+        try:
+            results.append(coordinator.create_group(request))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    first = Thread(target=admit)
+    second = Thread(target=admit)
+    first.start()
+    assert append_started.wait(timeout=2)
+    second.start()
+    sleep(0.05)
+    assert coordinator._sessions == {}
+    assert second.is_alive()
+    release_append.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert len(results) == 2
+    assert results[0] == results[1]
+    assert list(coordinator._sessions) == [results[0].group_id]
+    assert [event["event_type"] for event in events] == ["TASK_GROUP_ADMITTED"]
+
+
+def test_concurrent_group_admission_failure_never_publishes_a_session() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = replace(_request(plan), serial_fallback=True)
+    append_started = Event()
+    release_append = Event()
+
+    def append(_event):
+        append_started.set()
+        assert release_append.wait(timeout=2)
+        raise RuntimeError("admission append failed")
+
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+        event_sink=ParallelEventSink(append, lambda _events: None),
+    )
+    errors: list[BaseException] = []
+
+    def admit() -> None:
+        try:
+            coordinator.create_group(request)
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = Thread(target=admit)
+    second = Thread(target=admit)
+    first.start()
+    assert append_started.wait(timeout=2)
+    second.start()
+    sleep(0.05)
+    assert coordinator._sessions == {}
+    assert second.is_alive()
+    release_append.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert coordinator._sessions == {}
+    assert coordinator._pending_admissions == {}
+    assert len(errors) == 2
+    assert all(isinstance(error, RuntimeError) for error in errors)
 
 
 def test_serial_fallback_requires_explicit_adapter_and_preserves_group_waves() -> None:

@@ -1171,6 +1171,9 @@ class DurableTaskPlanStore:
         plan = self.plan(event.run_id, event.stage_id)
         if plan is not None:
             _require_event_matches_plan(event, plan)
+        from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+        validate_parallel_admission_append(events, (event,))
         refs: dict[str, _DocumentReference] = {}
         current = self._optional_projection(event.run_id, event.stage_id)
         if current is not None:
@@ -1201,6 +1204,9 @@ class DurableTaskPlanStore:
             for event in batch:
                 _require_event_matches_plan(event, plan)
 
+        from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+        validate_parallel_admission_append(history, batch)
         current = self._optional_projection(run_id, stage_id)
         refs: list[dict[str, _DocumentReference]] = []
         for event in batch:
@@ -1278,6 +1284,9 @@ class DurableTaskPlanStore:
                 historical_refs.append({"projection": reference})
             refs = tuple(historical_refs)
         else:
+            from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+            validate_parallel_admission_append(history, batch)
             # Immutable artifacts become authoritative only with their event batch.
             refs = tuple({"projection": self._put_projection(projection)} for projection in projections)
         self._publish(batch, refs)
@@ -1767,6 +1776,9 @@ class DurableTaskPlanStore:
                     "TaskPlan atomic event batch is only partially present",
                     code="task_plan_event_history_conflict",
                 )
+            from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+            validate_parallel_admission_append((event for _, event in stage_history), events)
             requests = tuple(
                 self._publish_request(event, event_refs)
                 for event, event_refs in missing

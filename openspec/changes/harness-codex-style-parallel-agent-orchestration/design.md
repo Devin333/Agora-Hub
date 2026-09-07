@@ -42,6 +42,8 @@ LLM 产生的是 `PlanCandidate` 或 `delegate_batch` candidate，不是上述�
 
 candidate durable dedup key 固定为 `run_id + stage_id + parent_turn_id + action_correlation_id`，与 `candidate_checksum` 一起持久化。相同 key/checksum 复用原 accepted plan/group/submission/terminal observation，冲突 checksum 返回 `CANDIDATE_IDEMPOTENCY_CONFLICT` 且不得执行新 payload。`group_id` 来自 accepted plan identity 与 dedup key 的稳定 hash；新 plan version 的 replan 必须使用新的 correlation/dedup identity。
 
+当前 admission 增量使用 `agora.harness-dispatch-group/v2`，分别计算稳定 group identity 与 immutable snapshot checksum。snapshot 锁定完整 accepted plan checksum、policy ref/checksum、父 Graph execution identity、静态 admission policy、membership 与预算 envelope；实时 available concurrency 和 pool reserved 不进入 immutable identity。配置 capacity demand 时必须覆盖整个 accepted plan，不能只绑定本轮 selected tasks。durable event sequence 是 admission revision，store 在同一 CAS 保护的 canonical prefix 上检查唯一 group、连续有界 wave ordinal 和 single active wave，不新增独立可写的 group 状态源。重启先从 verified replay 恢复 group 与完整 waves，再协调未结束的 spawn；持久化 wave terminal 后才开放下一 wave。本增量尚未完成跨重启绝对 deadline、统一 RefAuthority、生产多池容量 ledger 或 capacity-wait READY；原有完整合同保持不变。
+
 所有 input/result/planning refs 和 memory namespace 统一通过 `RefAuthority`，校验 run、stage、tenant/owner、读写权限、artifact type、source checksum 和 pinned allowlist。跨作用域默认拒绝；共享必须由 policy 声明只读范围，candidate 不能自行授权，child 不得读取 sibling private refs。
 
 ### 2. Harness 作为唯一 fan-out/fan-in coordinator

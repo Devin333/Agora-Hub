@@ -1380,6 +1380,9 @@ class InMemoryTaskPlanStore:
             plan = self._current_plan(event.run_id, event.stage_id)
             if plan is not None:
                 _require_event_matches_plan(event, plan)
+            from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+            validate_parallel_admission_append(self._events.get((event.run_id, event.stage_id), ()), (event,))
             self._append_event(event)
             key = (event.run_id, event.stage_id)
             projection = self._projections.get(key)
@@ -1410,6 +1413,9 @@ class InMemoryTaskPlanStore:
 
             # Every validation above runs before the visible event list or its
             # causal projection is changed.
+            from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+            validate_parallel_admission_append(history, batch)
             self._events.setdefault(key, []).extend(batch)
             projection = self._projections.get(key)
             if projection is not None:
@@ -1482,6 +1488,9 @@ class InMemoryTaskPlanStore:
                     )
                 _require_projection_transition_identity(current, projection)
 
+            from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+            validate_parallel_admission_append(history, batch)
             prior_events = (
                 None
                 if key not in self._events
@@ -2119,6 +2128,13 @@ def _require_event_matches_plan(
             "TaskPlan event plan version does not match the accepted plan",
             code="task_plan_event_identity_mismatch",
         )
+    if event.event_type in {"TASK_GROUP_ADMITTED", "TASK_WAVE_ADMITTED"}:
+        from framework.harness.task_plan.parallel_admission import validate_group_plan_binding
+
+        group = event.payload.get("group")
+        if not isinstance(group, Mapping):
+            raise HarnessValidationError("group admission snapshot is missing", code="TASK_GROUP_SCOPE_MISMATCH")
+        validate_group_plan_binding(group, plan)
 
 
 def _require_submission_scope(

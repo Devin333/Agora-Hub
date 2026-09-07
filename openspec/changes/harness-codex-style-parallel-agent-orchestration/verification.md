@@ -321,6 +321,57 @@ continuations and production gates remain separately tracked. Pre-increment
 non-atomic parallel histories are not promoted into verified atomic evidence.
 No production defaults or Research feature flags are enabled by this increment.
 
+### Immutable Group Admission Increment
+
+Status: this implementation increment and its focused/full repository checks
+are complete. Expanded PRD tasks and release qualification remain open below.
+
+- Group v2 separates stable plan/correlation identity from the immutable
+  checksum and pins complete accepted-plan membership, plan and policy
+  checksums, parent Graph execution identity, static admission configuration,
+  full-plan capacity demands and the total budget envelope.
+- Pending admission does not publish an in-memory session before the durable
+  event succeeds. Concurrent callers share the outcome, conflicts fail closed,
+  and admission waits have an explicit bound.
+- Both store adapters validate one group per accepted plan, immutable wave
+  ownership, one active wave, contiguous bounded ordinal and closed-group
+  rejection against the canonical prefix protected by the atomic commit.
+  Direct append cannot bypass the single-active-wave constraint.
+- Offline replay uses the same wave-slot validator and rejects multiple active
+  waves. Ready budget-batch tracking resets at each admission; settled attempts
+  do not prohibit a distinct retry attempt in a later wave.
+- Stage restart restores the canonical group and complete wave history before
+  audited spawn reconciliation. Recovered child results close the recorded wave
+  before another wave or final join; no new child is spawned during restoration.
+  Repeated restore with a different wave history fails closed instead of
+  silently retaining a stale local projection. Invalid standalone completion
+  events are rejected before projection artifacts or events are written.
+- Canonical event schema and replay parsing require group v2 evidence; older v1
+  groups are rejected rather than silently reinterpreted as pinned admissions.
+
+Increment checks:
+
+- Admission transactions, coordinator, audited recovery, lifecycle replay and
+  real Stage regression: `123 passed` in 54.35 seconds.
+- Canonical event suite: `463 passed` in 47.80 seconds.
+- Strict OpenSpec validation and `git diff --check`: passed.
+- An initial smoke run was deliberately stopped to fix the two review findings
+  above; that interrupted run is not passing evidence.
+- Final required repository smoke: exit 0; compilation passed and the complete
+  Harness/Research/API/service/composition/architecture suite reported
+  `2729 passed, 23 deselected, 23 warnings` in 1089.68 seconds.
+- Offline AgentLoop smoke: succeeded with 3 fixture LLM calls, 1 tool call and
+  0 network calls. Evidence manifest:
+  `.newsroom/smoke/test-agent-loop-1059700bbb3e4bad99a4e16e7de27fff/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors and 0 warnings. The suite warnings
+  are existing FastAPI/Starlette deprecations; the CLI also reports the existing
+  PyMuPDF import deprecation.
+
+Tasks 2.2 and 2.3 remain open. Absolute group/stage deadlines across restart,
+shared RefAuthority, authoritative expiring capacity reservations, capacity-wait
+READY without an attempt allocation, and full cancellation/reclaim settlement
+remain outside this increment. Production defaults and feature flags are unchanged.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

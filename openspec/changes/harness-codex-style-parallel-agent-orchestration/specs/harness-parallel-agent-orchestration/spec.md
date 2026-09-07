@@ -38,6 +38,20 @@ Harness SHALL create a durable `DispatchGroup` only after the complete plan scop
 - **THEN** Harness MUST start up to `effective_parallelism` child attempts concurrently
 - **AND** an implementation that always invokes those tasks sequentially MUST NOT satisfy this requirement
 
+#### Scenario: Concurrent admissions use the same canonical group revision
+
+- **WHEN** a coordinator proposes another wave while the same group still owns a non-terminal wave
+- **THEN** the canonical store MUST reject the whole admission even when the caller read the latest projection
+- **AND** no event, attempt allocation or new child may become authoritative from the rejected batch
+- **AND** the next wave ordinal MUST advance contiguously only after the previous wave has durable terminal evidence
+
+#### Scenario: Admission restores immutable scope after restart
+
+- **WHEN** a process restarts with an already admitted group
+- **THEN** Harness MUST restore the recorded complete membership, plan and policy checksums, parent Graph identity, waves and outstanding reservations before live recovery
+- **AND** it MUST reject a shortened scope, changed pinned policy or an alternate correlation attempting to create a second group for the same accepted plan
+- **AND** it MUST NOT repeat group admission or spawn a child merely to reconstruct local state
+
 #### Scenario: Ready set exceeds capacity
 
 - **WHEN** five tasks are ready but the effective parallelism is two

@@ -53,6 +53,7 @@ from framework.harness.task_plan.parallel_state import (
 )
 from framework.harness.task_plan.submission import CandidateSubmission, submissions_from_events
 from framework.harness.task_plan.submission_result import submission_result_from_event
+from framework.harness.task_plan.parallel_admission import validate_group_plan_binding, validate_wave_admission_slot
 
 
 TASK_PLAN_REPLAY_REDUCER_VERSION_V3 = "newsroom.harness-task-plan-replay/v3"
@@ -697,6 +698,8 @@ class TaskPlanReplayReducer:
                     )
             elif event.event_type in _PARALLEL_EVENT_TYPES:
                 projection = _require_projection(projection, event)
+                if event.event_type == "TASK_GROUP_ADMITTED":
+                    validate_group_plan_binding(event.payload.get("group", {}), current_plan)
                 if event.event_type == "TASK_WAVE_ADMITTED":
                     before = ready_batch_budget_checksum or TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget).to_dict()["ledger_checksum"]
                     if event.payload.get("budget_before_checksum") != before or not set(ready_batch_tasks).issubset(event.payload.get("wave", {}).get("task_ids", ())):
@@ -710,6 +713,9 @@ class TaskPlanReplayReducer:
                     parallel_diagnostics,
                     parallel_spawn_operations,
                 )
+                if event.event_type == "TASK_WAVE_ADMITTED":
+                    ready_batch_budget_checksum = None
+                    ready_batch_tasks = []
                 parallel_event_sequence = event.sequence
             elif event.event_type == "TASK_PLAN_HALTED":
                 if submissions or any(key in event.payload for key in ("submission_key", "terminal_result", "terminal_result_checksum")):
@@ -888,6 +894,10 @@ def _validate_parallel_report_projection(
             )
         if "reservation_checksum" in payload or "schema_version" in payload:
             _validate_reservation_checksum(payload)
+    for group_id in groups:
+        active = [wave for wave in waves.values() if wave["group_id"] == group_id and wave["state"] != DispatchWaveState.TERMINAL.value]
+        if len(active) > 1:
+            raise HarnessValidationError("parallel group projection has multiple active waves", code="task_plan_replay_parallel_state_mismatch")
     for wave in waves.values():
         for embedded in thaw_mapping(wave).get("reservations", ()):
             if isinstance(embedded, Mapping) and (
@@ -943,6 +953,8 @@ def _apply_parallel_event(
             _parallel_error("group admission snapshot is not admitted", event)
         if group_id in groups:
             _parallel_error("parallel group was admitted more than once", event)
+        if any(existing["plan_id"] == group["plan_id"] and existing["plan_version"] == group["plan_version"] for existing in groups.values()):
+            _parallel_error("accepted plan was admitted to multiple groups", event)
         groups[group_id] = group
         return
 
@@ -1052,6 +1064,7 @@ def _apply_parallel_event(
         wave = _normalize_parallel_wave(wave_payload, group, event)
         if wave["state"] != DispatchWaveState.ADMITTED.value:
             _parallel_error("wave admission snapshot is not admitted", event)
+        validate_wave_admission_slot(group, wave, waves.values(), code="task_plan_replay_parallel_mismatch")
         wave_id = wave["wave_id"]
         ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
         if payload.get("budget_after_checksum") != ledger.to_dict()["ledger_checksum"] or group["budget_envelope"] != dict(ledger.parent_allocation):
@@ -1070,6 +1083,7 @@ def _apply_parallel_event(
         if any(
             reservation["group_id"] == group_id
             and reservation["task_id"] in set(wave["task_ids"])
+            and reservation["state"] == "RESERVED"
             for reservation in reservations.values()
         ):
             _parallel_error("parallel task received duplicate reservation", event)
@@ -1396,31 +1410,29 @@ def _normalize_parallel_group(
     projection: TaskPlanProjection,
     event: TaskPlanEvent,
 ) -> dict[str, Any]:
-    value = thaw_mapping(frozen_mapping(raw, "parallel_group"))
-    required = {
-        "schema_version", "group_id", "group_checksum", "run_id", "stage_id", "plan_id",
-        "plan_version", "task_ids", "required_output_roles", "join_policy",
-        "max_waves", "max_parallelism", "budget_envelope", "correlation_id", "state",
-    }
-    if (
-        not required.issubset(value)
-        or set(value) - required
-        or value.get("schema_version") != "agora.harness-dispatch-group/v1"
-    ):
-        _parallel_error("parallel group snapshot has unexpected fields", event)
+    from framework.harness.task_plan.parallel import DispatchGroup
+
+    try:
+        value = DispatchGroup.from_dict(thaw_mapping(raw)).to_dict()
+    except (HarnessValidationError, TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "parallel group snapshot is invalid",
+            code="task_plan_replay_parallel_mismatch",
+        ) from exc
     for field_name, expected in (
         ("run_id", projection.run_id),
         ("stage_id", projection.stage_id),
         ("plan_id", projection.plan_id),
         ("plan_version", projection.plan_version),
+        ("plan_checksum", projection.plan_checksum),
     ):
         if value.get(field_name) != expected:
             _parallel_error("parallel group does not match plan identity", event)
     group_id = _parallel_identifier(value.get("group_id"), "group_id", event)
     task_ids = _parallel_task_ids(value.get("task_ids"), event)
     known_task_ids = {item.task_id for item in projection.tasks}
-    if not set(task_ids).issubset(known_task_ids):
-        _parallel_error("parallel group references unknown task", event)
+    if set(task_ids) != known_task_ids:
+        _parallel_error("parallel group does not cover complete plan scope", event)
     if value.get("state") not in _PARALLEL_GROUP_STATES:
         _parallel_error("parallel group has invalid state", event)
     if not isinstance(value.get("group_checksum"), str) or not value["group_checksum"].startswith("sha256:"):
@@ -1430,18 +1442,6 @@ def _normalize_parallel_group(
             _parallel_error("parallel group limits are invalid", event)
     if not isinstance(value.get("budget_envelope"), Mapping):
         _parallel_error("parallel group budget is invalid", event)
-    group_checksum_payload = {
-        field_name: value[field_name]
-        for field_name in (
-            "schema_version", "run_id", "stage_id", "plan_id", "plan_version",
-            "task_ids", "required_output_roles", "join_policy", "max_waves",
-            "max_parallelism", "budget_envelope", "correlation_id",
-        )
-        if field_name in value
-    }
-    expected_checksum = canonical_payload_checksum(group_checksum_payload)
-    if value["group_checksum"] != expected_checksum or group_id != f"dg_{expected_checksum.removeprefix('sha256:')[:32]}":
-        _parallel_error("parallel group checksum does not match its snapshot", event)
     return {
         **value,
         "group_id": group_id,

@@ -991,9 +991,21 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         event_sink: ParallelEventSink,
     ) -> None:
         history = self.store.read_events(request.run_id, request.stage_id)
-        if not any(event.event_type == "TASK_WAVE_ADMITTED" for event in history):
+        if not any(event.event_type == "TASK_GROUP_ADMITTED" for event in history):
             return
         report = self._replay_history(request, plan)
+        groups = [item for item in report.parallel_groups.values() if item["plan_id"] == plan.plan_id]
+        if len(groups) > 1:
+            raise HarnessValidationError("accepted plan owns multiple durable groups", code="TASK_GROUP_ADMISSION_CONFLICT")
+        if not groups:
+            return
+        canonical_group = DispatchGroup.from_dict(thaw_mapping(groups[0]))
+        self.parallel_coordinator.restore_group(
+            self._parallel_request(request, plan, task_instances=()),
+            canonical_group,
+            tuple(DispatchWave.from_dict(thaw_mapping(wave)) for wave in report.parallel_waves.values()
+                  if wave["group_id"] == canonical_group.group_id),
+        )
         pending = [wave for wave in report.parallel_waves.values()
                    if wave["state"] in {"ADMITTED", "RUNNING"} and wave["execution_mode"] == "SUPERVISED"
                    and report.parallel_groups[wave["group_id"]]["plan_id"] == plan.plan_id]

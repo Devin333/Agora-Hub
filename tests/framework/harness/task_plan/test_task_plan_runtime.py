@@ -47,6 +47,7 @@ from framework.harness.graph.model import HarnessContractKind, HarnessContractRe
 from framework.harness.graph.activity import HarnessWorkerType
 from framework.harness.workers.result import HarnessWorkerResult
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
+from framework.shared.graph_identity import GraphExecutionIdentity
 from tests.fixtures.task_plan import build_task_plan_stage_binding
 
 
@@ -198,6 +199,15 @@ def _candidate(stage_binding, tasks, roles=("role",)):
         required_output_roles=roles,
         generated_by="planner@1",
         requested_plan_budget=PlanBuildBudget(),
+    )
+
+
+def _execution_identity(candidate):
+    return GraphExecutionIdentity(
+        run_id=candidate.run_id, graph_id=candidate.graph_id, graph_version=candidate.graph_version,
+        graph_ref=candidate.graph_ref, graph_checksum=candidate.graph_checksum,
+        node_id=candidate.stage_id, node_instance_id=f"{candidate.stage_id}-node-1",
+        activity_id="test-parent-activity", attempt=1,
     )
 
 
@@ -407,7 +417,8 @@ def test_terminal_failure_closes_unadmitted_dependency_chain_without_child_calls
     store = InMemoryTaskPlanStore()
     calls: list[str] = []
 
-    def execute(_binding, instance):
+    def execute(_binding, instance, identity):
+        assert identity == _execution_identity(candidate)
         calls.append(instance.task_id)
         return HarnessWorkerResult(status="succeeded", output={"value": instance.task_id})
 
@@ -430,7 +441,7 @@ def test_terminal_failure_closes_unadmitted_dependency_chain_without_child_calls
             max_workers=2,
             allow_test_executor=True,
         ),
-    ).run(request)
+    ).run(replace(request, execution_identity=_execution_identity(candidate)))
 
     projection = store.load_projection("run", "dynamic_stage")
     statuses = {item.task_id: item.status for item in projection.tasks}
@@ -629,7 +640,8 @@ def test_parallel_runner_retries_with_a_new_attempt_in_the_same_dispatch_group()
     verifier = _FailOnceResultVerifier(failure_code="transport")
     attempts: list[tuple[str, int, str]] = []
 
-    def execute(_binding, instance):
+    def execute(_binding, instance, identity):
+        assert identity == _execution_identity(candidate)
         attempts.append(
             (
                 instance.task_id,
@@ -663,7 +675,7 @@ def test_parallel_runner_retries_with_a_new_attempt_in_the_same_dispatch_group()
         ),
     )
 
-    result = runner.run(request)
+    result = runner.run(replace(request, execution_identity=_execution_identity(candidate)))
 
     assert result.status.value == "succeeded"
     assert [attempt for _task_id, attempt, _instance_id in attempts] == [1, 2]
