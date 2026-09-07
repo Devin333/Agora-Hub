@@ -225,6 +225,25 @@ describe("Papers API data loading", () => {
     expect(result.papers[0].id).toBe("paper-agent")
   })
 
+  it("reports the unfiltered public corpus range for cached empty-state decisions", async () => {
+    mockedSafeApiGet.mockResolvedValueOnce({ ok: false, errorCode: "request_failed", errorMessage: "offline" })
+    mockedExistsSync.mockImplementation((filePath) => String(filePath).replace(/\\/g, "/").endsWith(".newsroom/papers/arxiv-papers.json"))
+    mockedReadFileSync.mockReturnValue(JSON.stringify({
+      papers: [
+        realPaper({ id: "cache-old", title: "Older Paper", publishedAt: "2026-04-02T00:00:00Z" }),
+        realPaper({ id: "cache-new", title: "Newer Paper", publishedAt: "2026-05-22T00:00:00Z" }),
+        realPaper({ id: "cache-private", title: "Private Paper", publishedAt: "2026-06-01T00:00:00Z", isPublished: false })
+      ]
+    }))
+
+    const result = await getPaperListResult({ q: "not present", topic: "cs.LG" })
+
+    expect(result.source).toBe("cache")
+    expect(result.total_count).toBe(0)
+    expect(result.earliestPublishedAt).toBe("2026-04-02T00:00:00Z")
+    expect(result.latestPublishedAt).toBe("2026-05-22T00:00:00Z")
+  })
+
   it("uses taxonomy with real paper-derived counts when task API is unavailable", async () => {
     mockedSafeApiGet
       .mockResolvedValueOnce({ ok: false, errorCode: "request_failed", errorMessage: "offline" })

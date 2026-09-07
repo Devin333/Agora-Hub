@@ -43,15 +43,19 @@ describe("PdfPageThumbnail resource lifecycle", () => {
     await waitFor(() => expect(loadingTask.destroy).toHaveBeenCalledTimes(1))
   })
 
-  it("awaits one cancellation when unmounted during a pending load", async () => {
-    let rejectLoad: (error: Error) => void = () => undefined
-    const promise = new Promise((_, reject) => { rejectLoad = reject })
-    const destroy = vi.fn().mockImplementation(async () => { rejectLoad(new Error("Worker was terminated")) })
+  it("settles worker setup before destroying an unmounted pending load", async () => {
+    let resolveLoad: (value: unknown) => void = () => undefined
+    const promise = new Promise((resolve) => { resolveLoad = resolve })
+    const destroy = vi.fn().mockResolvedValue(undefined)
     getDocument.mockReturnValue({ promise, destroy })
     const { unmount } = render(<PdfPageThumbnail locale="en" title="Paper" pdfUrl="https://arxiv.org/pdf/test" />)
     await waitFor(() => expect(getDocument).toHaveBeenCalledTimes(1))
     unmount()
     await act(async () => {})
+    expect(destroy).not.toHaveBeenCalled()
+    const getPage = vi.fn()
+    await act(async () => { resolveLoad({ getPage }) })
+    expect(getPage).not.toHaveBeenCalled()
     expect(destroy).toHaveBeenCalledTimes(1)
   })
 })

@@ -10,6 +10,9 @@ export async function GET(request: NextRequest) {
     q: params.get("q") ?? undefined,
     period: parsePeriod(params.get("period")),
     sort: parseSort(params.get("sort")),
+    topic: params.get("topic") ?? undefined,
+    from: params.get("from") ?? undefined,
+    to: params.get("to") ?? undefined,
     task: params.get("task") ?? undefined,
     method: params.get("method") ?? undefined,
     has: params.get("has") ?? undefined,
@@ -24,7 +27,7 @@ function parsePeriod(value: string | null): PaperPeriod | undefined {
 }
 
 function parseSort(value: string | null): PaperSort | undefined {
-  return value === "trending" || value === "newest" || value === "most_cited" ? value : undefined
+  return value === "trending" || value === "relevance" || value === "newest" || value === "most_cited" ? value : undefined
 }
 
 function numberParam(value: string | null) {

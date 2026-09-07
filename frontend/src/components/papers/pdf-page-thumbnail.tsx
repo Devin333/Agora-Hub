@@ -79,16 +79,18 @@ export function PdfPageThumbnail({ className, locale, pdfUrl, title }: PdfPageTh
         })
         let destruction: Promise<void> | undefined
         let renderTask: import("pdfjs-dist").RenderTask | undefined = undefined
-        // Rendering, unmounting and completion share one resource release.
+        // PDF.js 4 can throw inside its worker when destroyed during setupDoc.
+        // Let setup settle before destroying; cancelled thumbnails never render.
         cleanup = () => {
           if (!destruction) {
             renderTask?.cancel()
-            destruction = loadingTask.destroy()
+            destruction = loadingTask.promise.then(() => undefined, () => undefined).then(() => loadingTask.destroy())
           }
           return destruction
         }
 
         const pdf = await loadingTask.promise
+        if (cancelled) return
         const page = await pdf.getPage(1)
         const viewport = page.getViewport({ scale: 1 })
         const targetWidth = 360

@@ -9,6 +9,8 @@ type PaperWorkspaceState = {
   later: string[]
   hasPaper: (list: PaperWorkspaceList, paperId: string) => boolean
   togglePaper: (list: PaperWorkspaceList, paperId: string) => void
+  toggleSaved: (paperId: string) => void
+  removePaper: (list: PaperWorkspaceList, paperId: string) => void
   clear: () => void
 }
 
@@ -23,6 +25,14 @@ export const usePaperWorkspaceStore = create<PaperWorkspaceState>()(
     (set, get) => ({
       ...emptyLists,
       hasPaper: (list, paperId) => get()[list].includes(paperId),
+      toggleSaved: (paperId) => set((state) => {
+        const saved = state.readingList.includes(paperId) || state.later.includes(paperId)
+        return {
+          readingList: saved ? state.readingList.filter((id) => id !== paperId) : [...state.readingList, paperId],
+          later: state.later.filter((id) => id !== paperId)
+        }
+      }),
+      removePaper: (list, paperId) => set((state) => ({ [list]: state[list].filter((id) => id !== paperId) })),
       togglePaper: (list, paperId) => {
         set((state) => {
           const current = state[list]

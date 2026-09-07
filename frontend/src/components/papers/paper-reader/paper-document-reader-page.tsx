@@ -14,7 +14,7 @@ import styles from "./paper-document-reader.module.css"
 
 const DOCUMENT_POLL_INTERVAL_MS = 5000
 
-export function PaperDocumentReaderPage({ payload, locale }: { payload: PaperDocumentResponse; locale: Locale }) {
+export function PaperDocumentReaderPage({ payload, locale, backHref = "/papers" }: { payload: PaperDocumentResponse; locale: Locale; backHref?: string }) {
   const [currentPayload, setCurrentPayload] = useState(payload)
 
   useEffect(() => {
@@ -63,17 +63,17 @@ export function PaperDocumentReaderPage({ payload, locale }: { payload: PaperDoc
   const adapted = useMemo(() => (compiled ? paperDocumentToOpenReader(currentPayload) : null), [compiled, currentPayload])
 
   if (adapted) {
-    return <OpenReaderPage reader={adapted.reader} locale={locale} visualLayer={adapted.visualLayer} />
+    return <OpenReaderPage reader={adapted.reader} locale={locale} visualLayer={adapted.visualLayer} backHref={backHref} />
   }
 
-  return <CompileStatusPage payload={currentPayload} locale={locale} />
+  return <CompileStatusPage payload={currentPayload} locale={locale} backHref={backHref} />
 }
 
 function hasCompiledDocument(payload: PaperDocumentResponse) {
   return payload.status.status === "compiled" && Boolean(payload.document && payload.manifest)
 }
 
-function CompileStatusPage({ payload, locale }: { payload: PaperDocumentResponse; locale: Locale }) {
+function CompileStatusPage({ payload, locale, backHref }: { payload: PaperDocumentResponse; locale: Locale; backHref: string }) {
   const { paper, status } = payload
   const [queued, setQueued] = useState<PaperCompileTriggerResponse["enqueued"] | null>(null)
   const [compileError, setCompileError] = useState<string | null>(null)
@@ -97,7 +97,7 @@ function CompileStatusPage({ payload, locale }: { payload: PaperDocumentResponse
   return (
     <main className={styles.readerShell}>
       <header className={styles.header}>
-        <Link className={styles.backLink} href="/papers" aria-label={translate(locale, "papers.reader.backToPapers")}>
+        <Link className={styles.backLink} href={backHref} aria-label={translate(locale, "papers.reader.backToPapers")}>
           <ArrowLeft size={18} aria-hidden="true" />
         </Link>
         <div className={styles.headerText}>

@@ -50,6 +50,9 @@ export type PaperListParams = {
   offset?: number
   task?: string
   method?: string
+  topic?: string
+  from?: string
+  to?: string
   has?: string | PaperFeatureFilter[]
 }
 

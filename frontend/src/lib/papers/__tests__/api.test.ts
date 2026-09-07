@@ -155,4 +155,22 @@ describe("paper browser API client", () => {
       undefined
     )
   })
+
+  it("serializes independent discovery filters for the paper list", async () => {
+    vi.mocked(apiGet).mockResolvedValueOnce({ success: true, data: { papers: [] } })
+
+    await fetchPapers({
+      q: "agent planning",
+      topic: "cs.AI",
+      from: "2026-05-01",
+      to: "2026-05-31",
+      has: ["pdf", "code"],
+      sort: "relevance"
+    })
+
+    expect(apiGet).toHaveBeenCalledWith(
+      "/api/papers?q=agent+planning&topic=cs.AI&from=2026-05-01&to=2026-05-31&has=pdf%2Ccode&sort=relevance",
+      undefined
+    )
+  })
 })

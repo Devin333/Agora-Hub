@@ -50,6 +50,13 @@ describe("PaperDocumentReaderPage", () => {
     expect(screen.queryByText(/2026年5月24日/)).not.toBeInTheDocument()
   })
 
+  it("preserves the caller's return path in both reader states", () => {
+    const { rerender } = render(<PaperDocumentReaderPage payload={compiledPayload} locale="en" backHref="/design-demo/papers?q=Agent&page=2" />)
+    expect(screen.getByRole("link", { name: "Back to papers" })).toHaveAttribute("href", "/design-demo/papers?q=Agent&page=2")
+    rerender(<PaperDocumentReaderPage payload={needsReviewPayload} locale="en" backHref="/design-demo/papers?q=Agent&page=2" />)
+    expect(screen.getByRole("link", { name: "Back to papers" })).toHaveAttribute("href", "/design-demo/papers?q=Agent&page=2")
+  })
+
   it("renders compiled PaperDocument blocks through the Open Reader and keeps AI summary out of the body", () => {
     render(<PaperDocumentReaderPage payload={compiledPayload} locale="en" />)
 

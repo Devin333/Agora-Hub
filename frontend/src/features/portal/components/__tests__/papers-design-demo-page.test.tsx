@@ -4,6 +4,7 @@ import { PapersDesignDemoPage } from "@/features/portal/components/papers-design
 import { fetchPapers } from "@/lib/papers/api"
 import type { Paper } from "@/lib/papers/types"
 import { useUiStore } from "@/stores/ui-store"
+import { usePaperWorkspaceStore } from "@/stores/paper-workspace-store"
 
 const replace = vi.fn()
 let query = ""
@@ -28,6 +29,7 @@ describe("PapersDesignDemoPage", () => {
   beforeEach(() => {
     query = ""
     replace.mockReset()
+    usePaperWorkspaceStore.getState().clear()
     useUiStore.setState({ locale: "zh" })
     vi.mocked(fetchPapers).mockReset().mockResolvedValue({
       source: "test", query: "", period: "all", sort: "trending", paper_count: 1,
@@ -40,7 +42,7 @@ describe("PapersDesignDemoPage", () => {
     expect(await screen.findByRole("heading", { name: "Agent evaluation" })).toBeInTheDocument()
     expect(screen.queryByText("Draft")).not.toBeInTheDocument()
     expect(screen.queryByText("private-topic")).not.toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "cs.AI, 1 篇论文" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "人工智能, cs.AI, 1 篇论文" })).toBeInTheDocument()
     expect(screen.getByRole("link", { name: "Agora AI" })).toHaveAttribute("href", "/design-demo")
     expect(screen.getByRole("link", { name: "论文研究" })).toHaveAttribute("href", "/design-demo/papers")
     await waitFor(() => expect(screen.queryByText("更新中...")).not.toBeInTheDocument())
@@ -82,14 +84,17 @@ describe("PapersDesignDemoPage", () => {
   })
 
   it("reflects navigation changes in the search field and topic selection", async () => {
+    query = "q=Agent"
     const { rerender } = render(<PapersDesignDemoPage papers={[paper]} />)
-    fireEvent.click(screen.getByRole("button", { name: "cs.AI, 1 篇论文" }))
-    expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?q=cs.AI", { scroll: false })
-    query = "q=cs.AI"
+    fireEvent.click(screen.getByRole("button", { name: "人工智能, cs.AI, 1 篇论文" }))
+    expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?q=Agent&topic=cs.AI", { scroll: false })
+    query = "q=Agent&topic=cs.AI"
     rerender(<PapersDesignDemoPage papers={[paper]} />)
-    expect(screen.getByRole("textbox", { name: "搜索论文" })).toHaveValue("cs.AI")
-    expect(screen.getByRole("button", { name: "cs.AI, 1 篇论文" })).toHaveAttribute("aria-pressed", "true")
-    await waitFor(() => expect(fetchPapers).toHaveBeenCalledWith(expect.objectContaining({ q: "cs.AI" })))
+    expect(screen.getByRole("textbox", { name: "搜索论文" })).toHaveValue("Agent")
+    expect(screen.getByRole("button", { name: "人工智能, cs.AI, 1 篇论文" })).toHaveAttribute("aria-pressed", "true")
+    await waitFor(() => expect(fetchPapers).toHaveBeenCalledWith(expect.objectContaining({ q: "Agent", topic: "cs.AI", sort: "relevance" })))
+    fireEvent.click(screen.getByRole("button", { name: "移除筛选 人工智能" }))
+    expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?q=Agent", { scroll: false })
     await waitFor(() => expect(screen.queryByText("更新中...")).not.toBeInTheDocument())
   })
 
@@ -98,7 +103,7 @@ describe("PapersDesignDemoPage", () => {
     const row = within(await screen.findByTestId("paper-row"))
     fireEvent.click(row.getByRole("button", { name: "预览 Agent evaluation" }))
     expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?paper=agent-paper", { scroll: false })
-    expect(row.getByRole("link", { name: "阅读 Agent evaluation" })).toHaveAttribute("href", "/papers/agent-paper/read")
+    expect(row.getByRole("link", { name: "阅读 Agent evaluation" })).toHaveAttribute("href", "/papers/agent-paper/read?returnTo=%2Fdesign-demo%2Fpapers")
     expect(row.getByRole("link", { name: "打开论文 PDF" })).toHaveAttribute("href", paper.pdfUrl)
     await waitFor(() => expect(screen.queryByText("更新中...")).not.toBeInTheDocument())
   })
@@ -111,6 +116,26 @@ describe("PapersDesignDemoPage", () => {
     expect(screen.queryByTestId("paper-row")).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "清除筛选" }))
     expect(replace).toHaveBeenLastCalledWith("/design-demo/papers", { scroll: false })
+    await waitFor(() => expect(fetchPapers).toHaveBeenCalled())
+  })
+
+  it("clears only time when the corpus does not cover the selected period", async () => {
+    query = "q=Agent&topic=cs.AI&period=monthly"
+    vi.mocked(fetchPapers).mockResolvedValue({ source: "cache", query: "Agent", period: "monthly", sort: "relevance", paper_count: 0, total_count: 0, source_count: 1, limit: 15, offset: 0, papers: [], latestPublishedAt: "2020-05-22" })
+    render(<PapersDesignDemoPage papers={[paper]} />)
+    expect(await screen.findByText(/所选时间段暂无数据/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "查看全部时间" }))
+    expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?q=Agent&topic=cs.AI", { scroll: false })
+  })
+
+  it("opens a persisted reading list and keeps the query for discovery", async () => {
+    query = "q=Agent&view=reading"
+    usePaperWorkspaceStore.setState({ readingList: [paper.id], later: [paper.id] })
+    render(<PapersDesignDemoPage papers={[paper]} />)
+    expect(screen.getByRole("heading", { name: "阅读列表" })).toBeInTheDocument()
+    expect(screen.getAllByTestId("paper-row")).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: "发现论文" }))
+    expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?q=Agent", { scroll: false })
     await waitFor(() => expect(fetchPapers).toHaveBeenCalled())
   })
 })

@@ -99,6 +99,7 @@ export const papersCopy = {
 } satisfies Record<string, Localized>
 
 export const sortLabels: Record<PaperSort, Localized> = {
+  relevance: { zh: "相关度", en: "Relevance" },
   trending: copy("papers.sort.trending"),
   newest: copy("papers.sort.newest"),
   most_cited: copy("papers.sort.most_cited")

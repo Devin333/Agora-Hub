@@ -17,7 +17,7 @@ export type PaperModuleRoute =
   | `/papers/methods/${string}`
   | `/papers/${string}/read`
 
-export type PaperSort = "trending" | "newest" | "most_cited"
+export type PaperSort = "trending" | "relevance" | "newest" | "most_cited"
 export type PaperPeriod = "daily" | "weekly" | "monthly" | "all"
 export type PaperDataState = "ready" | "degraded" | "empty"
 export type ReadingStatus = "unread" | "reading" | "finished"
@@ -360,7 +360,12 @@ export interface PaperListResult {
   sort: PaperSort
   task?: string
   method?: string
+  topic?: string
+  from?: string
+  to?: string
   collectedAt?: string
+  earliestPublishedAt?: string
+  latestPublishedAt?: string
   paper_count: number
   total_count: number
   source_count: number

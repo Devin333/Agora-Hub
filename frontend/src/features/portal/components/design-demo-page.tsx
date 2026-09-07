@@ -13,6 +13,7 @@ import {
   WandSparkles,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { paperQuestionHref } from "@/lib/papers/discovery-navigation"
 
 type Intent = {
   command: string
@@ -108,7 +109,7 @@ export function DesignDemoPage() {
               {quickPrompts.map((prompt) => <button key={prompt} type="button" onClick={() => setPrompt(prompt)} className="rounded-xl border border-[#e7dff1] bg-white px-4 py-2.5 text-left text-[15px] leading-5 text-[#6b607e] transition-colors hover:border-[#b99beb] hover:bg-[#faf7ff]">{prompt}</button>)}
             </div>
 
-            {hasSubmitted ? <div className="mt-6 flex items-center justify-between gap-4 rounded-xl border border-[#e0d3f4] bg-[#faf7ff] px-4 py-3 text-base"><span className="inline-flex min-w-0 items-center gap-2 text-[#695d7d]"><span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[#f0e9ff] text-[#7c3aed]">{intent.icon}</span><span className="truncate">将带着你的问题进入 <strong className="font-semibold text-[#382758]">{intent.module}</strong></span></span><a href={intent.href} className="inline-flex shrink-0 items-center gap-1 font-semibold text-[#7042cc] hover:text-[#5425b5]">进入模块<ChevronRight className="size-4" /></a></div> : null}
+            {hasSubmitted ? <div className="mt-6 flex items-center justify-between gap-4 rounded-xl border border-[#e0d3f4] bg-[#faf7ff] px-4 py-3 text-base"><span className="inline-flex min-w-0 items-center gap-2 text-[#695d7d]"><span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[#f0e9ff] text-[#7c3aed]">{intent.icon}</span><span className="truncate">{intent.href === "/design-demo/papers" ? "带着问题检索论文" : "前往"} <strong className="font-semibold text-[#382758]">{intent.module}</strong></span></span><a href={intent.href === "/design-demo/papers" ? paperQuestionHref(query) : intent.href} className="inline-flex shrink-0 items-center gap-1 font-semibold text-[#7042cc] hover:text-[#5425b5]">进入模块<ChevronRight className="size-4" /></a></div> : null}
           </div>
 
         <div className="mt-12 min-h-0 self-start bg-[#fbf8ff]">

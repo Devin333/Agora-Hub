@@ -1,8 +1,8 @@
 import fs from "node:fs"
 import path from "node:path"
 import { safeApiGet } from "@/lib/api/server"
-import { paperMatchesFeatureFilters, parsePaperFeatureFilters, type PaperFeatureFilter } from "@/lib/papers/filters"
 import { normalizePdfUrl, paperPdfUrlFromSource, sortPapers } from "@/lib/papers/format"
+import { queryPapers, type PaperQuery } from "@/lib/papers/query"
 import { paperMethods, paperTasks } from "@/lib/papers/catalog"
 import { arxivIdFromUrl, enrichPapersForPublicStream, githubRepoSlug, normalizeDoi, normalizeGithubRepoUrl } from "@/lib/papers/enrichment"
 import type {
@@ -14,8 +14,6 @@ import type {
   PaperImplementation,
   PaperListResult,
   PaperMethod,
-  PaperPeriod,
-  PaperSort,
   PaperTask,
   TaskRef
 } from "@/lib/papers/types"
@@ -127,13 +125,7 @@ export type PaperResearchDataset = PaperRuntimeData & {
   methodTaxonomySource: "backend" | "taxonomy"
 }
 
-export type PaperListQuery = {
-  q?: string
-  period?: PaperPeriod
-  sort?: PaperSort
-  task?: string
-  method?: string
-  has?: PaperFeatureFilter[] | string
+export type PaperListQuery = PaperQuery & {
   limit?: number
   offset?: number
 }
@@ -195,29 +187,25 @@ export async function getPublishedPaperData(): Promise<PaperRuntimeData> {
 
 export async function getPaperListResult(query: PaperListQuery = {}): Promise<PaperListResult> {
   const data = await getPublishedPaperData()
-  const period = parsePaperPeriod(query.period)
-  const sort = parsePaperSort(query.sort)
-  const has = parsePaperFeatureFilters(query.has)
   const limit = positiveInteger(query.limit, 1000)
   const offset = Math.max(0, positiveInteger(query.offset, 0))
-  const filtered = filterPapers(data.papers, {
-    q: query.q,
-    period,
-    task: query.task,
-    method: query.method,
-    has
-  })
-  const sorted = sortPapers(filtered, sort)
+  const queried = queryPapers(data.papers, query)
+  const sorted = queried.papers
   const papers = sorted.slice(offset, offset + limit)
 
   return {
     source: data.source,
-    query: query.q ?? "",
-    period,
-    sort,
-    task: query.task,
-    method: query.method,
+    query: queried.query.q,
+    period: queried.query.period,
+    sort: queried.query.sort,
+    task: queried.query.task,
+    method: queried.query.method,
+    topic: queried.query.topic,
+    from: queried.query.from,
+    to: queried.query.to,
     collectedAt: data.collectedAt ?? new Date().toISOString(),
+    earliestPublishedAt: queried.earliestPublishedAt,
+    latestPublishedAt: queried.latestPublishedAt,
     paper_count: papers.length,
     total_count: sorted.length,
     source_count: uniqueStrings(data.papers.map((paper) => paper.venue ?? paper.sourceRefs?.[0]?.sourceName ?? "papers")).length,
@@ -355,45 +343,6 @@ function taxonomyDataState(hasApiTaxonomy: boolean, paperDataState: PaperDataSta
     return paperDataState === "empty" ? "empty" : "degraded"
   }
   return paperDataState
-}
-
-function filterPapers(
-  papers: Paper[],
-  query: { q?: string; period: PaperPeriod; task?: string; method?: string; has: PaperFeatureFilter[] }
-) {
-  const search = lower(query.q ?? "")
-  const periodStart = periodStartDate(query.period)
-
-  return papers.filter((paper) => {
-    if (periodStart && new Date(paper.publishedAt).getTime() < periodStart.getTime()) {
-      return false
-    }
-    if (query.task && !matchesRef(query.task, paper.taskRefs, "task")) {
-      return false
-    }
-    if (query.method && !matchesRef(query.method, paper.methodRefs, "method")) {
-      return false
-    }
-    if (!paperMatchesFeatureFilters(paper, query.has)) {
-      return false
-    }
-    if (!search) {
-      return true
-    }
-
-    const haystack = [
-      paper.title,
-      paper.titleZh,
-      paper.abstractSnippet,
-      paper.abstractSnippetZh,
-      paper.authors.join(" "),
-      paper.tags.join(" "),
-      paper.taskRefs.map((task) => `${task.slug} ${task.name} ${task.nameZh ?? ""} ${task.group ?? ""}`).join(" "),
-      paper.methodRefs.map((method) => `${method.slug} ${method.name} ${method.nameZh ?? ""} ${method.area ?? ""}`).join(" ")
-    ].join(" ")
-
-    return lower(haystack).includes(search)
-  })
 }
 
 function deriveTasks(tasks: PaperTask[], papers: Paper[]): PaperTask[] {
@@ -684,33 +633,6 @@ function cleanLocalizedText(value: string | undefined) {
 
 function isTaskRef(value: unknown): value is TaskRef {
   return isRecord(value) && Boolean(text(value.slug) && text(value.name))
-}
-
-function matchesRef(value: string, refs: Array<TaskRef | MethodRef>, kind: "task" | "method") {
-  const normalized = lower(value)
-  const canonicalSlug = kind === "task" ? canonicalTaskSlug(value) : canonicalMethodSlug(value)
-  return refs.some((ref) => {
-    const refSlug = kind === "task" ? canonicalTaskSlug(ref.slug) : canonicalMethodSlug(ref.slug)
-    return refSlug === canonicalSlug || lower(ref.slug) === normalized || lower(ref.name) === normalized || lower(ref.nameZh ?? "") === normalized
-  })
-}
-
-function periodStartDate(period: PaperPeriod) {
-  const days = period === "daily" ? 1 : period === "weekly" ? 7 : period === "monthly" ? 30 : 0
-  if (!days) {
-    return null
-  }
-  const start = new Date()
-  start.setDate(start.getDate() - days)
-  return start
-}
-
-function parsePaperPeriod(value: PaperPeriod | undefined): PaperPeriod {
-  return value === "daily" || value === "weekly" || value === "monthly" || value === "all" ? value : "all"
-}
-
-function parsePaperSort(value: PaperSort | undefined): PaperSort {
-  return value === "newest" || value === "most_cited" || value === "trending" ? value : "trending"
 }
 
 function positiveInteger(value: number | undefined, fallback: number) {

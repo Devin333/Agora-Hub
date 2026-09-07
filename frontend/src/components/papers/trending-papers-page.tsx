@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { BarChart3, ChevronLeft, ChevronRight, FileText, Github, Quote } from "lucide-react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { PapersDomainSidebar } from "@/components/papers/papers-domain-sidebar"
@@ -14,8 +14,9 @@ import { translate } from "@/lib/i18n"
 import type { TranslationKey } from "@/lib/i18n/translations"
 import { fetchPapers } from "@/lib/papers/api"
 import { localizedResearchNotice, papersCopy, t } from "@/lib/papers/copy"
-import { paperFeatureFilters, paperMatchesFeatureFilters, parsePaperFeatureFilters, serializePaperFeatureFilters, type PaperFeatureFilter } from "@/lib/papers/filters"
-import { sortPapers } from "@/lib/papers/format"
+import { paperFeatureFilters, parsePaperFeatureFilters, serializePaperFeatureFilters, type PaperFeatureFilter } from "@/lib/papers/filters"
+import { queryPapers, type PaperQuery } from "@/lib/papers/query"
+import { hasSavedPaperScroll, restorePaperScroll } from "@/lib/papers/discovery-navigation"
 import { buildPaperPortalMetrics, deriveMethodAreaDomains, deriveTopPaperDomains, type PaperPortalMetrics } from "@/lib/papers/metrics"
 import type { Locale, Paper, PaperListResult, PaperPeriod, PaperSort } from "@/lib/papers/types"
 
@@ -28,6 +29,17 @@ export type PapersDiscoveryViewModel = {
   papers: Paper[]
   metrics: PaperPortalMetrics
   query: string
+  topic: string
+  from: string
+  to: string
+  question: string
+  view: "discover" | "reading" | "compare"
+  returnTo: string
+  catalog: Paper[]
+  source?: string
+  collectedAt?: string
+  latestPublishedAt?: string
+  hasDataIssue: boolean
   period: PaperPeriod
   sort: PaperSort
   filters: PaperFeatureFilter[]
@@ -37,6 +49,10 @@ export type PapersDiscoveryViewModel = {
   pagination: ReactNode
   drawer: ReactNode
   onSearch: (query: string) => void
+  onTopicChange: (topic: string) => void
+  onDateRangeChange: (from: string, to: string) => void
+  onQuestionClear: () => void
+  onViewChange: (view: "discover" | "reading" | "compare") => void
   onPeriodChange: (period: PaperPeriod) => void
   onSortChange: (sort: PaperSort) => void
   onFilterToggle: (filter: PaperFeatureFilter) => void
@@ -55,20 +71,28 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   const searchParams = useSearchParams()
   const searchText = searchParams.toString()
   const period = parsePeriod(searchParams.get("period"))
-  const sort = parseSort(searchParams.get("sort"))
+  const sort = parseSort(searchParams.get("sort"), Boolean(renderView && searchParams.get("q")))
   const page = parsePage(searchParams.get("page"))
   const query = searchParams.get("q") ?? ""
+  const topic = searchParams.get("topic") ?? ""
+  const from = searchParams.get("from") ?? ""
+  const to = searchParams.get("to") ?? ""
+  const question = searchParams.get("question") ?? ""
+  const requestedView = searchParams.get("view")
+  const view = requestedView === "reading" || requestedView === "compare" ? requestedView : "discover"
   const featureFilters = useMemo(() => parsePaperFeatureFilters(new URLSearchParams(searchText).get("has")), [searchText])
   const deepLinkedPaperId = searchParams.get("paper")
-  const initialPublishedPapers = useMemo(() => fallbackPaperQuery(papers, { query, period, sort, has: featureFilters }), [featureFilters, papers, period, query, sort])
+  const initialPublishedPapers = useMemo(() => fallbackPaperQuery(papers, { query, period, sort, topic, from, to, has: featureFilters }), [featureFilters, papers, period, query, sort, topic, from, to])
   const [dashboardPapers, setDashboardPapers] = useState(initialPublishedPapers)
-  const [visiblePapers, setVisiblePapers] = useState(initialPublishedPapers.slice(0, PAPER_PAGE_SIZE))
+  const [visiblePapers, setVisiblePapers] = useState(initialPublishedPapers.slice((page - 1) * PAPER_PAGE_SIZE, page * PAPER_PAGE_SIZE))
   const [paperTotalCount, setPaperTotalCount] = useState(initialPublishedPapers.length)
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(deepLinkedPaperId)
   const [isLoading, setIsLoading] = useState(false)
   const [hasDataIssue, setHasDataIssue] = useState(false)
   const [notices, setNotices] = useState<string[]>([])
   const [dataContext, setDataContext] = useState<PaperDataContext>({})
+  const [latestPublishedAt, setLatestPublishedAt] = useState(() => latestPaperTimestamp(papers))
+  const [loaded, setLoaded] = useState(false)
   const pageOffset = (page - 1) * PAPER_PAGE_SIZE
   const portalMetrics = useMemo(
     () => buildPaperPortalMetrics(dashboardPapers, paperTotalCount),
@@ -97,7 +121,8 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   }, [pathname, routerReplace, searchText])
   const updatePage = useCallback((nextPage: number) => {
     updateQuery({ page: nextPage <= 1 ? null : String(nextPage), paper: null })
-  }, [updateQuery])
+    if (renderView && window.scrollY > 0) window.scrollTo({ top: 0, behavior: "instant" })
+  }, [updateQuery, renderView])
 
   useEffect(() => {
     setSelectedPaperId(deepLinkedPaperId)
@@ -108,9 +133,10 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
     setIsLoading(true)
     setHasDataIssue(false)
     const has = serializePaperFeatureFilters(featureFilters)
+    const refinements = { ...(topic ? { topic } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) }
     Promise.allSettled([
-      fetchPapers({ q: query, period, sort, ...(has ? { has } : {}), limit: PAPER_PAGE_SIZE, offset: pageOffset }),
-      fetchPapers({ q: query, period, sort, ...(has ? { has } : {}), limit: PAPER_DASHBOARD_LIMIT })
+      fetchPapers({ q: query, period, sort, ...refinements, ...(has ? { has } : {}), limit: PAPER_PAGE_SIZE, offset: pageOffset }),
+      fetchPapers({ q: query, period, sort, ...refinements, ...(has ? { has } : {}), limit: PAPER_DASHBOARD_LIMIT })
     ])
       .then(([pageSettled, dashboardSettled]) => {
         if (cancelled) {
@@ -124,7 +150,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
           throw firstRejectedReason(pageSettled, dashboardSettled) ?? new Error("Papers request failed")
         }
 
-        const fallbackPapers = dashboardResult ? [] : fallbackPaperQuery(papers, { query, period, sort, has: featureFilters })
+        const fallbackPapers = dashboardResult ? [] : fallbackPaperQuery(papers, { query, period, sort, topic, from, to, has: featureFilters })
         const pagePapers = pageResult ? publicPapers(pageResult.papers) : null
         const dashboardResultPapers = dashboardResult ? publicPapers(dashboardResult.papers) : null
         const nextDashboardPapers = dashboardResultPapers ?? fallbackPapers
@@ -147,6 +173,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
         setVisiblePapers(nextVisiblePapers)
         setDashboardPapers(nextDashboardPapers)
         setPaperTotalCount(nextTotalCount)
+        setLatestPublishedAt(dashboardResult?.latestPublishedAt ?? pageResult?.latestPublishedAt ?? latestPaperTimestamp(papers))
         setNotices(nextNotices)
         setHasDataIssue(pageSettled.status === "rejected" || dashboardSettled.status === "rejected")
         setDataContext({
@@ -161,7 +188,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
       })
       .catch(() => {
         if (!cancelled) {
-          const fallbackPapers = fallbackPaperQuery(papers, { query, period, sort, has: featureFilters })
+          const fallbackPapers = fallbackPaperQuery(papers, { query, period, sort, topic, from, to, has: featureFilters })
           setVisiblePapers(fallbackPapers.slice(pageOffset, pageOffset + PAPER_PAGE_SIZE))
           setDashboardPapers(fallbackPapers)
           setPaperTotalCount(fallbackPapers.length)
@@ -176,19 +203,34 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
       .finally(() => {
         if (!cancelled) {
           setIsLoading(false)
+          setLoaded(true)
         }
       })
     return () => {
       cancelled = true
     }
-  }, [featureFilters, locale, page, pageOffset, papers, period, query, sort, updatePage])
+  }, [featureFilters, locale, page, pageOffset, papers, period, query, sort, topic, from, to, updatePage])
+
+  const returnParams = new URLSearchParams(searchText)
+  returnParams.delete("paper")
+  const returnTo = returnParams.size ? `${pathname}?${returnParams}` : pathname
+  const [restoreOnMount] = useState(() => hasSavedPaperScroll(returnTo))
+  const scrollPending = useRef(restoreOnMount)
+  useEffect(() => {
+    if (!loaded || isLoading || !scrollPending.current) return
+    const frame = requestAnimationFrame(() => {
+      scrollPending.current = false
+      restorePaperScroll(returnTo)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [loaded, isLoading, returnTo])
 
   function previewPaper(paper: Paper) {
     updateQuery({ paper: paper.id })
   }
 
   function updatePeriod(nextPeriod: PaperPeriod) {
-    updateQuery({ period: nextPeriod === "all" ? null : nextPeriod, page: null, paper: null })
+    updateQuery({ period: nextPeriod === "all" ? null : nextPeriod, from: null, to: null, page: null, paper: null })
   }
 
   function periodHref(nextPeriod: PaperPeriod) {
@@ -205,7 +247,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   }
 
   function updateSort(nextSort: PaperSort) {
-    updateQuery({ sort: nextSort === "trending" ? null : nextSort, page: null, paper: null })
+    updateQuery({ sort: nextSort === "trending" && !query ? null : nextSort, page: null, paper: null })
   }
 
   function updateFeatureFilter(filter: PaperFeatureFilter) {
@@ -229,16 +271,25 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   if (renderView) {
     return renderView({
       locale, papers: visiblePapers, metrics: portalMetrics, query, period, sort,
+      topic, from, to, question, view, returnTo, catalog: papers,
+      source: dataContext.source, collectedAt: dataContext.collectedAt, latestPublishedAt, hasDataIssue,
       filters: featureFilters, isLoading,
       emptyDescription: paperEmptyDescription({ query, hasFilters: featureFilters.length > 0, notices, hasDataIssue, locale }),
       notice: notices.length || hasDataIssue ? <ResearchStatusNotice notices={notices} context={dataContext} locale={locale} /> : null,
       pagination: <PaperPagination currentPage={page} totalCount={paperTotalCount} pageSize={PAPER_PAGE_SIZE} visibleCount={visiblePapers.length} locale={locale} onPageChange={updatePage} />,
-      drawer: <PaperDetailDrawer paper={selectedPaper} paperId={selectedPaperId} locale={locale} open={Boolean(selectedPaperId)} closeHref={closeDrawerHref()} onOpenChange={(open) => { if (!open) closeDrawer() }} />,
-      onSearch: (value) => updateQuery({ q: value.trim(), page: null, paper: null }),
+      drawer: <PaperDetailDrawer paper={selectedPaper} paperId={selectedPaperId} locale={locale} open={Boolean(selectedPaperId)} closeHref={closeDrawerHref()} returnTo={returnTo} onOpenChange={(open) => { if (!open) closeDrawer() }} />,
+      onSearch: (value) => updateQuery({ q: value.trim(), ...(!value.trim() && sort === "relevance" ? { sort: null } : {}), page: null, paper: null }),
+      onTopicChange: (value) => updateQuery({ topic: value, page: null, paper: null }),
+      onDateRangeChange: (start, end) => updateQuery({ from: start, to: end, period: null, page: null, paper: null }),
+      onQuestionClear: () => updateQuery({ question: null }),
+      onViewChange: (value) => {
+        updateQuery({ view: value === "discover" ? null : value, paper: null })
+        if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: "instant" })
+      },
       onPeriodChange: updatePeriod,
       onSortChange: updateSort,
       onFilterToggle: updateFeatureFilter,
-      onReset: () => updateQuery({ q: null, has: null, period: null, sort: null, page: null, paper: null }),
+      onReset: () => updateQuery({ q: null, has: null, topic: null, from: null, to: null, period: null, sort: null, page: null, paper: null }),
       onPreview: previewPaper
     })
   }
@@ -399,8 +450,8 @@ function parsePeriod(value: string | null): PaperPeriod {
   return value === "daily" || value === "weekly" || value === "monthly" || value === "all" ? value : "all"
 }
 
-function parseSort(value: string | null): PaperSort {
-  return value === "newest" || value === "most_cited" || value === "trending" ? value : "trending"
+function parseSort(value: string | null, hasQuery = false): PaperSort {
+  return value === "newest" || value === "most_cited" || value === "trending" || value === "relevance" ? value : hasQuery ? "relevance" : "trending"
 }
 
 function parsePage(value: string | null): number {
@@ -410,56 +461,13 @@ function parsePage(value: string | null): number {
 
 function fallbackPaperQuery(
   papers: Paper[],
-  {
-    query,
-    period,
-    sort,
-    has
-  }: {
-    query: string
-    period: PaperPeriod
-    sort: PaperSort
-    has: PaperFeatureFilter[]
-  }
+  { query, ...options }: PaperQuery & { query: string }
 ) {
-  const search = query.trim().toLowerCase()
-  const periodStart = paperPeriodStart(period)
-  const filtered = publicPapers(papers).filter((paper) => {
-    if (periodStart && new Date(paper.publishedAt).getTime() < periodStart.getTime()) {
-      return false
-    }
-    if (!search) {
-      return paperMatchesFeatureFilters(paper, has)
-    }
-
-    const haystack = [
-      paper.title,
-      paper.titleZh,
-      paper.abstractSnippet,
-      paper.abstractSnippetZh,
-      paper.authors.join(" "),
-      paper.tags.join(" "),
-      paper.taskRefs.map((task) => `${task.slug} ${task.name} ${task.nameZh ?? ""}`).join(" "),
-      paper.methodRefs.map((method) => `${method.slug} ${method.name} ${method.nameZh ?? ""}`).join(" ")
-    ].join(" ").toLowerCase()
-
-    return haystack.includes(search) && paperMatchesFeatureFilters(paper, has)
-  })
-  return sortPapers(filtered, sort)
+  return queryPapers(papers, { ...options, q: query }).papers
 }
 
 function publicPapers(papers: Paper[]) {
   return papers.filter((paper) => paper.isPublished !== false)
-}
-
-function paperPeriodStart(period: PaperPeriod) {
-  const days = period === "daily" ? 1 : period === "weekly" ? 7 : period === "monthly" ? 30 : 0
-  if (!days) {
-    return null
-  }
-  const start = new Date()
-  start.setDate(start.getDate() - days)
-  return start
 }
 
 function PaperFeatureFilterBar({

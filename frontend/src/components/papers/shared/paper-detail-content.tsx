@@ -18,6 +18,7 @@ import {
   taskName
 } from "@/lib/papers/format"
 import { papersRoutes } from "@/lib/papers/routes"
+import { paperReaderHref, rememberPaperScroll } from "@/lib/papers/discovery-navigation"
 import type { Locale, Paper, PaperAISummary, PaperBenchmarkResult, PaperSourceRef } from "@/lib/papers/types"
 import { cn } from "@/lib/utils"
 
@@ -28,11 +29,13 @@ export function PaperDetailContent({
   locale,
   detailError,
   titleLevel = 2,
+  returnTo,
 }: {
   paper: Paper
   locale: Locale
   detailError?: string | null
   titleLevel?: 1 | 2
+  returnTo?: string
 }) {
   const initialSummary = matchingSummary(paper, locale)
   const [summary, setSummary] = useState<PaperAISummary | null>(initialSummary)
@@ -174,7 +177,7 @@ export function PaperDetailContent({
             </Button>
           ) : null}
           <Button asChild className="rounded-md">
-            <Link href={papersRoutes.reader(paper.slug || paper.id)}>
+            <Link href={paperReaderHref(paper.slug || paper.id, returnTo)} onClick={() => { if (returnTo) rememberPaperScroll(returnTo) }}>
               <BookOpen className="size-4" />
               {translate(locale, "papers.reader.openReader")}
             </Link>
