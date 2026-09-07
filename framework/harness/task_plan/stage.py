@@ -35,7 +35,7 @@ from framework.harness.task_plan.store import (
     TaskResultRecord,
     _task_plan_event_identity_kwargs,
 )
-from framework.harness.task_plan.submission import CandidateSubmission
+from framework.harness.task_plan.submission import CandidateSubmission, validate_submission_event_append
 from framework.harness.task_plan.submission_result import submission_result_from_event
 from framework.harness.task_plan.validation import TaskPlanValidationContext, TaskPlanValidator
 from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
@@ -243,6 +243,13 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
     def run(self, request: TaskPlanStageRequest) -> HarnessWorkerResult:
         plan: ValidatedTaskPlan | None = None
         try:
+            if request.submission_identity is not None:
+                existing = self.store.plan(request.run_id, request.stage_id)
+                submission = self._existing_submission(request, existing)
+                if existing is None and submission is not None:
+                    recorded_result = self._recorded_submission_result(request, None)
+                    if recorded_result is not None:
+                        return recorded_result
             plan = self._ensure_plan(request)
             recorded_result = self._recorded_submission_result(request, plan)
             if recorded_result is not None:
@@ -315,6 +322,24 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             self._halt(request, "task_plan_stage_failure", result=result)
             self._publish_metrics(plan or self.store.plan(request.run_id, request.stage_id))
             return result
+
+    def recorded_submission_result(self, request: TaskPlanStageRequest) -> HarnessWorkerResult | None:
+        """Read a submission outcome without granting execution or recovery."""
+        identity = request.submission_identity
+        if identity is None:
+            raise HarnessValidationError("submission identity is required", code="task_plan_submission_identity_required")
+        submission = self.store.candidate_submission(identity)
+        if submission is None:
+            return None
+        if request.source_candidate_checksum is not None and request.source_candidate_checksum != submission.candidate_checksum:
+            raise HarnessValidationError("candidate checksum conflicts with submission", code="CANDIDATE_IDEMPOTENCY_CONFLICT")
+        plan = self.store.plan(request.run_id, request.stage_id)
+        if plan is not None:
+            _require_plan_stage_binding(plan, request)
+            self.patch_validator.require_policy_identity(plan, request.policy)
+            if plan.plan_id != submission.plan_id:
+                raise HarnessValidationError("submission does not own the accepted plan", code="task_plan_submission_binding_conflict")
+        return self._recorded_submission_result(request, plan)
 
     def _ensure_plan(self, request: TaskPlanStageRequest) -> ValidatedTaskPlan:
         if request.policy_ref is not None and request.policy_ref != request.policy.exact_ref:
@@ -460,12 +485,16 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         }
 
     def _recorded_submission_result(
-        self, request: TaskPlanStageRequest, plan: ValidatedTaskPlan
+        self, request: TaskPlanStageRequest, plan: ValidatedTaskPlan | None
     ) -> HarnessWorkerResult | None:
         if request.submission_identity is None:
             return None
-        for event in reversed(self.store.read_events(request.run_id, request.stage_id)):
-            if event.plan_id != plan.plan_id or event.plan_version != plan.version:
+        history = self.store.read_events(request.run_id, request.stage_id)
+        for event in reversed(history):
+            if (event.plan_id, event.plan_version) != (
+                plan.plan_id if plan is not None else None,
+                plan.version if plan is not None else None,
+            ):
                 continue
             if event.event_type not in {"TASK_PLAN_VERIFIED", "TASK_PLAN_HALTED"}:
                 continue
@@ -476,7 +505,9 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     code="task_plan_submission_result_invalid",
                 )
             try:
-                self._replay_history(request, plan)
+                validate_submission_event_append((), history)
+                if plan is not None:
+                    self._replay_history(request, plan)
                 return submission_result_from_event(event)
             except HarnessValidationError as exc:
                 raise HarnessValidationError(

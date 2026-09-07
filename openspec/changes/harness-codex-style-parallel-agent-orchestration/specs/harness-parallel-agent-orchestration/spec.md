@@ -224,6 +224,40 @@ Harness MUST persist `candidate_dedup_key = run_id + stage_id + parent_turn_id +
 - **THEN** admission MUST return `CANDIDATE_IDEMPOTENCY_CONFLICT`
 - **AND** the original plan, group and observation MUST remain unchanged
 
+#### Scenario: Resubmission encounters a changed task profile
+
+- **WHEN** the same source candidate is resubmitted with its original dedup identity
+- **THEN** Harness MUST reuse the immutable recorded candidate instead of materializing a new candidate from current profiles
+- **AND** terminal success, failure or pre-plan rejection MUST return its recorded outcome without invoking a worker or rerunning candidate validation
+
+#### Scenario: Group admission does not bind the original parent action
+
+- **WHEN** a first group admission presents a different correlation from its accepted plan's candidate dedup identity
+- **THEN** the canonical store and offline replay MUST reject the admission with `task_plan_submission_binding_conflict`
+- **AND** rejection MUST occur before any authoritative event or projection change
+
+#### Scenario: A caller attempts to rewrite a terminal submission
+
+- **WHEN** a caller appends another terminal outcome for a submission at a new event sequence
+- **THEN** the store and offline replay MUST reject it with `task_plan_submission_result_invalid`
+- **AND** exact redelivery at the original committed sequence MUST remain an idempotent no-op
+- **AND** a pre-plan rejection MUST NOT be converted into accepted execution by reusing the closed submission
+
+#### Scenario: Resubmission arrives while original workers are running
+
+- **WHEN** another runtime receives an equal candidate and dedup identity while the original submission is active
+- **THEN** the redelivery MUST NOT grant execution or online recovery authority
+- **AND** it MUST NOT append recovery, halt or new attempt facts or alter the original group
+- **AND** until bounded parent continuation is available, the runtime MUST fail closed with `task_plan_submission_resume_required`, not fabricate a terminal group result
+- **AND** explicit online recovery MUST remain a separate Harness-controlled ingress
+
+#### Scenario: Two runtimes both observe an absent submission
+
+- **WHEN** concurrent first submissions race through candidate materialization and canonical admission
+- **THEN** the store MUST identify exactly one first-admission writer and only that writer may start execution
+- **AND** equal submissions MUST reuse one durable record even when their writer identities differ
+- **AND** an independent competing stage action MUST be rejected at the canonical CAS without taking over the first submission
+
 ### Requirement: Reference authority SHALL be uniform and fail closed
 
 Harness MUST apply one `RefAuthority` boundary to input refs, result refs, planning observation refs and memory namespaces. Validation MUST cover run, stage, tenant/owner, access mode, artifact type, source checksum and pinned allowlist. Cross-scope sharing MUST be explicitly policy-approved and read-only; candidates cannot authorize sharing and children cannot access sibling private refs.

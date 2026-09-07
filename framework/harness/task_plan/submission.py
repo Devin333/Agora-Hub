@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 CANDIDATE_DEDUP_IDENTITY_SCHEMA = "newsroom.harness-candidate-dedup-identity/v1"
-CANDIDATE_SUBMISSION_SCHEMA = "newsroom.harness-candidate-submission/v1"
+CANDIDATE_SUBMISSION_SCHEMA = "newsroom.harness-candidate-submission/v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,12 +97,17 @@ class CandidateDedupIdentity:
 
 @dataclass(frozen=True, slots=True)
 class CandidateSubmission:
-    """Durable mapping from a parent action to one immutable PlanCandidate."""
+    """Durable parent action mapping, including its first writer's admission id.
+
+    The writer nonce distinguishes created admission from a publish redelivery;
+    it never participates in logical submission, plan or group identity.
+    """
 
     identity: CandidateDedupIdentity
     candidate_checksum: str
     candidate_ref: str
     accepted_at: str
+    admission_id: str
     schema_version: str = CANDIDATE_SUBMISSION_SCHEMA
     submission_id: str = field(init=False)
     plan_id: str = field(init=False)
@@ -117,6 +122,7 @@ class CandidateSubmission:
             checksum(self.candidate_checksum, "candidate_checksum"),
         )
         object.__setattr__(self, "candidate_ref", checksum(self.candidate_ref, "candidate_ref"))
+        object.__setattr__(self, "admission_id", identifier(self.admission_id, "admission_id"))
         accepted_at = required_text(self.accepted_at, "accepted_at")
         parsed = parse_datetime(accepted_at)
         if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
@@ -152,6 +158,7 @@ class CandidateSubmission:
             "candidate_checksum": self.candidate_checksum,
             "candidate_ref": self.candidate_ref,
             "accepted_at": self.accepted_at,
+            "admission_id": self.admission_id,
             "submission_id": self.submission_id,
             "plan_id": self.plan_id,
         }
@@ -170,6 +177,7 @@ class CandidateSubmission:
                     "candidate_checksum",
                     "candidate_ref",
                     "accepted_at",
+                    "admission_id",
                     "submission_id",
                     "plan_id",
                     "record_checksum",
@@ -193,6 +201,30 @@ class CandidateSubmission:
                 code="candidate_submission_checksum_mismatch",
             )
         return submission
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSubmissionAdmission:
+    submission: CandidateSubmission
+    created: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.submission, CandidateSubmission) or not isinstance(self.created, bool):
+            raise TypeError("candidate admission requires a submission and boolean created flag")
+
+
+def require_submission_stage_available(
+    history: Sequence["TaskPlanEvent"], identity: CandidateDedupIdentity,
+) -> None:
+    submissions = submissions_from_events(history)
+    if (
+        any(item.identity != identity for item in submissions)
+        or (not submissions and any(event.event_type == "PLAN_ACCEPTED" for event in history))
+    ):
+        raise HarnessValidationError(
+            "stage execution scope is already bound to another submission",
+            code="task_plan_submission_scope_unavailable",
+        )
 
 
 def submissions_from_events(events: Sequence["TaskPlanEvent"]) -> tuple[CandidateSubmission, ...]:
@@ -234,10 +266,76 @@ def submissions_from_events(events: Sequence["TaskPlanEvent"]) -> tuple[Candidat
     return tuple(sorted(records.values(), key=lambda item: item.submission_id))
 
 
+def validate_submission_event_append(
+    history: Sequence["TaskPlanEvent"], events: Sequence["TaskPlanEvent"],
+) -> None:
+    """Enforce submission ownership and immutable outcomes at the store CAS."""
+    relevant_types = {
+        "PLAN_CANDIDATE_BUILT", "PLAN_ACCEPTED", "TASK_GROUP_ADMITTED",
+        "TASK_PLAN_VERIFIED", "TASK_PLAN_HALTED",
+    }
+    if not any(event.event_type in relevant_types for event in events):
+        return
+    from framework.harness.task_plan.submission_result import submission_result_from_event
+
+    ordered = (*history, *events)
+    submissions_from_events(ordered)
+    submissions: dict[str, CandidateSubmission] = {}
+    accepted_plans: set[tuple[str, int]] = set()
+    terminal_keys: set[str] = set()
+    for event in ordered:
+        payload = event.payload
+        if event.event_type == "PLAN_CANDIDATE_BUILT" and "submission" in payload:
+            submission = CandidateSubmission.from_dict(payload["submission"])
+            submissions[submission.identity.dedup_key] = submission
+        elif event.event_type in {"PLAN_ACCEPTED", "TASK_GROUP_ADMITTED"} and submissions:
+            matches = tuple(item for item in submissions.values() if item.plan_id == event.plan_id)
+            if len(matches) != 1 or matches[0].identity.dedup_key in terminal_keys:
+                raise HarnessValidationError(
+                    "execution scope does not belong to an open candidate submission",
+                    code="task_plan_submission_binding_conflict",
+                )
+            if event.event_type == "TASK_GROUP_ADMITTED":
+                group = payload.get("group", {})
+                if not isinstance(group, Mapping) or group.get("correlation_id") != matches[0].identity.dedup_key:
+                    raise HarnessValidationError(
+                        "dispatch group does not bind its candidate dedup identity",
+                        code="task_plan_submission_binding_conflict",
+                    )
+            else:
+                accepted_plans.add((event.plan_id, event.plan_version))
+        elif event.event_type in {"TASK_PLAN_VERIFIED", "TASK_PLAN_HALTED"}:
+            if not submissions and not any(key in payload for key in (
+                "submission_key", "terminal_result", "terminal_result_checksum",
+            )):
+                continue
+            key = payload.get("submission_key")
+            submission = submissions.get(key) if isinstance(key, str) else None
+            if (
+                submission is None or key in terminal_keys
+                or (event.plan_id is not None and event.plan_id != submission.plan_id)
+                or (event.plan_id is not None
+                    and (event.plan_id, event.plan_version) not in accepted_plans)
+                or (event.plan_id is None and (
+                    event.event_type != "TASK_PLAN_HALTED"
+                    or any(plan_id == submission.plan_id for plan_id, _ in accepted_plans)
+                ))
+            ):
+                raise HarnessValidationError(
+                    "candidate submission outcome is missing, conflicting or already terminal",
+                    code="task_plan_submission_result_invalid",
+                )
+            submission_result_from_event(event)
+            terminal_keys.add(key)
+
+
 __all__ = [
     "CANDIDATE_DEDUP_IDENTITY_SCHEMA",
     "CANDIDATE_SUBMISSION_SCHEMA",
     "CandidateDedupIdentity",
     "CandidateSubmission",
+    "CandidateSubmissionAdmission",
     "submissions_from_events",
+    "validate_submission_event_append",
+    "require_submission_stage_available",
 ]

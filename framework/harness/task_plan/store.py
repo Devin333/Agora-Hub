@@ -39,6 +39,9 @@ from framework.harness.task_plan.identity import TaskPlanStageIdentity
 from framework.harness.task_plan.submission import (
     CandidateDedupIdentity,
     CandidateSubmission,
+    CandidateSubmissionAdmission,
+    require_submission_stage_available,
+    validate_submission_event_append,
 )
 from framework.harness.task_plan.schema import (
     GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA,
@@ -728,6 +731,11 @@ class TaskPlanStorePort(Protocol):
         accepted_at: str,
         candidate_checksum: str | None = None,
     ) -> CandidateSubmission: ...
+    def submit_candidate(
+        self, candidate: PlanCandidate, identity: CandidateDedupIdentity, *,
+        accepted_at: str, candidate_checksum: str | None = None,
+        exclusive_stage: bool = False,
+    ) -> CandidateSubmissionAdmission: ...
     def candidate_submission(self, identity: CandidateDedupIdentity) -> CandidateSubmission | None: ...
     def submissions_for(self, run_id: str, stage_id: str) -> tuple[CandidateSubmission, ...]: ...
     def candidate_for(self, run_id: str, stage_id: str, candidate_ref: str) -> PlanCandidate | None: ...
@@ -805,6 +813,19 @@ class InMemoryTaskPlanStore:
         accepted_at: str,
         candidate_checksum: str | None = None,
     ) -> CandidateSubmission:
+        return self.submit_candidate(
+            candidate, identity, accepted_at=accepted_at, candidate_checksum=candidate_checksum,
+        ).submission
+
+    def submit_candidate(
+        self, candidate: PlanCandidate, identity: CandidateDedupIdentity, *,
+        accepted_at: str, candidate_checksum: str | None = None,
+        exclusive_stage: bool = False,
+    ) -> CandidateSubmissionAdmission:
+        from uuid import uuid4
+
+        if not isinstance(exclusive_stage, bool):
+            raise TypeError("exclusive_stage must be boolean")
         if not isinstance(candidate, PlanCandidate):
             raise TypeError("candidate must be PlanCandidate")
         if not isinstance(identity, CandidateDedupIdentity):
@@ -821,12 +842,15 @@ class InMemoryTaskPlanStore:
             candidate_checksum=action_checksum,
             candidate_ref=candidate.candidate_checksum,
             accepted_at=accepted_at,
+            admission_id=uuid4().hex,
         )
         with self._lock:
+            if exclusive_stage:
+                require_submission_stage_available(self._events.get((identity.run_id, identity.stage_id), ()), identity)
             existing = self._submissions.get(identity.dedup_key)
             if existing is not None:
                 _require_same_submission(existing, submission)
-                return existing
+                return CandidateSubmissionAdmission(existing, created=False)
             existing_candidate = self._candidates.get(candidate.candidate_checksum)
             if existing_candidate is not None and existing_candidate != candidate:
                 raise HarnessValidationError(
@@ -845,7 +869,7 @@ class InMemoryTaskPlanStore:
             self._candidates.setdefault(candidate.candidate_checksum, candidate)
             self._submissions[identity.dedup_key] = submission
             self._append_event(event)
-            return submission
+            return CandidateSubmissionAdmission(submission, created=True)
 
     def candidate_submission(
         self,
@@ -945,6 +969,13 @@ class InMemoryTaskPlanStore:
                     and submission.identity.stage_id == plan.stage_id
                 ),
             )
+            existing = self._plans.get(key)
+            if existing is not None:
+                if existing.plan_id != plan.plan_id:
+                    raise HarnessValidationError("TaskPlan version is already owned by another plan", code="task_plan_version_conflict")
+                if existing.plan_checksum != plan.plan_checksum:
+                    raise HarnessValidationError("plan version checksum conflict", code="task_plan_checksum_conflict")
+                return existing.plan_checksum
             current = self._current_plan(plan.run_id, plan.stage_id)
             if current is not None:
                 if plan.version != current.version + 1 or plan.parent_plan_id != current.plan_id:
@@ -957,11 +988,6 @@ class InMemoryTaskPlanStore:
                 and not any(plan.source_candidate_ref == item.candidate_checksum for item in self._candidates.values())
             ):
                 raise HarnessValidationError("accepted plan candidate ref is missing", code="task_plan_candidate_missing")
-            existing = self._plans.get(key)
-            if existing is not None:
-                if existing.plan_checksum != plan.plan_checksum:
-                    raise HarnessValidationError("plan version checksum conflict", code="task_plan_checksum_conflict")
-                return existing.plan_checksum
             sequence = self._next_sequence(plan.run_id, plan.stage_id)
             previous_projection = self._projections.get((plan.run_id, plan.stage_id))
             projection = _projection_for_plan(
@@ -970,6 +996,7 @@ class InMemoryTaskPlanStore:
                 previous=previous_projection,
             )
             event = _plan_event(plan, "PLAN_ACCEPTED", sequence)
+            validate_submission_event_append(self._events.get((plan.run_id, plan.stage_id), ()), (event,))
             self._plans[key] = plan
             self._projections[(plan.run_id, plan.stage_id)] = projection
             self._append_event(event)
@@ -1382,6 +1409,7 @@ class InMemoryTaskPlanStore:
                 _require_event_matches_plan(event, plan)
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
+            validate_submission_event_append(self._events.get((event.run_id, event.stage_id), ()), (event,))
             validate_parallel_admission_append(self._events.get((event.run_id, event.stage_id), ()), (event,))
             self._append_event(event)
             key = (event.run_id, event.stage_id)
@@ -1415,6 +1443,7 @@ class InMemoryTaskPlanStore:
             # causal projection is changed.
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
+            validate_submission_event_append(history, batch)
             validate_parallel_admission_append(history, batch)
             self._events.setdefault(key, []).extend(batch)
             projection = self._projections.get(key)
@@ -1490,6 +1519,7 @@ class InMemoryTaskPlanStore:
 
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
+            validate_submission_event_append(history, batch)
             validate_parallel_admission_append(history, batch)
             prior_events = (
                 None

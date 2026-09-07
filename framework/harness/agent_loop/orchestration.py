@@ -168,10 +168,17 @@ class HarnessAgentOrchestrationRuntime:
         )
 
     def dispatch(self, request: AgentOrchestrationRequest) -> AgentOrchestrationResult:
+        return self._dispatch_checked(request, recover=False)
+
+    def recover_submission(self, request: AgentOrchestrationRequest) -> AgentOrchestrationResult:
+        """Harness-only recovery ingress; never exposed by the Agent dispatch port."""
+        return self._dispatch_checked(request, recover=True)
+
+    def _dispatch_checked(self, request: AgentOrchestrationRequest, *, recover: bool) -> AgentOrchestrationResult:
         if not isinstance(request, AgentOrchestrationRequest):
             raise TypeError("request must be AgentOrchestrationRequest")
         try:
-            return self._dispatch(request)
+            return self._dispatch(request, recover=recover)
         except HarnessValidationError as exc:
             return _rejected_orchestration_result(request, exc.code or "agent_orchestration_rejected")
         except (TypeError, ValueError) as exc:
@@ -179,7 +186,7 @@ class HarnessAgentOrchestrationRuntime:
         except Exception:
             return _rejected_orchestration_result(request, "agent_orchestration_runtime_failed")
 
-    def _dispatch(self, request: AgentOrchestrationRequest) -> AgentOrchestrationResult:
+    def _dispatch(self, request: AgentOrchestrationRequest, *, recover: bool = False) -> AgentOrchestrationResult:
         if request.run_id is None or request.execution_identity is None:
             raise HarnessValidationError(
                 "production AgentLoop orchestration requires Graph execution identity",
@@ -205,28 +212,42 @@ class HarnessAgentOrchestrationRuntime:
                 "candidate checksum conflicts with the original submission",
                 code="CANDIDATE_IDEMPOTENCY_CONFLICT",
             )
-        candidate = self._materialize_candidate(request, policy)
+        if recover and original is None:
+            raise HarnessValidationError("recovery requires an existing submission", code="task_plan_submission_missing")
+        candidate = None if original is not None else self._materialize_candidate(request, policy)
+        created = False
+        if original is None:
+            admitted = self._store.submit_candidate(
+                candidate, submission_identity,
+                accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
+                candidate_checksum=source_checksum, exclusive_stage=True,
+            )
+            original, created = admitted.submission, admitted.created
         stage_identity = self._task_plan_execution_identity(parent_identity, request.candidate)
         context_refs = _context_refs_for_candidate(request.candidate)
-        run_result = self._stage_runner.run(
-            TaskPlanStageRequest(
-                run_id=request.run_id,
-                stage_binding=self._stage_binding,
-                context_refs=context_refs,
-                policy=policy,
-                policy_ref=policy.exact_ref,
-                accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
-                candidate=candidate,
-                submission_identity=submission_identity,
-                source_candidate_checksum=source_checksum,
-                execution_identity=stage_identity,
-                metadata={
-                    "parent_agent_id": request.parent_agent_id,
-                    "delegate_batch_correlation_id": request.candidate.correlation_id,
-                    "parent_graph_checkpoint_ref": request.graph_checkpoint_ref,
-                },
-            )
+        stage_request = TaskPlanStageRequest(
+            run_id=request.run_id,
+            stage_binding=self._stage_binding,
+            context_refs=context_refs,
+            policy=policy,
+            policy_ref=policy.exact_ref,
+            accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
+            candidate=candidate,
+            submission_identity=submission_identity,
+            source_candidate_checksum=source_checksum,
+            execution_identity=stage_identity,
+            metadata={
+                "parent_agent_id": request.parent_agent_id,
+                "delegate_batch_correlation_id": request.candidate.correlation_id,
+                "parent_graph_checkpoint_ref": request.graph_checkpoint_ref,
+            },
         )
+        if not created and not recover:
+            run_result = self._stage_runner.recorded_submission_result(stage_request)
+            if run_result is None:
+                return _rejected_orchestration_result(request, "task_plan_submission_resume_required")
+        else:
+            run_result = self._stage_runner.run(stage_request)
         if _reason_from_worker_result(run_result, "") in {
             "CANDIDATE_IDEMPOTENCY_CONFLICT",
             "task_plan_submission_binding_conflict",

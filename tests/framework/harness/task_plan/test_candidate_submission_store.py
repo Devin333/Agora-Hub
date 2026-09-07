@@ -13,6 +13,7 @@ from framework.harness.task_plan.submission import (
     CandidateSubmission,
     submissions_from_events,
 )
+from framework.harness.workers.result import HarnessWorkerResult
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
     _ArtifactStore,
     _EventStore,
@@ -83,6 +84,21 @@ def _identity(*, parent_turn_id: str = "turn-1") -> CandidateDedupIdentity:
 def _candidate(*, candidate_id: str = "candidate-1"):
     candidate, _plan = _graph_only_candidate_and_plan(run_id="submission-run")
     return replace(candidate, candidate_id=candidate_id)
+
+
+@pytest.mark.parametrize("field", ("run_id", "stage_id", "parent_turn_id", "action_correlation_id"))
+def test_dedup_identity_binds_every_scope_dimension(field):
+    original = _identity()
+    changed = replace(original, **{field: getattr(original, field) + "-other"})
+    assert changed.dedup_key != original.dedup_key
+    assert CandidateDedupIdentity.from_dict(original.to_dict()) == original
+    assert CandidateDedupIdentity.from_dict(changed.to_dict()) == changed
+
+
+def test_dedup_identity_cannot_alias_ambiguous_concatenation():
+    first = replace(_identity(), parent_turn_id="turn-a", action_correlation_id="b")
+    second = replace(_identity(), parent_turn_id="turn", action_correlation_id="a-b")
+    assert first.dedup_key != second.dedup_key
 
 
 def test_in_memory_submission_reuses_original_time_and_rejects_different_payload():
@@ -312,17 +328,55 @@ def test_initial_plan_must_bind_the_exact_submission_not_first_matching_candidat
     assert version_conflict.value.code == "task_plan_version_conflict"
 
 
+@pytest.mark.parametrize("durable", (False, True))
+def test_pre_plan_rejection_cannot_be_converted_to_accepted_execution(durable):
+    candidate, plan = _graph_only_candidate_and_plan(run_id="submission-run")
+    store = _store(_EventStore(), _ArtifactStore()) if durable else InMemoryTaskPlanStore()
+    submission = store.admit_candidate_submission(candidate, _identity(), accepted_at=ACCEPTED_AT)
+    rejected = HarnessWorkerResult(status="blocked", error="candidate_rejected",
+        diagnostics={"reason_code": "candidate_rejected"})
+    built = store.read_events(candidate.run_id, candidate.stage_id)[0]
+    halt = replace(built, event_type="TASK_PLAN_HALTED", sequence=2, input_checksum=None,
+        reason_code="candidate_rejected", payload={
+            "submission_key": submission.identity.dedup_key,
+            "terminal_result": rejected.to_dict(),
+            "terminal_result_checksum": rejected.candidate_result_ref,
+        })
+    store.append_event(halt)
+    before = store.read_events(candidate.run_id, candidate.stage_id)
+    bound = replace(plan, plan_id=submission.plan_id, accepted_at=submission.accepted_at)
+    with pytest.raises(HarnessValidationError) as refused:
+        store.accept_plan(bound)
+    assert refused.value.code == "task_plan_submission_binding_conflict"
+    assert store.plan(candidate.run_id, candidate.stage_id) is None
+    assert store.read_events(candidate.run_id, candidate.stage_id) == before
+    assert store.candidate_submission(_identity()) == submission
+
+
+@pytest.mark.parametrize("durable", (False, True))
+def test_submission_success_requires_causal_plan_acceptance(durable):
+    candidate = _candidate()
+    store = _store(_EventStore(), _ArtifactStore()) if durable else InMemoryTaskPlanStore()
+    submission = store.admit_candidate_submission(candidate, _identity(), accepted_at=ACCEPTED_AT)
+    result = HarnessWorkerResult(status="succeeded", output={"aggregate_checksum": "sha256:" + "0" * 64})
+    before = store.read_events(candidate.run_id, candidate.stage_id)
+    event = replace(before[0], event_type="TASK_PLAN_VERIFIED", sequence=2,
+        input_checksum=result.output["aggregate_checksum"], payload={
+            "submission_key": submission.identity.dedup_key,
+            "terminal_result": result.to_dict(),
+            "terminal_result_checksum": result.candidate_result_ref,
+        })
+    with pytest.raises(HarnessValidationError) as refused:
+        store.append_event(event)
+    assert refused.value.code == "task_plan_submission_result_invalid"
+    assert store.read_events(candidate.run_id, candidate.stage_id) == before
+
+
 def test_submission_event_parser_rejects_tampered_record_and_duplicate_key():
     candidate = _candidate()
     identity = _identity()
-    submission = CandidateSubmission(
-        identity=identity,
-        candidate_checksum=candidate.candidate_checksum,
-        candidate_ref=candidate.candidate_checksum,
-        accepted_at=ACCEPTED_AT,
-    )
     store = InMemoryTaskPlanStore()
-    store.admit_candidate_submission(candidate, identity, accepted_at=ACCEPTED_AT)
+    submission = store.admit_candidate_submission(candidate, identity, accepted_at=ACCEPTED_AT)
     event = store.read_events("submission-run", "dynamic_analysis_stage")[0]
 
     duplicate = replace(event, sequence=2)
@@ -353,6 +407,7 @@ def test_submission_contract_rejects_missing_strict_fields(factory, raw_factory,
         candidate_checksum=candidate.candidate_checksum,
         candidate_ref=candidate.candidate_checksum,
         accepted_at=ACCEPTED_AT,
+        admission_id="writer-1",
     )
     raw = raw_factory(identity if raw_factory is CandidateDedupIdentity.to_dict else submission)
     raw.pop(removed_key)
@@ -360,3 +415,66 @@ def test_submission_contract_rejects_missing_strict_fields(factory, raw_factory,
     with pytest.raises(HarnessValidationError) as invalid:
         factory(raw)
     assert invalid.value.code == "invalid_task_plan_payload_fields"
+
+
+@pytest.mark.parametrize("exclusive", (False, True))
+def test_concurrent_admission_has_exactly_one_execution_owner(exclusive):
+    artifacts, events = _ArtifactStore(), _ConcurrentEventStore()
+    barrier = Barrier(2)
+
+    def submit():
+        store = _store(events, artifacts)
+        barrier.wait()
+        return store.submit_candidate(_candidate(), _identity(), accepted_at=ACCEPTED_AT,
+                                      exclusive_stage=exclusive)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = tuple(pool.map(lambda _: submit(), range(2)))
+    assert sum(item.created for item in outcomes) == 1
+    assert outcomes[0].submission == outcomes[1].submission
+    assert len(_store(events, artifacts).read_events("submission-run", "dynamic_analysis_stage")) == 1
+
+
+def test_exclusive_stage_admission_rechecks_scope_after_artifact_interleaving():
+    artifacts, events = _DelayedCandidateArtifactStore(), _ConcurrentEventStore()
+    errors = []
+
+    def losing_submit():
+        try:
+            _store(events, artifacts).submit_candidate(
+                _candidate(candidate_id="candidate-2"), _identity(parent_turn_id="other-turn"),
+                accepted_at=ACCEPTED_AT, exclusive_stage=True,
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = Thread(target=losing_submit)
+    thread.start()
+    try:
+        assert artifacts.loser_candidate_written.wait(5)
+        winner = _store(events, artifacts).submit_candidate(
+            _candidate(), _identity(), accepted_at=ACCEPTED_AT, exclusive_stage=True,
+        )
+        assert winner.created
+    finally:
+        artifacts.release_loser.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert len(errors) == 1 and isinstance(errors[0], HarnessValidationError)
+    assert errors[0].code == "task_plan_submission_scope_unavailable"
+    assert _store(events, artifacts).submissions_for("submission-run", "dynamic_analysis_stage") == (winner.submission,)
+
+
+def test_submission_schema_pins_writer_nonce_without_changing_logical_identity():
+    candidate = _candidate()
+    first = CandidateSubmission(identity=_identity(), candidate_checksum=candidate.candidate_checksum,
+        candidate_ref=candidate.candidate_checksum, accepted_at=ACCEPTED_AT, admission_id="writer-1")
+    other = replace(first, admission_id="writer-2")
+    assert first.record_checksum != other.record_checksum
+    assert first.submission_id == other.submission_id and first.plan_id == other.plan_id
+    assert CandidateSubmission.from_dict(first.to_dict()) == first
+    old = first.to_dict()
+    old["schema_version"] = "newsroom.harness-candidate-submission/v1"
+    with pytest.raises(HarnessValidationError) as unsupported:
+        CandidateSubmission.from_dict(old)
+    assert unsupported.value.code == "candidate_submission_schema_invalid"

@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event, Thread
+from time import monotonic, sleep
 
 import pytest
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.canonical import canonical_payload_checksum, thaw_mapping
 from framework.harness.task_plan.ports import TaskPlanStageRequest
+from framework.harness.task_plan.parallel import DispatchGroup
 from framework.harness.task_plan.replay import TaskPlanReplayReducer
-from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskResultRecord
+from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskPlanEvent, TaskResultRecord
 from framework.harness.task_plan.submission import CandidateDedupIdentity
 from framework.harness.workers.result import HarnessWorkerResult
 from tests.framework.harness.agent_loop.test_orchestration_runtime import _runtime, _request
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
-    _ArtifactStore, _EventStore, _store,
+    _ArtifactStore, _store,
 )
+from tests.framework.harness.task_plan.test_candidate_submission_store import _ConcurrentEventStore
 
 
 @pytest.fixture(params=["memory", "durable"])
@@ -22,7 +27,7 @@ def store_factory(request):
     if request.param == "memory":
         store = InMemoryTaskPlanStore()
         return lambda: store
-    events, artifacts = _EventStore(), _ArtifactStore()
+    events, artifacts = _ConcurrentEventStore(), _ArtifactStore()
     return lambda: _store(events, artifacts)
 
 
@@ -61,6 +66,184 @@ def test_terminal_resubmission_reopens_without_new_events_or_worker_calls(store_
     assert recovered_store.read_events(request.run_id, "delegate_stage") == before
     assert recovered_store.plan(request.run_id, "delegate_stage") == plan
     assert recovered._stage_runner.parallel_coordinator._sessions == {}
+
+
+def test_terminal_resubmission_uses_persisted_candidate_not_current_profiles(store_factory):
+    calls = []
+    store = store_factory()
+    runtime, identity = _runtime(store=store, worker_executor=_counting_worker(calls))
+    request = _request(identity)
+    first = runtime.dispatch(request)
+    assert first.status == "succeeded"
+    before = store.read_events(request.run_id, "delegate_stage")
+    reopened, _ = _runtime(store=store_factory(), worker_executor=_counting_worker(calls))
+
+    def unexpected_materialization(*_args):
+        pytest.fail("resubmission must not materialize a new candidate")
+
+    reopened._materialize_candidate = unexpected_materialization
+    assert reopened.dispatch(request).to_dict() == first.to_dict()
+    assert len(calls) == 2
+    assert store.read_events(request.run_id, "delegate_stage") == before
+
+
+def test_active_resubmission_cannot_recover_or_halt_original_execution(store_factory):
+    release = Event()
+    calls, original_results = [], []
+
+    def worker(_binding, task, _identity):
+        calls.append(task)
+        assert release.wait(15)
+        return HarnessWorkerResult(status="succeeded", output={"summary": "done"})
+
+    store = store_factory()
+    runtime, identity = _runtime(store=store, worker_executor=worker)
+    request = _request(identity)
+    thread = Thread(target=lambda: original_results.append(runtime.dispatch(request)))
+    thread.start()
+    try:
+        deadline = monotonic() + 10
+        while monotonic() < deadline:
+            before = store.read_events(identity.run_id, "delegate_stage")
+            if len(calls) == 2 and any(event.event_type == "TASK_WAVE_DISPATCHED" for event in before):
+                break
+            sleep(0.005)
+        else:
+            pytest.fail("original dispatch never reached its active wave")
+        restarted, _ = _runtime(store=store_factory(), worker_executor=worker)
+        repeated = restarted.dispatch(request)
+        assert repeated.reason_code == "task_plan_submission_resume_required"
+        assert repeated.status == "rejected"
+        assert store.read_events(identity.run_id, "delegate_stage") == before
+        assert restarted._stage_runner.parallel_coordinator._sessions == {}
+        assert len(calls) == 2
+    finally:
+        release.set()
+        thread.join(15)
+    assert not thread.is_alive()
+    assert original_results[0].status == "succeeded"
+    final_events = store.read_events(identity.run_id, "delegate_stage")
+    assert not any(event.event_type.startswith("RECOVERY_") for event in final_events)
+    replayed = restarted.dispatch(request)
+    assert replayed.to_dict() == original_results[0].to_dict()
+    assert store.read_events(identity.run_id, "delegate_stage") == final_events
+    assert len(calls) == 2
+
+
+def test_racing_first_submissions_start_only_one_execution(store_factory):
+    calls = []
+    barrier = Barrier(2)
+    runtimes = [_runtime(store=store_factory(), worker_executor=_counting_worker(calls)) for _ in range(2)]
+    for runtime, _ in runtimes:
+        materialize = runtime._materialize_candidate
+
+        def synchronize(request, policy, original=materialize):
+            candidate = original(request, policy)
+            barrier.wait(timeout=10)
+            return candidate
+
+        runtime._materialize_candidate = synchronize
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = tuple(pool.map(lambda pair: pair[0].dispatch(_request(pair[1])), runtimes))
+    assert any(result.status == "succeeded" for result in outcomes)
+    assert all(result.status == "succeeded" or result.reason_code == "task_plan_submission_resume_required" for result in outcomes)
+    assert len(calls) == 2
+    events = store_factory().read_events(runtimes[0][1].run_id, "delegate_stage")
+    for kind in ("PLAN_CANDIDATE_BUILT", "PLAN_ACCEPTED", "TASK_GROUP_ADMITTED", "TASK_PLAN_VERIFIED"):
+        assert sum(event.event_type == kind for event in events) == 1
+    assert not any(event.event_type.startswith("RECOVERY_") for event in events)
+
+
+def test_first_group_must_bind_its_original_submission_before_commit_or_replay(store_factory, monkeypatch):
+    store = store_factory()
+    runtime, identity = _runtime(store=store)
+    parent = _request(identity)
+    policy = runtime._policy_registry.resolve(parent.policy_ref, stage_id="delegate_stage")
+    request = TaskPlanStageRequest(
+        run_id=identity.run_id, stage_binding=runtime._stage_binding,
+        context_refs={"document": "document"}, policy=policy,
+        accepted_at="2026-09-07T00:00:00Z",
+        candidate=runtime._materialize_candidate(parent, policy),
+        submission_identity=_submission_identity(parent),
+        source_candidate_checksum=canonical_payload_checksum(parent.candidate.to_dict()),
+        execution_identity=runtime._task_plan_execution_identity(identity, parent.candidate),
+    )
+    plan = runtime._stage_runner._ensure_plan(request)
+    group = runtime._stage_runner.parallel_coordinator.create_group(
+        runtime._stage_runner._parallel_request(request, plan, task_instances=()),
+    )
+    assert group.correlation_id == request.submission_identity.dedup_key
+    assert DispatchGroup.from_dict(group.to_dict()).group_id == group.group_id
+    altered = replace(group, correlation_id="another-submission")
+    current = store.load_projection(identity.run_id, "delegate_stage")
+    before = store.read_events(identity.run_id, "delegate_stage")
+    event = TaskPlanEvent.for_plan("TASK_GROUP_ADMITTED", plan,
+        sequence=current.last_sequence + 1, payload={
+            "event_type": "TASK_GROUP_ADMITTED",
+            "parallel_event_idempotency_key": "TASK_GROUP_ADMITTED:" + altered.group_id,
+            "idempotency_key": altered.group_id,
+            "group": altered.to_dict(), "requested_parallelism": 2,
+            "effective_parallelism": 2,
+        })
+    reopened = store_factory()
+    if hasattr(reopened, "_put_projection"):
+        monkeypatch.setattr(reopened, "_put_projection", lambda *_: pytest.fail("rejected group must not write artifacts"))
+    with pytest.raises(HarnessValidationError) as rejected:
+        reopened.commit_event(event, replace(current, last_sequence=event.sequence))
+    assert rejected.value.code == "task_plan_submission_binding_conflict"
+    assert reopened.read_events(identity.run_id, "delegate_stage") == before
+    assert reopened.load_projection(identity.run_id, "delegate_stage") == current
+    with pytest.raises(HarnessValidationError) as replayed:
+        TaskPlanReplayReducer().replay((plan,), (*before, event), require_terminal_events=False)
+    assert replayed.value.code == "task_plan_submission_binding_conflict"
+    monkeypatch.undo()
+    valid = replace(event, payload={
+        **thaw_mapping(event.payload), "group": group.to_dict(),
+        "parallel_event_idempotency_key": "TASK_GROUP_ADMITTED:" + group.group_id,
+        "idempotency_key": group.group_id,
+    })
+    reopened.commit_event(valid, replace(current, last_sequence=valid.sequence))
+    replay = TaskPlanReplayReducer().replay(
+        (plan,), reopened.read_events(identity.run_id, "delegate_stage"), require_terminal_events=False,
+    )
+    assert group.group_id in replay.parallel_groups
+
+
+@pytest.mark.parametrize("writer", ("append", "batch", "commit"))
+def test_terminal_submission_cannot_be_rewritten_at_a_new_sequence(store_factory, writer, monkeypatch):
+    store = store_factory()
+    runtime, identity = _runtime(store=store)
+    request = _request(identity)
+    original = runtime.dispatch(request)
+    assert original.status == "succeeded"
+    before = store.read_events(identity.run_id, "delegate_stage")
+    current = store.load_projection(identity.run_id, "delegate_stage")
+    plan = store.plan(identity.run_id, "delegate_stage")
+    result = HarnessWorkerResult(status="blocked", error="forged_halt",
+        diagnostics={"reason_code": "forged_halt"})
+    event = TaskPlanEvent.for_plan("TASK_PLAN_HALTED", plan, sequence=len(before) + 1,
+        reason_code="forged_halt", payload={
+            "submission_key": _submission_identity(request).dedup_key,
+            "terminal_result": result.to_dict(),
+            "terminal_result_checksum": result.candidate_result_ref,
+        })
+    reopened = store_factory()
+    if hasattr(reopened, "_put_projection"):
+        monkeypatch.setattr(reopened, "_put_projection", lambda *_: pytest.fail("terminal rewrite must not write artifacts"))
+    with pytest.raises(HarnessValidationError) as rejected:
+        if writer == "append":
+            reopened.append_event(event)
+        elif writer == "batch":
+            reopened.append_events((event,))
+        else:
+            reopened.commit_event(event, replace(current, last_sequence=event.sequence))
+    assert rejected.value.code == "task_plan_submission_result_invalid"
+    assert reopened.read_events(identity.run_id, "delegate_stage") == before
+    assert reopened.load_projection(identity.run_id, "delegate_stage") == current
+    with pytest.raises(HarnessValidationError) as replayed:
+        TaskPlanReplayReducer().replay((plan,), (*before, event),
+            results=store.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, plan.version))
+    assert replayed.value.code == "task_plan_submission_result_invalid"
 
 
 @pytest.mark.parametrize("change", ["objective", "invalid_capability", "parallelism"])
@@ -124,7 +307,11 @@ def test_restart_between_candidate_commit_and_plan_acceptance_reuses_original_ti
     )
     restarted_store = store_factory()
     restarted, _ = _runtime(store=restarted_store)
-    result = restarted.dispatch(request)
+    before = restarted_store.read_events(request.run_id, "delegate_stage")
+    deferred = restarted.dispatch(request)
+    assert deferred.reason_code == "task_plan_submission_resume_required"
+    assert restarted_store.read_events(request.run_id, "delegate_stage") == before
+    result = restarted.recover_submission(request)
 
     assert result.status == "succeeded"
     plan = restarted_store.plan(request.run_id, "delegate_stage")
@@ -133,6 +320,53 @@ def test_restart_between_candidate_commit_and_plan_acceptance_reuses_original_ti
     events = restarted_store.read_events(request.run_id, "delegate_stage")
     assert sum(item.event_type == "PLAN_CANDIDATE_BUILT" for item in events) == 1
     assert sum(item.event_type == "PLAN_ACCEPTED" for item in events) == 1
+
+
+def test_rejected_candidate_resubmission_reuses_pre_plan_outcome(store_factory):
+    calls = []
+    store = store_factory()
+    runtime, identity = _runtime(store=store, worker_executor=_counting_worker(calls))
+    parent = _request(identity)
+    policy = runtime._policy_registry.resolve(parent.policy_ref, stage_id="delegate_stage")
+    candidate = runtime._materialize_candidate(parent, policy)
+    invalid = replace(candidate, tasks=(
+        replace(candidate.tasks[0], worker_capability="not-registered"), *candidate.tasks[1:],
+    ))
+    request = TaskPlanStageRequest(
+        run_id=identity.run_id, stage_binding=runtime._stage_binding,
+        context_refs={"document": "document"}, policy=policy,
+        accepted_at="2026-09-07T00:00:00Z", candidate=invalid,
+        submission_identity=_submission_identity(parent),
+        execution_identity=runtime._task_plan_execution_identity(identity, parent.candidate),
+    )
+    first = runtime._stage_runner.run(request)
+    assert first.status.value == "blocked"
+    assert store.plan(identity.run_id, "delegate_stage") is None
+    before = store.read_events(identity.run_id, "delegate_stage")
+    assert before[-1].event_type == "TASK_PLAN_HALTED"
+    assert before[-1].plan_id is None
+    reopened, _ = _runtime(store=store_factory(), worker_executor=_counting_worker(calls))
+
+    def unexpected_validation(*_args, **_kwargs):
+        pytest.fail("terminal rejection must not revalidate the candidate")
+
+    reopened._stage_runner.validator.validate = unexpected_validation
+    repeated = reopened._stage_runner.run(replace(request, candidate=None))
+    assert repeated.to_dict() == first.to_dict()
+    assert calls == []
+    assert reopened._store.read_events(identity.run_id, "delegate_stage") == before
+
+
+def test_accepted_plan_and_terminal_event_redelivery_are_noops(store_factory):
+    store = store_factory()
+    runtime, identity = _runtime(store=store)
+    assert runtime.dispatch(_request(identity)).status == "succeeded"
+    before = store.read_events(identity.run_id, "delegate_stage")
+    plan = store.plan(identity.run_id, "delegate_stage")
+    reopened = store_factory()
+    assert reopened.accept_plan(plan) == plan.plan_checksum
+    assert reopened.append_events((before[-1],)) == (before[-1].event_checksum,)
+    assert reopened.read_events(identity.run_id, "delegate_stage") == before
 
 
 def test_restart_with_no_candidate_reads_durable_candidate_without_calling_builder(store_factory):

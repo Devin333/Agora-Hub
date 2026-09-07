@@ -428,6 +428,66 @@ Full cancellation/quarantine attempt history, expanded budget settlement,
 shared RefAuthority, authoritative capacity, and parent continuation remain in
 their later unchecked tasks. Static Research and feature defaults are unchanged.
 
+## Candidate Redelivery Integrity Increment
+
+Task 1.4 remains unchecked; overall progress is 13/46. This increment fixes confirmed admission and
+redelivery defects in that task; it does not complete the pending parent receipt,
+continuation or independent submission execution-scope contracts. Task 1.5 has
+not started, and the separate task 2.3 stash is unchanged.
+
+- `CandidateSubmission` v2 records an immutable `admission_id` for its first
+  writer. The nonce is excluded from logical submission/plan/group identity,
+  but included in the submission record checksum. Equal concurrent publish
+  requests cannot both interpret the same durable record as newly created.
+  Old v1 submissions fail closed on live readback; no automatic migration or
+  compatibility reader is installed.
+- `submit_candidate` returns a typed first-admission result. The memory store
+  protects it under its lock and the durable store uses canonical event CAS.
+  Generic runtime submissions also check exclusive stage ownership against
+  that exact CAS prefix. Tests force same-key races and a competing parent-turn
+  admission interleaved between artifact writing and canonical publication.
+- Ordinary Agent dispatch never treats redelivery as online recovery. Only a
+  newly admitted request starts execution; existing terminal results are read
+  without workers, candidate materialization or validation. Active/incomplete
+  redelivery fails closed with `task_plan_submission_resume_required`, leaving
+  the original execution untouched. Explicit `recover_submission` is a separate
+  Harness-only ingress, not part of the Agent dispatch port.
+- A concurrency repro originally showed redelivery appending recovery/halt
+  facts while the original workers were still running. Regression tests now
+  prove no recovery events, no new attempts, no group mutation, original
+  success and identical subsequent terminal reuse. Simultaneous first arrivals
+  produce one candidate, one accepted plan, one group and exactly two workers.
+- Store append/batch/commit and offline replay share submission ownership and
+  terminal-integrity validation. A first group must bind its original dedup
+  correlation; terminal outcomes cannot be rewritten at a new sequence.
+  Rejections occur before projection artifact writes. Exact historical event
+  redelivery and accepted-plan redelivery remain idempotent.
+- Pre-plan deterministic rejection is a durable, reusable outcome. It cannot
+  be converted into accepted execution, and success requires causal plan
+  acceptance. Readback checks the recorded result checksum and accepted-plan
+  outcomes still undergo full replay/aggregate validation.
+
+Final validation:
+
+- Submission/redelivery/store/schema suite: `107 passed` in 177.31 seconds.
+- Coordinator, spawn, checkpoint/recovery and architecture suite:
+  `342 passed, 4 warnings` in 168.30 seconds.
+- Independent canonical event suite: `463 passed` in 47.58 seconds.
+- Required repository `python -m scripts.dev smoke`: exit 0. Compile passed;
+  `3000 passed, 23 deselected, 23 warnings` in 1153.43 seconds.
+- Offline AgentLoop smoke: succeeded, 3 fixture LLM calls, 1 tool call,
+  0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-4c87d64561514e62be0bb4f7f33fe731/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings.
+- Strict OpenSpec validation and scoped `git diff --check`: passed.
+- An earlier smoke was stopped after the active-redelivery defect was reproduced
+  and is not passing evidence. The restarted smoke above validates the repair.
+- Existing FastAPI/Starlette and PyMuPDF deprecations remain outside this change.
+
+This guarded rejection is not a `PENDING` receipt or automatic same-parent-turn
+continuation. Feature defaults and the static Research path remain unchanged;
+no G1-G5 closure or production rollout approval is claimed.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

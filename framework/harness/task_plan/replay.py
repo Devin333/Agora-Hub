@@ -51,7 +51,9 @@ from framework.harness.task_plan.parallel_state import (
     validate_group_transition,
     validate_wave_transition,
 )
-from framework.harness.task_plan.submission import CandidateSubmission, submissions_from_events
+from framework.harness.task_plan.submission import (
+    CandidateSubmission, submissions_from_events, validate_submission_event_append,
+)
 from framework.harness.task_plan.submission_result import submission_result_from_event
 from framework.harness.task_plan.parallel_admission import validate_group_plan_binding, validate_wave_admission_slot
 from framework.harness.task_plan.task_lifecycle import ACTIVE_TASK_STATES as _ACTIVE_TASK_STATES
@@ -396,6 +398,7 @@ class TaskPlanReplayReducer:
         _validate_atomic_wave_intents(ordered_events)
         results_by_attempt = _validated_results(results, plan_history)
         patches_by_checksum = _validated_patches(patches, plan_history)
+        validate_submission_event_append((), ordered_events)
         submissions = submissions_from_events(ordered_events)
         admitted_submissions: dict[str, CandidateSubmission] = {}
 

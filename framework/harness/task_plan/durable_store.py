@@ -38,7 +38,10 @@ from framework.harness.task_plan.canonical import (
 from framework.harness.task_plan.submission import (
     CandidateDedupIdentity,
     CandidateSubmission,
+    CandidateSubmissionAdmission,
+    require_submission_stage_available,
     submissions_from_events,
+    validate_submission_event_append,
 )
 from framework.harness.task_plan.models import (
     PlanCandidate,
@@ -303,10 +306,25 @@ class DurableTaskPlanStore:
         accepted_at: str,
         candidate_checksum: str | None = None,
     ) -> CandidateSubmission:
+        return self.submit_candidate(
+            candidate, identity, accepted_at=accepted_at, candidate_checksum=candidate_checksum,
+        ).submission
+
+    def submit_candidate(
+        self, candidate: PlanCandidate, identity: CandidateDedupIdentity, *,
+        accepted_at: str, candidate_checksum: str | None = None,
+        exclusive_stage: bool = False,
+    ) -> CandidateSubmissionAdmission:
+        from uuid import uuid4
+
+        if not isinstance(exclusive_stage, bool):
+            raise TypeError("exclusive_stage must be boolean")
         if not isinstance(candidate, PlanCandidate):
             raise TypeError("candidate must be PlanCandidate")
         if not isinstance(identity, CandidateDedupIdentity):
             raise TypeError("identity must be CandidateDedupIdentity")
+        if exclusive_stage:
+            require_submission_stage_available(self.read_events(identity.run_id, identity.stage_id), identity)
         _require_live_graph_only(candidate, "candidate")
         _require_submission_scope(candidate, identity)
         submitted = CandidateSubmission(
@@ -318,11 +336,12 @@ class DurableTaskPlanStore:
             ),
             candidate_ref=candidate.candidate_checksum,
             accepted_at=accepted_at,
+            admission_id=uuid4().hex,
         )
         existing = self.candidate_submission(identity)
         if existing is not None:
             _require_same_submission(existing, submitted)
-            return existing
+            return CandidateSubmissionAdmission(existing, created=False)
 
         candidate_ref = self._put_document(
             "candidate",
@@ -352,7 +371,7 @@ class DurableTaskPlanStore:
                     code="task_plan_artifact_missing",
                     details={"candidate_ref": persisted.candidate_ref},
                 )
-            return persisted
+            return CandidateSubmissionAdmission(persisted, created=False)
         sequence = len(events) + 1
         event = _candidate_event(
             candidate,
@@ -368,7 +387,7 @@ class DurableTaskPlanStore:
                 replace(current, last_sequence=sequence)
             )
         try:
-            self._publish((event,), (refs,))
+            self._publish((event,), (refs,), exclusive_submission=identity if exclusive_stage else None)
         except HarnessValidationError as exc:
             if exc.code not in {
                 "task_plan_sequence_conflict",
@@ -380,8 +399,8 @@ class DurableTaskPlanStore:
             if existing is None:
                 raise
             _require_same_submission(existing, submitted)
-            return existing
-        return submitted
+            return CandidateSubmissionAdmission(existing, created=False)
+        return CandidateSubmissionAdmission(submitted, created=True)
 
     def candidate_submission(
         self,
@@ -570,6 +589,10 @@ class DurableTaskPlanStore:
             )
         self._require_source_document(plan)
 
+        sequence = len(events) + 1
+        event = _plan_event(plan, "PLAN_ACCEPTED", sequence)
+        validate_submission_event_append(events, (event,))
+
         plan_ref = self._put_document(
             "plan",
             plan.run_id,
@@ -577,14 +600,12 @@ class DurableTaskPlanStore:
             plan.plan_checksum,
             plan.to_dict(),
         )
-        sequence = len(events) + 1
         projection = _projection_for_plan(
             plan,
             sequence=sequence,
             previous=self._optional_projection(plan.run_id, plan.stage_id),
         )
         projection_ref = self._put_projection(projection)
-        event = _plan_event(plan, "PLAN_ACCEPTED", sequence)
         self._publish(
             (event,),
             ({"plan": plan_ref, "projection": projection_ref},),
@@ -1173,6 +1194,7 @@ class DurableTaskPlanStore:
             _require_event_matches_plan(event, plan)
         from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
+        validate_submission_event_append(events, (event,))
         validate_parallel_admission_append(events, (event,))
         refs: dict[str, _DocumentReference] = {}
         current = self._optional_projection(event.run_id, event.stage_id)
@@ -1206,6 +1228,7 @@ class DurableTaskPlanStore:
 
         from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
+        validate_submission_event_append(history, batch)
         validate_parallel_admission_append(history, batch)
         current = self._optional_projection(run_id, stage_id)
         refs: list[dict[str, _DocumentReference]] = []
@@ -1286,6 +1309,7 @@ class DurableTaskPlanStore:
         else:
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
+            validate_submission_event_append(history, batch)
             validate_parallel_admission_append(history, batch)
             # Immutable artifacts become authoritative only with their event batch.
             refs = tuple({"projection": self._put_projection(projection)} for projection in projections)
@@ -1724,6 +1748,7 @@ class DurableTaskPlanStore:
         self,
         events: Sequence[TaskPlanEvent],
         refs: Sequence[Mapping[str, _DocumentReference]],
+        *, exclusive_submission: CandidateDedupIdentity | None = None,
     ) -> tuple[StoredEvent, ...]:
         if not events or len(events) != len(refs):
             raise ValueError("events and refs must have the same non-zero length")
@@ -1748,6 +1773,8 @@ class DurableTaskPlanStore:
                 for item, event in restored
                 if event.stage_id == stage_id
             ]
+            if exclusive_submission is not None:
+                require_submission_stage_available(tuple(event for _, event in stage_history), exclusive_submission)
             missing: list[tuple[TaskPlanEvent, Mapping[str, _DocumentReference]]] = []
             for event, event_refs in zip(events, refs, strict=True):
                 if event.sequence <= len(stage_history):
@@ -1778,6 +1805,7 @@ class DurableTaskPlanStore:
                 )
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
+            validate_submission_event_append(tuple(event for _, event in stage_history), events)
             validate_parallel_admission_append((event for _, event in stage_history), events)
             requests = tuple(
                 self._publish_request(event, event_refs)

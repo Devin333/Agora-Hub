@@ -1162,7 +1162,7 @@ def _candidate_submission_schema() -> dict[str, Any]:
         "dedup_key": _CHECKSUM_TEXT,
     }
     fields = {
-        "schema_version": {"const": "newsroom.harness-candidate-submission/v1"},
+        "schema_version": {"const": "newsroom.harness-candidate-submission/v2"},
         "identity": {
             "type": "object", "additionalProperties": False,
             "required": list(identity_fields), "properties": identity_fields,
@@ -1170,6 +1170,7 @@ def _candidate_submission_schema() -> dict[str, Any]:
         "candidate_checksum": _CHECKSUM_TEXT,
         "candidate_ref": _CHECKSUM_TEXT,
         "accepted_at": _TEXT,
+        "admission_id": _TEXT,
         "submission_id": _TEXT,
         "plan_id": _TEXT,
         "record_checksum": _CHECKSUM_TEXT,
