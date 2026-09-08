@@ -31,6 +31,7 @@ function projectParams(searchParams: URLSearchParams): ProjectListParams {
     sort: searchParams.get("sort") as ProjectListParams["sort"],
     source: searchParams.get("source") as ProjectListParams["source"],
     language: searchParams.get("language") as ProjectListParams["language"],
+    license: searchParams.get("license") as ProjectListParams["license"],
     maturity: searchParams.get("maturity") as ProjectListParams["maturity"],
     period: searchParams.get("period") as ProjectListParams["period"],
     page: numberParam(searchParams.get("page")),

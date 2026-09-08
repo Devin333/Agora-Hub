@@ -48,6 +48,12 @@ export function ProjectFilterPanel({
         onSelect={(source) => onChange({ source: source as ProjectListParams["source"], page: 1, cursor: undefined })}
         onClear={() => onChange({ source: undefined, page: 1, cursor: undefined })}
       />
+      <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#334155]/55 dark:text-muted-foreground">
+        License
+        <select className="rounded-md border border-[#dbe3dc] bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-[#334155] dark:border-border dark:bg-card dark:text-foreground" aria-label="License" value={filters.license ?? ""} onChange={(event) => onChange({ license: (event.target.value || undefined) as ProjectListParams["license"], page: 1, cursor: undefined })}>
+          <option value="">All licenses</option><option value="MIT">MIT</option><option value="Apache-2.0">Apache-2.0</option><option value="BSD-3-Clause">BSD-3-Clause</option>
+        </select>
+      </label>
     </aside>
   )
 }

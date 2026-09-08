@@ -2,20 +2,27 @@
 
 import { useEffect, useRef, useState, useTransition, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowRight, BookOpen, Check, ChevronDown, ClipboardCheck, Github, LoaderCircle, Quote, Sparkles, WandSparkles } from "lucide-react"
+import { ArrowRight, BookOpen, Check, ChevronDown, ClipboardCheck, Github, LoaderCircle, Quote, Sparkles, WandSparkles, X, Link2 } from "lucide-react"
 import { PortalAccountControl } from "@/components/auth/portal-account-control"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { autoExamples, moduleInfo, researchModules, researchQuestionHref, resolveResearchIntent, type ResearchMode, type ResearchModule } from "@/lib/research/entry"
-import { prepareResearchResume, type ResearchVisit } from "@/lib/research/history"
+import { autoExamples, moduleInfo, researchModules, resolveResearchIntent, type ResearchMode, type ResearchModule } from "@/lib/research/entry"
+import { historyState, prepareResearchResume, researchResumeHref, saveResearchMaterial, type ResearchVisit } from "@/lib/research/history"
 import { useResearchDraft } from "@/lib/research/use-research-draft"
+import { inferResearchConstraints, researchEntryHref } from "@/lib/research/constraints"
+import { ResearchPromptMenu } from "./research-prompt-menu"
 import { ResearchSidebar } from "./research-sidebar"
+import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
+import type { ResearchConstraints } from "@/lib/research/workspace-items"
+import { ResearchComposerContext } from "./research-composer-context"
+import { ResearchSourceEntry } from "./research-source-entry"
 
 const icons = { auto: Sparkles, papers: BookOpen, projects: Github, community: Quote, reports: ClipboardCheck }
 const focusStyle = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6] focus-visible:ring-offset-2"
 
 export function DesignDemoPage() {
   const router = useRouter()
-  const { query, setQuery, mode, setMode, ready } = useResearchDraft()
+  const { query, setQuery, mode, setMode, constraints, setConstraints, groupId, setGroupId, materialIds, setMaterialIds, ready, restored, clear, markSubmitted, continueEditing } = useResearchDraft()
+  const workspace = useOwnedResearchWorkspace()
   const inputRef = useRef<HTMLInputElement>(null)
   const composing = useRef(false)
   const [choices, setChoices] = useState<ResearchModule[]>([])
@@ -39,10 +46,16 @@ export function DesignDemoPage() {
     inputRef.current?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
     inputRef.current?.focus({ preventScroll: true })
   }
-  function navigate(module: ResearchModule, href = researchQuestionHref(module, query, crypto.randomUUID()), restoring = false) {
+  function navigate(module: ResearchModule, href?: string, restoring = false) {
+    if (!href) {
+      const sessionId = crypto.randomUUID()
+      if (!markSubmitted(sessionId)) { setError(historyState().message || "暂时无法保存问题，请重试。"); return }
+      href = researchEntryHref(module, query, sessionId, { constraints: Object.keys(constraints).length ? constraints : inferResearchConstraints(query, module), groupId, materialIds })
+    }
+    const target = href
     setError(""); setChoices([]); setDestination(module)
     startTransition(() => {
-      try { if (restoring) router.push(href, { scroll: false }); else router.push(href) }
+      try { if (restoring) router.push(target, { scroll: false }); else router.push(target) }
       catch { setDestination(null); setError("暂时无法打开页面，请重试。你的问题已保留。") }
     })
   }
@@ -53,8 +66,8 @@ export function DesignDemoPage() {
     if (candidates.length === 1) navigate(candidates[0])
     else { setChoices(candidates); setError("") }
   }
-  function resume(visit: ResearchVisit) { prepareResearchResume(visit); navigate(visit.module, visit.href, true) }
-  function newResearch() { setQuery(""); setMode("auto"); setChoices([]); setError(""); setDestination(null); focusInput() }
+  function resume(visit: ResearchVisit) { prepareResearchResume(visit); navigate(visit.module, researchResumeHref(visit), true) }
+  function newResearch() { clear(); setChoices([]); setError(""); setDestination(null); focusInput() }
   function toggleSidebar() { setCollapsed(value => { const next = !value; try { localStorage.setItem("agora-research-sidebar-collapsed", String(next)) } catch { /* Layout remains usable. */ } return next }) }
   const busy = Boolean(!ready || destination || pending)
 
@@ -67,23 +80,29 @@ export function DesignDemoPage() {
       </nav>
     </header>
     <div className="flex h-[calc(100svh-var(--header-height))]">
-    <ResearchSidebar busy={busy} collapsed={collapsed} onToggle={toggleSidebar} onNew={newResearch} onResume={resume} />
+    <ResearchSidebar busy={busy} collapsed={collapsed} onToggle={toggleSidebar} onNew={newResearch} onResume={resume} onSelectGroup={setGroupId} />
     <div className="min-w-0 flex-1 overflow-y-auto" aria-label="研究工作区">
     {/* The composer is centered within the right workspace, accounting for the header. */}
     <main id="workspace" className="grid h-[calc(100svh-var(--header-height)-var(--header-height))] min-h-[520px] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)]">
       <h1 className="mx-auto w-[calc(100%-80px)] max-w-[900px] self-start pt-[clamp(5rem,12vh,9rem)] text-center font-sans text-[56px] font-bold leading-[1.2]"><span className="text-[#35274f]">Ask.</span>{" "}<span className="text-[#7c3aed]">Discover.</span></h1>
       <section aria-label="研究提问框" className="relative mx-auto w-[calc(100%-80px)] max-w-[960px] rounded-3xl border border-[#e7dff1] bg-white p-8 shadow-[0_18px_45px_rgba(86,58,127,0.13)]">
+        {restored && <div role="status" className="mb-4 flex items-center justify-between rounded-xl bg-[#f6f0fd] px-4 py-3 text-sm text-[#684b82]"><span>已恢复一条尚未发送的研究问题</span><span className="flex items-center gap-3"><button type="button" onClick={continueEditing} className={`rounded-md px-2 py-1 text-[#6d28d9] ${focusStyle}`}>继续编辑</button><button type="button" onClick={clear} aria-label="清除未发送的问题" className={`rounded-md ${focusStyle}`}><X size={16} /></button></span></div>}
         <form onSubmit={submit} aria-busy={busy} className="flex h-[72px] items-center gap-3 rounded-[24px] border border-[#ded4ec] bg-[#fefeff] p-2.5 pl-3 shadow-[0_3px_12px_rgba(86,58,127,0.06)] focus-within:border-[#a783ec] focus-within:ring-2 focus-within:ring-[#f0e9ff]">
           <DropdownMenu modal={false}><DropdownMenuTrigger disabled={busy} aria-label="选择研究模式" className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-xl px-3 text-base font-semibold text-[#5b4c76] hover:bg-[#f3edff] ${focusStyle}`}><span className="flex size-8 items-center justify-center rounded-lg bg-[#f0e9ff] text-[#7c3aed]"><ModeIcon size={18} /></span>{mode === "auto" ? "自动" : moduleInfo[mode].command}<ChevronDown size={16} /></DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-80 rounded-2xl border-[#e4d9ef] bg-white p-2 text-[#3f3158] shadow-[0_14px_36px_rgba(60,41,93,0.16)]">
-              {(["auto", ...researchModules] as ResearchMode[]).map(item => { const Icon = icons[item]; return <DropdownMenuItem key={item} onSelect={() => { setMode(item); setChoices([]); setError("") }} className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 focus:bg-[#f3edff]"><Icon className="size-5 shrink-0 text-[#7c3aed]" /><span className="flex-1"><span className="block text-base font-semibold">{item === "auto" ? "自动" : moduleInfo[item].command}</span><span className="mt-1 block text-sm text-[#766885]">{item === "auto" ? "根据问题选择合适的模块" : moduleInfo[item].description}</span></span>{mode === item && <Check className="size-4 text-[#7c3aed]" />}</DropdownMenuItem> })}
+              {(["auto", ...researchModules] as ResearchMode[]).map(item => { const Icon = icons[item]; return <DropdownMenuItem key={item} onSelect={() => { setMode(item); setConstraints(item === "auto" ? {} : inferResearchConstraints(query, item)); setChoices([]); setError("") }} className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 focus:bg-[#f3edff]"><Icon className="size-5 shrink-0 text-[#7c3aed]" /><span className="flex-1"><span className="block text-base font-semibold">{item === "auto" ? "自动" : moduleInfo[item].command}</span><span className="mt-1 block text-sm text-[#766885]">{item === "auto" ? "根据问题选择合适的模块" : moduleInfo[item].description}</span></span>{mode === item && <Check className="size-4 text-[#7c3aed]" />}</DropdownMenuItem> })}
             </DropdownMenuContent>
           </DropdownMenu>
           <input ref={inputRef} value={query} maxLength={2000} onChange={event => { setQuery(event.target.value); setChoices([]); setError("") }} onCompositionStart={() => { composing.current = true }} onCompositionEnd={() => { composing.current = false }} onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)) event.preventDefault() }} aria-label="向 Agora AI 提问" placeholder="输入你想研究的问题…" className="min-w-0 flex-1 bg-transparent px-1 text-lg text-[#3a304f] outline-none placeholder:text-[#93879f]" />
+          <ResearchPromptMenu question={query} mode={mode} constraints={constraints} onSelect={prompt => { setQuery(prompt.question); setMode(prompt.mode); setConstraints(prompt.constraints); inputRef.current?.focus() }} />
           <button disabled={!query.trim() || busy} type="submit" aria-label="发送问题" className={`flex size-12 shrink-0 items-center justify-center rounded-full bg-[#7c3aed] text-white transition-colors hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:bg-[#c3abea] ${focusStyle}`}>{busy ? <LoaderCircle className="size-5 animate-spin motion-reduce:animate-none" /> : <ArrowRight size={21} />}</button>
         </form>
+        <ResearchComposerContext key={workspace.owner ?? "guest"} groupId={groupId} setGroupId={setGroupId} materialIds={materialIds} setMaterialIds={setMaterialIds} disabled={busy} />
+        {mode !== "auto" && <ConstraintControls module={mode} constraints={constraints} setConstraints={setConstraints} />}
         <div className="mt-5 flex flex-wrap items-center gap-2.5 px-1"><span className="mr-1 text-[15px] text-[#756982]">试试：</span>{examples.map(prompt => <button key={prompt} disabled={busy} type="button" onClick={() => { setQuery(prompt); setChoices([]); setError(""); inputRef.current?.focus() }} className={`rounded-xl border border-[#e7dff1] bg-white px-3.5 py-2.5 text-left text-[15px] leading-5 text-[#6b607e] transition-colors hover:border-[#b99beb] hover:bg-[#faf7ff] disabled:opacity-60 ${focusStyle}`}>{prompt}</button>)}</div>
         {choices.length > 0 && <div className="mt-5 flex flex-wrap items-center gap-2 rounded-xl bg-[#faf7ff] p-3 text-[15px]" role="group" aria-label="确认研究方向"><span className="mr-1 text-[#6b607e]">你更想了解哪一类？</span>{choices.map(module => <button key={module} type="button" onClick={() => navigate(module)} className={`rounded-lg border border-[#dac9f4] bg-white px-3 py-2 text-[#6d28d9] hover:bg-[#f0e9ff] ${focusStyle}`}>{moduleInfo[module].command}</button>)}</div>}
+        <SourceHint query={query} />
+        <ResearchSourceEntry />
         <div aria-live="polite" role="status" className="text-[15px] text-[#6d28d9]">{destination && <p className="mt-4">正在打开{moduleInfo[destination].name}…</p>}</div>
         {error && <p role="alert" className="mt-4 text-[15px] text-[#a02b47]">{error}</p>}
       </section>
@@ -97,4 +116,31 @@ export function DesignDemoPage() {
     </div>
     </div>
   </div>
+}
+
+function ConstraintControls({ module, constraints, setConstraints }: { module: ResearchMode; constraints: ResearchConstraints; setConstraints: (value: ResearchConstraints) => void }) {
+  if (module !== "papers" && module !== "projects") return null
+  const options: Array<{ key: keyof ResearchConstraints; label: string; value?: string | boolean }> = module === "papers"
+    ? [{ key: "recentYear", label: "近一年", value: true }, { key: "hasCode", label: "有代码", value: true }, { key: "paperType", label: "综述", value: "survey" }]
+    : [{ key: "recentlyActive", label: "近期活跃", value: true }, { key: "language", label: "Python 项目", value: "python" }, { key: "license", label: "MIT 许可", value: "MIT" }]
+  return <div className="mt-4 flex flex-wrap items-center gap-2 text-sm"><span className="text-[#827190]">筛选：</span>{options.map(item => { const active = constraints[item.key] === item.value; return <button key={item.key} type="button" aria-pressed={active} onClick={() => setConstraints({ ...constraints, [item.key]: active ? undefined : item.value })} className={`rounded-full border px-3 py-1.5 ${active ? "border-[#9a6ee0] bg-[#f0e9ff] text-[#6d28d9]" : "border-[#e7dff1] bg-white text-[#756782]"}`}>{item.label} {active ? "×" : ""}</button> })}</div>
+}
+
+function SourceHint({ query }: { query: string }) {
+  const workspace = useOwnedResearchWorkspace()
+  const [saved, setSaved] = useState(false)
+  const [groupId, setGroupId] = useState("")
+  const arxiv = query.match(/https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/[^\s]+/i)?.[0]
+  const github = query.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/i)?.[0]
+  const doi = query.match(/https?:\/\/doi\.org\/[^\s]+/i)?.[0]
+  const source = arxiv || github || doi
+  if (!source) return null
+  const resolvedSource = source
+  const related = `/design-demo/papers?q=${encodeURIComponent(query.replace(resolvedSource, "").trim())}&entry=source`
+  function save() {
+    if (!workspace.ready || !workspace.workspace.groups.some(group => group.id === groupId)) return
+    const kind = resolvedSource.includes("github.com") ? "project" : "paper"
+    setSaved(saveResearchMaterial({ id: crypto.randomUUID(), groupId, kind, title: resolvedSource.split("/").filter(Boolean).pop() || resolvedSource, url: resolvedSource, notes: "从首页来源识别保存", createdAt: Date.now(), updatedAt: Date.now() }, workspace.owner))
+  }
+  return <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-[#faf7ff] p-3 text-sm text-[#6b607e]" role="status"><Link2 size={15} className="text-[#7c3aed]" /><span>识别到来源：</span><a href={resolvedSource} target="_blank" rel="noreferrer" className="max-w-[330px] truncate text-[#6d28d9] underline">{resolvedSource}</a><a href={related} className="rounded-lg border border-[#dac9f4] bg-white px-3 py-1.5 text-[#6d28d9]">查找相关研究</a>{workspace.workspace.groups.length > 0 && <><select aria-label="来源保存分组" className="rounded-lg border border-[#dac9d4] bg-white px-2 py-1.5" value={groupId} onChange={event => setGroupId(event.target.value)}><option value="">选择分组</option>{workspace.workspace.groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select><button type="button" disabled={!groupId || saved} onClick={save} className="rounded-lg border border-[#dac9f4] bg-white px-3 py-1.5 text-[#6d28d9]">{saved ? "已保存" : "保存来源"}</button></>}</div>
 }

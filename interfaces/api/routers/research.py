@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
@@ -15,6 +15,7 @@ from interfaces.services.research_service import (
     ResearchServiceError,
     bind_research_actor_input,
 )
+from interfaces.services.research_import_service import ResearchImportError, ResearchImportService
 
 
 class ResearchAnalyzeRequest(BaseModel):
@@ -86,6 +87,38 @@ class ResearchCatalogRefreshRequest(BaseModel):
 
 def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
     router = APIRouter()
+    imports = ResearchImportService()
+
+    @router.post("/api/v1/research/imports")
+    async def create_research_import(request: Request, x_newsroom_session: str | None = Header(default=None)):
+        import_id: str | None = None
+        try:
+            user_id = _authenticated_import_user(services, x_newsroom_session)
+            record = imports.create_received(user_id=user_id, content=await request.body(), filename=request.headers.get("x-filename"))
+            import_id = str(record["importId"])
+            return _run_import(services, helpers, imports, user_id=user_id, import_id=import_id)
+        except ResearchImportError as exc:
+            if import_id and "user_id" in locals():
+                imports.mark_failed(user_id=user_id, import_id=import_id, code=exc.code, message=str(exc))
+            return helpers.error(status_code=exc.status_code, code=exc.code, message=str(exc), retryable=exc.retryable, user_action_required=exc.status_code < 500)
+
+    @router.get("/api/v1/research/imports/{import_id}")
+    def get_research_import(import_id: str, x_newsroom_session: str | None = Header(default=None)):
+        try:
+            return helpers.success(imports.get(user_id=_authenticated_import_user(services, x_newsroom_session), import_id=import_id))
+        except ResearchImportError as exc:
+            return helpers.error(status_code=exc.status_code, code=exc.code, message=str(exc), user_action_required=True)
+
+    @router.post("/api/v1/research/imports/{import_id}/retry")
+    def retry_research_import(import_id: str, x_newsroom_session: str | None = Header(default=None)):
+        try:
+            user_id = _authenticated_import_user(services, x_newsroom_session)
+            record = imports.get(user_id=user_id, import_id=import_id)
+            if record.get("status") == "completed":
+                return helpers.success(record)
+            return _run_import(services, helpers, imports, user_id=user_id, import_id=import_id)
+        except ResearchImportError as exc:
+            return helpers.error(status_code=exc.status_code, code=exc.code, message=str(exc), user_action_required=True)
 
     @router.post("/api/v1/research/papers/parse")
     def parse_paper(request: Request, payload: ResearchParseRequest):
@@ -510,6 +543,34 @@ def _bound_research_actor(
         ),
         actor if isinstance(actor, ActorContext) else None,
     )
+
+
+def _authenticated_import_user(services: ApiServices, session_token: str | None) -> str:
+    try:
+        return services.auth_service_factory().get_session(session_token).user.userId
+    except Exception as exc:  # keep auth provider details out of the public boundary
+        raise ResearchImportError("auth_required", "Valid account session required", status_code=401) from exc
+
+
+def _run_import(services: ApiServices, helpers: ApiRouteHelpers, imports: ResearchImportService, *, user_id: str, import_id: str):
+    imports.mark_parsing(user_id=user_id, import_id=import_id)
+    try:
+        result = services.research_service_factory().parse_paper(
+            ResearchParseInput(
+                source=f"file://{imports.source_path(user_id=user_id, import_id=import_id)}",
+                source_type="pdf",
+                options={"quality_profile": "reading", "include_catalog": True, "include_chunks": True},
+                metadata={"import_id": import_id},
+                user_id=user_id,
+            )
+        )
+        return helpers.success(imports.mark_completed(user_id=user_id, import_id=import_id, result=result))
+    except ResearchServiceError as exc:
+        imports.mark_failed(user_id=user_id, import_id=import_id, code=exc.code, message=exc.public_message)
+        return helpers.error(status_code=exc.status_code, code=exc.code, message=exc.public_message, details=exc.details, retryable=exc.retryable, user_action_required=exc.user_action_required)
+    except Exception as exc:  # parser adapters are isolated behind a truthful retryable state
+        imports.mark_failed(user_id=user_id, import_id=import_id, code="research_parse_failed", message="PDF conversion failed; retry when the parser is available")
+        return helpers.error(status_code=503, code="research_parse_failed", message="PDF conversion failed; retry when the parser is available", details={"error_type": type(exc).__name__}, retryable=True, user_action_required=True)
 
 
 __all__ = [

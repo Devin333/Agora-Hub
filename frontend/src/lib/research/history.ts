@@ -1,5 +1,6 @@
 import { researchModuleForPath, safeResearchHref } from "./entry"
 import { emptyWorkspace, legacyHistoryId, migrateLegacyHistory, sessionParameter, validateVisit, validateWorkspace, validHistoryId, type ResearchVisit, type ResearchWorkspace } from "./history-model"
+import { validMaterial, validReportDraft, validPrompt, validActivity, type ResearchMaterial, type ResearchReportDraft, type ResearchPrompt, type ResearchComposerDraft, type ResearchActivity } from "./workspace-items"
 export type { ResearchVisit, ResearchGroup, ResearchWorkspace } from "./history-model"
 
 export const researchHistoryKey = "agora-research-history:v2"
@@ -67,6 +68,11 @@ function saveWorkspace(workspace: ResearchWorkspace): boolean {
   } else { accountWorkspace = valid; dirty = true; if (status !== "conflict") status = "saving" }
   generation++; persistPendingHistory(); notifyResearchHistory(); return true
 }
+/** Mutations from an open editor must retain the owner captured when it opened. */
+export function updateResearchWorkspace(update: (workspace: ResearchWorkspace) => ResearchWorkspace, expectedOwner: string | null | undefined = owner): boolean {
+  if (expectedOwner === undefined || expectedOwner !== owner) return false
+  return saveWorkspace(update(readResearchWorkspace()))
+}
 export function recordResearchVisit(href: string, scrollY = 0): void {
   if (!historyState().ready) return
   const safeHref = safeResearchHref(href)
@@ -79,11 +85,15 @@ export function recordResearchVisit(href: string, scrollY = 0): void {
   const workspace = readResearchWorkspace(), existing = workspace.visits.find(v => v.id === id)
   if (existing?.deletedAt) return
   const now = Date.now()
-  const visit = validateVisit({ ...existing, id, module: researchModule, question, href: safeHref, scrollY, title: existing?.title ?? question.slice(0, 40), groupId: existing?.groupId ?? null, isFavorite: existing?.isFavorite ?? false, createdAt: existing?.createdAt ?? now, updatedAt: now, deletedAt: null })
+  const requestedGroup = url.searchParams.get("researchGroup")
+  const groupId = existing ? existing.groupId : workspace.groups.some(g => g.id === requestedGroup) ? requestedGroup : null
+  const visit = validateVisit({ ...existing, id, module: researchModule, question, href: safeHref, scrollY, title: existing?.title ?? question.slice(0, 40), groupId, isFavorite: existing?.isFavorite ?? false, createdAt: existing?.createdAt ?? now, updatedAt: now, deletedAt: null })
   if (!visit) return
-  saveWorkspace({ ...workspace, visits: [visit, ...workspace.visits.filter(v => v.id !== id)] })
+  // Clear only the draft handed off to this exact session, never a later edit.
+  const acceptedDraft = workspace.composerDraft?.submittedSessionId === id && workspace.composerDraft.question.trim() === question
+  saveWorkspace({ ...workspace, ...(acceptedDraft ? { composerDraft: null } : {}), visits: [visit, ...workspace.visits.filter(v => v.id !== id)] })
 }
-export function updateResearchVisit(id: string, patch: Partial<Pick<ResearchVisit, "title" | "groupId" | "isFavorite">>): boolean {
+export function updateResearchVisit(id: string, patch: Partial<Pick<ResearchVisit, "title" | "groupId" | "isFavorite" | "archivedAt">>): boolean {
   const workspace = readResearchWorkspace()
   return saveWorkspace({ ...workspace, visits: workspace.visits.map(v => v.id === id ? { ...v, ...patch, updatedAt: Date.now() } : v) })
 }
@@ -104,13 +114,69 @@ export function saveResearchGroup(name: string, id = crypto.randomUUID()): strin
 }
 export function removeResearchGroup(id: string): boolean {
   const workspace = readResearchWorkspace()
-  return saveWorkspace({ groups: workspace.groups.filter(g => g.id !== id), visits: workspace.visits.map(v => v.groupId === id ? { ...v, groupId: null, updatedAt: Date.now() } : v) })
+  const ungroup = <T extends { groupId?: string | null }>(item: T): T => item.groupId === id ? { ...item, groupId: null, updatedAt: Date.now() } : item
+  return saveWorkspace({ ...workspace, groups: workspace.groups.filter(g => g.id !== id), visits: workspace.visits.map(ungroup),
+    ...(workspace.materials ? { materials: workspace.materials.map(ungroup) } : {}),
+    ...(workspace.reportDrafts ? { reportDrafts: workspace.reportDrafts.map(ungroup) } : {}),
+    ...(workspace.composerDraft ? { composerDraft: ungroup(workspace.composerDraft) } : {}),
+  })
 }
 export function importGuestHistory(): boolean {
   if (!owner) return false
   const guest = readGuestHistory(), workspace = readResearchWorkspace()
   const groups = [...workspace.groups, ...guest.groups.filter(g => !workspace.groups.some(item => item.id === g.id))]
-  return saveWorkspace({ groups, visits: [...workspace.visits, ...guest.visits.filter(v => !workspace.visits.some(item => item.id === v.id))] })
+  const merge = <T extends { id: string }>(owned: T[] = [], local: T[] = []) => [...owned, ...local.filter(item => !owned.some(existing => existing.id === item.id))]
+  const reportDrafts = merge(workspace.reportDrafts, guest.reportDrafts)
+  const visits = merge(workspace.visits, guest.visits.map(v => v.activity?.kind === "report" && workspace.reportDrafts?.some(d => d.id === (v.activity as Extract<ResearchActivity, { kind: "report" }>).draftId) ? { ...v, activity: null } : v))
+  return saveWorkspace({ ...workspace, groups, visits, materials: merge(workspace.materials, guest.materials), reportDrafts, prompts: merge(workspace.prompts, guest.prompts) })
+}
+
+export function saveResearchMaterial(material: ResearchMaterial, expectedOwner = owner): boolean {
+  if (!validMaterial(material)) return false
+  return updateResearchWorkspace(workspace => ({ ...workspace, materials: [material, ...(workspace.materials ?? []).filter(m => m.id !== material.id)] }), expectedOwner)
+}
+export function removeResearchMaterial(id: string, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({ ...workspace, materials: (workspace.materials ?? []).filter(m => m.id !== id),
+    ...(workspace.composerDraft?.materialIds?.includes(id) ? { composerDraft: { ...workspace.composerDraft, materialIds: workspace.composerDraft.materialIds.filter(item => item !== id) } } : {}),
+  }), expectedOwner)
+}
+export function saveWorkspaceReport(draft: ResearchReportDraft, expectedOwner = owner): boolean {
+  if (!validReportDraft(draft)) return false
+  return updateResearchWorkspace(workspace => ({ ...workspace, reportDrafts: [draft, ...(workspace.reportDrafts ?? []).filter(d => d.id !== draft.id)] }), expectedOwner)
+}
+export function removeWorkspaceReport(id: string, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({ ...workspace, reportDrafts: (workspace.reportDrafts ?? []).filter(d => d.id !== id), visits: workspace.visits.map(v => v.activity?.kind === "report" && v.activity.draftId === id ? { ...v, activity: null } : v) }), expectedOwner)
+}
+export function saveResearchPrompt(prompt: ResearchPrompt, expectedOwner = owner): boolean {
+  if (!validPrompt(prompt)) return false
+  return updateResearchWorkspace(workspace => ({ ...workspace, prompts: [prompt, ...(workspace.prompts ?? []).filter(p => p.id !== prompt.id)] }), expectedOwner)
+}
+export function removeResearchPrompt(id: string, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({ ...workspace, prompts: (workspace.prompts ?? []).filter(p => p.id !== id) }), expectedOwner)
+}
+export function saveComposerDraft(draft: ResearchComposerDraft | null, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({ ...workspace, composerDraft: draft }), expectedOwner)
+}
+export function rememberResearchActivity(sessionId: string, activity: ResearchActivity, expectedOwner = owner): boolean {
+  if (!validActivity(activity)) return false
+  const visit = readResearchWorkspace().visits.find(v => v.id === sessionId && !v.deletedAt)
+  if (!visit || (activity.kind === "reader" ? visit.module !== "papers" : visit.module !== "reports")) return false
+  return updateResearchWorkspace(workspace => ({ ...workspace, visits: workspace.visits.map(v => v.id === sessionId ? { ...v, activity, updatedAt: Math.max(v.updatedAt, activity.updatedAt) } : v) }), expectedOwner)
+}
+export function researchResumeHref(visit: ResearchVisit): string {
+  const activity = visit.activity
+  if (!activity) return visit.href
+  if (activity.kind === "report") {
+    if (!readResearchWorkspace().reportDrafts?.some(d => d.id === activity.draftId)) return visit.href
+    const url = new URL(visit.href, "https://agora.invalid")
+    url.searchParams.set("draft", activity.draftId); url.searchParams.set("compose", "1")
+    return url.pathname + url.search
+  }
+  const url = new URL(activity.href, "https://agora.invalid")
+  url.searchParams.set("returnTo", visit.href)
+  if (activity.sectionId) url.searchParams.set("resumeSection", activity.sectionId)
+  if (activity.pdfPage) url.searchParams.set("resumePage", String(activity.pdfPage))
+  return url.pathname + url.search
 }
 export function prepareResearchResume(visit: ResearchVisit) {
   const valid = validateVisit(visit)

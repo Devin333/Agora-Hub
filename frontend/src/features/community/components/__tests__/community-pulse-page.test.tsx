@@ -8,6 +8,12 @@ import {
 } from "@/lib/community/community-signals"
 import type { CommunityTopic, CommunityTopicDetail as CommunityTopicDetailType } from "@/types/community"
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/community",
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+}))
+
 describe("Community Pulse UI", () => {
   it("renders an empty state when no community signals are available", () => {
     const result = buildCommunitySignalListResult([], [], {}, { source: "empty" })

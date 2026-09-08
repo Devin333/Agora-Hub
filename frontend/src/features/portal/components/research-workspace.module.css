@@ -1,0 +1,64 @@
+.page { min-height: 100svh; background: #fbf8ff; color: #35274f; font-family: "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif; letter-spacing: 0; }
+.header { min-height: 73px; border-bottom: 1px solid #e9e1f2; background: #ffffffd9; padding: 16px 40px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.header a { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; }
+.header small { font-size: 13px; color: #736480; }
+.main { max-width: 1200px; margin: 0 auto; padding: 48px 40px; }
+.titleRow { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 28px; }
+.titleRow h1 { font-size: 30px; font-weight: 650; overflow-wrap: anywhere; }
+.titleRow p { color: #766785; font-size: 14px; margin-top: 10px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.button, .primary { display: inline-flex; justify-content: center; align-items: center; gap: 7px; min-height: 38px; border: 1px solid #ded2ec; background: #fff; border-radius: 7px; padding: 8px 12px; font-size: 14px; color: #654488; cursor: pointer; }
+.primary { color: #fff; background: #7c3aed; border-color: #7c3aed; }
+.button:hover { background: #f1eaf9; }
+.primary:hover { background: #6d28d9; }
+.button:disabled, .primary:disabled { opacity: .45; cursor: not-allowed; }
+.iconButton { width: 34px; height: 34px; display: inline-flex; justify-content: center; align-items: center; border-radius: 6px; color: #786087; cursor: pointer; }
+.iconButton:hover { background: #eee5f8; }
+.page :focus-visible, .dialog :focus-visible { outline: 2px solid #986be0; outline-offset: 3px; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid #e7deef; }
+.search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid #e0d4ec; border-radius: 7px; background: #fff; min-width: 240px; }
+.search input { background: transparent; min-width: 0; flex: 1; outline: none; font-size: 14px; }
+.select { border: 1px solid #e0d4ec; border-radius: 6px; background: #fff; padding: 9px; font-size: 14px; }
+.selection { display: flex; align-items: center; gap: 12px; padding: 16px 0; min-height: 70px; font-size: 14px; color: #766785; flex-wrap: wrap; }
+.list { padding: 0; list-style: none; }
+.row { display: flex; align-items: flex-start; gap: 15px; border-bottom: 1px solid #e8dfef; padding: 22px 0; }
+.row > input { margin-top: 5px; width: 16px; height: 16px; accent-color: #7c3aed; }
+.rowIcon { display: grid; place-items: center; width: 42px; height: 42px; background: #eee5fc; color: #7c3aed; border-radius: 8px; flex-shrink: 0; }
+.rowContent { min-width: 0; flex: 1; }
+.rowContent h3 { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.rowContent p { font-size: 14px; line-height: 1.7; white-space: pre-wrap; color: #766785; margin-top: 8px; overflow-wrap: anywhere; }
+.rowContent small { display: block; margin-top: 7px; color: #81718e; font-size: 12px; }
+.rowContent a { display: inline-flex; gap: 5px; align-items: center; color: #7542b5; margin-top: 10px; font-size: 13px; overflow-wrap: anywhere; }
+.drafts { margin-top: 40px; border-top: 1px solid #ded1eb; padding-top: 24px; }
+.drafts h2 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+.drafts a { display: flex; justify-content: space-between; gap: 20px; padding: 14px 0; color: #684890; border-bottom: 1px solid #e8dfef; }
+.empty { padding: 70px 20px; text-align: center; color: #857191; }
+.error { color: #a93451; font-size: 14px; margin: 14px 0; }
+.notice { color: #3c785e; font-size: 14px; margin: 14px 0; }
+.overlay { position: fixed; inset: 0; background: #35274045; backdrop-filter: blur(4px); z-index: 80; }
+.dialog { position: fixed; z-index: 81; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(620px, calc(100vw - 64px)); max-height: calc(100svh - 64px); overflow-y: auto; padding: 30px; border: 1px solid #ded1eb; border-radius: 12px; background: #fff; color: #35274f; font-family: "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif; }
+.dialog h2 { font-size: 22px; font-weight: 600; padding-right: 32px; }
+.description { margin: 8px 0 22px; font-size: 14px; color: #82718e; }
+.close { position: absolute; right: 18px; top: 18px; }
+.field { display: grid; gap: 8px; margin: 18px 0; font-size: 14px; }
+.field input, .field textarea, .field select { width: 100%; border: 1px solid #dacbe8; border-radius: 7px; padding: 10px 12px; background: #fff; color: #35274f; }
+.field textarea { resize: vertical; min-height: 120px; }
+.dialogActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.comparison { width: min(1100px, calc(100vw - 64px)); }
+.tableWrap { overflow-x: auto; margin-top: 24px; }
+.comparison table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; }
+.comparison th, .comparison td { padding: 16px; border: 1px solid #e4d9ef; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.comparison th { background: #f6f1fc; font-weight: 600; }
+.composerContext { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; font-size: 14px; color: #6b547d; }
+.composerContext :focus-visible { outline: 2px solid #986be0; outline-offset: 3px; }
+.destination { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.destination select { min-height: 38px; max-width: 200px; border: 1px solid #ded2ec; border-radius: 7px; padding: 6px 10px; background: #fff; }
+.attachedMaterials { display: flex; flex-wrap: wrap; gap: 8px; flex-basis: 100%; list-style: none; margin: 0; padding: 0; }
+.attachedMaterials li { display: flex; align-items: center; gap: 6px; max-width: 100%; background: #f3eefb; padding: 5px 8px; border-radius: 6px; }
+.attachedMaterials span { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachedMaterials button { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 4px; }
+.materialChoices { max-height: 300px; overflow-y: auto; list-style: none; padding: 0; margin: 0; }
+.materialChoices label { display: flex; gap: 12px; align-items: flex-start; padding: 16px 4px; border-bottom: 1px solid #eee6f5; cursor: pointer; }
+.materialChoices input { margin-top: 5px; accent-color: #7c3aed; }
+.materialChoices strong { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.materialChoices small { display: block; margin-top: 5px; font-size: 13px; color: #796587; }

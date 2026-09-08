@@ -1,12 +1,19 @@
 import { researchModuleForPath, safeResearchHref, type ResearchModule } from "./entry"
+import { validActivity, validComposerDraft, validMaterial, validPrompt, validReportDraft, type ResearchActivity, type ResearchComposerDraft, type ResearchMaterial, type ResearchPrompt, type ResearchReportDraft } from "./workspace-items"
 
 export type ResearchVisit = {
   id: string; module: ResearchModule; question: string; href: string; scrollY: number
   title: string; groupId: string | null; isFavorite: boolean
   createdAt: number; updatedAt: number; deletedAt: number | null
+  archivedAt?: number | null
+  activity?: ResearchActivity | null
 }
 export type ResearchGroup = { id: string; name: string; createdAt: number; updatedAt: number }
-export type ResearchWorkspace = { visits: ResearchVisit[]; groups: ResearchGroup[] }
+export type ResearchWorkspace = {
+  visits: ResearchVisit[]; groups: ResearchGroup[]
+  materials?: ResearchMaterial[]; reportDrafts?: ResearchReportDraft[]; prompts?: ResearchPrompt[]
+  composerDraft?: ResearchComposerDraft | null
+}
 export type ResearchSnapshot = ResearchWorkspace & { revision: number }
 export const emptyWorkspace = (): ResearchWorkspace => ({ visits: [], groups: [] })
 export const sessionParameter = "researchSession"
@@ -26,7 +33,11 @@ export function validateVisit(value: unknown): ResearchVisit | null {
   if (typeof v.title !== "string" || !v.title.trim() || v.title.length > 120 || typeof v.isFavorite !== "boolean") return null
   if (v.groupId !== null && !validHistoryId(v.groupId)) return null
   if (v.deletedAt !== null && !validTime(v.deletedAt)) return null
-  return { id: v.id, module: v.module, question: v.question, href, scrollY: v.scrollY, title: v.title.trim(), groupId: v.groupId, isFavorite: v.isFavorite, createdAt: v.createdAt, updatedAt: v.updatedAt, deletedAt: v.deletedAt }
+  if (v.archivedAt != null && !validTime(v.archivedAt)) return null
+  if (v.activity != null && !validActivity(v.activity)) return null
+  if (v.activity?.kind === "reader" && v.module !== "papers") return null
+  if (v.activity?.kind === "report" && v.module !== "reports") return null
+  return { id: v.id, module: v.module, question: v.question, href, scrollY: v.scrollY, title: v.title.trim(), groupId: v.groupId, isFavorite: v.isFavorite, createdAt: v.createdAt, updatedAt: v.updatedAt, deletedAt: v.deletedAt, ...(v.archivedAt !== undefined ? { archivedAt: v.archivedAt } : {}), ...(v.activity !== undefined ? { activity: v.activity } : {}) }
 }
 
 export function validateWorkspace(value: unknown): ResearchWorkspace | null {
@@ -44,7 +55,14 @@ export function validateWorkspace(value: unknown): ResearchWorkspace | null {
     if (!visit || visits.some(item => item.id === visit.id) || (visit.groupId && !groups.some(g => g.id === visit.groupId))) return null
     visits.push(visit)
   }
-  return { visits, groups }
+  const groupExists = (id: string | null | undefined) => !id || groups.some(g => g.id === id)
+  if (raw.materials !== undefined && (!Array.isArray(raw.materials) || raw.materials.length > 1000 || !raw.materials.every(m => validMaterial(m) && groupExists(m.groupId)) || new Set(raw.materials.map(m => m.id)).size !== raw.materials.length)) return null
+  if (raw.reportDrafts !== undefined && (!Array.isArray(raw.reportDrafts) || raw.reportDrafts.length > 100 || !raw.reportDrafts.every(d => validReportDraft(d) && groupExists(d.groupId)) || new Set(raw.reportDrafts.map(d => d.id)).size !== raw.reportDrafts.length)) return null
+  if (raw.prompts !== undefined && (!Array.isArray(raw.prompts) || raw.prompts.length > 100 || !raw.prompts.every(validPrompt) || new Set(raw.prompts.map(p => p.id)).size !== raw.prompts.length)) return null
+  if (raw.composerDraft != null && (!validComposerDraft(raw.composerDraft) || !groupExists(raw.composerDraft.groupId))) return null
+  if (raw.composerDraft?.materialIds?.some(id => !raw.materials?.some(m => m.id === id))) return null
+  if (visits.some(v => v.activity?.kind === "report" && !(raw.reportDrafts ?? []).some(d => d.id === (v.activity as Extract<ResearchActivity, { kind: "report" }>).draftId))) return null
+  return { visits, groups, ...(raw.materials !== undefined ? { materials: raw.materials } : {}), ...(raw.reportDrafts !== undefined ? { reportDrafts: raw.reportDrafts } : {}), ...(raw.prompts !== undefined ? { prompts: raw.prompts } : {}), ...(raw.composerDraft !== undefined ? { composerDraft: raw.composerDraft } : {}) }
 }
 
 // Deterministic identity deduplicates the same v1 record across imports.

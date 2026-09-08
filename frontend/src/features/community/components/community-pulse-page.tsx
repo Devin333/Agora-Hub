@@ -1,5 +1,7 @@
 "use client"
 
+import { ResearchMaterialContext } from "@/components/research/research-material-context"
+
 import type { FormEvent, ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import {
@@ -65,6 +67,7 @@ export function CommunityPulsePage({
 
   return (
     <main className="space-y-8 font-papers-research">
+      <ResearchMaterialContext />
       {sourceQuestion ? (
         <div className="rounded-lg border border-[#e7dff1] bg-[#faf7ff] px-3 py-2 text-sm text-[#695d7d]">
           来自首页的问题：<span className="font-medium text-[#382758]">{sourceQuestion}</span>

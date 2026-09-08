@@ -10,6 +10,7 @@ import { buildReaderParagraphs, buildReaderToc } from "@/components/papers/open-
 import { readerUnavailableMessage, type ReaderWorkspacePayload } from "./reader-contract"
 import { formatPaperDate, paperPdfUrl } from "@/lib/papers/format"
 import { usePaperWorkspaceStore } from "@/stores/paper-workspace-store"
+import { historyState, rememberResearchActivity } from "@/lib/research/history"
 import { ReaderAssistant, safeReaderSourceUrl } from "./reader-assistant"
 import { useReaderNotebook } from "./use-reader-notebook"
 import styles from "./reader-workspace.module.css"
@@ -36,8 +37,30 @@ export function PaperReaderWorkspace({ payload, backHref }: { payload: ReaderWor
   const source = safeReaderSourceUrl(current.sourceUrl || paper.paperUrl || paper.arxivUrl)
   const repository = safeReaderSourceUrl(paper.repoUrl)
   const researchQuestion = new URL(backHref, "https://agora.invalid").searchParams.get("question") || ""
+  const researchSession = new URL(backHref, "https://agora.invalid").searchParams.get("researchSession")
 
   useEffect(() => () => operation.current?.abort(), [])
+
+  useEffect(() => {
+    if (!notebook.ready || !outline.length) return
+    const params = new URL(window.location.href).searchParams
+    const requested = params.get("resumeSection")
+    if (requested && outline.some(section => section.id === requested)) {
+      setActiveSection(requested)
+      setSectionRequest(previous => ({ id: requested, sequence: (previous?.sequence ?? 0) + 1 }))
+    }
+  }, [notebook.ready, outline])
+
+  useEffect(() => {
+    if (!researchSession || !notebook.ready || !historyState().ready) return
+    const section = outline.find(item => item.id === activeSection)
+    const activityHref = `${window.location.pathname}`
+    rememberResearchActivity(researchSession, {
+      kind: "reader", paperId: paper.id, title: paper.title, href: activityHref,
+      ...(activeSection ? { sectionId: activeSection } : {}), ...(section?.title ? { sectionTitle: section.title } : {}),
+      ...(view === "pdf" ? { pdfPage: notebook.pdfPage } : {}), updatedAt: Date.now(),
+    }, historyState().owner)
+  }, [activeSection, notebook.pdfPage, notebook.ready, outline, paper.id, paper.title, researchSession, view])
 
   useEffect(() => {
     if (view !== "body") { setProgress(0); return }

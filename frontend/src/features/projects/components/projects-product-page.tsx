@@ -1,5 +1,7 @@
 "use client"
 
+import { ResearchMaterialContext } from "@/components/research/research-material-context"
+
 import Link from "next/link"
 import { AlertCircle, ArrowRight, Binoculars, Boxes, Check, ChevronRight, CircleHelp, Clipboard, ExternalLink, FlaskConical, Flame, FolderKanban, GitBranch, Info, Loader2, Search, Sparkles, Star } from "lucide-react"
 import type { ComponentType } from "react"
@@ -195,6 +197,7 @@ function ProjectHero({
     <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-end">
       <div className="min-w-0">
         {sourceQuestion ? <div className="mb-4 rounded-lg border border-[#e7dff1] bg-[#faf7ff] px-3 py-2 text-sm text-[#695d7d]">来自首页的问题：<span className="font-medium text-[#382758]">{sourceQuestion}</span></div> : null}
+        <ResearchMaterialContext />
         <div className="mb-5 flex flex-wrap items-center gap-2">
           <Badge variant="info">Projects API v1</Badge>
           <Badge variant="muted">Real Project Radar data</Badge>

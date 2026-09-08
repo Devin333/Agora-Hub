@@ -2,7 +2,7 @@ import { StrictMode } from "react"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { DesignDemoPage } from "../design-demo-page"
-import { recordResearchVisit, removeResearchVisit } from "@/lib/research/history"
+import { readResearchWorkspace, recordResearchVisit, removeResearchVisit, saveResearchGroup, saveResearchMaterial, selectHistoryOwner } from "@/lib/research/history"
 import { researchQuestionHref } from "@/lib/research/entry"
 
 const push = vi.hoisted(() => vi.fn())
@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
 vi.mock("@/components/auth/portal-account-control", () => ({ PortalAccountControl: () => <button>登录</button> }))
 
 describe("research homepage", () => {
-  beforeEach(() => { localStorage.clear(); sessionStorage.clear(); push.mockReset(); vi.spyOn(crypto, "randomUUID").mockReturnValue("11111111-1111-4111-8111-111111111111"); Element.prototype.scrollIntoView = vi.fn(); window.matchMedia = vi.fn().mockReturnValue({ matches: false }) })
+  beforeEach(() => { localStorage.clear(); sessionStorage.clear(); selectHistoryOwner(null); window.history.replaceState(null, "", "/design-demo"); push.mockReset(); vi.spyOn(crypto, "randomUUID").mockReturnValue("11111111-1111-4111-8111-111111111111"); Element.prototype.scrollIntoView = vi.fn(); window.matchMedia = vi.fn().mockReturnValue({ matches: false }) })
   afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
   it("starts automatically, fills examples without navigating, then sends once", () => {
@@ -38,7 +38,7 @@ describe("research homepage", () => {
   })
 
   it("does not send during Chinese composition and preserves input on failure", () => {
-    render(<DesignDemoPage />)
+    const view = render(<DesignDemoPage />)
     const input = screen.getByRole("textbox")
     fireEvent.change(input, { target: { value: "找研究基础设施项目" } })
     fireEvent.compositionStart(input)
@@ -50,6 +50,44 @@ describe("research homepage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("问题已保留")
     expect(input).toHaveValue("找研究基础设施项目")
     expect(screen.getByRole("button", { name: "发送问题" })).toBeEnabled()
+    expect(readResearchWorkspace().composerDraft?.question).toBe("找研究基础设施项目")
+    view.unmount()
+    render(<DesignDemoPage />)
+    expect(screen.getByRole("textbox")).toHaveValue("找研究基础设施项目")
+    expect(screen.getByText("已恢复一条尚未发送的研究问题")).toBeInTheDocument()
+  })
+
+  it("preserves a slow navigation draft and clears it only after the matching destination accepts it", () => {
+    vi.useFakeTimers()
+    try {
+      render(<DesignDemoPage />)
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Agent 论文" } })
+      fireEvent.click(screen.getByRole("button", { name: "发送问题" }))
+      const href = push.mock.calls[0][0]
+      act(() => vi.advanceTimersByTime(15001))
+      expect(screen.getByRole("alert")).toHaveTextContent("问题已保留")
+      expect(readResearchWorkspace().composerDraft?.question).toBe("Agent 论文")
+      act(() => recordResearchVisit(researchQuestionHref("papers", "Other", "other-session")))
+      expect(readResearchWorkspace().composerDraft).not.toBeNull()
+      act(() => recordResearchVisit(href))
+      expect(readResearchWorkspace().composerDraft).toBeNull()
+    } finally { vi.useRealTimers() }
+  })
+
+  it("keeps selected materials visible and forwards only owned IDs separately from the destination group", () => {
+    saveResearchGroup("Agent 分组", "group-a")
+    saveResearchMaterial({ id: "source-a", groupId: "group-a", kind: "paper", title: "已选论文", url: "https://arxiv.org/abs/2605.22343", notes: "方法笔记", createdAt: 1, updatedAt: 2 })
+    window.history.replaceState(null, "", "/design-demo?researchGroup=group-a&material=source-a&material=not-owned")
+    render(<DesignDemoPage />)
+    expect(screen.getByLabelText("本次研究选中的资料")).toHaveTextContent("已选论文")
+    fireEvent.change(screen.getByRole("combobox", { name: "新研究的保存分组" }), { target: { value: "" } })
+    expect(screen.getByLabelText("本次研究选中的资料")).toHaveTextContent("已选论文")
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Agent 论文" } })
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }))
+    const params = new URL(push.mock.calls[0][0], "https://agora.invalid").searchParams
+    expect(params.getAll("material")).toEqual(["source-a"])
+    expect(params.has("researchGroup")).toBe(false)
+    expect(readResearchWorkspace().composerDraft?.materialIds).toEqual(["source-a"])
   })
 
   it("restores draft and manual mode after ordinary navigation in StrictMode", async () => {

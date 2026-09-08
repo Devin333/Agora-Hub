@@ -72,6 +72,7 @@ export function projectParams(searchParams: URLSearchParams, defaults: ProjectLi
     sort: (searchParams.get("sort") as ProjectListParams["sort"]) ?? defaults.sort,
     source: (searchParams.get("source") as ProjectListParams["source"]) ?? defaults.source,
     language: (searchParams.get("language") as ProjectListParams["language"]) ?? defaults.language,
+    license: (searchParams.get("license") as ProjectListParams["license"]) ?? defaults.license,
     maturity: (searchParams.get("maturity") as ProjectListParams["maturity"]) ?? defaults.maturity,
     period: (searchParams.get("period") as ProjectListParams["period"]) ?? defaults.period,
     page: numberParam(searchParams.get("page")) ?? defaults.page,

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useUiStore } from "@/stores/ui-store"
 const navigation = vi.hoisted(() => ({ query: "", replace: vi.fn() }))
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => navigation.query ? new URLSearchParams(navigation.query) : null,
+  useSearchParams: () => new URLSearchParams(navigation.query),
   usePathname: () => "/projects",
   useRouter: () => ({ replace: navigation.replace }),
 }))

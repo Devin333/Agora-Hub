@@ -33,6 +33,7 @@ export function ProjectToolbar({
       topic: undefined,
       source: undefined,
       language: undefined,
+      license: undefined,
       maturity: undefined,
       period: undefined,
       page: 1,

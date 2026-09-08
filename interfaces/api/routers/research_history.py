@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
 from interfaces.services.auth_service import AuthSessionInvalidError
+from interfaces.services.research_workspace_model import ResearchActivity, WorkspaceItems
 from interfaces.services.research_history_service import (
     MAX_GROUPS,
     MAX_VISITS,
@@ -30,6 +31,8 @@ class ResearchHistoryVisitInput(BaseModel):
     groupId: str | None
     isFavorite: bool
     deletedAt: int | float | None
+    archivedAt: int | None = None
+    activity: ResearchActivity | None = None
 
 
 class ResearchHistoryGroupInput(BaseModel):
@@ -41,7 +44,7 @@ class ResearchHistoryGroupInput(BaseModel):
     updatedAt: int | float
 
 
-class ResearchHistoryReplaceRequest(BaseModel):
+class ResearchHistoryReplaceRequest(WorkspaceItems):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     revision: int = Field(ge=0)
@@ -78,8 +81,9 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
             result = services.research_history_service_factory().replace(
                 user_id=user_id,
                 revision=request.revision,
-                visits=[item.model_dump() for item in request.visits],
+                visits=[item.model_dump(exclude_unset=True) for item in request.visits],
                 groups=[item.model_dump() for item in request.groups],
+                workspace_items=request.model_dump(exclude={"revision", "visits", "groups"}, exclude_unset=True),
             )
         except AuthSessionInvalidError as exc:
             return helpers.error(

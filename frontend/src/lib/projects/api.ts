@@ -466,6 +466,7 @@ function toApiListParams(params: ProjectListParams): Record<string, unknown> {
     category: params.category,
     tag: params.topic,
     source: params.source,
+    license: params.license,
     sort: params.sort,
     page: params.page,
     page_size: params.pageSize,

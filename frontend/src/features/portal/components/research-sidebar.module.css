@@ -76,5 +76,12 @@
 .toast span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toast button { display: flex; align-items: center; gap: 5px; flex-shrink: 0; color: #7c3aed; }
 .spinner { animation: spin 1s linear infinite; }
+.searchScope { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: #756881; margin: -3px 2px 8px; }
+.searchScope select { max-width: 142px; background: transparent; color: #59416e; border-radius: 5px; padding: 4px; }
+.activity { display: block; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6f5885; font-size: 12px; }
+.favoriteLink { display: block; width: 100%; padding: 7px 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 13px; color: #69418f; border-radius: 6px; }
+.favoriteLink:hover { background: #eee8f5; }
+.materialLink { display: flex; align-items: center; gap: 8px; padding: 10px 11px; margin: -10px 0 14px; color: #6f36af; font-size: 13px; border-radius: 6px; background: #eee6f8; }
+.materialLink:focus-visible, .searchScope select:focus-visible { outline: 2px solid #8b5cf6; outline-offset: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

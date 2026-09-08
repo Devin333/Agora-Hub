@@ -8,6 +8,7 @@ import { ResearchHistoryTracker } from "@/components/research/research-history-t
 import { PortalAccountProvider, usePortalAccount } from "@/components/auth/portal-account-provider"
 import { startHistorySync } from "@/lib/research/history-sync"
 import { setHistoryStatus } from "@/lib/research/history"
+import { ResearchCommandPalette } from "@/features/portal/components/research-command-palette"
 
 function ResearchHistoryRuntime() {
   const account = usePortalAccount()
@@ -54,6 +55,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <ThemeBridge />
         <PortalAccountProvider>
           <ResearchHistoryRuntime />
+          <ResearchCommandPalette />
           {children}
         </PortalAccountProvider>
       </TooltipProvider>

@@ -204,6 +204,7 @@ export function filterProjects(items: ProjectItem[], params: ProjectListParams):
   const topic = params.topic?.trim().toLowerCase()
   const source = normalizeSource(params.source)
   const language = normalizeLanguage(params.language)
+  const license = params.license
   const maturity = normalizeMaturity(params.maturity)
   const period = normalizePeriod(params.period)
 
@@ -213,6 +214,7 @@ export function filterProjects(items: ProjectItem[], params: ProjectListParams):
     if (topic && !projectTopicText(item).includes(topic)) return false
     if (source && !projectSources(item).includes(source)) return false
     if (language && normalizeLanguage(item.language) !== language) return false
+    if (license && item.license !== license) return false
     if (maturity && item.maturity !== maturity) return false
     if (period && period !== "all" && !matchesPeriod(item, period)) return false
     return true

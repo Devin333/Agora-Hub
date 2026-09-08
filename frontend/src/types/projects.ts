@@ -154,6 +154,7 @@ export type ProjectListParams = {
   sort?: ProjectSort
   source?: ProjectSource
   language?: ProjectLanguage
+  license?: "MIT" | "Apache-2.0" | "BSD-3-Clause"
   maturity?: ProjectMaturity
   period?: ProjectPeriod
   page?: number

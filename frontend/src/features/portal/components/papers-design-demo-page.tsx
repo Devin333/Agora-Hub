@@ -16,6 +16,7 @@ import { PaperCategorySidebar } from "./paper-category-sidebar"
 import { buildPaperCategories, type PaperCategoryDefinitions, type PaperCategoryGroups } from "@/lib/papers/discovery-categories"
 import { canonicalRefSlug } from "@/lib/papers/query"
 import { useResearchReturnContext } from "@/lib/auth/research-return-context"
+import { ResearchMaterialContext } from "@/components/research/research-material-context"
 
 const featureOptions = {
   pdf: { zh: "有 PDF", en: "PDF available", icon: FileText },
@@ -83,6 +84,7 @@ export function PapersDiscoveryView({ model, categories }: { model: PapersDiscov
           {view === "discover" && <PaperCategorySidebar groups={categories} locale={locale} selected={{ topic: model.topic, method: model.method, task: model.task }} onSelect={(kind, value) => ({ topic: model.onTopicChange, method: model.onMethodChange, task: model.onTaskChange })[kind](value)} />}
         </aside>
         {view === "discover" ? <section className={styles.results} aria-labelledby="paper-results-title" aria-busy={model.isLoading}>
+          <ResearchMaterialContext />
           {model.question && <div className={styles.questionContext}><span><strong>{zh ? "研究问题" : "Research question"}</strong>{model.question}</span><button type="button" aria-label={zh ? "移除研究问题" : "Dismiss research question"} title={zh ? "移除研究问题" : "Dismiss research question"} onClick={model.onQuestionClear}><X size={16} /></button></div>}
           <form onSubmit={search} role="search" className={styles.search}><Search size={20} /><span className={styles.searchMode}>{zh ? "关键词" : "Keywords"}</span><input aria-label={zh ? "搜索论文" : "Search papers"} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={zh ? "论文标题、作者、研究方向..." : "Title, author, research topic..."} />{draft && <button type="button" className={styles.clearSearch} aria-label={zh ? "清空搜索" : "Clear search"} title={zh ? "清空搜索" : "Clear search"} onClick={() => { setDraft(""); model.onSearch("") }}><X size={18} /></button>}<button className={styles.submit} type="submit" aria-label={zh ? "搜索" : "Search"} title={zh ? "搜索" : "Search"}><ArrowRight size={20} /></button></form>
           <div className={styles.filterBar}><div className={styles.features} role="group" aria-label={zh ? "论文筛选" : "Paper filters"}>{paperFeatureFilters.map((filter) => { const option = featureOptions[filter]; const Icon = option.icon; const active = filters.includes(filter); return <button type="button" key={filter} aria-pressed={active} onClick={() => model.onFilterToggle(filter)}><Icon size={15} />{option[locale]}{active && <Check size={13} />}</button> })}</div><label className={styles.period}><select aria-label={zh ? "发布时间" : "Publication period"} value={model.period} onChange={(event) => model.onPeriodChange(event.target.value as PaperPeriod)}>{periods.map((period) => <option key={period.value} value={period.value}>{period[locale]}</option>)}</select></label><DateRange model={model} /></div>

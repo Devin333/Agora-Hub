@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import math
+import json
 import os
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -15,6 +16,7 @@ from interfaces.services.json_file_store import (
     read_json_object_unlocked,
     write_json_object_unlocked,
 )
+from interfaces.services.research_workspace_model import activity_adapter, validate_workspace_items
 
 
 DEFAULT_RESEARCH_HISTORY_PATH = ".newsroom/research/history.json"
@@ -58,12 +60,14 @@ class ResearchHistorySnapshot:
     revision: int
     visits: list[dict[str, Any]]
     groups: list[dict[str, Any]]
+    workspace_items: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "revision": self.revision,
             "visits": self.visits,
             "groups": self.groups,
+            **self.workspace_items,
         }
 
 
@@ -89,6 +93,7 @@ class ResearchHistoryService:
         revision: int,
         visits: Sequence[Mapping[str, Any]],
         groups: Sequence[Mapping[str, Any]],
+        workspace_items: Mapping[str, Any] | None = None,
     ) -> ResearchHistorySnapshot:
         owner = _require_user_id(user_id)
         requested_revision = _validate_revision(revision)
@@ -109,11 +114,22 @@ class ResearchHistoryService:
                         "research history has changed; reload before saving",
                         details={"revision": current.revision},
                     )
+                try:
+                    validated_items = validate_workspace_items(
+                        {**current.workspace_items, **(workspace_items or {})},
+                        group_ids=group_ids,
+                        visits=validated_visits,
+                    )
+                except ValueError as exc:
+                    raise ResearchHistoryError(str(exc)) from exc
                 next_snapshot = ResearchHistorySnapshot(
                     revision=current.revision + 1,
                     visits=validated_visits,
                     groups=validated_groups,
+                    workspace_items=validated_items,
                 )
+                if len(json.dumps(next_snapshot.to_dict(), ensure_ascii=False).encode("utf-8")) > MAX_BODY_BYTES:
+                    raise ResearchHistoryError("workspace exceeds the 4 MiB storage limit")
                 payload.setdefault("users", {})[owner] = next_snapshot.to_dict()
                 payload["schemaVersion"] = RESEARCH_HISTORY_SCHEMA_VERSION
                 write_json_object_unlocked(path, payload)
@@ -147,7 +163,12 @@ def _snapshot_for_owner(payload: Mapping[str, Any], owner: str) -> ResearchHisto
     group_ids = {item["id"] for item in groups}
     if any(item["groupId"] is not None and item["groupId"] not in group_ids for item in visits):
         raise JsonFileInvalidError("research history visit groupId is not defined")
-    return ResearchHistorySnapshot(revision=revision, visits=visits, groups=groups)
+    items = validate_workspace_items(
+        {key: value for key, value in raw.items() if key not in {"revision", "visits", "groups"}},
+        group_ids=group_ids,
+        visits=visits,
+    )
+    return ResearchHistorySnapshot(revision=revision, visits=visits, groups=groups, workspace_items=items)
 
 
 def _require_user_id(value: Any) -> str:
@@ -177,7 +198,7 @@ def _validate_visits(values: Any) -> list[dict[str, Any]]:
 def _validate_visit(value: Any, *, index: int) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ResearchHistoryError(f"visit {index} must be an object")
-    allowed = {"id", "module", "question", "href", "scrollY", "createdAt", "updatedAt", "title", "groupId", "isFavorite", "deletedAt"}
+    allowed = {"id", "module", "question", "href", "scrollY", "createdAt", "updatedAt", "title", "groupId", "isFavorite", "deletedAt", "archivedAt", "activity"}
     unknown = set(value) - allowed
     if unknown:
         raise ResearchHistoryError(f"visit {index} contains unsupported fields")
@@ -211,6 +232,19 @@ def _validate_visit(value: Any, *, index: int) -> dict[str, Any]:
     deleted_at = value["deletedAt"]
     if deleted_at is not None:
         deleted_at = _positive_safe_integer(deleted_at, f"visit {index}.deletedAt")
+    extras: dict[str, Any] = {}
+    if "archivedAt" in value:
+        archived = value["archivedAt"]
+        extras["archivedAt"] = None if archived is None else _positive_safe_integer(archived, f"visit {index}.archivedAt")
+    if "activity" in value:
+        activity = value["activity"]
+        try:
+            parsed = activity_adapter.validate_python(activity) if activity is not None else None
+        except ValueError as exc:
+            raise ResearchHistoryError(f"visit {index}.activity is invalid") from exc
+        if parsed is not None and module != ("papers" if parsed.kind == "reader" else "reports"):
+            raise ResearchHistoryError(f"visit {index}.activity does not match module")
+        extras["activity"] = parsed.model_dump(exclude_unset=True) if parsed else None
     return {
         "id": visit_id,
         "module": module,
@@ -223,6 +257,7 @@ def _validate_visit(value: Any, *, index: int) -> dict[str, Any]:
         "groupId": group_id,
         "isFavorite": favorite,
         "deletedAt": deleted_at,
+        **extras,
     }
 
 
