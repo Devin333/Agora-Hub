@@ -323,6 +323,26 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **AND** a planning grant MUST be read-only, parented by the original input grant, and carry no fabricated child attempt identity
 - **AND** missing metadata or payload for committed authority MUST fail closed rather than trigger tool reexecution or legacy-body metadata reconstruction
 
+#### Scenario: Memory namespace name is allowed but no revision is admitted
+
+- **WHEN** a candidate requests an allowlisted memory namespace without a trusted exact descriptor in its committed input grant
+- **THEN** Harness MUST reject access before invoking a child or reading memory payload
+- **AND** a caller-provided record version, namespace name or mutable latest alias MUST NOT serve as namespace authority
+
+#### Scenario: A new namespace revision is published after input admission
+
+- **WHEN** a trusted publisher commits another immutable namespace revision
+- **THEN** existing executions MUST retain their original exact namespace refs and checksums
+- **AND** recovering input admission MUST reuse recorded descriptors rather than resolve current catalog contents
+- **AND** publication MUST NOT itself promote memory, update active memory or widen any grant
+
+#### Scenario: A child consumes an admitted memory revision
+
+- **WHEN** an accepted child attempt requests memory permitted by its pinned policy
+- **THEN** its input grant and context envelope MUST contain the exact requested namespace revision as a read-only subset of the original grant
+- **AND** parent-private or sibling-private memory MUST NOT become shared by naming the namespace
+- **AND** the reader MUST verify the caller's full execution/attempt, committed grant and metadata before opening memory payload, then verify the actual complete revision bytes
+
 ### Requirement: Spawn SHALL use a durable intent receipt and reconciliation protocol
 
 Each attempt MUST have `spawn_operation_key = group_id + wave_id + task_instance_id + attempt`. Wave admission, reservation ledger and `TASK_ATTEMPT_SPAWN_INTENT` MUST be committed in one transaction or equivalent durable batch before spawn. `ChildAgentSupervisor` MUST handle the operation key idempotently and persist `SPAWN_CONFIRMED` or `SPAWN_UNKNOWN` receipts. `TASK_WAVE_DISPATCHED` requires known spawn status and trackable children for all selected tasks. Partially successful batches MUST reconcile each task independently. Identical verified receipt redelivery MUST be reused; conflicting identity/checksum evidence MUST halt rather than overwrite history.

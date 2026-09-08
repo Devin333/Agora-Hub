@@ -1567,17 +1567,18 @@ def _build_configured_composition(
             artifact_store=artifact_port.store,
             tenant_id=_RESEARCH_EVENT_TENANT_ID,
         )
-        from framework.harness.ref_admission import HarnessRefAdmissionService
+        from interfaces.composition.harness_memory import build_harness_ref_admission_service
         from framework.harness.ref_results import HarnessResultRefAuthority
         from framework.harness.ref_snapshot_store import DurableRefAuthoritySnapshotStore
 
-        dynamic_ref_admission_service = HarnessRefAdmissionService(
-            DurableRefAuthoritySnapshotStore(
+        dynamic_ref_admission_service = build_harness_ref_admission_service(
+            snapshot_store=DurableRefAuthoritySnapshotStore(
                 durable_events.event_runtime,
                 durable_events.event_store,
                 artifact_store=artifact_port.store,
                 tenant_id=_RESEARCH_EVENT_TENANT_ID,
-            )
+            ),
+            namespace_root=settings.artifact.root / "memory-namespaces",
         )
         dynamic_checkpoint_store = JsonlTaskPlanCheckpointStore(
             settings.artifact.root / "task-plan-checkpoints.jsonl"

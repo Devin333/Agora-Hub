@@ -13,7 +13,7 @@ from framework.harness.context.models import (
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.policy import HarnessBudgetSnapshot
 from framework.harness.ref_admission import HarnessRefAdmissionService
-from framework.harness.ref_authority import RefAuthority
+from framework.harness.ref_authority import REF_KIND_MEMORY, RefAuthority
 from framework.harness.ref_snapshot import RefAuthoritySnapshot, SnapshotRefResolutionPort
 from framework.harness.subagents.context import SubAgentContextBuilder
 from framework.harness.subagents.models import (
@@ -492,6 +492,7 @@ class ResolvedSubAgentTaskAdapter:
             context_pack=context_pack,
         )
         ref_options = {}
+        memory_context_refs = ()
         if self._ref_admission_service is not None:
             root = self._ref_admission_service.store.find(
                 run_id=plan.run_id,
@@ -507,6 +508,10 @@ class ResolvedSubAgentTaskAdapter:
             child_grant = self._ref_admission_service.admit_child_inputs(
                 root, attempt_identity=attempt_identity,
                 input_refs=resolved_task.task.input_refs,
+                memory_namespaces=resolved_task.task.requested_memory_namespaces,
+            )
+            memory_context_refs = tuple(
+                item.ref for item in child_grant.descriptors if item.ref_kind == REF_KIND_MEMORY
             )
             ref_options = {
                 "ref_authority": RefAuthority(),
@@ -519,7 +524,7 @@ class ResolvedSubAgentTaskAdapter:
             spec=bounded_spec,
             context_pack=context_pack,
             input_refs=resolved_task.task.input_refs,
-            memory_context_refs=(),
+            memory_context_refs=memory_context_refs,
             budget_snapshot=budget_snapshot,
             **ref_options,
         )

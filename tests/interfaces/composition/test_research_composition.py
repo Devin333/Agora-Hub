@@ -517,6 +517,10 @@ def test_valid_settings_compose_full_durable_production_graph(
         assert isinstance(admission.store, DurableRefAuthoritySnapshotStore)
         assert admission.store.is_durable is True
         assert admission.store._artifacts is runtime.artifact_port.store
+        from infrastructure.storage.memory.namespace import FilesystemMemoryNamespaceStore
+        assert isinstance(admission.memory_namespaces, FilesystemMemoryNamespaceStore)
+        assert admission.memory_namespaces.is_durable is True
+        assert admission.memory_namespace_refs == ()
         stage_worker_type = research_composition.ResearchAnalysisTaskPlanStageWorker
         volatile_admission = HarnessRefAdmissionService(SimpleNamespace(
             commit=admission.store.commit,

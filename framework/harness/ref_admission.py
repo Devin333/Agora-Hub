@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from framework.harness.control_plane.activity_execution import (
     HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY,
@@ -14,23 +14,57 @@ from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.graph.activity import graph_activity_input_checksum
 from framework.harness.graph.canonical import freeze_json, mapping_to_dict
 from framework.harness.ref_authority import (
-    REF_KIND_INPUT, RefAccessMode, RefAccessPolicy, RefDescriptor, RefScope,
+    REF_KIND_INPUT,
+    REF_KIND_MEMORY,
+    RefAccessMode,
+    RefAccessPolicy,
+    RefAuthority,
+    RefDescriptor,
+    RefScope,
 )
 from framework.harness.ref_snapshot import (
-    RefAuthoritySnapshot, RefAuthoritySnapshotStorePort, RefSnapshotPhase,
+    RefAuthoritySnapshot,
+    RefAuthoritySnapshotStorePort,
+    RefSnapshotPhase,
+    SnapshotRefResolutionPort,
 )
 from framework.harness.subagents.transcript import SubAgentAttemptIdentity
 from framework.harness.task_plan.canonical import canonical_payload_checksum, stable_text_tuple
 from framework.harness.task_plan.policy import TaskPlanPolicy
 from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
+from framework.memory.namespace import MemoryNamespaceDescriptor, MemoryNamespaceDescriptorPort, namespace_revision
 from framework.shared.graph_identity import GraphExecutionIdentity
+
+if TYPE_CHECKING:
+    from framework.harness.ref_memory import HarnessMemoryNamespaceReader
 
 
 class HarnessRefAdmissionService:
-    def __init__(self, store: RefAuthoritySnapshotStorePort) -> None:
+    def __init__(
+        self,
+        store: RefAuthoritySnapshotStorePort,
+        *,
+        memory_namespaces: MemoryNamespaceDescriptorPort | None = None,
+        memory_namespace_refs: tuple[str, ...] = (),
+    ) -> None:
         if not isinstance(store, RefAuthoritySnapshotStorePort):
             raise TypeError("store must implement RefAuthoritySnapshotStorePort")
         self.store = store
+        self.memory_namespace_refs = stable_text_tuple(
+            memory_namespace_refs,
+            "memory_namespace_refs",
+            item_kind="reference",
+        )
+        for ref in self.memory_namespace_refs:
+            namespace_revision(ref)
+        if self.memory_namespace_refs and not isinstance(memory_namespaces, MemoryNamespaceDescriptorPort):
+            raise TypeError("memory namespace refs require a metadata-only namespace port")
+        if memory_namespaces is not None and (
+            not isinstance(memory_namespaces, MemoryNamespaceDescriptorPort)
+            or getattr(memory_namespaces, "is_durable", False) is not True
+        ):
+            raise TypeError("memory namespace authority requires durable metadata")
+        self.memory_namespaces = memory_namespaces
 
     def admit_graph_inputs(
         self,
@@ -88,12 +122,35 @@ class HarnessRefAdmissionService:
             )
             for name in sorted(inputs)
         )
+        recorded = self.store.find(
+            run_id=activity.run_id,
+            binding_key=RefAuthoritySnapshot.admission_binding_key(
+                execution,
+                stage_binding.stage_id,
+                stage_binding.binding_checksum,
+            ),
+        )
+        if recorded is not None:
+            memory_descriptors = tuple(
+                item for item in recorded.descriptors if item.ref_kind == REF_KIND_MEMORY
+            )
+            if tuple(sorted(item.ref for item in memory_descriptors)) != self.memory_namespace_refs:
+                raise HarnessValidationError("memory bindings differ from the admitted grant", code="REF_SNAPSHOT_CONFLICT")
+        else:
+            memory_descriptors = self._resolve_memory_descriptors(
+                run_id=activity.run_id, stage_id=stage_binding.stage_id,
+            )
+        if any(item.namespace not in task_policy.allowed_memory_namespaces for item in memory_descriptors):
+            raise HarnessValidationError("memory namespace exceeds TaskPlan policy", code="REF_UNAUTHORIZED")
+        descriptors += memory_descriptors
         policy = RefAccessPolicy(
             policy_id="graph-input:" + stage_binding.stage_id, version="1",
             run_id=activity.run_id, stage_id=stage_binding.stage_id,
             tenant_id=activity.tenant_scope_ref, owner_id=activity.identity_scope_ref,
             allowed_refs=tuple(item.ref for item in descriptors),
-            allowed_artifact_types=("graph_input",), allowed_ref_kinds=(REF_KIND_INPUT,),
+            allowed_artifact_types=tuple(sorted({item.artifact_type for item in descriptors})),
+            allowed_ref_kinds=tuple(sorted({item.ref_kind for item in descriptors})),
+            allowed_memory_namespaces=tuple(item.namespace for item in memory_descriptors),
             pinned_checksums={item.ref: item.source_checksum for item in descriptors},
         )
         snapshot = RefAuthoritySnapshot(
@@ -104,24 +161,78 @@ class HarnessRefAdmissionService:
         )
         return self._commit(snapshot)
 
+    def _resolve_memory_descriptors(
+        self,
+        *,
+        run_id: str,
+        stage_id: str,
+    ) -> tuple[RefDescriptor, ...]:
+        result = []
+        for ref in self.memory_namespace_refs:
+            metadata = self.memory_namespaces.describe(ref)
+            if (
+                not isinstance(metadata, MemoryNamespaceDescriptor)
+                or metadata.exact_ref != ref
+            ):
+                raise HarnessValidationError(
+                    "trusted memory namespace metadata is unavailable",
+                    code="REF_UNRESOLVED",
+                )
+            result.append(RefDescriptor.memory(
+                namespace=metadata.namespace, ref=ref, run_id=run_id, stage_id=stage_id,
+                tenant_id=metadata.tenant_id, owner_id=metadata.owner_id,
+                source_checksum=metadata.source_checksum,
+                scope=RefScope.SHARED_READ_ONLY if metadata.shared_read_only else RefScope.PRIVATE,
+            ))
+        return tuple(result)
+
+    def memory_reader(
+        self,
+        snapshot: RefAuthoritySnapshot,
+        *,
+        execution_identity: GraphExecutionIdentity,
+        attempt_identity: SubAgentAttemptIdentity | None = None,
+    ) -> HarnessMemoryNamespaceReader:
+        from framework.harness.ref_memory import HarnessMemoryNamespaceReader
+
+        return HarnessMemoryNamespaceReader(
+            snapshot=snapshot,
+            snapshot_store=self.store,
+            namespace_store=self.memory_namespaces,
+            execution_identity=execution_identity,
+            attempt_identity=attempt_identity,
+        )
+
     def admit_child_inputs(
         self,
         parent: RefAuthoritySnapshot,
         *,
         attempt_identity: SubAgentAttemptIdentity,
         input_refs: tuple[str, ...],
+        memory_namespaces: tuple[str, ...] = (),
     ) -> RefAuthoritySnapshot:
         refs = stable_text_tuple(input_refs, "input_refs", item_kind="reference")
         available = {item.ref: item for item in parent.descriptors}
         if parent.phase is not RefSnapshotPhase.INPUT_ADMISSION or not set(refs).issubset(available):
             raise HarnessValidationError("child inputs are outside the admitted reference grant", code="REF_UNAUTHORIZED")
-        descriptors = tuple(available[ref] for ref in refs)
+        if any(available[ref].ref_kind != REF_KIND_INPUT for ref in refs):
+            raise HarnessValidationError("child inputs must be admitted input references", code="REF_UNAUTHORIZED")
+        namespaces = stable_text_tuple(
+            memory_namespaces,
+            "memory_namespaces",
+            item_kind="reference",
+        )
+        memory_descriptors = tuple(RefAuthority().authorize_memory_namespace_ref(
+            namespace, parent.policy, resolver=SnapshotRefResolutionPort(parent),
+        ) for namespace in namespaces)
+        descriptors = tuple(available[ref] for ref in refs) + memory_descriptors
+        refs = tuple(item.ref for item in descriptors)
         policy = replace(
             parent.policy, policy_id="child-input:" + attempt_identity.task_instance_id,
             owner_id=attempt_identity.child_run_id, allowed_refs=refs,
             allowed_artifact_types=tuple(sorted({item.artifact_type for item in descriptors})),
             allowed_ref_kinds=tuple(sorted({item.ref_kind for item in descriptors})),
-            allowed_memory_namespaces=(), writable_refs=(),
+            allowed_memory_namespaces=namespaces, writable_refs=(),
             shared_read_only_refs=refs,
             pinned_checksums={item.ref: item.source_checksum for item in descriptors},
         )

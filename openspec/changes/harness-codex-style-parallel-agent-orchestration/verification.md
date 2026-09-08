@@ -812,6 +812,64 @@ successfully after the validator fix:
 - Strict OpenSpec and scoped/staged whitespace checks passed. The checklist
   remains 14/46 with task 1.5 as the earliest unchecked item.
 
+## Task 1.5 Memory Namespace Revision and Admission Increment
+
+The checklist remains 14/46, with task 1.5 still the earliest unfinished item.
+This increment supplies real immutable namespace persistence, publication policy,
+Graph/child admission and authorized revision reads; it does not close every
+existing memory recall or tool consumer.
+
+- `MemoryNamespaceRevision` freezes canonical bytes of the complete scope and
+  sorted `MemoryRecord` documents. Its full content checksum identifies the exact
+  namespace revision. Record `version` remains data, not trusted version proof.
+- The trusted publisher receives namespace/tenant/owner/sharing from composition,
+  rejects mismatching record scope, applies the existing `MemoryPolicy` to the
+  whole batch before commit, and neither promotes nor updates active memory.
+- Filesystem storage bounds metadata, payload and records; serializes immutable
+  metadata-then-payload commit; verifies canonical bytes and identity; and rejects
+  links, half commits, changed files, conflicts and corruption. Description never
+  opens the record payload or searches a live vector store.
+- Input admission pins exact revision descriptors alongside actual Graph inputs.
+  Existing executions restore original descriptors without a catalog lookup;
+  changed revision configuration cannot replace the original binding. Namespace
+  names alone grant no access.
+- Actual TaskPlan child construction carries the exact requested, shareable
+  read-only memory refs in its grant and envelope. A parent-private namespace
+  fails before worker invocation. Revision reads first verify canonical grant,
+  full caller execution/attempt and trusted metadata, then actual payload bytes.
+- Research production composition now supplies the durable namespace store.
+  Default bindings remain empty and normal Research outlines request no memory.
+  The generic composition helper accepts explicit trusted exact refs; candidate
+  hints cannot populate them.
+
+Validation:
+
+- Namespace contracts, reference reader, real Graph/child integration, existing
+  input admission and production composition: `39 passed` in 110.13 seconds.
+- Existing planning/snapshot/TaskPlan lineage, framework memory and architecture:
+  `325 passed, 4 warnings` in 306.24 seconds. Warnings are existing FastAPI
+  deprecations.
+- Filesystem namespace persistence: `17 passed` in 5.09 seconds, including real
+  concurrent processes, hardlink rejection and the Windows directory-junction
+  boundary. A Windows junction substitutes for unavailable symlink creation,
+  exercising an actual reparse point without skipping the test.
+- Required `.venv/Scripts/python.exe -m scripts.dev smoke` exited 0: compile
+  passed; `3105 passed, 23 deselected, 23 warnings` in 1331.86 seconds. Warnings
+  are existing FastAPI/Starlette deprecations.
+- Offline AgentLoop succeeded with 3 fixture LLM calls, 1 tool call and 0
+  network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-4b92e3c44d4c43139fe6ab954daba563/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings.
+- Strict OpenSpec and scoped/staged whitespace checks passed. The checklist
+  remains 14/46 with task 1.5 as the earliest unchecked item.
+
+Existing RAG/AgentLoop recall, memory tools and their live vector lookup paths
+still require authorized consumer integration. The immutable publisher is a
+trusted composition port, not an automatic conversion or promotion of existing
+vector records. Generic parent input/result provenance, replacement/dependency
+grants and remaining replay consumers also remain in task 1.5. No default feature
+is enabled by this increment.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

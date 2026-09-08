@@ -64,7 +64,13 @@ planning receipt 授权增量新增 `PLANNING_OBSERVATION` 分支，直接以原
 
 通用 planning service 的生产工厂现在要求已提交的 input grant、持久化 snapshot store 和有界 planner ordinal，并通过实际 ToolRegistry 将 TaskPlan 的工具名称解析成精确版本白名单；不可用的工具在构建时拒绝。planning artifact 必须经持久化 metadata resolver 与显式 artifact type policy 校验，默认没有 artifact 读取权限。通用 orchestration 与启用 planning 的 Research composition 拒绝缺少授权的 planning port；真实 stage 请求还必须与该 grant 的完整 execution identity 一致。candidate validator 使用原 input grant 与已提交 planning receipt grant 的只读验证视图，仍逐字段要求 input/planning kind，不改写原 grant，也不把 receipt artifact 自动加入 candidate 输入权限。Research 默认 planning tool 数仍为零。这里交付的是绑定到已接纳 Graph 输入的 planning 端口与读取边界，通用 parent delegation 的输入 admission、完整 turn continuation 和 standalone TaskPlan replay 的 source-candidate 装配仍需后续增量完成。
 
-任务 1.5 尚未完成：generic AgentLoop 输入/结果来源、versioned memory、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。当前 Research 和 planning 的强制生产依赖检查不替代这些剩余边界。
+memory namespace 授权增量使用独立的 `newsroom.memory-namespace-revision/v1` 与 metadata-only `newsroom.memory-namespace-descriptor/v1`。可信 composition 固定 namespace、tenant、owner 和只读共享策略，`MemoryNamespacePublisher` 对每条真实 `MemoryRecord` 应用已有 `MemoryPolicy`，全部通过后才提交整个不可变版本；正文包含完整 scope 与稳定排序的全部 record 字段。完整 SHA-256 形成 exact `memory-namespace://<digest>`，记录自报的 `MemoryRecord.version` 只是正文数据，不是 namespace authority。发布 revision 不改变 active memory，不做 promotion，不维护 `latest` alias。
+
+`FilesystemMemoryNamespaceStore` 在跨进程锁内先持久化 metadata 再持久化正文；相同内容幂等复用，半提交、损坏、路径链接、越界和冲突均拒绝。describe 只读取 metadata 与正文 stat，read 才校验实际完整字节。Harness input admission 从可信 composition 提供的精确 ref 查询 metadata，将 memory descriptor 与 Graph 输入共同固定到原 snapshot；namespace 名称白名单不产生读取权限。恢复校验原输入和 policy，并复用原 snapshot 的 memory descriptors，不解析当前 catalog 或把新版本绑定到旧 execution。
+
+TaskPlan child 只继承实际请求 namespace 对应的精确只读 descriptor；parent-private memory 不能转为 child sharing。`ResolvedSubAgentTaskAdapter` 将这些 refs 放入真实 child envelope，`HarnessMemoryNamespaceReader` 先校验调用方完整 execution/attempt、canonical committed grant 与 metadata，再读取和校验该版本正文。生产 Research 的 admission composition 已构造 durable namespace store，但默认没有绑定 memory revision；普通 Research outline 仍不请求 memory。现有 RAG/AgentLoop recall 与 memory tool 的可变 vector 查询尚未改接此 reader，不能视作已经获得版本授权，也不能从既有 vector payload 自动反推可信 owner 或 revision。
+
+任务 1.5 尚未完成：generic AgentLoop 输入/结果来源、现有 memory recall/tool 消费接线、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。当前 Research 和 planning 的强制生产依赖检查不替代这些剩余边界。
 
 ### 2. Harness 作为唯一 fan-out/fan-in coordinator
 
