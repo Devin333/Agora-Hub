@@ -36,13 +36,15 @@ from framework.harness.side_effects import (
     HarnessSideEffectStorePort,
 )
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
+from framework.harness.ref_authority import RefResolutionPort
+from framework.harness.ref_planning import HarnessPlanningRefAuthority
+from framework.harness.ref_snapshot import RefAuthoritySnapshot, RefAuthoritySnapshotStorePort
 from framework.harness.task_plan.capability import TaskCapabilityRegistry
 from framework.harness.task_plan.checkpoint import TaskPlanCheckpointStorePort
 from framework.harness.task_plan.durable_store import DurableTaskPlanStore
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.task_plan.planning_observation import (
     HarnessPlanningObservationService,
-    JsonlPlanningObservationStore,
     PlanningObservationPort,
     PlanningObservationPolicy,
 )
@@ -59,6 +61,7 @@ from framework.agent.models import AgentSpec
 from framework.execution_environment.composition import RuntimeExecutionComposition
 from framework.execution_environment.errors import RuntimeCompositionDriftError
 from framework.tool import ToolExecutor, ToolRegistry
+from infrastructure.storage.harness.planning_observation import FilesystemPlanningObservationStore
 from interfaces.services.agent_loop_graph_service import (
     AgentLoopGraphApplicationService,
 )
@@ -98,12 +101,17 @@ def build_agent_loop_planning_observation_service(
     executor: ToolExecutor,
     registry: ToolRegistry,
     receipt_path: str | Path,
+    input_snapshot: RefAuthoritySnapshot,
+    snapshot_store: RefAuthoritySnapshotStorePort,
+    planner_turn: int,
+    artifact_resolution: RefResolutionPort | None = None,
+    allowed_artifact_types: tuple[str, ...] = (),
 ) -> HarnessPlanningObservationService:
     """Build the durable, Harness-owned planning tool boundary.
 
-    The caller supplies the application-owned ``ToolExecutor`` and registry;
-    this factory only narrows them to the policy's read-only planning grants
-    and makes the receipt log durable before candidates can cite it.
+    The caller supplies the admitted Graph input grant and bounded planner
+    ordinal. Metadata and receipts live under ``receipt_path``; authority is
+    committed to the canonical run stream before any receipt is consumed.
     """
 
     if not isinstance(policy, TaskPlanPolicy):
@@ -112,11 +120,24 @@ def build_agent_loop_planning_observation_service(
         raise TypeError("executor must be ToolExecutor")
     if not isinstance(registry, ToolRegistry):
         raise TypeError("registry must be ToolRegistry")
+    if getattr(snapshot_store, "is_durable", False) is not True:
+        raise ValueError("planning observations require durable reference authority")
+    if artifact_resolution is not None and getattr(artifact_resolution, "is_durable", False) is not True:
+        raise ValueError("planning artifact metadata requires a durable resolver")
+    if isinstance(planner_turn, bool) or not isinstance(planner_turn, int) or not 1 <= planner_turn <= policy.max_plan_build_turns:
+        raise ValueError("planner_turn exceeds the admitted planning policy")
+    receipt_store = FilesystemPlanningObservationStore(receipt_path, input_snapshot=input_snapshot)
+    authority = HarnessPlanningRefAuthority(
+        snapshot_store, receipt_store=receipt_store, input_snapshot=input_snapshot,
+        planner_turn=planner_turn, artifact_resolution=artifact_resolution,
+        allowed_artifact_types=allowed_artifact_types,
+    )
     return HarnessPlanningObservationService(
         executor=executor,
         registry=registry,
-        store=JsonlPlanningObservationStore(receipt_path),
-        policy=PlanningObservationPolicy.from_task_plan_policy(policy),
+        store=receipt_store,
+        policy=PlanningObservationPolicy.from_task_plan_policy(policy, registry),
+        planning_ref_authority=authority,
     )
 
 
@@ -196,6 +217,15 @@ def build_agent_loop_harness_orchestration_runtime(
         raise TypeError(
             "planning_observation_port must implement PlanningObservationPort"
         )
+    planning_authority = getattr(planning_observation_port, "planning_ref_authority", None)
+    if (
+        not isinstance(planning_observation_port, HarnessPlanningObservationService)
+        or not isinstance(planning_authority, HarnessPlanningRefAuthority)
+        or not planning_observation_port.is_durable
+        or planning_authority.input_snapshot.stage_binding_checksum != stage_binding.binding_checksum
+        or planning_authority.input_snapshot.task_policy_checksum != policy.policy_checksum
+    ):
+        raise ValueError("planning_observation_port requires durable execution-bound reference authority")
 
     coordinator = ParallelAgentCoordinator(
         max_workers=child_supervisor.capacity,

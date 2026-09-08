@@ -194,6 +194,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 "planning observation request is outside the stage policy scope",
                 code="planning_observation_request_scope_mismatch",
             )
+        self._require_planning_execution(stage_request)
         return self.planning_observation_port.observe(observation_request)
 
     def apply_patch(self, request: TaskPlanStageRequest, patch: PlanPatch) -> ValidatedTaskPlan:
@@ -363,6 +364,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     "submitted candidate differs from the accepted stage candidate",
                     code="task_plan_candidate_conflict",
                 )
+            self._validate_recorded_planning(request, initial)
             return existing
         candidate = request.candidate
         if candidate is None and submission is not None:
@@ -405,6 +407,17 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         self._validate_planning_observations(request, candidate)
         if submission is None:
             self.store.append_candidate(candidate)
+        ref_options = {
+            "ref_authority": request.ref_authority,
+            "ref_policy": request.ref_policy,
+            "ref_resolution": request.ref_resolution,
+            "ref_descriptors": request.ref_descriptors,
+        }
+        planning_authority = getattr(self.planning_observation_port, "planning_ref_authority", None)
+        if planning_authority is not None and candidate.source_observation_refs:
+            if request.ref_policy is not None and request.ref_policy != planning_authority.input_snapshot.policy:
+                raise HarnessValidationError("planning validation uses a different input authority", code="REF_POLICY_SCOPE_MISMATCH")
+            ref_options = planning_authority.validation_ref_options(candidate.source_observation_refs)
         context = TaskPlanValidationContext(
             run_id=request.run_id,
             stage_binding=request.stage_binding,
@@ -414,10 +427,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 fallback=request.policy.allowed_gate_refs,
             ),
             registered_aggregator_refs=self.aggregator.registry.refs,
-            ref_authority=request.ref_authority,
-            ref_policy=request.ref_policy,
-            ref_resolution=request.ref_resolution,
-            ref_descriptors=request.ref_descriptors,
+            **ref_options,
         )
         missing_aggregators = sorted({ref for ref in request.policy.deterministic_aggregator_refs.values() if not self.aggregator.registry.contains(ref)})
         if missing_aggregators:
@@ -524,6 +534,25 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 ) from exc
         return None
 
+    def _require_planning_execution(self, request: TaskPlanStageRequest) -> None:
+        authority = getattr(self.planning_observation_port, "planning_ref_authority", None)
+        if authority is not None:
+            authority.require_execution(
+                request.execution_identity, request.stage_binding.binding_checksum,
+                request.policy.policy_checksum,
+            )
+
+    def _validate_recorded_planning(self, request: TaskPlanStageRequest, initial: ValidatedTaskPlan | None) -> None:
+        if getattr(self.planning_observation_port, "planning_ref_authority", None) is None:
+            return
+        self._require_planning_execution(request)
+        candidate = None if initial is None else self.store.candidate_for(
+            request.run_id, request.stage_id, initial.source_candidate_ref,
+        )
+        if candidate is None or candidate.candidate_checksum != initial.source_candidate_ref:
+            raise HarnessValidationError("planning recovery is missing its accepted candidate", code="task_plan_replay_candidate_mismatch")
+        self._validate_planning_observations(request, candidate)
+
     def _validate_planning_observations(
         self,
         request: TaskPlanStageRequest,
@@ -543,6 +572,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 "candidate planning observation refs require planner_turn_id metadata",
                 code="planning_observation_planner_turn_missing",
             )
+        self._require_planning_execution(request)
         self.planning_observation_port.validate_source_refs(
             source_refs,
             run_id=request.run_id,
@@ -1644,6 +1674,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 "TaskPlan history is missing its accepted plan",
                 code="task_plan_replay_plan_missing",
             )
+        self._validate_recorded_planning(request, plan_history[0])
         patch_reader = getattr(self.store, "patches_for", None)
         patches = (
             tuple(patch_reader(request.run_id, request.stage_id))

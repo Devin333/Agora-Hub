@@ -58,7 +58,13 @@ Research production composition 已为真实 `document` / `evidence_pack` 输入
 
 `HarnessResultRefAuthority` 给每个 accepted attempt 建立不可变读取端口，`SubAgentRuntime`、TaskPlan verifier、SubAgent result adapter 和 Research stage replay 使用同一授权存储。授权先校验原输入 grant、完整 Graph activity/plan/task/attempt、tenant 和 source checksum，再读取 context/output/transcript；读取后继续核对实际文档 checksum。materializer 从真实 catalog 的 run/tenant/graph/node/`subagent_result_attempt_id` 元数据创建独立 `MATERIALIZED_RESULT` grant，其 parent 必须是同一 attempt 的 `RESULT_ACCEPTANCE`，不能修改输入或原结果权限。replay 必须由调用方提供已记录的 Graph execution identity，并只允许原 worker artifact refs 与已提交 materialization refs 的精确并集。snapshot v1 增加该 phase，现有序列化字段与旧 input/child/result grant 校验保持不变；父链最多四层，按严格 phase 顺序验证。
 
-任务 1.5 尚未完成：generic AgentLoop 输入/结果来源、planning、versioned memory、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。当前 Research 的强制生产依赖检查与上述 SubAgent 结果路径，不替代这些剩余边界。
+planning receipt 授权增量新增 `PLANNING_OBSERVATION` 分支，直接以原 `INPUT_ADMISSION` 为 parent，不制造尚不存在的 child attempt。grant binding 固定完整 Graph execution、stage binding 和 request checksum，source checksum 为 request checksum，精确 allowlist 固定 receipt checksum 与可信 artifact descriptor；同一 request 的不同 receipt 不能改写已提交 grant。Harness 从原 input grant 和 policy 允许的 planner turn ordinal 派生 `planner_turn_id`，candidate/request 只能回显该身份。
+
+`FilesystemPlanningObservationStore` 按 input snapshot 隔离存储，写入 `.meta` 后才写 receipt 正文；descriptor 固定 request/receipt/input grant 的身份、artifact refs、正文 checksum 和大小，但不包含 arguments 或 observation summary。查找 request、source ref 和 scope 时只读取 metadata 并检查正文路径/stat；正文 API 继续验证实际字节和规范化 receipt。单边文件缺失、越界、冲突和损坏均拒绝，不扫描旧 JSONL 正文生成授权。`HarnessPlanningRefAuthority` 在观察重投、replay、candidate 引用验证和已接纳 TaskPlan 恢复读取之前验证 grant；只有在线 observe 可从完整的可信 receipt metadata 补交缺失 grant，离线读取不调用 ToolExecutor、不追加 event。
+
+通用 planning service 的生产工厂现在要求已提交的 input grant、持久化 snapshot store 和有界 planner ordinal，并通过实际 ToolRegistry 将 TaskPlan 的工具名称解析成精确版本白名单；不可用的工具在构建时拒绝。planning artifact 必须经持久化 metadata resolver 与显式 artifact type policy 校验，默认没有 artifact 读取权限。通用 orchestration 与启用 planning 的 Research composition 拒绝缺少授权的 planning port；真实 stage 请求还必须与该 grant 的完整 execution identity 一致。candidate validator 使用原 input grant 与已提交 planning receipt grant 的只读验证视图，仍逐字段要求 input/planning kind，不改写原 grant，也不把 receipt artifact 自动加入 candidate 输入权限。Research 默认 planning tool 数仍为零。这里交付的是绑定到已接纳 Graph 输入的 planning 端口与读取边界，通用 parent delegation 的输入 admission、完整 turn continuation 和 standalone TaskPlan replay 的 source-candidate 装配仍需后续增量完成。
+
+任务 1.5 尚未完成：generic AgentLoop 输入/结果来源、versioned memory、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。当前 Research 和 planning 的强制生产依赖检查不替代这些剩余边界。
 
 ### 2. Harness 作为唯一 fan-out/fan-in coordinator
 

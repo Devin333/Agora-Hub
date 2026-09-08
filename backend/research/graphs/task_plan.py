@@ -501,6 +501,18 @@ class ResearchAnalysisTaskPlanStageWorker:
                 code="research_task_plan_ref_authority_required",
             )
         self._ref_admission_service = ref_admission_service
+        if not allow_test_store and actual_policy.max_planning_tool_calls > 0:
+            from framework.harness.ref_planning import HarnessPlanningRefAuthority
+
+            planning_authority = getattr(planning_observation_port, "planning_ref_authority", None)
+            if (
+                not isinstance(planning_authority, HarnessPlanningRefAuthority)
+                or planning_authority.store is not ref_admission_service.store
+            ):
+                raise HarnessValidationError(
+                    "Research planning requires the same durable execution-bound reference authority",
+                    code="research_task_plan_planning_ref_authority_required",
+                )
         if not allow_test_store:
             from framework.harness.ref_results import HarnessResultRefAuthority
 

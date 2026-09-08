@@ -136,6 +136,8 @@ class HarnessAgentOrchestrationRuntime:
     def observe_for_planning(
         self,
         request: PlanningObservationRequest,
+        *,
+        execution_identity: GraphExecutionIdentity | None = None,
     ) -> PlanningObservationReceipt:
         """Expose the Harness-owned observation ingress to a composed planner."""
 
@@ -161,6 +163,7 @@ class HarnessAgentOrchestrationRuntime:
                 policy=policy,
                 policy_ref=policy.exact_ref,
                 accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
+                execution_identity=execution_identity,
                 metadata={
                     "planner_turn_id": request.planner_turn_id,
                     "planning_correlation_id": request.correlation_id,

@@ -12,7 +12,10 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from framework.harness.ref_planning import HarnessPlanningRefAuthority
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.ref_authority import (
@@ -65,12 +68,20 @@ class PlanningObservationPolicy:
         object.__setattr__(self, "timeout_seconds", positive_int(self.timeout_seconds, "timeout_seconds"))
 
     @classmethod
-    def from_task_plan_policy(cls, policy: Any) -> "PlanningObservationPolicy":
+    def from_task_plan_policy(cls, policy: Any, registry: ToolRegistry) -> "PlanningObservationPolicy":
         """Derive the narrow observation policy from a normalized stage policy."""
 
+        if not isinstance(registry, ToolRegistry):
+            raise TypeError("registry must be ToolRegistry")
+        exact_tools = []
+        for name in policy.allowed_tool_ids:
+            registered = registry.maybe_get(name)
+            if registered is None:
+                raise HarnessValidationError("planning tool binding is unavailable", code="planning_tool_unavailable")
+            exact_tools.append(registered.definition.tool_id)
         return cls(
             policy_checksum=policy.policy_checksum,
-            allowed_tool_ids=tuple(policy.allowed_tool_ids),
+            allowed_tool_ids=tuple(exact_tools),
             max_tool_calls=policy.max_planning_tool_calls,
             timeout_seconds=policy.planning_timeout_seconds,
         )
@@ -341,6 +352,7 @@ class HarnessPlanningObservationService:
         ref_policy: RefAccessPolicy | None = None,
         ref_resolution: RefResolutionPort | None = None,
         ref_descriptors: Mapping[str, RefDescriptor] | None = None,
+        planning_ref_authority: HarnessPlanningRefAuthority | None = None,
     ) -> None:
         if not isinstance(executor, ToolExecutor):
             raise TypeError("executor must be ToolExecutor")
@@ -365,6 +377,21 @@ class HarnessPlanningObservationService:
         self._ref_policy = ref_policy
         self._ref_resolution = ref_resolution
         self._ref_descriptors = normalized_descriptors
+        if planning_ref_authority is not None:
+            from framework.harness.ref_planning import HarnessPlanningRefAuthority
+
+            if not isinstance(planning_ref_authority, HarnessPlanningRefAuthority) or planning_ref_authority.receipt_store is not store:
+                raise TypeError("planning_ref_authority must own this receipt store")
+            if ref_authority is not None:
+                raise ValueError("planning grants cannot be combined with static authority")
+            if planning_ref_authority.input_snapshot.task_policy_checksum != policy.policy_checksum:
+                raise HarnessValidationError("planning policy differs from admitted authority", code="REF_POLICY_SCOPE_MISMATCH")
+        self.planning_ref_authority = planning_ref_authority
+
+    def _store_for(self, *, online: bool = False) -> PlanningObservationStorePort:
+        if self.planning_ref_authority is None:
+            return self._store
+        return self.planning_ref_authority.reader(allow_registration=online)
 
     @property
     def store(self) -> PlanningObservationStorePort:
@@ -384,20 +411,25 @@ class HarnessPlanningObservationService:
 
     @property
     def is_durable(self) -> bool:
-        return getattr(self._store, "is_durable", False) is True
+        return getattr(self._store_for(), "is_durable", False) is True
 
     def observe(self, request: PlanningObservationRequest) -> PlanningObservationReceipt:
+        if self.planning_ref_authority is not None:
+            self.planning_ref_authority.require_scope(request.run_id, request.stage_id, request.policy_checksum, request.planner_turn_id)
         if self._ref_authority is not None:
             self._ref_authority.require_scope(self._ref_policy, run_id=request.run_id, stage_id=request.stage_id)
-        existing = self._store.by_request(request.request_checksum)
+        store = self._store_for(online=True)
+        existing = store.by_request(request.request_checksum)
         if existing is not None:
+            if existing.request != request:
+                raise HarnessValidationError("planning request differs from recorded receipt", code="planning_observation_receipt_scope_mismatch")
             return existing
         reason = self._admission_reason(request)
         if reason is not None:
             return self._persist(PlanningObservationReceipt(request=request, status="REJECTED", reason_code=reason))
         prior_calls = sum(
             1
-            for item in self._store.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id)
+            for item in store.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id)
             if item.tool_call_id is not None
         )
         if prior_calls >= self._policy.max_tool_calls:
@@ -440,9 +472,11 @@ class HarnessPlanningObservationService:
     def replay(self, request: PlanningObservationRequest) -> PlanningObservationReceipt:
         """Return recorded evidence only. This method must never invoke the executor."""
 
+        if self.planning_ref_authority is not None:
+            self.planning_ref_authority.require_scope(request.run_id, request.stage_id, request.policy_checksum, request.planner_turn_id)
         if self._ref_authority is not None:
             self._ref_authority.require_scope(self._ref_policy, run_id=request.run_id, stage_id=request.stage_id)
-        receipt = self._store.by_request(request.request_checksum)
+        receipt = self._store_for().by_request(request.request_checksum)
         if receipt is None:
             raise HarnessValidationError("planning observation receipt is unavailable for replay", code="planning_observation_receipt_missing")
         if receipt.request != request:
@@ -461,6 +495,8 @@ class HarnessPlanningObservationService:
         """Fail closed before plan acceptance when a candidate cites stale evidence."""
 
         refs = stable_text_tuple(source_observation_refs, "source_observation_refs", item_kind="reference")
+        if self.planning_ref_authority is not None:
+            self.planning_ref_authority.require_scope(run_id, stage_id, policy_checksum, planner_turn_id)
         if self._ref_authority is not None:
             self._ref_authority.require_scope(
                 self._ref_policy,
@@ -478,7 +514,7 @@ class HarnessPlanningObservationService:
                     descriptors=self._ref_descriptors,
                     expected_kind=REF_KIND_PLANNING,
                 )
-            receipt = self._store.by_source_ref(source_ref)
+            receipt = self._store_for().by_source_ref(source_ref)
             if receipt is None:
                 raise HarnessValidationError("planning observation receipt is missing", code="planning_observation_receipt_missing", details={"source_ref": source_ref})
             if receipt.source_ref != source_ref:
@@ -507,7 +543,8 @@ class HarnessPlanningObservationService:
         return tuple(receipts)
 
     def _persist(self, receipt: PlanningObservationReceipt) -> PlanningObservationReceipt:
-        self._store.save(receipt)
+        if self._store_for(online=True).save(receipt) != receipt.receipt_checksum:
+            raise HarnessValidationError("planning store returned a different receipt", code="planning_observation_receipt_corrupt")
         return receipt
 
     def _admission_reason(self, request: PlanningObservationRequest) -> str | None:

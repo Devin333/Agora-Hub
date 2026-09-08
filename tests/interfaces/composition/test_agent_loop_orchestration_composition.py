@@ -282,3 +282,68 @@ def test_production_factory_rejects_missing_planning_observation_port() -> None:
     kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier())
     with pytest.raises((TypeError, ValueError), match="planning_observation_port"):
         build_agent_loop_harness_orchestration_runtime(**kwargs)
+
+
+def test_production_factory_rejects_unbound_planning_port() -> None:
+    kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier(), planning_observation_port=_PlanningPort())
+    with pytest.raises(ValueError, match="durable execution-bound reference authority"):
+        build_agent_loop_harness_orchestration_runtime(**kwargs)
+
+
+def test_planning_production_factory_and_stage_require_admitted_execution(tmp_path):
+    from dataclasses import replace
+
+    from framework.harness.control_plane.errors import HarnessValidationError
+    from framework.harness.task_plan.planning_observation import PlanningObservationRequest
+    from framework.tool import ToolDefinition, ToolExecutor, ToolRegistry
+    from interfaces.composition.agent_loop_graph import build_agent_loop_planning_observation_service
+    from tests.framework.harness.test_ref_snapshot_store import _snapshot, _store
+
+    kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier())
+    binding = kwargs["stage_binding"]
+    policy = kwargs["policy_registry"].resolve(binding.policy_ref, stage_id=binding.stage_id)
+    parent = _snapshot()
+    descriptor = replace(parent.descriptors[0], stage_id=binding.stage_id)
+    parent = replace(
+        parent, stage_id=binding.stage_id,
+        execution_identity=replace(
+            parent.execution_identity, graph_id=binding.graph_id, graph_version=binding.graph_version,
+            graph_ref=binding.graph.graph_ref.exact_ref, graph_checksum=binding.graph_checksum,
+            node_id=binding.node_id,
+        ),
+        stage_binding_checksum=binding.binding_checksum, task_policy_checksum=policy.policy_checksum,
+        descriptors=(descriptor,), policy=replace(parent.policy, stage_id=binding.stage_id),
+    )
+    grants, events = _store(tmp_path)
+    grants.commit(parent)
+    registry = ToolRegistry()
+    calls = []
+    registry.register(ToolDefinition(
+        name="tool.read", version="1", side_effect="read_only", input_schema={"type": "object"},
+    ), lambda args: calls.append(args) or {"evidence": "recorded"})
+    factory = dict(
+        policy=policy, executor=ToolExecutor(registry), registry=registry,
+        receipt_path=tmp_path / "planning", input_snapshot=parent,
+        snapshot_store=grants, planner_turn=1,
+    )
+    planning = build_agent_loop_planning_observation_service(**factory)
+    kwargs["planning_observation_port"] = planning
+    runtime = build_agent_loop_harness_orchestration_runtime(**kwargs)
+    request = PlanningObservationRequest(
+        request_id="lookup", run_id=parent.run_id, stage_id=parent.stage_id,
+        planner_turn_id=planning.planning_ref_authority.planner_turn_id,
+        policy_checksum=policy.policy_checksum, correlation_id="lookup", tool_name="tool.read",
+        purpose="Read a planning fact",
+    )
+    with pytest.raises(HarnessValidationError, match="Graph execution"):
+        runtime.observe_for_planning(request)
+    assert calls == []
+    assert events.get_stream_high_watermark("run:ref-run", tenant_id="control") == 1
+    receipt = runtime.observe_for_planning(request, execution_identity=parent.execution_identity)
+    assert receipt.status == "SUCCEEDED"
+    assert len(calls) == 1
+    assert planning.replay(request) == receipt
+    with pytest.raises(ValueError, match="planner_turn"):
+        build_agent_loop_planning_observation_service(**{**factory, "planner_turn": 2})
+    with pytest.raises(ValueError, match="durable reference"):
+        build_agent_loop_planning_observation_service(**{**factory, "snapshot_store": object()})

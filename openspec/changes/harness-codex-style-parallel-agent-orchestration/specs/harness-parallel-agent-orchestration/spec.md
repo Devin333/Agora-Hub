@@ -309,6 +309,20 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **AND** unavailable owner or tenant evidence MUST NOT be fabricated from a candidate-provided ref
 - **AND** subsequent payload consumption MUST still verify the actual bytes against the authorized checksum
 
+#### Scenario: Planning receipt is read after an interrupted grant commit
+
+- **WHEN** a trusted planning writer committed immutable receipt metadata and payload under an admitted Graph input snapshot but grant publication was interrupted
+- **THEN** online Harness observation recovery MAY commit the exact `PLANNING_OBSERVATION` grant before reading receipt payload, without repeating the tool call
+- **AND** offline replay MUST reject a missing grant without issuing authority or calling a live tool
+- **AND** metadata MUST bind input snapshot, request, receipt, artifact refs and payload checksum/size without containing request arguments or observation summary
+
+#### Scenario: Planning reference belongs to a different execution or turn
+
+- **WHEN** a candidate, planning request or resumed TaskPlan supplies a planning receipt outside the caller's admitted Graph execution, stage, policy, owner, tenant or Harness-derived planner turn
+- **THEN** Harness MUST reject it before reading receipt payload or executing a planning tool
+- **AND** a planning grant MUST be read-only, parented by the original input grant, and carry no fabricated child attempt identity
+- **AND** missing metadata or payload for committed authority MUST fail closed rather than trigger tool reexecution or legacy-body metadata reconstruction
+
 ### Requirement: Spawn SHALL use a durable intent receipt and reconciliation protocol
 
 Each attempt MUST have `spawn_operation_key = group_id + wave_id + task_instance_id + attempt`. Wave admission, reservation ledger and `TASK_ATTEMPT_SPAWN_INTENT` MUST be committed in one transaction or equivalent durable batch before spawn. `ChildAgentSupervisor` MUST handle the operation key idempotently and persist `SPAWN_CONFIRMED` or `SPAWN_UNKNOWN` receipts. `TASK_WAVE_DISPATCHED` requires known spawn status and trackable children for all selected tasks. Partially successful batches MUST reconcile each task independently. Identical verified receipt redelivery MUST be reused; conflicting identity/checksum evidence MUST halt rather than overwrite history.

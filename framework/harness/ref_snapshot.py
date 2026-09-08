@@ -26,6 +26,7 @@ REF_AUTHORITY_SNAPSHOT_SCHEMA = "newsroom.harness-ref-authority-snapshot/v1"
 
 class RefSnapshotPhase(StrEnum):
     INPUT_ADMISSION = "INPUT_ADMISSION"
+    PLANNING_OBSERVATION = "PLANNING_OBSERVATION"
     CHILD_INPUT = "CHILD_INPUT"
     RESULT_ACCEPTANCE = "RESULT_ACCEPTANCE"
     MATERIALIZED_RESULT = "MATERIALIZED_RESULT"
@@ -92,7 +93,11 @@ class RefAuthoritySnapshot:
                 raise _invalid("input admission cannot carry a child or parent grant")
         else:
             object.__setattr__(self, "parent_snapshot_ref", checksum(self.parent_snapshot_ref, "parent_snapshot_ref"))
-            self._require_attempt()
+            if self.phase is RefSnapshotPhase.PLANNING_OBSERVATION:
+                if self.attempt_identity is not None:
+                    raise _invalid("planning grants cannot invent a child attempt")
+            else:
+                self._require_attempt()
         object.__setattr__(self, "binding_key", checksum_for(self.binding_projection()))
         object.__setattr__(self, "snapshot_checksum", checksum_for(self.checksum_projection()))
 
@@ -127,6 +132,8 @@ class RefAuthoritySnapshot:
             "stage_binding_checksum": self.stage_binding_checksum,
             "task_instance_id": None if attempt is None else attempt.task_instance_id,
             "attempt": None if attempt is None else attempt.attempt,
+            **({"planning_request_checksum": self.source_checksum}
+               if self.phase is RefSnapshotPhase.PLANNING_OBSERVATION else {}),
         }
 
     @staticmethod
@@ -154,12 +161,24 @@ class RefAuthoritySnapshot:
         )
 
     @staticmethod
+    def planning_binding_key(parent: "RefAuthoritySnapshot", request_checksum: str) -> str:
+        return checksum_for({
+            "schema_version": REF_AUTHORITY_SNAPSHOT_SCHEMA,
+            "phase": RefSnapshotPhase.PLANNING_OBSERVATION.value,
+            "execution_identity": parent.execution_identity.to_dict(),
+            "stage_id": parent.stage_id,
+            "stage_binding_checksum": parent.stage_binding_checksum,
+            "task_instance_id": None, "attempt": None,
+            "planning_request_checksum": checksum(request_checksum, "request_checksum"),
+        })
+
+    @staticmethod
     def task_binding_key(
         execution: GraphExecutionIdentity, stage_id: str, stage_binding_checksum: str,
         task_instance_id: str, attempt: int, phase: RefSnapshotPhase,
     ) -> str:
         phase = RefSnapshotPhase(phase)
-        if phase is RefSnapshotPhase.INPUT_ADMISSION:
+        if phase in {RefSnapshotPhase.INPUT_ADMISSION, RefSnapshotPhase.PLANNING_OBSERVATION}:
             raise _invalid("task reference binding requires a child or result phase")
 
         return checksum_for({
@@ -229,7 +248,15 @@ class RefAuthoritySnapshot:
             or parent.policy.tenant_id != self.policy.tenant_id
         ):
             raise _invalid("reference snapshot parent binding does not match", "REF_SNAPSHOT_BINDING_MISMATCH")
-        if self.phase is RefSnapshotPhase.CHILD_INPUT:
+        if self.phase is RefSnapshotPhase.PLANNING_OBSERVATION:
+            if (
+                parent.phase is not RefSnapshotPhase.INPUT_ADMISSION
+                or self.policy.owner_id != parent.policy.owner_id
+                or self.policy.writable_refs
+                or self.policy.shared_read_only_refs
+            ):
+                raise _invalid("planning grant requires its original owner and read-only input admission", "REF_SNAPSHOT_BINDING_MISMATCH")
+        elif self.phase is RefSnapshotPhase.CHILD_INPUT:
             if parent.phase is not RefSnapshotPhase.INPUT_ADMISSION:
                 raise _invalid("child input grant requires input admission")
             inherited = {item.ref: item for item in parent.descriptors}

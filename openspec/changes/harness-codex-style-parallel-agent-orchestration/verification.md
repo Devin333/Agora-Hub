@@ -742,6 +742,76 @@ replacement/dependency grants, and other result/recovery consumers. This
 increment is not blanket authorization for those paths and does not enable any
 new feature default.
 
+## Task 1.5 Planning Reference Authorization Increment
+
+The checklist remains 14/46. This increment implements planning receipt
+authorization under an already admitted Graph input snapshot; it does not close
+task 1.5 or advance capacity/budget tasks.
+
+- `PLANNING_OBSERVATION` grants parent directly to `INPUT_ADMISSION`, retain the
+  exact Graph execution/stage/policy/owner/tenant, and pin request checksum,
+  receipt checksum and permitted artifact descriptors. They are read-only and
+  carry no invented SubAgent attempt. Harness derives planner turn identity from
+  the input grant and a policy-bounded turn ordinal.
+- Trusted filesystem receipt metadata excludes arguments and summary text and
+  pins input grant, request/turn/policy, receipt, artifacts and payload bytes
+  checksum/size. Each input snapshot has an isolated directory. Metadata is
+  created before payload under a verified cross-process lock; equal receipts
+  are reusable, conflicts and incomplete/corrupt pairs fail closed. Metadata
+  queries read sidecars and stat payloads; payload APIs verify actual bytes and
+  canonical receipt identity after authorization.
+- Online observation can finish interrupted grant publication from complete
+  trusted metadata before reading the receipt, without another tool call.
+  Offline receipt replay and candidate source validation cannot commit grants.
+  A committed grant whose entire receipt pair disappeared prevents tool
+  reexecution. Artifact metadata must match owner/tenant/type and the original
+  pinned checksum before receipt payload access.
+- Generic production planning composition requires a durable input grant,
+  snapshot store and bounded planner turn. It resolves TaskPlan tool names to
+  exact registered tool versions; missing bindings fail construction. This also
+  fixes the previous incompatible direct conversion between name-based
+  TaskPlan allowlists and exact-reference planning policy. Generic orchestration
+  and enabled Research planning reject unbound planning ports. Stage observation,
+  source validation and accepted-plan recovery compare full execution identity.
+  Research planning remains disabled by its existing default policy.
+- The pure standalone TaskPlan reducer still requires separate source-candidate
+  evidence plumbing; generic parent delegation input admission, memory,
+  replacement/dependency grants and other result consumers remain task 1.5 work.
+  Bounded planning retry/concurrent budget accounting remains task 1.10.
+
+The final focused planning authority/storage/composition/legacy observation
+group passed `47 passed` in 44.38 seconds. Accepted-stage recovery additionally
+proves both existing-plan reuse and stage replay validate the original planning
+receipt, fail before payload reads when a grant is missing, and invoke no worker
+or additional tool. Its fully authorized input fixture exposed a validator wiring
+gap: candidate validation now composes a read-only view of the original input
+descriptors plus already committed planning receipt descriptors, without changing
+either grant or granting access to receipt artifacts as candidate inputs.
+
+The broader TaskPlan/AgentLoop/Research/composition/architecture group passed
+`993 passed, 4 warnings` in 781.32 seconds before that final validator fix; the
+required full smoke was stopped to apply the fix and restarted afterward.
+The earlier stopped smoke is not counted as qualification.
+
+Independent metadata/store review confirmed
+the authorize-before-payload order and scope/turn checks; filesystem tests cover
+real two-process idempotent writers as well as threads, half commits, corruption,
+size/query bounds and cross-snapshot isolation. Strict OpenSpec and whitespace
+checks passed. The event schema and existing snapshot contract/store regression
+group passed `23 passed` in 78.70 seconds.
+
+The final required `.venv/Scripts/python.exe -m scripts.dev smoke` completed
+successfully after the validator fix:
+
+- Compile passed; `3089 passed, 23 deselected, 23 warnings` in 1935.68 seconds.
+  The warnings are existing FastAPI/Starlette deprecations.
+- Offline AgentLoop succeeded with 3 fixture LLM calls, 1 tool call and 0
+  network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-316a105e12694cbe8782cc4a2faffd10/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings.
+- Strict OpenSpec and scoped/staged whitespace checks passed. The checklist
+  remains 14/46 with task 1.5 as the earliest unchecked item.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

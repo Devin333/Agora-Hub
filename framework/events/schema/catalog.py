@@ -747,7 +747,7 @@ def default_event_schema_catalog(
                     "snapshot_ref": _CHECKSUM_TEXT,
                     "binding_key": _CHECKSUM_TEXT,
                     "stage_id": _TEXT,
-                    "phase": {"enum": ["INPUT_ADMISSION", "CHILD_INPUT", "RESULT_ACCEPTANCE", "MATERIALIZED_RESULT"]},
+                    "phase": {"enum": ["INPUT_ADMISSION", "PLANNING_OBSERVATION", "CHILD_INPUT", "RESULT_ACCEPTANCE", "MATERIALIZED_RESULT"]},
                     "artifact_checksum": _CHECKSUM_TEXT,
                     "artifact_size_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
                 },
