@@ -27,5 +27,7 @@
 ## 5. Verification and delivery
 
 - [x] 5.1 Run focused ownership, migration, filters, continuation, import and UI tests plus full frontend tests/typecheck/lint/build.
-- [x] 5.2 Verify real desktop browser workflows with sources, accounts, groups, resume, search and reports; record evidence and capability limits.
-- [x] 5.3 Run strict OpenSpec validation and required smoke; repair failures, audit every requirement, commit scoped changes and keep the local app usable.
+- [ ] 5.2 Verify real desktop browser workflows with sources, accounts, groups, resume, search and reports; record evidence and capability limits.
+  - Verified in a headless desktop browser: homepage HTTP 200, page title, main heading and Ctrl+K dialog opening. Account switching, PDF import, group/material reuse, exact resume and report preparation have automated test coverage but have not been individually verified end-to-end in a browser.
+- [ ] 5.3 Run strict OpenSpec validation and required smoke; repair failures, audit every requirement, commit scoped changes and keep the local app usable.
+  - Strict OpenSpec validation, scoped backend tests, frontend tests/typecheck/lint/build and required smoke passed. Implementation is committed in 605b0bad and the local homepage returns HTTP 200. Final acceptance remains pending the browser workflows in task 5.2.
