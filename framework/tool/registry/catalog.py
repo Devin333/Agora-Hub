@@ -6,6 +6,8 @@ from typing import Any
 from framework.tool.builtin.artifact import register_artifact_tools
 from framework.tool.builtin.control import register_control_tools
 from framework.tool.builtin.memory import register_memory_tools
+from framework.memory.recall_port import ExecutionMemoryRecallPort
+from framework.memory.policy import MemoryPolicy
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool.models import ToolDefinition, ToolPolicy
 from framework.tool.registry.registry import ToolRegistry
@@ -94,6 +96,8 @@ def build_builtin_tool_registry(
     run_id: str | None = None,
     execution_identity: GraphExecutionIdentity | None = None,
     memory_runtime: Any | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
+    memory_policy: MemoryPolicy | None = None,
     vector_store: Any | None = None,
     approval_store: Any | None = None,
     task_queue: Any | None = None,
@@ -106,6 +110,8 @@ def build_builtin_tool_registry(
         run_id=run_id,
         execution_identity=execution_identity,
         memory_runtime=memory_runtime,
+        memory_recall=memory_recall,
+        memory_policy=memory_policy,
         vector_store=vector_store,
         approval_store=approval_store,
         task_queue=task_queue,
@@ -167,6 +173,8 @@ def _build_unfiltered_builtin_tool_registry(
     run_id: str | None = None,
     execution_identity: GraphExecutionIdentity | None = None,
     memory_runtime: Any | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
+    memory_policy: MemoryPolicy | None = None,
     vector_store: Any | None = None,
     approval_store: Any | None = None,
     task_queue: Any | None = None,
@@ -187,11 +195,13 @@ def _build_unfiltered_builtin_tool_registry(
             artifact_manager=artifact_manager,
             execution_identity=execution_identity,
         )
-    if vector_store is not None or memory_runtime is not None:
+    if vector_store is not None or memory_runtime is not None or memory_recall is not None:
         register_memory_tools(
             registry,
             vector_store=vector_store,
             memory_runtime=memory_runtime,
+            memory_recall=memory_recall,
+            memory_policy=memory_policy,
             execution_identity=execution_identity,
         )
     return registry

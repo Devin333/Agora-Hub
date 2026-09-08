@@ -303,6 +303,13 @@ class ToolExecutor:
             policy_trace.requires_approval = _requires_approval(registered.definition, policy)
             policy_trace.add("tool.resolve", "compatibility", True, f"tool resolved: {call.tool_name}")
 
+            if (
+                call.graph_identity is not None
+                and call.tool_name in {"memory.recall", "memory.explain"}
+                and registered.graph_identity is None
+            ):
+                policy_trace.add("tool.graph_identity", "safety", False, "Graph memory requires execution-bound registration")
+                raise ToolPermissionError("Graph memory requires execution-bound registration")
             if registered.graph_identity is not None and call.graph_identity != registered.graph_identity:
                 policy_trace.add(
                     "tool.graph_identity",

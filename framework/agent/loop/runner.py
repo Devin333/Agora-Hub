@@ -12,8 +12,9 @@ from framework.agent.subagents import SubAgentExecutor
 from framework.llm.budget import GlobalBudgetTracker
 from framework.llm.models import LLMClient
 from framework.memory import MemoryPolicy, MemoryRuntime
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.tool import ToolExecutor
-from framework.tool import ToolRegistry
+from framework.tool import ToolRegistry, register_memory_tools
 from framework.agent.messages import (
     AgentIterationCheckpoint,
     AgentMessageRecord,
@@ -125,6 +126,7 @@ class AgentRunner:
         resume_from_cursor: bool = False,
         global_budget_tracker: GlobalBudgetTracker | None = None,
         standalone: bool = False,
+        memory_recall: ExecutionMemoryRecallPort | None = None,
     ) -> AgentLoopResult:
         if not isinstance(standalone, bool):
             raise TypeError("standalone must be boolean")
@@ -157,6 +159,34 @@ class AgentRunner:
                 "AgentRunner requires an exact GraphExecutionIdentity; "
                 "use standalone=True for an explicitly isolated run"
             )
+        if memory_recall is not None and not isinstance(
+            memory_recall, ExecutionMemoryRecallPort
+        ):
+            raise TypeError(
+                "memory_recall must implement ExecutionMemoryRecallPort"
+            )
+        if standalone and memory_recall is not None:
+            raise ValueError(
+                "standalone AgentRunner cannot use execution-bound memory recall"
+            )
+        if memory_recall is not None:
+            memory_recall.validate_execution(graph_identity)
+        elif graph_identity is not None and (
+            self._orchestration_enabled
+            or self._memory_runtime is not None
+            or _has_registered_memory_tools(self._tool_registry)
+        ):
+            raise ValueError(
+                "Graph-bound AgentRunner memory recall requires an "
+                "ExecutionMemoryRecallPort"
+            )
+        execution_tool_registry = _execution_tool_registry(
+            self._tool_registry,
+            memory_recall=memory_recall,
+            execution_identity=graph_identity,
+            memory_policy=self._memory_policy,
+            memory_enabled=agent.memory_enabled,
+        )
         message_scope_kind = (
             CONVERSATION_SCOPE_STANDALONE
             if standalone
@@ -195,7 +225,7 @@ class AgentRunner:
                 metadata={"message_type": "agent_inputs"},
             ),
         )
-        tools = self._tool_registry.export_schema_for_llm(
+        tools = execution_tool_registry.export_schema_for_llm(
             agent.agent_id,
             agent.resolved_tool_policy(),
         )
@@ -207,7 +237,7 @@ class AgentRunner:
         loop = AgentLoop(
             llm_client=self._llm_client,
             tool_executor=ToolExecutor(
-                self._tool_registry,
+                execution_tool_registry,
                 graph_identity=graph_identity,
                 execution_environment=self._execution_environment,
                 runtime_event_sink=self._runtime_event_sink,
@@ -222,6 +252,7 @@ class AgentRunner:
             orchestration_port=self._orchestration_port,
             orchestration_enabled=self._orchestration_enabled,
             memory_runtime=self._memory_runtime,
+            memory_recall=memory_recall,
             memory_policy=self._memory_policy,
             runtime_event_sink=self._runtime_event_sink,
         )
@@ -575,6 +606,49 @@ class AgentRunner:
                 metadata=_iteration_checkpoint_metadata(result),
             )
         )
+
+
+_MEMORY_TOOL_NAMES = frozenset({"memory.recall", "memory.explain"})
+
+
+def _has_registered_memory_tools(registry: ToolRegistry) -> bool:
+    return any(
+        item.definition.name in _MEMORY_TOOL_NAMES
+        for item in registry.list_registered_tools()
+    )
+
+
+def _execution_tool_registry(
+    registry: ToolRegistry,
+    *,
+    memory_recall: ExecutionMemoryRecallPort | None,
+    execution_identity: GraphExecutionIdentity | None,
+    memory_policy: MemoryPolicy | None,
+    memory_enabled: bool,
+) -> ToolRegistry:
+    if memory_recall is None and memory_enabled:
+        return registry
+    if memory_recall is not None and execution_identity is None:
+        raise ValueError(
+            "execution-bound memory recall requires GraphExecutionIdentity"
+        )
+    overlay = ToolRegistry()
+    for registered in registry.list_registered_tools():
+        if registered.definition.name in _MEMORY_TOOL_NAMES:
+            continue
+        overlay.register(
+            registered.definition,
+            registered.executor,
+            graph_identity=registered.graph_identity,
+        )
+    if memory_recall is not None and memory_enabled:
+        register_memory_tools(
+            overlay,
+            memory_recall=memory_recall,
+            memory_policy=memory_policy,
+            execution_identity=execution_identity,
+        )
+    return overlay
 
 
 def _validate_graph_identity_arguments(

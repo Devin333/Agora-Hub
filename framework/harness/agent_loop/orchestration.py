@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.agent.models import AgentSpec, DelegateBatchCandidate, DelegateBatchProposal
 from framework.agent.models.orchestration import (
     AGENT_ORCHESTRATION_REQUEST_SCHEMA,
@@ -194,6 +195,13 @@ class HarnessAgentOrchestrationRuntime:
         )
         return self._ref_admission_service.admit_graph_inputs(
             task, stage_binding=self._stage_binding, task_policy=policy,
+        )
+
+    def parent_memory_recall(self, snapshot: RefAuthoritySnapshot) -> ExecutionMemoryRecallPort:
+        if self._ref_admission_service is None:
+            raise HarnessValidationError("parent memory admission is unavailable", code="REF_SNAPSHOT_MISSING")
+        return self._ref_admission_service.memory_recall(
+            snapshot, execution_identity=snapshot.execution_identity,
         )
 
     def _input_ref_options(

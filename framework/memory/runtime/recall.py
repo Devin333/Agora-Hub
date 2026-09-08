@@ -5,7 +5,7 @@ from typing import Protocol
 from framework.memory.models import MemoryContextBlock, MemoryQuery, MemoryRecallResult, MemorySearchResult
 from framework.memory.policy import MemoryPolicy
 from framework.memory.runtime.context_assembler import MemoryContextAssembler
-from framework.memory.stores import MemoryStore
+from framework.memory.stores.base import MemorySearchPort
 
 
 class MemoryRecallStrategy(Protocol):
@@ -13,7 +13,7 @@ class MemoryRecallStrategy(Protocol):
         self,
         query: MemoryQuery,
         *,
-        store: MemoryStore,
+        store: MemorySearchPort,
         policy: MemoryPolicy,
         assembler: MemoryContextAssembler,
     ) -> MemoryRecallResult:
@@ -25,7 +25,7 @@ class SimpleMemoryRecallStrategy:
         self,
         query: MemoryQuery,
         *,
-        store: MemoryStore,
+        store: MemorySearchPort,
         policy: MemoryPolicy,
         assembler: MemoryContextAssembler,
     ) -> MemoryRecallResult:

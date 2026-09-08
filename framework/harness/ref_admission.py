@@ -36,7 +36,7 @@ from framework.memory.namespace import MemoryNamespaceDescriptor, MemoryNamespac
 from framework.shared.graph_identity import GraphExecutionIdentity
 
 if TYPE_CHECKING:
-    from framework.harness.ref_memory import HarnessMemoryNamespaceReader
+    from framework.harness.ref_memory import HarnessMemoryNamespaceReader, HarnessMemoryRecallRuntime
 
 
 class HarnessRefAdmissionService:
@@ -216,6 +216,19 @@ class HarnessRefAdmissionService:
             execution_identity=execution_identity,
             attempt_identity=attempt_identity,
         )
+
+    def memory_recall(
+        self,
+        snapshot: RefAuthoritySnapshot,
+        *,
+        execution_identity: GraphExecutionIdentity,
+        attempt_identity: SubAgentAttemptIdentity | None = None,
+    ) -> HarnessMemoryRecallRuntime:
+        from framework.harness.ref_memory import HarnessMemoryRecallRuntime
+
+        return HarnessMemoryRecallRuntime(self.memory_reader(
+            snapshot, execution_identity=execution_identity, attempt_identity=attempt_identity,
+        ))
 
     def admit_child_inputs(
         self,

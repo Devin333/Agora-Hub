@@ -4,6 +4,7 @@ from typing import Any
 
 from framework.memory.models import MemoryKind, MemoryQuery, MemoryRecord, MemoryRecallResult, MemoryScope
 from framework.memory.policy import DEFAULT_AGENT_MEMORY_POLICY, MemoryPolicy
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.memory.runtime import MemoryRuntime
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.hashing import short_hash
@@ -16,20 +17,55 @@ class AgentMemoryAdapter:
         *,
         agent_id: str,
         input_text: str,
-        runtime: MemoryRuntime,
+        runtime: MemoryRuntime | None = None,
+        memory_recall: ExecutionMemoryRecallPort | None = None,
         execution_identity: GraphExecutionIdentity | None = None,
         policy: MemoryPolicy = DEFAULT_AGENT_MEMORY_POLICY,
     ) -> MemoryRecallResult:
+        if memory_recall is not None:
+            if not isinstance(memory_recall, ExecutionMemoryRecallPort):
+                raise TypeError(
+                    "memory_recall must implement ExecutionMemoryRecallPort"
+                )
+            execution_identity = _require_execution_identity(execution_identity)
+            memory_recall.validate_execution(execution_identity)
+            kinds = [
+                kind for kind in (MemoryKind.CORE, MemoryKind.SEMANTIC, MemoryKind.EPISODIC)
+                if not policy.allowed_kinds or kind in policy.allowed_kinds
+            ]
+            if not kinds:
+                raise ValueError("Agent memory policy permits no automatic recall kinds")
+            return memory_recall.recall(
+                MemoryQuery(
+                    query=input_text,
+                    scopes=_allowed_scopes(
+                        _allowed_scopes(
+                            [
+                                MemoryScope.SESSION,
+                                MemoryScope.AGENT,
+                                MemoryScope.GRAPH,
+                                MemoryScope.GLOBAL,
+                            ],
+                            policy=DEFAULT_AGENT_MEMORY_POLICY,
+                        ),
+                        policy=policy,
+                    ),
+                    kinds=kinds,
+                    limit=policy.max_recall_results,
+                    max_context_tokens=policy.max_context_tokens,
+                ),
+                policy=policy,
+            )
+        if execution_identity is not None:
+            raise ValueError("Graph memory recall requires ExecutionMemoryRecallPort")
+        if runtime is None:
+            raise ValueError("runtime or memory_recall is required")
         desired_scopes = [
             MemoryScope.SESSION,
             MemoryScope.AGENT,
             MemoryScope.GLOBAL,
         ]
         filters: dict[str, Any] = {"agent_id": agent_id}
-        if execution_identity is not None:
-            execution_identity = _require_execution_identity(execution_identity)
-            desired_scopes.insert(2, MemoryScope.GRAPH)
-            filters.update(execution_identity.to_dict())
         return runtime.recall(
             MemoryQuery(
                 query=input_text,

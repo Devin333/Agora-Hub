@@ -5,6 +5,7 @@ from typing import Any
 
 from framework.memory.exceptions import MemoryNotFound
 from framework.memory.models import MemoryQuery, MemoryRecord, MemorySearchResult, MemoryWriteResult
+from framework.memory.stores.keyword_search import search_memory_records
 
 
 class InMemoryMemoryStore:
@@ -29,24 +30,7 @@ class InMemoryMemoryStore:
         return self._records.get(memory_id)
 
     def search(self, query: MemoryQuery) -> list[MemorySearchResult]:
-        results: list[MemorySearchResult] = []
-        query_terms = _terms(query.query)
-        for record in self._records.values():
-            if not _record_matches_query(record, query):
-                continue
-            score = _score_record(record, query_terms)
-            if query.min_score is not None and score < query.min_score:
-                continue
-            results.append(
-                MemorySearchResult(
-                    record=record,
-                    score=score,
-                    source="keyword",
-                    match_reasons=_match_reasons(record, query_terms),
-                )
-            )
-        results.sort(key=lambda result: result.score, reverse=True)
-        return results[: query.limit]
+        return search_memory_records(self._records.values(), query)
 
     def update(self, memory_id: str, patch: dict[str, Any]) -> MemoryRecord:
         record = self._records.get(memory_id)
@@ -95,54 +79,3 @@ class InMemoryMemoryStore:
 
     def records(self) -> list[MemoryRecord]:
         return list(self._records.values())
-
-
-def _record_matches_query(record: MemoryRecord, query: MemoryQuery) -> bool:
-    if not query.include_invalidated and record.is_invalidated():
-        return False
-    if not query.include_expired and record.is_expired():
-        return False
-    if query.scopes and record.scope not in query.scopes:
-        return False
-    if query.kinds and record.kind not in query.kinds:
-        return False
-    if query.namespace is not None and record.namespace != query.namespace:
-        return False
-    if query.tenant_id is not None and record.tenant_id != query.tenant_id:
-        return False
-    if query.tags and not set(query.tags).issubset(set(record.tags)):
-        return False
-    if query.time_window is not None and not query.time_window.contains(record.created_at):
-        return False
-    return query.matches_metadata(record)
-
-
-def _score_record(record: MemoryRecord, query_terms: set[str]) -> float:
-    searchable = " ".join(
-        part
-        for part in [
-            record.summary or "",
-            record.content,
-            " ".join(record.tags),
-        ]
-        if part
-    )
-    record_terms = _terms(searchable)
-    if not query_terms:
-        return 0.0
-    overlap = len(query_terms & record_terms)
-    if overlap == 0:
-        return 0.0
-    return overlap / len(query_terms)
-
-
-def _match_reasons(record: MemoryRecord, query_terms: set[str]) -> list[str]:
-    record_terms = _terms(f"{record.summary or ''} {record.content} {' '.join(record.tags)}")
-    if query_terms & record_terms:
-        return ["text_match"]
-    return []
-
-
-def _terms(text: str) -> set[str]:
-    normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in str(text))
-    return {part for part in normalized.split() if part}

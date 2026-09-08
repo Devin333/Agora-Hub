@@ -5,8 +5,10 @@ import time
 
 import pytest
 
+import framework.tool.runtime.executor as executor_module
 from framework.shared.attempts import (
     AttemptContext,
+    AttemptSupervisor,
     bind_attempt_context,
     current_attempt_context,
 )
@@ -24,7 +26,20 @@ from framework.tool import (
 )
 
 
-def test_unconfirmed_tool_timeout_never_overlaps_retry_or_duplicates_late_effect() -> None:
+@pytest.fixture
+def attempt_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    now = [0.0]
+    monkeypatch.setattr(
+        executor_module,
+        "AttemptSupervisor",
+        lambda **options: AttemptSupervisor(clock=lambda: now[0], **options),
+    )
+    return now
+
+
+def test_unconfirmed_tool_timeout_never_overlaps_retry_or_duplicates_late_effect(
+    attempt_clock: list[float],
+) -> None:
     release = threading.Event()
     started = threading.Event()
     finished = threading.Event()
@@ -40,8 +55,9 @@ def test_unconfirmed_tool_timeout_never_overlaps_retry_or_duplicates_late_effect
             calls += 1
             active += 1
             max_active = max(max_active, active)
+        attempt_clock[0] = 2.0
         started.set()
-        release.wait(1)
+        release.wait()
         effects.append("published")
         with lock:
             active -= 1
@@ -53,38 +69,41 @@ def test_unconfirmed_tool_timeout_never_overlaps_retry_or_duplicates_late_effect
         ToolDefinition(
             name="sample.unconfirmed",
             side_effect=ToolSideEffect.READ_ONLY,
-            timeout_seconds=0.01,
+            timeout_seconds=1.0,
             max_attempts=3,
         ),
         execute,
     )
 
     executor = ToolExecutor(registry)
-    observation = executor.execute(
-        ToolCall(tool_name="sample.unconfirmed", call_id="logical-call"),
-        ToolPolicy(
-            require_explicit_allowlist=False,
-            require_approval_for_side_effects=False,
-            cancellation_grace_seconds=0.005,
-        ),
-    )
+    try:
+        observation = executor.execute(
+            ToolCall(tool_name="sample.unconfirmed", call_id="logical-call"),
+            ToolPolicy(
+                require_explicit_allowlist=False,
+                require_approval_for_side_effects=False,
+                cancellation_grace_seconds=0.005,
+            ),
+        )
 
-    assert started.is_set()
-    assert observation.status == ToolStatus.TIMEOUT
-    assert observation.result.termination_confirmed is False
-    assert observation.result.indeterminate is True
-    assert observation.result.retry_count == 0
-    assert calls == 1
-    assert max_active == 1
-    assert effects == []
-
-    release.set()
-    assert finished.wait(1)
+        assert started.is_set()
+        assert observation.status == ToolStatus.TIMEOUT
+        assert observation.result.termination_confirmed is False
+        assert observation.result.indeterminate is True
+        assert observation.result.retry_count == 0
+        assert calls == 1
+        assert max_active == 1
+        assert effects == []
+    finally:
+        release.set()
+        assert finished.wait(5)
     assert effects == ["published"]
     assert calls == 1
 
 
-def test_confirmed_read_only_timeout_retries_with_stable_logical_key() -> None:
+def test_confirmed_read_only_timeout_retries_with_stable_logical_key(
+    attempt_clock: list[float],
+) -> None:
     contexts: list[tuple[str, str, int]] = []
 
     def execute(_arguments: dict[str, object]) -> dict[str, bool]:
@@ -94,7 +113,8 @@ def test_confirmed_read_only_timeout_retries_with_stable_logical_key() -> None:
             (context.attempt_id, context.idempotency_key, context.local_attempt_no)
         )
         if len(contexts) == 1:
-            assert context.cancel_event.wait(1)
+            # Expire the real supervisor's deadline without racing OS scheduling.
+            attempt_clock[0] = 2.0
             return {"late": True}
         return {"ok": True}
 
@@ -103,13 +123,14 @@ def test_confirmed_read_only_timeout_retries_with_stable_logical_key() -> None:
         ToolDefinition(
             name="sample.read",
             side_effect=ToolSideEffect.READ_ONLY,
-            timeout_seconds=0.01,
+            timeout_seconds=1.0,
             max_attempts=2,
         ),
         execute,
     )
 
-    observation = ToolExecutor(registry).execute(
+    executor = ToolExecutor(registry)
+    observation = executor.execute(
         ToolCall(tool_name="sample.read", call_id="stable-call"),
         ToolPolicy(
             require_explicit_allowlist=False,
@@ -125,6 +146,15 @@ def test_confirmed_read_only_timeout_retries_with_stable_logical_key() -> None:
     assert contexts[0][0] != contexts[1][0]
     assert contexts[0][1] == contexts[1][1] == "tool:stable-call"
     assert [item[2] for item in contexts] == [1, 2]
+    terminal_events = [
+        event for event in executor.list_events()
+        if event.event_type == "attempt_terminal"
+    ]
+    assert [event.payload["state"] for event in terminal_events] == [
+        "TIMED_OUT", "SUCCEEDED",
+    ]
+    assert terminal_events[0].payload["termination_confirmed"] is True
+    assert terminal_events[0].payload["indeterminate"] is False
 
 
 def test_external_write_timeout_is_indeterminate_even_after_confirmed_exit() -> None:

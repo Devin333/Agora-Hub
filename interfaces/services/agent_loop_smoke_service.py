@@ -13,7 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from framework.agent.loop.runner import AgentRunner
-from framework.agent.models import AgentLoopResult, AgentSpec
+from framework.agent.models import AgentLoopPolicy, AgentLoopResult, AgentSpec
 from framework.events.canonical import checksum_for
 from framework.harness.agent_loop import (
     AGENT_LOOP_GRAPH_ACTIVITY_TASK_SCHEMA,
@@ -77,10 +77,12 @@ from framework.harness.workers.result import (
     HarnessWorkerStatus,
 )
 from framework.llm import FakeLLMClient
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.shared.attempts import AttemptSupervisor
+from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.redaction import redact_sensitive_values
 from framework.shared.time import utc_now
-from framework.tool import ToolDefinition, ToolRegistry
+from framework.tool import ToolRegistry
 
 
 AGENT_LOOP_SMOKE_GRAPH_ID = "test-agent-loop.graph"
@@ -286,6 +288,8 @@ class AgentLoopGraphSmokeVerifyGate:
             failures.append("event_sequence_invalid")
         if not requested_tools_valid or requested_tools != ["memory.recall"]:
             failures.append("tool_policy_evidence_invalid")
+        if not _verified_memory_observation(context):
+            failures.append("memory_recall_evidence_invalid")
         if activity_output is not None:
             projected_metrics = activity_output.result.get("metrics")
             if not isinstance(projected_metrics, Mapping) or any(
@@ -354,6 +358,7 @@ class AgentLoopGraphSmokeApplicationService:
         artifact_port: AgentLoopSmokeArtifactPort,
         conversation_store: Any,
         artifact_root: str | Path,
+        memory_recall_factory: Callable[[HarnessGraphActivity, str, AgentSpec], ExecutionMemoryRecallPort],
         clock: Callable[[], datetime] = utc_now,
         run_id_factory: Callable[[], str] | None = None,
     ) -> None:
@@ -371,12 +376,15 @@ class AgentLoopGraphSmokeApplicationService:
                 )
         if not callable(clock):
             raise TypeError("clock must be callable")
+        if not callable(memory_recall_factory):
+            raise TypeError("memory_recall_factory must be callable")
         if run_id_factory is not None and not callable(run_id_factory):
             raise TypeError("run_id_factory must be callable")
         self._artifact_port = artifact_port
         self._conversation_store = conversation_store
         self._artifact_root = Path(artifact_root)
         self._clock = clock
+        self._memory_recall_factory = memory_recall_factory
         self._run_id_factory = run_id_factory or (
             lambda: f"test-agent-loop-{uuid4().hex}"
         )
@@ -427,18 +435,20 @@ class AgentLoopGraphSmokeApplicationService:
             graph_checkpoint_ref=checkpoint_ref,
             output_keys=(AGENT_LOOP_SMOKE_RESULT_KEY,),
         )
+        agent = _agent_spec(topic)
         recording_runner = _RecordingRunner(
             AgentRunner(
                 llm_client=_fake_llm(topic),
-                tool_registry=_fake_tool_registry(),
+                tool_registry=ToolRegistry(),
                 conversation_store=self._conversation_store,
-            )
+            ),
+            memory_recall=self._memory_recall_factory(activity, topic, agent),
         )
         bundle = build_agent_loop_graph_activity_binding_bundle(
             worker_ref=_WORKER_REF,
             activity_ref=_ACTIVITY_REF,
             agent_runner=recording_runner,
-            agent=_agent_spec(topic),
+            agent=agent,
             artifact_recorder=AgentLoopGraphArtifactRecorder(
                 self._artifact_port
             ),
@@ -636,6 +646,48 @@ class AgentLoopGraphSmokeApplicationService:
         return artifact_ref
 
 
+def _verified_memory_observation(context: _SmokeVerifyContext) -> bool:
+    observations = [
+        event.get("observation") for event in context.result.events
+        if event.get("event_type") == "tool_observation"
+    ]
+    if len(observations) != 1 or not isinstance(observations[0], Mapping):
+        return False
+    result = observations[0].get("result")
+    if not isinstance(result, Mapping) or result.get("status") != "succeeded":
+        return False
+    output = result.get("output")
+    if not isinstance(output, Mapping) or output.get("result_count") != 1:
+        return False
+    diagnostics = output.get("diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        return False
+    refs = diagnostics.get("namespace_refs")
+    checksums = diagnostics.get("namespace_checksums")
+    if (
+        not isinstance(refs, list)
+        or len(refs) != 1
+        or not all(isinstance(ref, str) and ref.startswith("memory-namespace://") for ref in refs)
+        or not isinstance(checksums, Mapping)
+    ):
+        return False
+    if set(checksums) != set(refs) or not all(
+        isinstance(value, str) and value.startswith("sha256:")
+        for value in (diagnostics.get("input_snapshot_ref"), *checksums.values())
+    ):
+        return False
+    activity = context.receipt.activity
+    expected = GraphExecutionIdentity(
+        run_id=activity.run_id, graph_id=activity.graph_ref.graph_id,
+        graph_version=activity.graph_ref.identity_version,
+        graph_ref=activity.graph_ref.identity_ref.exact_ref,
+        graph_checksum=activity.graph_ref.checksum, node_id=activity.node_id,
+        node_instance_id=activity.node_instance_id,
+        activity_id=activity.activity_id, attempt=activity.attempt,
+    )
+    return diagnostics.get("execution_identity") == expected.to_dict()
+
+
 def build_test_agent_loop_graph() -> NormalizedHarnessGraph:
     return NormalizedHarnessGraph(
         graph_id=AGENT_LOOP_SMOKE_GRAPH_ID,
@@ -739,8 +791,11 @@ class _ResultCommitter:
 
 
 class _RecordingRunner:
-    def __init__(self, delegate: AgentRunner) -> None:
+    def __init__(
+        self, delegate: AgentRunner, *, memory_recall: ExecutionMemoryRecallPort,
+    ) -> None:
         self._delegate = delegate
+        self._memory_recall = memory_recall
         self.result: AgentLoopResult | None = None
 
     def run(
@@ -749,7 +804,9 @@ class _RecordingRunner:
         inputs: dict[str, Any],
         **kwargs: Any,
     ) -> AgentLoopResult:
-        result = self._delegate.run(agent, inputs, **kwargs)
+        result = self._delegate.run(
+            agent, inputs, memory_recall=self._memory_recall, **kwargs,
+        )
         self.result = result
         return result
 
@@ -802,7 +859,10 @@ def _agent_spec(topic: str) -> AgentSpec:
         input_keys=["topic"],
         output_key="analysis_result",
         allowed_tools=["memory.recall"],
-        memory_enabled=False,
+        memory_enabled=True,
+        loop_policy=AgentLoopPolicy(
+            memory_recall_enabled=False, memory_write_enabled=False,
+        ),
     )
 
 
@@ -841,32 +901,6 @@ def _fake_llm(topic: str) -> FakeLLMClient:
             ),
         ]
     )
-
-
-def _fake_tool_registry() -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(
-        ToolDefinition(
-            name="memory.recall",
-            description="Local deterministic memory fixture.",
-            input_schema={
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["query"],
-                "properties": {"query": {"type": "string"}},
-            },
-        ),
-        lambda args: {
-            "matches": [
-                {
-                    "title": f"Fixture memory for {args['query']}",
-                    "source": "fixture://agent-loop",
-                    "score": 1.0,
-                }
-            ]
-        },
-    )
-    return registry
 
 
 @contextmanager

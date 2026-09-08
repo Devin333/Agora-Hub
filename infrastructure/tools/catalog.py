@@ -12,6 +12,8 @@ from framework.tool.models import ToolDefinition, ToolPolicy
 from framework.tool.registry import ToolCatalog, ToolCatalogNamespace, ToolRegistry
 from framework.tool.registry.catalog import build_tool_catalog
 from framework.shared.graph_identity import GraphExecutionIdentity
+from framework.memory.recall_port import ExecutionMemoryRecallPort
+from framework.memory.policy import MemoryPolicy
 from infrastructure.tools.local_json_tools import register_local_json_tools
 from infrastructure.tools.notification_tools import register_notification_tools
 from infrastructure.tools.qdrant_tools import register_qdrant_tools
@@ -45,6 +47,8 @@ def build_builtin_tool_registry(
     web_search_provider: WebSearchProvider | None = None,
     vector_store: Any | None = None,
     memory_runtime: Any | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
+    memory_policy: MemoryPolicy | None = None,
     qdrant_vector_store: Any | None = None,
     qdrant_document_store: Any | None = None,
     approval_store: Any | None = None,
@@ -61,6 +65,8 @@ def build_builtin_tool_registry(
         web_search_provider=web_search_provider,
         vector_store=vector_store,
         memory_runtime=memory_runtime,
+        memory_recall=memory_recall,
+        memory_policy=memory_policy,
         qdrant_vector_store=qdrant_vector_store,
         qdrant_document_store=qdrant_document_store,
         approval_store=approval_store,
@@ -108,6 +114,8 @@ def _build_unfiltered_builtin_tool_registry(
     web_search_provider: WebSearchProvider | None = None,
     vector_store: Any | None = None,
     memory_runtime: Any | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
+    memory_policy: MemoryPolicy | None = None,
     qdrant_vector_store: Any | None = None,
     qdrant_document_store: Any | None = None,
     approval_store: Any | None = None,
@@ -133,11 +141,13 @@ def _build_unfiltered_builtin_tool_registry(
         )
     if local_json_root is not None:
         register_local_json_tools(registry, root=local_json_root)
-    if vector_store is not None or memory_runtime is not None:
+    if vector_store is not None or memory_runtime is not None or memory_recall is not None:
         register_memory_tools(
             registry,
             vector_store=vector_store,
             memory_runtime=memory_runtime,
+            memory_recall=memory_recall,
+            memory_policy=memory_policy,
             execution_identity=execution_identity,
         )
     if qdrant_vector_store is not None:

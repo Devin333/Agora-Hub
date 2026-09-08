@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from framework.memory.recall_port import ExecutionMemoryRecallPort
+from framework.memory.policy import MemoryPolicy
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool.models.definition import ToolDefinition
 from framework.tool.registry.registry import ToolRegistry
@@ -17,6 +19,8 @@ def register_memory_tools(
     vector_store: Any | None = None,
     default_collection: str = DEFAULT_MEMORY_COLLECTION,
     memory_runtime: Any | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
+    memory_policy: MemoryPolicy | None = None,
     execution_identity: GraphExecutionIdentity | None = None,
     standalone: bool = False,
 ) -> None:
@@ -31,7 +35,19 @@ def register_memory_tools(
             "memory tools require an exact GraphExecutionIdentity; "
             "use standalone=True for an explicitly isolated read-only registry"
         )
-    runtime = memory_runtime or _runtime_from_vector_store(
+    if standalone and execution_identity is not None:
+        raise ValueError("standalone memory tools cannot carry Graph identity")
+    if memory_recall is not None:
+        if standalone or not isinstance(memory_recall, ExecutionMemoryRecallPort):
+            raise TypeError("Graph memory tools require an execution-bound recall port")
+        if memory_runtime is not None or vector_store is not None:
+            raise ValueError("execution-bound memory cannot have a mutable fallback")
+        if default_collection != DEFAULT_MEMORY_COLLECTION:
+            raise ValueError("collection cannot select namespace authority")
+        memory_recall.validate_execution(execution_identity)
+    elif execution_identity is not None:
+        raise ValueError("Graph memory tools require an execution-bound recall port")
+    runtime = memory_recall or memory_runtime or _runtime_from_vector_store(
         vector_store,
         default_collection=default_collection,
     )
@@ -65,6 +81,7 @@ def register_memory_tools(
             runtime=runtime,
             default_collection=default_collection,
             execution_identity=execution_identity,
+            memory_policy=memory_policy,
         ),
         graph_identity=execution_identity,
     )
@@ -88,6 +105,7 @@ def _recall_memory(
     runtime: Any,
     default_collection: str,
     execution_identity: GraphExecutionIdentity | None,
+    memory_policy: MemoryPolicy | None = None,
 ) -> dict[str, Any]:
     query_text = str(args["query"]).strip()
     if not query_text:
@@ -107,7 +125,12 @@ def _recall_memory(
                 raise ValueError(
                     f"memory recall filter {key} conflicts with Graph identity"
                 )
-            recall_filters[key] = value
+            if not isinstance(runtime, ExecutionMemoryRecallPort):
+                recall_filters[key] = value
+        if isinstance(runtime, ExecutionMemoryRecallPort):
+            runtime.validate_execution(execution_identity)
+            if collection != DEFAULT_MEMORY_COLLECTION:
+                raise ValueError("collection cannot select namespace authority")
     limit = _limit(args.get("limit"))
     min_score = args.get("min_score", args.get("score_threshold"))
     recall = runtime.recall(
@@ -119,7 +142,8 @@ def _recall_memory(
             "limit": limit,
             "min_score": float(min_score) if min_score is not None else None,
             "max_context_tokens": _optional_int(args.get("max_context_tokens")),
-        }
+        },
+        **({"policy": memory_policy} if memory_policy is not None else {}),
     )
     payload = _to_dict(recall)
     payload["collection"] = collection

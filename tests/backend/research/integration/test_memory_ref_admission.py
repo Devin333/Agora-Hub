@@ -83,6 +83,12 @@ def test_real_graph_admits_exact_memory_and_children_inherit_only_read_only_refs
         assert not child.policy.writable_refs
         reader = admission.memory_reader(child, execution_identity=root.execution_identity, attempt_identity=child.attempt_identity)
         assert reader.read(ref).records()[0].memory_id == "verified-note"
+        recall = admission.memory_recall(
+            child, execution_identity=root.execution_identity, attempt_identity=child.attempt_identity,
+        ).recall("evidence-bound")
+        assert [item.memory_id for item in recall.results] == ["verified-note"]
+        assert recall.diagnostics["input_snapshot_ref"] == child.snapshot_ref
+        assert recall.diagnostics["namespace_refs"] == [ref]
         result_grant = next(grant for grant in grants if grant.phase is RefSnapshotPhase.RESULT_ACCEPTANCE and grant.attempt_identity == child.attempt_identity)
         context_ref = next(item.ref for item in result_grant.descriptors if item.artifact_type == "subagent_context")
         context = factory.transcript_stores[0].read_context(context_ref)

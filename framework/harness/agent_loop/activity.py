@@ -62,6 +62,8 @@ from framework.harness.workers.result import (
 )
 from framework.shared.redaction import redact_sensitive_values
 from framework.shared.graph_identity import GraphExecutionIdentity
+from framework.memory.recall_port import ExecutionMemoryRecallPort
+from framework.harness.ref_snapshot import RefAuthoritySnapshot
 
 
 AGENT_LOOP_GRAPH_ACTIVITY_TASK_SCHEMA = (
@@ -102,12 +104,15 @@ class AgentLoopRunnerPort(Protocol):
         node_instance_id: str | None = None,
         graph_checkpoint_ref: str | None = None,
         resume_from_cursor: bool = False,
+        memory_recall: ExecutionMemoryRecallPort | None = None,
     ) -> AgentLoopResult: ...
 
 
 @runtime_checkable
 class AgentLoopInputAdmissionPort(Protocol):
-    def admit_parent_inputs(self, task: Mapping[str, Any], *, agent: AgentSpec) -> Any: ...
+    def admit_parent_inputs(self, task: Mapping[str, Any], *, agent: AgentSpec) -> RefAuthoritySnapshot: ...
+
+    def parent_memory_recall(self, snapshot: RefAuthoritySnapshot) -> ExecutionMemoryRecallPort: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -863,8 +868,10 @@ class AgentLoopGraphWorker:
                     "actual_activity_ref": activity.activity_ref.exact_ref,
                 },
             )
+        recall_options = {}
         if self.input_admission is not None:
-            self.input_admission.admit_parent_inputs(task, agent=self.agent)
+            snapshot = self.input_admission.admit_parent_inputs(task, agent=self.agent)
+            recall_options["memory_recall"] = self.input_admission.parent_memory_recall(snapshot)
         result = self.agent_runner.run(
             self.agent,
             mapping_to_dict(parsed.inputs),
@@ -880,6 +887,7 @@ class AgentLoopGraphWorker:
             activity_id=activity.activity_id,
             attempt=activity.attempt,
             resume_from_cursor=parsed.resume_from_cursor,
+            **recall_options,
         )
         if not isinstance(result, AgentLoopResult):
             raise HarnessValidationError(

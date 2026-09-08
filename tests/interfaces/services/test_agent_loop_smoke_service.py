@@ -13,12 +13,13 @@ from framework.harness.control_plane.graph_runtime import (
     HarnessGraphActivityResultStatus,
 )
 from framework.harness.workers.result import HarnessWorkerResult
+from framework.memory.namespace import MemoryNamespaceError
 from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
-from infrastructure.storage.conversation import LocalJsonConversationStore
+from interfaces.composition.agent_loop_smoke import build_agent_loop_graph_smoke_service
+from infrastructure.storage.memory.namespace import FilesystemMemoryNamespaceStore
 from interfaces.services.agent_loop_smoke_service import (
     AGENT_LOOP_SMOKE_EVENT_TYPES,
     AGENT_LOOP_SMOKE_OUTCOME_SCHEMA,
-    AgentLoopGraphSmokeApplicationService,
     AgentLoopGraphSmokeVerifyGate,
     _deny_network_connections,
     build_test_agent_loop_graph,
@@ -42,11 +43,7 @@ def test_graph_smoke_persists_verified_events_metrics_and_node_identity(
     tmp_path,
 ) -> None:
     port = FilesystemHarnessArtifactPort(tmp_path)
-    service = AgentLoopGraphSmokeApplicationService(
-        artifact_port=port,
-        conversation_store=LocalJsonConversationStore(
-            tmp_path / "state" / "conversations"
-        ),
+    service = build_agent_loop_graph_smoke_service(
         artifact_root=tmp_path,
         clock=_Clock(),
     )
@@ -109,6 +106,46 @@ def test_graph_smoke_persists_verified_events_metrics_and_node_identity(
     assert persisted["payload"]["activity_receipt"]["node_output_commit"][
         "commit_ref"
     ].startswith("sha256:")
+    observation = next(
+        item["observation"] for item in persisted["payload"]["events"]
+        if item["event_type"] == "tool_observation"
+    )
+    assert observation["result"]["status"] == "succeeded"
+    recall = observation["result"]["output"]
+    assert recall["result_count"] == 1
+    diagnostics = recall["diagnostics"]
+    assert diagnostics["execution_identity"]["run_id"] == result.run_id
+    assert diagnostics["execution_identity"]["node_instance_id"] == result.node_instance_id
+    assert diagnostics["input_snapshot_ref"].startswith("sha256:")
+    namespace_ref, = diagnostics["namespace_refs"]
+    revision = FilesystemMemoryNamespaceStore(
+        tmp_path / "_state" / "agent-loop-memory" / "namespaces"
+    ).read(namespace_ref)
+    assert diagnostics["namespace_checksums"][namespace_ref] == revision.descriptor.source_checksum
+    assert recall["results"][0]["record"]["memory_id"] == revision.records()[0].memory_id
+    assert revision.records()[0].content == "Fixture memory for agentic research"
+
+
+def test_graph_smoke_rejects_failed_memory_tool_despite_accepted_llm_output(
+    tmp_path, monkeypatch,
+) -> None:
+    def corrupt_read(self, ref):
+        raise MemoryNamespaceError("corrupt smoke memory")
+
+    service = build_agent_loop_graph_smoke_service(artifact_root=tmp_path, clock=_Clock())
+    original_factory = service._memory_recall_factory
+
+    def admitted_then_corrupt(activity, topic, agent):
+        recall = original_factory(activity, topic, agent)
+        monkeypatch.setattr(FilesystemMemoryNamespaceStore, "read", corrupt_read)
+        return recall
+
+    monkeypatch.setattr(service, "_memory_recall_factory", admitted_then_corrupt)
+    with pytest.raises(HarnessValidationError) as error:
+        service.run(topic="agentic research", run_id="smoke-corrupt")
+    assert error.value.code == "test_agent_loop_graph_verify_failed", error.value.__cause__
+    assert "memory_recall_evidence_invalid" in error.value.details["failures"]
+    assert not (tmp_path / "smoke-corrupt" / "manifest.json").exists()
 
 
 def test_graph_smoke_graph_is_single_node_graph_only_fixture() -> None:

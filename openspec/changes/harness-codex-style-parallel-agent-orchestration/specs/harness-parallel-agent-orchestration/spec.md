@@ -356,6 +356,27 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **AND** parent-private or sibling-private memory MUST NOT become shared by naming the namespace
 - **AND** the reader MUST verify the caller's full execution/attempt, committed grant and metadata before opening memory payload, then verify the actual complete revision bytes
 
+#### Scenario: Parent AgentLoop recalls an admitted memory namespace
+
+- **WHEN** the physical Graph activity admits its parent inputs
+- **THEN** automatic recall and the execution-scoped `memory.recall` tool MUST use the same Harness-issued read-only capability and exact namespace revisions
+- **AND** the capability MUST be passed per invocation without rebinding shared Runner or tool registry state
+- **AND** an orchestration execution without memory refs MUST receive an empty capability rather than fall back to mutable memory
+
+#### Scenario: Graph memory consumption has no revision authority
+
+- **WHEN** a Graph memory caller supplies only a mutable runtime/vector store, an uncommitted grant, a mismatched execution or corrupt revision evidence
+- **THEN** memory access MUST fail closed without mutable-source fallback, unauthorized payload reads or continuation through a failed automatic recall
+- **AND** candidate collection, revision, namespace, tenant and owner selectors MUST NOT widen the admitted grant
+- **AND** recall MUST retain bounded MemoryPolicy limits and report the input snapshot and namespace refs/checksums
+
+#### Scenario: Agent memory is disabled or restricted
+
+- **WHEN** the Agent disables all memory or narrows its memory recall policy
+- **THEN** automatic recall and explicit memory tools MUST respect the configured boundary before reading namespace payload
+- **AND** disabling automatic recall alone MUST still allow an explicitly authorized memory tool under the same bounded MemoryPolicy
+- **AND** direct Graph AgentLoop/ToolExecutor callers MUST NOT reuse standalone memory registrations
+
 ### Requirement: Spawn SHALL use a durable intent receipt and reconciliation protocol
 
 Each attempt MUST have `spawn_operation_key = group_id + wave_id + task_instance_id + attempt`. Wave admission, reservation ledger and `TASK_ATTEMPT_SPAWN_INTENT` MUST be committed in one transaction or equivalent durable batch before spawn. `ChildAgentSupervisor` MUST handle the operation key idempotently and persist `SPAWN_CONFIRMED` or `SPAWN_UNKNOWN` receipts. `TASK_WAVE_DISPATCHED` requires known spawn status and trackable children for all selected tasks. Partially successful batches MUST reconcile each task independently. Identical verified receipt redelivery MUST be reused; conflicting identity/checksum evidence MUST halt rather than overwrite history.

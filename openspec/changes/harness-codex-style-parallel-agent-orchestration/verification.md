@@ -985,6 +985,89 @@ AgentRunner/ToolRuntime receipt wiring, complete parent continuation and G1-G5
 acceptance remain under their original later tasks. No default feature or live
 traffic was enabled, and no task checkbox was advanced.
 
+## Task 1.5 Execution-Bound Memory Recall Increment
+
+Status: increment implemented and verified; task 1.5 remains unchecked.
+This increment does not advance G1-G5 acceptance or enable a feature.
+
+Implemented:
+
+- Physical parent Graph input admission now supplies one per-invocation,
+  Harness-issued read-only memory capability to AgentRunner. Automatic recall
+  and the execution-local memory tool overlay share the same committed grant.
+  Shared Runner and registry state cannot retain a previous caller's grant.
+- Graph mutable-runtime/vector-only recall fails closed; standalone remains
+  explicitly isolated. Empty admitted memory produces an empty result, not a
+  fallback. Authorization and integrity failures propagate before the next LLM
+  call. Query selectors cannot issue namespace, revision, tenant or owner access.
+- Recall reads verified immutable records after all selected metadata checks,
+  reuses the existing keyword retrieval and policy/context assembly, and records
+  snapshot/ref/checksum lineage. Default bounds are 5 results and 1500 context
+  tokens; per-call policies cannot increase them. No memory writes or promotion
+  APIs are exposed through the capability.
+- Framework, infrastructure and business tool catalog ingress can pass the same
+  neutral recall port. Agent and Tool do not import Harness authorization code.
+- `memory_enabled` disables automatic recall, explicit tools and candidate
+  recording; disabled tools are omitted from Graph and standalone schemas.
+  `memory_recall_enabled` controls automatic recall only. Explicit tools inherit
+  the same caller MemoryPolicy, intersected with Harness limits. Unrestricted
+  caller scope/kind lists do not remove the Harness ceiling.
+- The offline AgentLoop smoke now publishes fixture records into the real
+  immutable namespace store, commits an execution-bound grant, and uses the
+  actual memory tool. Its deterministic gate verifies successful recall and
+  identity/revision lineage, in addition to the existing event, metric and
+  artifact checks. This smoke-specific grant is not production admission proof.
+- Two tool attempt tests now use the real Supervisor with an injected clock
+  rather than 10ms OS scheduling assumptions. The unconfirmed worker is released
+  explicitly in cleanup; timeout/retry/termination/idempotency assertions remain,
+  with terminal-event assertions added to the confirmed retry case.
+
+Final integrated validation (2026-09-08):
+
+- Agent, Memory, Tool, immutable recall, business catalog, AgentLoop services,
+  production composition and smoke command regression: `336 passed, 2 skipped`
+  in 169.71 seconds. Skips are existing unavailable Windows symlink cases in
+  artifact tools. Includes disabled Graph/standalone schemas, narrower and empty
+  policy allowlists, direct ToolExecutor rejection, same-policy tool recall,
+  grant reopen, mutable fallback denial, and corrupt smoke memory rejection.
+- `openspec validate harness-codex-style-parallel-agent-orchestration --strict`
+  and `git diff --check`: passed.
+- `.venv/Scripts/python.exe -m scripts.dev smoke`: exit 0. Compile passed;
+  Harness/Research/API/service/recorded transport/architecture coverage returned
+  `3152 passed, 23 deselected, 23 warnings` in 1570.53 seconds. Deselection follows
+  the existing repository marker policy; warnings are existing FastAPI/Starlette
+  deprecations. This includes physical parent automatic/tool recall, rejected
+  corrupt payloads before LLM/child invocation, and Research child grants.
+- Offline AgentLoop run `test-agent-loop-0dee69c014154a4388cecf55eed9133d`:
+  succeeded, 3 fixture LLM calls, 1 successful real memory tool call, 1 judge
+  retry, 60 fixture tokens and 0 network calls. Terminal manifest:
+  `.newsroom/smoke/test-agent-loop-0dee69c014154a4388cecf55eed9133d/manifest.json`;
+  manifest hash `sha256:2ef3b842e009006ca8bbbfc25a60de471bd7ab5090b01abae8bdb77f83a7a158`.
+- Source validation: `is_valid=true`, `error_count=0`, `warning_count=0`.
+
+Earlier failed runs exposed an empty-grant constructor check, a missing memory
+tool allowlist in the new Graph fixture, and a legacy business test passing an
+unbound vector placeholder. These were corrected with a legitimate empty grant,
+an explicit fixture allowlist and a committed namespace capability respectively,
+without weakening gate behavior or reducing the original tool assertions.
+Additional regressions exposed default-policy expansion order, unbound direct
+Graph memory tools, inconsistent memory flags and missing policy propagation.
+Review also found standalone schema exposure and empty-allowlist handling.
+These boundaries were repaired together with the obsolete smoke fixture, without
+weakening authorization or changing production deadline semantics. The final
+negative smoke test also uses a short semantic run ID to stay within Windows
+path limits; its corrupt-recall and no-terminal-publication assertions remain.
+Three smoke runs were stopped after further code changes were identified; none
+is counted as passing evidence. The final integrated results above supersede
+all earlier partial validation.
+
+Remaining task 1.5 scope includes RAG memory consumers, dependency/replacement
+input grants and remaining recovery/replay consumers. Concrete child AgentRunner
+receipt wiring and complete parent continuation retain their later task owners.
+Online recall retains normal record expiry rules; offline observation replay
+must consume recorded evidence rather than rerun recall against the current
+clock. Namespace reopen tests are not full offline AgentLoop replay evidence.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

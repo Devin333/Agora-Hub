@@ -5,7 +5,8 @@ from backend.tools import (
 from framework.agent.artifacts import ArtifactManager
 from framework.tool import ToolCall, ToolExecutor, ToolPolicy, ToolStatus, build_tool_catalog
 from infrastructure.tools import WebSearchResult
-from framework.shared.graph_identity import GraphExecutionIdentity
+from framework.harness.ref_memory import HarnessMemoryRecallRuntime
+from tests.framework.harness.test_ref_memory import _setup
 
 
 def test_business_tool_registry_includes_safe_business_tools() -> None:
@@ -24,15 +25,16 @@ def test_business_tool_registry_includes_safe_business_tools() -> None:
 
 
 def test_business_dangerous_registry_includes_risky_business_tools(tmp_path) -> None:
+    root, _, reader, _, _, _ = _setup(tmp_path / "memory-authority")
     artifact_manager = ArtifactManager(tmp_path)
-    artifact_manager.start_run("run-tools")
+    artifact_manager.start_run(root.run_id)
 
     registry = build_business_dangerous_tool_registry(
         artifact_manager=artifact_manager,
-        run_id="run-tools",
-        execution_identity=_identity("run-tools"),
+        run_id=root.run_id,
+        execution_identity=root.execution_identity,
         local_json_root=tmp_path / "local-json",
-        vector_store=object(),
+        memory_recall=HarnessMemoryRecallRuntime(reader),
         memory_ingestion_service=object(),
         qdrant_vector_store=object(),
         qdrant_document_store=object(),
@@ -61,20 +63,7 @@ def test_business_dangerous_registry_includes_risky_business_tools(tmp_path) -> 
     }.issubset(names)
     assert "report.validate" not in names
     assert "quality.duplicate_check" not in names
-
-
-def _identity(run_id: str) -> GraphExecutionIdentity:
-    return GraphExecutionIdentity(
-        run_id=run_id,
-        graph_id="graph.test",
-        graph_version="v1",
-        graph_ref="graph.test@v1",
-        graph_checksum="sha256:" + "0" * 64,
-        node_id="node.tools",
-        node_instance_id="instance.tools",
-        activity_id="activity.tools",
-        attempt=1,
-    )
+    assert "memory.recall" not in names
 
 
 def test_business_dangerous_registry_has_one_web_search_owner_and_forwards_provider() -> None:

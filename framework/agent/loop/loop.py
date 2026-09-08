@@ -84,6 +84,7 @@ from framework.memory import (
     MemoryPolicy,
     MemoryRuntime,
 )
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.tool import ToolExecutor
 from framework.tool import (
     ArtifactRef,
@@ -110,6 +111,7 @@ class AgentLoop:
         orchestration_port: AgentOrchestrationPort | None = None,
         orchestration_enabled: bool = False,
         memory_runtime: MemoryRuntime | None = None,
+        memory_recall: ExecutionMemoryRecallPort | None = None,
         memory_policy: MemoryPolicy | None = None,
         memory_adapter: AgentMemoryAdapter | None = None,
         skill_registry: Any | None = None,
@@ -136,7 +138,14 @@ class AgentLoop:
             raise TypeError("orchestration_enabled must be boolean")
         self._orchestration_port = orchestration_port
         self._orchestration_enabled = orchestration_enabled
+        if memory_recall is not None and not isinstance(
+            memory_recall, ExecutionMemoryRecallPort
+        ):
+            raise TypeError(
+                "memory_recall must implement ExecutionMemoryRecallPort"
+            )
         self._memory_runtime = memory_runtime
+        self._memory_recall = memory_recall
         self._memory_policy = memory_policy or DEFAULT_AGENT_MEMORY_POLICY
         self._memory_adapter = memory_adapter or AgentMemoryAdapter()
         if agent_skill_runtime is not None:
@@ -175,11 +184,26 @@ class AgentLoop:
             execution_identity is not None or graph_checkpoint_ref is not None
         ):
             raise ValueError("standalone AgentLoop cannot carry Graph identity")
+        if standalone and self._memory_recall is not None:
+            raise ValueError(
+                "standalone AgentLoop cannot use execution-bound memory recall"
+            )
         if execution_identity is None and not standalone:
             raise ValueError(
                 "AgentLoop requires an exact GraphExecutionIdentity; "
                 "use standalone=True for an explicitly isolated run"
             )
+        if (
+            execution_identity is not None
+            and self._memory_recall is None
+            and self._memory_runtime is not None
+        ):
+            raise ValueError(
+                "Graph-bound AgentLoop memory recall requires an "
+                "ExecutionMemoryRecallPort"
+            )
+        if self._memory_recall is not None:
+            self._memory_recall.validate_execution(execution_identity)
         if execution_identity is not None and (
             not isinstance(graph_checkpoint_ref, str)
             or not graph_checkpoint_ref
@@ -729,6 +753,10 @@ class AgentLoop:
     ) -> str | AgentLoopResult | None:
         iteration = iteration_trace.iteration
         tool_policy = agent.resolved_tool_policy()
+        if not agent.memory_enabled:
+            tool_policy = replace(tool_policy, blocked_tools=[
+                *tool_policy.blocked_tools, "memory.recall", "memory.explain",
+            ])
         tool_call = ToolCall(
             tool_name=action.tool_name or "",
             arguments=action.tool_args,
@@ -1649,6 +1677,17 @@ class AgentLoop:
         inputs: dict[str, Any],
         execution_identity: GraphExecutionIdentity | None,
     ) -> str | None:
+        if not agent.memory_enabled or not agent.loop_policy.memory_recall_enabled:
+            return None
+        if self._memory_recall is not None:
+            recall = self._memory_adapter.before_llm_call(
+                agent_id=agent.agent_id,
+                input_text=str(inputs),
+                memory_recall=self._memory_recall,
+                execution_identity=execution_identity,
+                policy=self._memory_policy,
+            )
+            return recall.context_block.content or None
         if self._memory_runtime is None:
             return None
         try:
@@ -1707,7 +1746,7 @@ class AgentLoop:
         observation: ToolObservation,
         trace: AgentLoopTrace,
     ) -> None:
-        if not agent.loop_policy.memory_write_enabled:
+        if not agent.memory_enabled or not agent.loop_policy.memory_write_enabled:
             return
         if observation.status != ToolStatus.SUCCEEDED:
             return
@@ -1730,7 +1769,7 @@ class AgentLoop:
         output: dict[str, Any],
         trace: AgentLoopTrace,
     ) -> None:
-        if not agent.loop_policy.memory_write_enabled:
+        if not agent.memory_enabled or not agent.loop_policy.memory_write_enabled:
             return
         try:
             candidate = self._memory_adapter.propose_final_output(

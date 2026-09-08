@@ -39,12 +39,16 @@ from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.verification import TaskPlanGateRegistry, TaskPlanResultVerifier, TaskPlanResultVerificationRequest
 from framework.harness.workers.result import HarnessWorkerResult
 from framework.llm import FakeLLMClient
-from framework.tool import ToolRegistry
+from framework.memory.models import MemoryRecord
+from framework.memory.namespace import MemoryNamespacePublisher
+from framework.memory.policy import MemoryPolicy
+from framework.tool import ToolPolicy, ToolRegistry
 from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
 from infrastructure.storage.conversation import LocalJsonConversationStore
 from infrastructure.storage.events.sqlite import SQLiteEventStore
 from infrastructure.storage.harness import SQLiteHarnessNodeOutputResource
 from infrastructure.storage.harness.subagent_transcript import FilesystemSubAgentTranscriptStore
+from infrastructure.storage.memory.namespace import FilesystemMemoryNamespaceStore
 from interfaces.composition.agent_loop_graph import (
     build_agent_loop_graph_runtime_composition,
     build_agent_loop_harness_orchestration_runtime,
@@ -64,7 +68,7 @@ class _RecordingAdmission(HarnessRefAdmissionService):
         return self.snapshot
 
 
-def _setup(root, *, include_document=True):
+def _setup(root, *, include_document=True, include_memory=False):
     template, template_identity = _runtime()
     policy = replace(
         template._policy_registry.policies[0], stage_id="run-agent-loop", max_planning_tool_calls=0,
@@ -78,6 +82,11 @@ def _setup(root, *, include_document=True):
         support_refs=template._stage_binding.support_refs,
     )
     definition = replace(spec.graph, task_plan_stage_bindings=(declaration,), definition_checksum=None)
+    if include_memory:
+        definition = replace(definition, activities=tuple(
+            replace(activity, metadata={**activity.metadata, "tool_allowlist": ["memory.recall"]})
+            for activity in definition.activities
+        ), definition_checksum=None)
     binding = TaskPlanStageBinding(HarnessGraphCompiler().compile(definition).graph, policy.stage_id)
     business_inputs = {"parent_private": "private-parent-only"}
     if include_document:
@@ -88,7 +97,21 @@ def _setup(root, *, include_document=True):
         metadata={**spec.metadata, "tenant_scope_ref": checksum_for("production")},
     )
     grants, events = _store(root / "grants")
-    admission = _RecordingAdmission(grants)
+    namespace_store = FilesystemMemoryNamespaceStore(root / "memory-namespaces") if include_memory else None
+    namespace_metadata = None
+    if include_memory:
+        namespace_metadata = MemoryNamespacePublisher(
+            namespace_store, namespace="memory.read", tenant_id=checksum_for("production"),
+            owner_id=checksum_for("production"), shared_read_only=False, policy=MemoryPolicy(),
+        ).publish((MemoryRecord(
+            content="admitted memory evidence note", memory_id="parent-note",
+            namespace="memory.read", tenant_id=checksum_for("production"),
+            actor=checksum_for("production"), refs={"source_id": "verified-source"},
+        ),))
+    admission = _RecordingAdmission(
+        grants, memory_namespaces=namespace_store,
+        memory_namespace_refs=() if namespace_metadata is None else (namespace_metadata.exact_ref,),
+    )
     task_events = SQLiteEventStore(root / "tasks.sqlite3")
     task_store = DurableTaskPlanStore(
         EventRuntime(store=task_events, schema_catalog=default_event_schema_catalog()),
@@ -150,9 +173,11 @@ def _setup(root, *, include_document=True):
         checkpoint_store=JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"),
         ref_admission_service=admission,
     )
-    agent = replace(_agent(), loop_policy=AgentLoopPolicy(max_iterations=2, allow_subagents=True), metadata={
+    agent = replace(_agent(), loop_policy=AgentLoopPolicy(max_iterations=3 if include_memory else 2, allow_subagents=True), metadata={
         "agent_orchestration": {"policy_ref": policy.exact_ref, "max_tasks_per_group": 2},
     })
+    if include_memory:
+        agent = replace(agent, allowed_tools=["memory.recall"], tool_policy=ToolPolicy(allowed_tools=["memory.recall"]))
     candidate = _request(template_identity).candidate
     batch = {"action_type": "delegate_batch", **candidate.to_dict()}
 
@@ -161,9 +186,13 @@ def _setup(root, *, include_document=True):
             snapshot = admission.snapshot
             assert snapshot.execution_identity == request.execution_identity
             assert grants.get(run_id=snapshot.run_id, snapshot_ref=snapshot.snapshot_ref) == snapshot
+            if include_memory:
+                assert "admitted memory evidence note" in str(request.messages)
             return super().complete(request)
 
-    llm = InspectingLLM([
+    llm = InspectingLLM(([
+        json.dumps({"action_type": "tool_call", "tool_name": "memory.recall", "tool_args": {"query": "memory evidence"}}),
+    ] if include_memory else []) + [
         json.dumps(batch),
         json.dumps({"action_type": "final_output", "output": {"analysis_result": {"summary": "done"}}}),
     ])
@@ -185,6 +214,31 @@ def _setup(root, *, include_document=True):
         side_effect_store=effects, side_effect_registry=effect_registry,
     )
     return SimpleNamespace(**locals())
+
+
+def test_real_graph_recall_and_tool_share_admitted_namespace(tmp_path):
+    setup = _setup(tmp_path, include_memory=True)
+    result = setup.graph_runtime.run(setup.spec)
+    assert result.succeeded, result
+    assert setup.llm.call_count == 3
+    assert len(setup.child_calls) == 2
+    assert "admitted memory evidence note" in str(setup.llm.requests[1].messages)
+    assert setup.runner._tool_registry.maybe_get("memory.recall") is None
+    assert setup.admission.snapshot.policy.allowed_memory_namespaces == ("memory.read",)
+
+
+def test_real_graph_corrupt_memory_halts_before_llm_or_children(tmp_path, monkeypatch):
+    setup = _setup(tmp_path, include_memory=True)
+
+    def corrupt_payload(ref):
+        raise HarnessValidationError("memory checksum corrupt", code="REF_CHECKSUM_MISMATCH")
+
+    monkeypatch.setattr(setup.namespace_store, "read", corrupt_payload)
+    result = setup.graph_runtime.run(setup.spec)
+    assert not result.succeeded
+    assert setup.llm.call_count == 0
+    assert setup.child_calls == []
+    assert setup.admission.snapshot is not None
 
 
 def _admitted_request(setup):

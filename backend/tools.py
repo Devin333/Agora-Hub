@@ -10,6 +10,8 @@ from backend.layers.signal.connector_tools import register_arxiv_tools, register
 from backend.layers.signal.tools import FetchText, register_source_tools
 from framework.agent.artifacts import ArtifactManager
 from framework.memory import MemoryRuntime
+from framework.memory.policy import MemoryPolicy
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.tool import (
     ToolRegistry,
 )
@@ -41,6 +43,8 @@ def build_business_tool_registry(
     vector_store: Any | None = None,
     memory_ingestion_service: Any | None = None,
     memory_runtime: MemoryRuntime | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
+    memory_policy: MemoryPolicy | None = None,
     qdrant_vector_store: Any | None = None,
     qdrant_document_store: Any | None = None,
     report_service: Any | None = None,
@@ -60,6 +64,8 @@ def build_business_tool_registry(
         local_json_root=local_json_root,
         vector_store=vector_store,
         memory_runtime=memory_runtime,
+        memory_recall=memory_recall,
+        memory_policy=memory_policy,
         qdrant_vector_store=qdrant_vector_store,
         qdrant_document_store=qdrant_document_store,
         approval_store=approval_store,
@@ -115,6 +121,8 @@ def build_business_dangerous_tool_registry(**kwargs: Any) -> ToolRegistry:
         local_json_root=options.get("local_json_root"),
         vector_store=options.get("vector_store"),
         memory_runtime=options.get("memory_runtime"),
+        memory_recall=options.get("memory_recall"),
+        memory_policy=options.get("memory_policy"),
         qdrant_vector_store=options.get("qdrant_vector_store"),
         qdrant_document_store=options.get("qdrant_document_store"),
         approval_store=options.get("approval_store"),
