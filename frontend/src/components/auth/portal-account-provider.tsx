@@ -7,6 +7,7 @@ import { PortalLoginDialog } from "./portal-login-dialog"
 
 type AccountContext = {
   session: AuthSession | null
+  resolved: boolean
   pending: boolean
   error: string | null
   openLogin: (trigger?: HTMLElement) => void
@@ -16,6 +17,7 @@ const Context = createContext<AccountContext | null>(null)
 
 export function PortalAccountProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null)
+  const [resolved, setResolved] = useState(false)
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -24,7 +26,9 @@ export function PortalAccountProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const controller = new AbortController()
     initialSession.current = controller
-    fetchPortalSession(controller.signal).then((result) => { if (!controller.signal.aborted) setSession(result.session) }).catch(() => {})
+    fetchPortalSession(controller.signal).then((result) => {
+      if (!controller.signal.aborted) { setSession(result.session); setResolved(true) }
+    }).catch(() => { if (!controller.signal.aborted) setError("账号状态暂时无法读取，请重新登录。") })
     return () => controller.abort()
   }, [])
   const openLogin = useCallback((element?: HTMLElement) => {
@@ -41,9 +45,9 @@ export function PortalAccountProvider({ children }: { children: ReactNode }) {
     catch (cause) { setError(authErrorMessage(cause)) }
     finally { setPending(false) }
   }
-  return <Context.Provider value={{ session, pending, error, openLogin, signOut }}>
+  return <Context.Provider value={{ session, resolved, pending, error, openLogin, signOut }}>
     {children}
-    <PortalLoginDialog open={open} onOpenChange={setOpen} onAuthenticated={(value) => { initialSession.current?.abort(); setSession(value); setOpen(false) }} onRestoreFocus={() => trigger.current?.focus({ preventScroll: true })} />
+    <PortalLoginDialog open={open} onOpenChange={setOpen} onAuthenticated={(value) => { initialSession.current?.abort(); setSession(value); setResolved(true); setError(null); setOpen(false) }} onRestoreFocus={() => trigger.current?.focus({ preventScroll: true })} />
   </Context.Provider>
 }
 

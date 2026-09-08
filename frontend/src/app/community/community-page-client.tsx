@@ -76,7 +76,7 @@ export function CommunityPageClient() {
 }
 
 export function preserveEntryParams(current: { get(name: string): string | null }, next: URLSearchParams): URLSearchParams {
-  for (const key of ["question", "entry"]) {
+  for (const key of ["question", "entry", "researchSession"]) {
     const value = current.get(key)
     if (value) next.set(key, value)
   }

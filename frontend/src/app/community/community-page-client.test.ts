@@ -3,11 +3,12 @@ import { preserveEntryParams } from "@/app/community/community-page-client"
 
 describe("CommunityPageClient research context", () => {
   it("preserves the homepage question and source while filters change", () => {
-    const current = new URLSearchParams("question=Agent+memory&q=memory&entry=home&source=reddit&signal=topic-1")
+    const current = new URLSearchParams("question=Agent+memory&q=memory&entry=home&source=reddit&signal=topic-1&researchSession=study-one")
     const next = preserveEntryParams(current, new URLSearchParams("q=latency&period=weekly&source=hackernews"))
 
     expect(next.get("question")).toBe("Agent memory")
     expect(next.get("entry")).toBe("home")
+    expect(next.get("researchSession")).toBe("study-one")
     expect(next.get("source")).toBe("hackernews")
     expect(next.get("q")).toBe("latency")
     expect(next.get("period")).toBe("weekly")

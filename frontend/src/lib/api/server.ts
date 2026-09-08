@@ -11,7 +11,7 @@ type ApiEnvelope<T> = {
 
 export type SafeApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; errorCode: string; errorMessage: string; requestId?: string; retryAfter?: number }
+  | { ok: false; errorCode: string; errorMessage: string; requestId?: string; retryAfter?: number; status?: number }
 
 export class NewsRoomApiError extends Error {
   code: string
@@ -38,7 +38,8 @@ export async function safeApiGet<T>(path: string, init?: RequestInit): Promise<S
         ok: false,
         errorCode: error.code,
         errorMessage: error.message,
-        requestId: error.requestId
+        requestId: error.requestId,
+        status: error.status
       }
     }
     return {
@@ -59,7 +60,29 @@ export async function safeApiPost<T>(path: string, body?: unknown, init?: Reques
         errorCode: error.code,
         errorMessage: error.message,
         requestId: error.requestId,
+        status: error.status,
         ...(retryAfterSeconds(error.detail) !== undefined ? { retryAfter: retryAfterSeconds(error.detail) } : {})
+      }
+    }
+    return {
+      ok: false,
+      errorCode: "request_failed",
+      errorMessage: error instanceof Error ? error.message : "Request failed"
+    }
+  }
+}
+
+export async function safeApiPut<T>(path: string, body?: unknown, init?: RequestInit): Promise<SafeApiResult<T>> {
+  try {
+    return { ok: true, data: await apiPut<T>(path, body, init) }
+  } catch (error) {
+    if (error instanceof NewsRoomApiError) {
+      return {
+        ok: false,
+        errorCode: error.code,
+        errorMessage: error.message,
+        requestId: error.requestId,
+        status: error.status
       }
     }
     return {
@@ -84,7 +107,8 @@ export async function safeApiPatch<T>(path: string, body?: unknown, init?: Reque
         ok: false,
         errorCode: error.code,
         errorMessage: error.message,
-        requestId: error.requestId
+        requestId: error.requestId,
+        status: error.status
       }
     }
     return {
@@ -104,7 +128,8 @@ export async function safeApiDelete<T>(path: string, init?: RequestInit): Promis
         ok: false,
         errorCode: error.code,
         errorMessage: error.message,
-        requestId: error.requestId
+        requestId: error.requestId,
+        status: error.status
       }
     }
     return {
@@ -173,6 +198,64 @@ async function apiPost<T>(path: string, body?: unknown, init?: RequestInit): Pro
   const response = await fetch(apiUrl(path), {
     ...init,
     method: "POST",
+    headers: {
+      ...requestHeaders(init?.headers),
+      "Content-Type": "application/json",
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store"
+  })
+
+  const payload = await parsePayload<T>(response)
+  if (!response.ok) {
+    if (isApiEnvelope<T>(payload) && payload.error) {
+      throw new NewsRoomApiError(
+        {
+          code: payload.error.code,
+          message: payload.error.message,
+          detail: "detail" in payload.error ? payload.error.detail : payload.error.details,
+          requestId: payload.error.requestId ?? payload.error.request_id ?? payload.request_id ?? undefined
+        },
+        response.status
+      )
+    }
+    throw new NewsRoomApiError(
+      {
+        code: `http_${response.status}`,
+        message: response.statusText || "API request failed",
+        detail: payload
+      },
+      response.status
+    )
+  }
+
+  if (isApiEnvelope<T>(payload)) {
+    if (payload.success === false) {
+      const error = payload.error ?? {
+        code: "api_error",
+        message: "API request failed",
+        detail: payload
+      }
+      throw new NewsRoomApiError(
+        {
+          code: error.code,
+          message: error.message,
+          detail: "detail" in error ? error.detail : error.details,
+          requestId: error.requestId ?? error.request_id ?? payload.request_id ?? undefined
+        },
+        response.status
+      )
+    }
+    return payload.data as T
+  }
+
+  return payload as T
+}
+
+async function apiPut<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    method: "PUT",
     headers: {
       ...requestHeaders(init?.headers),
       "Content-Type": "application/json",

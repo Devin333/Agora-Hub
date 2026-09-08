@@ -79,6 +79,7 @@ from interfaces.services.memory_service import MemoryApplicationService
 from interfaces.services.mcp_service import MCPApplicationService
 from interfaces.services.project_service import ProjectApplicationService
 from interfaces.services.research_service import ResearchApplicationService
+from interfaces.services.research_history_service import ResearchHistoryService
 from interfaces.services.report_service import ReportApplicationService
 from interfaces.services.run_inspection_service import GraphRunInspectionService
 from interfaces.services.run_inspection_factory import (
@@ -118,6 +119,7 @@ ScheduleServiceFactory = Callable[[], ScheduleApplicationService]
 AuthServiceFactory = Callable[[], AuthApplicationService]
 ProjectServiceFactory = Callable[[], ProjectApplicationService]
 ResearchServiceFactory = Callable[[], ResearchApplicationService]
+ResearchHistoryServiceFactory = Callable[[], ResearchHistoryService]
 RuntimeOperatorStatusServiceFactory = Callable[[], RuntimeOperatorStatusService]
 AuditEmitterFactory = Callable[[], AuditEmitter | None]
 ApiKeyRoles = Mapping[str, str | Sequence[str]]
@@ -143,6 +145,7 @@ def create_app(
     auth_service_factory: AuthServiceFactory = AuthApplicationService,
     project_service_factory: ProjectServiceFactory = ProjectApplicationService,
     research_service_factory: ResearchServiceFactory = build_research_application_service,
+    research_history_service_factory: ResearchHistoryServiceFactory = ResearchHistoryService,
     harness_graph_service_factory: HarnessGraphServiceFactory | None = None,
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None,
     runtime_operator_status_service_factory: RuntimeOperatorStatusServiceFactory | None = None,
@@ -410,6 +413,7 @@ def create_app(
         auth_service_factory=auth_service_factory,
         project_service_factory=project_service_factory,
         research_service_factory=research_service_factory,
+        research_history_service_factory=research_history_service_factory,
         harness_graph_service_factory=harness_graph_service_factory,
         harness_wait_service_factory=harness_wait_service_factory,
         runtime_operator_status_service_factory=runtime_operator_status_service_factory,

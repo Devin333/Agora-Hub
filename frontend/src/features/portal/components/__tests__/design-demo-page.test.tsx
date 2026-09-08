@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }))
 vi.mock("@/components/auth/portal-account-control", () => ({ PortalAccountControl: () => <button>登录</button> }))
 
 describe("research homepage", () => {
-  beforeEach(() => { localStorage.clear(); sessionStorage.clear(); push.mockReset() })
+  beforeEach(() => { localStorage.clear(); sessionStorage.clear(); push.mockReset(); vi.spyOn(crypto, "randomUUID").mockReturnValue("11111111-1111-4111-8111-111111111111"); Element.prototype.scrollIntoView = vi.fn(); window.matchMedia = vi.fn().mockReturnValue({ matches: false }) })
   afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
   it("starts automatically, fills examples without navigating, then sends once", () => {
@@ -22,7 +22,7 @@ describe("research homepage", () => {
     expect(screen.getByRole("textbox")).toHaveFocus()
     expect(push).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }))
-    expect(push).toHaveBeenCalledExactlyOnceWith(researchQuestionHref("projects", "找可本地运行的开源项目"))
+    expect(push).toHaveBeenCalledExactlyOnceWith(researchQuestionHref("projects", "找可本地运行的开源项目", "11111111-1111-4111-8111-111111111111"))
     expect(screen.getByRole("status")).toHaveTextContent("正在打开项目雷达")
     expect(screen.queryByRole("link", { name: "进入模块" })).not.toBeInTheDocument()
   })
@@ -34,7 +34,7 @@ describe("research homepage", () => {
     expect(push).not.toHaveBeenCalled()
     expect(screen.getByRole("group", { name: "确认研究方向" })).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "找项目", exact: true }))
-    expect(push).toHaveBeenCalledExactlyOnceWith(researchQuestionHref("projects", "论文和开源项目"))
+    expect(push).toHaveBeenCalledExactlyOnceWith(researchQuestionHref("projects", "论文和开源项目", "11111111-1111-4111-8111-111111111111"))
   })
 
   it("does not send during Chinese composition and preserves input on failure", () => {
@@ -67,9 +67,21 @@ describe("research homepage", () => {
     render(<DesignDemoPage />)
     expect(screen.queryByText("继续上次研究")).not.toBeInTheDocument()
     act(() => recordResearchVisit(researchQuestionHref("papers", "Agent") + "&sort=citations", 320))
-    fireEvent.click(screen.getByRole("button", { name: /继续上次研究/ }))
+    fireEvent.click(screen.getByRole("button", { name: "继续研究：Agent" }))
     expect(push).toHaveBeenCalledWith(expect.stringContaining("sort=citations"), { scroll: false })
     act(() => removeResearchVisit())
     expect(screen.queryByText("继续上次研究")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "继续研究：Agent" })).not.toBeInTheDocument()
+  })
+  it("starts a new research draft and keeps collapse preference", () => {
+    const view = render(<DesignDemoPage />)
+    fireEvent.change(screen.getByRole("textbox", { name: "向 Agora AI 提问" }), { target: { value: "待发送内容" } })
+    fireEvent.click(screen.getByRole("button", { name: "新研究" }))
+    expect(screen.getByRole("textbox", { name: "向 Agora AI 提问" })).toHaveValue("")
+    expect(screen.getByRole("textbox", { name: "向 Agora AI 提问" })).toHaveFocus()
+    fireEvent.click(screen.getByRole("button", { name: "收起研究侧栏" }))
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument()
+    view.unmount(); render(<DesignDemoPage />)
+    expect(screen.getByRole("button", { name: "展开研究侧栏" })).toBeInTheDocument()
   })
 })

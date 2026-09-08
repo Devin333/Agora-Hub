@@ -42,8 +42,9 @@ export function researchSearchQuery(question: string): string {
   return value || question.trim()
 }
 
-export function researchQuestionHref(module: ResearchModule, question: string): string {
+export function researchQuestionHref(module: ResearchModule, question: string, sessionId?: string): string {
   const params = new URLSearchParams({ question: question.trim(), q: researchSearchQuery(question), entry: "home" })
+  if (sessionId) params.set("researchSession", sessionId)
   if (module === "reports") params.set("compose", "1")
   return `${moduleInfo[module].path}?${params}`
 }

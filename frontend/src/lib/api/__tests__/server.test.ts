@@ -57,7 +57,8 @@ describe("server api fallback surface", () => {
       ok: false,
       errorCode: "studio_backend_unavailable",
       errorMessage: "Studio backend unavailable",
-      requestId: "req-error-envelope"
+      requestId: "req-error-envelope",
+      status: 200
     })
   })
 

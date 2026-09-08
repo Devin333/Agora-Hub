@@ -1,0 +1,85 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { historyState, recordResearchVisit, selectHistoryOwner, readResearchHistory, updateResearchVisit, readGuestHistory, pendingHistoryKey } from "./history"
+import { startHistorySync, retryHistoryEvent, reloadHistoryEvent } from "./history-sync"
+import { researchQuestionHref } from "./entry"
+
+const response = (data: unknown, status = 200) => new Response(JSON.stringify({ success: status === 200, data }), { status })
+describe("account research synchronization", () => {
+  let stop: (() => void) | undefined
+  beforeEach(() => { localStorage.clear(); sessionStorage.clear(); selectHistoryOwner(null); vi.useFakeTimers() })
+  afterEach(() => { stop?.(); selectHistoryOwner(null); vi.useRealTimers(); vi.unstubAllGlobals() })
+  it("saves revisions and retains edits on conflict until the user retries", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ visits: [], groups: [], revision: 0 })).mockResolvedValueOnce(response(null, 409)).mockResolvedValueOnce(response(null, 409))
+    vi.stubGlobal("fetch", fetcher)
+    stop = startHistorySync("alice")
+    await vi.advanceTimersByTimeAsync(0)
+    recordResearchVisit(researchQuestionHref("papers", "Agent", "study"))
+    await vi.advanceTimersByTimeAsync(501)
+    expect(historyState().status).toBe("conflict")
+    expect(historyState().dirty).toBe(true)
+    expect(readResearchHistory()).toHaveLength(1)
+    expect(readGuestHistory().visits).toHaveLength(0)
+    expect(JSON.parse(fetcher.mock.calls[1][1].body).revision).toBe(0)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    window.dispatchEvent(new Event(retryHistoryEvent))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    expect(historyState().status).toBe("conflict")
+  })
+  it("does not acknowledge newer edits as saved while a write is in flight", async () => {
+    let resolveWrite: (value: Response) => void = () => {}
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ visits: [], groups: [], revision: 0 })).mockImplementationOnce(() => new Promise<Response>(resolve => { resolveWrite = resolve })).mockImplementationOnce((_url, init) => response({ ...JSON.parse(init.body), revision: 2 }))
+    vi.stubGlobal("fetch", fetcher)
+    stop = startHistorySync("alice"); await vi.advanceTimersByTimeAsync(0)
+    recordResearchVisit(researchQuestionHref("papers", "Agent", "study")); await vi.advanceTimersByTimeAsync(501)
+    updateResearchVisit("study", { title: "更新标题" })
+    const first = JSON.parse(fetcher.mock.calls[1][1].body)
+    resolveWrite(response({ ...first, revision: 1 })); await vi.advanceTimersByTimeAsync(0)
+    expect(historyState().dirty).toBe(true)
+    await vi.advanceTimersByTimeAsync(501)
+    expect(JSON.parse(fetcher.mock.calls[2][1].body)).toMatchObject({ revision: 1, visits: [{ title: "更新标题" }] })
+    expect(historyState().status).toBe("synced")
+  })
+  it("ignores stale responses after switching accounts and never falls back to guest on error", async () => {
+    recordResearchVisit(researchQuestionHref("papers", "guest", "local"))
+    let resolveAlice: (value: Response) => void = () => {}
+    vi.stubGlobal("fetch", vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { resolveAlice = resolve })).mockResolvedValueOnce(response(null, 503)))
+    stop = startHistorySync("alice"); stop()
+    stop = startHistorySync("bob"); await vi.advanceTimersByTimeAsync(0)
+    resolveAlice(response({ ...readGuestHistory(), revision: 1 })); await vi.advanceTimersByTimeAsync(0)
+    expect(historyState()).toMatchObject({ owner: "bob", ready: false, status: "error" })
+    expect(readResearchHistory()).toEqual([])
+  })
+  it("recovers an unsaved account draft after reload and clears it only after acknowledgement", async () => {
+    recordResearchVisit(researchQuestionHref("papers", "尚未同步", "draft-study"))
+    const draft = { ...readGuestHistory(), revision: 3 }
+    sessionStorage.setItem(pendingHistoryKey("alice"), JSON.stringify(draft))
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ visits: [], groups: [], revision: 3 })).mockResolvedValueOnce(response({ ...draft, revision: 4 }))
+    vi.stubGlobal("fetch", fetcher)
+    stop = startHistorySync("alice"); await vi.advanceTimersByTimeAsync(0)
+    expect(readResearchHistory()[0].id).toBe("draft-study")
+    expect(historyState().dirty).toBe(true)
+    expect(sessionStorage.getItem(pendingHistoryKey("alice"))).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(501)
+    expect(JSON.parse(fetcher.mock.calls[1][1].body).revision).toBe(3)
+    expect(historyState()).toMatchObject({ dirty: false, revision: 4, status: "synced" })
+    expect(sessionStorage.getItem(pendingHistoryKey("alice"))).toBeNull()
+  })
+  it("keeps a stale draft until explicit conflict recovery loads the server snapshot", async () => {
+    recordResearchVisit(researchQuestionHref("papers", "本地修改", "draft-study"))
+    sessionStorage.setItem(pendingHistoryKey("alice"), JSON.stringify({ ...readGuestHistory(), revision: 2 }))
+    const server = { visits: [], groups: [], revision: 3 }
+    const fetcher = vi.fn().mockResolvedValueOnce(response(server)).mockResolvedValueOnce(response(server))
+    vi.stubGlobal("fetch", fetcher)
+    stop = startHistorySync("alice"); await vi.advanceTimersByTimeAsync(501)
+    expect(historyState()).toMatchObject({ dirty: true, status: "conflict" })
+    expect(readResearchHistory()[0].question).toBe("本地修改")
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    window.dispatchEvent(new Event(reloadHistoryEvent)); await vi.advanceTimersByTimeAsync(0)
+    expect(historyState()).toMatchObject({ dirty: false, revision: 3, status: "synced" })
+    expect(readResearchHistory()).toEqual([])
+    expect(sessionStorage.getItem(pendingHistoryKey("alice"))).toBeNull()
+    expect(fetcher.mock.calls.every(([, options]) => options.method === "GET")).toBe(true)
+  })
+})

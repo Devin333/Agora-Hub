@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState, useTransition, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowRight, BookOpen, Check, ChevronDown, ClipboardCheck, Clock3, Github, LoaderCircle, Quote, Sparkles, WandSparkles } from "lucide-react"
+import { ArrowRight, BookOpen, Check, ChevronDown, ClipboardCheck, Github, LoaderCircle, Quote, Sparkles, WandSparkles } from "lucide-react"
 import { PortalAccountControl } from "@/components/auth/portal-account-control"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { autoExamples, moduleInfo, researchModules, researchQuestionHref, resolveResearchIntent, type ResearchMode, type ResearchModule } from "@/lib/research/entry"
-import { prepareResearchResume, readResearchHistory, researchHistoryEvent, type ResearchVisit } from "@/lib/research/history"
+import { prepareResearchResume, type ResearchVisit } from "@/lib/research/history"
 import { useResearchDraft } from "@/lib/research/use-research-draft"
-import { RecentResearch } from "./recent-research"
+import { ResearchSidebar } from "./research-sidebar"
 
 const icons = { auto: Sparkles, papers: BookOpen, projects: Github, community: Quote, reports: ClipboardCheck }
 const focusStyle = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6] focus-visible:ring-offset-2"
@@ -19,7 +19,7 @@ export function DesignDemoPage() {
   const inputRef = useRef<HTMLInputElement>(null)
   const composing = useRef(false)
   const [choices, setChoices] = useState<ResearchModule[]>([])
-  const [visits, setVisits] = useState<ResearchVisit[]>([])
+  const [collapsed, setCollapsed] = useState(false)
   const [destination, setDestination] = useState<ResearchModule | null>(null)
   const [error, setError] = useState("")
   const [pending, startTransition] = useTransition()
@@ -27,11 +27,7 @@ export function DesignDemoPage() {
   const examples = mode === "auto" ? autoExamples : moduleInfo[mode].examples
 
   useEffect(() => {
-    const update = () => setVisits(readResearchHistory())
-    update()
-    window.addEventListener(researchHistoryEvent, update)
-    window.addEventListener("storage", update)
-    return () => { window.removeEventListener(researchHistoryEvent, update); window.removeEventListener("storage", update) }
+    try { setCollapsed(localStorage.getItem("agora-research-sidebar-collapsed") === "true") } catch { /* Default expanded. */ }
   }, [])
   useEffect(() => {
     if (!destination) return
@@ -43,7 +39,7 @@ export function DesignDemoPage() {
     inputRef.current?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })
     inputRef.current?.focus({ preventScroll: true })
   }
-  function navigate(module: ResearchModule, href = researchQuestionHref(module, query), restoring = false) {
+  function navigate(module: ResearchModule, href = researchQuestionHref(module, query, crypto.randomUUID()), restoring = false) {
     setError(""); setChoices([]); setDestination(module)
     startTransition(() => {
       try { if (restoring) router.push(href, { scroll: false }); else router.push(href) }
@@ -58,17 +54,22 @@ export function DesignDemoPage() {
     else { setChoices(candidates); setError("") }
   }
   function resume(visit: ResearchVisit) { prepareResearchResume(visit); navigate(visit.module, visit.href, true) }
+  function newResearch() { setQuery(""); setMode("auto"); setChoices([]); setError(""); setDestination(null); focusInput() }
+  function toggleSidebar() { setCollapsed(value => { const next = !value; try { localStorage.setItem("agora-research-sidebar-collapsed", String(next)) } catch { /* Layout remains usable. */ } return next }) }
   const busy = Boolean(!ready || destination || pending)
 
-  return <div className="min-h-screen bg-[#fbf8ff] font-papers-research text-[#211a3c] [--header-height:73px]">
+  return <div className="h-screen overflow-hidden bg-[#fbf8ff] font-papers-research text-[#211a3c] [--header-height:73px]">
     <header className="h-[var(--header-height)] border-b border-[#eee8f5] bg-white">
       <nav className="mx-auto flex h-full max-w-[1280px] items-center justify-between px-10" aria-label="主导航">
         <a href="/design-demo" className={`flex items-center gap-2.5 rounded-lg ${focusStyle}`}><span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span><span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span></a>
-        <div className="flex items-center gap-8 text-base text-[#6d6286]"><a href="#modules" className={`rounded-md hover:text-[#6735d3] ${focusStyle}`}>研究模块</a><RecentResearch visits={visits} onResume={resume} /></div>
+        <div className="flex items-center gap-8 text-base text-[#6d6286]"><a href="#modules" className={`rounded-md hover:text-[#6735d3] ${focusStyle}`}>研究模块</a></div>
         <div className="flex items-center gap-3"><PortalAccountControl /><button type="button" onClick={focusInput} className={`inline-flex h-11 items-center rounded-xl bg-[#7c3aed] px-5 text-base font-semibold text-white shadow-[0_5px_14px_rgba(124,58,237,0.25)] hover:bg-[#6d28d9] ${focusStyle}`}>开始研究</button></div>
       </nav>
     </header>
-    {/* The middle row is centered in the viewport, including the header above it. */}
+    <div className="flex h-[calc(100svh-var(--header-height))]">
+    <ResearchSidebar busy={busy} collapsed={collapsed} onToggle={toggleSidebar} onNew={newResearch} onResume={resume} />
+    <div className="min-w-0 flex-1 overflow-y-auto" aria-label="研究工作区">
+    {/* The composer is centered within the right workspace, accounting for the header. */}
     <main id="workspace" className="grid h-[calc(100svh-var(--header-height)-var(--header-height))] min-h-[520px] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)]">
       <h1 className="mx-auto w-[calc(100%-80px)] max-w-[900px] self-start pt-[clamp(5rem,12vh,9rem)] text-center font-sans text-[56px] font-bold leading-[1.2]"><span className="text-[#35274f]">Ask.</span>{" "}<span className="text-[#7c3aed]">Discover.</span></h1>
       <section aria-label="研究提问框" className="relative mx-auto w-[calc(100%-80px)] max-w-[960px] rounded-3xl border border-[#e7dff1] bg-white p-8 shadow-[0_18px_45px_rgba(86,58,127,0.13)]">
@@ -87,12 +88,13 @@ export function DesignDemoPage() {
         {error && <p role="alert" className="mt-4 text-[15px] text-[#a02b47]">{error}</p>}
       </section>
       <div className="mt-10 min-h-0 self-start bg-[#fbf8ff]">
-        {visits[0] && <div className="mx-auto mb-6 w-[calc(100%-80px)] max-w-[960px]"><button type="button" onClick={() => resume(visits[0])} className={`flex w-full items-center gap-3 rounded-xl border border-[#e7dff1] bg-white/50 px-5 py-4 text-left text-[15px] text-[#6b607e] hover:bg-white ${focusStyle}`}><Clock3 className="size-4 shrink-0 text-[#7c3aed]" /><span className="shrink-0">继续上次研究</span><span className="min-w-0 flex-1 truncate text-[#3f3158]">{visits[0].question}</span><span className="shrink-0 text-sm">{moduleInfo[visits[0].module].name}</span><ArrowRight className="size-4 shrink-0" /></button></div>}
         <div id="modules" className="mx-auto grid w-[calc(100%-80px)] max-w-[960px] scroll-mt-8 grid-cols-2 gap-6 pb-20">
           {researchModules.map(module => { const Icon = icons[module]; const info = moduleInfo[module]; return <a key={module} href={info.path} className={`group flex min-h-[226px] flex-col items-center justify-center rounded-2xl border border-white/75 bg-white/50 p-7 text-center shadow-[0_18px_45px_rgba(86,58,127,0.08)] backdrop-blur-xl transition-colors hover:border-[#d8c6f0] hover:bg-white/75 ${focusStyle}`}><span className="flex size-[72px] items-center justify-center rounded-2xl bg-[#f0e9ff]/85 text-[#7c3aed]"><Icon className="size-8" /></span><h2 className="mt-5 text-[22px] font-semibold text-[#372b51]">{info.name}</h2><p className="mt-2 text-[17px] text-[#756782]">{info.description}</p></a> })}
         </div>
         <footer className="px-10 py-10"><div className="mx-auto flex max-w-[1280px] items-center justify-between text-base text-[#82758f]"><span>Agora Hub Research</span><span>用 AI 开始你的下一次研究</span></div></footer>
       </div>
     </main>
+    </div>
+    </div>
   </div>
 }

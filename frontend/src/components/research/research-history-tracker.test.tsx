@@ -2,7 +2,7 @@ import { act, cleanup, render } from "@testing-library/react"
 import { StrictMode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ResearchHistoryTracker } from "./research-history-tracker"
-import { prepareResearchResume, readResearchHistory, recordResearchVisit } from "@/lib/research/history"
+import { acceptAccountHistory, prepareResearchResume, readResearchHistory, readResearchWorkspace, recordResearchVisit, selectHistoryOwner, takeResearchResume } from "@/lib/research/history"
 import { researchQuestionHref } from "@/lib/research/entry"
 
 let path = "/design-demo/papers"
@@ -15,6 +15,7 @@ describe("research continuity after asynchronous loading", () => {
   beforeEach(() => {
     vi.useFakeTimers()
     localStorage.clear(); sessionStorage.clear()
+    selectHistoryOwner(null)
     height = 900
     path = "/design-demo/papers"
     query = researchQuestionHref("papers", "Agent").split("?")[1] + "&sort=most_cited&page=2"
@@ -23,7 +24,7 @@ describe("research continuity after asynchronous loading", () => {
     vi.spyOn(window, "scrollTo").mockImplementation(() => {})
     Object.defineProperty(window, "scrollY", { configurable: true, value: 0, writable: true })
   })
-  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+  afterEach(() => { cleanup(); selectHistoryOwner(null); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
   it("retains filters and saved position across StrictMode while waiting for real content height", () => {
     const href = `${path}?${query}`
     recordResearchVisit(href, 600)
@@ -46,5 +47,17 @@ describe("research continuity after asynchronous loading", () => {
     path = "/design-demo"; query = ""
     view.rerender(<ResearchHistoryTracker />)
     expect(readResearchHistory()[0].question).toBe("Agent")
+  })
+  it("does not carry an unfinished scroll restoration into a different account", () => {
+    const href = `${path}?${query}`
+    recordResearchVisit(href, 600)
+    const saved = readResearchWorkspace()
+    selectHistoryOwner("alice"); acceptAccountHistory(saved, 1)
+    prepareResearchResume(readResearchHistory()[0])
+    render(<ResearchHistoryTracker expectedOwner="alice" />)
+    expect(window.scrollTo).not.toHaveBeenCalled()
+    act(() => { selectHistoryOwner("bob") })
+    expect(takeResearchResume(href)).toBeNull()
+    expect(readResearchHistory()).toEqual([])
   })
 })
