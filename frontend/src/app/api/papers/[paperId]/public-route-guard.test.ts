@@ -70,7 +70,7 @@ describe("paper public route guard", () => {
     vi.mocked(getPaperById).mockResolvedValueOnce(paper)
     vi.mocked(safeApiPost).mockResolvedValueOnce({
       ok: true,
-      data: { answer: "grounded" },
+      data: { answer: "grounded", evidenceRefs: ["evidence:1"], confidence: 0.8 },
     })
 
     const response = await askPaper(
@@ -82,10 +82,11 @@ describe("paper public route guard", () => {
     )
 
     expect(response.status).toBe(200)
-    expect(safeApiPost).toHaveBeenCalledWith("/api/v1/papers/paper-1/ask", {
+    expect(safeApiPost).toHaveBeenCalledWith("/api/v1/research/papers/paper-1/ask", {
       question: "What changed?",
       locale: "en",
-    })
+    }, { signal: expect.any(AbortSignal) })
+    await expect(response.json()).resolves.toMatchObject({ success: true, data: { answer: { paperId: "paper-1", answer: "grounded", citations: [{ id: "evidence:1", evidenceId: "evidence:1", sourceType: "evidence" }] } } })
   })
 
   it("does not proxy reader data for non-public paper refs", async () => {
@@ -97,6 +98,17 @@ describe("paper public route guard", () => {
 
     expect(response.status).toBe(404)
     expect(safeApiGet).not.toHaveBeenCalled()
+  })
+
+  it("rejects blank questions before running Research and malformed answers after it", async () => {
+    vi.mocked(getPaperById).mockResolvedValue(paper)
+    const blank = await askPaper(request("/api/papers/public-paper/ask", { method: "POST", body: JSON.stringify({ question: "  " }) }), { params: { paperId: "public-paper" } })
+    expect(blank.status).toBe(400)
+    expect(safeApiPost).not.toHaveBeenCalled()
+    vi.mocked(safeApiPost).mockResolvedValueOnce({ ok: true, data: { answer: { invented: "wrong" } } })
+    const malformed = await askPaper(request("/api/papers/public-paper/ask", { method: "POST", body: JSON.stringify({ question: "Explain" }) }), { params: { paperId: "public-paper" } })
+    expect(malformed.status).toBe(502)
+    expect(await malformed.json()).toMatchObject({ error: { code: "reader_answer_invalid" } })
   })
 
   it("filters bulk user states down to currently public papers", async () => {

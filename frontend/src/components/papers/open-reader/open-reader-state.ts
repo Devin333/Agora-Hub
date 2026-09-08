@@ -26,6 +26,7 @@ const EMPTY_STATE: SelectionState = { selections: [], events: [] }
 export function useOpenReaderSettings(paperId: string) {
   const key = useMemo(() => storageKey(paperId, "settings"), [paperId])
   const [settingsLoaded, setSettingsLoaded] = useState(false)
+  const [storageError, setStorageError] = useState(false)
   const [settings, setSettings] = useReducer((current: ReaderSettings, patch: Partial<ReaderSettings>) => {
     const next: ReaderSettings = { ...current, ...patch, layoutVersion: READER_SETTINGS_LAYOUT_VERSION }
     next.fontSize = clamp(next.fontSize, 12, 38)
@@ -37,16 +38,21 @@ export function useOpenReaderSettings(paperId: string) {
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    setSettings(normalizeStoredSettings(safeJsonParse<Partial<ReaderSettings>>(window.localStorage.getItem(key), {})))
+    try {
+      setSettings(normalizeStoredSettings(safeJsonParse<Partial<ReaderSettings>>(window.localStorage.getItem(key), {})))
+    } catch { setStorageError(true) }
     setSettingsLoaded(true)
   }, [key])
 
   useEffect(() => {
     if (typeof window === "undefined" || !settingsLoaded) return
-    window.localStorage.setItem(key, JSON.stringify(settings))
+    try {
+      window.localStorage.setItem(key, JSON.stringify(settings))
+      setStorageError(false)
+    } catch { setStorageError(true) }
   }, [key, settings, settingsLoaded])
 
-  return { settings, patchSettings: setSettings }
+  return { settings, patchSettings: setSettings, storageError }
 }
 
 function normalizeStoredSettings(stored: Partial<ReaderSettings>): ReaderSettings {
@@ -72,23 +78,26 @@ export function useOpenReaderSelections(paperId: string) {
   const eventsKey = useMemo(() => storageKey(paperId, "events"), [paperId])
   const [state, dispatch] = useReducer(selectionReducer, EMPTY_STATE)
   const [selectionsLoaded, setSelectionsLoaded] = useState(false)
+  const [storageError, setStorageError] = useState(false)
 
   useEffect(() => {
     if (typeof window === "undefined") return
     setSelectionsLoaded(false)
-    const storedSelections = safeJsonParse<unknown[]>(window.localStorage.getItem(selectionsKey), [])
-    const storedEvents = safeJsonParse<unknown[]>(window.localStorage.getItem(eventsKey), [])
-    dispatch({
-      type: "load",
-      state: normalizeLoadedSelectionState(paperId, storedSelections, storedEvents),
-    })
+    try {
+      const storedSelections = safeJsonParse<unknown[]>(window.localStorage.getItem(selectionsKey), [])
+      const storedEvents = safeJsonParse<unknown[]>(window.localStorage.getItem(eventsKey), [])
+      dispatch({ type: "load", state: normalizeLoadedSelectionState(paperId, storedSelections, storedEvents) })
+    } catch { setStorageError(true) }
     setSelectionsLoaded(true)
   }, [eventsKey, paperId, selectionsKey])
 
   useEffect(() => {
     if (typeof window === "undefined" || !selectionsLoaded) return
-    window.localStorage.setItem(selectionsKey, JSON.stringify(state.selections))
-    window.localStorage.setItem(eventsKey, JSON.stringify(state.events))
+    try {
+      window.localStorage.setItem(selectionsKey, JSON.stringify(state.selections))
+      window.localStorage.setItem(eventsKey, JSON.stringify(state.events))
+      setStorageError(false)
+    } catch { setStorageError(true) }
   }, [eventsKey, selectionsKey, selectionsLoaded, state])
 
   const createTempSelection = useCallback((input: {
@@ -135,6 +144,7 @@ export function useOpenReaderSelections(paperId: string) {
   const mergeRemoteMaterials = useCallback((materials: BackendReaderMaterialSummary) => dispatch({ type: "merge_remote", state: backendMaterialsToSelectionState(materials) }), [])
 
   return {
+    storageError,
     selections: state.selections,
     events: state.events,
     createTempSelection,

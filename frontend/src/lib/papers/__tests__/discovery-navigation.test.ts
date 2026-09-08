@@ -10,8 +10,12 @@ describe("paper discovery navigation", () => {
     const path = "/design-demo/papers?q=Agent&topic=cs.AI&page=2&view=reading&paper=123"
     expect(safePaperReturnTo(path)).toBe("/design-demo/papers?q=Agent&topic=cs.AI&page=2&view=reading")
     const href = new URL(paperReaderHref("a/b", path), "http://localhost")
-    expect(href.pathname).toBe("/papers/a%2Fb/read")
+    expect(href.pathname).toBe("/design-demo/papers/a%2Fb/read")
     expect(href.searchParams.get("returnTo")).toBe(safePaperReturnTo(path))
+  })
+  it("retains the formal reader outside the design discovery surface", () => {
+    expect(paperReaderHref("paper")).toBe("/papers/paper/read")
+    expect(paperReaderHref("paper", "/papers?q=Agent")).toBe("/papers/paper/read?returnTo=%2Fpapers%3Fq%3DAgent")
   })
   it("carries a home question verbatim without inventing a semantic query", () => {
     const question = "找出支持长上下文 Agent 评测的论文"

@@ -98,12 +98,12 @@ describe("PapersDesignDemoPage", () => {
     await waitFor(() => expect(screen.queryByText("更新中...")).not.toBeInTheDocument())
   })
 
-  it("keeps preview and original reader/PDF destinations functional", async () => {
+  it("keeps preview, workspace reader and original PDF destinations functional", async () => {
     render(<PapersDesignDemoPage papers={[paper]} />)
     const row = within(await screen.findByTestId("paper-row"))
     fireEvent.click(row.getByRole("button", { name: "预览 Agent evaluation" }))
     expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?paper=agent-paper", { scroll: false })
-    expect(row.getByRole("link", { name: "阅读 Agent evaluation" })).toHaveAttribute("href", "/papers/agent-paper/read?returnTo=%2Fdesign-demo%2Fpapers")
+    expect(row.getByRole("link", { name: "阅读 Agent evaluation" })).toHaveAttribute("href", "/design-demo/papers/agent-paper/read?returnTo=%2Fdesign-demo%2Fpapers")
     expect(row.getByRole("link", { name: "打开论文 PDF" })).toHaveAttribute("href", paper.pdfUrl)
     await waitFor(() => expect(screen.queryByText("更新中...")).not.toBeInTheDocument())
   })

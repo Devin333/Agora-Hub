@@ -102,7 +102,7 @@ export interface PaperVisualAsset {
   width: number
   height: number
   checksum: string
-  pageNumber: number
+  pageNumber?: number
   label?: string
   caption?: string
   source?: PaperSourceRegion

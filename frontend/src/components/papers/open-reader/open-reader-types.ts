@@ -59,6 +59,7 @@ export interface OpenReaderVisualBlock {
   order: number
   block: PaperBlock
   asset?: PaperVisualAsset
+  assets?: PaperVisualAsset[]
   source?: PaperSourceRegion
 }
 
@@ -138,6 +139,11 @@ export interface OpenReaderPageProps {
   locale: Locale
   backHref?: string
   visualLayer?: OpenReaderVisualLayer
+  workspace?: {
+    fontSize: number
+    sectionRequest?: { id: string; sequence: number }
+    onSectionChange?: (id: string) => void
+  }
 }
 
 export interface SelectionMenuState {

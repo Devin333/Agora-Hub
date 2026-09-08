@@ -15,7 +15,9 @@ export function safePaperReturnTo(value?: string | null): string {
 }
 
 export function paperReaderHref(slug: string, returnTo?: string) {
-  const href = papersRoutes.reader(slug)
+  const href = safePaperReturnTo(returnTo).startsWith("/design-demo/papers")
+    ? `/design-demo${papersRoutes.reader(slug)}`
+    : papersRoutes.reader(slug)
   return returnTo ? `${href}?${new URLSearchParams({ returnTo: safePaperReturnTo(returnTo) })}` : href
 }
 

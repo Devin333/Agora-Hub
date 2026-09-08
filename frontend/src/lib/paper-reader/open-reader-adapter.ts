@@ -108,6 +108,7 @@ export function paperDocumentToOpenReader(payload: PaperDocumentResponse): {
         order,
         block,
         asset: block.assetId ? assetsById.get(block.assetId) : undefined,
+        assets: Array.isArray(block.metadata?.assetIds) ? block.metadata.assetIds.map((id) => assetsById.get(String(id))).filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)) : undefined,
         source: block.source,
       })
     }

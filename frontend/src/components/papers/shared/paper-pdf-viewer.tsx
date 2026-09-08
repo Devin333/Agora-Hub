@@ -16,6 +16,8 @@ type PaperPdfViewerProps = {
   notes?: PaperReaderNote[]
   onCreateReaderNote?: (note: PaperReaderNoteCreate) => void
   onPageChange?: (pageNumber: number, numPages: number) => void
+  className?: string
+  errorMessage?: string
 }
 
 type PdfViewport = {
@@ -109,6 +111,8 @@ export function PaperPdfViewer({
   notes = [],
   onCreateReaderNote,
   onPageChange,
+  className,
+  errorMessage,
 }: PaperPdfViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const pageLayerRef = useRef<HTMLDivElement | null>(null)
@@ -398,7 +402,7 @@ export function PaperPdfViewer({
         <div className="border-b border-[#d8dfd8] bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-border dark:bg-amber-950/30 dark:text-amber-100">
           <div className="flex items-center gap-2 font-semibold">
             <FileWarning className="size-4" />
-            {locale === "zh" ? "PDF 无法渲染，已切换到文本阅读。" : "PDF could not be rendered; showing text fallback."}
+            {errorMessage || (locale === "zh" ? "PDF 无法渲染，已切换到文本阅读。" : "PDF could not be rendered; showing text fallback.")}
           </div>
         </div>
         {fallback}
@@ -497,13 +501,13 @@ export function PaperPdfViewer({
   return (
     <div
       aria-label={locale === "zh" ? `${title} PDF 阅读器` : `${title} PDF viewer`}
-      className="flex min-h-[42rem] flex-col bg-[#f8faf9] outline-none focus-visible:ring-2 focus-visible:ring-[#315d8a]/35 dark:bg-background"
+      className={`flex min-h-[42rem] flex-col bg-[#f8faf9] outline-none focus-visible:ring-2 focus-visible:ring-[#315d8a]/35 dark:bg-background ${className || ""}`}
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
-      <div className="flex flex-col gap-3 border-b border-[#d8dfd8] bg-white px-4 py-3 dark:border-border dark:bg-card lg:flex-row lg:items-center lg:justify-between">
+      <div data-pdf-toolbar className="flex flex-col gap-3 border-b border-[#d8dfd8] bg-white px-4 py-3 dark:border-border dark:bg-card lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold text-[#334155] dark:text-foreground">{title}</h2>
+          <h2 className="truncate text-sm font-semibold text-[#334155] dark:text-foreground" title={title}>{title}</h2>
           <p className="mt-1 text-xs text-[#334155]/55 dark:text-muted-foreground">
             {status === "ready"
               ? locale === "zh"
@@ -587,7 +591,7 @@ export function PaperPdfViewer({
         searchStatus={searchStatus}
       />
 
-      <div className="grid min-h-[38rem] flex-1 lg:grid-cols-[7.25rem_minmax(0,1fr)]">
+      <div data-pdf-pages className="grid min-h-[38rem] flex-1 lg:grid-cols-[7.25rem_minmax(0,1fr)]">
         <PdfThumbnailRail
           currentPage={pageNumber}
           locale={locale}
@@ -597,7 +601,7 @@ export function PaperPdfViewer({
           status={status}
           title={title}
         />
-        <div className="relative flex h-[78vh] min-h-[38rem] flex-1 justify-center overflow-auto bg-[#eef4ef] p-4 dark:bg-secondary/30">
+        <div data-pdf-canvas-scroll className="relative flex h-[78vh] min-h-[38rem] flex-1 justify-center overflow-auto bg-[#eef4ef] p-4 dark:bg-secondary/30">
           {status === "loading" ? (
             <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-background/80">
               <div className="inline-flex items-center gap-2 rounded-md border border-[#d8dfd8] bg-white px-4 py-3 text-sm font-semibold text-[#334155]/70 shadow-sm dark:border-border dark:bg-card dark:text-muted-foreground">
