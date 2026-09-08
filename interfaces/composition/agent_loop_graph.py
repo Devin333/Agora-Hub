@@ -36,6 +36,7 @@ from framework.harness.side_effects import (
     HarnessSideEffectStorePort,
 )
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
+from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.ref_authority import RefResolutionPort
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_planning import HarnessPlanningRefAuthority
@@ -150,10 +151,9 @@ def build_agent_loop_harness_orchestration_runtime(
     store: DurableTaskPlanStore,
     child_supervisor: ChildAgentSupervisor,
     candidate_builder: Any,
-    worker_executor: Any,
+    worker_executor: HarnessSubAgentTaskExecutor,
     task_profiles: tuple[AgentOrchestrationTaskProfile, ...],
     result_verifier: Any | None = None,
-    worker_result_recovery: Any | None = None,
     planning_observation_port: PlanningObservationPort | None = None,
     metrics_sink: Any | None = None,
     checkpoint_store: TaskPlanCheckpointStorePort,
@@ -234,6 +234,8 @@ def build_agent_loop_harness_orchestration_runtime(
         ref_admission_service is None or planning_authority.store is not ref_admission_service.store
     ):
         raise ValueError("planning and parent input admission must share the canonical snapshot store")
+    if not isinstance(worker_executor, HarnessSubAgentTaskExecutor):
+        raise TypeError("worker_executor must be HarnessSubAgentTaskExecutor")
 
     coordinator = ParallelAgentCoordinator(
         max_workers=child_supervisor.capacity,
@@ -245,7 +247,7 @@ def build_agent_loop_harness_orchestration_runtime(
         store=store,
         result_verifier=result_verifier,
         worker_executor=worker_executor,
-        worker_result_recovery=worker_result_recovery,
+        worker_result_recovery=worker_executor.recover,
         parallel_coordinator=coordinator,
         child_supervisor_capacity=child_supervisor.capacity,
         planning_observation_port=planning_observation_port,
@@ -358,6 +360,8 @@ class AgentLoopGraphRuntimeComposition:
             orchestration_runtime is None or not orchestration_runtime.has_durable_input_admission
         ):
             raise ValueError("production AgentLoop requires durable parent input admission")
+        if orchestration_binding.available:
+            orchestration_runtime.require_production_child_authority()
         agent_runner.bind_orchestration(
             orchestration_port=orchestration_binding.port,
             orchestration_enabled=orchestration_binding.feature_enabled,

@@ -59,6 +59,11 @@ class HarnessResultRefAuthority:
         self._tenant_id = tenant_id
 
     @property
+    def artifact_descriptors(self) -> ArtifactReferenceDescriptorPort | None:
+        """Expose the canonical metadata owner for composition checks."""
+        return self._artifacts
+
+    @property
     def is_durable(self) -> bool:
         return (
             getattr(self.store, "is_durable", False) is True

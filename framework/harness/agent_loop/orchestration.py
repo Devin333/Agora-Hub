@@ -19,6 +19,7 @@ from framework.agent.models.orchestration import (
     ParentWaveSummary,
 )
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_authority import RefAuthority
 from framework.harness.ref_snapshot import (
@@ -153,6 +154,23 @@ class HarnessAgentOrchestrationRuntime:
                 "production orchestration requires a declared AgentLoop stage and durable input admission"
             )
         self._ref_admission_service = ref_admission_service
+        if require_durable_store:
+            self.require_production_child_authority()
+
+    def require_production_child_authority(self) -> None:
+        """Validate the child dependency owners, including manual compositions."""
+        executor = self._stage_runner.worker_executor
+        if not isinstance(executor, HarnessSubAgentTaskExecutor):
+            raise TypeError("worker_executor must be HarnessSubAgentTaskExecutor")
+        if self._stage_runner.worker_result_recovery != executor.recover:
+            raise ValueError("child execution and recovery must use the same executor")
+        policy = self._policy_registry.resolve(self._stage_binding.policy_ref, stage_id=self._stage_binding.stage_id)
+        executor.require_production_bindings(
+            store=self._store, admission=self._ref_admission_service,
+            verifier=self._stage_runner.result_verifier,
+            bindings=tuple(self._capability_registry.resolve(profile.capability_hint, policy) for profile in self._profiles.values()),
+            gate_refs=tuple(ref for profile in self._profiles.values() for ref in profile.gate_refs),
+        )
 
     @property
     def has_durable_input_admission(self) -> bool:

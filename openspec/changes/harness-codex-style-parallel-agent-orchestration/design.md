@@ -74,7 +74,11 @@ generic parent input 授权增量将 TaskPlan delegation 声明绑定到真实�
 
 `AgentLoopGraphWorker` 在调用 `AgentRunner` 前，通过 Harness ingress 校验原始 Graph task checksum、实际 context、AgentSpec policy 与 stage binding，并提交 input snapshot。只将 parent business inputs 中明确列入 TaskPlan policy 的名称加入只读 grant；parent 私有 prompt inputs 不进入 delegation authority。dispatch、planning 和恢复都按完整 identity 读取 canonical snapshot；candidate 外部 refs 在提交 candidate/submission 之前授权，缺少原 grant 时拒绝，不从 candidate 或当前 policy 名称重新生成 descriptor。生产 runtime 和 Graph composition 强制要求 durable parent input admission；planning 配额为零时允许不构造 planning port，启用时仍要求 execution-bound authority，且必须与 parent admission 使用同一 snapshot store。
 
-任务 1.5 尚未完成：generic child adapter/result verifier 的同源 authority 依赖及结果消费接线、现有 memory recall/tool 消费接线、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。generic factory 仍接收 worker executor/result verifier，当前 parent 输入授权不代表这些下游入口全部完成，也不代表已启用生产流量。
+generic child/result 接线增量使用 `HarnessSubAgentTaskExecutor`，执行与在线恢复由同一个对象提供。它只从 durable accepted plan、精确 TaskInstance 和真实 parent Graph identity 构造 context；必须能在 canonical history 中找到同一 Graph/group 的原 spawn intent，尚未接纳的 attempt 不能产生 child grant。调用已有 `ResolvedSubAgentTaskAdapter` 与 `SubAgentRuntime` 完成 child input admission、确定性边界 gate、v3 transcript 写入和 result grant。context 包含已接纳 objective 与精确 input refs，不复制 parent 私有对话或伪造业务 payload。
+
+生产构造要求 executor 与 stage 使用同一 TaskPlan store 和 admission service，input/result/planning 使用同一 snapshot store；SubAgent runtime、result authority 与 TaskPlan verifier 使用同一 durable transcript owner 和同一个 result authority。artifact descriptor 与 verifier 使用同一个 canonical artifact owner，profile 的全部 gate 必须注册到 deterministic registry。capability 必须为 SUBAGENT，实际 runtime worker 必须就是 pinned registration 中的 implementation；不再接受任意 callable executor 或独立 recovery callback。Graph composition 对手动装配 runtime 也执行同样检查，不能借 fixture runtime 绕过。bundle 已提交但 result grant 中断时，重启后的同一 executor 仅从可信 metadata 补授权后读取，不重复 worker；只读结果读取仍拒绝缺失 grant。
+
+任务 1.5 尚未完成：现有 memory recall/tool 消费接线、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。这里完成的是通用 child 的授权、transcript 和 verifier 接线；具体 AgentRunner child、ToolRuntime receipts、parent continuation 及全部 G1-G5 验收仍按后续任务推进，不代表已经启用生产流量。
 
 ### 2. Harness 作为唯一 fan-out/fan-in coordinator
 

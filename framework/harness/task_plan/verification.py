@@ -294,6 +294,11 @@ class TaskPlanResultVerifier:
         self.result_ref_authority = result_ref_authority
 
     @property
+    def gate_registry(self) -> TaskPlanGateEvaluatorPort:
+        """Expose the deterministic gate owner for production composition."""
+        return self._gates
+
+    @property
     def registered_gate_refs(self) -> tuple[str, ...]:
         """Expose the concrete gate registry for PLAN preflight validation."""
 

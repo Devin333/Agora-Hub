@@ -932,6 +932,59 @@ production composition. Existing memory recall/tool integration, dependency and
 replacement grants, remaining replay consumers and G1-G5 acceptance also remain.
 No default feature was enabled.
 
+## Task 1.5 Generic Child and Result Authority Increment
+
+The checklist remains 14/46 with task 1.5 as the earliest unfinished item.
+This increment replaces the generic production factory's callback child path
+with one `HarnessSubAgentTaskExecutor` for invocation and online recovery.
+
+- The executor loads the durable accepted plan and exact task instance, checks
+  the pinned capability boundary and the original group/spawn intent against
+  the caller's complete physical Graph identity, then constructs the bounded
+  context and invokes the existing `ResolvedSubAgentTaskAdapter`/`SubAgentRuntime`.
+  A deterministic instance checksum alone cannot grant an unadmitted attempt.
+- The factory and physical Graph composition require the same TaskPlan store,
+  input admission service, canonical snapshot store, result authority and
+  durable transcript owner across execution/recovery/verification. The result
+  descriptor and artifact verifier must share their canonical artifact owner.
+  Every profile must resolve to its registered SUBAGENT implementation and
+  registered deterministic gates. The production factory no longer accepts
+  a separate recovery callback; manually composed runtimes cannot bypass checks.
+- Real Graph tests now use the SubAgent runtime, immutable transcript sidecars,
+  canonical input/child/result grants, and real TaskPlanResultVerifier. Fixture
+  LLM and business workers remain test data, with no production fake fallback.
+- Restart redelivery and child recovery reuse exact evidence with no extra
+  workers or grants. Interrupted result-grant publication is recovered through
+  the original metadata and child authority; ordinary read-only access rejects
+  a missing grant, and no worker is repeated.
+
+Validation:
+
+- Physical Graph, child/result grant lineage, restart recovery, sibling receipt
+  rejection, changed physical execution and unadmitted attempt rejection:
+  `18 passed` in 190.50 seconds.
+- Production composition and dependency mismatch matrix: `24 passed` in 78.14
+  seconds. Covers callback executors, different TaskPlan/input/result/transcript/
+  artifact owners, missing gates, replaced workers and permissive gate suites.
+- Additional AgentLoop application service and composition regression:
+  `36 passed` in 108.19 seconds. Independent child-boundary review found no
+  blocking issue in this increment; this is not a whole-change release review.
+- Strict OpenSpec validation passed after the contract/design update.
+- Required `.venv/Scripts/python.exe -m scripts.dev smoke` exited 0 on the final
+  code: compile passed; `3125 passed, 23 deselected, 23 warnings` in 1690.57
+  seconds. Warnings are existing FastAPI/Starlette deprecations.
+- Offline AgentLoop succeeded with 3 fixture LLM calls, 1 tool call and 0 network
+  calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-a9e1f9ad7624494d860c6fc22796f9a1/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings. Strict OpenSpec and
+  scoped/staged whitespace checks passed; no task checkbox was advanced.
+
+Existing memory recall/tool consumers, dependency/replacement input grants and
+remaining recovery/replay consumers still require task 1.5 work. Concrete child
+AgentRunner/ToolRuntime receipt wiring, complete parent continuation and G1-G5
+acceptance remain under their original later tasks. No default feature or live
+traffic was enabled, and no task checkbox was advanced.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

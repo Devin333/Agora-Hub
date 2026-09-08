@@ -14,9 +14,19 @@ from framework.events.runtime.publisher import EventRuntime
 from framework.events.canonical import checksum_for
 from framework.events.schema import default_event_schema_catalog
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
+from framework.harness.graph.activity import HarnessWorkerType
+from framework.harness.graph.bindings import HarnessWorkerBinding
+from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
 from framework.harness.graph.compiler import HarnessGraphCompiler
 from framework.harness.graph.definition import HarnessGraphDefinition, HarnessGraphTaskPlanStageBinding
 from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_results import HarnessResultRefAuthority
+from framework.harness.ref_snapshot import RefAuthoritySnapshot, RefSnapshotPhase
+from framework.harness.subagents.models import SubAgentSpec
+from framework.harness.subagents.runtime import SubAgentRuntime
+from framework.harness.subagents.transcript import SubAgentAttemptIdentity
+from framework.harness.task_plan.capability import TaskCapabilityRegistration, TaskCapabilityRegistry
 from framework.harness.side_effects import (
     CountingHarnessSideEffectHandler, HarnessSideEffectDisposition,
     HarnessSideEffectHandlerBinding, HarnessSideEffectRegistry, InMemoryHarnessSideEffectStore,
@@ -25,6 +35,8 @@ from framework.harness.task_plan.checkpoint import JsonlTaskPlanCheckpointStore
 from framework.harness.task_plan.durable_store import DurableTaskPlanStore
 from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
 from framework.harness.task_plan.submission import CandidateDedupIdentity
+from framework.harness.task_plan.scheduler import task_instance_for_attempt
+from framework.harness.task_plan.verification import TaskPlanGateRegistry, TaskPlanResultVerifier, TaskPlanResultVerificationRequest
 from framework.harness.workers.result import HarnessWorkerResult
 from framework.llm import FakeLLMClient
 from framework.tool import ToolRegistry
@@ -32,6 +44,7 @@ from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
 from infrastructure.storage.conversation import LocalJsonConversationStore
 from infrastructure.storage.events.sqlite import SQLiteEventStore
 from infrastructure.storage.harness import SQLiteHarnessNodeOutputResource
+from infrastructure.storage.harness.subagent_transcript import FilesystemSubAgentTranscriptStore
 from interfaces.composition.agent_loop_graph import (
     build_agent_loop_graph_runtime_composition,
     build_agent_loop_harness_orchestration_runtime,
@@ -53,7 +66,10 @@ class _RecordingAdmission(HarnessRefAdmissionService):
 
 def _setup(root, *, include_document=True):
     template, template_identity = _runtime()
-    policy = replace(template._policy_registry.policies[0], stage_id="run-agent-loop", max_planning_tool_calls=0)
+    policy = replace(
+        template._policy_registry.policies[0], stage_id="run-agent-loop", max_planning_tool_calls=0,
+        allowed_subagent_ids=("structure-worker", "contribution-worker"),
+    )
     spec = _runtime_run_spec("parent-ref-run", identity_scope_ref=checksum_for("production"))
     declaration = HarnessGraphTaskPlanStageBinding(
         activity_id=policy.stage_id, worker_ref=WORKER_REF, activity_ref=ACTIVITY_REF,
@@ -66,7 +82,11 @@ def _setup(root, *, include_document=True):
     business_inputs = {"parent_private": "private-parent-only"}
     if include_document:
         business_inputs["document"] = {"text": "trusted document"}
-    spec = replace(spec, graph=definition, inputs={**spec.inputs, "inputs": business_inputs})
+    spec = replace(
+        spec, graph=definition,
+        inputs={**spec.inputs, "inputs": business_inputs, "tenant_scope_ref": checksum_for("production")},
+        metadata={**spec.metadata, "tenant_scope_ref": checksum_for("production")},
+    )
     grants, events = _store(root / "grants")
     admission = _RecordingAdmission(grants)
     task_events = SQLiteEventStore(root / "tasks.sqlite3")
@@ -76,20 +96,57 @@ def _setup(root, *, include_document=True):
     )
     child_calls = []
 
-    def worker(binding, instance, identity):
-        child_calls.append((instance, identity))
-        assert "private-parent-only" not in str(instance.to_dict())
-        return HarnessWorkerResult(status="succeeded", output={"summary": "completed"})
+    class Worker:
+        worker_version = "1"
+        worker_type = HarnessWorkerType.SUBAGENT
+
+        def __init__(self, worker_id):
+            self.worker_id = worker_id
+
+        def execute(self, task, *, execution_identity):
+            invocation = task["invocation"]
+            child_calls.append((invocation, execution_identity))
+            assert "private-parent-only" not in str(task)
+            assert invocation["input_refs"] == ["document"]
+            return HarnessWorkerResult(status="succeeded", output={"summary": "completed"})
+
+    registrations = []
+    workers = {}
+    for role in ("structure", "contribution"):
+        worker_id = f"{role}-worker"
+        worker = Worker(worker_id)
+        workers[worker_id] = worker
+        registrations.append(TaskCapabilityRegistration(
+            f"cap.{role}", HarnessWorkerBinding(
+                HarnessContractReference(HarnessContractKind.WORKER, worker_id, "1"),
+                HarnessWorkerType.SUBAGENT, worker,
+            ), f"{role}-contract@1", "schema://input@1", "schema://result@1",
+            subagent_spec=SubAgentSpec(
+                subagent_id=worker_id, role=role, purpose=f"Analyze {role}",
+                input_schema={"required": ["input_refs"]},
+                output_schema={"required": ["summary"], "properties": {"summary": {"type": "string"}}},
+                allowed_tools=policy.allowed_tool_ids, allowed_memory_namespaces=policy.allowed_memory_namespaces,
+            ),
+        ))
+    capabilities = TaskCapabilityRegistry(registrations)
+    transcripts = FilesystemSubAgentTranscriptStore(root / "transcripts")
+    child_artifacts = FilesystemHarnessArtifactPort(root / "child-artifacts")
+    authority = HarnessResultRefAuthority(grants, transcript_store=transcripts, artifact_descriptors=child_artifacts, tenant_id="production")
+    subagents = SubAgentRuntime(workers=workers, transcript_store=transcripts, result_ref_authority=authority)
+    executor = HarnessSubAgentTaskExecutor(store=task_store, runtime=subagents, ref_admission_service=admission)
+    gates = TaskPlanGateRegistry()
+    gates.register("gate@1", lambda request: request.worker_result.output.get("summary") == "completed", deterministic=True)
+    verifier = TaskPlanResultVerifier(gates, transcript_store=transcripts, artifact_reference_verifier=child_artifacts, result_ref_authority=authority)
 
     configured, _ = _runtime(
-        policy=policy, stage_binding=binding, store=task_store, worker_executor=worker,
+        policy=policy, stage_binding=binding, store=task_store,
     )
     runtime = build_agent_loop_harness_orchestration_runtime(
         stage_binding=binding, policy_registry=configured._policy_registry,
-        capability_registry=configured._capability_registry, store=task_store,
+        capability_registry=capabilities, store=task_store,
         child_supervisor=configured._child_supervisor, candidate_builder=_CandidateBuilder(),
-        worker_executor=worker, task_profiles=tuple(configured._profiles.values()),
-        result_verifier=configured._stage_runner.result_verifier,
+        worker_executor=executor, task_profiles=tuple(configured._profiles.values()),
+        result_verifier=verifier,
         checkpoint_store=JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"),
         ref_admission_service=admission,
     )
@@ -164,18 +221,159 @@ def test_real_graph_admits_before_llm_and_keeps_parent_physical_identity(tmp_pat
     request = replace(
         _admitted_request(setup), parent_turn_id=submission.identity.parent_turn_id,
     )
-    restored, _ = _runtime(
-        policy=setup.policy, stage_binding=setup.binding,
-        store=DurableTaskPlanStore(
-            EventRuntime(store=setup.task_events, schema_catalog=default_event_schema_catalog()),
-            setup.task_events, artifact_store=FilesystemArtifactStore(tmp_path / "task-artifacts"),
-        ), ref_admission_service=HarnessRefAdmissionService(reopened),
-        worker_executor=lambda *_args: pytest.fail("redelivery must not invoke a child"),
-    )
+    restored, restored_executor = _reopen_runtime(setup, tmp_path)
     before_tasks = setup.task_store.read_events(snapshot.run_id, snapshot.stage_id)
     repeated = restored.dispatch(request)
     assert repeated.status == "succeeded", repeated
     assert setup.task_store.read_events(snapshot.run_id, snapshot.stage_id) == before_tasks
+    for task in plan.tasks:
+        instance = task_instance_for_attempt(plan, task.task_id, 1)
+        binding = setup.capabilities.resolve(task.task.worker_capability, setup.policy)
+        recovered = restored_executor.recover(binding, instance, snapshot.execution_identity)
+        assert recovered.status.value == "succeeded"
+        assert recovered.evidence[0].evidence_type == "subagent_attempt"
+    assert len(setup.child_calls) == 2
+    assert setup.events.get_stream_high_watermark(f"run:{snapshot.run_id}", tenant_id="control") == before
+
+
+def _reopen_runtime(setup, root):
+    grants, _ = _store(root / "grants")
+    admission = HarnessRefAdmissionService(grants)
+    task_events = SQLiteEventStore(root / "tasks.sqlite3")
+    store = DurableTaskPlanStore(
+        EventRuntime(store=task_events, schema_catalog=default_event_schema_catalog()),
+        task_events, artifact_store=FilesystemArtifactStore(root / "task-artifacts"),
+    )
+    transcripts = FilesystemSubAgentTranscriptStore(root / "transcripts")
+    artifacts = FilesystemHarnessArtifactPort(root / "child-artifacts")
+    authority = HarnessResultRefAuthority(grants, transcript_store=transcripts, artifact_descriptors=artifacts, tenant_id="production")
+    subagents = SubAgentRuntime(workers=setup.workers, transcript_store=transcripts, result_ref_authority=authority)
+    executor = HarnessSubAgentTaskExecutor(store=store, runtime=subagents, ref_admission_service=admission)
+    verifier = TaskPlanResultVerifier(setup.gates, transcript_store=transcripts, artifact_reference_verifier=artifacts, result_ref_authority=authority)
+    return build_agent_loop_harness_orchestration_runtime(
+        stage_binding=setup.binding, policy_registry=setup.configured._policy_registry,
+        capability_registry=setup.capabilities, store=store,
+        child_supervisor=setup.configured._child_supervisor, candidate_builder=_CandidateBuilder(),
+        worker_executor=executor, task_profiles=tuple(setup.configured._profiles.values()), result_verifier=verifier,
+        checkpoint_store=JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"), ref_admission_service=admission,
+    ), executor
+
+
+@pytest.fixture(scope="module")
+def completed_children(tmp_path_factory):
+    setup = _setup(tmp_path_factory.mktemp("generic-child-authority"))
+    assert setup.graph_runtime.run(setup.spec).succeeded
+    return setup
+
+
+def test_child_and_result_grants_bind_the_exact_parent_and_distinct_attempts(completed_children):
+    setup = completed_children
+    parent = setup.admission.snapshot
+    owners = set()
+    for raw, execution in setup.child_calls:
+        identity = SubAgentAttemptIdentity.from_dict(raw["attempt_identity"])
+        child = setup.grants.find(run_id=parent.run_id, binding_key=RefAuthoritySnapshot.attempt_binding_key(identity, RefSnapshotPhase.CHILD_INPUT))
+        result = setup.grants.find(run_id=parent.run_id, binding_key=RefAuthoritySnapshot.attempt_binding_key(identity, RefSnapshotPhase.RESULT_ACCEPTANCE))
+        assert child.parent_snapshot_ref == parent.snapshot_ref
+        assert result.parent_snapshot_ref == child.snapshot_ref
+        assert child.execution_identity == result.execution_identity == execution == parent.execution_identity
+        assert child.attempt_identity == result.attempt_identity == identity
+        assert child.policy.allowed_refs == ("document",)
+        assert child.policy.shared_read_only_refs == ("document",)
+        assert child.policy.writable_refs == result.policy.writable_refs == ()
+        assert child.policy.owner_id == result.policy.owner_id == identity.child_run_id
+        assert len(result.descriptors) == 3
+        owners.add(child.policy.owner_id)
+    assert len(owners) == 2
+
+
+@pytest.mark.parametrize("field,value", [
+    ("node_id", "sibling"), ("node_instance_id", "other-instance"),
+    ("activity_id", "other-activity"), ("attempt", 2), ("run_id", "other-run"),
+])
+def test_child_executor_rejects_other_physical_attempt_before_payload(completed_children, monkeypatch, field, value):
+    setup = completed_children
+    execution = setup.admission.snapshot.execution_identity
+    plan = setup.task_store.plan(execution.run_id, setup.policy.stage_id)
+    task = plan.tasks[0]
+    instance = task_instance_for_attempt(plan, task.task_id, 1)
+    binding = setup.capabilities.resolve(task.task.worker_capability, setup.policy)
+    for name in ("read", "read_output", "read_context"):
+        monkeypatch.setattr(setup.transcripts, name, lambda *_a, **_kw: pytest.fail("unauthorized payload read"))
+    before = setup.events.get_stream_high_watermark(f"run:{execution.run_id}", tenant_id="control")
+    with pytest.raises(HarnessValidationError):
+        setup.executor.recover(binding, instance, replace(execution, **{field: value}))
+    assert len(setup.child_calls) == 2
+    assert setup.events.get_stream_high_watermark(f"run:{execution.run_id}", tenant_id="control") == before
+
+
+def test_child_executor_cannot_issue_a_grant_for_an_unadmitted_attempt(completed_children):
+    setup = completed_children
+    execution = setup.admission.snapshot.execution_identity
+    plan = setup.task_store.plan(execution.run_id, setup.policy.stage_id)
+    task = plan.tasks[0]
+    binding = setup.capabilities.resolve(task.task.worker_capability, setup.policy)
+    future = task_instance_for_attempt(plan, task.task_id, 2)
+    before = setup.events.get_stream_high_watermark(f"run:{execution.run_id}", tenant_id="control")
+    with pytest.raises(HarnessValidationError, match="no admitted attempt"):
+        setup.executor(binding, future, execution)
+    assert len(setup.child_calls) == 2
+    assert setup.events.get_stream_high_watermark(f"run:{execution.run_id}", tenant_id="control") == before
+
+
+def test_child_result_verifier_rejects_sibling_receipt_before_payload(completed_children, monkeypatch):
+    setup = completed_children
+    execution = setup.admission.snapshot.execution_identity
+    plan = setup.task_store.plan(execution.run_id, setup.policy.stage_id)
+    own, sibling = plan.tasks
+    own_instance = task_instance_for_attempt(plan, own.task_id, 1)
+    sibling_result = setup.executor.recover(
+        setup.capabilities.resolve(sibling.task.worker_capability, setup.policy),
+        task_instance_for_attempt(plan, sibling.task_id, 1), execution,
+    )
+    for name in ("read", "read_output", "read_context"):
+        monkeypatch.setattr(setup.transcripts, name, lambda *_a, **_kw: pytest.fail("sibling payload read"))
+    with pytest.raises(HarnessValidationError):
+        setup.verifier.verify(sibling_result, task=own, request=TaskPlanResultVerificationRequest(
+            plan=plan, task=own, instance=own_instance, worker_result=sibling_result, execution_identity=execution,
+        ))
+    assert len(setup.child_calls) == 2
+
+
+def test_generic_child_recovers_interrupted_result_grant_without_reexecuting(tmp_path, monkeypatch):
+    setup = _setup(tmp_path)
+    commit = setup.grants.commit
+    interrupted = []
+
+    def interrupt_result(snapshot):
+        if snapshot.phase is RefSnapshotPhase.RESULT_ACCEPTANCE:
+            interrupted.append(snapshot.attempt_identity)
+            raise OSError("result grant publication interrupted")
+        return commit(snapshot)
+
+    monkeypatch.setattr(setup.grants, "commit", interrupt_result)
+    assert not setup.graph_runtime.run(setup.spec).succeeded
+    assert len(setup.child_calls) == 2
+    assert interrupted
+    identity = interrupted[0]
+    metadata = setup.transcripts.describe_attempt(identity)
+    assert metadata is not None
+    before = setup.events.get_stream_high_watermark(f"run:{identity.parent_run_id}", tenant_id="control")
+    with pytest.raises(HarnessValidationError):
+        setup.authority.for_attempt(identity).find_by_identity(identity)
+    assert setup.events.get_stream_high_watermark(f"run:{identity.parent_run_id}", tenant_id="control") == before
+    _, executor = _reopen_runtime(setup, tmp_path)
+    plan = executor.store.plan(identity.parent_run_id, identity.stage_id)
+    task = next(item for item in plan.tasks if item.task_id == identity.task_id)
+    result = executor.recover(
+        setup.capabilities.resolve(task.task.worker_capability, setup.policy),
+        task_instance_for_attempt(plan, identity.task_id, identity.attempt), setup.admission.snapshot.execution_identity,
+    )
+    assert result.status.value == "succeeded"
+    assert result.output == {"summary": "completed"}
+    assert len(setup.child_calls) == 2
+    assert executor.result_ref_authority.for_attempt(identity).find_by_identity(identity) == metadata.receipt
+    assert setup.events.get_stream_high_watermark(f"run:{identity.parent_run_id}", tenant_id="control") == before + 1
 
 
 @pytest.mark.parametrize("field,value", [

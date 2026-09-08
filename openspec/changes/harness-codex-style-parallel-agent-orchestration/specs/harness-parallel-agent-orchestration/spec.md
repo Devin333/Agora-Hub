@@ -288,6 +288,19 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **AND** metadata MUST pin the receipt, artifact refs, full attempt identity and bundle checksum/size without containing business output
 - **AND** a missing metadata or bundle file MUST fail closed without worker reexecution or automatic metadata reconstruction from payload
 
+#### Scenario: Generic child dependencies use different authority owners
+
+- **WHEN** production generic delegation is composed with a callback executor, independent recovery callback, unbound result verifier, or mismatched plan/admission/result/transcript/artifact owners
+- **THEN** composition MUST reject before invoking any child or reading result payload
+- **AND** execution and recovery MUST use one controlled SubAgent executor, every profile MUST resolve to its exact registered SUBAGENT worker, and all required deterministic gates MUST be available
+- **AND** manually assembled runtimes entering the physical Graph composition MUST satisfy the same checks
+
+#### Scenario: Generic child names an attempt without spawn admission
+
+- **WHEN** a child executor receives a valid task definition but no canonical spawn intent for that exact attempt and parent Graph execution
+- **THEN** it MUST reject before issuing child input authority, reading result payload, or invoking a worker
+- **AND** it MUST NOT synthesize a Graph activity identity or treat a deterministic task-instance checksum as spawn authorization
+
 #### Scenario: Materialized results extend an attempt without rewriting its authority
 
 - **WHEN** the trusted materializer persists the verified SubAgent result

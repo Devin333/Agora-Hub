@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from types import SimpleNamespace
+
 import pytest
 
 from framework.agent.models import DelegateBatchCandidate, DelegateBatchProposal
@@ -14,44 +17,35 @@ from framework.harness.agent_loop import (
 from framework.harness.graph.activity import HarnessWorkerType
 from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.subagents.gates import FakeSubAgentGateSuite
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.task_plan.capability import (
     TaskCapabilityRegistration,
     TaskCapabilityRegistry,
 )
-from framework.harness.task_plan.checkpoint import TaskPlanCheckpointStorePort
-from framework.harness.task_plan.durable_store import DurableTaskPlanStore
+from framework.harness.task_plan.checkpoint import JsonlTaskPlanCheckpointStore
 from framework.harness.task_plan.models import TaskBudget
 from framework.harness.task_plan.parallel import (
     ParallelAgentCoordinator,
     SerialTaskExecutorAdapter,
 )
 from framework.harness.task_plan.policy import TaskPlanPolicy, TaskPlanPolicyRegistry
-from framework.harness.task_plan.verification import TaskPlanResultVerifier
+from framework.harness.task_plan.verification import TaskPlanGateRegistry, TaskPlanResultVerifier
 from framework.harness.workers.result import HarnessWorkerResult
+from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
+from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
 from interfaces.composition.agent_loop_graph import (
     AgentLoopOrchestrationFeature,
     build_agent_loop_harness_orchestration_runtime,
     build_agent_loop_orchestration_binding,
 )
+from tests.fixtures.agent_loop_delegation import (
+    build_child_dependencies,
+    build_ref_admission,
+    build_task_plan_store,
+)
 from tests.fixtures.task_plan import build_task_plan_stage_binding
-
-
-class _DurableStoreStub(DurableTaskPlanStore):
-    """Protocol-shaped store; no persistence is exercised by composition tests."""
-
-    def __init__(self) -> None:
-        pass
-
-
-class _CheckpointStub(TaskPlanCheckpointStorePort):
-    is_durable = True
-
-    def save(self, checkpoint):
-        return checkpoint
-
-    def load(self, checkpoint_id):
-        raise KeyError(checkpoint_id)
 
 
 class _Worker:
@@ -79,8 +73,11 @@ class _PlanningPort:
         return ()
 
 
-def _factory_kwargs(*, candidate_builder=None, result_verifier=None, planning_observation_port=None):
-    policy = TaskPlanPolicy(
+_DEFAULT_VERIFIER = object()
+
+
+def _policy(*, max_planning_tool_calls: int = 0) -> TaskPlanPolicy:
+    return TaskPlanPolicy(
         policy_id="composition.delegate",
         version="1",
         stage_id="delegate_stage",
@@ -106,8 +103,30 @@ def _factory_kwargs(*, candidate_builder=None, result_verifier=None, planning_ob
         max_plan_build_tool_calls=0,
         per_task_budget=TaskBudget(max_turns=1),
         aggregate_task_budget=TaskBudget(max_turns=1),
-        max_planning_tool_calls=1,
+        max_planning_tool_calls=max_planning_tool_calls,
     )
+
+
+def _factory_kwargs(
+    root,
+    *,
+    policy=None,
+    store=None,
+    admission=None,
+    candidate_builder=None,
+    result_verifier=_DEFAULT_VERIFIER,
+    planning_observation_port=None,
+):
+    policy = policy or _policy()
+    store = store or build_task_plan_store(root / "task-plan")
+    admission = admission or build_ref_admission(root / "ref-authority")
+    child = build_child_dependencies(
+        root / "child",
+        policy=policy,
+        store=store,
+        admission=admission,
+    )
+    policy = child.policy
     stage_binding = build_task_plan_stage_binding(
         graph_id="composition",
         stage_id=policy.stage_id,
@@ -115,26 +134,14 @@ def _factory_kwargs(*, candidate_builder=None, result_verifier=None, planning_ob
         required_output_roles=policy.required_output_roles,
         worker_type=HarnessWorkerType.AGENT_LOOP,
     )
-    worker = _Worker()
-    registration = TaskCapabilityRegistration(
-        "cap.structure",
-        HarnessWorkerBinding(
-            HarnessContractReference(HarnessContractKind.WORKER, "structure-worker", "1"),
-            HarnessWorkerType.LLM,
-            worker,
-        ),
-        "structure-contract@1",
-        "schema://input@1",
-        "schema://result@1",
-    )
     return {
         "stage_binding": stage_binding,
         "policy_registry": TaskPlanPolicyRegistry((policy,)),
-        "capability_registry": TaskCapabilityRegistry((registration,)),
-        "store": _DurableStoreStub(),
+        "capability_registry": child.capability_registry,
+        "store": store,
         "child_supervisor": ChildAgentSupervisor(max_children=1),
         "candidate_builder": candidate_builder or _CandidateBuilder(),
-        "worker_executor": lambda *_args: HarnessWorkerResult(status="succeeded", output={}),
+        "worker_executor": child.executor,
         "task_profiles": (
             AgentOrchestrationTaskProfile(
                 capability_hint="cap.structure",
@@ -143,9 +150,10 @@ def _factory_kwargs(*, candidate_builder=None, result_verifier=None, planning_ob
                 gate_refs=("gate@1",),
             ),
         ),
-        "result_verifier": result_verifier,
+        "result_verifier": child.verifier if result_verifier is _DEFAULT_VERIFIER else result_verifier,
         "planning_observation_port": planning_observation_port,
-        "checkpoint_store": _CheckpointStub(),
+        "checkpoint_store": JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"),
+        "ref_admission_service": admission,
     }
 
 
@@ -260,47 +268,189 @@ def test_parallel_production_requires_an_explicit_serial_adapter() -> None:
     assert coordinator.serial_executor is not None
 
 
-def test_production_factory_rejects_missing_plan_builder() -> None:
-    kwargs = _factory_kwargs(candidate_builder=object())
+def test_production_factory_rejects_missing_plan_builder(tmp_path) -> None:
+    kwargs = _factory_kwargs(tmp_path, candidate_builder=object())
     with pytest.raises((TypeError, ValueError), match="candidate_builder"):
         build_agent_loop_harness_orchestration_runtime(**kwargs)
 
 
-def test_production_factory_rejects_missing_worker_binding() -> None:
-    kwargs = _factory_kwargs(candidate_builder=_CandidateBuilder())
+def test_production_factory_rejects_missing_worker_binding(tmp_path) -> None:
+    kwargs = _factory_kwargs(tmp_path, candidate_builder=_CandidateBuilder())
     kwargs["capability_registry"] = TaskCapabilityRegistry()
     with pytest.raises((TypeError, ValueError), match="(worker|capability|binding)"):
         build_agent_loop_harness_orchestration_runtime(**kwargs)
 
 
-def test_production_factory_rejects_missing_result_evidence_verifier() -> None:
-    kwargs = _factory_kwargs(result_verifier=None, planning_observation_port=_PlanningPort())
+def test_production_factory_binds_one_authorized_executor_for_execution_and_recovery(tmp_path) -> None:
+    kwargs = _factory_kwargs(tmp_path)
+
+    runtime = build_agent_loop_harness_orchestration_runtime(**kwargs)
+    executor = kwargs["worker_executor"]
+    verifier = kwargs["result_verifier"]
+
+    assert runtime.has_durable_input_admission is True
+    assert runtime._stage_runner.worker_executor is executor
+    assert runtime._stage_runner.worker_result_recovery == executor.recover
+    assert executor.store is kwargs["store"]
+    assert executor.ref_admission_service is kwargs["ref_admission_service"]
+    assert executor.result_ref_authority is verifier.result_ref_authority
+    assert executor.runtime.transcript_store is verifier.transcript_store
+    assert (
+        verifier.artifact_reference_verifier
+        is executor.result_ref_authority.artifact_descriptors
+    )
+
+
+def _break_production_child_binding(kwargs, root, case: str) -> str:
+    policy = kwargs["policy_registry"].policies[0]
+    executor = kwargs["worker_executor"]
+    authority = executor.result_ref_authority
+
+    if case == "arbitrary_executor":
+        kwargs["worker_executor"] = lambda *_args: HarnessWorkerResult(
+            status="succeeded", output={"summary": "bypassed"}
+        )
+        return "HarnessSubAgentTaskExecutor"
+    if case == "task_plan_store":
+        other_store = build_task_plan_store(root / "other-task-plan")
+        kwargs["worker_executor"] = build_child_dependencies(
+            root / "other-store-child",
+            policy=policy,
+            store=other_store,
+            admission=kwargs["ref_admission_service"],
+        ).executor
+        return "configured TaskPlan store"
+    if case == "input_admission":
+        other_admission = build_ref_admission(root / "other-admission")
+        kwargs["worker_executor"] = build_child_dependencies(
+            root / "other-admission-child",
+            policy=policy,
+            store=kwargs["store"],
+            admission=other_admission,
+        ).executor
+        return "configured input admission service"
+    if case == "result_authority":
+        kwargs["result_verifier"] = build_child_dependencies(
+            root / "other-authority-child",
+            policy=policy,
+            store=kwargs["store"],
+            admission=kwargs["ref_admission_service"],
+        ).verifier
+        return "share result authority"
+    if case == "transcript_store":
+        kwargs["result_verifier"]._transcript_store = FilesystemSubAgentTranscriptStore(
+            root / "other-transcripts"
+        )
+        return "share result authority and transcript store"
+    if case == "artifact_owner":
+        kwargs["result_verifier"] = TaskPlanResultVerifier(
+            kwargs["result_verifier"].gate_registry,
+            transcript_store=executor.runtime.transcript_store,
+            artifact_reference_verifier=FilesystemHarnessArtifactPort(
+                root / "other-artifacts"
+            ),
+            result_ref_authority=authority,
+        )
+        return "canonical artifact owner"
+    if case == "gate_registry":
+        kwargs["result_verifier"] = TaskPlanResultVerifier(
+            TaskPlanGateRegistry(),
+            transcript_store=executor.runtime.transcript_store,
+            artifact_reference_verifier=executor.runtime.result_ref_authority.artifact_descriptors,
+            result_ref_authority=authority,
+        )
+        return "every profile gate"
+    if case == "runtime_worker":
+        subagent_id = next(iter(executor.runtime.workers))
+        executor.runtime.workers[subagent_id] = object()
+        return "pinned capability binding"
+    if case == "subagent_gates":
+        executor.runtime.gates = SimpleNamespace(**vars(FakeSubAgentGateSuite()))
+        return "deterministic SubAgent gate suite"
+    if case == "worker_type":
+        worker = _Worker()
+        kwargs["capability_registry"] = TaskCapabilityRegistry(
+            (
+                TaskCapabilityRegistration(
+                    "cap.structure",
+                    HarnessWorkerBinding(
+                        HarnessContractReference(
+                            HarnessContractKind.WORKER,
+                            worker.worker_id,
+                            worker.worker_version,
+                        ),
+                        HarnessWorkerType.LLM,
+                        worker,
+                    ),
+                    "structure-contract@1",
+                    "schema://generic-child-input@1",
+                    "schema://result@1",
+                ),
+            )
+        )
+        return "SUBAGENT worker"
+    raise AssertionError(f"unknown child binding case: {case}")
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "arbitrary_executor",
+        "task_plan_store",
+        "input_admission",
+        "result_authority",
+        "transcript_store",
+        "artifact_owner",
+        "gate_registry",
+        "runtime_worker",
+        "subagent_gates",
+        "worker_type",
+    ),
+)
+def test_production_factory_rejects_child_dependency_mismatch(tmp_path, case: str) -> None:
+    kwargs = _factory_kwargs(tmp_path / "base")
+    expected = _break_production_child_binding(kwargs, tmp_path / case, case)
+
+    with pytest.raises((TypeError, ValueError), match=expected):
+        build_agent_loop_harness_orchestration_runtime(**kwargs)
+
+
+def test_production_factory_rejects_missing_result_evidence_verifier(tmp_path) -> None:
+    kwargs = _factory_kwargs(tmp_path, result_verifier=None)
     with pytest.raises((TypeError, ValueError), match="(result_verifier|artifact|transcript)"):
         build_agent_loop_harness_orchestration_runtime(**kwargs)
 
 
-def test_production_factory_rejects_missing_planning_observation_port() -> None:
-    kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier())
+def test_production_factory_rejects_missing_planning_observation_port(tmp_path) -> None:
+    kwargs = _factory_kwargs(tmp_path, policy=_policy(max_planning_tool_calls=1))
     with pytest.raises((TypeError, ValueError), match="planning_observation_port"):
         build_agent_loop_harness_orchestration_runtime(**kwargs)
 
 
-def test_production_factory_rejects_unbound_planning_port() -> None:
-    kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier(), planning_observation_port=_PlanningPort())
+def test_production_factory_rejects_unbound_planning_port(tmp_path) -> None:
+    kwargs = _factory_kwargs(
+        tmp_path,
+        policy=_policy(max_planning_tool_calls=1),
+        planning_observation_port=_PlanningPort(),
+    )
     with pytest.raises(ValueError, match="durable execution-bound reference authority"):
         build_agent_loop_harness_orchestration_runtime(**kwargs)
 
 
 def test_planning_production_factory_and_stage_require_admitted_execution(tmp_path):
-    from dataclasses import replace
-
     from framework.harness.control_plane.errors import HarnessValidationError
     from framework.harness.task_plan.planning_observation import PlanningObservationRequest
     from framework.tool import ToolDefinition, ToolExecutor, ToolRegistry
     from interfaces.composition.agent_loop_graph import build_agent_loop_planning_observation_service
     from tests.framework.harness.test_ref_snapshot_store import _snapshot, _store
 
-    kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier())
+    grants, events = _store(tmp_path / "grants")
+    admission = HarnessRefAdmissionService(grants)
+    kwargs = _factory_kwargs(
+        tmp_path / "composition",
+        policy=_policy(max_planning_tool_calls=1),
+        admission=admission,
+    )
     binding = kwargs["stage_binding"]
     policy = kwargs["policy_registry"].resolve(binding.policy_ref, stage_id=binding.stage_id)
     parent = _snapshot()
@@ -315,7 +465,6 @@ def test_planning_production_factory_and_stage_require_admitted_execution(tmp_pa
         stage_binding_checksum=binding.binding_checksum, task_policy_checksum=policy.policy_checksum,
         descriptors=(descriptor,), policy=replace(parent.policy, stage_id=binding.stage_id),
     )
-    grants, events = _store(tmp_path)
     grants.commit(parent)
     registry = ToolRegistry()
     calls = []
@@ -329,8 +478,6 @@ def test_planning_production_factory_and_stage_require_admitted_execution(tmp_pa
     )
     planning = build_agent_loop_planning_observation_service(**factory)
     kwargs["planning_observation_port"] = planning
-    from framework.harness.ref_admission import HarnessRefAdmissionService
-    kwargs["ref_admission_service"] = HarnessRefAdmissionService(grants)
     runtime = build_agent_loop_harness_orchestration_runtime(**kwargs)
     assert runtime.has_durable_input_admission
     with pytest.raises(ValueError, match="share the canonical snapshot store"):
@@ -355,11 +502,9 @@ def test_planning_production_factory_and_stage_require_admitted_execution(tmp_pa
         build_agent_loop_planning_observation_service(**{**factory, "snapshot_store": object()})
 
 
-def test_production_orchestration_requires_durable_parent_admission_with_planning_disabled():
-    from dataclasses import replace
-
-    kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier())
-    policy = replace(kwargs["policy_registry"].policies[0], max_planning_tool_calls=0)
-    kwargs["policy_registry"] = TaskPlanPolicyRegistry((policy,))
+def test_production_orchestration_requires_durable_parent_admission_with_planning_disabled(tmp_path):
+    kwargs = _factory_kwargs(tmp_path)
     with pytest.raises(ValueError, match="durable input admission"):
-        build_agent_loop_harness_orchestration_runtime(**kwargs)
+        build_agent_loop_harness_orchestration_runtime(
+            **{**kwargs, "ref_admission_service": None}
+        )
