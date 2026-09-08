@@ -74,13 +74,13 @@ describe("research homepage", () => {
     } finally { vi.useRealTimers() }
   })
 
-  it("keeps selected materials visible and forwards only owned IDs separately from the destination group", () => {
+  it("keeps selected materials visible and forwards only owned IDs separately from the destination group", async () => {
     saveResearchGroup("Agent 分组", "group-a")
     saveResearchMaterial({ id: "source-a", groupId: "group-a", kind: "paper", title: "已选论文", url: "https://arxiv.org/abs/2605.22343", notes: "方法笔记", createdAt: 1, updatedAt: 2 })
-    window.history.replaceState(null, "", "/design-demo?researchGroup=group-a&material=source-a&material=not-owned")
+    window.history.replaceState(null, "", "/design-demo?material=source-a&material=not-owned")
     render(<DesignDemoPage />)
     expect(screen.getByLabelText("本次研究选中的资料")).toHaveTextContent("已选论文")
-    fireEvent.change(screen.getByRole("combobox", { name: "新研究的保存分组" }), { target: { value: "" } })
+    await waitFor(() => expect(screen.getByRole("button", { name: "添加到本次研究" })).toBeEnabled())
     expect(screen.getByLabelText("本次研究选中的资料")).toHaveTextContent("已选论文")
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Agent 论文" } })
     fireEvent.click(screen.getByRole("button", { name: "发送问题" }))
@@ -88,6 +88,19 @@ describe("research homepage", () => {
     expect(params.getAll("material")).toEqual(["source-a"])
     expect(params.has("researchGroup")).toBe(false)
     expect(readResearchWorkspace().composerDraft?.materialIds).toEqual(["source-a"])
+  })
+
+  it("uses plain-language plan mode before choosing a destination", async () => {
+    sessionStorage.setItem("agora-home-draft:v1", JSON.stringify({ query: "我想了解 AI Agent 如何完成任务", mode: "plan" }))
+    render(<DesignDemoPage />)
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("我想了解 AI Agent 如何完成任务"))
+    fireEvent.click(screen.getByRole("button", { name: "发送问题" }))
+    expect(screen.getByRole("status", { name: "确认研究计划" })).toHaveTextContent("我会帮你找")
+    expect(screen.getByRole("status", { name: "确认研究计划" })).toHaveTextContent("你更想看")
+    expect(push).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "论文" }))
+    expect(push).toHaveBeenCalledOnce()
+    expect(push.mock.calls[0][0]).toContain("/design-demo/papers")
   })
 
   it("restores draft and manual mode after ordinary navigation in StrictMode", async () => {

@@ -47,7 +47,7 @@ Question = Annotated[str, Field(max_length=2000), AfterValidator(_clean_text)]
 Notes = Annotated[str, Field(max_length=10000), AfterValidator(_clean_text)]
 SourceUrl = Annotated[str, Field(max_length=2000), AfterValidator(_source_url)]
 ReaderHref = Annotated[str, Field(max_length=10000), AfterValidator(_reader_href)]
-ResearchMode = Literal["auto", "papers", "projects", "community", "reports"]
+ResearchMode = Literal["auto", "plan", "papers", "projects", "community", "reports"]
 
 
 class WorkspaceModel(BaseModel):

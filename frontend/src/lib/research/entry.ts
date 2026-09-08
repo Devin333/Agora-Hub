@@ -1,6 +1,6 @@
 export const researchModules = ["papers", "projects", "community", "reports"] as const
 export type ResearchModule = typeof researchModules[number]
-export type ResearchMode = "auto" | ResearchModule
+export type ResearchMode = "auto" | "plan" | ResearchModule
 
 export const moduleInfo: Record<ResearchModule, { name: string; command: string; description: string; path: string; examples: string[] }> = {
   papers: { name: "论文研究", command: "找论文", description: "查找论文，阅读原文与证据", path: "/design-demo/papers", examples: ["找 Agent 相关论文", "查找 RAG 评测论文", "了解长上下文研究"] },
@@ -11,12 +11,12 @@ export const moduleInfo: Record<ResearchModule, { name: string; command: string;
 export const autoExamples = [moduleInfo.papers.examples[0], moduleInfo.projects.examples[0], moduleInfo.community.examples[0]]
 
 export function isResearchMode(value: unknown): value is ResearchMode {
-  return value === "auto" || researchModules.includes(value as ResearchModule)
+  return value === "auto" || value === "plan" || researchModules.includes(value as ResearchModule)
 }
 
 // Explicit task objects outrank generic research vocabulary. Unknown intent is a user choice.
 export function resolveResearchIntent(question: string, mode: ResearchMode = "auto"): ResearchModule[] {
-  if (mode !== "auto") return [mode]
+  if (mode !== "auto" && mode !== "plan") return [mode]
   const text = question.trim().toLowerCase()
   const scores: Record<ResearchModule, number> = {
     papers: /论文|文献|\bpapers?\b|\barxiv\b/.test(text) ? 4 : /研究方法|研究进展|评测|引用|长上下文研究/.test(text) ? 1 : 0,
