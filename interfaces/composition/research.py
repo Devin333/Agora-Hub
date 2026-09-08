@@ -1568,6 +1568,7 @@ def _build_configured_composition(
             tenant_id=_RESEARCH_EVENT_TENANT_ID,
         )
         from framework.harness.ref_admission import HarnessRefAdmissionService
+        from framework.harness.ref_results import HarnessResultRefAuthority
         from framework.harness.ref_snapshot_store import DurableRefAuthoritySnapshotStore
 
         dynamic_ref_admission_service = HarnessRefAdmissionService(
@@ -1629,12 +1630,25 @@ def _build_configured_composition(
                     worker,
                 )
             capability_registry = build_research_analysis_capability_registry(bindings)
+            actor_metadata = {
+                "tenant_id": workspace.request.tenant_id,
+                "user_id": workspace.request.user_id,
+                "memory_namespace": workspace.request.memory_namespace,
+            }
+            result_tenant_id = research_event_tenant_id(actor_metadata)
+            result_ref_authority = HarnessResultRefAuthority(
+                dynamic_ref_admission_service.store,
+                transcript_store=subagent_transcript_store,
+                artifact_descriptors=graph_result_catalog,
+                tenant_id=result_tenant_id,
+            )
             subagent_runtime = SubAgentRuntime(
                 workers={
                     RESEARCH_DYNAMIC_SUBAGENT_IDS[capability]: worker
                     for capability, worker in task_workers.items()
                 },
                 transcript_store=subagent_transcript_store,
+                result_ref_authority=result_ref_authority,
             )
             subagent_adapter = ResolvedSubAgentTaskAdapter(
                 subagent_runtime,
@@ -1682,6 +1696,7 @@ def _build_configured_composition(
                 ),
                 transcript_store=subagent_transcript_store,
                 artifact_reference_verifier=artifact_port,
+                result_ref_authority=result_ref_authority,
             )
             def task_context_pack(plan, instance, execution_identity):
                 if not isinstance(execution_identity, GraphExecutionIdentity):
@@ -1730,13 +1745,8 @@ def _build_configured_composition(
                         HarnessGraphControlPlaneRuntime(transition_port)
                     ),
                     transcript_store=subagent_transcript_store,
+                    result_ref_authority=result_ref_authority,
                 )
-                actor_metadata = {
-                    "tenant_id": workspace.request.tenant_id,
-                    "user_id": workspace.request.user_id,
-                    "memory_namespace": workspace.request.memory_namespace,
-                }
-                result_tenant_id = research_event_tenant_id(actor_metadata)
 
                 def child_invocation(plan, resolved, instance, execution_identity):
                     binding = capability_registry.resolve(

@@ -52,7 +52,13 @@ candidate durable dedup key 固定为 `run_id + stage_id + parent_turn_id + acti
 
 任务 1.5 的输入授权增量使用 `newsroom.harness-ref-authority-snapshot/v1`，将完整 Graph execution identity、stage binding、TaskPlan policy、实际输入文档 checksum、精确 descriptor allowlist 和 access policy 固定在不可变 artifact 中。`harness_ref_authority_committed` 是 canonical run stream 内唯一授权提交证据；artifact 写入成功但 event 未提交时不产生可读取的 grant。同一 execution binding 重复提交复用原 snapshot，改变输入、policy 或 descriptor 则拒绝冲突；已提交 artifact 丢失或损坏时不以当前配置重建授权。child input grant 必须绑定原 admission snapshot 和完整 accepted attempt identity，只能继承原 descriptor 的只读子集。
 
-Research production composition 已为真实 `document` / `evidence_pack` 输入和子任务 context 注入同一个持久化 admission service。artifact descriptor 端口只解析完整性受保护的 manifest/catalog 元数据，不预读业务 payload，也不从 worker 提供的 ref 字符串推断 owner；缺少可信 tenant 数据时不得伪造。此增量不代表结果授权已完成：新输出需要在可信持久化路径提交独立 result grant；`SubAgentRuntime.invoke()` 内部也会尝试恢复既有 transcript，结果恢复入口必须先加载原 grant 再读取 bundle，不能在读取后补授权。generic AgentLoop、planning、memory、replacement/dependency refs 和 result recovery 的完整生产接线仍属于未完成的任务 1.5。
+Research production composition 已为真实 `document` / `evidence_pack` 输入和子任务 context 注入同一个持久化 admission service。artifact descriptor 端口只解析完整性受保护的 manifest/catalog 元数据，不预读业务 payload，也不从 worker 提供的 ref 字符串推断 owner；缺少可信 tenant 数据时不得伪造。
+
+结果授权增量在可信 writer 提交 v3 bundle 前，先写不可变 `newsroom.subagent-attempt-descriptor/v1` sidecar，固定完整 accepted attempt、receipt、artifact refs、bundle checksum/size；元数据读取仅打开同目录 `.meta` 文件并对 bundle 做路径和 stat 校验，不读正文。任一文件单边缺失时以 `subagent_attempt_metadata_incomplete` 拒绝恢复，不从旧 bundle 自动生成授权元数据。bundle 已提交但授权 event 尚未提交的在线恢复，允许 Harness 从可信 sidecar 和原 child grant 补交 `RESULT_ACCEPTANCE`，然后才能读取 bundle；离线 replay 不得补发授权。
+
+`HarnessResultRefAuthority` 给每个 accepted attempt 建立不可变读取端口，`SubAgentRuntime`、TaskPlan verifier、SubAgent result adapter 和 Research stage replay 使用同一授权存储。授权先校验原输入 grant、完整 Graph activity/plan/task/attempt、tenant 和 source checksum，再读取 context/output/transcript；读取后继续核对实际文档 checksum。materializer 从真实 catalog 的 run/tenant/graph/node/`subagent_result_attempt_id` 元数据创建独立 `MATERIALIZED_RESULT` grant，其 parent 必须是同一 attempt 的 `RESULT_ACCEPTANCE`，不能修改输入或原结果权限。replay 必须由调用方提供已记录的 Graph execution identity，并只允许原 worker artifact refs 与已提交 materialization refs 的精确并集。snapshot v1 增加该 phase，现有序列化字段与旧 input/child/result grant 校验保持不变；父链最多四层，按严格 phase 顺序验证。
+
+任务 1.5 尚未完成：generic AgentLoop 输入/结果来源、planning、versioned memory、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。当前 Research 的强制生产依赖检查与上述 SubAgent 结果路径，不替代这些剩余边界。
 
 ### 2. Harness 作为唯一 fan-out/fan-in coordinator
 

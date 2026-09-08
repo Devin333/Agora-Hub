@@ -512,6 +512,9 @@ class ResearchTaskPlanResultMaterializer(TaskPlanResultVerifierPort):
         self._tenant_id = tenant_id
         self._tenant_scope_ref = tenant_scope_ref
         self._invocation_factory = invocation_factory
+        self.result_ref_authority = getattr(verifier, "result_ref_authority", None)
+        if self.result_ref_authority is not adapter.result_ref_authority:
+            raise TypeError("TaskPlan verifier and materializer must share result reference authority")
 
     @property
     def registered_gate_refs(self) -> tuple[str, ...]:

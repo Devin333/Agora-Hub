@@ -666,6 +666,82 @@ No task 1.6 work or feature-default change is included in this increment.
 The passing checks qualify this increment, not the still-open G1-G5 release
 contracts.
 
+### Task 1.5 Execution-Bound Result Authorization Increment
+
+Task 1.5 remains unchecked. This increment follows the input-admission work and
+does not advance task 1.6 or qualify the entire G1-G5 release contract.
+
+- Trusted SubAgent attempt descriptors bind the receipt, full attempt identity,
+  artifact refs, bundle bytes checksum and size. Filesystem writes serialize
+  equal/conflicting attempts, commit immutable `.meta` before the existing v3
+  bundle, and reuse the original receipt on equal redelivery. Descriptor reads
+  open only metadata; ordinary reads still verify actual bundle bytes. Either
+  missing half is an explicit incomplete-attempt error, not a new worker run.
+- `HarnessResultRefAuthority` issues `RESULT_ACCEPTANCE` from original admitted
+  child grants and trusted writer metadata. Online recovery can finish an
+  interrupted grant publication before payload access; read-only consumers and
+  replay cannot mint grants. Per-attempt read views are immutable and verify
+  exact refs, types, source checksums and full accepted ownership.
+- Runtime recovery, deterministic TaskPlan verification, SubAgent materializer
+  reads and Research stage replay share this authority. Production Research
+  construction rejects missing or non-durable result authority and requires
+  the same snapshot store as input admission.
+- Materialization appends `MATERIALIZED_RESULT` without changing original
+  grants. Catalog ownership must match the real run, tenant, graph, node and
+  full-identity-derived SubAgent attempt id. Replay validates the exact original
+  and materialized ref union using a caller-supplied recorded Graph activity,
+  with no event append or live worker call.
+- New checks cover unauthorized activity/policy/receipt/tenant/sibling refs,
+  payload-type mismatch and mutated metadata before any payload reader runs;
+  bundle-before-grant crash recovery; rejected worker-selected sibling artifacts;
+  reopened four-level grant chains; repeated materialization; and actual
+  Research result-wrapper replay with materialized refs.
+
+Validation: the initial final-focused group passed `63 passed` in
+107.16 seconds; the broad TaskPlan/SubAgent/Research/composition/architecture
+suite passed `841 passed, 4 warnings` in 360.70 seconds; event/SQLite regressions
+passed `494 passed` in 52.19 seconds. After the independent-review fixes below,
+the result-authority/metadata regression group passed `31 passed` in 46.21
+seconds. Strict OpenSpec passed.
+An early deep-path filesystem failure was fixed by storing the sidecar beside
+the original bundle as `.meta`, avoiding an extra directory and long atomic
+temporary path on Windows. A new test's incorrect configuration import was
+corrected to the existing Harness result-policy module; no assertions were
+weakened.
+
+Independent review reproduced a self-consistent substituted result grant with
+the correct metadata source checksum but a sibling descriptor. Existing grants
+now must exactly equal the full snapshot reconstructed from trusted metadata,
+not merely carry the same source checksum. A regression proves rejection
+before any payload reader runs. Failed-result replay now explicitly authorizes
+original artifact refs from metadata before reading the transcript; its test
+asserts that ordering. A separate size-limit repro found descriptor overflow
+was detected only after committing files; descriptor size is now checked before
+either immutable file is created. The attempt-bound store also preserves the
+canonical read keyword arguments and bounded parent-query signature. Three
+earlier smoke runs were stopped for these production fixes and interface
+alignment and are not counted as passing qualification.
+
+Final required `.venv/Scripts/python.exe -m scripts.dev smoke` completed with
+exit 0 after the final code/test edits:
+
+- Compile passed; `3078 passed, 23 deselected, 24 warnings` in 1366.28 seconds.
+- Offline AgentLoop succeeded with 3 fixture LLM calls, 1 tool call and 0
+  network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-2b692cb6fd16411e8a70e6321cb742e3/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings.
+- The smoke includes existing FastAPI/Starlette deprecations and an Authlib
+  deprecation from concurrent account-auth work. That account-auth/frontend
+  implementation is outside this increment's commit scope.
+- Strict OpenSpec and scoped/staged whitespace checks passed. The task checklist
+  remains 14/46 with 1.5 as the earliest unchecked item.
+
+Remaining task 1.5 work includes generic AgentLoop provenance and result
+consumers, planning observations, versioned memory descriptors and namespaces,
+replacement/dependency grants, and other result/recovery consumers. This
+increment is not blanket authorization for those paths and does not enable any
+new feature default.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

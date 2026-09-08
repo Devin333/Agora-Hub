@@ -4,6 +4,7 @@ import os
 import stat
 import time
 from collections.abc import Callable, Mapping
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from framework.agent.artifacts.stores.fs_safety import (
     is_link_or_reparse_point,
     reject_link_chain,
     verified_atomic_create,
+    verified_exclusive_file_lock,
 )
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.subagents.observability import (
@@ -51,6 +53,12 @@ from framework.harness.subagents.transcript import (
     _context_ref,
     _receipt_matches_bundle,
     _validate_bundle_identity,
+)
+from framework.harness.subagents.transcript_metadata import (
+    SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1,
+    SubAgentAttemptDescriptor,
+    SubAgentAttemptMetadataIncompleteError,
+    descriptor_for_bundle,
 )
 from framework.shared.json import json_loads, stable_json_dumps
 from framework.shared.time import utc_now
@@ -119,64 +127,98 @@ class FilesystemSubAgentTranscriptStore:
         started_at = self._monotonic()
         _validate_bundle_identity(context, output, transcript)
         identity = transcript.identity
-        version = "v3"
-        receipt = SubAgentTranscriptReceipt(
-            transcript_ref=transcript.ref,
-            transcript_checksum=transcript.transcript_checksum,
-            transcript_id=transcript.transcript_id,
-            invocation_id=identity.invocation_id,
-            parent_run_id=identity.parent_run_id,
-            child_run_id=identity.child_run_id,
-            task_instance_id=identity.task_instance_id,
-            attempt=identity.attempt,
-            context_ref=_context_ref(identity, context.schema_version),
-            context_checksum=context.context_checksum,
-            output_ref=output.ref,
-            output_checksum=output.output_checksum,
-            storage_revision=f"bundle:{identity.transcript_id}:{version}",
-            committed_at=self._clock(),
-            identity_checksum=identity.identity_checksum,
-            schema_version=SUBAGENT_RECEIPT_SCHEMA_V3,
-        )
-        payload = {
-            "schema_version": _bundle_schema_for_identity(identity),
-            "context": context.to_dict(),
-            "output": output.to_dict(),
-            "transcript": transcript.to_dict(),
-            "receipt": receipt.to_dict(),
-        }
-        content = (stable_json_dumps(payload) + "\n").encode("utf-8")
+        content = b""
         try:
-            self._enforce_sizes(context, output, transcript, content)
             path = self._bundle_path(identity.parent_run_id, identity.transcript_id)
+            metadata_path = self._metadata_path(
+                identity.parent_run_id,
+                identity.transcript_id,
+            )
+            lock_path = self._lock_path(identity.parent_run_id, identity.transcript_id)
             try:
-                created = verified_atomic_create(
-                    path,
-                    content,
+                with verified_exclusive_file_lock(
+                    lock_path,
                     root=self.root,
                     identity=f"{identity.parent_run_id}/{identity.transcript_id}",
-                )
+                ):
+                    descriptor = self.describe_attempt(identity)
+                    if descriptor is not None:
+                        receipt = descriptor.receipt
+                        content = self._bundle_content(context, output, transcript, receipt)
+                        self._enforce_sizes(context, output, transcript, content)
+                        candidate = descriptor_for_bundle(
+                            identity=identity,
+                            receipt=receipt,
+                            artifact_refs=output.artifact_refs,
+                            bundle=content,
+                        )
+                        if candidate != descriptor:
+                            raise SubAgentTranscriptConflictError(
+                                "subagent transcript identity already has different content",
+                                code="subagent_transcript_conflict",
+                                details={"transcript_id": identity.transcript_id},
+                            )
+                        existing = self._read_bundle(path)
+                        if (
+                            existing[0] != context
+                            or existing[1] != output
+                            or existing[2] != transcript
+                        ):
+                            raise SubAgentTranscriptConflictError(
+                                "subagent transcript identity already has different content",
+                                code="subagent_transcript_conflict",
+                                details={"transcript_id": identity.transcript_id},
+                            )
+                        committed = self.verify(receipt)
+                    else:
+                        receipt = self._new_receipt(context, output, transcript)
+                        content = self._bundle_content(context, output, transcript, receipt)
+                        self._enforce_sizes(context, output, transcript, content)
+                        descriptor = descriptor_for_bundle(
+                            identity=identity,
+                            receipt=receipt,
+                            artifact_refs=output.artifact_refs,
+                            bundle=content,
+                        )
+                        metadata_content = (
+                            stable_json_dumps(descriptor.to_dict()) + "\n"
+                        ).encode("utf-8")
+                        if len(metadata_content) > self.max_transcript_bytes:
+                            raise _store_error(
+                                "subagent_transcript_size_exceeded",
+                                "subagent attempt descriptor exceeds configured size",
+                                exceeded={"descriptor": {
+                                    "size": len(metadata_content),
+                                    "limit": self.max_transcript_bytes,
+                                }},
+                            )
+                        metadata_created = verified_atomic_create(
+                            metadata_path,
+                            metadata_content,
+                            root=self.root,
+                            identity=f"{identity.parent_run_id}/{identity.transcript_id}/metadata",
+                        )
+                        if not metadata_created:
+                            raise _corrupt(
+                                "subagent attempt metadata appeared during serialized commit"
+                            )
+                        bundle_created = verified_atomic_create(
+                            path,
+                            content,
+                            root=self.root,
+                            identity=f"{identity.parent_run_id}/{identity.transcript_id}",
+                        )
+                        if not bundle_created:
+                            raise _corrupt(
+                                "subagent attempt bundle appeared during serialized commit"
+                            )
+                        committed = self.verify(receipt)
             except (ArtifactStoreMetadataError, OSError) as exc:
                 raise _store_error(
                     "subagent_transcript_store_unavailable",
                     "commit subagent transcript bundle failed",
                     transcript_id=identity.transcript_id,
                 ) from exc
-            committed = receipt
-            if not created:
-                existing = self._read_bundle(path)
-                committed = existing[3]
-                if (
-                    existing[0] != context
-                    or existing[1] != output
-                    or existing[2] != transcript
-                ):
-                    raise SubAgentTranscriptConflictError(
-                        "subagent transcript identity already has different content",
-                        code="subagent_transcript_conflict",
-                        details={"transcript_id": identity.transcript_id},
-                    )
-            committed = self.verify(committed)
         except Exception as exc:
             reason_code = _reason_code(exc)
             if isinstance(exc, SubAgentTranscriptConflictError):
@@ -317,17 +359,69 @@ class FilesystemSubAgentTranscriptStore:
     ) -> SubAgentTranscriptReceipt | None:
         if not isinstance(identity, SubAgentAttemptIdentity):
             raise TypeError("identity must be SubAgentAttemptIdentity")
-        path = self._bundle_path(identity.parent_run_id, identity.transcript_id)
-        try:
-            receipt = self._read_bundle(path)[3]
-        except SubAgentTranscriptStoreError as exc:
-            if exc.code == "subagent_transcript_not_found":
-                return None
-            raise
+        descriptor = self.describe_attempt(identity)
+        if descriptor is None:
+            return None
+        receipt = descriptor.receipt
         transcript = self.read(receipt.transcript_ref)
         if transcript.identity != identity:
             raise _corrupt("subagent identity lookup resolved a different attempt")
         return self.verify(receipt)
+
+    def describe_attempt(
+        self,
+        identity: SubAgentAttemptIdentity,
+    ) -> SubAgentAttemptDescriptor | None:
+        if not isinstance(identity, SubAgentAttemptIdentity):
+            raise TypeError("identity must be SubAgentAttemptIdentity")
+        descriptor = self._describe_paths(
+            self._bundle_path(identity.parent_run_id, identity.transcript_id),
+            self._metadata_path(identity.parent_run_id, identity.transcript_id),
+        )
+        if descriptor is not None and descriptor.identity != identity:
+            raise _corrupt(
+                "subagent attempt descriptor resolved a different attempt",
+                code="subagent_transcript_identity_mismatch",
+            )
+        return descriptor
+
+    def describe_ref(self, ref: str) -> SubAgentAttemptDescriptor | None:
+        kind = next(
+            (
+                candidate
+                for candidate in (
+                    "subagent-transcript",
+                    "subagent-context",
+                    "subagent-output",
+                )
+                if isinstance(ref, str) and ref.startswith(f"{candidate}://")
+            ),
+            None,
+        )
+        if kind is None:
+            raise _store_error(
+                "subagent_transcript_identity_mismatch",
+                "subagent evidence ref is invalid",
+                ref=str(ref),
+            )
+        _, parent, transcript_id = _parse_ref(ref, kind)
+        descriptor = self._describe_paths(
+            self._bundle_path(parent, transcript_id),
+            self._metadata_path(parent, transcript_id),
+        )
+        if descriptor is None:
+            return None
+        expected = {
+            "subagent-transcript": descriptor.receipt.transcript_ref,
+            "subagent-context": descriptor.receipt.context_ref,
+            "subagent-output": descriptor.receipt.output_ref,
+        }[kind]
+        if ref != expected:
+            raise _corrupt(
+                "subagent evidence ref does not match its descriptor",
+                code="subagent_transcript_identity_mismatch",
+            )
+        return descriptor
 
     def _read_bundle(
         self,
@@ -339,6 +433,13 @@ class FilesystemSubAgentTranscriptStore:
         SubAgentTranscriptReceipt,
     ]:
         try:
+            descriptor = self._describe_paths(path, self._metadata_path_from_bundle(path))
+            if descriptor is None:
+                raise _store_error(
+                    "subagent_transcript_not_found",
+                    "subagent transcript bundle was not found",
+                    path=str(path),
+                )
             reject_link_chain(
                 path,
                 root=self.root,
@@ -370,6 +471,11 @@ class FilesystemSubAgentTranscriptStore:
                 identity=path.name,
                 role="subagent transcript read",
             )
+            if (
+                len(content) != descriptor.bundle_size_bytes
+                or f"sha256:{sha256(content).hexdigest()}" != descriptor.bundle_checksum
+            ):
+                raise _corrupt("subagent transcript bundle does not match trusted metadata")
             payload = json_loads(content.decode("utf-8"))
             if not isinstance(payload, Mapping) or set(payload) != {
                 "schema_version", "context", "output", "transcript", "receipt"
@@ -389,6 +495,8 @@ class FilesystemSubAgentTranscriptStore:
                 )
             if not _receipt_matches_bundle(receipt, context, output, transcript):
                 raise _corrupt("subagent receipt checksum or ref mismatch")
+            if receipt != descriptor.receipt or output.artifact_refs != descriptor.artifact_refs:
+                raise _corrupt("subagent bundle identity does not match trusted metadata")
             self._enforce_sizes(context, output, transcript, content)
             return context, output, transcript, receipt
         except SubAgentTranscriptStoreError:
@@ -401,6 +509,149 @@ class FilesystemSubAgentTranscriptStore:
             ) from exc
         except (ArtifactStoreMetadataError, HarnessValidationError, UnicodeError, ValueError, OSError) as exc:
             raise _corrupt("subagent transcript bundle is corrupt") from exc
+
+    def _describe_paths(
+        self,
+        bundle_path: Path,
+        metadata_path: Path,
+    ) -> SubAgentAttemptDescriptor | None:
+        try:
+            bundle_stat = self._regular_stat_or_none(bundle_path, role="bundle metadata")
+            metadata_stat = self._regular_stat_or_none(
+                metadata_path,
+                role="attempt descriptor",
+            )
+            if bundle_stat is None and metadata_stat is None:
+                return None
+            if bundle_stat is None or metadata_stat is None:
+                raise SubAgentAttemptMetadataIncompleteError(
+                    "subagent attempt has incomplete immutable metadata",
+                    code="subagent_attempt_metadata_incomplete",
+                    details={
+                        "bundle_present": bundle_stat is not None,
+                        "metadata_present": metadata_stat is not None,
+                    },
+                )
+            if metadata_stat.st_size > self.max_transcript_bytes:
+                raise _corrupt("subagent attempt descriptor exceeds size limit")
+            with metadata_path.open("rb") as handle:
+                opened = os.fstat(handle.fileno())
+                if not os.path.samestat(metadata_stat, opened):
+                    raise _corrupt("subagent attempt descriptor changed while opening")
+                content = handle.read(self.max_transcript_bytes + 1)
+            if len(content) > self.max_transcript_bytes:
+                raise _corrupt("subagent attempt descriptor exceeds size limit")
+            reject_link_chain(
+                metadata_path,
+                root=self.root,
+                identity=metadata_path.name,
+                role="subagent attempt descriptor read",
+            )
+            after = os.lstat(metadata_path)
+            if not os.path.samestat(metadata_stat, after):
+                raise _corrupt("subagent attempt descriptor changed while reading")
+            payload = json_loads(content.decode("utf-8"))
+            if not isinstance(payload, Mapping):
+                raise _corrupt("subagent attempt descriptor must be an object")
+            descriptor = SubAgentAttemptDescriptor.from_dict(payload)
+            if descriptor.schema_version != SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1:
+                raise _corrupt("subagent attempt descriptor schema is unsupported")
+            if descriptor.bundle_size_bytes != bundle_stat.st_size:
+                raise _corrupt("subagent bundle size does not match trusted metadata")
+            expected_bundle = self._bundle_path(
+                descriptor.identity.parent_run_id,
+                descriptor.identity.transcript_id,
+            )
+            expected_metadata = self._metadata_path(
+                descriptor.identity.parent_run_id,
+                descriptor.identity.transcript_id,
+            )
+            if expected_bundle != bundle_path or expected_metadata != metadata_path:
+                raise _corrupt(
+                    "subagent attempt descriptor path identity mismatch",
+                    code="subagent_transcript_identity_mismatch",
+                )
+            reject_link_chain(
+                bundle_path,
+                root=self.root,
+                identity=bundle_path.name,
+                role="subagent bundle metadata",
+            )
+            bundle_after = os.lstat(bundle_path)
+            if not os.path.samestat(bundle_stat, bundle_after):
+                raise _corrupt("subagent bundle changed during metadata inspection")
+            return descriptor
+        except SubAgentTranscriptStoreError:
+            raise
+        except FileNotFoundError as exc:
+            raise SubAgentAttemptMetadataIncompleteError(
+                "subagent attempt metadata changed during inspection",
+                code="subagent_attempt_metadata_incomplete",
+            ) from exc
+        except (ArtifactStoreMetadataError, HarnessValidationError, UnicodeError, ValueError, OSError) as exc:
+            raise _corrupt("subagent attempt descriptor is corrupt") from exc
+
+    def _regular_stat_or_none(
+        self,
+        path: Path,
+        *,
+        role: str,
+    ) -> os.stat_result | None:
+        try:
+            reject_link_chain(
+                path,
+                root=self.root,
+                identity=path.name,
+                role=role,
+            )
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        if is_link_or_reparse_point(info) or not stat.S_ISREG(info.st_mode):
+            raise _corrupt(f"subagent {role} is not a regular file")
+        return info
+
+    def _new_receipt(
+        self,
+        context: SubAgentContextEvidence,
+        output: SubAgentOutputDocument,
+        transcript: SubAgentTranscript,
+    ) -> SubAgentTranscriptReceipt:
+        identity = transcript.identity
+        return SubAgentTranscriptReceipt(
+            transcript_ref=transcript.ref,
+            transcript_checksum=transcript.transcript_checksum,
+            transcript_id=transcript.transcript_id,
+            invocation_id=identity.invocation_id,
+            parent_run_id=identity.parent_run_id,
+            child_run_id=identity.child_run_id,
+            task_instance_id=identity.task_instance_id,
+            attempt=identity.attempt,
+            context_ref=_context_ref(identity, context.schema_version),
+            context_checksum=context.context_checksum,
+            output_ref=output.ref,
+            output_checksum=output.output_checksum,
+            storage_revision=f"bundle:{identity.transcript_id}:v3",
+            committed_at=self._clock(),
+            identity_checksum=identity.identity_checksum,
+            schema_version=SUBAGENT_RECEIPT_SCHEMA_V3,
+        )
+
+    @staticmethod
+    def _bundle_content(
+        context: SubAgentContextEvidence,
+        output: SubAgentOutputDocument,
+        transcript: SubAgentTranscript,
+        receipt: SubAgentTranscriptReceipt,
+    ) -> bytes:
+        payload = {
+            "schema_version": _bundle_schema_for_identity(transcript.identity),
+            "context": context.to_dict(),
+            "output": output.to_dict(),
+            "transcript": transcript.to_dict(),
+            "receipt": receipt.to_dict(),
+        }
+        return (stable_json_dumps(payload) + "\n").encode("utf-8")
 
     def _enforce_sizes(
         self,
@@ -455,6 +706,29 @@ class FilesystemSubAgentTranscriptStore:
             self._parent_dir(parent),
             f"{transcript}.json",
             field="subagent transcript bundle path",
+        )
+
+    def _metadata_path(self, parent_run_id: str, transcript_id: str) -> Path:
+        bundle = self._bundle_path(parent_run_id, transcript_id)
+        return resolve_artifact_descendant(
+            bundle.parent,
+            f"{transcript_id}.meta",
+            field="subagent attempt descriptor path",
+        )
+
+    def _metadata_path_from_bundle(self, bundle_path: Path) -> Path:
+        return resolve_artifact_descendant(
+            bundle_path.parent,
+            f"{bundle_path.stem}.meta",
+            field="subagent attempt descriptor path",
+        )
+
+    def _lock_path(self, parent_run_id: str, transcript_id: str) -> Path:
+        bundle = self._bundle_path(parent_run_id, transcript_id)
+        return resolve_artifact_descendant(
+            bundle.parent,
+            f"_locks/{transcript_id}.lock",
+            field="subagent attempt commit lock path",
         )
 
     def _observe(

@@ -10,7 +10,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from threading import RLock
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from framework.harness.ref_results import HarnessResultRefAuthority
 
 from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.context.models import ContextEnvelope
@@ -250,6 +253,7 @@ class TaskPlanResultVerifier:
         ref_policy: RefAccessPolicy | None = None,
         ref_resolution: RefResolutionPort | None = None,
         ref_descriptors: Mapping[str, RefDescriptor] | None = None,
+        result_ref_authority: HarnessResultRefAuthority | None = None,
     ) -> None:
         self._gates = gates or TaskPlanGateRegistry()
         if not isinstance(self._gates, TaskPlanGateEvaluatorPort):
@@ -280,6 +284,14 @@ class TaskPlanResultVerifier:
         self._ref_policy = ref_policy
         self._ref_resolution = ref_resolution
         self._ref_descriptors = normalized_descriptors
+        if result_ref_authority is not None:
+            from framework.harness.ref_results import HarnessResultRefAuthority
+
+            if not isinstance(result_ref_authority, HarnessResultRefAuthority) or result_ref_authority.transcript_store is not transcript_store:
+                raise TypeError("result_ref_authority must own this transcript store")
+            if ref_authority is not None:
+                raise ValueError("static and execution-bound result authority cannot be combined")
+        self.result_ref_authority = result_ref_authority
 
     @property
     def registered_gate_refs(self) -> tuple[str, ...]:
@@ -342,6 +354,8 @@ class TaskPlanResultVerifier:
             execution_identity=request.execution_identity,
         )
         if receipt is None:
+            if self.result_ref_authority is not None:
+                raise HarnessValidationError("result authority requires an admitted SubAgent attempt", code="REF_SNAPSHOT_MISSING")
             self._authorize_result_ref(
                 result.candidate_result_ref,
                 expected_checksum=result.candidate_result_ref,
@@ -459,9 +473,16 @@ class TaskPlanResultVerifier:
             expected_checksum=receipt.transcript_checksum,
         )
         self._authorize_result_refs(result.artifacts)
-        self._transcript_store.verify(receipt)
-        transcript = self._transcript_store.read(receipt.transcript_ref)
-        output = self._transcript_store.read_output(receipt.output_ref)
+        store = self._transcript_store
+        if self.result_ref_authority is not None:
+            store = authorized_task_result_store(
+                self.result_ref_authority, plan=plan, task=task,
+                instance=instance, execution_identity=execution_identity,
+            )
+            store.authorize_artifacts(result.artifacts)
+        store.verify(receipt)
+        transcript = store.read(receipt.transcript_ref)
+        output = store.read_output(receipt.output_ref)
         identity = transcript.identity
         if (
             not _subagent_identity_matches_plan(identity, plan, task, instance)
@@ -521,6 +542,23 @@ class TaskPlanResultVerifier:
             expected_kind=REF_KIND_RESULT,
             expected_checksum=expected_checksum,
         )
+
+
+def authorized_task_result_store(
+    authority: HarnessResultRefAuthority, *, plan: ValidatedTaskPlan,
+    task: ResolvedTaskSpec, instance: TaskInstance,
+    execution_identity: GraphExecutionIdentity,
+):
+    _require_plan_task_instance_identity(plan, task, instance)
+    identity = authority.accepted_attempt(
+        execution=execution_identity, stage_id=plan.stage_id,
+        stage_binding_checksum=plan.stage_binding_checksum,
+        task_instance_id=instance.task_instance_id, attempt=instance.attempt,
+        task_policy_checksum=plan.policy_checksum,
+    )
+    if not _subagent_identity_matches_plan(identity, plan, task, instance) or not _subagent_identity_matches_execution(identity, execution_identity):
+        raise HarnessValidationError("result authority differs from accepted TaskPlan", code="REF_SNAPSHOT_BINDING_MISMATCH")
+    return authority.for_attempt(identity)
 
 
 def _verify_artifact_references(

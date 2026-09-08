@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from framework.harness.ref_results import HarnessResultRefAuthority
 
 from framework.harness.context.models import ContextEnvelope
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -47,11 +50,18 @@ class SubAgentRuntime:
             DEFAULT_SUBAGENT_TRANSCRIPT_OBSERVATION_SINK
         ),
         runtime_event_sink: Any | None = None,
+        result_ref_authority: HarnessResultRefAuthority | None = None,
     ) -> None:
         if not isinstance(transcript_store, SubAgentTranscriptStorePort):
             raise TypeError("transcript_store must implement SubAgentTranscriptStorePort")
         self.workers = dict(workers)
         self.transcript_store = transcript_store
+        if result_ref_authority is not None:
+            from framework.harness.ref_results import HarnessResultRefAuthority
+
+            if not isinstance(result_ref_authority, HarnessResultRefAuthority) or result_ref_authority.transcript_store is not transcript_store:
+                raise TypeError("result_ref_authority must own this transcript store")
+        self.result_ref_authority = result_ref_authority
         self.gates = gates or FakeSubAgentGateSuite()
         if observation_sink is not None and not isinstance(
             observation_sink,
@@ -186,7 +196,7 @@ class SubAgentRuntime:
         final_result = _with_receipt(base_result, receipt)
         transcript_result = self.gates.transcript.evaluate(
             final_result,
-            store=self.transcript_store,
+            store=self._store_for(identity),
             identity=identity,
         )
         if not transcript_result.passed:
@@ -234,12 +244,13 @@ class SubAgentRuntime:
         return self._recover(subagent_attempt_identity(invocation))
 
     def _recover(self, identity: SubAgentAttemptIdentity) -> SubAgentResult | None:
-        receipt = self.transcript_store.find_by_identity(identity)
+        store = self._store_for(identity)
+        receipt = store.find_by_identity(identity)
         if receipt is None:
             return None
-        self.transcript_store.verify(receipt)
-        output = self.transcript_store.read_output(receipt.output_ref)
-        transcript = self.transcript_store.read(receipt.transcript_ref)
+        store.verify(receipt)
+        output = store.read_output(receipt.output_ref)
+        transcript = store.read(receipt.transcript_ref)
         record_subagent_transcript_observation(
             self._observation_sink,
             SubAgentTranscriptObservation.from_identity(
@@ -346,8 +357,14 @@ class SubAgentRuntime:
             observed_at=invocation.observed_at,
             schema_version=schemas.transcript,
         )
-        receipt = self.transcript_store.write(context, output, transcript)
-        return self.transcript_store.verify(receipt)
+        store = self._store_for(identity)
+        receipt = store.write(context, output, transcript)
+        return store.verify(receipt)
+
+    def _store_for(self, identity: SubAgentAttemptIdentity) -> SubAgentTranscriptStorePort:
+        if self.result_ref_authority is None:
+            return self.transcript_store
+        return self.result_ref_authority.for_attempt(identity, allow_registration=True)
 
 
 def subagent_attempt_identity(

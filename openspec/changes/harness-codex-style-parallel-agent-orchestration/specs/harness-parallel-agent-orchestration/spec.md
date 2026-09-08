@@ -281,6 +281,27 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **THEN** the orphan artifact MUST NOT grant reference access
 - **AND** a missing or corrupt artifact for an already committed grant MUST fail closed rather than be repaired from current mutable policy
 
+#### Scenario: A result bundle commits before its authorization event
+
+- **WHEN** the trusted SubAgent writer committed its immutable attempt metadata and bundle but result-grant publication did not commit
+- **THEN** online Harness recovery MAY issue the missing result grant from the original admitted child identity and metadata before reading bundle payload
+- **AND** metadata MUST pin the receipt, artifact refs, full attempt identity and bundle checksum/size without containing business output
+- **AND** a missing metadata or bundle file MUST fail closed without worker reexecution or automatic metadata reconstruction from payload
+
+#### Scenario: Materialized results extend an attempt without rewriting its authority
+
+- **WHEN** the trusted materializer persists the verified SubAgent result
+- **THEN** Harness MUST append a separate materialized-result grant parented by the same attempt's original result grant
+- **AND** artifact run, tenant, graph, node, attempt ownership and checksum MUST come from trusted catalog metadata
+- **AND** the original input and result grants MUST remain unchanged
+
+#### Scenario: Offline replay reads an accepted child result
+
+- **WHEN** replay verifies a recorded SubAgent result
+- **THEN** it MUST select the child grant from the accepted plan/task and the caller-supplied recorded Graph execution identity before reading context, output or transcript payload
+- **AND** replay MUST NOT infer caller authority from a candidate-selected result ref, issue grants, publish events or invoke live workers
+- **AND** successful result artifact refs MUST equal the exact union of original worker refs and committed materialized-result refs
+
 #### Scenario: Artifact authority is resolved before payload access
 
 - **WHEN** Harness requests an artifact descriptor for reference authorization

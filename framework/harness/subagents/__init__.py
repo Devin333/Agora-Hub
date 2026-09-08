@@ -85,6 +85,12 @@ from framework.harness.subagents.transcript import (
     subagent_context_ref,
     subagent_evidence_schemas,
 )
+from framework.harness.subagents.transcript_metadata import (
+    SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1,
+    SubAgentAttemptDescriptor,
+    SubAgentAttemptMetadataIncompleteError,
+    SubAgentTranscriptDescriptorPort,
+)
 
 __all__ = [
     "FORBIDDEN_SUBAGENT_CONTEXT_KEYS",
@@ -94,6 +100,7 @@ __all__ = [
     "FakeSubAgentRuntime",
     "FakeSubAgentTranscriptStore",
     "SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3",
+    "SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1",
     "SUBAGENT_BUNDLE_SCHEMA_V3",
     "SUBAGENT_CONTEXT_SCHEMA_V3",
     "SUBAGENT_INVOCATION_SCHEMA_V3",
@@ -141,6 +148,8 @@ __all__ = [
     "SubAgentToolPolicy",
     "SubAgentTranscript",
     "SubAgentAttemptIdentity",
+    "SubAgentAttemptDescriptor",
+    "SubAgentAttemptMetadataIncompleteError",
     "SubAgentContextEvidence",
     "SubAgentEvidenceSchemas",
     "SubAgentOutputDocument",
@@ -149,6 +158,7 @@ __all__ = [
     "SubAgentTranscriptReceipt",
     "SubAgentTranscriptStoreError",
     "SubAgentTranscriptStorePort",
+    "SubAgentTranscriptDescriptorPort",
     "SubAgentTranscriptGate",
     "SubAgentTranscriptObservation",
     "SubAgentTranscriptObservationSink",

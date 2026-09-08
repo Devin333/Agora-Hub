@@ -501,6 +501,19 @@ class ResearchAnalysisTaskPlanStageWorker:
                 code="research_task_plan_ref_authority_required",
             )
         self._ref_admission_service = ref_admission_service
+        if not allow_test_store:
+            from framework.harness.ref_results import HarnessResultRefAuthority
+
+            result_authority = getattr(result_verifier, "result_ref_authority", None)
+            if (
+                not isinstance(result_authority, HarnessResultRefAuthority)
+                or not result_authority.is_durable
+                or result_authority.store is not ref_admission_service.store
+            ):
+                raise HarnessValidationError(
+                    "Research production TaskPlan requires shared durable result authority",
+                    code="research_task_plan_result_authority_required",
+                )
         self._stage_binding = stage_binding
         self._accepted_at = str(accepted_at)
         self._policy = actual_policy

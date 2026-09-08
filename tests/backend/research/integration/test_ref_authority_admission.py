@@ -27,11 +27,13 @@ class _RecordingAdmission(HarnessRefAdmissionService):
         return self.snapshot
 
 
-def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path):
+@pytest.mark.parametrize("authorize_results", (False, True))
+def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path, authorize_results):
     store, events = _store(tmp_path)
     admission = _RecordingAdmission(store)
     factory = _DynamicTaskPlanFactory(
         ref_admission_service=admission, transcript_root=tmp_path / "transcripts",
+        authorize_results=authorize_results,
     )
     result = _analyze(
         "research-ref-authority", dynamic=True,
@@ -46,7 +48,7 @@ def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path)
         stream_id=f"run:{root.run_id}", tenant_id="control",
         event_types=frozenset({REF_SNAPSHOT_EVENT_TYPE}),
     )).events
-    assert len(committed) == 4
+    assert len(committed) == (7 if authorize_results else 4)
     reopened, _ = _store(tmp_path)
     restored_admission = HarnessRefAdmissionService(reopened)
     stage = factory.stage_workers[0]
@@ -91,4 +93,10 @@ def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path)
     assert error.value.code == "REF_INPUT_CHECKSUM_MISMATCH"
     assert factory.outline_workers[0].calls == calls_before
     assert sum(len(worker.calls) for worker in factory.subagent_workers[0].values()) == child_calls_before
-    assert events.get_stream_high_watermark(f"run:{root.run_id}", tenant_id="control") == 4
+    assert events.get_stream_high_watermark(f"run:{root.run_id}", tenant_id="control") == len(committed)
+    if authorize_results:
+        results = tuple(grant for grant in grants if grant.phase is RefSnapshotPhase.RESULT_ACCEPTANCE)
+        assert len(results) == 3
+        assert {grant.parent_snapshot_ref for grant in results} == {grant.snapshot_ref for grant in children}
+        assert all(grant.policy.shared_read_only_refs == () and grant.policy.writable_refs == () for grant in results)
+        assert all({item.artifact_type for item in grant.descriptors} == {"subagent_context", "subagent_output", "subagent_transcript"} for grant in results)

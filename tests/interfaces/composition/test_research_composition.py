@@ -541,6 +541,17 @@ def test_valid_settings_compose_full_durable_production_graph(
                     )
                 assert error.value.code == "research_task_plan_ref_authority_required"
         configured_verifier = dynamic_stage._runner.result_verifier
+        assert configured_verifier.result_ref_authority.store is admission.store
+        assert configured_verifier.result_ref_authority.is_durable is True
+        def stage_without_result_authority(**kwargs):
+            kwargs["result_verifier"].result_ref_authority = None
+            return stage_worker_type(**kwargs)
+
+        with monkeypatch.context() as scope:
+            scope.setattr(research_composition, "ResearchAnalysisTaskPlanStageWorker", stage_without_result_authority)
+            with pytest.raises(HarnessValidationError) as error:
+                runtime.dynamic_task_plan_runner_factory(workspace=candidate_workspace, dependencies=object())
+            assert error.value.code == "research_task_plan_result_authority_required"
         while hasattr(configured_verifier, "_verifier"):
             configured_verifier = configured_verifier._verifier
         configured_verifier = configured_verifier._artifact_reference_verifier
@@ -763,6 +774,9 @@ def test_enforce_mode_composes_real_graph_result_runtime(
         child_verifier = dynamic_stage._runner.result_verifier
         assert isinstance(child_verifier, ResearchTaskPlanResultMaterializer)
         assert child_verifier._adapter._materializer is materializer
+        assert child_verifier.result_ref_authority is child_verifier._adapter.result_ref_authority
+        assert child_verifier.result_ref_authority is child_verifier._verifier.result_ref_authority
+        assert child_verifier.result_ref_authority._artifacts is materializer._catalog
     finally:
         composition.close()
 

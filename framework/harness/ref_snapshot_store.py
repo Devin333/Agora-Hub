@@ -108,17 +108,18 @@ class DurableRefAuthoritySnapshotStore:
         if event is None:
             raise _error("reference snapshot is not durably committed", "REF_SNAPSHOT_MISSING")
         snapshot = self._load(event, run_id)
-        if snapshot.parent_snapshot_ref is not None:
-            parent_event = self._find_event(events, "snapshot_ref", snapshot.parent_snapshot_ref)
-            if parent_event is None or parent_event.stream_sequence >= event.stream_sequence:
+        child, child_event = snapshot, event
+        for _ in range(len(RefSnapshotPhase) - 1):
+            if child.parent_snapshot_ref is None:
+                return snapshot
+            parent_event = self._find_event(events, "snapshot_ref", child.parent_snapshot_ref)
+            if parent_event is None or parent_event.stream_sequence >= child_event.stream_sequence:
                 raise _error("reference grant has no prior committed parent", "REF_SNAPSHOT_PARENT_MISSING")
             parent = self._load(parent_event, run_id)
-            snapshot.validate_parent(parent)
-            if parent.parent_snapshot_ref is not None:
-                root_event = self._find_event(events, "snapshot_ref", parent.parent_snapshot_ref)
-                if root_event is None or root_event.stream_sequence >= parent_event.stream_sequence:
-                    raise _error("child grant has no prior admission snapshot", "REF_SNAPSHOT_PARENT_MISSING")
-                parent.validate_parent(self._load(root_event, run_id))
+            child.validate_parent(parent)
+            child, child_event = parent, parent_event
+        if child.phase is not RefSnapshotPhase.INPUT_ADMISSION or child.parent_snapshot_ref is not None:
+            raise _error("reference grant exceeds its bounded parent chain")
         return snapshot
 
     def find(self, *, run_id: str, binding_key: str) -> RefAuthoritySnapshot | None:

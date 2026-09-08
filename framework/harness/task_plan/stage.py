@@ -1650,7 +1650,12 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             if callable(patch_reader)
             else ()
         )
-        return TaskPlanReplayReducer().replay(
+        return TaskPlanReplayReducer(
+            transcript_store=getattr(self.result_verifier, "transcript_store", None),
+            artifact_reference_verifier=getattr(self.result_verifier, "artifact_reference_verifier", None),
+            result_ref_authority=getattr(self.result_verifier, "result_ref_authority", None),
+            execution_identity=request.execution_identity,
+        ).replay(
             plan_history,
             events,
             results=results,

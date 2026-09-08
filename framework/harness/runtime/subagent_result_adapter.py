@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
+
+if TYPE_CHECKING:
+    from framework.harness.ref_results import HarnessResultRefAuthority
 
 from framework.events.canonical import checksum_for, thaw_canonical_json
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -264,6 +267,7 @@ class HarnessSubAgentResultAdapter:
         graph_result_runtime: HarnessGraphResultRuntime,
         transcript_store: SubAgentTranscriptStorePort,
         clock=utc_now,
+        result_ref_authority: HarnessResultRefAuthority | None = None,
     ) -> None:
         if not isinstance(materializer, ResultMaterializer):
             raise TypeError("materializer must be ResultMaterializer")
@@ -281,6 +285,21 @@ class HarnessSubAgentResultAdapter:
         self._graph_result_runtime = graph_result_runtime
         self._transcript_store = transcript_store
         self._clock = clock
+        if result_ref_authority is not None:
+            from framework.harness.ref_results import HarnessResultRefAuthority
+
+            if not isinstance(result_ref_authority, HarnessResultRefAuthority) or result_ref_authority.transcript_store is not transcript_store:
+                raise TypeError("result_ref_authority must own this transcript store")
+        self.result_ref_authority = result_ref_authority
+
+    def _store_for(self, identity: SubAgentAttemptIdentity) -> SubAgentTranscriptStorePort:
+        if self.result_ref_authority is None:
+            return self._transcript_store
+        return self.result_ref_authority.for_attempt(identity)
+
+    def _admit_materialization(self, identity: SubAgentAttemptIdentity, envelope: NodeResultEnvelope) -> None:
+        if self.result_ref_authority is not None:
+            self.result_ref_authority.admit_materialized_result(identity, envelope)
 
     def binding_for_activity(
         self,
@@ -427,6 +446,7 @@ class HarnessSubAgentResultAdapter:
             request,
             budget=budget,
         )
+        self._admit_materialization(bundle.identity, materialization.envelope)
         return HarnessSubAgentMaterializationResult(
             result=result,
             bundle=bundle,
@@ -504,6 +524,7 @@ class HarnessSubAgentResultAdapter:
             request,
             budget=budget,
         )
+        self._admit_materialization(bundle.identity, materialization.envelope)
         return HarnessSubAgentMaterializationResult(
             result=result,
             bundle=bundle,
@@ -526,7 +547,7 @@ class HarnessSubAgentResultAdapter:
         """Build a result request from the transcript store without live work."""
 
         identity = subagent_attempt_identity(invocation)
-        receipt = self._transcript_store.find_by_identity(identity)
+        receipt = self._store_for(identity).find_by_identity(identity)
         if receipt is None:
             raise HarnessValidationError(
                 "SubAgent result recovery requires a committed transcript",
@@ -616,9 +637,10 @@ class HarnessSubAgentResultAdapter:
         handoff: SubAgentHandoff | None,
         bundle_schema: str,
     ) -> VerifiedSubAgentMaterializedBundle:
+        store = self._store_for(identity)
         gate = SubAgentTranscriptGate().evaluate(
             result,
-            store=self._transcript_store,
+            store=store,
             identity=identity,
         )
         if not gate.passed or result.transcript_receipt is None:
@@ -627,10 +649,10 @@ class HarnessSubAgentResultAdapter:
                 code=gate.reason_code,
                 details={"gate": gate.gate_name},
             )
-        receipt = self._transcript_store.verify(result.transcript_receipt)
-        context = self._transcript_store.read_context(receipt.context_ref)
-        output = self._transcript_store.read_output(receipt.output_ref)
-        transcript = self._transcript_store.read(receipt.transcript_ref)
+        receipt = store.verify(result.transcript_receipt)
+        context = store.read_context(receipt.context_ref)
+        output = store.read_output(receipt.output_ref)
+        transcript = store.read(receipt.transcript_ref)
         _verify_source_result(
             result,
             identity=identity,
@@ -654,9 +676,10 @@ class HarnessSubAgentResultAdapter:
         *,
         identity: SubAgentAttemptIdentity,
     ) -> SubAgentResult:
-        verified = self._transcript_store.verify(receipt)
-        output = self._transcript_store.read_output(verified.output_ref)
-        transcript = self._transcript_store.read(verified.transcript_ref)
+        store = self._store_for(identity)
+        verified = store.verify(receipt)
+        output = store.read_output(verified.output_ref)
+        transcript = store.read(verified.transcript_ref)
         if output.identity != identity or transcript.identity != identity:
             raise HarnessValidationError(
                 "recovered SubAgent transcript belongs to another attempt",
@@ -1006,7 +1029,7 @@ def _node_status(status: SubAgentStatus) -> NodeResultStatus:
 def subagent_result_attempt_id(identity: SubAgentAttemptIdentity) -> str:
     if not isinstance(identity, SubAgentAttemptIdentity):
         raise TypeError("identity must be SubAgentAttemptIdentity")
-    return f"subagent_{identity.identity_checksum.removeprefix('sha256:')}"
+    return identity.result_attempt_id
 
 
 def _validate_activity_identity(

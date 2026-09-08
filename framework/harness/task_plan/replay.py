@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from framework.harness.ref_results import HarnessResultRefAuthority
 
 from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.harness.subagents.transcript import SubAgentTranscriptStorePort
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
@@ -340,6 +344,8 @@ class TaskPlanReplayReducer:
         transcript_store: SubAgentTranscriptStorePort | None = None,
         *,
         artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
+        result_ref_authority: HarnessResultRefAuthority | None = None,
+        execution_identity: GraphExecutionIdentity | None = None,
     ) -> None:
         if transcript_store is not None and not isinstance(
             transcript_store,
@@ -356,6 +362,15 @@ class TaskPlanReplayReducer:
                 "ArtifactReferenceVerifierPort"
             )
         self._artifact_reference_verifier = artifact_reference_verifier
+        if result_ref_authority is not None:
+            from framework.harness.ref_results import HarnessResultRefAuthority
+
+            if not isinstance(result_ref_authority, HarnessResultRefAuthority) or result_ref_authority.transcript_store is not transcript_store:
+                raise TypeError("result_ref_authority must own this transcript store")
+        self._result_ref_authority = result_ref_authority
+        if result_ref_authority is not None and not isinstance(execution_identity, GraphExecutionIdentity):
+            raise HarnessValidationError("authorized replay requires its recorded Graph activity", code="task_plan_execution_identity_required")
+        self._execution_identity = execution_identity
 
     def reduce(
         self,
@@ -579,6 +594,8 @@ class TaskPlanReplayReducer:
                     task_plan,
                     transcript_store=self._transcript_store,
                     artifact_reference_verifier=self._artifact_reference_verifier,
+                    result_ref_authority=self._result_ref_authority,
+                    execution_identity=self._execution_identity,
                 )
                 pending_results[(instance.task_instance_id, instance.attempt, task_plan.version)] = result
             elif event.event_type in _TASK_TERMINAL_EVENTS:
@@ -2301,6 +2318,8 @@ def _result_for_event(
     *,
     transcript_store: SubAgentTranscriptStorePort | None = None,
     artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
+    result_ref_authority: HarnessResultRefAuthority | None = None,
+    execution_identity: GraphExecutionIdentity | None = None,
 ) -> TaskResultRecord:
     assert event.task_instance_id is not None
     assert event.attempt is not None
@@ -2343,6 +2362,9 @@ def _result_for_event(
         definition=definition,
         transcript_store=transcript_store,
         artifact_reference_verifier=artifact_reference_verifier,
+        result_ref_authority=result_ref_authority,
+        execution_identity=execution_identity,
+        plan=plan,
     )
     return result
 
@@ -2353,6 +2375,9 @@ def _verify_replay_subagent_evidence(
     definition: Any,
     transcript_store: SubAgentTranscriptStorePort | None,
     artifact_reference_verifier: ArtifactReferenceVerifierPort | None,
+    result_ref_authority: HarnessResultRefAuthority | None,
+    execution_identity: GraphExecutionIdentity | None,
+    plan: ValidatedTaskPlan,
 ) -> None:
     if definition.subagent_id is None:
         return
@@ -2372,6 +2397,20 @@ def _verify_replay_subagent_evidence(
             "TaskPlan replay requires a subagent transcript store",
             code="task_plan_subagent_transcript_store_required",
         )
+    if result_ref_authority is not None:
+        from framework.harness.task_plan.verification import authorized_task_result_store
+
+        if execution_identity is None:
+            raise HarnessValidationError("authorized replay requires its recorded Graph activity", code="task_plan_execution_identity_required")
+        transcript_store = authorized_task_result_store(
+            result_ref_authority, plan=plan, task=definition,
+            instance=task_instance_for_attempt(plan, result.task_id, result.attempt, task_instance_id=result.task_instance_id),
+            execution_identity=execution_identity,
+        )
+        if result.status is TaskLifecycle.SUCCEEDED:
+            transcript_store.authorize_artifacts(result.output_refs, include_materialized=True)
+        else:
+            transcript_store.authorize_original_artifacts()
     transcript = transcript_store.read(result.transcript_ref)
     output = transcript_store.read_output(result.subagent_output_ref)
     stored = transcript_store.find_by_identity(transcript.identity)
@@ -2388,6 +2427,7 @@ def _verify_replay_subagent_evidence(
         or output.output_checksum != result.subagent_output_checksum
         or (
             result.status is TaskLifecycle.SUCCEEDED
+            and result_ref_authority is None
             and output.artifact_refs != result.output_refs
         )
         or output.identity != transcript.identity
@@ -2415,7 +2455,7 @@ def _verify_replay_subagent_evidence(
         )
     transcript_store.verify(stored)
     _verify_replay_artifact_references(
-        output.artifact_refs,
+        result.output_refs if result_ref_authority is not None and result.status is TaskLifecycle.SUCCEEDED else output.artifact_refs,
         expected_run_id=result.run_id,
         verifier=artifact_reference_verifier,
     )

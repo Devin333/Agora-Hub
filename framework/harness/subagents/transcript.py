@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 import re
-from typing import Any, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from framework.events.canonical import checksum_for, normalize_canonical_json
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -17,6 +17,9 @@ from framework.harness.graph.versioning import (
 from framework.shared.json import stable_json_dumps, to_jsonable
 from framework.shared.redaction import redact_sensitive_values
 from framework.shared.time import format_datetime, parse_datetime, utc_now
+
+if TYPE_CHECKING:
+    from framework.harness.subagents.transcript_metadata import SubAgentAttemptDescriptor
 
 
 SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3 = "newsroom.subagent-attempt-identity/v3"
@@ -240,6 +243,10 @@ class SubAgentAttemptIdentity:
     @property
     def transcript_id(self) -> str:
         return f"sat_{self.identity_checksum.removeprefix('sha256:')}"
+
+    @property
+    def result_attempt_id(self) -> str:
+        return f"subagent_{self.identity_checksum.removeprefix('sha256:')}"
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Self:
@@ -570,6 +577,7 @@ class FakeSubAgentTranscriptStore:
         self.outputs: dict[str, SubAgentOutputDocument] = {}
         self.transcripts: dict[str, SubAgentTranscript] = {}
         self.receipts: dict[str, SubAgentTranscriptReceipt] = {}
+        self.descriptors: dict[str, SubAgentAttemptDescriptor] = {}
 
     def write(self, context: SubAgentContextEvidence, output: SubAgentOutputDocument, transcript: SubAgentTranscript) -> SubAgentTranscriptReceipt:
         _validate_bundle_identity(context, output, transcript)
@@ -593,6 +601,27 @@ class FakeSubAgentTranscriptStore:
         self.outputs[receipt.output_ref] = output
         self.transcripts[receipt.transcript_ref] = transcript
         self.receipts[receipt.transcript_ref] = receipt
+        from framework.harness.subagents.transcript_metadata import descriptor_for_bundle
+
+        bundle = (
+            stable_json_dumps(
+                {
+                    "schema_version": _bundle_schema_for_identity(identity),
+                    "context": context.to_dict(),
+                    "output": output.to_dict(),
+                    "transcript": transcript.to_dict(),
+                    "receipt": receipt.to_dict(),
+                }
+            )
+            + "\n"
+        ).encode("utf-8")
+        descriptor = descriptor_for_bundle(
+            identity=identity,
+            receipt=receipt,
+            artifact_refs=output.artifact_refs,
+            bundle=bundle,
+        )
+        self.descriptors[receipt.transcript_ref] = descriptor
         return receipt
 
     def read(self, transcript_ref: str) -> SubAgentTranscript:
@@ -642,6 +671,84 @@ class FakeSubAgentTranscriptStore:
         if transcript.identity != identity:
             raise SubAgentTranscriptCorruptError("subagent identity lookup resolved a different attempt", code="subagent_transcript_identity_mismatch")
         return receipt
+
+    def describe_attempt(
+        self,
+        identity: SubAgentAttemptIdentity,
+    ) -> SubAgentAttemptDescriptor | None:
+        if not isinstance(identity, SubAgentAttemptIdentity):
+            raise TypeError("identity must be SubAgentAttemptIdentity")
+        ref = f"subagent-transcript://v3/{identity.parent_run_id}/{identity.transcript_id}"
+        descriptor = self.descriptors.get(ref)
+        receipt = self.receipts.get(ref)
+        payload_present = (
+            receipt is not None
+            and receipt.context_ref in self.contexts
+            and receipt.output_ref in self.outputs
+            and receipt.transcript_ref in self.transcripts
+        )
+        if descriptor is None and receipt is None and not payload_present:
+            return None
+        if descriptor is None or receipt is None or not payload_present:
+            from framework.harness.subagents.transcript_metadata import (
+                SubAgentAttemptMetadataIncompleteError,
+            )
+
+            raise SubAgentAttemptMetadataIncompleteError(
+                "subagent attempt metadata is incomplete",
+                code="subagent_attempt_metadata_incomplete",
+            )
+        if descriptor.identity != identity or descriptor.receipt != receipt:
+            raise SubAgentTranscriptCorruptError(
+                "subagent attempt descriptor resolved a different attempt",
+                code="subagent_transcript_identity_mismatch",
+            )
+        return descriptor
+
+    def describe_ref(self, ref: str) -> SubAgentAttemptDescriptor | None:
+        if not isinstance(ref, str):
+            raise TypeError("ref must be str")
+        for kind in ("subagent-transcript", "subagent-context", "subagent-output"):
+            prefix = f"{kind}://v3/"
+            if ref.startswith(prefix):
+                parts = ref.removeprefix(prefix).split("/")
+                if len(parts) != 2:
+                    break
+                canonical = f"subagent-transcript://v3/{parts[0]}/{parts[1]}"
+                descriptor = self.descriptors.get(canonical)
+                receipt = self.receipts.get(canonical)
+                payload_present = (
+                    receipt is not None
+                    and receipt.context_ref in self.contexts
+                    and receipt.output_ref in self.outputs
+                    and receipt.transcript_ref in self.transcripts
+                )
+                if descriptor is None and receipt is None and not payload_present:
+                    return None
+                if descriptor is None or receipt is None or not payload_present:
+                    from framework.harness.subagents.transcript_metadata import (
+                        SubAgentAttemptMetadataIncompleteError,
+                    )
+
+                    raise SubAgentAttemptMetadataIncompleteError(
+                        "subagent attempt metadata is incomplete",
+                        code="subagent_attempt_metadata_incomplete",
+                    )
+                expected = {
+                    "subagent-transcript": descriptor.receipt.transcript_ref,
+                    "subagent-context": descriptor.receipt.context_ref,
+                    "subagent-output": descriptor.receipt.output_ref,
+                }[kind]
+                if ref != expected:
+                    raise SubAgentTranscriptCorruptError(
+                        "subagent evidence ref does not match its descriptor",
+                        code="subagent_transcript_identity_mismatch",
+                    )
+                return descriptor
+        raise SubAgentTranscriptStoreError(
+            "subagent evidence ref is invalid",
+            code="subagent_transcript_identity_mismatch",
+        )
 
 
 __all__ = [

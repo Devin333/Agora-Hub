@@ -17,7 +17,7 @@ from framework.harness.ref_authority import (
     normalize_ref_descriptors,
 )
 from framework.harness.subagents.transcript import SubAgentAttemptIdentity
-from framework.harness.task_plan.canonical import checksum, identifier
+from framework.harness.task_plan.canonical import checksum, identifier, positive_int
 from framework.shared.graph_identity import GraphExecutionIdentity
 
 
@@ -28,6 +28,7 @@ class RefSnapshotPhase(StrEnum):
     INPUT_ADMISSION = "INPUT_ADMISSION"
     CHILD_INPUT = "CHILD_INPUT"
     RESULT_ACCEPTANCE = "RESULT_ACCEPTANCE"
+    MATERIALIZED_RESULT = "MATERIALIZED_RESULT"
 
 
 def _invalid(message: str, code: str = "REF_SNAPSHOT_INVALID") -> HarnessValidationError:
@@ -108,13 +109,7 @@ class RefAuthoritySnapshot:
         if not isinstance(attempt, SubAgentAttemptIdentity):
             raise _invalid("child reference snapshot requires its accepted attempt")
         execution = self.execution_identity
-        actual = GraphExecutionIdentity(
-            run_id=attempt.parent_run_id, graph_id=attempt.graph_id,
-            graph_version=attempt.graph_version, graph_ref=attempt.graph_ref,
-            graph_checksum=attempt.graph_checksum, node_id=attempt.node_id,
-            node_instance_id=attempt.node_instance_id, activity_id=attempt.activity_id,
-            attempt=attempt.activity_attempt,
-        )
+        actual = self.execution_for_attempt(attempt)
         if actual != execution or (
             attempt.stage_id != self.stage_id
             or attempt.stage_binding_checksum != self.stage_binding_checksum
@@ -145,6 +140,44 @@ class RefAuthoritySnapshot:
             "task_instance_id": None,
             "attempt": None,
         })
+
+    @staticmethod
+    def execution_for_attempt(attempt: SubAgentAttemptIdentity) -> GraphExecutionIdentity:
+        if not isinstance(attempt, SubAgentAttemptIdentity):
+            raise TypeError("attempt must be SubAgentAttemptIdentity")
+        return GraphExecutionIdentity(
+            run_id=attempt.parent_run_id, graph_id=attempt.graph_id,
+            graph_version=attempt.graph_version, graph_ref=attempt.graph_ref,
+            graph_checksum=attempt.graph_checksum, node_id=attempt.node_id,
+            node_instance_id=attempt.node_instance_id, activity_id=attempt.activity_id,
+            attempt=attempt.activity_attempt,
+        )
+
+    @staticmethod
+    def task_binding_key(
+        execution: GraphExecutionIdentity, stage_id: str, stage_binding_checksum: str,
+        task_instance_id: str, attempt: int, phase: RefSnapshotPhase,
+    ) -> str:
+        phase = RefSnapshotPhase(phase)
+        if phase is RefSnapshotPhase.INPUT_ADMISSION:
+            raise _invalid("task reference binding requires a child or result phase")
+
+        return checksum_for({
+            "schema_version": REF_AUTHORITY_SNAPSHOT_SCHEMA,
+            "phase": phase.value,
+            "execution_identity": execution.to_dict(),
+            "stage_id": identifier(stage_id, "stage_id"),
+            "stage_binding_checksum": checksum(stage_binding_checksum, "stage_binding_checksum"),
+            "task_instance_id": identifier(task_instance_id, "task_instance_id"),
+            "attempt": positive_int(attempt, "attempt"),
+        })
+
+    @classmethod
+    def attempt_binding_key(cls, attempt: SubAgentAttemptIdentity, phase: RefSnapshotPhase) -> str:
+        return cls.task_binding_key(
+            cls.execution_for_attempt(attempt), attempt.stage_id,
+            attempt.stage_binding_checksum, attempt.task_instance_id, attempt.attempt, phase,
+        )
 
     def checksum_projection(self) -> dict[str, Any]:
         return {
@@ -204,8 +237,16 @@ class RefAuthoritySnapshot:
                 raise _invalid("child input grant cannot create or modify references", "REF_UNAUTHORIZED")
             if self.source_checksum != parent.source_checksum:
                 raise _invalid("child input grant changed its source checksum", "REF_CHECKSUM_MISMATCH")
-        elif parent.phase is not RefSnapshotPhase.CHILD_INPUT or parent.attempt_identity != self.attempt_identity:
-            raise _invalid("result grant requires the same admitted child attempt", "REF_SNAPSHOT_BINDING_MISMATCH")
+        else:
+            required_parent = (
+                RefSnapshotPhase.CHILD_INPUT
+                if self.phase is RefSnapshotPhase.RESULT_ACCEPTANCE
+                else RefSnapshotPhase.RESULT_ACCEPTANCE
+            )
+            if parent.phase is not required_parent or parent.attempt_identity != self.attempt_identity:
+                raise _invalid("result grant requires the same admitted child attempt", "REF_SNAPSHOT_BINDING_MISMATCH")
+            if self.policy.writable_refs:
+                raise _invalid("result grants must remain read-only", "REF_ACCESS_MODE_DENIED")
 
 
 @runtime_checkable

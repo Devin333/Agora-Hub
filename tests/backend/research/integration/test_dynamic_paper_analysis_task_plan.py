@@ -161,11 +161,13 @@ class _DynamicTaskPlanFactory:
         transcript_root: Path | None = None,
         crash_after_receipt_once: bool = False,
         ref_admission_service=None,
+        authorize_results: bool = False,
     ) -> None:
         self.outline_transform = outline_transform
         self.transcript_root = transcript_root
         self.crash_after_receipt_once = crash_after_receipt_once
         self.ref_admission_service = ref_admission_service
+        self.authorize_results = authorize_results
         self._crashed_after_receipt = False
         self.stores: list[InMemoryTaskPlanStore] = []
         self.transcript_stores: list[Any] = []
@@ -204,12 +206,26 @@ class _DynamicTaskPlanFactory:
             if self.transcript_root is not None
             else FakeSubAgentTranscriptStore()
         )
+        result_authority = None
+        if self.authorize_results:
+            from framework.harness.ref_results import HarnessResultRefAuthority
+            from backend.research.domain import research_event_tenant_id
+
+            result_authority = HarnessResultRefAuthority(
+                self.ref_admission_service.store, transcript_store=transcript_store,
+                tenant_id=research_event_tenant_id({
+                    "tenant_id": workspace.request.tenant_id,
+                    "user_id": workspace.request.user_id,
+                    "memory_namespace": workspace.request.memory_namespace,
+                }),
+            )
         runtime = SubAgentRuntime(
             workers={
                 RESEARCH_DYNAMIC_SUBAGENT_IDS[capability]: worker
                 for capability, worker in workers.items()
             },
             transcript_store=transcript_store,
+            result_ref_authority=result_authority,
         )
         adapter = ResolvedSubAgentTaskAdapter(
             runtime, ref_admission_service=self.ref_admission_service,
@@ -379,6 +395,7 @@ class _DynamicTaskPlanFactory:
             result_verifier=TaskPlanResultVerifier(
                 task_gate_registry,
                 transcript_store=transcript_store,
+                result_ref_authority=result_authority,
             ),
             policy=policy,
             parallel_coordinator=parallel_coordinator,
