@@ -11,7 +11,7 @@ type ApiEnvelope<T> = {
 
 export type SafeApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; errorCode: string; errorMessage: string; requestId?: string }
+  | { ok: false; errorCode: string; errorMessage: string; requestId?: string; retryAfter?: number }
 
 export class NewsRoomApiError extends Error {
   code: string
@@ -58,7 +58,8 @@ export async function safeApiPost<T>(path: string, body?: unknown, init?: Reques
         ok: false,
         errorCode: error.code,
         errorMessage: error.message,
-        requestId: error.requestId
+        requestId: error.requestId,
+        ...(retryAfterSeconds(error.detail) !== undefined ? { retryAfter: retryAfterSeconds(error.detail) } : {})
       }
     }
     return {
@@ -67,6 +68,11 @@ export async function safeApiPost<T>(path: string, body?: unknown, init?: Reques
       errorMessage: error instanceof Error ? error.message : "Request failed"
     }
   }
+}
+
+function retryAfterSeconds(detail: unknown): number | undefined {
+  const value = detail && typeof detail === "object" && "retryAfter" in detail ? detail.retryAfter : undefined
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.ceil(value) : undefined
 }
 
 export async function safeApiPatch<T>(path: string, body?: unknown, init?: RequestInit): Promise<SafeApiResult<T>> {

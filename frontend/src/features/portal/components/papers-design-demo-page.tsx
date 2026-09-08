@@ -12,6 +12,8 @@ import { usePaperWorkspaceStore } from "@/stores/paper-workspace-store"
 import { PaperDiscoveryRow } from "./paper-discovery-row"
 import { PaperWorkspaceView } from "./paper-workspace-view"
 import styles from "./papers-design-demo.module.css"
+import { PortalAccountControl } from "@/components/auth/portal-account-control"
+import { useResearchReturnContext } from "@/lib/auth/research-return-context"
 
 const featureOptions = {
   pdf: { zh: "有 PDF", en: "PDF available", icon: FileText },
@@ -67,6 +69,7 @@ export function PapersDiscoveryView({ model, topics }: { model: PapersDiscoveryV
   const remove = usePaperWorkspaceStore((state) => state.removePaper)
   const savedIds = useMemo(() => [...new Set([...readingList, ...later])], [readingList, later])
   useEffect(() => setDraft(query), [query])
+  useResearchReturnContext("papers", draft, (saved) => { if (typeof saved === "string") setDraft(saved) })
   const hasTime = model.period !== "all" || Boolean(model.from || model.to)
   const hasFilters = Boolean(query || filters.length || model.topic || hasTime || model.sort !== "trending")
   const latest = model.latestPublishedAt ? formatPaperDate(model.latestPublishedAt, locale) : null
@@ -83,7 +86,7 @@ export function PapersDiscoveryView({ model, topics }: { model: PapersDiscoveryV
     <header className={styles.header}><nav className={styles.headerInner} aria-label={zh ? "主导航" : "Main navigation"}>
       <Link href="/design-demo" className={styles.brand} aria-label="Agora AI"><span className={styles.brandIcon}><WandSparkles size={19} /></span><span>Agora<span className={styles.accent}>AI</span></span></Link>
       <div className={styles.navigation}><Link href="/design-demo">{zh ? "首页" : "Home"}</Link><Link href="/design-demo/papers" aria-current="page">{zh ? "论文研究" : "Papers"}</Link><Link href="/projects">{zh ? "项目雷达" : "Projects"}</Link><Link href="/community">{zh ? "社区信号" : "Community"}</Link></div>
-      <Link href="/design-demo#workspace" className={styles.newResearch}><WandSparkles size={16} />{zh ? "开始研究" : "New research"}</Link>
+      <div className={styles.headerActions}><PortalAccountControl /><Link href="/design-demo#workspace" className={styles.newResearch}><WandSparkles size={16} />{zh ? "开始研究" : "New research"}</Link></div>
     </nav></header>
     <main className={styles.main}>
       <section className={styles.intro} aria-labelledby="papers-title"><h1 id="papers-title">{zh ? "论文研究" : "Research papers"}<span className={styles.titleDot}>.</span></h1><span className={styles.introCaption}>{zh ? "发现论文，连接研究线索。" : "Discover papers. Connect ideas."}</span></section>

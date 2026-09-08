@@ -10,18 +10,22 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Agora Hub" }]
-[project.urls]
-Homepage = "https://github.com/Devin333/Agora-Hub"
-Repository = "https://github.com/Devin333/Agora-Hub"
-Issues = "https://github.com/Devin333/Agora-Hub/issues"
 dependencies = [
+  "Authlib>=1.3.2,<2.0",
   "cryptography>=42.0",
+  "email-validator>=2.2",
   "jsonschema>=4.0",
   "PyMuPDF>=1.24",
   "PyYAML>=6.0.1",
   "pydantic>=2.6",
+  "phonenumbers>=8.13",
   "pywin32>=306; sys_platform == 'win32'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Devin333/Agora-Hub"
+Repository = "https://github.com/Devin333/Agora-Hub"
+Issues = "https://github.com/Devin333/Agora-Hub/issues"
 
 [project.optional-dependencies]
 api = [

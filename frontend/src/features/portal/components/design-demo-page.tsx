@@ -1,5 +1,7 @@
 "use client"
 
+import { PortalAccountControl } from "@/components/auth/portal-account-control"
+
 import { useRef, useState, type FormEvent, type ReactNode } from "react"
 import {
   ArrowRight,
@@ -14,6 +16,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { paperQuestionHref } from "@/lib/papers/discovery-navigation"
+import { useResearchReturnContext } from "@/lib/auth/research-return-context"
 
 type Intent = {
   command: string
@@ -43,6 +46,13 @@ export function DesignDemoPage() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const selectedModeRef = useRef<Intent | null>(null)
   const [hasSubmitted, setHasSubmitted] = useState(false)
+  useResearchReturnContext("home", { query, intent: intent.module, hasSubmitted, selectedMode: selectedModeRef.current?.module }, (saved) => {
+    if (typeof saved?.query !== "string") return
+    setQuery(saved.query)
+    setIntent(intents.find((item) => item.module === saved.intent) ?? intents[0])
+    setHasSubmitted(Boolean(saved.hasSubmitted))
+    selectedModeRef.current = intents.find((item) => item.module === saved.selectedMode) ?? null
+  })
 
   function resolveIntent(value: string) {
     const normalized = value.trim().toLowerCase()
@@ -78,7 +88,7 @@ export function DesignDemoPage() {
             <a href="/design-demo/papers" className="transition-colors hover:text-[#6735d3]">论文研究</a>
           </div>
           <div className="flex items-center gap-3">
-            <button type="button" className="text-base font-medium text-[#594f71] transition-colors hover:text-[#6735d3]">登录</button>
+            <PortalAccountControl />
             <a href="#workspace" className="inline-flex h-11 items-center rounded-xl bg-[#7c3aed] px-5 text-base font-semibold text-white shadow-[0_5px_14px_rgba(124,58,237,0.25)] transition-colors hover:bg-[#6d28d9]">开始研究</a>
           </div>
         </nav>

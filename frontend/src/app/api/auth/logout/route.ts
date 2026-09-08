@@ -1,30 +1,20 @@
 import { cookies } from "next/headers"
-import { NextResponse } from "next/server"
+import { NextRequest } from "next/server"
 import { safeApiPost } from "@/lib/api/server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
+import { authFailure, authResponse, isSameOrigin } from "@/lib/auth/portal-server"
 
 export const dynamic = "force-dynamic"
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  if (!isSameOrigin(request)) return authFailure("auth_invalid_origin", 403)
   const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiPost(
     "/api/v1/auth/logout",
     {},
-    { headers: token ? { "x-newsroom-session": token } : undefined }
+    { headers: token ? { "x-newsroom-session": token } : undefined, signal: AbortSignal.timeout(10000) }
   )
-  const response = NextResponse.json(
-    result.ok
-      ? { success: true, data: result.data }
-      : {
-          success: false,
-          error: {
-            code: result.errorCode,
-            message: result.errorMessage,
-            requestId: result.requestId,
-          },
-        },
-    { status: result.ok ? 200 : 502 }
-  )
-  response.cookies.delete(NEWSROOM_SESSION_COOKIE)
+  const response = authResponse(result)
+  if (result.ok) response.cookies.delete(NEWSROOM_SESSION_COOKIE)
   return response
 }

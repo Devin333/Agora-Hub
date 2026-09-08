@@ -37,6 +37,31 @@ class AuthSessionInvalidError(AuthError):
 
 
 @dataclass(frozen=True)
+class AuthIdentity:
+    provider: str
+    subject: str
+    userId: str
+    createdAt: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "subject": self.subject,
+            "userId": self.userId,
+            "createdAt": _format_datetime(self.createdAt),
+        }
+
+    @classmethod
+    def from_record(cls, payload: dict[str, Any]) -> "AuthIdentity":
+        return cls(
+            provider=str(payload["provider"]),
+            subject=str(payload["subject"]),
+            userId=str(payload["userId"]),
+            createdAt=_parse_datetime(payload.get("createdAt")),
+        )
+
+
+@dataclass(frozen=True)
 class AuthUser:
     userId: str
     username: str
@@ -149,6 +174,7 @@ class AuthUserRepository(Protocol):
     def get_user(self, user_id: str) -> StoredAuthUser | None: ...
     def add_user(self, user: StoredAuthUser) -> StoredAuthUser: ...
     def bootstrap_first_user(self, user: StoredAuthUser) -> StoredAuthUser: ...
+    def resolve_identity(self, *, provider: str, subject: str, username: str) -> StoredAuthUser: ...
 
 
 class AuthSessionRepository(Protocol):
@@ -176,34 +202,89 @@ class LocalJsonAuthUserRepository:
 
     def add_user(self, user: StoredAuthUser) -> StoredAuthUser:
         with locked_json_file(self.path) as path:
-            records = self._read_records_unlocked(path)
+            records, identities = self._read_payload_unlocked(path)
             if user.userId in records or any(item.username.lower() == user.username.lower() for item in records.values()):
                 raise ValueError("user already exists")
             records[user.userId] = user
-            self._write_records_unlocked(path, records)
+            self._write_payload_unlocked(path, records, identities)
         return user
 
     def bootstrap_first_user(self, user: StoredAuthUser) -> StoredAuthUser:
         with locked_json_file(self.path) as path:
-            records = self._read_records_unlocked(path)
-            if records:
+            records, identities = self._read_payload_unlocked(path)
+            if any(item.role == "admin" for item in records.values()):
                 raise AuthAlreadyInitializedError("account bootstrap is already complete")
+            if any(item.username.lower() == user.username.lower() for item in records.values()):
+                raise ValueError("username is already in use")
             records[user.userId] = user
-            self._write_records_unlocked(path, records)
+            self._write_payload_unlocked(path, records, identities)
         return user
+
+    def resolve_identity(self, *, provider: str, subject: str, username: str) -> StoredAuthUser:
+        normalized_provider = provider.strip().lower()
+        normalized_subject = subject.strip()
+        if not normalized_provider or not normalized_subject:
+            raise ValueError("provider identity is required")
+        with locked_json_file(self.path) as path:
+            records, identities = self._read_payload_unlocked(path)
+            for identity in identities:
+                if identity.provider == normalized_provider and identity.subject == normalized_subject:
+                    user = records.get(identity.userId)
+                    if user is None:
+                        raise AuthSessionInvalidError("identity user was not found")
+                    return user
+            actual_username = _unique_public_username(username, records.values())
+            now = datetime.now(UTC)
+            user = StoredAuthUser(
+                userId=f"user_{secrets.token_hex(8)}",
+                username=actual_username,
+                role="user",
+                createdAt=now,
+                updatedAt=now,
+            )
+            records[user.userId] = user
+            identities.append(
+                AuthIdentity(
+                    provider=normalized_provider,
+                    subject=normalized_subject,
+                    userId=user.userId,
+                    createdAt=now,
+                )
+            )
+            self._write_payload_unlocked(path, records, identities)
+            return user
 
     def _read_records(self) -> dict[str, StoredAuthUser]:
         with locked_json_file(self.path) as path:
             return self._read_records_unlocked(path)
 
     def _read_records_unlocked(self, path: Path) -> dict[str, StoredAuthUser]:
+        records, _ = self._read_payload_unlocked(path)
+        return records
+
+    def _read_payload_unlocked(self, path: Path) -> tuple[dict[str, StoredAuthUser], list[AuthIdentity]]:
         payload = read_json_object_unlocked(path, default={"users": []}, strict=True)
-        return {user.userId: user for user in (StoredAuthUser.from_record(item) for item in payload.get("users", []))}
+        records = {user.userId: user for user in (StoredAuthUser.from_record(item) for item in payload.get("users", []))}
+        identities = [AuthIdentity.from_record(item) for item in payload.get("identities", [])]
+        return records, identities
 
     def _write_records_unlocked(self, path: Path, records: dict[str, StoredAuthUser]) -> None:
+        _, identities = self._read_payload_unlocked(path)
+        self._write_payload_unlocked(path, records, identities)
+
+    def _write_payload_unlocked(
+        self,
+        path: Path,
+        records: dict[str, StoredAuthUser],
+        identities: list[AuthIdentity],
+    ) -> None:
         payload = {
-            "schemaVersion": "newsroom_auth_users.v1",
+            "schemaVersion": "newsroom_auth_users.v2",
             "users": [record.to_record() for record in sorted(records.values(), key=lambda item: item.username)],
+            "identities": [
+                identity.to_record()
+                for identity in sorted(identities, key=lambda item: (item.provider, item.subject))
+            ],
         }
         write_json_object_unlocked(path, payload)
 
@@ -269,13 +350,24 @@ class AuthApplicationService:
         user_store_path: str | Path | None = None,
         session_store_path: str | Path | None = None,
         session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
+        public_auth_settings: Any | None = None,
+        email_delivery: Any | None = None,
+        phone_delivery: Any | None = None,
+        oauth_providers: Any | None = None,
+        clock: Any | None = None,
     ) -> None:
         self.users = user_repository or LocalJsonAuthUserRepository(user_store_path)
         self.sessions = session_repository or LocalJsonAuthSessionRepository(session_store_path)
         self.session_ttl_seconds = session_ttl_seconds
+        self._public_auth_settings = public_auth_settings
+        self._email_delivery = email_delivery
+        self._phone_delivery = phone_delivery
+        self._oauth_providers = oauth_providers
+        self._public_clock = clock
+        self._public_auth_service: Any | None = None
 
     def is_initialized(self) -> bool:
-        return bool(self.users.list_users())
+        return any(user.role == "admin" for user in self.users.list_users())
 
     def bootstrap(self, *, username: str, password: str) -> AuthSessionResult:
         user = self._build_user(username=username, password=password, role="admin")
@@ -348,6 +440,82 @@ class AuthApplicationService:
             sessionToken=token,
         )
 
+    def create_identity_session(self, *, provider: str, subject: str, username: str) -> AuthSessionResult:
+        resolver = getattr(self.users, "resolve_identity", None)
+        if not callable(resolver):
+            raise RuntimeError("auth user repository does not support public identities")
+        user = resolver(provider=provider, subject=subject, username=username)
+        if user.role != "user":
+            raise AuthSessionInvalidError("public identity resolved to a privileged account")
+        return self._create_session_result(user)
+
+    def public_methods(self) -> dict[str, Any]:
+        return self._public_auth().methods()
+
+    def request_otp(
+        self,
+        *,
+        channel: str,
+        destination: str,
+        consent: bool,
+        browser_binding: str,
+    ) -> dict[str, Any]:
+        return self._public_auth().request_otp(
+            channel=channel,
+            destination=destination,
+            consent=consent,
+            browser_binding=browser_binding,
+        )
+
+    def verify_otp(self, *, challenge_id: str, code: str, browser_binding: str) -> AuthSessionResult:
+        return self._public_auth().verify_otp(
+            challenge_id=challenge_id,
+            code=code,
+            browser_binding=browser_binding,
+        )
+
+    def start_oauth(
+        self,
+        *,
+        provider: str,
+        consent: bool,
+        browser_binding: str,
+    ) -> dict[str, Any]:
+        return self._public_auth().start_oauth(
+            provider=provider,
+            consent=consent,
+            browser_binding=browser_binding,
+        )
+
+    def complete_oauth(
+        self,
+        *,
+        provider: str,
+        code: str,
+        state: str,
+        browser_binding: str,
+    ) -> AuthSessionResult:
+        return self._public_auth().complete_oauth(
+            provider=provider,
+            code=code,
+            state=state,
+            browser_binding=browser_binding,
+        )
+
+    def _public_auth(self) -> Any:
+        if self._public_auth_service is None:
+            from interfaces.services.account_auth.service import PublicAccountAuthService
+
+            self._public_auth_service = PublicAccountAuthService(
+                self,
+                settings=self._public_auth_settings,
+                email_delivery=self._email_delivery,
+                phone_delivery=self._phone_delivery,
+                oauth_providers=self._oauth_providers,
+                clock=self._public_clock,
+            )
+        return self._public_auth_service
+
 
 def _public_user(user: StoredAuthUser) -> AuthUser:
     return AuthUser(
@@ -379,8 +547,23 @@ def _password_hash(password: str, salt: str, iterations: int) -> str:
 
 
 def _verify_password(password: str, user: StoredAuthUser) -> bool:
+    if not user.passwordHash or not user.passwordSalt or user.passwordIterations <= 0:
+        return False
     expected = _password_hash(password, user.passwordSalt, user.passwordIterations)
     return hmac.compare_digest(expected, user.passwordHash)
+
+
+def _unique_public_username(preferred: str, users: Any) -> str:
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", preferred.strip()).strip("._-")[:48]
+    if len(base) < 3:
+        base = "Agora_user"
+    existing = {item.username.lower() for item in users}
+    if base.lower() not in existing:
+        return base
+    while True:
+        candidate = f"{base[:48]}_{secrets.token_hex(3)}"
+        if candidate.lower() not in existing:
+            return candidate
 
 
 def _token_digest(token: str) -> str:

@@ -14,6 +14,7 @@
 .navigation a:hover { color: var(--accent); }
 .newResearch { display: inline-flex; align-items: center; gap: 8px; height: 42px; padding: 0 18px; border-radius: 12px; color: white; background: var(--accent); font-size: 14px; font-weight: 600; box-shadow: 0 5px 14px #7c3aed28; }
 .newResearch:hover { background: #6d28d9; }
+.headerActions { display: flex; align-items: center; gap: 18px; flex-shrink: 0; }
 .main { max-width: 1360px; margin: 0 auto; padding: 30px 40px 110px; }
 .intro { display: flex; align-items: baseline; gap: 22px; padding-bottom: 26px; }
 .intro h1 { font-size: 30px; line-height: 1.3; font-weight: 700; }
