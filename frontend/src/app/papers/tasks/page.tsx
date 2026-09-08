@@ -1,10 +1,11 @@
-"use client"
+import { PaperTaxonomyDirectory } from "@/features/portal/components/paper-taxonomy-directory"
+import { getPaperResearchDataset } from "@/lib/papers/real-data"
+import { getPaperCategoryDefinitions } from "@/lib/papers/category-definitions"
 
-import { TasksPage } from "@/components/papers/tasks/tasks-page"
-import { useUiStore } from "@/stores/ui-store"
+export const dynamic = "force-dynamic"
+export const metadata = { title: "研究任务 | Agora AI" }
 
-export default function PapersTasksPageRoute() {
-  const locale = useUiStore((state) => state.locale)
-
-  return <TasksPage locale={locale} />
+export default async function PapersTasksPageRoute() {
+  const data = await getPaperResearchDataset()
+  return <PaperTaxonomyDirectory kind="task" papers={data.papers.filter(paper => paper.taskRefs.length > 0)} definitions={getPaperCategoryDefinitions(data.methods, data.tasks)} source={data.source} />
 }

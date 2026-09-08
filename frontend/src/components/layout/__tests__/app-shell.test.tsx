@@ -21,6 +21,14 @@ describe("AppShell", () => {
     useUiStore.setState({ locale: "en", theme: "light" })
   })
 
+  it.each(["/papers/methods", "/papers/tasks"])("allows the redesigned directory to own its header on %s", pathname => {
+    navigationState.pathname = pathname
+    render(<AppShell><div>Directory content</div></AppShell>)
+    expect(screen.getByText("Directory content")).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Agora Hub Research" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("main")).not.toBeInTheDocument()
+  })
+
   it.each(["/", "/news", "/community", "/reports", "/search", "/papers", "/papers/tasks/agents", "/papers/methods/tool-use", "/projects", "/projects/hot", "/projects/tools/openai-codex"])("renders the Research header on portal route %s", (pathname) => {
     navigationState.pathname = pathname
 

@@ -167,7 +167,7 @@ function matchesRef(value: string, refs: Array<TaskRef | MethodRef>, kind: "task
   ))
 }
 
-function canonicalRefSlug(value: string, kind: "task" | "method") {
+export function canonicalRefSlug(value: string, kind: "task" | "method") {
   const normalized = lower(value)
   if (kind === "task") {
     return normalized === "task-agent-task-completion" ? "agent-task-completion"

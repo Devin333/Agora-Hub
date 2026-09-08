@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { PapersDesignDemoPage } from "@/features/portal/components/papers-design-demo-page"
-import { fetchPapers } from "@/lib/papers/api"
+import { fetchPapers, fetchPaperDetail } from "@/lib/papers/api"
 import type { Paper } from "@/lib/papers/types"
 import { useUiStore } from "@/stores/ui-store"
 import { usePaperWorkspaceStore } from "@/stores/paper-workspace-store"
@@ -29,6 +29,7 @@ describe("PapersDesignDemoPage", () => {
   beforeEach(() => {
     query = ""
     replace.mockReset()
+    vi.mocked(fetchPaperDetail).mockReset().mockRejectedValue(new Error("Paper unavailable"))
     usePaperWorkspaceStore.getState().clear()
     useUiStore.setState({ locale: "zh" })
     vi.mocked(fetchPapers).mockReset().mockResolvedValue({
@@ -137,5 +138,41 @@ describe("PapersDesignDemoPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "发现论文" }))
     expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?q=Agent", { scroll: false })
     await waitFor(() => expect(fetchPapers).toHaveBeenCalled())
+  })
+
+  it("shows five method categories with expandable pending definitions and independent group collapse", async () => {
+    const methods = Array.from({ length: 7 }, (_, i) => ({ slug: `method-${i}`, name: `Method ${i}` }))
+    render(<PapersDesignDemoPage papers={[paper]} taxonomy={{ methods, tasks: [] }} />)
+    const group = within(screen.getByRole("region", { name: "研究方法" }))
+    expect(group.getAllByRole("button", { name: /Method \d/ })).toHaveLength(5)
+    expect(group.getByRole("button", { name: "Method 0, 待标注" })).toBeDisabled()
+    fireEvent.click(group.getByRole("button", { name: "展开更多 研究方法" }))
+    expect(group.getAllByRole("button", { name: /Method \d/ })).toHaveLength(7)
+    fireEvent.click(group.getByRole("button", { name: "收起 研究方法" }))
+    expect(group.getAllByRole("button", { name: /Method \d/ })).toHaveLength(5)
+    fireEvent.click(group.getByRole("button", { name: "研究方法", exact: true }))
+    expect(group.queryByRole("button", { name: /Method 0/ })).not.toBeInTheDocument()
+    expect(group.getByRole("link", { name: "查看研究方法目录" })).toHaveAttribute("href", "/papers/methods")
+    await waitFor(() => expect(fetchPapers).toHaveBeenCalled())
+  })
+
+  it("combines method and task with existing filters in API requests and local fallback", async () => {
+    query = "q=Agent&topic=cs.AI&method=planning&task=agents&has=code&question=Research&page=2&paper=old"
+    const annotated = { ...paper, methodRefs: [{ id: "planning", slug: "planning", name: "Planning" }], taskRefs: [{ id: "agents", slug: "agents", name: "Agents" }] }
+    vi.mocked(fetchPapers).mockRejectedValue(new Error("offline"))
+    render(<PapersDesignDemoPage papers={[annotated, { ...paper, id: "unclassified", title: "Unclassified Agent" }]} />)
+    await waitFor(() => expect(fetchPapers).toHaveBeenCalledWith(expect.objectContaining({ q: "Agent", method: "planning", task: "agents", topic: "cs.AI" })))
+    await waitFor(() => expect(screen.queryByText("更新中...")).not.toBeInTheDocument())
+    expect(screen.queryByRole("heading", { name: "Unclassified Agent" })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "移除筛选 Planning" }))
+    const cleared = new URL(replace.mock.calls.at(-1)![0], "http://localhost")
+    expect(cleared.searchParams.get("task")).toBe("agents")
+    expect(cleared.searchParams.get("topic")).toBe("cs.AI")
+    expect(cleared.searchParams.get("has")).toBe("code")
+    expect(cleared.searchParams.has("method")).toBe(false)
+    expect(cleared.searchParams.has("page")).toBe(false)
+    expect(cleared.searchParams.has("paper")).toBe(false)
+    fireEvent.click(screen.getByRole("button", { name: "重置" }))
+    expect(replace).toHaveBeenLastCalledWith("/design-demo/papers?question=Research", { scroll: false })
   })
 })

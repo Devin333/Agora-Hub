@@ -17,6 +17,13 @@ describe("paper discovery navigation", () => {
     expect(paperReaderHref("paper")).toBe("/papers/paper/read")
     expect(paperReaderHref("paper", "/papers?q=Agent")).toBe("/papers/paper/read?returnTo=%2Fpapers%3Fq%3DAgent")
   })
+  it.each(["/papers/methods", "/papers/tasks"])("preserves category detail and search when returning to %s", (path) => {
+    const returnTo = `${path}?q=Agent&group=agents&category=planning`
+    expect(safePaperReturnTo(returnTo)).toBe(returnTo)
+    const href = new URL(paperReaderHref("paper", returnTo), "http://localhost")
+    expect(href.searchParams.get("returnTo")).toBe(returnTo)
+    expect(safePaperReturnTo(`${path}/unapproved`)).toBe("/papers")
+  })
   it("carries a home question verbatim without inventing a semantic query", () => {
     const question = "找出支持长上下文 Agent 评测的论文"
     const href = new URL(paperQuestionHref(question), "http://localhost")
