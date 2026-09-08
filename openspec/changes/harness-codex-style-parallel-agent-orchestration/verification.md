@@ -1348,12 +1348,35 @@ Validation:
 - Strict OpenSpec validation and scoped diff checks passed; final documentation
   is validated again before committing.
 
-Remaining 1.6 acceptance work: authority provenance and scope for required
-production capacity configuration; durable reservation ownership/revision
-validation across groups and recovery; authority-backed fence recovery receipts.
-Task 2.3 still owns complete READY packing and atomic all-pool admission; task
-2.11 owns running fence renewal, termination coordination and reclaim. No task
-after 1.6 is advanced by this increment.
+The initial follow-up list incorrectly assigned runtime authority work to G1
+task 1.6. A subsequent review against the unchanged checklist and design's
+G1/G2 boundary assigns those still-required capabilities as follows:
+
+- Tasks 2.2/2.3/2.5: durable shared-pool ownership, atomic all-pool admission,
+  reservation revision CAS and crash reconciliation across groups. The current
+  coordinator's local `pool_state` is not evidence that these tasks are done.
+- Task 2.11: live fence ownership, renewal, termination coordination, reclaim
+  and authority-backed recovery receipts. The G1 history reducer verifies
+  recorded transitions; a checksum is not a live authority grant.
+- Tasks 3.5/4.6: production capacity dependency provenance, durable adapter
+  composition and rejection of missing dependencies, including serial fallback.
+
+These requirements remain open under their original runtime delivery gates;
+none is waived or satisfied by G1 contract tests. A speculative, uncommitted
+capacity authority module and its incomplete request wiring were removed
+before final validation. Production and test code are identical to commit
+`4bd57f16`; no untested authority implementation is included in this closure.
+
+Task 1.6 acceptance is limited to the versioned demand, pool, reservation and
+fence contracts; exact policy/worker/stage binding; fail-closed missing/stale
+policy checks; and strict wave/replay evidence parsing described above.
+
+The six-file contract suite was rerun once after all changes were frozen:
+`98 passed in 3.32s`. Strict OpenSpec validation and `git diff --check` also
+passed. Task 1.6 is now checked; progress is 16/46 and the next task is 1.7.
+Earlier smoke evidence remains scoped as recorded above, including its
+explicit exact-final fence-test limitation. This documentation-only closure
+does not claim a new full smoke run.
 
 ### Broader Acceptance
 
