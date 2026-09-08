@@ -50,7 +50,7 @@ from framework.harness.task_plan.stage import TaskPlanStageRunner
 from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
 from framework.harness.task_plan.store import TaskPlanStorePort
 from framework.harness.task_plan.submission import CandidateDedupIdentity
-from framework.harness.task_plan.canonical import canonical_payload_checksum
+from framework.harness.task_plan.canonical import canonical_payload_checksum, task_reference_producer
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.time import utc_now
 
@@ -168,6 +168,7 @@ class HarnessAgentOrchestrationRuntime:
         policy = self._policy_registry.resolve(self._stage_binding.policy_ref, stage_id=self._stage_binding.stage_id)
         executor.require_production_bindings(
             store=self._store, admission=self._ref_admission_service,
+            task_policy=policy,
             verifier=self._stage_runner.result_verifier,
             bindings=tuple(self._capability_registry.resolve(profile.capability_hint, policy) for profile in self._profiles.values()),
             gate_refs=tuple(ref for profile in self._profiles.values() for ref in profile.gate_refs),
@@ -515,7 +516,7 @@ class HarnessAgentOrchestrationRuntime:
         return PlanCandidate.for_stage(
             stage_identity=task_identity,
             candidate_id=f"agent-loop:{candidate.correlation_id}",
-            input_context_refs=tuple(sorted({ref for task in tasks for ref in task.input_refs})),
+            input_context_refs=tuple(_context_refs_for_candidate(candidate).values()),
             tasks=tasks,
             required_output_roles=policy.required_output_roles,
             generated_by="harness.agent-loop@1",
@@ -743,7 +744,7 @@ def _context_refs_for_candidate(candidate: DelegateBatchCandidate) -> dict[str, 
                 ref
                 for proposal in candidate.tasks
                 for ref in proposal.input_refs
-                if not ref.startswith("task://") and not ref.startswith("task:")
+                if task_reference_producer(ref, tuple(item.logical_task_id for item in candidate.tasks)) is None
             }
         )
     )

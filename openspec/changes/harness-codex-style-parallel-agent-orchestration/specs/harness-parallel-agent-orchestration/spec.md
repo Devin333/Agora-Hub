@@ -301,6 +301,21 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **THEN** it MUST reject before issuing child input authority, reading result payload, or invoking a worker
 - **AND** it MUST NOT synthesize a Graph activity identity or treat a deterministic task-instance checksum as spawn authorization
 
+#### Scenario: A child consumes an accepted predecessor output
+
+- **WHEN** a child declares a predecessor output as an input
+- **THEN** Harness MUST require the predecessor role in the pinned policy's explicit sharing allowlist and resolve the current accepted result before issuing the child input grant
+- **AND** the grant MUST pin the original producer attempt, accepted result checksum, source result snapshot and descriptor, preserving the source grant unchanged
+- **AND** only that public output MAY become a read-only child input; private context, transcript and arbitrary selectors MUST fail before worker invocation
+- **AND** every source MUST be committed before the derived grant and verified before payload access, with actual output bytes checked against the pinned checksum
+
+#### Scenario: A replacement plan references an earlier result
+
+- **WHEN** a replacement plan retains a successful predecessor as a dependency
+- **THEN** Harness MUST verify that the current producer definition, worker binding, schema and policy match the original accepted result and physical Graph execution
+- **AND** changed producers, stale attempts, mismatched receipts, future-plan results or missing source grants MUST be rejected without payload reads
+- **AND** restoring a committed child grant MUST use its immutable dependency provenance without changing the original input or result authority
+
 #### Scenario: A physical SubAgent activity bypasses the generic factory
 
 - **WHEN** a caller manually composes a SubAgent activity runtime or binds a SubAgent result adapter to a physical Graph activity
@@ -393,6 +408,21 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **AND** mutable collection selectors and namespace names MUST NOT grant access
 - **AND** each retained memory hit MUST identify its exact namespace revision, record, checksum, input snapshot and execution
 - **AND** offline RAG context replay MUST use recorded memory evidence without current namespace reads or new grants
+
+#### Scenario: Production Research enables memory for an ordinary Graph activity
+
+- **WHEN** trusted Research composition enables memory with exact immutable namespace revisions
+- **THEN** the current physical RAG activity MUST obtain its capability from Harness admission bound to its frozen Graph node, worker, activity, input checksum and authenticated actor
+- **AND** mutable names, current vector collections, missing revisions or conflicting tenant/owner scope MUST NOT grant access
+- **AND** resuming an admitted execution MUST retain its recorded namespace revision and reject a changed input document
+- **AND** memory-disabled execution MUST NOT issue memory grants or read namespace metadata or payload
+
+#### Scenario: Unauthenticated Research callers cannot claim private memory scope
+
+- **WHEN** an HTTP or MCP Research caller supplies tenant, user or memory namespace selectors without a trusted transport actor
+- **THEN** shared application actor binding MUST reject the request before invoking Research operations
+- **AND** caller-controlled headers or payload fields MUST NOT create authenticated actor authority
+- **AND** authenticated matching scope and anonymous unscoped operation MUST preserve their existing behavior
 
 ### Requirement: Spawn SHALL use a durable intent receipt and reconciliation protocol
 

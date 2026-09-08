@@ -16,6 +16,7 @@ from framework.harness.ref_authority import (
     RefDescriptor,
     normalize_ref_descriptors,
 )
+from framework.harness.ref_dependency_binding import DependencyResultBinding
 from framework.harness.subagents.transcript import SubAgentAttemptIdentity
 from framework.harness.task_plan.canonical import checksum, identifier, positive_int
 from framework.shared.graph_identity import GraphExecutionIdentity
@@ -48,6 +49,7 @@ class RefAuthoritySnapshot:
     phase: RefSnapshotPhase | str = RefSnapshotPhase.INPUT_ADMISSION
     parent_snapshot_ref: str | None = None
     attempt_identity: SubAgentAttemptIdentity | None = None
+    dependency_bindings: tuple[DependencyResultBinding, ...] = ()
     schema_version: str = REF_AUTHORITY_SNAPSHOT_SCHEMA
     binding_key: str = field(init=False)
     snapshot_checksum: str = field(init=False)
@@ -88,6 +90,30 @@ class RefAuthoritySnapshot:
                 ),
             )
         object.__setattr__(self, "descriptors", descriptors)
+        bindings = self.dependency_bindings
+        if (
+            isinstance(bindings, (str, bytes)) or not isinstance(bindings, Sequence)
+            or any(not isinstance(item, DependencyResultBinding) for item in bindings)
+            or len(bindings) > 64
+        ):
+            raise _invalid("dependency bindings must be a bounded typed array")
+        bindings = tuple(sorted(bindings, key=lambda item: item.logical_ref))
+        if bindings and self.phase is not RefSnapshotPhase.CHILD_INPUT:
+            raise _invalid("only child inputs can carry dependency bindings")
+        if len({item.logical_ref for item in bindings}) != len(bindings):
+            raise _invalid("dependency bindings repeat a logical input")
+        for binding in bindings:
+            if (
+                self.execution_for_attempt(binding.producer_attempt) != self.execution_identity
+                or binding.producer_attempt.stage_id != self.stage_id
+                or binding.producer_attempt.stage_binding_checksum != self.stage_binding_checksum
+                or binding.descriptor.tenant_id != self.policy.tenant_id
+                or binding.producer_attempt.child_run_id == self.policy.owner_id
+                or binding.shared_descriptor not in descriptors
+                or binding.descriptor.ref not in self.policy.shared_read_only_refs
+            ):
+                raise _invalid("dependency binding is outside the admitted child", "REF_SNAPSHOT_BINDING_MISMATCH")
+        object.__setattr__(self, "dependency_bindings", bindings)
         if self.phase is RefSnapshotPhase.INPUT_ADMISSION:
             if self.parent_snapshot_ref is not None or self.attempt_identity is not None:
                 raise _invalid("input admission cannot carry a child or parent grant")
@@ -98,6 +124,8 @@ class RefAuthoritySnapshot:
                     raise _invalid("planning grants cannot invent a child attempt")
             else:
                 self._require_attempt()
+                if any(item.producer_attempt.plan_version > self.attempt_identity.plan_version for item in bindings):
+                    raise _invalid("child input cannot depend on a future plan", "REF_SNAPSHOT_BINDING_MISMATCH")
         object.__setattr__(self, "binding_key", checksum_for(self.binding_projection()))
         object.__setattr__(self, "snapshot_checksum", checksum_for(self.checksum_projection()))
 
@@ -212,6 +240,8 @@ class RefAuthoritySnapshot:
             "parent_snapshot_ref": self.parent_snapshot_ref,
             "attempt_identity": None if self.attempt_identity is None else self.attempt_identity.to_dict(),
             "binding_key": self.binding_key,
+            **({"dependency_bindings": [item.to_dict() for item in self.dependency_bindings]}
+               if self.dependency_bindings else {}),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -219,7 +249,8 @@ class RefAuthoritySnapshot:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "RefAuthoritySnapshot":
-        if not isinstance(value, Mapping) or set(value) != set(cls.__dataclass_fields__):
+        required = set(cls.__dataclass_fields__) - {"dependency_bindings"}
+        if not isinstance(value, Mapping) or set(value) not in (required, required | {"dependency_bindings"}):
             raise _invalid("reference snapshot fields do not match its schema")
         payload = dict(value)
         expected_checksum = checksum(payload.pop("snapshot_checksum"), "snapshot_checksum")
@@ -230,6 +261,11 @@ class RefAuthoritySnapshot:
         if isinstance(descriptors, (str, bytes)) or not isinstance(descriptors, Sequence):
             raise _invalid("reference snapshot descriptors must be an array")
         payload["descriptors"] = tuple(RefDescriptor.from_dict(item) for item in descriptors)
+        if "dependency_bindings" in payload:
+            bindings = payload["dependency_bindings"]
+            if isinstance(bindings, (str, bytes)) or not isinstance(bindings, Sequence) or not bindings:
+                raise _invalid("dependency binding extension must be a nonempty array")
+            payload["dependency_bindings"] = tuple(DependencyResultBinding.from_dict(item) for item in bindings)
         if payload["attempt_identity"] is not None:
             payload["attempt_identity"] = SubAgentAttemptIdentity.from_dict(payload["attempt_identity"])
         result = cls(**payload)
@@ -260,7 +296,11 @@ class RefAuthoritySnapshot:
             if parent.phase is not RefSnapshotPhase.INPUT_ADMISSION:
                 raise _invalid("child input grant requires input admission")
             inherited = {item.ref: item for item in parent.descriptors}
-            if self.policy.writable_refs or any(inherited.get(item.ref) != item for item in self.descriptors):
+            derived = {item.descriptor.ref: item.shared_descriptor for item in self.dependency_bindings}
+            if (
+                self.policy.writable_refs or set(derived).intersection(inherited)
+                or any((derived if item.ref in derived else inherited).get(item.ref) != item for item in self.descriptors)
+            ):
                 raise _invalid("child input grant cannot create or modify references", "REF_UNAUTHORIZED")
             if self.source_checksum != parent.source_checksum:
                 raise _invalid("child input grant changed its source checksum", "REF_CHECKSUM_MISMATCH")
@@ -274,6 +314,23 @@ class RefAuthoritySnapshot:
                 raise _invalid("result grant requires the same admitted child attempt", "REF_SNAPSHOT_BINDING_MISMATCH")
             if self.policy.writable_refs:
                 raise _invalid("result grants must remain read-only", "REF_ACCESS_MODE_DENIED")
+
+    def validate_dependency_sources(self, sources: Mapping[str, "RefAuthoritySnapshot"]) -> None:
+        """A derived read-only descriptor must retain its exact producer grant."""
+        for binding in self.dependency_bindings:
+            source = sources.get(binding.source_snapshot_ref)
+            if (
+                source is None or source.phase is not RefSnapshotPhase.RESULT_ACCEPTANCE
+                or source.snapshot_ref != binding.source_snapshot_ref
+                or source.attempt_identity != binding.producer_attempt
+                or source.execution_identity != self.execution_identity
+                or source.stage_id != self.stage_id
+                or source.stage_binding_checksum != self.stage_binding_checksum
+                or source.task_policy_checksum != self.task_policy_checksum
+                or source.policy.tenant_id != self.policy.tenant_id
+                or binding.descriptor not in source.descriptors
+            ):
+                raise _invalid("dependency input has no matching committed result source", "REF_SNAPSHOT_BINDING_MISMATCH")
 
 
 @runtime_checkable

@@ -114,6 +114,12 @@ class SubAgentRuntime:
             "input_refs": list(invocation.input_refs),
             "budget": spec.budget,
         }
+        if self.result_ref_authority is not None:
+            dependency_outputs = self.result_ref_authority.read_dependency_outputs(
+                identity, input_refs=invocation.input_refs,
+            )
+            if dependency_outputs:
+                task["dependency_outputs"] = dependency_outputs
         try:
             worker_result = _call_worker(
                 worker,

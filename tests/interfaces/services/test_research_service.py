@@ -259,6 +259,54 @@ def test_research_service_rejects_tenant_namespace_without_tenant_actor() -> Non
     assert failed.value.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "requested",
+    (
+        ResearchActorInput(tenant_id="tenant-a"),
+        ResearchActorInput(user_id="user-1"),
+        ResearchActorInput(
+            memory_namespace="research:tenant:tenant-a:user:user-1"
+        ),
+    ),
+)
+@pytest.mark.parametrize(
+    "actor",
+    (
+        None,
+        ActorContext(
+            actor_id="anonymous",
+            actor_type="anonymous",
+            roles=[],
+            request_id="anonymous-request",
+            metadata={"tenant_id": "tenant-a"},
+        ),
+    ),
+)
+def test_untrusted_actor_cannot_claim_research_scope(requested, actor) -> None:
+    with pytest.raises(ResearchActorAuthorizationError) as forbidden:
+        bind_research_actor_input(requested, actor)
+    assert forbidden.value.status_code == 403
+    assert forbidden.value.code == "forbidden"
+
+
+def test_untrusted_actor_without_scope_keeps_public_research_access() -> None:
+    anonymous = ActorContext(
+        actor_id="anonymous",
+        actor_type="anonymous",
+        roles=[],
+        request_id="anonymous-request",
+        metadata={"tenant_id": "must-not-be-trusted"},
+    )
+    assert (
+        bind_research_actor_input(ResearchActorInput(), None)
+        == ResearchActorInput()
+    )
+    assert (
+        bind_research_actor_input(ResearchActorInput(), anonymous)
+        == ResearchActorInput()
+    )
+
+
 def test_authenticated_actor_scope_overrides_or_rejects_requested_scope() -> None:
     actor = ActorContext(
         actor_id="service-a",

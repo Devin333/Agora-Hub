@@ -94,6 +94,37 @@ class HarnessResultRefAuthority:
     ) -> "AttemptResultStore":
         return AttemptResultStore(self, identity, allow_registration=allow_registration)
 
+    def read_dependency_outputs(
+        self, identity: SubAgentAttemptIdentity, *, input_refs: tuple[str, ...],
+    ) -> dict[str, dict]:
+        """Release only predecessor public outputs named by the durable child grant.
+
+        Logical input names remain useful to the worker, but never select a
+        producer or a payload reader. Those come from Harness-issued provenance.
+        """
+        from framework.harness.ref_authority import REF_KIND_MEMORY
+
+        grant = self._grant(identity, RefSnapshotPhase.CHILD_INPUT)
+        if grant is None:
+            raise _denied("dependency access requires the admitted child grant", "REF_SNAPSHOT_MISSING")
+        expected = {item.ref for item in grant.descriptors if item.ref_kind != REF_KIND_MEMORY}
+        if set(input_refs) != expected:
+            raise _denied("worker input references differ from its admitted grant")
+        # Validate every source before reading any payload. Store.get validates
+        # the complete immutable provenance graph against its committed events.
+        sources = {}
+        for binding in grant.dependency_bindings:
+            source = self.result_grant(binding.producer_attempt, allow_registration=False)
+            if source is None or source[0].snapshot_ref != binding.source_snapshot_ref:
+                raise _denied("dependency source grant changed", "REF_SNAPSHOT_BINDING_MISMATCH")
+            sources[binding.source_snapshot_ref] = source[0]
+        grant.validate_dependency_sources(sources)
+        outputs = {}
+        for binding in grant.dependency_bindings:
+            document = self.for_attempt(binding.producer_attempt).read_output(binding.descriptor.ref)
+            outputs[binding.logical_ref] = document.to_dict()["output"]
+        return outputs
+
     def _require_tenant(self, grant: RefAuthoritySnapshot) -> None:
         if grant.policy.tenant_id != checksum_for(self._tenant_id):
             raise _denied("result authority is outside the admitted tenant", "REF_POLICY_SCOPE_MISMATCH")

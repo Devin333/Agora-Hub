@@ -11,7 +11,7 @@ only unchanged, focused surfaces; each gate requires all its own exit evidence.
 - [x] 1.2 Use one Agent/Harness `ParentObservationLimits` contract with canonical `max_observation_bytes`, PRD defaults, strict parsing and matching serialization/checksum tests; remove competing field aliases.
 - [x] 1.3 Complete versioned group/wave/task/attempt schemas, canonical `REPLAN_PENDING` and `BLOCKED_DEPENDENCY`, typed wave outcomes, stable identity/checksum and transition validation.
 - [x] 1.4 Implement durable candidate dedup keyed by run/stage/parent-turn/action-correlation plus candidate checksum, stable group identity, terminal reuse and conflict rejection across restart.
-- [ ] 1.5 Establish shared `RefAuthority` validation for input/result/planning refs and memory namespaces, including owner/tenant/stage/run/access/type/checksum/allowlist and read-only sharing policy.
+- [x] 1.5 Establish shared `RefAuthority` validation for input/result/planning refs and memory namespaces, including owner/tenant/stage/run/access/type/checksum/allowlist and read-only sharing policy.
 - [ ] 1.6 Define per-task multi-pool capacity demand, versioned pool reservations, resource conflict keys and fenced mutation lifecycle; reject missing or stale required capacity policy.
 - [ ] 1.7 Define versioned token/time/tool/cost budget allocations and ledger settlement; prove consumed/released/outstanding invariants, no partial reservation and idempotent retry/cancel/recovery accounting.
 - [ ] 1.8 Preserve complete accepted/rejected/failed/cancelled/indeterminate/reclaimed/quarantined attempt history and group/wave/plan/task/binding/receipt identity in result verification and replay.

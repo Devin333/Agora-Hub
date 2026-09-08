@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from framework.harness.control_plane.activity_execution import (
@@ -13,6 +13,7 @@ from framework.harness.control_plane.activity_execution import (
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.graph.activity import graph_activity_input_checksum
 from framework.harness.graph.canonical import freeze_json, mapping_to_dict
+from framework.harness.graph.model import HarnessExecutableNode, NormalizedHarnessGraph
 from framework.harness.ref_authority import (
     REF_KIND_INPUT,
     REF_KIND_MEMORY,
@@ -28,12 +29,63 @@ from framework.harness.ref_snapshot import (
     RefSnapshotPhase,
     SnapshotRefResolutionPort,
 )
+from framework.harness.ref_dependency_binding import DependencyResultBinding
 from framework.harness.subagents.transcript import SubAgentAttemptIdentity
 from framework.harness.task_plan.canonical import canonical_payload_checksum, stable_text_tuple
 from framework.harness.task_plan.policy import TaskPlanPolicy
 from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
 from framework.memory.namespace import MemoryNamespaceDescriptor, MemoryNamespaceDescriptorPort, namespace_revision
 from framework.shared.graph_identity import GraphExecutionIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalGraphRefAdmissionBinding:
+    """Trusted immutable projection for one physical Graph executable stage.
+
+    Unlike ``TaskPlanStageBinding``, this value is derived from the compiled
+    Graph definition and carries no planner-owned inputs. It is intentionally
+    small so ordinary Graph activities cannot be made to look like TaskPlan
+    stages during reference admission.
+    """
+
+    graph: NormalizedHarnessGraph
+    stage_id: str
+    stage_binding_checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.graph, NormalizedHarnessGraph):
+            raise TypeError("graph must be a normalized Graph")
+        stage_id = str(self.stage_id).strip()
+        if not stage_id:
+            raise ValueError("stage_id is required")
+        node = next(
+            (item for item in self.graph.nodes
+             if isinstance(item, HarnessExecutableNode) and item.node_id == stage_id),
+            None,
+        )
+        if node is None:
+            raise HarnessValidationError(
+                "physical Graph admission requires an executable stage",
+                code="REF_POLICY_SCOPE_MISMATCH",
+            )
+        object.__setattr__(self, "stage_id", stage_id)
+        object.__setattr__(
+            self,
+            "stage_binding_checksum",
+            canonical_payload_checksum({
+                "definition_checksum": self.graph.definition_checksum,
+                "graph_checksum": self.graph.checksum,
+                "node": node.to_dict(),
+            }),
+        )
+
+    @property
+    def node(self) -> HarnessExecutableNode:
+        return next(
+            item for item in self.graph.nodes
+            if isinstance(item, HarnessExecutableNode) and item.node_id == self.stage_id
+        )
+
 
 if TYPE_CHECKING:
     from framework.harness.ref_memory import HarnessMemoryNamespaceReader, HarnessMemoryRecallRuntime
@@ -65,6 +117,215 @@ class HarnessRefAdmissionService:
         ):
             raise TypeError("memory namespace authority requires durable metadata")
         self.memory_namespaces = memory_namespaces
+
+    def admit_physical_graph_inputs(
+        self,
+        task: Mapping[str, Any],
+        *,
+        binding: PhysicalGraphRefAdmissionBinding,
+        tenant_scope_ref: str,
+        identity_scope_ref: str,
+        tenant_id: str,
+        owner_id: str,
+        memory_namespace: str,
+        memory_namespace_refs: tuple[str, ...],
+    ) -> RefAuthoritySnapshot:
+        """Admit immutable memory for one ordinary physical Graph activity.
+
+        Existing executions are restored exclusively from their committed
+        snapshot. Trusted composition revisions are consulted only for a new
+        physical execution, so restart and replay cannot move an old execution
+        to a newer namespace revision.
+        """
+
+        if not isinstance(binding, PhysicalGraphRefAdmissionBinding):
+            raise TypeError("binding must be PhysicalGraphRefAdmissionBinding")
+        refs = stable_text_tuple(
+            memory_namespace_refs,
+            "memory_namespace_refs",
+            item_kind="reference",
+            allow_empty=True,
+        )
+        if not refs:
+            raise HarnessValidationError(
+                "physical Graph memory requires an exact namespace revision",
+                code="REF_AUTHORITY_REQUIRED",
+            )
+        for ref in refs:
+            namespace_revision(ref)
+        if not isinstance(self.memory_namespaces, MemoryNamespaceDescriptorPort):
+            raise HarnessValidationError(
+                "physical Graph memory namespace authority is unavailable",
+                code="REF_AUTHORITY_REQUIRED",
+            )
+
+        frozen = freeze_json(task, "$.physical_ref_admission.task")
+        if not isinstance(frozen, Mapping):
+            raise HarnessValidationError(
+                "physical Graph reference admission task must be an object",
+                code="REF_INPUT_INVALID",
+            )
+        task = mapping_to_dict(frozen)
+        raw_context = task.get(HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY)
+        if not isinstance(raw_context, Mapping):
+            raise HarnessValidationError(
+                "physical Graph input admission requires its activity context",
+                code="REF_INPUT_INVALID",
+            )
+        context = HarnessGraphActivityTaskContext.from_dict(raw_context)
+        activity = context.activity
+        source_task = {
+            key: value
+            for key, value in task.items()
+            if key != HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY
+        }
+        if set(source_task) != {"run_id", "step_id", "worker_type", "inputs", "metadata"}:
+            raise HarnessValidationError(
+                "physical Graph activity task fields are invalid",
+                code="REF_INPUT_INVALID",
+            )
+        if graph_activity_input_checksum(source_task) != activity.input_ref:
+            raise HarnessValidationError(
+                "physical Graph inputs differ from the activity input document",
+                code="REF_INPUT_CHECKSUM_MISMATCH",
+            )
+
+        graph = binding.graph
+        node = binding.node
+        activity_graph = activity.graph_ref
+        inputs = source_task.get("inputs")
+        if (
+            graph.graph_ref is None
+            or activity_graph.identity_ref.exact_ref != graph.graph_ref.exact_ref
+            or activity_graph.checksum != graph.checksum
+            or activity.node_id != node.node_id
+            or activity.step_ref != node.step_ref
+            or activity.worker_ref != node.worker_ref
+            or activity.activity_ref != node.activity_ref
+            or source_task.get("run_id") != activity.run_id
+            or source_task.get("step_id") != node.step_id
+            or source_task.get("worker_type") != node.metadata.get("worker_type")
+            or source_task.get("metadata") != node.metadata.get("step_metadata")
+            or activity.tenant_scope_ref != tenant_scope_ref
+            or activity.identity_scope_ref != identity_scope_ref
+        ):
+            raise HarnessValidationError(
+                "physical Graph reference authority is outside its frozen activity",
+                code="REF_POLICY_SCOPE_MISMATCH",
+            )
+        if (
+            not isinstance(inputs, Mapping)
+            or set(inputs) != set(node.input_keys)
+            or any(value is None for value in inputs.values())
+        ):
+            raise HarnessValidationError(
+                "physical Graph input references are unavailable",
+                code="REF_INPUT_INVALID",
+            )
+
+        execution = GraphExecutionIdentity(
+            run_id=activity.run_id,
+            graph_id=activity_graph.graph_id,
+            graph_version=activity_graph.identity_version,
+            graph_ref=activity_graph.identity_ref.exact_ref,
+            graph_checksum=activity_graph.checksum,
+            node_id=activity.node_id,
+            node_instance_id=activity.node_instance_id,
+            activity_id=activity.activity_id,
+            attempt=activity.attempt,
+        )
+        binding_key = RefAuthoritySnapshot.admission_binding_key(
+            execution,
+            node.step_id,
+            binding.stage_binding_checksum,
+        )
+        recorded = self.store.find(run_id=activity.run_id, binding_key=binding_key)
+        if recorded is not None:
+            if recorded.source_checksum != activity.input_ref or recorded.execution_identity != execution:
+                raise HarnessValidationError(
+                    "recorded physical Graph grant differs from its input document",
+                    code="REF_SNAPSHOT_CONFLICT",
+                )
+            memory_descriptors = tuple(
+                item for item in recorded.descriptors if item.ref_kind == REF_KIND_MEMORY
+            )
+            if (
+                len(memory_descriptors) != 1
+                or memory_descriptors[0].namespace != memory_namespace
+                or memory_descriptors[0].tenant_id != tenant_id
+                or memory_descriptors[0].owner_id != owner_id
+            ):
+                raise HarnessValidationError(
+                    "recorded physical Graph memory grant is outside the actor scope",
+                    code="REF_SNAPSHOT_CONFLICT",
+                )
+            return recorded
+
+        matching = []
+        for ref in refs:
+            metadata = self.memory_namespaces.describe(ref)
+            if not isinstance(metadata, MemoryNamespaceDescriptor) or metadata.exact_ref != ref:
+                raise HarnessValidationError(
+                    "trusted memory namespace metadata is unavailable",
+                    code="REF_UNRESOLVED",
+                )
+            if (
+                metadata.namespace == memory_namespace
+                and metadata.tenant_id == tenant_id
+                and metadata.owner_id == owner_id
+            ):
+                matching.append(metadata)
+        if len(matching) != 1:
+            raise HarnessValidationError(
+                "physical Graph memory revision is missing or ambiguous for the actor",
+                code="REF_UNAUTHORIZED",
+            )
+        metadata = matching[0]
+        descriptor = RefDescriptor.memory(
+            namespace=metadata.namespace,
+            ref=metadata.exact_ref,
+            run_id=activity.run_id,
+            stage_id=node.step_id,
+            tenant_id=metadata.tenant_id,
+            owner_id=metadata.owner_id,
+            source_checksum=metadata.source_checksum,
+            scope=(
+                RefScope.SHARED_READ_ONLY
+                if metadata.shared_read_only
+                else RefScope.PRIVATE
+            ),
+        )
+        policy = RefAccessPolicy(
+            policy_id="physical-graph-memory:" + node.step_id,
+            version="1",
+            run_id=activity.run_id,
+            stage_id=node.step_id,
+            tenant_id=tenant_id,
+            owner_id=owner_id,
+            allowed_refs=(descriptor.ref,),
+            allowed_artifact_types=(descriptor.artifact_type,),
+            allowed_ref_kinds=(REF_KIND_MEMORY,),
+            allowed_memory_namespaces=(memory_namespace,),
+            pinned_checksums={descriptor.ref: descriptor.source_checksum},
+        )
+        task_policy_checksum = canonical_payload_checksum({
+            "policy_id": "physical-graph-memory",
+            "version": "1",
+            "graph_checksum": graph.checksum,
+            "node_id": node.node_id,
+            "tenant_id": tenant_id,
+            "owner_id": owner_id,
+            "memory_namespace": memory_namespace,
+        })
+        return self._commit(RefAuthoritySnapshot(
+            execution_identity=execution,
+            stage_id=node.step_id,
+            stage_binding_checksum=binding.stage_binding_checksum,
+            task_policy_checksum=task_policy_checksum,
+            source_checksum=activity.input_ref,
+            policy=policy,
+            descriptors=(descriptor,),
+        ))
 
     def admit_graph_inputs(
         self,
@@ -237,12 +498,26 @@ class HarnessRefAdmissionService:
         attempt_identity: SubAgentAttemptIdentity,
         input_refs: tuple[str, ...],
         memory_namespaces: tuple[str, ...] = (),
+        dependency_bindings: tuple[DependencyResultBinding, ...] = (),
+        task_policy: TaskPlanPolicy | None = None,
     ) -> RefAuthoritySnapshot:
         refs = stable_text_tuple(input_refs, "input_refs", item_kind="reference")
         available = {item.ref: item for item in parent.descriptors}
+        if not isinstance(dependency_bindings, tuple) or any(not isinstance(item, DependencyResultBinding) for item in dependency_bindings):
+            raise HarnessValidationError("dependency bindings must be a typed tuple", code="REF_SNAPSHOT_INVALID")
+        if dependency_bindings:
+            if (
+                not isinstance(task_policy, TaskPlanPolicy) or task_policy.policy_checksum != parent.task_policy_checksum
+                or any(item.output_role not in task_policy.shared_dependency_output_roles for item in dependency_bindings)
+            ):
+                raise HarnessValidationError("dependency sharing requires the pinned TaskPlan policy", code="REF_UNAUTHORIZED")
+        derived = {item.descriptor.ref: item.shared_descriptor for item in dependency_bindings}
+        if set(derived).intersection(available):
+            raise HarnessValidationError("dependency result collides with a root input", code="REF_UNAUTHORIZED")
+        available.update(derived)
         if parent.phase is not RefSnapshotPhase.INPUT_ADMISSION or not set(refs).issubset(available):
             raise HarnessValidationError("child inputs are outside the admitted reference grant", code="REF_UNAUTHORIZED")
-        if any(available[ref].ref_kind != REF_KIND_INPUT for ref in refs):
+        if any(available[ref].ref_kind != REF_KIND_INPUT for ref in refs if ref not in derived):
             raise HarnessValidationError("child inputs must be admitted input references", code="REF_UNAUTHORIZED")
         namespaces = stable_text_tuple(
             memory_namespaces,
@@ -270,6 +545,7 @@ class HarnessRefAdmissionService:
             source_checksum=parent.source_checksum, policy=policy, descriptors=descriptors,
             phase=RefSnapshotPhase.CHILD_INPUT,
             parent_snapshot_ref=parent.snapshot_ref, attempt_identity=attempt_identity,
+            dependency_bindings=dependency_bindings,
         )
         snapshot.validate_parent(parent)
         return self._commit(snapshot)

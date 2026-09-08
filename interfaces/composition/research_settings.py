@@ -14,6 +14,7 @@ from framework.harness.runtime.result_policy import (
     GraphArtifactPersistenceConfig,
     GraphArtifactRetentionSettings,
 )
+from framework.memory.namespace import namespace_revision
 from interfaces.composition.research_errors import (
     ResearchConfigurationError,
     ResearchRemediation,
@@ -176,6 +177,8 @@ class ResearchRAGSettings:
     max_context_items: int
     max_context_tokens: int
     max_worker_calls: int
+    memory_enabled: bool = False
+    memory_namespace_refs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         backend = str(self.backend or "").strip().lower()
@@ -211,6 +214,19 @@ class ResearchRAGSettings:
             32_768,
         )
         _bounded_int(self.max_worker_calls, "research.rag.max_worker_calls", 0, 32)
+        if not isinstance(self.memory_enabled, bool):
+            _invalid("research.rag.memory")
+        refs = tuple(str(value).strip() for value in self.memory_namespace_refs)
+        if any(not value for value in refs) or len(refs) != len(set(refs)):
+            _invalid("research.rag.memory_namespace_refs")
+        try:
+            for ref in refs:
+                namespace_revision(ref)
+        except (TypeError, ValueError):
+            _invalid("research.rag.memory_namespace_refs")
+        if self.memory_enabled and not refs:
+            _invalid("research.rag.memory_namespace_refs")
+        object.__setattr__(self, "memory_namespace_refs", tuple(sorted(refs)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -556,6 +572,19 @@ class ResearchRuntimeSettings:
                     "NEWS_RESEARCH_RAG_MAX_WORKER_CALLS",
                     16,
                     capability="research.rag.max_worker_calls",
+                ),
+                memory_enabled=_env_bool(
+                    values,
+                    "NEWS_RAG_MEMORY",
+                    False,
+                    capability="research.rag.memory",
+                ),
+                memory_namespace_refs=_memory_namespace_refs(
+                    _first_text(
+                        values,
+                        ("NEWS_RESEARCH_RAG_MEMORY_NAMESPACE_REFS",),
+                        "",
+                    )
                 ),
             ),
             artifact=ResearchArtifactSettings(
@@ -978,6 +1007,20 @@ def _parser_backends(value: str) -> tuple[str, ...]:
     if len(value) > 256:
         _invalid("research.parser.backends")
     return tuple(part.strip().lower() for part in value.split(",") if part.strip())
+
+
+def _memory_namespace_refs(value: str) -> tuple[str, ...]:
+    if len(value) > 8_192:
+        _invalid("research.rag.memory_namespace_refs")
+    refs = tuple(part.strip() for part in value.split(",") if part.strip())
+    if len(refs) != len(set(refs)):
+        _invalid("research.rag.memory_namespace_refs")
+    try:
+        for ref in refs:
+            namespace_revision(ref)
+    except (TypeError, ValueError):
+        _invalid("research.rag.memory_namespace_refs")
+    return tuple(sorted(refs))
 
 
 def _text_tuple(

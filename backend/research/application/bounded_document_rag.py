@@ -15,6 +15,8 @@ from framework.harness.rag.models import (
 )
 from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.rag.session import RAGSessionResult
+from framework.memory.recall_port import ExecutionMemoryRecallPort
+from framework.harness.control_plane.errors import HarnessValidationError
 
 from backend.research.application.paper_rag_session import PaperRAGSession
 from backend.research.document.chunker import PaperDocumentChunker
@@ -36,6 +38,10 @@ class _RAGSessionPort(Protocol):
 
 
 RAGSessionFactory = Callable[[ChunkStorePort], _RAGSessionPort]
+RAGAuthorizedSessionFactory = Callable[
+    [ChunkStorePort, ExecutionMemoryRecallPort],
+    _RAGSessionPort,
+]
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,7 @@ class BoundedDocumentRAGRuntime:
         chunk_indexer: ChunkIndexerPort | None = None,
         chunker: PaperDocumentChunker | None = None,
         session_factory: RAGSessionFactory | None = None,
+        authorized_session_factory: RAGAuthorizedSessionFactory | None = None,
     ) -> None:
         if not isinstance(chunk_store, ChunkStorePort):
             raise TypeError("chunk_store must implement ChunkStorePort")
@@ -106,11 +113,14 @@ class BoundedDocumentRAGRuntime:
             raise TypeError("chunk_indexer must implement ChunkIndexerPort")
         if session_factory is not None and not callable(session_factory):
             raise TypeError("session_factory must be callable")
+        if authorized_session_factory is not None and not callable(authorized_session_factory):
+            raise TypeError("authorized_session_factory must be callable")
 
         self._chunk_store = chunk_store
         self._chunk_indexer = resolved_indexer
         self._chunker = chunker or PaperDocumentChunker()
         self._session_factory = session_factory or (lambda scoped_store: PaperRAGSession(scoped_store))
+        self._authorized_session_factory = authorized_session_factory
         self._last_context_pack: ContextVar[RAGContextPack | None] = ContextVar(
             f"bounded_document_rag_last_context_pack_{id(self)}",
             default=None,
@@ -141,18 +151,32 @@ class BoundedDocumentRAGRuntime:
         *,
         session_spec: RAGSessionSpec,
         document: ResearchDocument,
+        memory_recall: ExecutionMemoryRecallPort | None = None,
     ) -> ResearchRAGContext:
         if not isinstance(session_spec, RAGSessionSpec):
             raise TypeError("session_spec must be RAGSessionSpec")
         if not isinstance(document, ResearchDocument):
             raise TypeError("document must be ResearchDocument")
 
-        # A failed invocation must never expose a context pack from an earlier run
-        # in the same thread or async task.
+        # Even a rejected authority must not expose a previous execution's pack.
         self._last_context_pack.set(None)
         with self._context_pack_index_lock:
-            # A reused run id must never expose the previous execution's pack.
             self._context_pack_index.pop(session_spec.run_id, None)
+        if memory_recall is not None:
+            if not isinstance(memory_recall, ExecutionMemoryRecallPort):
+                raise TypeError("memory_recall must implement ExecutionMemoryRecallPort")
+            execution_identity = session_spec.graph_identity.to_graph_execution_identity()
+            if memory_recall.execution_identity != execution_identity:
+                raise HarnessValidationError(
+                    "RAG memory capability is outside the physical Graph execution",
+                    code="REF_SNAPSHOT_BINDING_MISMATCH",
+                )
+            memory_recall.validate_execution(execution_identity)
+            if self._authorized_session_factory is None:
+                raise HarnessValidationError(
+                    "RAG memory capability has no authorized session factory",
+                    code="REF_AUTHORITY_REQUIRED",
+                )
         scope = _RunChunkScope.from_spec(session_spec, document)
         source_refs = _validated_document_source_refs(session_spec, document)
         canonical_chunks = self._chunker.chunk(document, _parse_source(document))
@@ -161,7 +185,11 @@ class BoundedDocumentRAGRuntime:
         self._chunk_store.ensure_collection()
         self._chunk_indexer.index_chunks(scoped_chunks)
         scoped_store = _RunScopedChunkStore(self._chunk_store, scope)
-        session = self._session_factory(scoped_store)
+        session = (
+            self._session_factory(scoped_store)
+            if memory_recall is None
+            else self._authorized_session_factory(scoped_store, memory_recall)
+        )
         if not callable(getattr(session, "run_spec", None)):
             raise TypeError("session_factory must return a run_spec-capable session")
         result = session.run_spec(session_spec)
@@ -1235,4 +1263,8 @@ def _text_values(value: Any) -> list[str]:
     return []
 
 
-__all__ = ["BoundedDocumentRAGRuntime", "RAGSessionFactory"]
+__all__ = [
+    "BoundedDocumentRAGRuntime",
+    "RAGAuthorizedSessionFactory",
+    "RAGSessionFactory",
+]

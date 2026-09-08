@@ -78,6 +78,9 @@ from framework.shared.json import to_jsonable
 from framework.shared.time import utc_now
 
 from backend.research.application.ask_paper import AskPaperUseCase, ResearchActorScope
+from backend.research.application.rag_memory_admission import (
+    ResearchRAGMemoryAdmissionPort,
+)
 from backend.research.benchmark.models import ResearchScore
 from backend.research.domain import (
     EvidenceRef,
@@ -799,6 +802,7 @@ class _ResearchWorkerDependencies:
     llm_worker: Any
     github_repository: Any
     rag_runtime: Any
+    rag_memory_admission: ResearchRAGMemoryAdmissionPort | None
     taxonomy_registry: TaxonomyRegistry
     quality_gate: ResearchQualityGate
     evidence_builder: ResearchEvidenceBuilder
@@ -855,6 +859,7 @@ class ResearchSinglePaperRuntime:
         llm_worker: Any,
         github_repository: Any,
         rag_runtime: Any,
+        rag_memory_admission: ResearchRAGMemoryAdmissionPort | None = None,
         artifact_port: ArtifactPort,
         event_port_factory: Callable[[str], HarnessTransitionPort],
         scoped_event_port_factory: (
@@ -883,6 +888,14 @@ class ResearchSinglePaperRuntime:
         self.llm_worker = llm_worker
         self.github_repository = github_repository
         self.rag_runtime = rag_runtime
+        if rag_memory_admission is not None and not isinstance(
+            rag_memory_admission,
+            ResearchRAGMemoryAdmissionPort,
+        ):
+            raise TypeError(
+                "rag_memory_admission must implement ResearchRAGMemoryAdmissionPort"
+            )
+        self.rag_memory_admission = rag_memory_admission
         self.artifact_port = artifact_port
         if graph_event_projection is not None and not isinstance(
             graph_event_projection,
@@ -1599,6 +1612,7 @@ class ResearchSinglePaperRuntime:
             llm_worker=self.llm_worker,
             github_repository=self.github_repository,
             rag_runtime=self.rag_runtime,
+            rag_memory_admission=self.rag_memory_admission,
             taxonomy_registry=self.taxonomy_registry,
             quality_gate=self.quality_gate,
             evidence_builder=self.evidence_builder,
@@ -1729,7 +1743,23 @@ class ResearchSinglePaperRuntime:
                 "max_output_tokens": workspace.context_max_output_tokens,
             },
         )
-        rag_context = self.rag_runtime.run(session_spec=session_spec, document=workspace.document)
+        memory_recall = None
+        if self.rag_memory_admission is not None:
+            memory_recall = self.rag_memory_admission.admit(
+                task,
+                actor_scope=ResearchActorScope(
+                    tenant_id=workspace.request.tenant_id,
+                    user_id=workspace.request.user_id,
+                    memory_namespace=str(workspace.request.memory_namespace),
+                ),
+                graph_identity=rag_graph_identity,
+                dynamic_task_plan=_dynamic_task_plan_requested(workspace.request.options),
+            )
+        rag_context = self.rag_runtime.run(
+            session_spec=session_spec,
+            document=workspace.document,
+            **({"memory_recall": memory_recall} if memory_recall is not None else {}),
+        )
         context_pack_for_run = getattr(self.rag_runtime, "context_pack_for_run", None)
         if callable(context_pack_for_run):
             workspace.rag_context_pack = context_pack_for_run(workspace.request.run_id)
@@ -1784,6 +1814,7 @@ class ResearchSinglePaperRuntime:
             self.llm_worker,
             task="candidate_three_minute_read",
             payload={
+                **({"dependency_outputs": task["dependency_outputs"]} if task.get("dependency_outputs") else {}),
                 "paper": workspace.paper.to_dict() if workspace.paper else {},
                 "evidence_pack": workspace.evidence_pack.to_dict() if workspace.evidence_pack else {},
             },
@@ -1860,6 +1891,7 @@ class ResearchSinglePaperRuntime:
                 self.llm_worker,
                 task="candidate_taxonomy",
                 payload={
+                    **({"dependency_outputs": task["dependency_outputs"]} if task.get("dependency_outputs") else {}),
                     "paper": workspace.paper.to_dict() if workspace.paper else {},
                     "evidence_pack": (
                         workspace.evidence_pack.to_dict()
@@ -1902,6 +1934,7 @@ class ResearchSinglePaperRuntime:
             self.llm_worker,
             task="candidate_experiment_claims",
             payload={
+                **({"dependency_outputs": task["dependency_outputs"]} if task.get("dependency_outputs") else {}),
                 "evidence_pack": workspace.evidence_pack.to_dict()
                 if workspace.evidence_pack
                 else {}

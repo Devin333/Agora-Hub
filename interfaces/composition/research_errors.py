@@ -38,6 +38,8 @@ class ResearchCapability(str, Enum):
     RAG_MAX_QUERIES = "research.rag.max_queries"
     RAG_MAX_SOURCE_READS = "research.rag.max_source_reads"
     RAG_MAX_MEMORY_HITS = "research.rag.max_memory_hits"
+    RAG_MEMORY = "research.rag.memory"
+    RAG_MEMORY_NAMESPACE_REFS = "research.rag.memory_namespace_refs"
     RAG_MAX_CONTEXT_ITEMS = "research.rag.max_context_items"
     RAG_MAX_CONTEXT_TOKENS = "research.rag.max_context_tokens"
     RAG_MAX_WORKER_CALLS = "research.rag.max_worker_calls"

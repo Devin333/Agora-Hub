@@ -7,6 +7,7 @@ from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.policy import HarnessBudgetSnapshot
 from framework.harness.ref_authority import (
     REF_KIND_INPUT,
+    REF_KIND_RESULT,
     RefAccessPolicy,
     RefAuthority,
     RefDescriptor,
@@ -14,6 +15,7 @@ from framework.harness.ref_authority import (
     normalize_ref_descriptors,
     validate_ref_configuration,
 )
+from framework.harness.ref_dependency_binding import DependencyResultBinding
 from framework.harness.subagents.models import SubAgentContextEnvelope, SubAgentSpec
 from framework.harness.subagents.policy import SubAgentToolPolicy
 
@@ -33,6 +35,7 @@ class SubAgentContextBuilder:
         ref_policy: RefAccessPolicy | None = None,
         ref_resolution: RefResolutionPort | None = None,
         ref_descriptors: Mapping[str, RefDescriptor] | None = None,
+        dependency_bindings: tuple[DependencyResultBinding, ...] = (),
     ) -> SubAgentContextEnvelope:
         descriptors = normalize_ref_descriptors(ref_descriptors)
         validate_ref_configuration(ref_authority, ref_policy, ref_resolution, descriptors)
@@ -43,13 +46,14 @@ class SubAgentContextBuilder:
             ref_authority.require_scope(ref_policy, run_id=parent_run_id, stage_id=graph_identity.stage_id)
             if ref_policy.owner_id != child_run_id:
                 raise HarnessValidationError("SubAgent reference policy must identify the child owner", code="REF_UNAUTHORIZED")
-            ref_authority.authorize_many(
-                input_refs,
-                ref_policy,
-                expected_kind=REF_KIND_INPUT,
-                resolver=ref_resolution,
-                descriptors=descriptors,
-            )
+            derived = {item.descriptor.ref: item.shared_descriptor for item in dependency_bindings}
+            for ref in input_refs:
+                descriptor = ref_authority.authorize_ref(
+                    ref, ref_policy, expected_kind=REF_KIND_RESULT if ref in derived else REF_KIND_INPUT,
+                    resolver=ref_resolution, descriptors=descriptors,
+                )
+                if ref in derived and descriptor != derived[ref]:
+                    raise HarnessValidationError("dependency input differs from its child grant", code="REF_UNAUTHORIZED")
             for ref in memory_context_refs:
                 descriptor = ref_authority.authorize_memory_namespace_ref(
                     ref,

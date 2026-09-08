@@ -9,6 +9,7 @@ from typing import Any, Callable
 import pytest
 
 from backend.research.application.bounded_document_rag import BoundedDocumentRAGRuntime
+from framework.harness.control_plane.errors import HarnessValidationError
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from backend.research.document.models import PaperChunk
 from backend.research.domain.common import SourceLineage
@@ -25,9 +26,26 @@ from framework.harness.rag.models import (
 )
 from framework.harness.rag.policy import RAGDecision, RAGDecisionType
 from framework.harness.rag.session import RAGSessionResult
+from framework.shared.graph_identity import GraphExecutionIdentity
 
 
 FIXED_TIME = datetime(2026, 7, 19, 8, 30, tzinfo=UTC)
+
+
+class _ExecutionMemoryCapability:
+    def __init__(self, execution_identity: GraphExecutionIdentity) -> None:
+        self._execution_identity = execution_identity
+        self.validated: list[GraphExecutionIdentity] = []
+
+    @property
+    def execution_identity(self) -> GraphExecutionIdentity:
+        return self._execution_identity
+
+    def validate_execution(self, execution_identity: GraphExecutionIdentity) -> None:
+        self.validated.append(execution_identity)
+
+    def recall(self, query, *, policy=None):
+        raise AssertionError("capture session does not perform memory recall")
 
 
 class _MemoryChunkStore:
@@ -605,6 +623,59 @@ def test_uses_supplied_spec_identity_and_remaps_every_chunk_reference() -> None:
     assert child.metadata["stage_id"] == spec_a.stage_id
     assert child.metadata["tenant_id"] == "tenant-a"
     assert child.metadata["source_hash"] == document.source_hash
+
+
+def test_execution_memory_capability_is_validated_per_call_and_never_cached() -> None:
+    store = _MemoryChunkStore()
+    base_factory = _CaptureFactory(lambda spec: _result(spec))
+    authorized_calls: list[_ExecutionMemoryCapability] = []
+
+    def authorized_factory(scoped_store, capability):
+        authorized_calls.append(capability)
+        return base_factory(scoped_store)
+
+    runtime = BoundedDocumentRAGRuntime(
+        store,
+        chunker=_RelationalChunker(),  # type: ignore[arg-type]
+        session_factory=base_factory,
+        authorized_session_factory=authorized_factory,
+    )
+    unbound = _spec(run_id="memory-capability", session_id="memory-capability")
+    identity = unbound.graph_identity.with_physical_activity(
+        node_id="run_research_rag",
+        node_instance_id="run_research_rag:1",
+        activity_id="hga_memory_capability",
+        activity_attempt=1,
+    )
+    spec = replace(unbound, graph_identity=identity)
+    capability = _ExecutionMemoryCapability(identity.to_graph_execution_identity())
+
+    runtime.run(
+        session_spec=spec,
+        document=_document(),
+        memory_recall=capability,
+    )
+    runtime.run(session_spec=spec, document=_document())
+
+    assert authorized_calls == [capability]
+    assert capability.validated == [identity.to_graph_execution_identity()]
+    assert len(store.indexed_batches) == 2
+    assert runtime.last_context_pack is not None
+    assert runtime.context_pack_for_run(spec.run_id) is not None
+
+    foreign = _ExecutionMemoryCapability(
+        replace(identity.to_graph_execution_identity(), attempt=2)
+    )
+    with pytest.raises(HarnessValidationError, match="outside the physical Graph execution"):
+        runtime.run(
+            session_spec=spec,
+            document=_document(),
+            memory_recall=foreign,
+        )
+    assert foreign.validated == []
+    assert len(store.indexed_batches) == 2
+    assert runtime.last_context_pack is None
+    assert runtime.context_pack_for_run(spec.run_id) is None
 
 
 @pytest.mark.parametrize(

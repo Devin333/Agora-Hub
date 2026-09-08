@@ -1199,6 +1199,94 @@ focused pytest runs were added. Task 1.5 remains unchecked;
 dependency/replacement input binding and production Harness-to-RAG capability
 issuance remain open.
 
+### Task 1.5 dependency sharing and physical RAG memory admission — 2026-09-08
+
+The final open reference-authority surfaces were implemented together before
+validation. The failed first batch was repaired together, followed by complete
+smoke validation. Task 1.5 is now checked against the final evidence below.
+
+- Dependency inputs require an explicit `shared_dependency_output_roles`
+  allowlist. Resolution uses the current accepted projection, original plan,
+  exact producer attempt, result checksum, receipt and metadata authority before
+  payload IO. Private context/transcript selectors fail at validation.
+- Derived child grants persist checksum-bound producer provenance and shared
+  read-only output descriptors. The canonical snapshot store validates all
+  sources in one bounded event prefix, retaining original grants unchanged.
+  Runtime payload reads verify actual output bytes before releasing public
+  `dependency_outputs` to the worker. Generic delegation and Research analysis
+  use the same resolution and runtime boundary.
+- Ordinary Research RAG activities obtain immutable namespace capabilities
+  through frozen physical Graph admission and authenticated actor scope.
+  Production configuration requires exact revision refs when memory is enabled;
+  capabilities are passed per call and existing grants retain their recorded
+  revision on restart. Default memory remains disabled.
+- New tests cover a real two-task Graph, source-grant reopening, no-payload-IO
+  rejection of wrong execution/policy/receipt/source, private-selector rejection,
+  policy serialization, and actual predecessor output reaching the Research LLM.
+  Replacement tests exercise authority selection against typed accepted store
+  projections; full replacement orchestration remains task 2.10.
+- RAG tests cover physical admission, immutable revision reuse, scope rejection,
+  corruption, bounded-session execution and the actual Graph worker dependency
+  path. Final evidence is recorded below.
+
+The first complete validation batch finished on 2026-09-09. No tests ran between
+individual edits. Strict OpenSpec validation and compile passed. Full smoke
+returned `69 failed, 3145 passed, 23 deselected, 23 warnings in 1457.36s`;
+offline AgentLoop and source validation passed. The separate composition batch
+returned `3 failed, 87 passed in 78.22s`.
+
+The failures were collected before repair. Research worker methods execute
+against `_ResearchWorkerDependencies`, which initially omitted the new memory
+admission port and stopped runs before RAG even when memory was disabled. The
+dependency tuple now includes the port, with an actual Graph-worker regression.
+Two dependency tests incorrectly read a nested attempt field or used a selector
+outside the existing reference grammar; the tests now address the real contract.
+The three settings failures exposed missing public capability registrations;
+both memory configuration identifiers are now registered, without changing the
+invalid-configuration rejection rules.
+
+A parallel read-only audit also identified untrusted actor scope entering via
+HTTP and MCP. Their shared actor binder now rejects caller-supplied private scope
+without a trusted actor, with before-service rejection tests and authenticated
+positive fixtures. `None` and explicitly anonymous actors cannot provide private
+scope; anonymous metadata is ignored. Trusted deployment and authenticated user
+scope retain their exact matching behavior.
+
+Final integrated validation after the repair batch:
+
+- `.venv/Scripts/python.exe -m scripts.dev smoke --keep-going`: exit 0.
+  Compile passed; full smoke selection returned `3225 passed, 23 deselected,
+  31 warnings in 2057.93s` (34m17s). Existing marker deselection and existing
+  FastAPI/Starlette deprecation warnings are unchanged in kind. The only added
+  pytest option was `--durations=10`; no selection or assertions were weakened.
+- Supplemental configuration/composition, error-envelope, MCP service, HTTP
+  catalog/MCP and MCP transport checks: `175 passed, 43 warnings in 91.03s`.
+  This includes `test_research_settings.py`,
+  `test_agent_loop_orchestration_composition.py`, `test_research_composition.py`,
+  `test_research_rag_composition.py`, `test_research_errors.py`,
+  `test_mcp_application_service.py`, `test_research_catalog_api.py`,
+  `test_api_mcp.py` and `tests/interfaces/mcp`.
+- Final HTTP/MCP actor fixtures and anonymous/deployment cases were completed
+  during smoke without changing production code. Their complete three-file
+  batch (`test_research_api.py`, `test_research_service.py`,
+  `test_mcp_application_service.py`) passed: `71 passed, 27 warnings in 18.13s`.
+  SHA-256 comparison confirms all production files remained unchanged throughout
+  smoke, and all 37 scoped files remained unchanged after that interface batch
+  began until final documentation updates.
+- Offline AgentLoop `test-agent-loop-97e04257feb74ec3ab0f4273b704928d`: succeeded,
+  3 fixture LLM calls, 1 successful real memory tool call, 1 judge retry,
+  60 fixture tokens and 0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-97e04257feb74ec3ab0f4273b704928d/manifest.json`,
+  hash `sha256:4fbb37c0ddba9e6f2ec9098f7737336dc0f6254096bb4d81f1c974d60477fc2c`.
+- Source validation: `is_valid=true`, `error_count=0`, `warning_count=0`.
+- Strict OpenSpec validation passed before the smoke batch and is rerun for
+  this final acceptance record and checklist.
+
+This closes reference authority task 1.5. Default Research memory remains off;
+enabled use requires configured immutable revisions and trusted tenant/owner.
+Full replacement orchestration (2.10), later capacity/budget/lifecycle gates and
+G1-G5 release acceptance remain separate unchecked work.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist
@@ -1206,9 +1294,8 @@ issuance remain open.
 - Bind group/wave identity into task-result verification and durable child
   evidence, not only coordinator events.
 - Complete bounded planning retries, failure accounting, and crash handling.
-- Complete durable candidate dedup and RefAuthority, per-task spawn intent/receipt
-  reconciliation, multi-pool capacity and versioned budget reservations, and
-  terminal dependency blocking under the revised PRD.
+- Complete per-task spawn intent/receipt reconciliation, multi-pool capacity
+  and versioned budget reservations under the revised PRD.
 - Replace synchronous-only parent dispatch with durable submission and
   idempotent same-turn continuation; complete deterministic summary spill and
   full legacy result/cancellation/recovery golden fixtures.

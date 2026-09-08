@@ -181,6 +181,7 @@ def build_child_dependencies(
         store=store,
         runtime=runtime,
         ref_admission_service=admission,
+        task_policy=bound_policy,
     )
     return SimpleNamespace(
         policy=bound_policy,

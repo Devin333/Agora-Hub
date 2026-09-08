@@ -72,6 +72,7 @@ class TaskPlanPolicy:
     )
     max_planning_tool_calls: int = 3
     planning_timeout_seconds: int = 30
+    shared_dependency_output_roles: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
     runtime_version: str = TASK_PLAN_RUNTIME_VERSION
     schema_version: str = TASK_PLAN_POLICY_SCHEMA
@@ -115,6 +116,10 @@ class TaskPlanPolicy:
                 details={"policy_ref": self.exact_ref},
             )
         object.__setattr__(self, "allowed_output_roles", allowed_roles)
+        shared_roles = stable_text_tuple(self.shared_dependency_output_roles, "shared_dependency_output_roles")
+        if not set(shared_roles).issubset(allowed_roles):
+            raise HarnessValidationError("dependency sharing roles must be allowed output roles", code="REF_UNAUTHORIZED")
+        object.__setattr__(self, "shared_dependency_output_roles", shared_roles)
         object.__setattr__(self, "required_output_roles", required_roles)
         object.__setattr__(
             self,
@@ -335,6 +340,8 @@ class TaskPlanPolicy:
             "parent_observation_limits": thaw_mapping(self.parent_observation_limits),
             "max_planning_tool_calls": self.max_planning_tool_calls,
             "planning_timeout_seconds": self.planning_timeout_seconds,
+            **({"shared_dependency_output_roles": list(self.shared_dependency_output_roles)}
+               if self.shared_dependency_output_roles else {}),
             "metadata": thaw_mapping(self.metadata),
         }
 
@@ -393,6 +400,7 @@ class TaskPlanPolicy:
                 "parent_observation_limits",
                 "max_planning_tool_calls",
                 "planning_timeout_seconds",
+                "shared_dependency_output_roles",
             }
         )
         payload = exact_keys(value, required=required, optional=optional, model=cls.__name__)

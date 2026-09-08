@@ -61,6 +61,7 @@ from framework.harness.graph.model import (
 from framework.harness.graph.validation import HarnessGraphPreflightPolicy
 from framework.harness.task_plan import task_plan_context_identities
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
+from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_results import HarnessResultRefAuthority
@@ -240,10 +241,13 @@ class _DynamicTaskPlanFactory:
             transcript_store=transcript_store,
             result_ref_authority=result_authority,
         )
+        store = InMemoryTaskPlanStore()
         adapter = ResolvedSubAgentTaskAdapter(
             runtime, ref_admission_service=self.ref_admission_service,
+            dependency_result_resolver=(AcceptedDependencyResultResolver(
+                store=store, authority=result_authority, policy=policy,
+            ) if result_authority is not None else None),
         )
-        store = InMemoryTaskPlanStore()
         outline_worker = _PlanOutlineWorker(
             dependencies.llm_worker,
             self.outline_transform,
@@ -497,6 +501,39 @@ def test_dynamic_task_plan_fake_llm_and_subagents_publish_through_fixed_path(tmp
         if item["node_id"] == "publish_artifacts"
     )
     assert publish_result["status"] == "succeeded"
+
+
+def test_dynamic_dependency_public_output_reaches_the_research_llm(tmp_path) -> None:
+    dependency_ref = "task://analyze-structure/output"
+
+    def dependent_input(outline):
+        for task in outline["tasks"]:
+            if task["task_id"] == "analyze-experiments":
+                task["input_refs"].append(dependency_ref)
+        return outline
+
+    class RecordingWorker(FakeResearchLLMWorker):
+        def __init__(self):
+            super().__init__()
+            self.experiment_inputs = []
+
+        def generate_candidate(self, *, task, payload, execution_identity=None):
+            if task == "candidate_experiment_claims":
+                self.experiment_inputs.append(deepcopy(payload))
+            return super().generate_candidate(task=task, payload=payload, execution_identity=execution_identity)
+
+    llm = RecordingWorker()
+    factory = _DynamicTaskPlanFactory(outline_transform=dependent_input, transcript_root=tmp_path / "transcripts")
+    result = _analyze("dynamic-shared-dependency", dynamic=True, dynamic_factory=factory, llm_worker=llm)
+    assert result.succeeded, result
+    assert len(llm.experiment_inputs) == 1
+    inputs = llm.experiment_inputs[0]["dependency_outputs"]
+    assert set(inputs) == {dependency_ref}
+    assert inputs[dependency_ref]["three_minute_read"]["core_idea"] == (
+        "Harness owns routing while LLM workers generate candidate research content."
+    )
+    assert "context_pack" not in inputs[dependency_ref]
+    assert "transcript" not in inputs[dependency_ref]
 
 
 def test_missing_dynamic_role_stops_before_subagent_and_publication(tmp_path) -> None:

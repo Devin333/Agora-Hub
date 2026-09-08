@@ -58,6 +58,8 @@ def test_from_env_builds_immutable_defaults_without_creating_storage(
     assert settings.rag.max_context_items == 8
     assert settings.rag.max_context_tokens == 4_096
     assert settings.rag.max_worker_calls == 16
+    assert settings.rag.memory_enabled is False
+    assert settings.rag.memory_namespace_refs == ()
     assert settings.run_store.write_schema_version == "v2"
     assert settings.run_store.supported_schema_versions == ("v1", "v2")
     assert settings.run_store.rollback_schema_versions == ("v1", "v2")
@@ -84,6 +86,35 @@ def test_from_env_builds_immutable_defaults_without_creating_storage(
     projection = json.dumps(asdict(settings), default=str, sort_keys=True)
     assert secret not in projection
     assert secret not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    "extra_env",
+    (
+        {"NEWS_RAG_MEMORY": "true"},
+        {
+            "NEWS_RAG_MEMORY": "true",
+            "NEWS_RESEARCH_RAG_MEMORY_NAMESPACE_REFS": "research:latest",
+        },
+        {
+            "NEWS_RAG_MEMORY": "true",
+            "NEWS_RESEARCH_RAG_MEMORY_NAMESPACE_REFS": (
+                "memory-namespace://" + "a" * 64 + ","
+                "memory-namespace://" + "a" * 64
+            ),
+        },
+    ),
+)
+def test_enabled_rag_memory_requires_unique_exact_namespace_revisions(
+    tmp_path: Path,
+    extra_env: dict[str, str],
+) -> None:
+    with pytest.raises(ResearchConfigurationError) as exc_info:
+        ResearchRuntimeSettings.from_env(
+            {**_minimum_env(), **extra_env},
+            cwd=tmp_path,
+        )
+    assert "research.rag.memory_namespace_refs" in exc_info.value.capabilities
 
 
 def test_from_env_normalizes_all_research_configuration_groups(tmp_path: Path) -> None:
@@ -125,6 +156,11 @@ def test_from_env_normalizes_all_research_configuration_groups(tmp_path: Path) -
         "NEWS_RESEARCH_RAG_MAX_CONTEXT_ITEMS": "20",
         "NEWS_RESEARCH_RAG_MAX_CONTEXT_TOKENS": "12000",
         "NEWS_RESEARCH_RAG_MAX_WORKER_CALLS": "6",
+        "NEWS_RAG_MEMORY": "true",
+        "NEWS_RESEARCH_RAG_MEMORY_NAMESPACE_REFS": (
+            "memory-namespace://" + "b" * 64 + ","
+            "memory-namespace://" + "a" * 64
+        ),
         "NEWS_RESEARCH_ARTIFACT_MAX_BYTES": "24000000",
         "NEWS_RESEARCH_RUN_RECORD_MAX_BYTES": "25000000",
         "NEWS_RESEARCH_RUN_WRITE_SCHEMA_VERSION": "v2",
@@ -159,6 +195,11 @@ def test_from_env_normalizes_all_research_configuration_groups(tmp_path: Path) -
     assert settings.rag.local_root == (tmp_path / "rag" / "chunks").resolve()
     assert settings.rag.vector_size == 1536
     assert settings.rag.max_replans == 2
+    assert settings.rag.memory_enabled is True
+    assert settings.rag.memory_namespace_refs == (
+        "memory-namespace://" + "a" * 64,
+        "memory-namespace://" + "b" * 64,
+    )
     assert settings.artifact.max_bytes == 24_000_000
     assert settings.run_store.max_record_bytes == 25_000_000
     assert settings.run_store.write_schema_version == "v2"

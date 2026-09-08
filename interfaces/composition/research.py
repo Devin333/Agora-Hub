@@ -16,6 +16,9 @@ from backend.research.application.bounded_document_rag import (
     BoundedDocumentRAGRuntime,
 )
 from backend.research.application.paper_rag_session import PaperRAGSession
+from backend.research.application.rag_memory_admission import (
+    HarnessResearchRAGMemoryAdmission,
+)
 from backend.research.application.run_disposition import (
     ResearchRunDispositionReconciler,
     classify_research_run_record,
@@ -59,6 +62,7 @@ from backend.research.document.chunker import PaperDocumentChunker
 from backend.research.document.latex_compiler import ArxivLatexDocumentCompiler
 from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
 from backend.research.document.mineru_pdf_parser import MinerUPdfDocumentParser
+from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
 from backend.research.ports.artifact_publication import (
     RESEARCH_ARTIFACT_MANIFEST_VERSION,
     ResearchArtifactDiagnosticClaim,
@@ -108,6 +112,7 @@ from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
 from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
 from framework.harness.task_plan.capability import task_plan_context_identities
+from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.task_plan.checkpoint import JsonlTaskPlanCheckpointStore
 from framework.harness.control_plane.gates import GateContext
@@ -1654,6 +1659,9 @@ def _build_configured_composition(
             subagent_adapter = ResolvedSubAgentTaskAdapter(
                 subagent_runtime,
                 ref_admission_service=dynamic_ref_admission_service,
+                dependency_result_resolver=AcceptedDependencyResultResolver(
+                    store=dynamic_task_plan_store, authority=result_ref_authority, policy=policy,
+                ),
             )
             gate_registry = build_paper_analysis_gate_registry()
 
@@ -2000,6 +2008,19 @@ def _build_configured_composition(
                 scoped_store,
                 context_assembler_factory=rag_context_assembler_factory,
             ),
+            authorized_session_factory=lambda scoped_store, memory_recall: PaperRAGSession(
+                scoped_store,
+                context_assembler_factory=rag_context_assembler_factory,
+                memory=ResearchRAGMemoryPort(memory_recall),
+            ),
+        )
+        rag_memory_admission = (
+            HarnessResearchRAGMemoryAdmission(
+                dynamic_ref_admission_service,
+                namespace_refs=settings.rag.memory_namespace_refs,
+            )
+            if settings.rag.memory_enabled
+            else None
         )
 
         recovery_source = _DurableResearchRunRecoverySource(
@@ -2043,6 +2064,7 @@ def _build_configured_composition(
             llm_worker=candidate_worker,
             github_repository=github_repository,
             rag_runtime=rag_runtime,
+            rag_memory_admission=rag_memory_admission,
             artifact_port=artifact_port,
             event_port_factory=event_port_factory,
             scoped_event_port_factory=scoped_event_port_factory,

@@ -105,7 +105,13 @@ def test_mcp_capability_manifest_describes_research_permissions() -> None:
 
 def test_mcp_research_tools_use_configured_research_service_factory() -> None:
     research_service = _FakeResearchService()
-    service = MCPApplicationService(research_service_factory=lambda: research_service)
+    service = MCPApplicationService(research_service_factory=lambda: research_service).for_actor(
+        ActorContext(
+            actor_id="user-1", actor_type="user", roles=["mcp_client"],
+            request_id="request-scoped-research",
+            metadata={"tenant_id": "tenant-a"},
+        )
+    )
     actor_args = {
         "tenant_id": "tenant-a",
         "user_id": "user-1",
@@ -204,6 +210,79 @@ def test_mcp_research_tools_use_configured_research_service_factory() -> None:
     assert {"tenant_id", "user_id", "memory_namespace"} <= ask_properties.keys()
     for properties in (analysis_properties, reader_properties, trace_properties):
         assert {"tenant_id", "user_id", "memory_namespace"} <= properties.keys()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("tenant_id", "tenant-a"),
+        ("user_id", "user-1"),
+        ("memory_namespace", "research:tenant:tenant-a:user:user-1"),
+    ),
+)
+def test_mcp_research_rejects_untrusted_scope_before_service_call(
+    monkeypatch,
+    field,
+    value,
+) -> None:
+    monkeypatch.delenv("NEWS_EVENT_OPERATOR_PRINCIPAL_ID", raising=False)
+    monkeypatch.delenv("NEWS_TENANT_ID", raising=False)
+    research_service = _FakeResearchService()
+    service = MCPApplicationService(research_service_factory=lambda: research_service)
+    result = service.call_tool(
+        "news.research.analyze_paper",
+        {
+            "paper_id": "paper-1",
+            "source_url": "https://arxiv.org/abs/2605.00001",
+            field: value,
+        },
+    )
+    assert result.success is False
+    assert result.error_type == "ResearchActorAuthorizationError"
+    assert research_service.calls == []
+
+
+def test_mcp_research_without_actor_keeps_public_scope(monkeypatch) -> None:
+    monkeypatch.delenv("NEWS_EVENT_OPERATOR_PRINCIPAL_ID", raising=False)
+    monkeypatch.delenv("NEWS_TENANT_ID", raising=False)
+    research_service = _FakeResearchService()
+    service = MCPApplicationService(research_service_factory=lambda: research_service)
+
+    result = service.call_tool(
+        "news.research.analyze_paper",
+        {
+            "paper_id": "paper-1",
+            "source_url": "https://arxiv.org/abs/2605.00001",
+        },
+    )
+
+    assert result.success is True
+    command = research_service.calls[0][1]
+    assert (command.tenant_id, command.user_id, command.memory_namespace) == (
+        None, None, None,
+    )
+
+
+def test_mcp_research_uses_authenticated_deployment_actor_scope(monkeypatch) -> None:
+    monkeypatch.setenv("NEWS_EVENT_OPERATOR_PRINCIPAL_ID", "research-service")
+    monkeypatch.setenv("NEWS_EVENT_OPERATOR_ROLE", "service")
+    monkeypatch.setenv("NEWS_TENANT_ID", "tenant-a")
+    research_service = _FakeResearchService()
+    service = MCPApplicationService(research_service_factory=lambda: research_service)
+
+    result = service.call_tool(
+        "news.research.analyze_paper",
+        {
+            "paper_id": "paper-1",
+            "source_url": "https://arxiv.org/abs/2605.00001",
+        },
+    )
+
+    assert result.success is True
+    command = research_service.calls[0][1]
+    assert (command.tenant_id, command.user_id, command.memory_namespace) == (
+        "tenant-a", None, "research:tenant:tenant-a:public",
+    )
 
 
 def test_mcp_research_scope_is_bound_to_transport_actor() -> None:

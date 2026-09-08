@@ -115,6 +115,24 @@ def task_reference_producer(
     return task_ref if task_ref in frozenset(known_task_ids) else None
 
 
+def task_output_reference_producer(value: str, known_task_ids: Sequence[str] = ()) -> str | None:
+    """Resolve the public candidate output selector, never private evidence."""
+    producer = task_reference_producer(value, known_task_ids)
+    if producer is None:
+        return None
+    allowed = {producer}
+    for prefix in ("task:", "task://"):
+        allowed.update(prefix + producer + suffix for suffix in ("", "/output"))
+    allowed.add("task://" + producer + "#output")
+    if value not in allowed:
+        raise _contract_error(
+            "REF_DEPENDENCY_SELECTOR_INVALID",
+            "task dependencies can reference only the accepted public output",
+            field="input_ref",
+        )
+    return producer
+
+
 def checksum(value: Any, field_name: str) -> str:
     text = required_text(value, field_name)
     if _CHECKSUM_PATTERN.fullmatch(text) is None:
@@ -263,5 +281,6 @@ __all__ = [
     "required_text",
     "stable_text_tuple",
     "task_reference_producer",
+    "task_output_reference_producer",
     "thaw_mapping",
 ]

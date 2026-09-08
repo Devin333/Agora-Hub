@@ -28,7 +28,9 @@ from framework.harness.task_plan.canonical import (
     exact_reference,
     identifier,
     required_text,
+    task_output_reference_producer,
 )
+from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
 from framework.harness.task_plan.models import (
     ResolvedTaskSpec,
     TaskInstance,
@@ -354,6 +356,7 @@ class ResolvedSubAgentTaskAdapter:
         *,
         context_builder: SubAgentContextBuilder | None = None,
         ref_admission_service: "HarnessRefAdmissionService | None" = None,
+        dependency_result_resolver: AcceptedDependencyResultResolver | None = None,
     ) -> None:
         if not isinstance(runtime, SubAgentRuntime):
             raise TypeError("runtime must be SubAgentRuntime")
@@ -362,6 +365,22 @@ class ResolvedSubAgentTaskAdapter:
         if ref_admission_service is not None and not isinstance(ref_admission_service, HarnessRefAdmissionService):
             raise TypeError("ref_admission_service must be HarnessRefAdmissionService")
         self._ref_admission_service = ref_admission_service
+        if dependency_result_resolver is not None:
+            if not isinstance(dependency_result_resolver, AcceptedDependencyResultResolver):
+                raise TypeError("dependency_result_resolver must be AcceptedDependencyResultResolver")
+        self._dependency_result_resolver = dependency_result_resolver
+        self._require_dependency_authority()
+
+    def _require_dependency_authority(self) -> None:
+        resolver = self._dependency_result_resolver
+        if resolver is not None and (
+            self._ref_admission_service is None
+            or resolver.authority is not self._runtime.result_ref_authority
+            or resolver.authority.store is not self._ref_admission_service.store
+            or resolver.authority.transcript_store is not self._runtime.transcript_store
+            or not resolver.authority.is_durable
+        ):
+            raise ValueError("dependency resolution must share the runtime and input authority owners")
 
     def invoke(
         self,
@@ -418,6 +437,7 @@ class ResolvedSubAgentTaskAdapter:
         budget_snapshot: HarnessBudgetSnapshot,
         execution_identity: GraphExecutionIdentity,
     ) -> SubAgentInvocation:
+        self._require_dependency_authority()
         if not isinstance(plan, ValidatedTaskPlan):
             raise TypeError("plan must be ValidatedTaskPlan")
         if not isinstance(instance, TaskInstance):
@@ -493,6 +513,16 @@ class ResolvedSubAgentTaskAdapter:
         )
         ref_options = {}
         memory_context_refs = ()
+        input_refs = resolved_task.task.input_refs
+        dependency_bindings = ()
+        if any(task_output_reference_producer(ref, tuple(item.task_id for item in plan.tasks)) is not None for ref in input_refs):
+            if self._dependency_result_resolver is None:
+                raise HarnessValidationError("dependency inputs require accepted-result resolution", code="REF_UNAUTHORIZED")
+            dependency_bindings = self._dependency_result_resolver.resolve(
+                plan=plan, task=resolved_task, execution_identity=execution_identity,
+            )
+            replacements = {item.logical_ref: item.descriptor.ref for item in dependency_bindings}
+            input_refs = tuple(sorted({replacements.get(ref, ref) for ref in input_refs}))
         if self._ref_admission_service is not None:
             root = self._ref_admission_service.store.find(
                 run_id=plan.run_id,
@@ -507,8 +537,10 @@ class ResolvedSubAgentTaskAdapter:
                 )
             child_grant = self._ref_admission_service.admit_child_inputs(
                 root, attempt_identity=attempt_identity,
-                input_refs=resolved_task.task.input_refs,
+                input_refs=input_refs,
                 memory_namespaces=resolved_task.task.requested_memory_namespaces,
+                dependency_bindings=dependency_bindings,
+                task_policy=(self._dependency_result_resolver.policy if dependency_bindings else None),
             )
             memory_context_refs = tuple(
                 item.ref for item in child_grant.descriptors if item.ref_kind == REF_KIND_MEMORY
@@ -517,19 +549,20 @@ class ResolvedSubAgentTaskAdapter:
                 "ref_authority": RefAuthority(),
                 "ref_policy": child_grant.policy,
                 "ref_resolution": SnapshotRefResolutionPort(child_grant),
+                "dependency_bindings": child_grant.dependency_bindings,
             }
         envelope = self._context_builder.build(
             parent_run_id=plan.run_id,
             child_run_id=child_run_id,
             spec=bounded_spec,
             context_pack=context_pack,
-            input_refs=resolved_task.task.input_refs,
+            input_refs=input_refs,
             memory_context_refs=memory_context_refs,
             budget_snapshot=budget_snapshot,
             **ref_options,
         )
         metadata = {
-            "input_refs": list(resolved_task.task.input_refs),
+            "input_refs": list(input_refs),
             "task_id": resolved_task.task_id,
             "task_definition_checksum": resolved_task.task_definition_checksum,
         }
@@ -551,7 +584,7 @@ class ResolvedSubAgentTaskAdapter:
             attempt=instance.attempt,
             observed_at=plan.accepted_at,
             subagent_spec=bounded_spec,
-            input_refs=resolved_task.task.input_refs,
+            input_refs=input_refs,
             context_envelope=envelope,
             budget_snapshot=budget_snapshot,
             metadata=metadata,

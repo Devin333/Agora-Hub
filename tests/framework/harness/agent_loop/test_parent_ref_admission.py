@@ -68,11 +68,12 @@ class _RecordingAdmission(HarnessRefAdmissionService):
         return self.snapshot
 
 
-def _setup(root, *, include_document=True, include_memory=False):
+def _setup(root, *, include_document=True, include_memory=False, dependency_ref=None, share_dependency=True):
     template, template_identity = _runtime()
     policy = replace(
         template._policy_registry.policies[0], stage_id="run-agent-loop", max_planning_tool_calls=0,
         allowed_subagent_ids=("structure-worker", "contribution-worker"),
+        shared_dependency_output_roles=("structure",) if dependency_ref is not None and share_dependency else (),
     )
     spec = _runtime_run_spec("parent-ref-run", identity_scope_ref=checksum_for("production"))
     declaration = HarnessGraphTaskPlanStageBinding(
@@ -118,6 +119,7 @@ def _setup(root, *, include_document=True, include_memory=False):
         task_events, artifact_store=FilesystemArtifactStore(root / "task-artifacts"),
     )
     child_calls = []
+    child_inputs = []
 
     class Worker:
         worker_version = "1"
@@ -129,8 +131,13 @@ def _setup(root, *, include_document=True, include_memory=False):
         def execute(self, task, *, execution_identity):
             invocation = task["invocation"]
             child_calls.append((invocation, execution_identity))
+            child_inputs.append(deepcopy(task))
             assert "private-parent-only" not in str(task)
-            assert invocation["input_refs"] == ["document"]
+            if dependency_ref is not None and self.worker_id == "contribution-worker":
+                assert task["dependency_outputs"] == {dependency_ref: {"summary": "completed"}}
+                assert all(ref.startswith("subagent-output://") for ref in invocation["input_refs"])
+            else:
+                assert invocation["input_refs"] == ["document"]
             return HarnessWorkerResult(status="succeeded", output={"summary": "completed"})
 
     registrations = []
@@ -156,7 +163,7 @@ def _setup(root, *, include_document=True, include_memory=False):
     child_artifacts = FilesystemHarnessArtifactPort(root / "child-artifacts")
     authority = HarnessResultRefAuthority(grants, transcript_store=transcripts, artifact_descriptors=child_artifacts, tenant_id="production")
     subagents = SubAgentRuntime(workers=workers, transcript_store=transcripts, result_ref_authority=authority)
-    executor = HarnessSubAgentTaskExecutor(store=task_store, runtime=subagents, ref_admission_service=admission)
+    executor = HarnessSubAgentTaskExecutor(store=task_store, runtime=subagents, ref_admission_service=admission, task_policy=policy)
     gates = TaskPlanGateRegistry()
     gates.register("gate@1", lambda request: request.worker_result.output.get("summary") == "completed", deterministic=True)
     verifier = TaskPlanResultVerifier(gates, transcript_store=transcripts, artifact_reference_verifier=child_artifacts, result_ref_authority=authority)
@@ -179,6 +186,10 @@ def _setup(root, *, include_document=True, include_memory=False):
     if include_memory:
         agent = replace(agent, allowed_tools=["memory.recall"], tool_policy=ToolPolicy(allowed_tools=["memory.recall"]))
     candidate = _request(template_identity).candidate
+    if dependency_ref is not None:
+        candidate = replace(candidate, tasks=(candidate.tasks[0], replace(
+            candidate.tasks[1], depends_on=("structure",), input_refs=(dependency_ref,),
+        )))
     batch = {"action_type": "delegate_batch", **candidate.to_dict()}
 
     class InspectingLLM(FakeLLMClient):
@@ -302,7 +313,7 @@ def _reopen_runtime(setup, root):
     artifacts = FilesystemHarnessArtifactPort(root / "child-artifacts")
     authority = HarnessResultRefAuthority(grants, transcript_store=transcripts, artifact_descriptors=artifacts, tenant_id="production")
     subagents = SubAgentRuntime(workers=setup.workers, transcript_store=transcripts, result_ref_authority=authority)
-    executor = HarnessSubAgentTaskExecutor(store=store, runtime=subagents, ref_admission_service=admission)
+    executor = HarnessSubAgentTaskExecutor(store=store, runtime=subagents, ref_admission_service=admission, task_policy=setup.policy)
     verifier = TaskPlanResultVerifier(setup.gates, transcript_store=transcripts, artifact_reference_verifier=artifacts, result_ref_authority=authority)
     return build_agent_loop_harness_orchestration_runtime(
         stage_binding=setup.binding, policy_registry=setup.configured._policy_registry,

@@ -25,6 +25,7 @@ from framework.harness.task_plan.canonical import (
     identifier,
     stable_text_tuple,
     task_reference_producer,
+    task_output_reference_producer,
     thaw_mapping,
 )
 from framework.harness.task_plan.dag import task_dependency_depths
@@ -393,13 +394,19 @@ class TaskPlanValidator:
             if ref in context.future_stage_input_refs:
                 diagnostics.append(_diag("future_stage_reference", "task references a future stage input", "dataflow", task_id=task.task_id, details={"ref": ref}))
                 continue
-            producer = task_reference_producer(ref, tuple(by_id))
+            try:
+                producer = task_output_reference_producer(ref, tuple(by_id))
+            except HarnessValidationError as exc:
+                diagnostics.append(_diag(exc.code, str(exc), "dataflow", task_id=task.task_id, details={"ref": ref}))
+                continue
             if producer is not None:
                 if producer not in by_id:
                     diagnostics.append(_diag("task_plan_unknown_dependency", "task input references an unknown producer", "dataflow", task_id=task.task_id, details={"ref": ref, "producer_task_id": producer}))
                     continue
                 if producer not in task.depends_on:
                     diagnostics.append(_diag("task_plan_task_input_dependency_missing", "task input reference must be declared as a dependency", "dataflow", task_id=task.task_id, details={"ref": ref, "producer_task_id": producer}))
+                if by_id[producer].output_contract.output_role not in policy.shared_dependency_output_roles:
+                    diagnostics.append(_diag("REF_UNAUTHORIZED", "dependency output role is not approved for sharing", "refs", task_id=task.task_id, details={"ref": ref}))
             elif ref not in policy.allowed_input_refs or ref not in context.available_input_refs:
                 diagnostics.append(_diag("task_plan_input_reference_unavailable", "task input reference is not authorized and available in this stage", "dataflow", task_id=task.task_id, details={"ref": ref}))
         for ref in task.output_contract.metadata.values():

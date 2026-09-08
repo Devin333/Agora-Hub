@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from interfaces.api import create_app
+from interfaces.models import ActorContext
 from interfaces.sdk import NewsApiError, NewsClient
 from interfaces.services.research_service import (
     InMemoryResearchRunStore,
@@ -35,6 +36,23 @@ def _client(*, result=None):
     )
 
 
+def _scoped_client(service) -> TestClient:
+    app = create_app(
+        research_service_factory=lambda: service,
+        audit_emitter_factory=None,
+    )
+
+    @app.middleware("http")
+    async def authenticated_test_actor(request, call_next):
+        request.state.actor_context = ActorContext(
+            actor_id="user-1", actor_type="user", roles=["service"],
+            request_id="authenticated-test-request", metadata={"tenant_id": "tenant-a"},
+        )
+        return await call_next(request)
+
+    return TestClient(app)
+
+
 def test_research_analyze_endpoint_returns_run_id_and_refs() -> None:
     client = _client()
 
@@ -60,12 +78,7 @@ def test_research_analyze_endpoint_returns_run_id_and_refs() -> None:
 
 def test_research_http_transports_actor_scope_for_analyze_and_both_ask_modes() -> None:
     service = _CapturingResearchService()
-    client = TestClient(
-        create_app(
-            research_service_factory=lambda: service,
-            audit_emitter_factory=None,
-        )
-    )
+    client = _scoped_client(service)
     actor = {
         "tenantId": "tenant-a",
         "userId": "user-1",
@@ -131,6 +144,36 @@ def test_research_http_transports_actor_scope_for_analyze_and_both_ask_modes() -
         "user-1",
         "research:tenant:tenant-a:user:user-1",
     )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("tenantId", "tenant-a"),
+        ("userId", "user-1"),
+        ("memoryNamespace", "research:tenant:tenant-a:user:user-1"),
+    ),
+)
+def test_research_http_rejects_untrusted_scope_before_service_call(field, value):
+    service = _CapturingResearchService()
+    client = TestClient(
+        create_app(
+            research_service_factory=lambda: service,
+            audit_emitter_factory=None,
+        )
+    )
+    response = client.post(
+        "/api/v1/research/papers/analyze",
+        json={
+            "paperId": "paper-1",
+            "sourceUrl": "https://arxiv.org/abs/2606.00001",
+            field: value,
+        },
+        headers={"x-news-actor": "user-1", "x-news-tenant-id": "tenant-a"},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
+    assert service.analyze_inputs == []
 
 
 def test_authenticated_research_http_binds_deployment_tenant_and_rejects_spoof(
@@ -373,12 +416,13 @@ def test_research_api_requires_matching_actor_for_tenant_queries() -> None:
         analyze_use_case=FakeAnalyzeUseCase(result),
         run_store=InMemoryResearchRunStore(),
     )
-    client = TestClient(
+    anonymous_client = TestClient(
         create_app(
             research_service_factory=lambda: service,
             audit_emitter_factory=None,
         )
     )
+    client = _scoped_client(service)
     actor = {
         "tenantId": "tenant-a",
         "userId": "user-1",
@@ -394,8 +438,8 @@ def test_research_api_requires_matching_actor_for_tenant_queries() -> None:
         },
     )
 
-    hidden_analysis = client.get("/api/v1/research/papers/paper-1/analysis")
-    hidden_trace = client.get("/api/v1/research/runs/run-tenant-a/trace")
+    hidden_analysis = anonymous_client.get("/api/v1/research/papers/paper-1/analysis")
+    hidden_trace = anonymous_client.get("/api/v1/research/runs/run-tenant-a/trace")
     visible_analysis = client.get(
         "/api/v1/research/papers/paper-1/analysis",
         params=actor,

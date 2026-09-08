@@ -100,6 +100,7 @@ def _policy(
         allowed_memory_namespaces=("research.public",),
         allowed_input_refs=("document", "evidence_pack"),
         allowed_output_roles=roles,
+        shared_dependency_output_roles=roles,
         required_output_roles=required_roles or roles,
         allowed_output_schema_refs=tuple(f"schema://{role}@1" for role in roles),
         allowed_gate_refs=("SummarySchemaGate@1",),

@@ -25,6 +25,7 @@ REF_SNAPSHOT_EVENT_SCHEMA = "newsroom.harness-ref-authority-committed/v1"
 REF_SNAPSHOT_EVENT_SOURCE = "framework.harness.ref_authority"
 _ARTIFACT_TYPE = "harness.ref-authority.snapshot"
 _MAX_SNAPSHOT_BYTES = 1024 * 1024
+_MAX_AUTHORITY_GRAPH_SNAPSHOTS = 1024
 
 
 def _error(message: str, code: str = "REF_SNAPSHOT_CORRUPT") -> HarnessValidationError:
@@ -64,6 +65,10 @@ class DurableRefAuthoritySnapshotStore:
             raise TypeError("snapshot must be RefAuthoritySnapshot")
         if snapshot.parent_snapshot_ref is not None:
             snapshot.validate_parent(self.get(run_id=snapshot.run_id, snapshot_ref=snapshot.parent_snapshot_ref))
+        snapshot.validate_dependency_sources({
+            ref: self.get(run_id=snapshot.run_id, snapshot_ref=ref)
+            for ref in {item.source_snapshot_ref for item in snapshot.dependency_bindings}
+        })
         content = canonical_json_bytes(snapshot.to_dict())
         if len(content) > _MAX_SNAPSHOT_BYTES:
             raise _error("reference snapshot exceeds its bounded size", "REF_SNAPSHOT_SIZE_EXCEEDED")
@@ -107,20 +112,34 @@ class DurableRefAuthoritySnapshotStore:
         event = self._find_event(events, "snapshot_ref", snapshot_ref)
         if event is None:
             raise _error("reference snapshot is not durably committed", "REF_SNAPSHOT_MISSING")
-        snapshot = self._load(event, run_id)
-        child, child_event = snapshot, event
-        for _ in range(len(RefSnapshotPhase) - 1):
-            if child.parent_snapshot_ref is None:
-                return snapshot
-            parent_event = self._find_event(events, "snapshot_ref", child.parent_snapshot_ref)
-            if parent_event is None or parent_event.stream_sequence >= child_event.stream_sequence:
-                raise _error("reference grant has no prior committed parent", "REF_SNAPSHOT_PARENT_MISSING")
-            parent = self._load(parent_event, run_id)
-            child.validate_parent(parent)
-            child, child_event = parent, parent_event
-        if child.phase is not RefSnapshotPhase.INPUT_ADMISSION or child.parent_snapshot_ref is not None:
-            raise _error("reference grant exceeds its bounded parent chain")
-        return snapshot
+        # A dependent child has one input-admission parent plus explicit edges
+        # to prior producer results. Verify the whole bounded DAG once, using
+        # this fixed event prefix rather than recursively rereading the stream.
+        by_ref = {item.payload["snapshot_ref"]: item for item in events}
+        pending = [event]
+        loaded: dict[str, RefAuthoritySnapshot] = {}
+        while pending:
+            current = pending.pop()
+            ref = current.payload["snapshot_ref"]
+            if ref in loaded:
+                continue
+            if len(loaded) >= _MAX_AUTHORITY_GRAPH_SNAPSHOTS:
+                raise _error("reference authority graph exceeds its bounded size", "REF_SNAPSHOT_SIZE_EXCEEDED")
+            child = self._load(current, run_id)
+            loaded[ref] = child
+            sources = {item.source_snapshot_ref for item in child.dependency_bindings}
+            if child.parent_snapshot_ref is not None:
+                sources.add(child.parent_snapshot_ref)
+            for source_ref in sources:
+                source_event = by_ref.get(source_ref)
+                if source_event is None or source_event.stream_sequence >= current.stream_sequence:
+                    raise _error("reference grant has no prior committed source", "REF_SNAPSHOT_PARENT_MISSING")
+                pending.append(source_event)
+        for child in loaded.values():
+            if child.parent_snapshot_ref is not None:
+                child.validate_parent(loaded[child.parent_snapshot_ref])
+            child.validate_dependency_sources(loaded)
+        return loaded[snapshot_ref]
 
     def find(self, *, run_id: str, binding_key: str) -> RefAuthoritySnapshot | None:
         run_id = identifier(run_id, "run_id")

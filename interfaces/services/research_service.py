@@ -1291,10 +1291,12 @@ def bind_research_actor_input(
 ) -> ResearchActorInput:
     if not isinstance(requested, ResearchActorInput):
         raise TypeError("requested must be ResearchActorInput")
-    if actor is None:
-        return requested
-    if not isinstance(actor, ActorContext):
+    if actor is not None and not isinstance(actor, ActorContext):
         raise TypeError("actor must be ActorContext or None")
+    if actor is None or actor.actor_type == "anonymous":
+        if any((requested.tenant_id, requested.user_id, requested.memory_namespace)):
+            raise _research_actor_forbidden()
+        return ResearchActorInput()
 
     metadata = actor.metadata if isinstance(actor.metadata, dict) else {}
     trusted_user_id = _optional_text(metadata.get("user_id"))

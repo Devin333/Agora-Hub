@@ -18,7 +18,7 @@ from framework.harness.task_plan.aggregator import (
     TaskPlanAggregator,
     TaskPlanAggregatorRegistry,
 )
-from framework.harness.task_plan.canonical import canonical_payload_checksum
+from framework.harness.task_plan.canonical import canonical_payload_checksum, task_output_reference_producer
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_authority import RefAuthority
 from framework.harness.ref_snapshot import SnapshotRefResolutionPort
@@ -168,6 +168,7 @@ def build_research_analysis_task_plan_policy() -> TaskPlanPolicy:
         allowed_memory_namespaces=RESEARCH_DYNAMIC_MEMORY_NAMESPACES,
         allowed_input_refs=RESEARCH_DYNAMIC_INPUT_REFS,
         allowed_output_roles=RESEARCH_DYNAMIC_OUTPUT_ROLES,
+        shared_dependency_output_roles=RESEARCH_DYNAMIC_OUTPUT_ROLES,
         required_output_roles=RESEARCH_DYNAMIC_OUTPUT_ROLES,
         allowed_output_schema_refs=(
             "research.analysis.structure@1",
@@ -329,8 +330,14 @@ class ResearchAnalysisPlanCandidateBuilder(PlanCandidateBuilderPort):
                 code="research_task_plan_capability_not_allowed",
             )
         input_refs = value.get("input_refs")
-        if not isinstance(input_refs, list) or not set(input_refs).issubset(
-            RESEARCH_DYNAMIC_INPUT_REFS
+        dependencies = value.get("depends_on", ())
+        if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
+            raise HarnessValidationError("Research dependencies must be task identifiers", code="research_task_plan_builder_output_invalid")
+        if not isinstance(input_refs, list) or any(
+            not isinstance(ref, str) or (
+                ref not in RESEARCH_DYNAMIC_INPUT_REFS
+                and task_output_reference_producer(ref, tuple(dependencies)) not in dependencies
+            ) for ref in input_refs
         ):
             raise HarnessValidationError(
                 "Research TaskPlan task referenced context outside the analysis stage",
@@ -348,7 +355,7 @@ class ResearchAnalysisPlanCandidateBuilder(PlanCandidateBuilderPort):
             acceptance_criteria=TaskAcceptanceCriteria(
                 RESEARCH_DYNAMIC_GATES_BY_CAPABILITY[capability]
             ),
-            depends_on=tuple(value.get("depends_on", ())),
+            depends_on=tuple(dependencies),
             requested_tools=(),
             requested_memory_namespaces=(),
             budget_request=policy.per_task_budget,

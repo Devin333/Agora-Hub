@@ -15,6 +15,8 @@ from framework.harness.task_plan.capability import (
     ResolvedCapabilityBinding, ResolvedSubAgentTaskAdapter, task_plan_context_identities,
 )
 from framework.harness.task_plan.durable_store import DurableTaskPlanStore
+from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
+from framework.harness.task_plan.policy import TaskPlanPolicy
 from framework.harness.task_plan.models import TaskInstance
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.verification import (
@@ -35,6 +37,7 @@ class HarnessSubAgentTaskExecutor:
     def __init__(
         self, *, store: DurableTaskPlanStore, runtime: SubAgentRuntime,
         ref_admission_service: HarnessRefAdmissionService,
+        task_policy: TaskPlanPolicy,
     ) -> None:
         if not isinstance(store, DurableTaskPlanStore):
             raise TypeError("store must be DurableTaskPlanStore")
@@ -45,8 +48,12 @@ class HarnessSubAgentTaskExecutor:
         self._store = store
         self._runtime = runtime
         self._ref_admission_service = ref_admission_service
-        self._adapter = ResolvedSubAgentTaskAdapter(runtime, ref_admission_service=ref_admission_service)
-        self._require_authority()
+        authority = self._require_authority()
+        self._dependency_resolver = AcceptedDependencyResultResolver(store=store, authority=authority, policy=task_policy)
+        self._adapter = ResolvedSubAgentTaskAdapter(
+            runtime, ref_admission_service=ref_admission_service,
+            dependency_result_resolver=self._dependency_resolver,
+        )
 
     @property
     def store(self) -> DurableTaskPlanStore:
@@ -86,8 +93,11 @@ class HarnessSubAgentTaskExecutor:
         self, *, store: DurableTaskPlanStore, admission: HarnessRefAdmissionService,
         verifier: TaskPlanResultVerifier, bindings: tuple[ResolvedCapabilityBinding, ...],
         gate_refs: tuple[str, ...],
+        task_policy: TaskPlanPolicy,
     ) -> None:
         authority = self._require_authority()
+        if self._dependency_resolver.policy != task_policy:
+            raise ValueError("child executor must use the pinned TaskPlan policy")
         if self.store is not store:
             raise ValueError("child executor must use the configured TaskPlan store")
         if self.ref_admission_service is not admission:
