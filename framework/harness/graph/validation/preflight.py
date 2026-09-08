@@ -129,14 +129,19 @@ def _validate_dynamic_task_plan_declarations(
         declaration = _task_plan_step_metadata(node)
         worker_type = node.metadata.get("worker_type")
         is_task_plan_worker = worker_type == HarnessWorkerType.TASK_PLAN.value
+        is_agent_delegation = (
+            worker_type == HarnessWorkerType.AGENT_LOOP.value
+            and node.metadata.get("binding_source") == "graph_definition"
+            and declaration.get("agent_loop_delegation") is True
+        )
         is_dynamic_stage = declaration.get("dynamic_stage") is True
         if not is_task_plan_worker and not is_dynamic_stage:
             continue
-        if not is_task_plan_worker:
+        if not is_task_plan_worker and not is_agent_delegation:
             diagnostics.append(
                 _task_plan_diagnostic(
                     "dynamic_task_plan_worker_type_mismatch",
-                    "dynamic TaskPlan stage must use HarnessWorkerType.TASK_PLAN",
+                    "dynamic TaskPlan stage requires a TaskPlan or declared AgentLoop worker",
                     node=node,
                     path="metadata.worker_type",
                 )

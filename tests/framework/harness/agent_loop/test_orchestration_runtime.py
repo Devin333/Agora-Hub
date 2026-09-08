@@ -58,8 +58,8 @@ class _BoundWorker:
         return HarnessWorkerResult(status="succeeded", output={"summary": "completed"})
 
 
-def _runtime(*, store=None, worker_executor=None, result_verifier=None) -> tuple[HarnessAgentOrchestrationRuntime, GraphExecutionIdentity]:
-    policy = TaskPlanPolicy(
+def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admission_service=None, agent_delegation=False, policy=None, stage_binding=None) -> tuple[HarnessAgentOrchestrationRuntime, GraphExecutionIdentity]:
+    policy = policy or TaskPlanPolicy(
         policy_id="agent.loop.delegate",
         version="1",
         stage_id="delegate_stage",
@@ -95,11 +95,12 @@ def _runtime(*, store=None, worker_executor=None, result_verifier=None) -> tuple
         available_concurrency_reservations=2,
         max_tasks_per_group=2,
     )
-    stage_binding = build_task_plan_stage_binding(
+    stage_binding = stage_binding or build_task_plan_stage_binding(
         graph_id="agent-graph",
         stage_id=policy.stage_id,
         policy_ref=policy.exact_ref,
         required_output_roles=policy.required_output_roles,
+        worker_type=HarnessWorkerType.AGENT_LOOP if agent_delegation else HarnessWorkerType.TASK_PLAN,
     )
     registrations = []
     for capability, worker_id in (
@@ -162,6 +163,7 @@ def _runtime(*, store=None, worker_executor=None, result_verifier=None) -> tuple
             ),
         ),
         require_durable_store=False,
+        ref_admission_service=ref_admission_service,
     )
     graph = stage_binding.graph
     identity = GraphExecutionIdentity(
@@ -170,7 +172,7 @@ def _runtime(*, store=None, worker_executor=None, result_verifier=None) -> tuple
         graph_version=graph.graph_version,
         graph_ref=graph.identity_ref.exact_ref,
         graph_checksum=stage_binding.graph_checksum,
-        node_id="parent-agent-loop",
+        node_id=stage_binding.node_id,
         node_instance_id="parent-node-1",
         activity_id="parent-activity-1",
         attempt=1,

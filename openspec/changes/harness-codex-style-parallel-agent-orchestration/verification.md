@@ -870,6 +870,68 @@ vector records. Generic parent input/result provenance, replacement/dependency
 grants and remaining replay consumers also remain in task 1.5. No default feature
 is enabled by this increment.
 
+## Task 1.5 Generic Parent Graph Input Admission Increment
+
+The checklist remains 14/46 with task 1.5 still unchecked. This increment binds
+generic delegation to the real parent Graph activity and persists its input
+authority before parent reasoning. It does not complete the generic child/result
+adapter composition or existing memory recall/tool consumers.
+
+- A declared AgentLoop Graph activity can carry both its leaf binding and a
+  TaskPlan delegation binding. Definition validation requires identical exact
+  worker/activity refs and forbids side-effect ownership. The compiler alone
+  adds delegation authority metadata; ordinary AgentLoop step metadata cannot
+  forge it. Existing standalone TaskPlan bindings retain their checks.
+- TaskPlan stage binding and preflight recognize that explicit declaration.
+  Generic dispatch retains every field of the actual parent execution identity;
+  candidate correlation no longer creates synthetic physical activity ids.
+- The physical Graph worker invokes Harness input admission before AgentRunner.
+  Admission verifies the complete original Graph task checksum, actual context,
+  stage binding and AgentSpec policy. Only explicitly allowed business-input
+  names enter the read-only grant; private parent inputs remain outside it.
+- Dispatch authorizes external candidate input refs before candidate/submission
+  writes. Planning and redelivery load the original grant by full execution
+  identity. Missing grants are rejected rather than reconstructed from hints.
+- Production runtime and Graph composition require durable input admission.
+  A zero planning-tool quota permits no planning port; an enabled planning port
+  retains its execution-bound authority and shares the canonical snapshot store.
+
+Validation:
+
+- Graph definition/compiler/preflight, TaskPlan stage binding, existing
+  submission/recovery and composition regression: `243 passed` in 134.51 seconds.
+- Updated composition negative checks: `13 passed` in 4.29 seconds.
+- Candidate checksum conflict keeps `CANDIDATE_IDEMPOTENCY_CONFLICT`, including
+  when the conflicting payload names unavailable inputs: `2 passed, 48
+  deselected` in 7.97 seconds, covering both memory and durable TaskPlan stores.
+  Input authorization still precedes every first submission write.
+- New physical Graph coverage uses the real control plane, dispatcher, AgentRunner,
+  SQLite event/grant/task stores and filesystem artifacts, with fixture LLM and
+  child workers. It checks admission before the first LLM call, original
+  TaskPlan/DispatchGroup/worker identity, private-input exclusion, restart
+  redelivery without workers or events, and rejection of changed identities or
+  input bytes. An allowlisted input absent from the original Graph task halts
+  the parent with `REF_UNRESOLVED` after one LLM call, with no submission and no
+  child calls. These cases are included in the required full smoke.
+- The initial smoke process was deliberately stopped after the dedup diagnostic
+  ordering fix because it had loaded the previous code. It is not passing
+  evidence. Required `.venv/Scripts/python.exe -m scripts.dev smoke` on the final
+  code exited 0: compile passed; `3116 passed, 23 deselected, 23 warnings` in
+  1502.83 seconds. Warnings are existing FastAPI/Starlette deprecations.
+- Offline AgentLoop succeeded with 3 fixture LLM calls, 1 tool call and 0 network
+  calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-94b7ed18da21424bb926b09e640e3e4e/manifest.json`.
+- Source validation: `is_valid=true`, 0 errors, 0 warnings.
+- Strict OpenSpec and scoped/staged whitespace checks passed. No task checkbox
+  was advanced: task 1.5 remains the earliest unfinished item, 14/46 complete.
+
+The generic factory still accepts a worker executor and result verifier. Their
+shared child/result authority dependencies and real generic child runtime wiring
+remain unclosed; fixture workers/verifiers in these tests do not prove that
+production composition. Existing memory recall/tool integration, dependency and
+replacement grants, remaining replay consumers and G1-G5 acceptance also remain.
+No default feature was enabled.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

@@ -101,6 +101,20 @@ class HarnessRefAdmissionService:
         ):
             raise HarnessValidationError("Graph input authority is outside its pinned stage", code="REF_POLICY_SCOPE_MISMATCH")
         inputs = source_task.get("inputs")
+        if stage_binding.is_agent_delegation:
+            if not isinstance(inputs, Mapping) or set(inputs) != {
+                "inputs", "conversation_id", "resume_from_cursor",
+            }:
+                raise HarnessValidationError("AgentLoop Graph input envelope is invalid", code="REF_INPUT_INVALID")
+            inputs = inputs.get("inputs")
+            if not isinstance(inputs, Mapping):
+                raise HarnessValidationError("AgentLoop inputs must be an object", code="REF_INPUT_INVALID")
+            # The parent may see private prompt inputs. Only the explicitly
+            # configured input names enter the delegation grant.
+            inputs = {
+                name: value for name, value in inputs.items()
+                if name in task_policy.allowed_input_refs
+            }
         if not isinstance(inputs, Mapping) or any(value is None for value in inputs.values()):
             raise HarnessValidationError("Graph input references are unavailable", code="REF_INPUT_INVALID")
         if not set(inputs).issubset(task_policy.allowed_input_refs):

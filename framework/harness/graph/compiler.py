@@ -56,6 +56,7 @@ _TASK_PLAN_AUTHORITY_METADATA_KEYS = frozenset(
         "task_plan_policy_ref",
         "task_plan_schema",
         "task_plan_support",
+        "agent_loop_delegation",
     }
 )
 
@@ -641,7 +642,11 @@ class _CompilerContext:
         activity = self._activity(activity_id)
         leaf_binding = self.definition.leaf_activity_binding(activity_id)
         task_plan_binding = self.definition.task_plan_stage_binding(activity_id)
-        if (leaf_binding is None) == (task_plan_binding is None):
+        delegated = (
+            activity.worker_type is HarnessWorkerType.AGENT_LOOP
+            and leaf_binding is not None and task_plan_binding is not None
+        )
+        if (leaf_binding is None) == (task_plan_binding is None) and not delegated:
             raise HarnessValidationError(
                 "Graph activity must resolve to exactly one binding class",
                 code="graph_activity_binding_resolution_invalid",
@@ -710,9 +715,22 @@ class _CompilerContext:
                     code="graph_leaf_activity_worker_type_mismatch",
                     details={"activity_id": activity.step_id},
                 )
-            return leaf_binding.worker_ref, leaf_binding.activity_ref, metadata
+            if task_plan_binding is None:
+                if activity.worker_type is HarnessWorkerType.AGENT_LOOP and _TASK_PLAN_AUTHORITY_METADATA_KEYS.intersection(metadata):
+                    raise HarnessValidationError(
+                        "AgentLoop delegation authority requires an explicit TaskPlan binding",
+                        code="graph_task_plan_authority_metadata_forbidden",
+                    )
+                return leaf_binding.worker_ref, leaf_binding.activity_ref, metadata
+            if activity.worker_type is not HarnessWorkerType.AGENT_LOOP or (
+                leaf_binding.worker_ref, leaf_binding.activity_ref
+            ) != (task_plan_binding.worker_ref, task_plan_binding.activity_ref):
+                raise HarnessValidationError(
+                    "AgentLoop delegation differs from its leaf binding",
+                    code="graph_agent_delegation_binding_mismatch",
+                )
         assert task_plan_binding is not None
-        if activity.worker_type is not HarnessWorkerType.TASK_PLAN:
+        if activity.worker_type not in {HarnessWorkerType.TASK_PLAN, HarnessWorkerType.AGENT_LOOP}:
             raise HarnessValidationError(
                 "Graph TaskPlan binding does not target a TaskPlan activity",
                 code="graph_task_plan_stage_binding_worker_type_mismatch",
@@ -736,6 +754,8 @@ class _CompilerContext:
                 "task_plan_support": dict(task_plan_binding.support_refs),
             }
         )
+        if activity.worker_type is HarnessWorkerType.AGENT_LOOP:
+            metadata["agent_loop_delegation"] = True
         return (
             task_plan_binding.worker_ref,
             task_plan_binding.activity_ref,

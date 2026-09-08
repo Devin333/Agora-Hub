@@ -13,6 +13,7 @@ from framework.harness.graph import (
 from framework.harness.graph.compiler import HarnessGraphCompiler
 from framework.harness.graph.definition import (
     HarnessGraphDefinition,
+    HarnessGraphLeafBinding,
     HarnessGraphTaskPlanStageBinding,
 )
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
@@ -66,7 +67,11 @@ def build_task_plan_stage_binding(
         graph_version="1",
         root=root,
         activities=(step,),
-        leaf_activity_bindings=(),
+        leaf_activity_bindings=(HarnessGraphLeafBinding(
+            activity_id=stage_id, leaf_activity_kind="agent_loop",
+            worker_ref=HarnessContractReference(HarnessContractKind.WORKER, f"{stage_id}.worker", "1"),
+            activity_ref=HarnessContractReference(HarnessContractKind.ACTIVITY, f"{stage_id}.activity", "1"),
+        ),) if worker_type == HarnessWorkerType.AGENT_LOOP else (),
         task_plan_stage_bindings=(
             HarnessGraphTaskPlanStageBinding(
                 activity_id=stage_id,

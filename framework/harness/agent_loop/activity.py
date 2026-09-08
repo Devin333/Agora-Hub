@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from framework.agent.models import (
     AgentLoopIssue,
@@ -103,6 +103,11 @@ class AgentLoopRunnerPort(Protocol):
         graph_checkpoint_ref: str | None = None,
         resume_from_cursor: bool = False,
     ) -> AgentLoopResult: ...
+
+
+@runtime_checkable
+class AgentLoopInputAdmissionPort(Protocol):
+    def admit_parent_inputs(self, task: Mapping[str, Any], *, agent: AgentSpec) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -775,6 +780,7 @@ class AgentLoopGraphWorker:
     artifact_recorder: AgentLoopGraphArtifactRecorder = field(repr=False)
     result_output_key: str = "agent_loop_result"
     worker_type: HarnessWorkerType = HarnessWorkerType.AGENT_LOOP
+    input_admission: AgentLoopInputAdmissionPort | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         reference = HarnessContractReference(
@@ -804,6 +810,8 @@ class AgentLoopGraphWorker:
         )
         if not callable(getattr(self.agent_runner, "run", None)):
             raise TypeError("agent_runner must expose run(...)")
+        if self.input_admission is not None and not isinstance(self.input_admission, AgentLoopInputAdmissionPort):
+            raise TypeError("input_admission must implement AgentLoopInputAdmissionPort")
         if not isinstance(self.agent, AgentSpec):
             raise TypeError("agent must be AgentSpec")
         if not isinstance(self.artifact_recorder, AgentLoopGraphArtifactRecorder):
@@ -855,6 +863,8 @@ class AgentLoopGraphWorker:
                     "actual_activity_ref": activity.activity_ref.exact_ref,
                 },
             )
+        if self.input_admission is not None:
+            self.input_admission.admit_parent_inputs(task, agent=self.agent)
         result = self.agent_runner.run(
             self.agent,
             mapping_to_dict(parsed.inputs),
@@ -1442,6 +1452,7 @@ def build_agent_loop_graph_activity_binding_bundle(
     tenant_scope_input_key: str = "tenant_scope_ref",
     identity_scope_input_key: str = "identity_scope_ref",
     side_effect_registry: HarnessSideEffectRegistry | None = None,
+    input_admission: AgentLoopInputAdmissionPort | None = None,
 ) -> AgentLoopGraphActivityBindingBundle:
     if not isinstance(worker_ref, HarnessContractReference) or (
         worker_ref.contract_kind is not HarnessContractKind.WORKER
@@ -1465,6 +1476,7 @@ def build_agent_loop_graph_activity_binding_bundle(
         agent=agent,
         artifact_recorder=artifact_recorder,
         result_output_key=result_output_key,
+        input_admission=input_admission,
     )
     activity_contract = AgentLoopGraphActivityContract(
         activity_contract_id=activity_ref.contract_id,

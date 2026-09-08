@@ -97,9 +97,11 @@ class TaskPlanStageBinding:
                 details={"stage_id": stage_id, "matches": len(matches)},
             )
         node = matches[0]
-        if node.metadata.get("worker_type") != HarnessWorkerType.TASK_PLAN.value:
+        if node.metadata.get("worker_type") not in {
+            HarnessWorkerType.TASK_PLAN.value, HarnessWorkerType.AGENT_LOOP.value,
+        }:
             raise HarnessValidationError(
-                "TaskPlan stage binding requires a TASK_PLAN worker",
+                "TaskPlan stage binding requires a TASK_PLAN or declared AGENT_LOOP worker",
                 code="dynamic_task_plan_worker_type_mismatch",
                 details={"stage_id": stage_id, "node_id": node.node_id},
             )
@@ -113,6 +115,13 @@ class TaskPlanStageBinding:
                 details={"stage_id": stage_id, "node_id": node.node_id},
             )
         declaration = node.metadata.get("step_metadata")
+        if node.metadata.get("worker_type") == HarnessWorkerType.AGENT_LOOP.value and (
+            not isinstance(declaration, Mapping) or declaration.get("agent_loop_delegation") is not True
+        ):
+            raise HarnessValidationError(
+                "AgentLoop TaskPlan authority requires an explicit delegation binding",
+                code="graph_agent_delegation_binding_missing",
+            )
         if not isinstance(declaration, Mapping) or declaration.get("dynamic_stage") is not True:
             raise HarnessValidationError(
                 "TaskPlan stage binding requires an explicit dynamic stage declaration",
@@ -252,6 +261,14 @@ class TaskPlanStageBinding:
             self,
             "binding_checksum",
             canonical_payload_checksum(self.checksum_projection()),
+        )
+
+    @property
+    def is_agent_delegation(self) -> bool:
+        return any(
+            node.node_id == self.node_id
+            and node.metadata.get("worker_type") == HarnessWorkerType.AGENT_LOOP.value
+            for node in self.graph.nodes if isinstance(node, HarnessExecutableNode)
         )
 
     @property

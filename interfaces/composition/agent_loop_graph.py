@@ -37,6 +37,7 @@ from framework.harness.side_effects import (
 )
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.ref_authority import RefResolutionPort
+from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_planning import HarnessPlanningRefAuthority
 from framework.harness.ref_snapshot import RefAuthoritySnapshot, RefAuthoritySnapshotStorePort
 from framework.harness.task_plan.capability import TaskCapabilityRegistry
@@ -156,6 +157,7 @@ def build_agent_loop_harness_orchestration_runtime(
     planning_observation_port: PlanningObservationPort | None = None,
     metrics_sink: Any | None = None,
     checkpoint_store: TaskPlanCheckpointStorePort,
+    ref_admission_service: HarnessRefAdmissionService | None = None,
 ) -> HarnessAgentOrchestrationRuntime:
     """Compose the real AgentLoop fan-out runtime from durable dependencies.
 
@@ -213,12 +215,14 @@ def build_agent_loop_harness_orchestration_runtime(
         raise TypeError(
             "result_verifier must implement TaskPlanResultVerifierPort"
         )
-    if not isinstance(planning_observation_port, PlanningObservationPort):
+    if (
+        planning_observation_port is not None or policy.max_planning_tool_calls > 0
+    ) and not isinstance(planning_observation_port, PlanningObservationPort):
         raise TypeError(
             "planning_observation_port must implement PlanningObservationPort"
         )
     planning_authority = getattr(planning_observation_port, "planning_ref_authority", None)
-    if (
+    if planning_observation_port is not None and (
         not isinstance(planning_observation_port, HarnessPlanningObservationService)
         or not isinstance(planning_authority, HarnessPlanningRefAuthority)
         or not planning_observation_port.is_durable
@@ -226,6 +230,10 @@ def build_agent_loop_harness_orchestration_runtime(
         or planning_authority.input_snapshot.task_policy_checksum != policy.policy_checksum
     ):
         raise ValueError("planning_observation_port requires durable execution-bound reference authority")
+    if planning_authority is not None and (
+        ref_admission_service is None or planning_authority.store is not ref_admission_service.store
+    ):
+        raise ValueError("planning and parent input admission must share the canonical snapshot store")
 
     coordinator = ParallelAgentCoordinator(
         max_workers=child_supervisor.capacity,
@@ -253,6 +261,7 @@ def build_agent_loop_harness_orchestration_runtime(
         child_supervisor=child_supervisor,
         task_profiles=task_profiles,
         require_durable_store=True,
+        ref_admission_service=ref_admission_service,
     )
 
 
@@ -345,6 +354,10 @@ class AgentLoopGraphRuntimeComposition:
                 else None
             ),
         )
+        if orchestration_binding.available and (
+            orchestration_runtime is None or not orchestration_runtime.has_durable_input_admission
+        ):
+            raise ValueError("production AgentLoop requires durable parent input admission")
         agent_runner.bind_orchestration(
             orchestration_port=orchestration_binding.port,
             orchestration_enabled=orchestration_binding.feature_enabled,
@@ -357,6 +370,7 @@ class AgentLoopGraphRuntimeComposition:
             agent=agent,
             artifact_recorder=AgentLoopGraphArtifactRecorder(artifact_port),
             side_effect_registry=side_effect_registry,
+            input_admission=orchestration_runtime if orchestration_binding.available else None,
         )
         control_plane = HarnessControlPlane(
             event_port=event_port,

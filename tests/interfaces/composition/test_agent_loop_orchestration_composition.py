@@ -113,6 +113,7 @@ def _factory_kwargs(*, candidate_builder=None, result_verifier=None, planning_ob
         stage_id=policy.stage_id,
         policy_ref=policy.exact_ref,
         required_output_roles=policy.required_output_roles,
+        worker_type=HarnessWorkerType.AGENT_LOOP,
     )
     worker = _Worker()
     registration = TaskCapabilityRegistration(
@@ -328,7 +329,12 @@ def test_planning_production_factory_and_stage_require_admitted_execution(tmp_pa
     )
     planning = build_agent_loop_planning_observation_service(**factory)
     kwargs["planning_observation_port"] = planning
+    from framework.harness.ref_admission import HarnessRefAdmissionService
+    kwargs["ref_admission_service"] = HarnessRefAdmissionService(grants)
     runtime = build_agent_loop_harness_orchestration_runtime(**kwargs)
+    assert runtime.has_durable_input_admission
+    with pytest.raises(ValueError, match="share the canonical snapshot store"):
+        build_agent_loop_harness_orchestration_runtime(**{**kwargs, "ref_admission_service": None})
     request = PlanningObservationRequest(
         request_id="lookup", run_id=parent.run_id, stage_id=parent.stage_id,
         planner_turn_id=planning.planning_ref_authority.planner_turn_id,
@@ -347,3 +353,13 @@ def test_planning_production_factory_and_stage_require_admitted_execution(tmp_pa
         build_agent_loop_planning_observation_service(**{**factory, "planner_turn": 2})
     with pytest.raises(ValueError, match="durable reference"):
         build_agent_loop_planning_observation_service(**{**factory, "snapshot_store": object()})
+
+
+def test_production_orchestration_requires_durable_parent_admission_with_planning_disabled():
+    from dataclasses import replace
+
+    kwargs = _factory_kwargs(result_verifier=TaskPlanResultVerifier())
+    policy = replace(kwargs["policy_registry"].policies[0], max_planning_tool_calls=0)
+    kwargs["policy_registry"] = TaskPlanPolicyRegistry((policy,))
+    with pytest.raises(ValueError, match="durable input admission"):
+        build_agent_loop_harness_orchestration_runtime(**kwargs)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from framework.agent.models import DelegateBatchCandidate, DelegateBatchProposal
+from framework.agent.models import AgentSpec, DelegateBatchCandidate, DelegateBatchProposal
 from framework.agent.models.orchestration import (
     AGENT_ORCHESTRATION_REQUEST_SCHEMA,
     AGENT_ORCHESTRATION_RESULT_SCHEMA,
@@ -19,6 +19,13 @@ from framework.agent.models.orchestration import (
     ParentWaveSummary,
 )
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_authority import RefAuthority
+from framework.harness.ref_snapshot import (
+    RefAuthoritySnapshot,
+    RefSnapshotPhase,
+    SnapshotRefResolutionPort,
+)
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.task_plan.capability import TaskCapabilityRegistry
 from framework.harness.task_plan.durable_store import DurableTaskPlanStore
@@ -91,6 +98,7 @@ class HarnessAgentOrchestrationRuntime:
         child_supervisor: ChildAgentSupervisor,
         task_profiles: tuple[AgentOrchestrationTaskProfile, ...],
         require_durable_store: bool = True,
+        ref_admission_service: HarnessRefAdmissionService | None = None,
     ) -> None:
         if not isinstance(stage_binding, TaskPlanStageBinding):
             raise TypeError("stage_binding must be TaskPlanStageBinding")
@@ -132,6 +140,72 @@ class HarnessAgentOrchestrationRuntime:
         self._stage_runner = stage_runner
         self._child_supervisor = child_supervisor
         self._profiles = by_capability
+        if ref_admission_service is not None and not isinstance(
+            ref_admission_service, HarnessRefAdmissionService
+        ):
+            raise TypeError("ref_admission_service must be HarnessRefAdmissionService")
+        if require_durable_store and (
+            ref_admission_service is None
+            or getattr(ref_admission_service.store, "is_durable", False) is not True
+            or not stage_binding.is_agent_delegation
+        ):
+            raise ValueError(
+                "production orchestration requires a declared AgentLoop stage and durable input admission"
+            )
+        self._ref_admission_service = ref_admission_service
+
+    @property
+    def has_durable_input_admission(self) -> bool:
+        return (
+            self._stage_binding.is_agent_delegation
+            and self._ref_admission_service is not None
+            and getattr(self._ref_admission_service.store, "is_durable", False) is True
+        )
+
+    def admit_parent_inputs(
+        self, task: Mapping[str, Any], *, agent: AgentSpec,
+    ) -> RefAuthoritySnapshot:
+        """Harness worker ingress; the Agent dispatch port cannot issue grants."""
+        if self._ref_admission_service is None or not self._stage_binding.is_agent_delegation:
+            raise HarnessValidationError("parent input admission is unavailable", code="REF_SNAPSHOT_MISSING")
+        declared = agent.metadata.get("agent_orchestration")
+        if not isinstance(declared, Mapping) or declared.get("policy_ref") != self._stage_binding.policy_ref:
+            raise HarnessValidationError("parent Agent policy differs from its Graph binding", code="REF_POLICY_SCOPE_MISMATCH")
+        policy = self._policy_registry.resolve(
+            self._stage_binding.policy_ref, stage_id=self._stage_binding.stage_id,
+        )
+        return self._ref_admission_service.admit_graph_inputs(
+            task, stage_binding=self._stage_binding, task_policy=policy,
+        )
+
+    def _input_ref_options(
+        self, identity: GraphExecutionIdentity | None, policy: TaskPlanPolicy,
+    ) -> dict[str, Any]:
+        if self._ref_admission_service is None:
+            return {}
+        if identity is None:
+            raise HarnessValidationError("input authority requires Graph execution identity", code="REF_SNAPSHOT_BINDING_MISMATCH")
+        self._require_parent_graph(identity)
+        snapshot = self._ref_admission_service.store.find(
+            run_id=identity.run_id,
+            binding_key=RefAuthoritySnapshot.admission_binding_key(
+                identity, self._stage_binding.stage_id, self._stage_binding.binding_checksum,
+            ),
+        )
+        if snapshot is None:
+            raise HarnessValidationError("parent input grant is missing", code="REF_SNAPSHOT_MISSING")
+        if (
+            snapshot.phase is not RefSnapshotPhase.INPUT_ADMISSION
+            or snapshot.execution_identity != identity
+            or snapshot.stage_binding_checksum != self._stage_binding.binding_checksum
+            or snapshot.task_policy_checksum != policy.policy_checksum
+        ):
+            raise HarnessValidationError("parent input grant differs from the execution", code="REF_SNAPSHOT_BINDING_MISMATCH")
+        return {
+            "ref_authority": RefAuthority(),
+            "ref_policy": snapshot.policy,
+            "ref_resolution": SnapshotRefResolutionPort(snapshot),
+        }
 
     def observe_for_planning(
         self,
@@ -164,6 +238,7 @@ class HarnessAgentOrchestrationRuntime:
                 policy_ref=policy.exact_ref,
                 accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
                 execution_identity=execution_identity,
+                **self._input_ref_options(execution_identity, policy),
                 metadata={
                     "planner_turn_id": request.planner_turn_id,
                     "planning_correlation_id": request.correlation_id,
@@ -204,6 +279,8 @@ class HarnessAgentOrchestrationRuntime:
             stage_id=self._stage_binding.stage_id,
         )
         self._require_policy(policy, request)
+        ref_options = self._input_ref_options(parent_identity, policy)
+        context_refs = _context_refs_for_candidate(request.candidate)
         submission_identity = CandidateDedupIdentity(
             run_id=request.run_id,
             stage_id=self._stage_binding.stage_id,
@@ -225,6 +302,14 @@ class HarnessAgentOrchestrationRuntime:
             )
         if recover and original is None:
             raise HarnessValidationError("recovery requires an existing submission", code="task_plan_submission_missing")
+        # A conflicting payload retains its original dedup diagnostic. All
+        # other external inputs are authorized before any submission write.
+        TaskPlanStageRequest(
+            run_id=request.run_id, stage_binding=self._stage_binding,
+            context_refs=context_refs, policy=policy,
+            accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
+            execution_identity=parent_identity, **ref_options,
+        )
         candidate = None if original is not None else self._materialize_candidate(request, policy)
         created = False
         if original is None:
@@ -234,8 +319,6 @@ class HarnessAgentOrchestrationRuntime:
                 candidate_checksum=source_checksum, exclusive_stage=True,
             )
             original, created = admitted.submission, admitted.created
-        stage_identity = self._task_plan_execution_identity(parent_identity, request.candidate)
-        context_refs = _context_refs_for_candidate(request.candidate)
         stage_request = TaskPlanStageRequest(
             run_id=request.run_id,
             stage_binding=self._stage_binding,
@@ -246,7 +329,8 @@ class HarnessAgentOrchestrationRuntime:
             candidate=candidate,
             submission_identity=submission_identity,
             source_candidate_checksum=source_checksum,
-            execution_identity=stage_identity,
+            execution_identity=parent_identity,
+            **ref_options,
             metadata={
                 "parent_agent_id": request.parent_agent_id,
                 "delegate_batch_correlation_id": request.candidate.correlation_id,
@@ -341,12 +425,14 @@ class HarnessAgentOrchestrationRuntime:
             self._stage_binding.graph_version,
             self._stage_binding.graph.identity_ref.exact_ref,
             self._stage_binding.graph_checksum,
+            self._stage_binding.node_id,
         )
         actual = (
             identity.graph_id,
             identity.graph_version,
             identity.graph_ref,
             identity.graph_checksum,
+            identity.node_id,
         )
         if actual != expected:
             raise HarnessValidationError(
@@ -397,10 +483,8 @@ class HarnessAgentOrchestrationRuntime:
             policy=policy,
             policy_ref=policy.exact_ref,
             accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
-            execution_identity=self._task_plan_execution_identity(
-                request.execution_identity,
-                candidate,
-            ) if request.execution_identity is not None else None,
+            execution_identity=request.execution_identity,
+            **self._input_ref_options(request.execution_identity, policy),
         ).stage_identity
         return PlanCandidate.for_stage(
             stage_identity=task_identity,
@@ -450,29 +534,6 @@ class HarnessAgentOrchestrationRuntime:
             depends_on=proposal.depends_on,
             budget_request=policy.per_task_budget,
             retry_policy=profile.retry_policy,
-        )
-
-    def _task_plan_execution_identity(
-        self,
-        parent: GraphExecutionIdentity | None,
-        candidate: DelegateBatchCandidate,
-    ) -> GraphExecutionIdentity:
-        if parent is None:
-            raise HarnessValidationError(
-                "AgentLoop orchestration requires parent Graph identity",
-                code="agent_orchestration_identity_required",
-            )
-        suffix = candidate.correlation_id
-        return GraphExecutionIdentity(
-            run_id=parent.run_id,
-            graph_id=parent.graph_id,
-            graph_version=parent.graph_version,
-            graph_ref=parent.graph_ref,
-            graph_checksum=parent.graph_checksum,
-            node_id=self._stage_binding.node_id,
-            node_instance_id=f"{parent.node_instance_id}:delegate:{suffix}",
-            activity_id=f"{parent.activity_id}:delegate:{suffix}",
-            attempt=parent.attempt,
         )
 
     def _joined_result(

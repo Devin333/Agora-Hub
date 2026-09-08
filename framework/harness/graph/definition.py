@@ -531,6 +531,7 @@ class HarnessGraphDefinition:
         _validate_task_plan_stage_bindings(
             task_plan_stage_bindings,
             activities=activities,
+            leaf_bindings=leaf_activity_bindings,
         )
         _validate_committed_output_bindings(
             committed_output_bindings,
@@ -1080,6 +1081,7 @@ def _validate_task_plan_stage_bindings(
     bindings: tuple[HarnessGraphTaskPlanStageBinding, ...],
     *,
     activities: tuple[HarnessStepSpec, ...],
+    leaf_bindings: tuple[HarnessGraphLeafBinding, ...],
 ) -> None:
     binding_ids = {binding.activity_id for binding in bindings}
     activities_by_id = {activity.step_id: activity for activity in activities}
@@ -1090,7 +1092,11 @@ def _validate_task_plan_stage_bindings(
     }
     unknown = sorted(binding_ids.difference(activities_by_id))
     missing = sorted(expected.difference(binding_ids))
-    unexpected = sorted(binding_ids.difference(expected))
+    delegated = {
+        activity.step_id for activity in activities
+        if activity.worker_type is HarnessWorkerType.AGENT_LOOP
+    }
+    unexpected = sorted(binding_ids.difference(expected | delegated))
     if unknown or missing or unexpected:
         raise HarnessValidationError(
             "Graph TaskPlan binding coverage does not match its activities",
@@ -1104,7 +1110,7 @@ def _validate_task_plan_stage_bindings(
     effectful = sorted(
         activity.step_id
         for activity in activities
-        if activity.worker_type is HarnessWorkerType.TASK_PLAN
+        if activity.step_id in binding_ids
         and activity.side_effect_handler is not None
     )
     if effectful:
@@ -1113,6 +1119,19 @@ def _validate_task_plan_stage_bindings(
             code="graph_task_plan_stage_side_effect_forbidden",
             details={"activities": effectful},
         )
+    leaves = {binding.activity_id: binding for binding in leaf_bindings}
+    for binding in bindings:
+        if binding.activity_id not in delegated:
+            continue
+        leaf = leaves.get(binding.activity_id)
+        if leaf is None or (leaf.worker_ref, leaf.activity_ref) != (
+            binding.worker_ref, binding.activity_ref,
+        ):
+            raise HarnessValidationError(
+                "AgentLoop delegation must use its actual leaf worker and activity",
+                code="graph_agent_delegation_binding_mismatch",
+                details={"activity_id": binding.activity_id},
+            )
 
 
 def _validate_committed_output_bindings(

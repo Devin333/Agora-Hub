@@ -38,6 +38,16 @@ The production AgentLoop composition SHALL resolve a real `AgentOrchestrationPor
 - **THEN** AgentLoop MUST return the stable unavailable/deferred diagnostic
 - **AND** it MUST not silently execute children serially unless the pinned policy explicitly selects `serial_fallback`
 
+#### Scenario: Delegation uses the admitted parent Graph activity
+
+- **WHEN** production AgentLoop delegation is configured
+- **THEN** its Graph executable node MUST carry explicit leaf and TaskPlan delegation bindings with identical exact worker/activity refs
+- **AND** Harness MUST persist a read-only input grant from the verified Graph task before the parent LLM runs
+- **AND** the grant MUST include only the parent input names explicitly allowed by the pinned TaskPlan policy
+- **AND** TaskPlan and DispatchGroup execution MUST retain the actual parent activity identity without synthesizing activity or node-instance ids from candidate correlation
+- **AND** external candidate refs MUST be authorized against that committed grant before submission, including on restart or redelivery
+- **AND** missing authority MUST reject rather than reconstruct a grant from candidate refs or current policy names
+
 ### Requirement: AgentLoop receives one security-projected joined observation
 
 After Harness completes or fails a delegation group, AgentLoop SHALL receive one observation containing the group status, wave summaries, stable child task summaries, result refs/checksums, aggregate refs when valid, gate diagnostics, and retry/recovery information. The observation MUST obey `ParentObservationLimits` from the parent AgentSpec/stage policy: maximum task summaries, summary bytes, diagnostics, refs, and total observation bytes. Over-limit content MUST be represented only by checksum-bound artifact refs. The observation MUST exclude hidden prompts, sibling private transcripts, secrets, and unapproved raw tool payloads.

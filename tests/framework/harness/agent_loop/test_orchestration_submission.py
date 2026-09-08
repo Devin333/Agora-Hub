@@ -93,6 +93,22 @@ def test_terminal_resubmission_uses_persisted_candidate_not_current_profiles(sto
     assert store.read_events(request.run_id, "delegate_stage") == before
 
 
+def test_conflicting_candidate_keeps_dedup_reason_even_with_unavailable_inputs(store_factory):
+    calls = []
+    store = store_factory()
+    runtime, identity = _runtime(store=store, worker_executor=_counting_worker(calls))
+    request = _request(identity)
+    assert runtime.dispatch(request).status == "succeeded"
+    before = store.read_events(identity.run_id, "delegate_stage")
+    changed = replace(request.candidate, tasks=tuple(
+        replace(task, input_refs=("unavailable-private-input",)) for task in request.candidate.tasks
+    ))
+    result = runtime.dispatch(replace(request, candidate=changed))
+    assert result.reason_code == "CANDIDATE_IDEMPOTENCY_CONFLICT"
+    assert len(calls) == 2
+    assert store.read_events(identity.run_id, "delegate_stage") == before
+
+
 def test_active_resubmission_cannot_recover_or_halt_original_execution(store_factory):
     release = Event()
     calls, original_results = [], []
@@ -216,7 +232,7 @@ def test_first_group_must_bind_its_original_submission_before_commit_or_replay(s
         candidate=runtime._materialize_candidate(parent, policy),
         submission_identity=_submission_identity(parent),
         source_candidate_checksum=canonical_payload_checksum(parent.candidate.to_dict()),
-        execution_identity=runtime._task_plan_execution_identity(identity, parent.candidate),
+        execution_identity=identity,
     )
     plan = runtime._stage_runner._ensure_plan(request)
     group = runtime._stage_runner.parallel_coordinator.create_group(
@@ -389,7 +405,7 @@ def test_rejected_candidate_resubmission_reuses_pre_plan_outcome(store_factory):
         context_refs={"document": "document"}, policy=policy,
         accepted_at="2026-09-07T00:00:00Z", candidate=invalid,
         submission_identity=_submission_identity(parent),
-        execution_identity=runtime._task_plan_execution_identity(identity, parent.candidate),
+        execution_identity=identity,
     )
     first = runtime._stage_runner.run(request)
     assert first.status.value == "blocked"
@@ -436,7 +452,7 @@ def test_restart_with_no_candidate_reads_durable_candidate_without_calling_build
         run_id=identity.run_id, stage_binding=runtime._stage_binding, context_refs={"document": "document"},
         policy=policy, accepted_at="2026-09-05T02:00:00Z",
         submission_identity=submission.identity,
-        execution_identity=runtime._task_plan_execution_identity(identity, parent_request.candidate),
+        execution_identity=identity,
     ))
     assert result.status.value == "succeeded"
     assert recovered._store.plan(identity.run_id, "delegate_stage").accepted_at == submission.accepted_at
@@ -534,7 +550,7 @@ def test_stage_rejects_changed_candidate_without_submission_identity():
         run_id=identity.run_id, stage_binding=runtime._stage_binding,
         context_refs={"document": "document"}, policy=policy,
         accepted_at="2026-09-05T00:00:00Z", candidate=candidate,
-        execution_identity=runtime._task_plan_execution_identity(identity, request.candidate),
+        execution_identity=identity,
     )
     assert runtime._stage_runner.run(stage_request).status.value == "succeeded"
     before = store.read_events(identity.run_id, "delegate_stage")
