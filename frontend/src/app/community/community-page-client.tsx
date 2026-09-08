@@ -19,6 +19,7 @@ export function CommunityPageClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const selectedSignalId = searchParams.get("signal") ?? undefined
+  const sourceQuestion = searchParams.get("question") ?? ""
   const filters = useMemo(
     () => communitySignalFiltersFromSearchParams(new URLSearchParams(searchParams.toString())),
     [searchParams]
@@ -35,19 +36,19 @@ export function CommunityPageClient() {
 
   const setFilters = (patch: Partial<CommunitySignalListParams>) => {
     const next = updateCommunitySignalFilters(filters, patch)
-    const params = communitySignalFiltersToSearchParams(next)
+    const params = preserveEntryParams(searchParams, communitySignalFiltersToSearchParams(next))
     if (selectedSignalId) params.set("signal", selectedSignalId)
     router.replace(params.size ? `/community?${params.toString()}` : "/community", { scroll: false })
   }
 
   const openSignal = (signalId: string) => {
-    const params = communitySignalFiltersToSearchParams(filters)
+    const params = preserveEntryParams(searchParams, communitySignalFiltersToSearchParams(filters))
     params.set("signal", signalId)
     router.replace(`/community?${params.toString()}`, { scroll: false })
   }
 
   const closeSignal = () => {
-    const params = communitySignalFiltersToSearchParams(filters)
+    const params = preserveEntryParams(searchParams, communitySignalFiltersToSearchParams(filters))
     router.replace(params.size ? `/community?${params.toString()}` : "/community", { scroll: false })
   }
 
@@ -65,10 +66,19 @@ export function CommunityPageClient() {
     <CommunityPulsePage
       result={data}
       filters={filters}
+      sourceQuestion={sourceQuestion}
       selectedSignal={selectedSignal}
       onChange={setFilters}
       onOpenSignal={openSignal}
       onCloseSignal={closeSignal}
     />
   )
+}
+
+export function preserveEntryParams(current: { get(name: string): string | null }, next: URLSearchParams): URLSearchParams {
+  for (const key of ["question", "entry"]) {
+    const value = current.get(key)
+    if (value) next.set(key, value)
+  }
+  return next
 }

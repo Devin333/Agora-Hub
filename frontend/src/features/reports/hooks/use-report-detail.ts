@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { evidences, newsItems, reports as fallbackReports, topics } from "@/lib/mock-data";
 import type { Evidence } from "@/types/evidence";
 import type { MockHookResult } from "@/types/common";
 import type { NewsItem } from "@/types/news";
@@ -35,13 +34,13 @@ export function useReportDetail(id: string): MockHookResult<ReportDetailData> {
     void loadReport();
   }, [loadReport]);
 
-  const report = apiReport ?? fallbackReports.find((item) => item.id === id);
+  const report = apiReport;
   return {
     data: {
       report,
-      relatedTopics: report ? topics.filter((topic) => (report.topicIds ?? []).includes(topic.id)) : [],
-      relatedNews: report ? newsItems.filter((item) => (report.newsItemIds ?? []).includes(item.id)) : [],
-      evidence: report ? evidences.filter((item) => report.evidenceIds?.includes(item.id)) : [],
+      relatedTopics: [],
+      relatedNews: [],
+      evidence: [],
     },
     isLoading: isLoading && apiReport === undefined,
     isError: Boolean(error) && apiReport === undefined && report === undefined,

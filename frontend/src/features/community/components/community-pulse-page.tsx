@@ -37,6 +37,7 @@ import type {
 export function CommunityPulsePage({
   result,
   filters,
+  sourceQuestion,
   selectedSignal,
   onChange,
   onOpenSignal,
@@ -44,6 +45,7 @@ export function CommunityPulsePage({
 }: {
   result: CommunitySignalListResult
   filters: CommunitySignalListParams
+  sourceQuestion?: string
   selectedSignal?: CommunitySignalDetailResult
   onChange: (patch: Partial<CommunitySignalListParams>) => void
   onOpenSignal: (signalId: string) => void
@@ -63,6 +65,11 @@ export function CommunityPulsePage({
 
   return (
     <main className="space-y-8 font-papers-research">
+      {sourceQuestion ? (
+        <div className="rounded-lg border border-[#e7dff1] bg-[#faf7ff] px-3 py-2 text-sm text-[#695d7d]">
+          来自首页的问题：<span className="font-medium text-[#382758]">{sourceQuestion}</span>
+        </div>
+      ) : null}
       <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end">
         <div className="min-w-0">
           <p className="mb-5 text-xs font-medium uppercase tracking-[0.18em] text-[#334155]/55 dark:text-muted-foreground">

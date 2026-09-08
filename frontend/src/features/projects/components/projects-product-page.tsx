@@ -5,7 +5,7 @@ import { AlertCircle, ArrowRight, Binoculars, Boxes, Check, ChevronRight, Circle
 import type { ComponentType } from "react"
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { useSearchParams } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -66,19 +66,34 @@ const routeIcons: Record<ProjectProductRoute, ComponentType<{ className?: string
 export function ProjectsProductPage({ route }: ProjectsProductPageProps) {
   const section = useMemo(() => projectProductSection(route), [route])
   const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
   const urlCategory = projectCategoryAlias(searchParams?.get("category") ?? null)
-  const [query, setQuery] = useState("")
+  const initialQuery = searchParams?.get("q") ?? searchParams?.get("question") ?? ""
+  const [query, setQuery] = useState(initialQuery)
+  const sourceQuestion = searchParams?.get("question") ?? ""
+  useEffect(() => {
+    setQuery(initialQuery)
+  }, [initialQuery])
+  function submitQuery() {
+    const params = new URLSearchParams(searchParams?.toString())
+    if (query.trim() || sourceQuestion) params.set("q", query.trim())
+    else params.delete("q")
+    router.replace(`${pathname || "/projects"}${params.size ? `?${params}` : ""}`, { scroll: false })
+  }
   const queryParams = useMemo(
-    () => ({ q: query.trim() || undefined, limit: route === "home" ? 6 : 18, category: urlCategory }),
-    [query, route, urlCategory]
+    () => ({ q: initialQuery.trim() || undefined, limit: route === "home" ? 6 : 18, category: urlCategory }),
+    [initialQuery, route, urlCategory]
   )
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["projects", "product-v1", route, queryParams],
     queryFn: () =>
-      route === "home"
+      route === "home" && !queryParams.q
         ? fetchProjectsHome({ limit: queryParams.limit })
-        : fetchProjectProductSection(route, { params: queryParams }),
+        : route === "home"
+          ? fetchProjectProductSection("hot", { params: { ...queryParams, limit: 18 } })
+          : fetchProjectProductSection(route, { params: queryParams }),
   })
 
   if (isLoading) return route === "lab" ? <LabWorkspaceSkeleton /> : <ProjectLoadingState title={route === "home" ? "Loading Projects home" : `Loading ${section.title}`} />
@@ -92,7 +107,7 @@ export function ProjectsProductPage({ route }: ProjectsProductPageProps) {
   const meta = getMeta(data)
   return (
     <main className="space-y-9 font-papers-research">
-      <ProjectHero section={section} route={route} data={data} query={query} onQueryChange={setQuery} isFetching={isFetching} />
+      <ProjectHero section={section} route={route} data={data} query={query} onQueryChange={setQuery} onSearch={submitQuery} isFetching={isFetching} sourceQuestion={sourceQuestion} />
       {meta ? <ProjectDegradedNotice meta={meta} /> : null}
       <RouteContent route={route} data={data} onRefresh={() => void refetch()} />
     </main>
@@ -159,14 +174,18 @@ function ProjectHero({
   data,
   query,
   onQueryChange,
+  onSearch,
   isFetching,
+  sourceQuestion,
 }: {
   section: ProjectProductSection
   route: ProjectProductRoute
   data: ProductData
   query: string
   onQueryChange: (value: string) => void
+  onSearch: () => void
   isFetching: boolean
+  sourceQuestion: string
 }) {
   const Icon = routeIcons[route]
   const meta = getMeta(data)
@@ -175,6 +194,7 @@ function ProjectHero({
   return (
     <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-end">
       <div className="min-w-0">
+        {sourceQuestion ? <div className="mb-4 rounded-lg border border-[#e7dff1] bg-[#faf7ff] px-3 py-2 text-sm text-[#695d7d]">来自首页的问题：<span className="font-medium text-[#382758]">{sourceQuestion}</span></div> : null}
         <div className="mb-5 flex flex-wrap items-center gap-2">
           <Badge variant="info">Projects API v1</Badge>
           <Badge variant="muted">Real Project Radar data</Badge>
@@ -190,21 +210,23 @@ function ProjectHero({
           <HeroPill label="Collections" value={collectionCount(data)} />
           <HeroPill label="State" value={meta?.data_state ?? "empty"} />
         </div>
-        <div className="mt-6 max-w-2xl">
+        <form className="mt-6 max-w-2xl" onSubmit={event => { event.preventDefault(); onSearch() }}>
           <label className="sr-only" htmlFor="projects-product-search">
             Search projects
           </label>
-          <div className="relative">
+          <div className="relative flex items-center gap-2">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               id="projects-product-search"
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
+              onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault() }}
               className="h-11 rounded-md bg-white pl-9 dark:bg-card"
               placeholder="Search real projects, tools, cases, or module themes"
             />
+            <Button type="submit" className="h-11 shrink-0">搜索</Button>
           </div>
-        </div>
+        </form>
       </div>
 
       <aside className="rounded-md border border-[#d8dee7] bg-white p-5 shadow-sm dark:border-border dark:bg-card">
@@ -238,7 +260,11 @@ function ProjectHero({
 }
 
 function RouteContent({ route, data, onRefresh }: { route: ProjectProductRoute; data: ProductData; onRefresh: () => void }) {
-  if (route === "home") return <ProjectsHome data={data as ProjectsApiHomeResult} />
+  if (route === "home") {
+    return "items" in data && "page" in data
+      ? <ProjectGrid projects={data.items} meta={data.meta} />
+      : <ProjectsHome data={data as ProjectsApiHomeResult} />
+  }
   if (route === "tools") return <ToolsView data={data as ProjectsApiToolResult} />
   if (route === "cases") return <CasesView data={data as ProjectsApiCaseResult} />
   if (route === "collections") return <CollectionsView data={data as ProjectsApiCollectionResult} />

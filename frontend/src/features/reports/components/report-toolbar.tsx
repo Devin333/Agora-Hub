@@ -29,6 +29,7 @@ export function ReportToolbar({ filters, onChange }: { filters: ReportFilters; o
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="grid gap-3 md:grid-cols-[1fr_0.55fr_0.55fr]">
         <input
+          aria-label={locale === "zh" ? "搜索报告" : "Search reports"}
           className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
           placeholder={locale === "zh" ? "搜索报告..." : "Search reports..."}
           value={filters.keyword ?? ""}

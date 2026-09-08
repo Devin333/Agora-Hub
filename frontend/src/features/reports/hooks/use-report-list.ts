@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { reports as fallbackReports } from "@/lib/mock-data";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { MockHookResult } from "@/types/common";
 import type { Report, ReportStatus, ReportType } from "@/types/report";
 
@@ -12,48 +12,26 @@ export type ReportFilters = {
 };
 
 export function useReportList(filters: ReportFilters = {}): MockHookResult<Report[]> {
-  const [apiReports, setApiReports] = useState<Report[] | null>(null);
-  const [error, setError] = useState<Error | undefined>();
-  const [isLoading, setIsLoading] = useState(true);
-
-  const loadReports = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      setApiReports(await fetchReports());
-      setError(undefined);
-    } catch (caught) {
-      setApiReports(null);
-      setError(caught instanceof Error ? caught : new Error("Failed to load reports"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadReports();
-  }, [loadReports]);
+  const { data: apiReports, error, isLoading, isError, refetch } = useQuery({
+    queryKey: ["reports", "search", filters.keyword?.trim() ?? ""],
+    queryFn: ({ signal }) => fetchReports(filters.keyword, signal),
+    retry: false,
+  });
 
   const data = useMemo(() => {
-    const keyword = filters.keyword?.trim().toLowerCase();
-    return (apiReports ?? fallbackReports)
+    return (apiReports ?? [])
       .filter((report) => (!filters.reportType ? true : (report.reportType ?? report.type) === filters.reportType))
       .filter((report) => (!filters.status ? true : report.status === filters.status))
-      .filter((report) => {
-        if (!keyword) {
-          return true;
-        }
-        return [report.title, report.agentName, report.reportType ?? report.type, report.status, report.markdown].filter(Boolean).join(" ").toLowerCase().includes(keyword);
-      })
       .sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
-  }, [apiReports, filters.keyword, filters.reportType, filters.status]);
+  }, [apiReports, filters.reportType, filters.status]);
 
   return {
     data,
-    isLoading: isLoading && apiReports === null,
-    isError: Boolean(error) && apiReports === null,
-    error,
+    isLoading,
+    isError,
+    error: error ?? undefined,
     refetch: () => {
-      void loadReports();
+      void refetch();
     },
   };
 }
@@ -82,8 +60,13 @@ type ApiReportSummary = {
   profile?: string | null;
 };
 
-async function fetchReports(): Promise<Report[]> {
-  const response = await fetch("/api/v1/reports?limit=50", {
+async function fetchReports(keyword?: string, signal?: AbortSignal): Promise<Report[]> {
+  const query = keyword?.trim();
+  const path = query
+    ? `/api/v1/search/reports?q=${encodeURIComponent(query)}&limit=50`
+    : "/api/v1/reports?limit=50";
+  const response = await fetch(path, {
+    signal,
     headers: { Accept: "application/json" },
     cache: "no-store",
   });

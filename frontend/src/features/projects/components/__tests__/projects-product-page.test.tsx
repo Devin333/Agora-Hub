@@ -2,6 +2,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useUiStore } from "@/stores/ui-store"
+const navigation = vi.hoisted(() => ({ query: "", replace: vi.fn() }))
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => navigation.query ? new URLSearchParams(navigation.query) : null,
+  usePathname: () => "/projects",
+  useRouter: () => ({ replace: navigation.replace }),
+}))
 import { LabGraph, LabSolutionPanel, ProjectsProductPage } from "@/features/projects/components/projects-product-page"
 import {
   addProjectWatchlistItem,
@@ -33,6 +39,8 @@ vi.mock("@/lib/projects/api", async (importOriginal) => {
 describe("ProjectsProductPage", () => {
   beforeEach(() => {
     useUiStore.setState({ locale: "en" })
+    navigation.query = ""
+    navigation.replace.mockReset()
   })
 
   afterEach(() => {
@@ -65,6 +73,45 @@ describe("ProjectsProductPage", () => {
     expect(screen.getAllByText("AgentKit").length).toBeGreaterThan(0)
     expect(screen.getByText("Agent workflow case")).toBeInTheDocument()
     expect(fetchProjectsHome).toHaveBeenCalledWith({ limit: 6 })
+  })
+
+  it("uses the homepage query for a real project search and keeps the original question visible", async () => {
+    navigation.query = "question=%E6%89%BE%E4%B8%80%E4%B8%AA+Agent+%E9%A1%B9%E7%9B%AE&q=Agent&source=home"
+    vi.mocked(fetchProjectProductSection).mockResolvedValueOnce({
+      items: [project("p-agent", "AgentProject")],
+      page: { page: 1, page_size: 18, total: 1, has_next: false },
+      meta: { source: "artifact", data_state: "ready", notices: [] },
+      metrics: [],
+    })
+
+    renderWithQueryClient(<ProjectsProductPage route="home" />)
+
+    expect(await screen.findByText("找一个 Agent 项目")).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Search projects" })).toHaveValue("Agent")
+    expect(fetchProjectProductSection).toHaveBeenCalledWith("hot", {
+      params: { q: "Agent", limit: 18, category: undefined },
+    })
+    expect(fetchProjectsHome).not.toHaveBeenCalled()
+  })
+
+  it("keeps an explicit empty q when a homepage query is cleared", async () => {
+    navigation.query = "question=%E6%89%BE%E4%B8%80%E4%B8%AA+Agent+%E9%A1%B9%E7%9B%AE&q=Agent&source=home"
+    vi.mocked(fetchProjectProductSection).mockResolvedValueOnce({
+      items: [],
+      page: { page: 1, page_size: 18, total: 0, has_next: false },
+      meta: { source: "none", data_state: "empty", notices: [] },
+      metrics: [],
+    })
+
+    renderWithQueryClient(<ProjectsProductPage route="home" />)
+    const input = await screen.findByRole("textbox", { name: "Search projects" })
+    fireEvent.change(input, { target: { value: "" } })
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }))
+
+    expect(navigation.replace).toHaveBeenCalledWith(
+      "/projects?question=%E6%89%BE%E4%B8%80%E4%B8%AA+Agent+%E9%A1%B9%E7%9B%AE&q=&source=home",
+      { scroll: false },
+    )
   })
 
   it("renders explicit empty state when no real Project Radar data exists", async () => {

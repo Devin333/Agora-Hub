@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { EmptyState } from "@/components/common/empty-state";
+import { ErrorState } from "@/components/common/error-state";
 import { EvidenceList } from "@/components/common/evidence-list";
+import { PageSkeleton } from "@/components/common/loading-skeleton";
 import { MarkdownViewer } from "@/components/markdown/markdown-viewer";
 import { NewsCard } from "@/features/news/components/news-card";
 import { ReportMetadataPanel } from "@/features/reports/components/report-metadata-panel";
@@ -11,13 +13,22 @@ import { useReportDetail } from "@/features/reports/hooks/use-report-detail";
 import { TopicCard } from "@/features/topics/components/topic-card";
 
 export default function ReportDetailPage({ params }: { params: { id: string } }) {
-  const { data } = useReportDetail(params.id);
+  const reportQuery = useReportDetail(params.id);
+  const { data } = reportQuery;
+
+  if (reportQuery.isLoading) {
+    return <PageSkeleton />;
+  }
+
+  if (reportQuery.isError) {
+    return <ErrorState title="报告加载失败" message={reportQuery.error?.message} onRetry={reportQuery.refetch} />;
+  }
 
   if (!data.report) {
     return (
       <EmptyState
         title="未找到报告"
-        description="这个报告 ID 不在生成报告 mock 数据中。"
+        description="当前真实报告目录中没有这个报告 ID。"
         action={
           <Link href="/reports" className="rounded-md border border-border px-3 py-2 text-sm text-foreground hover:bg-secondary">
             返回报告

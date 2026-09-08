@@ -34,6 +34,7 @@ describe("Community Pulse UI", () => {
       <CommunityPulsePage
         result={result}
         filters={{}}
+        sourceQuestion="Agent 社区最近在讨论什么？"
         onChange={onChange}
         onOpenSignal={onOpenSignal}
         onCloseSignal={vi.fn()}
@@ -41,6 +42,7 @@ describe("Community Pulse UI", () => {
     )
 
     expect(screen.getAllByText("Agent memory debate").length).toBeGreaterThan(0)
+    expect(screen.getByText("Agent 社区最近在讨论什么？")).toBeInTheDocument()
     expect(screen.getByText("Hot Discussion")).toBeInTheDocument()
     expect(screen.getByText("Debate Cluster")).toBeInTheDocument()
     expect(screen.getAllByText("1 papers").length).toBeGreaterThan(0)
