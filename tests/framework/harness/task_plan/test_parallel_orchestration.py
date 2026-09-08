@@ -47,7 +47,8 @@ from framework.harness.task_plan.parallel import (
     SideEffectClass,
     TaskReservation,
 )
-from framework.harness.task_plan.capacity import CapacityPool, TaskCapacityDemand
+from framework.harness.task_plan.capacity import TaskCapacityDemand
+from tests.framework.harness.task_plan.capacity_fixtures import capacity_pool as CapacityPool
 from framework.shared.graph_identity import GraphExecutionIdentity
 from tests.fixtures.task_plan import build_task_plan_stage_binding
 

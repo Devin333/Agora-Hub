@@ -1287,6 +1287,74 @@ enabled use requires configured immutable revisions and trusted tenant/owner.
 Full replacement orchestration (2.10), later capacity/budget/lifecycle gates and
 G1-G5 release acceptance remain separate unchecked work.
 
+### Task 1.6 capacity and mutation contract increment — 2026-09-09
+
+Task 1.6 remains unchecked. This increment establishes typed contracts and
+connects explicitly configured capacity rules to the real stage request path;
+it does not claim authoritative shared-pool accounting or running mutation
+fence enforcement.
+
+- `CapacityPool` requires an owner scope, stable reservation key, reservation
+  revision and expiry. Its policy checksum pins pool identity, configured
+  capacity, exact policy version, owner and key. Its snapshot checksum also
+  covers live reserved quantity, revision and expiry. Live admission rejects
+  expired snapshots; offline parsing does not compare historical data with
+  the current clock.
+- `TaskCapacityPolicy` pins pool policy checksums and per-worker rules by exact
+  accepted worker reference and stage. It resolves demand for the complete
+  accepted plan. `TaskPlanPolicy` includes this optional contract in its own
+  checksum. `TaskPlanStageRunner` requires an injected snapshot reader when
+  that contract is configured. A multi-pool dispatch without trusted rules is
+  rejected, including explicit serial fallback.
+- `TaskCapacityDemand` defines all pool quantities and policy-derived mutation
+  rules. Same-key read/write conflicts are symmetric; independent keys retain
+  eligibility. Idempotent mutations require receipt evidence, and concurrent
+  same-key use additionally requires explicit policy on both tasks.
+- `PoolReservation` records task/attempt key, owner, every pool allocation,
+  policy checksum, pool reservation key/revision, expiry and settlement
+  revision. It round-trips strictly and settles by key idempotently. Only
+  `RESERVED` occupies slots; `CONSUMED` records finished use and `RELEASED`
+  records unused capacity. This is a record contract, not an authoritative
+  pool ledger or proof of a cross-group compare-and-swap.
+- Wave snapshots and canonical event schemas embed these records. Stable wave
+  identity uses the admission form of the reservation; terminal replay updates
+  the settlement form without rewriting wave identity.
+- `MutationFence` validates a bounded checksum-linked sequence of acquire,
+  renew, loss, recovery and release records. Owner and generation remain pinned
+  until confirmed release and a later acquisition; expiry never allows direct
+  reacquisition. The coordinator refuses `FENCED_MUTATION` execution while its
+  resource-authority/execution adapter is absent. Pure fence history validation
+  does not establish authoritative live ownership.
+
+Validation:
+
+- The initial complete five-file focused batch passed: `95 passed in 1.64s`.
+- Required `.venv/Scripts/python.exe -m scripts.dev smoke --keep-going` exited
+  0: compile passed; `3262 passed, 23 deselected, 31 warnings in 3257.65s`
+  (54 minutes 17 seconds). No test selections were added to or removed from
+  the repository smoke command.
+- Parallel fence review finished after smoke started. The final six-file batch
+  covered all five affected task-plan test files plus
+  `tests/framework/events/test_schema_catalog.py`: `98 passed in 3.13s`.
+  The repository compile command passed again for the final code. These final
+  focused results cover the settled fence implementation; the earlier smoke
+  result alone is not claimed as an exact-final-version fence test.
+- Offline AgentLoop `test-agent-loop-d4a21a4c710f489ab6334dff5c204e9b` succeeded:
+  3 fixture LLM calls, 1 successful real memory tool call, 1 judge retry,
+  60 fixture tokens and 0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-d4a21a4c710f489ab6334dff5c204e9b/manifest.json`,
+  hash `sha256:c50097dab4238129c544cb1fcaee7a0da8d8a32985d3eab0b51286a9aa7f451a`.
+- Source validation: `is_valid=true`, `error_count=0`, `warning_count=0`.
+- Strict OpenSpec validation and scoped diff checks passed; final documentation
+  is validated again before committing.
+
+Remaining 1.6 acceptance work: authority provenance and scope for required
+production capacity configuration; durable reservation ownership/revision
+validation across groups and recovery; authority-backed fence recovery receipts.
+Task 2.3 still owns complete READY packing and atomic all-pool admission; task
+2.11 owns running fence renewal, termination coordination and reclaim. No task
+after 1.6 is advanced by this increment.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

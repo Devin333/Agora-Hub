@@ -173,6 +173,8 @@ from framework.harness.task_plan.capacity import (
     TaskCapacityDemand,
     pack_first_fit,
 )
+from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
+from framework.harness.task_plan.mutation_fence import MutationFence, MutationFenceState
 from framework.harness.task_plan.observability import (
     TaskPlanMetricSample,
     TaskPlanTraceEvent,
@@ -320,6 +322,9 @@ __all__ = [
     "SerialTaskExecutorPort",
     "DispatchWaveTerminalOutcome",
     "CapacityPool",
+    "TaskCapacityPolicy",
+    "MutationFence",
+    "MutationFenceState",
     "TaskCapacityDemand",
     "PoolReservation",
     "FirstFitPacking",

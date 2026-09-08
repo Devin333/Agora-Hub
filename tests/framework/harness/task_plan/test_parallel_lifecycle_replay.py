@@ -7,7 +7,9 @@ import pytest
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan import TaskLifecycle
-from framework.harness.task_plan.capacity import CapacityPool, TaskCapacityDemand
+from framework.harness.task_plan.capacity import TaskCapacityDemand
+from tests.framework.harness.task_plan.capacity_fixtures import capacity_pool as CapacityPool
+from tests.framework.harness.task_plan.capacity_fixtures import bind_capacity_policy
 from framework.harness.task_plan.parallel import (
     JoinPolicy,
     ParallelAgentCoordinator,
@@ -50,6 +52,7 @@ def _coordinator_events(*, status: TaskLifecycle = TaskLifecycle.SUCCEEDED, with
             capacity_pools=(CapacityPool("cpu", 1, policy_version="policy-v1"),),
             task_capacity_demands={"task-1": TaskCapacityDemand("task-1", {"cpu": 1})},
         )
+        request = bind_capacity_policy(request)
     events: list[dict[str, object]] = []
     coordinator = ParallelAgentCoordinator(
         max_workers=1,
@@ -80,6 +83,9 @@ def test_capacity_policy_evidence_survives_terminal_replay() -> None:
     reservation = next(iter(reservations.values()))
     assert reservation["capacity_allocations"] == {"cpu": 1}
     assert reservation["capacity_policy_checksums"]["cpu"].startswith("sha256:")
+    assert reservation["capacity_reservation"]["reservation_version"] == 2
+    assert reservation["capacity_reservation"]["state"] == "CONSUMED"
+    assert reservation["capacity_reservation"]["reservation_key"] == reservation["idempotency_key"]
     _validate_parallel_report_projection(groups, waves, reservations)
 
 

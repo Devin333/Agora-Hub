@@ -9,6 +9,8 @@ from framework.harness.control_plane.scheduler import HarnessScheduler
 from framework.harness.task_plan.aggregator import TaskPlanAggregator
 from framework.harness.task_plan.binding import TaskPlanCapabilityRegistry
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.capacity import CapacityPool, capacity_now_ms
+from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
 from framework.harness.task_plan.models import TaskLifecycle, ValidatedTaskPlan, TaskInstance, TaskPlanProjection
 from framework.harness.task_plan.ports import (
     PlanBuildRequest,
@@ -107,6 +109,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         worker_result_recovery: Any | None = None,
         parallel_coordinator: ParallelAgentCoordinator | None = None,
         child_supervisor_capacity: int | None = None,
+        capacity_snapshot_reader: Callable[[TaskCapacityPolicy], tuple[CapacityPool, ...]] | None = None,
         planning_observation_port: PlanningObservationPort | None = None,
         metrics_sink: Callable[[tuple[Any, ...]], Any] | None = None,
         checkpoint_store: TaskPlanCheckpointStorePort | None = None,
@@ -142,6 +145,9 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             raise ValueError("child_supervisor_capacity must be a non-negative integer")
         self.parallel_coordinator = parallel_coordinator
         self.child_supervisor_capacity = child_supervisor_capacity
+        if capacity_snapshot_reader is not None and not callable(capacity_snapshot_reader):
+            raise TypeError("capacity_snapshot_reader must be callable")
+        self.capacity_snapshot_reader = capacity_snapshot_reader
         if planning_observation_port is not None and not isinstance(
             planning_observation_port,
             PlanningObservationPort,
@@ -1025,7 +1031,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 "capability_capacity",
                 "available_concurrency_reservations",
             )
-        ) or bool(getattr(policy, "metadata", {}).get("parallel_orchestration", False))
+        ) or policy.capacity_policy is not None or bool(getattr(policy, "metadata", {}).get("parallel_orchestration", False))
 
     def _parallel_request(
         self,
@@ -1035,6 +1041,13 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         task_instances: tuple[TaskInstance, ...],
     ) -> ParallelDispatchRequest:
         policy = request.policy
+        capacity_pools = ()
+        capacity_demands = {}
+        if policy.capacity_policy is not None:
+            if self.capacity_snapshot_reader is None:
+                raise HarnessValidationError("required capacity snapshot reader is unavailable", code="CAPACITY_POLICY_MISSING")
+            capacity_pools = tuple(self.capacity_snapshot_reader(policy.capacity_policy))
+            capacity_demands = policy.capacity_policy.resolve(plan, capacity_pools, now_ms=capacity_now_ms())
         return ParallelDispatchRequest(
             plan=plan,
             task_instances=tuple(task_instances),
@@ -1058,6 +1071,9 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             max_group_runtime_seconds=policy.max_group_runtime_seconds,
             max_join_wait_seconds=policy.max_join_wait_seconds,
             parent_graph_identity=request.execution_identity,
+            capacity_pools=capacity_pools,
+            task_capacity_demands=capacity_demands,
+            capacity_policy=policy.capacity_policy,
         )
 
     def _parallel_group_id(self, request: TaskPlanStageRequest, plan: ValidatedTaskPlan) -> str:

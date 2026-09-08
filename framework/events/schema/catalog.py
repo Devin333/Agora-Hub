@@ -1259,10 +1259,22 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "SUCCEEDED", "PARTIAL_FAILED", "FAILED", "CANCELLED", "INDETERMINATE",
         "RECLAIMED", "DEADLINE_EXCEEDED",
     ]}
+    pool_reservation = object_schema({
+        "schema_version": {"const": "agora.task-pool-reservation/v1"},
+        "task_id": _TEXT, "allocations": capacity_allocations,
+        "policy_checksums": {"type": "object", "minProperties": 1, "maxProperties": 16, "additionalProperties": _CHECKSUM_TEXT},
+        "owner_scope": _TEXT, "reservation_key": _TEXT,
+        "pool_versions": {"type": "object", "minProperties": 1, "maxProperties": 16, "additionalProperties": non_negative},
+        "pool_reservation_keys": {"type": "object", "minProperties": 1, "maxProperties": 16, "additionalProperties": _TEXT},
+        "expires_at_ms": {"type": "integer", "minimum": 1},
+        "reservation_version": {"enum": [1, 2]},
+        "state": reservation_state, "reservation_checksum": _CHECKSUM_TEXT,
+    })
     reservation = object_schema({
         "schema_version": {"const": "agora.harness-task-reservation/v1"},
         "task_id": _TEXT, "idempotency_key": _TEXT, "budget": budget,
         "capacity_allocations": capacity_allocations,
+        "capacity_reservation": pool_reservation,
         "capacity_policy_checksums": {
             "type": "object", "minProperties": 1,
             "additionalProperties": _CHECKSUM_TEXT, "maxProperties": 16,

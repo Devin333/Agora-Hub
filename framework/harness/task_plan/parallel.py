@@ -52,7 +52,8 @@ from framework.harness.task_plan.parallel_lifecycle import (
     _GROUP_TRANSITIONS,
 )
 from framework.harness.task_plan.parallel_state import validate_group_transition, validate_wave_transition
-from framework.harness.task_plan.capacity import CapacityPool, TaskCapacityDemand, pack_first_fit
+from framework.harness.task_plan.capacity import CapacityPool, PoolReservation, TaskCapacityDemand, capacity_now_ms, pack_first_fit
+from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.store import TaskResultRecord
@@ -88,27 +89,6 @@ def spawn_operation_key(group_id: str, wave_id: str, task_instance_id: str, atte
 
 
 @dataclass(frozen=True, slots=True)
-class CapabilityCapacity:
-    capability: str
-    capacity_limit: int
-    currently_reserved: int = 0
-    reservation_scope: str = "run"
-    reservation_key: str = ""
-
-    @property
-    def available(self) -> int:
-        return max(self.capacity_limit - self.currently_reserved, 0)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.capability, str) or not self.capability.strip():
-            raise HarnessValidationError("capability must be non-empty", code="PLAN_SCHEMA_INVALID")
-        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (self.capacity_limit, self.currently_reserved)):
-            raise HarnessValidationError("capability capacity must be non-negative", code="PLAN_SCHEMA_INVALID")
-        if self.currently_reserved > self.capacity_limit:
-            raise HarnessValidationError("reserved capability capacity exceeds limit", code="CAPACITY_EXHAUSTED")
-
-
-@dataclass(frozen=True, slots=True)
 class TaskReservation:
     task_id: str
     idempotency_key: str
@@ -117,6 +97,7 @@ class TaskReservation:
     capacity_allocations: Mapping[str, int] = field(default_factory=dict)
     capacity_policy_checksums: Mapping[str, str] = field(default_factory=dict)
     schema_version: str = TASK_RESERVATION_SCHEMA
+    capacity_reservation: PoolReservation | Mapping[str, Any] | None = None
     reservation_checksum: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -178,6 +159,19 @@ class TaskReservation:
         object.__setattr__(self, "state", ReservationState(self.state))
         if self.schema_version != TASK_RESERVATION_SCHEMA:
             raise HarnessValidationError("unsupported reservation schema", code="PLAN_SCHEMA_INVALID")
+        pool_reservation = self.capacity_reservation
+        if isinstance(pool_reservation, Mapping):
+            pool_reservation = PoolReservation.from_dict(pool_reservation)
+        if pool_reservation is not None:
+            if not isinstance(pool_reservation, PoolReservation) or (
+                pool_reservation.task_id != self.task_id
+                or pool_reservation.reservation_key != self.idempotency_key
+                or pool_reservation.allocations != self.capacity_allocations
+                or pool_reservation.policy_checksums != self.capacity_policy_checksums
+                or pool_reservation.state is not self.state
+            ):
+                raise HarnessValidationError("capacity reservation differs from task reservation", code="CAPACITY_RESERVATION_CONFLICT")
+        object.__setattr__(self, "capacity_reservation", pool_reservation)
         object.__setattr__(self, "reservation_checksum", canonical_payload_checksum(self.to_dict(include_checksum=False)))
 
     def to_dict(self, *, include_checksum: bool = True) -> dict[str, Any]:
@@ -185,9 +179,18 @@ class TaskReservation:
         if self.capacity_allocations:
             value["capacity_allocations"] = thaw_mapping(self.capacity_allocations)
             value["capacity_policy_checksums"] = thaw_mapping(self.capacity_policy_checksums)
+        if self.capacity_reservation is not None:
+            value["capacity_reservation"] = self.capacity_reservation.to_dict()
         if include_checksum:
             value["reservation_checksum"] = self.reservation_checksum
         return value
+
+    def settled(self, state: ReservationState | str) -> TaskReservation:
+        target = ReservationState(state)
+        return replace(self, state=target, capacity_reservation=(
+            self.capacity_reservation.settled(target, reservation_key=self.idempotency_key, expected_version=1)
+            if self.capacity_reservation is not None else None
+        ))
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "TaskReservation":
@@ -197,7 +200,7 @@ class TaskReservation:
                 "schema_version", "task_id", "idempotency_key", "budget", "state",
                 "reservation_checksum",
             }),
-            optional=frozenset({"capacity_allocations", "capacity_policy_checksums"}),
+            optional=frozenset({"capacity_allocations", "capacity_policy_checksums", "capacity_reservation"}),
             model=cls.__name__,
         )
         payload.setdefault("capacity_allocations", {})
@@ -443,6 +446,7 @@ class DispatchWave:
                         "budget": thaw_mapping(item.budget),
                         **({"capacity_allocations": thaw_mapping(item.capacity_allocations)} if item.capacity_allocations else {}),
                         **({"capacity_policy_checksums": thaw_mapping(item.capacity_policy_checksums)} if item.capacity_policy_checksums else {}),
+                        **({"capacity_reservation": item.capacity_reservation.admission_snapshot()} if item.capacity_reservation is not None else {}),
                     }
                     for item in self.reservations
                 ],
@@ -544,6 +548,7 @@ class ParallelDispatchRequest:
     schema_version: str = PARALLEL_DISPATCH_REQUEST_SCHEMA
     capacity_pools: tuple[CapacityPool, ...] = ()
     task_capacity_demands: Mapping[str, TaskCapacityDemand] = field(default_factory=dict)
+    capacity_policy: TaskCapacityPolicy | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.plan, ValidatedTaskPlan):
@@ -601,6 +606,12 @@ class ParallelDispatchRequest:
                 details={"pool_ids": unknown_pools},
             )
         object.__setattr__(self, "task_capacity_demands", MappingProxyType(demands))
+        if self.capacity_policy is not None:
+            if not isinstance(self.capacity_policy, TaskCapacityPolicy):
+                raise HarnessValidationError("dispatch capacity policy must be typed", code="CAPACITY_POLICY_INVALID")
+            expected_demands = self.capacity_policy.demands_for(self.plan)
+            if expected_demands != demands or not pools:
+                raise HarnessValidationError("dispatch demands differ from trusted capacity policy", code="CAPACITY_DEMAND_INVALID")
         object.__setattr__(self, "join_policy", JoinPolicy(self.join_policy))
         object.__setattr__(self, "side_effect_class", SideEffectClass(self.side_effect_class))
         if self.group_task_ids is not None:
@@ -1020,7 +1031,7 @@ class ParallelAgentCoordinator:
             if value is not None:
                 values.append(value)
         limit = min(values)
-        if request.side_effect_class in {
+        if not request.task_capacity_demands and request.side_effect_class in {
             SideEffectClass.MUTATING_SERIAL,
             SideEffectClass.FENCED_MUTATION,
         }:
@@ -1028,6 +1039,16 @@ class ParallelAgentCoordinator:
         if request.side_effect_class is SideEffectClass.FENCED_MUTATION and not request.resource_conflict_key:
             raise HarnessValidationError("fenced mutation requires a resource conflict key", code="SIDE_EFFECT_FENCE_REQUIRED")
         return limit
+
+    @staticmethod
+    def _validate_capacity_policy(request: ParallelDispatchRequest) -> None:
+        observed_at = capacity_now_ms()
+        if request.capacity_pools and request.capacity_policy is None:
+            raise HarnessValidationError("multi-pool dispatch requires trusted capacity rules", code="CAPACITY_POLICY_MISSING")
+        if request.capacity_policy is not None:
+            request.capacity_policy.resolve(request.plan, request.capacity_pools, now_ms=observed_at)
+        for pool in request.capacity_pools:
+            pool.require_current(now_ms=observed_at)
 
     def effective_parallelism(self, request: ParallelDispatchRequest) -> int:
         values = [self._group_parallelism_limit(request)]
@@ -1057,6 +1078,15 @@ class ParallelAgentCoordinator:
         self,
         request: ParallelDispatchRequest,
     ) -> tuple[int, str | None]:
+        self._validate_capacity_policy(request)
+        if request.side_effect_class is SideEffectClass.FENCED_MUTATION or any(
+            demand.side_effect_class is SideEffectClass.FENCED_MUTATION
+            for demand in request.task_capacity_demands.values()
+        ):
+            raise HarnessValidationError(
+                "fenced mutation requires a resource authority and execution lease adapter",
+                code="SIDE_EFFECT_FENCE_REQUIRED",
+            )
         if self._requires_serial_fallback_transport():
             if not request.serial_fallback:
                 raise HarnessValidationError(
@@ -1076,7 +1106,7 @@ class ParallelAgentCoordinator:
                 "parallel capacity is unavailable",
                 code="CAPACITY_EXHAUSTED",
             )
-        if request.side_effect_class is SideEffectClass.MUTATING_SERIAL:
+        if not request.task_capacity_demands and request.side_effect_class is SideEffectClass.MUTATING_SERIAL:
             return effective, "side_effect_fence"
         requested = request.requested_parallelism or self._group_parallelism_limit(request)
         if effective == 1 and requested > 1:
@@ -1458,7 +1488,7 @@ class ParallelAgentCoordinator:
                 outcome = _WaveRunOutcome(wave_results)
                 terminal = replace(
                     wave.transitioned(DispatchWaveState.TERMINAL, terminal_outcome=_terminal_wave_outcome(outcome)),
-                    reservations=tuple(replace(item, state=ReservationState.CONSUMED) for item in wave.reservations),
+                    reservations=tuple(item.settled(ReservationState.CONSUMED) for item in wave.reservations),
                 )
                 self._emit(
                     "TASK_WAVE_COMPLETED", event_sink=event_sink,
@@ -1885,6 +1915,8 @@ class ParallelAgentCoordinator:
                         request.task_capacity_demands,
                         pool_state,
                         max_tasks=effective,
+                        owner_scope=f"{request.plan.run_id}/{request.plan.stage_id}/{request.plan.plan_id}",
+                        reservation_keys={item.task_id: item.idempotency_key for item in pending_work},
                     )
                     if not packing.selected:
                         session.terminal_diagnostics = ("CAPACITY_NOT_AVAILABLE",)
@@ -1895,6 +1927,7 @@ class ParallelAgentCoordinator:
                     reservation_policy_checksums = {
                         item.task_id: dict(item.policy_checksums) for item in packing.reservations
                     }
+                    pool_reservations = {item.task_id: item for item in packing.reservations}
                     for reservation in packing.reservations:
                         for pool_id, quantity in reservation.allocations.items():
                             pool_state[pool_id] = replace(pool_state[pool_id], reserved=pool_state[pool_id].reserved + quantity)
@@ -1902,6 +1935,7 @@ class ParallelAgentCoordinator:
                     batch = tuple(pending_work[:effective])
                     reservation_allocations = {item.task_id: {} for item in batch}
                     reservation_policy_checksums = {item.task_id: {} for item in batch}
+                    pool_reservations = {}
                 wave = DispatchWave(
                     group.group_id,
                     session.next_wave_ordinal,
@@ -1914,6 +1948,7 @@ class ParallelAgentCoordinator:
                             item.budget_snapshot.to_dict(),
                             capacity_allocations=reservation_allocations[item.task_id],
                             capacity_policy_checksums=reservation_policy_checksums[item.task_id],
+                            capacity_reservation=pool_reservations.get(item.task_id),
                         )
                         for item in batch
                     ),
@@ -2021,6 +2056,9 @@ class ParallelAgentCoordinator:
                             reservation_states[item.task_id],
                             item.capacity_allocations,
                             item.capacity_policy_checksums,
+                            capacity_reservation=(item.capacity_reservation.settled(
+                                reservation_states[item.task_id], reservation_key=item.idempotency_key, expected_version=1,
+                            ) if item.capacity_reservation is not None else None),
                         )
                         for item in wave.reservations
                     ),
@@ -2717,14 +2755,7 @@ class ParallelAgentCoordinator:
                 updated.append(wave)
                 continue
             reservations = tuple(
-                TaskReservation(
-                    item.task_id,
-                    item.idempotency_key,
-                    item.budget,
-                    ReservationState.RELEASED,
-                    item.capacity_allocations,
-                    item.capacity_policy_checksums,
-                )
+                item.settled(ReservationState.RELEASED)
                 if release_confirmed and item.task_id in pending
                 else item
                 for item in wave.reservations
@@ -2926,6 +2957,8 @@ def _admission_policy_checksum(request: ParallelDispatchRequest) -> str:
                 "capacity": pool.capacity,
                 "policy_version": pool.policy_version,
                 "policy_checksum": pool.policy_checksum,
+                "owner_scope": pool.owner_scope,
+                "reservation_key": pool.reservation_key,
             }
             for pool in sorted(request.capacity_pools, key=lambda item: item.pool_id)
         ],
@@ -2933,6 +2966,7 @@ def _admission_policy_checksum(request: ParallelDispatchRequest) -> str:
             request.task_capacity_demands[task_id].to_dict()
             for task_id in sorted(request.task_capacity_demands)
         ],
+        **({"capacity_policy_checksum": request.capacity_policy.policy_checksum} if request.capacity_policy is not None else {}),
     })
 
 

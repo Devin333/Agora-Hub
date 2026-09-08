@@ -20,6 +20,7 @@ from framework.harness.task_plan.canonical import (
     thaw_mapping,
 )
 from framework.harness.task_plan.models import PlanBuildBudget, TaskBudget, TaskPlanLimits
+from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
 from framework.harness.task_plan.schema import (
     DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
     TASK_PLAN_POLICY_SCHEMA,
@@ -73,6 +74,7 @@ class TaskPlanPolicy:
     max_planning_tool_calls: int = 3
     planning_timeout_seconds: int = 30
     shared_dependency_output_roles: tuple[str, ...] = ()
+    capacity_policy: TaskCapacityPolicy | Mapping[str, Any] | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
     runtime_version: str = TASK_PLAN_RUNTIME_VERSION
     schema_version: str = TASK_PLAN_POLICY_SCHEMA
@@ -254,6 +256,17 @@ class TaskPlanPolicy:
             raise HarnessValidationError(str(exc), code="invalid_task_plan_limit") from exc
         object.__setattr__(self, "parent_observation_limits", frozen_mapping(observation_limits, "parent_observation_limits"))
         object.__setattr__(self, "metadata", frozen_mapping(self.metadata, "policy.metadata"))
+        capacity_policy = self.capacity_policy
+        if isinstance(capacity_policy, Mapping):
+            capacity_policy = TaskCapacityPolicy.from_dict(capacity_policy)
+        if capacity_policy is not None:
+            if not isinstance(capacity_policy, TaskCapacityPolicy):
+                raise HarnessValidationError("invalid task capacity policy", code="CAPACITY_POLICY_INVALID")
+            if capacity_policy.stage_id != self.stage_id:
+                raise HarnessValidationError("capacity policy belongs to a different stage", code="CAPACITY_POLICY_SCOPE_MISMATCH")
+            if set(capacity_policy.worker_rules) - set(self.pinned_capability_bindings.values()):
+                raise HarnessValidationError("capacity rule must reference a pinned worker binding", code="CAPACITY_POLICY_INVALID")
+        object.__setattr__(self, "capacity_policy", capacity_policy)
         object.__setattr__(self, "runtime_version", required_text(self.runtime_version, "runtime_version"))
         object.__setattr__(self, "policy_checksum", canonical_payload_checksum(self.checksum_projection()))
 
@@ -342,6 +355,7 @@ class TaskPlanPolicy:
             "planning_timeout_seconds": self.planning_timeout_seconds,
             **({"shared_dependency_output_roles": list(self.shared_dependency_output_roles)}
                if self.shared_dependency_output_roles else {}),
+            **({"capacity_policy": self.capacity_policy.to_dict()} if self.capacity_policy is not None else {}),
             "metadata": thaw_mapping(self.metadata),
         }
 
@@ -401,6 +415,7 @@ class TaskPlanPolicy:
                 "max_planning_tool_calls",
                 "planning_timeout_seconds",
                 "shared_dependency_output_roles",
+                "capacity_policy",
             }
         )
         payload = exact_keys(value, required=required, optional=optional, model=cls.__name__)
