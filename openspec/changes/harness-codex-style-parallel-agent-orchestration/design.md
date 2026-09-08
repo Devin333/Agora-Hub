@@ -88,7 +88,11 @@ generic child/result 接线增量使用 `HarnessSubAgentTaskExecutor`，执行�
 
 生产构造要求 executor 与 stage 使用同一 TaskPlan store 和 admission service，input/result/planning 使用同一 snapshot store；SubAgent runtime、result authority 与 TaskPlan verifier 使用同一 durable transcript owner 和同一个 result authority。artifact descriptor 与 verifier 使用同一个 canonical artifact owner，profile 的全部 gate 必须注册到 deterministic registry。capability 必须为 SUBAGENT，实际 runtime worker 必须就是 pinned registration 中的 implementation；不再接受任意 callable executor 或独立 recovery callback。Graph composition 对手动装配 runtime 也执行同样检查，不能借 fixture runtime 绕过。bundle 已提交但 result grant 中断时，重启后的同一 executor 仅从可信 metadata 补授权后读取，不重复 worker；只读结果读取仍拒绝缺失 grant。
 
-任务 1.5 尚未完成：现有 memory recall/tool 消费接线、replacement/dependency refs，以及其他恢复和结果消费入口仍需逐一生产接线和验收。这里完成的是通用 child 的授权、transcript 和 verifier 接线；具体 AgentRunner child、ToolRuntime receipts、parent continuation 及全部 G1-G5 验收仍按后续任务推进，不代表已经启用生产流量。
+手动装配的 `HarnessSubAgentActivityRuntime` 在构造、执行和恢复入口检查 durable result authority，并要求 runtime 与 adapter 共用同一授权及 transcript owner；adapter 的物理 Graph binding 入口也独立检查授权。materializer 暴露实际使用的 artifact catalog，必须与 result authority 的 metadata owner 是同一个对象，不能在读取或物化后才发现目录混用。独立的低层 bundle/model 测试不构成物理 Graph 授权；Graph 正例使用真实 durable grant 和 transcript store。
+
+通用 `TaskPlanReplayReducer` 的 SubAgent evidence 入口必须具有 durable result authority、同一个 transcript owner 和调用方提供的 recorded Graph execution，构造后变更依赖也必须在正文访问前拒绝。`ValidatedTaskPlan` 仅支持 Graph v2；旧数据迁移不构成当前 reducer 的 raw-store 兼容分支。`TaskPlanRecoveryService` 显式接收这些依赖并自行构造 reducer，不接收外部预构造 reducer。纯 metadata replay/recovery 即使携带 Graph identity，只要没有 SubAgent 结果正文，也不要求未使用的 payload capability。
+
+任务 1.5 尚未完成：replacement/dependency refs 与 Harness 到生产 RAG 的 capability 提供路径仍需继续完成。手动 physical SubAgent composition 与 generic replay/recovery 的结果授权入口已由本批实现覆盖，完整验证证据以 `verification.md` 为准。parent AgentLoop 与 RAG consumer 的 memory recall 边界已有 scoped 验证；具体 AgentRunner child、ToolRuntime receipts、parent continuation 及全部 G1-G5 验收仍按后续任务推进，不代表已经启用生产流量。
 
 ### 2. Harness 作为唯一 fan-out/fan-in coordinator
 

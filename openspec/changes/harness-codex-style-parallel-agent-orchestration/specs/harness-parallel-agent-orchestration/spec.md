@@ -301,6 +301,13 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **THEN** it MUST reject before issuing child input authority, reading result payload, or invoking a worker
 - **AND** it MUST NOT synthesize a Graph activity identity or treat a deterministic task-instance checksum as spawn authorization
 
+#### Scenario: A physical SubAgent activity bypasses the generic factory
+
+- **WHEN** a caller manually composes a SubAgent activity runtime or binds a SubAgent result adapter to a physical Graph activity
+- **THEN** it MUST require durable result authority before worker invocation or evidence payload access
+- **AND** execution and acceptance MUST share that authority and transcript owner, and materialization MUST use the authority's exact artifact metadata catalog
+- **AND** execute and recovery entrypoints MUST recheck these dependencies so changing a binding after construction cannot restore raw-store access
+
 #### Scenario: Materialized results extend an attempt without rewriting its authority
 
 - **WHEN** the trusted materializer persists the verified SubAgent result

@@ -301,6 +301,26 @@ class HarnessSubAgentResultAdapter:
         if self.result_ref_authority is not None:
             self.result_ref_authority.admit_materialized_result(identity, envelope)
 
+    def require_graph_authority(self) -> HarnessResultRefAuthority:
+        """Reject incomplete Graph composition before evidence or worker access."""
+        from framework.harness.ref_results import HarnessResultRefAuthority
+
+        authority = self.result_ref_authority
+        if not isinstance(authority, HarnessResultRefAuthority) or not authority.is_durable:
+            raise HarnessValidationError(
+                "Graph SubAgent results require durable reference authority",
+                code="REF_SNAPSHOT_MISSING",
+            )
+        if (
+            authority.transcript_store is not self._transcript_store
+            or authority.artifact_descriptors is not self._materializer.artifact_catalog
+        ):
+            raise HarnessValidationError(
+                "Graph SubAgent persistence must share its canonical metadata owners",
+                code="REF_SNAPSHOT_BINDING_MISMATCH",
+            )
+        return authority
+
     def binding_for_activity(
         self,
         *,
@@ -320,6 +340,7 @@ class HarnessSubAgentResultAdapter:
                 code="graph_result_lineage_scope_mismatch",
                 details={"mismatches": ["tenant_id"]},
             )
+        self.require_graph_authority()
         return self._graph_result_runtime.binding_for_activity(
             activity_id=activity.activity_id,
             graph=graph,
@@ -715,6 +736,18 @@ class HarnessSubAgentActivityRuntime:
             raise TypeError("adapter must be HarnessSubAgentResultAdapter")
         self._runtime = runtime
         self._adapter = adapter
+        self._require_authority()
+
+    def _require_authority(self) -> None:
+        authority = self._adapter.require_graph_authority()
+        if (
+            self._runtime.result_ref_authority is not authority
+            or self._runtime.transcript_store is not authority.transcript_store
+        ):
+            raise HarnessValidationError(
+                "Graph SubAgent execution and acceptance must share result authority",
+                code="REF_SNAPSHOT_BINDING_MISMATCH",
+            )
 
     def execute_and_accept(
         self,
@@ -730,6 +763,7 @@ class HarnessSubAgentActivityRuntime:
         budget: PersistenceBudgetSnapshot | None = None,
         context_fingerprint: str | None = None,
     ) -> HarnessSubAgentActivityResult:
+        self._require_authority()
         binding = self._adapter.binding_for_activity(
             activity=activity,
             graph=graph,
@@ -767,6 +801,7 @@ class HarnessSubAgentActivityRuntime:
         budget: PersistenceBudgetSnapshot | None = None,
         context_fingerprint: str | None = None,
     ) -> HarnessSubAgentActivityResult:
+        self._require_authority()
         binding = self._adapter.binding_for_activity(
             activity=activity,
             graph=graph,

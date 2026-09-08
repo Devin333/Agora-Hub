@@ -4,7 +4,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.ref_results import HarnessResultRefAuthority
+from framework.harness.subagents.transcript import SubAgentTranscriptStorePort
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     identifier,
@@ -22,6 +25,7 @@ from framework.harness.task_plan.replay import TaskPlanReplayReducer, TaskPlanRe
 from framework.harness.task_plan.schema import GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA
 from framework.harness.task_plan.scheduler import materialize_queue_task
 from framework.harness.task_plan.store import TaskPlanEvent, TaskResultRecord
+from framework.shared.graph_identity import GraphExecutionIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,11 +236,19 @@ class TaskPlanRecoveryService:
 
     def __init__(
         self,
-        reducer: TaskPlanReplayReducer | None = None,
         *,
         queue_reader: TaskPlanQueueReadPort | None = None,
+        transcript_store: SubAgentTranscriptStorePort | None = None,
+        artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
+        result_ref_authority: HarnessResultRefAuthority | None = None,
+        execution_identity: GraphExecutionIdentity | None = None,
     ) -> None:
-        self._reducer = reducer or TaskPlanReplayReducer()
+        self._reducer = TaskPlanReplayReducer(
+            transcript_store=transcript_store,
+            artifact_reference_verifier=artifact_reference_verifier,
+            result_ref_authority=result_ref_authority,
+            execution_identity=execution_identity,
+        )
         if queue_reader is not None and not isinstance(
             queue_reader,
             TaskPlanQueueReadPort,

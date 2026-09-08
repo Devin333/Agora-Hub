@@ -10,6 +10,7 @@ from backend.research.graphs import (
     build_dynamic_paper_analysis_graph_definition,
 )
 from framework.agent.artifacts import FilesystemArtifactStore
+from framework.events.canonical import checksum_for
 from framework.events.runtime.publisher import EventRuntime
 from framework.events.schema import default_event_schema_catalog
 from framework.harness import (
@@ -58,6 +59,7 @@ from framework.harness import (
     task_plan_context_identities,
     task_instance_for_attempt,
 )
+from framework.harness.artifacts.ports import ArtifactReferenceDescriptor
 from framework.harness.graph import HarnessGraphCompiler, HarnessWorkerType
 from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import (
@@ -72,15 +74,21 @@ from framework.harness.subagents.transcript import (
     subagent_evidence_schemas,
 )
 from framework.harness.subagents.models import SUBAGENT_INVOCATION_SCHEMA_V3
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_authority import RefAccessPolicy, RefDescriptor
+from framework.harness.ref_results import HarnessResultRefAuthority
+from framework.harness.ref_snapshot import RefAuthoritySnapshot
 from framework.harness.task_plan import task_plan_subagent_attempt_identity
 from framework.harness.task_plan import TASK_PLAN_REPLAY_REDUCER_VERSION_V3
 from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
 from infrastructure.storage.events import SQLiteEventStore
 from tests.fixtures.task_plan import build_task_plan_stage_binding
+from tests.framework.harness.test_ref_snapshot_store import _store as _ref_snapshot_store
 
 
 ACCEPTED_AT = "2026-08-13T00:00:00Z"
+RESULT_AUTHORITY_TENANT = "lineage-result-tenant"
 
 
 def _execution_identity(
@@ -131,11 +139,38 @@ class _RecordingArtifactVerifier:
     def __init__(self, valid_refs: tuple[str, ...] = ()) -> None:
         self.valid_refs = set(valid_refs)
         self.calls: list[tuple[str, str]] = []
+        self.attempt_identity = None
 
     def verify_artifact_ref(self, ref: str, *, expected_run_id: str) -> None:
         self.calls.append((ref, expected_run_id))
         if expected_run_id != "lineage-run" or ref not in self.valid_refs:
             raise ValueError("artifact evidence is not owned by the accepted run")
+
+    def bind_attempt(self, identity) -> None:
+        self.attempt_identity = identity
+
+    def describe_artifact_ref(
+        self,
+        ref: str,
+        *,
+        expected_run_id: str,
+        expected_tenant_id: str | None = None,
+    ) -> ArtifactReferenceDescriptor:
+        identity = self.attempt_identity
+        if identity is None:
+            raise ValueError("artifact evidence is not owned by an accepted attempt")
+        return ArtifactReferenceDescriptor(
+            ref=ref,
+            run_id=expected_run_id,
+            tenant_id=expected_tenant_id,
+            artifact_type="graph-result",
+            checksum=checksum_for({"ref": ref}),
+            byte_size=1,
+            media_type="application/json",
+            graph_id=identity.graph_id,
+            node_id=identity.node_id,
+            attempt_id=identity.result_attempt_id,
+        )
 
 
 def _fixture(
@@ -529,6 +564,74 @@ def _start_attempt(store, plan, instance) -> None:
             ),
             projection,
         )
+
+
+def _committed_replay_authority(
+    fixture,
+    root: Path,
+    *,
+    plan,
+    record: TaskResultRecord,
+) -> HarnessResultRefAuthority:
+    if record.transcript_ref is None:
+        raise AssertionError("replay authority fixture requires transcript evidence")
+    identity = fixture["transcript_store"].read(record.transcript_ref).identity
+    execution_identity = RefAuthoritySnapshot.execution_for_attempt(identity)
+    tenant_scope = checksum_for(RESULT_AUTHORITY_TENANT)
+    descriptor = RefDescriptor(
+        ref="document",
+        run_id=identity.parent_run_id,
+        stage_id=identity.stage_id,
+        tenant_id=tenant_scope,
+        owner_id="lineage-root-owner",
+        access_mode="READ_ONLY",
+        artifact_type="graph_input",
+        source_checksum=checksum_for("lineage-input"),
+        ref_kind="input",
+        scope="SHARED_READ_ONLY",
+    )
+    admission = RefAuthoritySnapshot(
+        execution_identity=execution_identity,
+        stage_id=identity.stage_id,
+        stage_binding_checksum=identity.stage_binding_checksum,
+        task_policy_checksum=plan.policy_checksum,
+        source_checksum=checksum_for("lineage-inputs"),
+        policy=RefAccessPolicy(
+            policy_id="lineage-inputs",
+            version="1",
+            run_id=identity.parent_run_id,
+            stage_id=identity.stage_id,
+            tenant_id=tenant_scope,
+            owner_id="lineage-root-owner",
+            allowed_refs=(descriptor.ref,),
+            allowed_artifact_types=(descriptor.artifact_type,),
+            allowed_ref_kinds=(descriptor.ref_kind,),
+            pinned_checksums={descriptor.ref: descriptor.source_checksum},
+        ),
+        descriptors=(descriptor,),
+    )
+    snapshots, _ = _ref_snapshot_store(root)
+    snapshots.commit(admission)
+    HarnessRefAdmissionService(snapshots).admit_child_inputs(
+        admission,
+        attempt_identity=identity,
+        input_refs=(descriptor.ref,),
+    )
+    artifact_descriptors = fixture.get("artifact_reference_verifier")
+    if artifact_descriptors is not None and hasattr(
+        artifact_descriptors,
+        "bind_attempt",
+    ):
+        artifact_descriptors.bind_attempt(identity)
+    authority = HarnessResultRefAuthority(
+        snapshots,
+        transcript_store=fixture["transcript_store"],
+        artifact_descriptors=artifact_descriptors if record.output_refs else None,
+        tenant_id=RESULT_AUTHORITY_TENANT,
+    )
+    authority.result_grant(identity, allow_registration=True)
+    assert authority.is_durable is True
+    return authority
 
 
 def _committed_lineage(
@@ -958,8 +1061,18 @@ def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(
     store.append_result(record)
     events = store.read_events(plan.run_id, plan.stage_id)
     worker_calls = fixture["worker"].calls
+    result_authority = _committed_replay_authority(
+        fixture,
+        tmp_path / "replay-grants",
+        plan=plan,
+        record=record,
+    )
 
-    report = TaskPlanReplayReducer(fixture["transcript_store"]).replay(
+    report = TaskPlanReplayReducer(
+        fixture["transcript_store"],
+        result_ref_authority=result_authority,
+        execution_identity=_execution_identity(plan, instance),
+    ).replay(
         (plan,),
         events,
         results=(record,),
@@ -994,7 +1107,11 @@ def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(
         stage_identity_checksum=other_stage_identity_checksum,
     )
     with pytest.raises(HarnessValidationError) as result_identity_error:
-        TaskPlanReplayReducer(fixture["transcript_store"]).replay(
+        TaskPlanReplayReducer(
+            fixture["transcript_store"],
+            result_ref_authority=result_authority,
+            execution_identity=_execution_identity(plan, instance),
+        ).replay(
             (plan,),
             events,
             results=(cross_graph_result,),
@@ -1079,8 +1196,18 @@ def test_offline_replay_verifies_transcript_and_rejects_event_lineage_mismatch(
         fixture["plan"].stage_id,
     )
     worker_calls = fixture["worker"].calls
+    result_authority = _committed_replay_authority(
+        fixture,
+        tmp_path / "replay-grants",
+        plan=fixture["plan"],
+        record=fixture["record"],
+    )
 
-    report = TaskPlanReplayReducer(fixture["transcript_store"]).replay(
+    report = TaskPlanReplayReducer(
+        fixture["transcript_store"],
+        result_ref_authority=result_authority,
+        execution_identity=fixture["execution_identity"],
+    ).replay(
         (fixture["plan"],),
         events,
         results=(fixture["record"],),
@@ -1103,7 +1230,11 @@ def test_offline_replay_verifies_transcript_and_rejects_event_lineage_mismatch(
         payload=payload,
     )
     with pytest.raises(HarnessValidationError) as captured:
-        TaskPlanReplayReducer(fixture["transcript_store"]).replay(
+        TaskPlanReplayReducer(
+            fixture["transcript_store"],
+            result_ref_authority=result_authority,
+            execution_identity=fixture["execution_identity"],
+        ).replay(
             (fixture["plan"],),
             tuple(tampered_events),
             results=(fixture["record"],),
@@ -1180,10 +1311,18 @@ def test_offline_replay_revalidates_artifact_refs_without_live_worker_call(
         fixture["plan"].stage_id,
     )
     worker_calls = fixture["worker"].calls
+    result_authority = _committed_replay_authority(
+        fixture,
+        tmp_path / "replay-grants",
+        plan=fixture["plan"],
+        record=fixture["record"],
+    )
 
     replay = TaskPlanReplayReducer(
         fixture["transcript_store"],
         artifact_reference_verifier=artifact_verifier,
+        result_ref_authority=result_authority,
+        execution_identity=fixture["execution_identity"],
     ).replay(
         (fixture["plan"],),
         events,
@@ -1202,6 +1341,8 @@ def test_offline_replay_revalidates_artifact_refs_without_live_worker_call(
         TaskPlanReplayReducer(
             fixture["transcript_store"],
             artifact_reference_verifier=artifact_verifier,
+            result_ref_authority=result_authority,
+            execution_identity=fixture["execution_identity"],
         ).replay(
             (fixture["plan"],),
             events,
@@ -1211,7 +1352,11 @@ def test_offline_replay_revalidates_artifact_refs_without_live_worker_call(
     assert fixture["worker"].calls == worker_calls
 
     with pytest.raises(HarnessValidationError) as missing_error:
-        TaskPlanReplayReducer(fixture["transcript_store"]).replay(
+        TaskPlanReplayReducer(
+            fixture["transcript_store"],
+            result_ref_authority=result_authority,
+            execution_identity=fixture["execution_identity"],
+        ).replay(
             (fixture["plan"],),
             events,
             results=(fixture["record"],),
@@ -1284,7 +1429,10 @@ def test_artifact_verification_failure_halts_parent_without_task_result(
 def test_receipt_before_task_result_is_recovered_without_live_worker_call(
     tmp_path: Path,
 ) -> None:
-    fixture = _fixture(tmp_path)
+    from tests.framework.harness.test_ref_results import _authorized_fixture
+
+    fixture = _authorized_fixture(tmp_path)
+    fixture["adapter"]._runtime = fixture["runtime"]
     store = InMemoryTaskPlanStore()
     store.append_candidate(fixture["candidate"])
     store.accept_plan(fixture["plan"])

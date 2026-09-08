@@ -6,6 +6,13 @@ from datetime import timedelta
 import pytest
 
 from framework.events.canonical import checksum_for, thaw_canonical_json
+from framework.harness.artifacts.ports import ArtifactReferenceDescriptor
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_authority import RefAccessPolicy, RefDescriptor
+from framework.harness.ref_results import HarnessResultRefAuthority
+from framework.harness.ref_snapshot import RefAuthoritySnapshot
+from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
+from tests.framework.harness.test_ref_snapshot_store import _store as _snapshot_store
 from framework.harness import (
     FakeSubAgentWorker,
     HarnessValidationError,
@@ -45,7 +52,6 @@ from framework.harness.subagents.models import SubAgentHandoff
 from framework.harness.subagents.models import SUBAGENT_INVOCATION_SCHEMA_V3
 from framework.harness.subagents.transcript import (
     SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
-    FakeSubAgentTranscriptStore,
     SubAgentAttemptIdentity,
 )
 from framework.shared.json import stable_json_dumps
@@ -145,7 +151,7 @@ def _invocation(fixture, spec: SubAgentSpec) -> SubAgentInvocation:
         spec=spec,
         context_pack=context_pack,
         input_refs=("artifact://research/input-1",),
-        memory_context_refs=("memory://research/context-1",),
+        memory_context_refs=(),
         budget_snapshot=budget,
     )
     attempt_identity = SubAgentAttemptIdentity(
@@ -198,16 +204,73 @@ def _invocation(fixture, spec: SubAgentSpec) -> SubAgentInvocation:
     )
 
 
-def _stack(fixture, worker_result: HarnessWorkerResult):
+class _DescriptorCatalog(RecordingCatalog):
+    def __init__(self, identity):
+        super().__init__()
+        # Fixture-owned source metadata, independently of the worker's response.
+        self.source = ArtifactReferenceDescriptor(
+            ref="artifact://research/analysis-1", run_id=identity.parent_run_id,
+            tenant_id=TENANT_ID, graph_id=identity.graph_id, node_id=identity.node_id,
+            attempt_id=identity.result_attempt_id, artifact_type="analysis",
+            checksum=checksum_for("analysis fixture"), byte_size=16,
+            media_type="application/json",
+        )
+
+    def describe_artifact_ref(self, ref, *, expected_run_id, expected_tenant_id=None):
+        if ref == self.source.ref:
+            descriptor = self.source
+        else:
+            record = next(item.record for item in self.requests if item.record.ref == ref)
+            descriptor = ArtifactReferenceDescriptor(
+                ref=record.ref, run_id=record.run_id, tenant_id=record.tenant_id,
+                graph_id=record.graph_id, node_id=record.node_id, attempt_id=record.attempt_id,
+                artifact_type=record.artifact_type, checksum=record.content_checksum,
+                byte_size=record.byte_size, media_type=record.media_type,
+            )
+        assert descriptor.run_id == expected_run_id
+        assert descriptor.tenant_id == expected_tenant_id
+        return descriptor
+
+
+def _stack(fixture, worker_result: HarnessWorkerResult, tmp_path):
     spec = _spec()
-    store = FakeSubAgentTranscriptStore()
+    invocation = _invocation(fixture, spec)
+    identity = invocation.attempt_identity
+    store = FilesystemSubAgentTranscriptStore(tmp_path / "transcripts")
+    grants, _events = _snapshot_store(tmp_path / "grants")
+    descriptors = tuple(RefDescriptor(
+        ref=ref, run_id=identity.parent_run_id, stage_id=identity.stage_id,
+        tenant_id=TENANT_SCOPE_REF, owner_id="fixture-owner", access_mode="READ_ONLY",
+        artifact_type="graph_input", source_checksum=checksum_for(ref),
+        ref_kind="input", scope="SHARED_READ_ONLY",
+    ) for ref in invocation.input_refs)
+    root = RefAuthoritySnapshot(
+        execution_identity=RefAuthoritySnapshot.execution_for_attempt(identity),
+        stage_id=identity.stage_id, stage_binding_checksum=identity.stage_binding_checksum,
+        task_policy_checksum=checksum_for("fixture-policy"), source_checksum=checksum_for("inputs"),
+        policy=RefAccessPolicy(
+            policy_id="fixture-inputs", version="1", run_id=identity.parent_run_id,
+            stage_id=identity.stage_id, tenant_id=TENANT_SCOPE_REF, owner_id="fixture-owner",
+            allowed_refs=invocation.input_refs, allowed_artifact_types=("graph_input",),
+            allowed_ref_kinds=("input",),
+            pinned_checksums={item.ref: item.source_checksum for item in descriptors},
+        ), descriptors=descriptors,
+    )
+    grants.commit(root)
+    HarnessRefAdmissionService(grants).admit_child_inputs(
+        root, attempt_identity=identity, input_refs=invocation.input_refs,
+    )
+    catalog = _DescriptorCatalog(identity)
+    authority = HarnessResultRefAuthority(
+        grants, transcript_store=store, artifact_descriptors=catalog, tenant_id=TENANT_ID,
+    )
     runtime = SubAgentRuntime(
         workers={spec.subagent_id: FakeSubAgentWorker((worker_result,))},
         transcript_store=store,
+        result_ref_authority=authority,
     )
     artifact = RecordingArtifactPort()
     attempts = RecordingAttempts()
-    catalog = RecordingCatalog()
     materializer = _materializer(
         artifact=artifact,
         attempts=attempts,
@@ -220,6 +283,7 @@ def _stack(fixture, worker_result: HarnessWorkerResult):
         materializer=materializer,
         graph_result_runtime=HarnessGraphResultRuntime(graph_runtime),
         transcript_store=store,
+        result_ref_authority=authority,
         clock=lambda: NOW,
     )
     return (
@@ -230,7 +294,7 @@ def _stack(fixture, worker_result: HarnessWorkerResult):
         artifact,
         attempts,
         catalog,
-        _invocation(fixture, spec),
+        invocation,
     )
 
 
@@ -262,7 +326,70 @@ def _lineage(result, fixture) -> dict:
     return thaw_canonical_json(node.output_refs["activity_result_lineage"])
 
 
-def test_verified_bundle_materializes_all_documents_and_projects_only_lineage() -> None:
+@pytest.mark.parametrize("path", ("compose", "execute", "recover", "adapter"))
+@pytest.mark.parametrize("fault", ("missing", "non_durable", "different_owner"))
+def test_graph_authority_is_required_before_worker_or_evidence_access(tmp_path, monkeypatch, path, fault):
+    fixture = _dispatched("run-subagent-authority")
+    activity, adapter, runtime, store, artifact, attempts, _catalog, invocation = _stack(
+        fixture, HarnessWorkerResult(status="succeeded", output={"result": "ok"}), tmp_path,
+    )
+    authority = runtime.result_ref_authority
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid Graph composition must fail before payload or worker access")
+
+    for method in ("read", "read_context", "read_output", "verify", "find_by_identity"):
+        monkeypatch.setattr(store, method, unexpected)
+    monkeypatch.setattr(runtime.workers[invocation.subagent_spec.subagent_id], "execute", unexpected)
+    if fault == "missing":
+        adapter.result_ref_authority = None
+    elif fault == "non_durable":
+        monkeypatch.setattr(authority.store, "is_durable", False)
+    else:
+        adapter.result_ref_authority = HarnessResultRefAuthority(
+            authority.store, transcript_store=store,
+            artifact_descriptors=_DescriptorCatalog(invocation.attempt_identity), tenant_id=TENANT_ID,
+        )
+    with pytest.raises(HarnessValidationError) as error:
+        if path == "compose":
+            HarnessSubAgentActivityRuntime(runtime=runtime, adapter=adapter)
+        elif path == "execute":
+            _execute(activity, fixture, invocation)
+        elif path == "adapter":
+            adapter.binding_for_activity(
+                activity=fixture.activity, graph=fixture.graph, tenant_id=TENANT_ID,
+                tenant_scope_ref=TENANT_SCOPE_REF, run_spec_checksum=fixture.run_spec_checksum,
+                invocation=invocation,
+            )
+        else:
+            activity.recover_and_accept(
+                invocation=invocation, activity=fixture.activity, graph=fixture.graph,
+                tenant_id=TENANT_ID, tenant_scope_ref=TENANT_SCOPE_REF,
+                run_spec_checksum=fixture.run_spec_checksum, occurred_at=NOW,
+            )
+    assert error.value.code == (
+        "REF_SNAPSHOT_BINDING_MISMATCH" if fault == "different_owner" else "REF_SNAPSHOT_MISSING"
+    )
+    assert artifact.write_count == attempts.put_count == 0
+    assert fixture.port.recover_graph(fixture.activity.run_id).activity_result_commits == ()
+
+
+def test_runtime_cannot_use_a_separate_authority_from_graph_acceptance(tmp_path):
+    fixture = _dispatched("run-subagent-separated-authority")
+    _activity, adapter, runtime, store, _artifact, _attempts, _catalog, _invocation_value = _stack(
+        fixture, HarnessWorkerResult(status="succeeded", output={"result": "ok"}), tmp_path,
+    )
+    authority = runtime.result_ref_authority
+    runtime.result_ref_authority = HarnessResultRefAuthority(
+        authority.store, transcript_store=store, artifact_descriptors=authority.artifact_descriptors,
+        tenant_id=TENANT_ID,
+    )
+    with pytest.raises(HarnessValidationError) as error:
+        HarnessSubAgentActivityRuntime(runtime=runtime, adapter=adapter)
+    assert error.value.code == "REF_SNAPSHOT_BINDING_MISMATCH"
+
+
+def test_verified_bundle_materializes_all_documents_and_projects_only_lineage(tmp_path) -> None:
     fixture = _dispatched("run-subagent-materialized")
     large_result = "x" * (48 * 1024)
     (
@@ -281,6 +408,7 @@ def test_verified_bundle_materializes_all_documents_and_projects_only_lineage() 
             output={"result": large_result},
             artifacts=("artifact://research/analysis-1",),
         ),
+        tmp_path,
     )
     handoff = SubAgentHandoff(
         handoff_id="handoff-1",
@@ -328,7 +456,7 @@ def test_verified_bundle_materializes_all_documents_and_projects_only_lineage() 
     assert "context_evidence" not in graph_payload
 
 
-def test_halted_attempt_is_materialized_with_failed_gate_evidence() -> None:
+def test_halted_attempt_is_materialized_with_failed_gate_evidence(tmp_path) -> None:
     fixture = _dispatched("run-subagent-halted")
     (
         activity_runtime,
@@ -345,6 +473,7 @@ def test_halted_attempt_is_materialized_with_failed_gate_evidence() -> None:
             status="succeeded",
             output={"result": "ok", "requested_tools": ["admin.write"]},
         ),
+        tmp_path,
     )
 
     result = _execute(activity_runtime, fixture, invocation)
@@ -360,7 +489,7 @@ def test_halted_attempt_is_materialized_with_failed_gate_evidence() -> None:
     assert any(gate["passed"] is False for gate in stored.transcript.gate_results)
 
 
-def test_restart_reuses_transcript_and_attempt_without_invoking_worker() -> None:
+def test_restart_reuses_transcript_and_attempt_without_invoking_worker(tmp_path) -> None:
     fixture = _dispatched("run-subagent-restart")
     (
         _activity_runtime,
@@ -374,6 +503,7 @@ def test_restart_reuses_transcript_and_attempt_without_invoking_worker() -> None
     ) = _stack(
         fixture,
         HarnessWorkerResult(status="succeeded", output={"result": "ok"}),
+        tmp_path,
     )
     binding = adapter.binding_for_activity(
         activity=fixture.activity,
@@ -402,19 +532,21 @@ def test_restart_reuses_transcript_and_attempt_without_invoking_worker() -> None
     restarted_runtime = SubAgentRuntime(
         workers={invocation.subagent_spec.subagent_id: worker},
         transcript_store=store,
+        result_ref_authority=runtime.result_ref_authority,
     )
     restarted_adapter = HarnessSubAgentResultAdapter(
         materializer=_materializer(
             artifact=artifact,
             attempts=attempts,
             cache=RecordingCache(),
-            catalog=RecordingCatalog(),
+            catalog=runtime.result_ref_authority.artifact_descriptors,
             quota=RecordingQuota(),
         ),
         graph_result_runtime=HarnessGraphResultRuntime(
             HarnessGraphControlPlaneRuntime(fixture.port)
         ),
         transcript_store=store,
+        result_ref_authority=runtime.result_ref_authority,
         clock=lambda: NOW,
     )
     restarted = HarnessSubAgentActivityRuntime(
@@ -437,7 +569,7 @@ def test_restart_reuses_transcript_and_attempt_without_invoking_worker() -> None
     assert attempts.put_count == 1
 
 
-def test_conflicting_same_attempt_fails_without_second_artifact_or_graph_commit() -> None:
+def test_conflicting_same_attempt_fails_without_second_artifact_or_graph_commit(tmp_path) -> None:
     fixture = _dispatched("run-subagent-conflict")
     (
         _activity_runtime,
@@ -451,6 +583,7 @@ def test_conflicting_same_attempt_fails_without_second_artifact_or_graph_commit(
     ) = _stack(
         fixture,
         HarnessWorkerResult(status="succeeded", output={"result": "first"}),
+        tmp_path,
     )
     binding = adapter.binding_for_activity(
         activity=fixture.activity,
@@ -519,6 +652,7 @@ def test_cross_tenant_or_run_is_rejected_before_materialization(
     tenant_scope_ref,
     parent_run_id,
     expected_code,
+    tmp_path,
 ) -> None:
     fixture = _dispatched("run-subagent-cross-scope")
     (
@@ -533,6 +667,7 @@ def test_cross_tenant_or_run_is_rejected_before_materialization(
     ) = _stack(
         fixture,
         HarnessWorkerResult(status="succeeded", output={"result": "ok"}),
+        tmp_path,
     )
     if parent_run_id != fixture.activity.run_id:
         with pytest.raises(HarnessValidationError) as identity_error:
@@ -562,7 +697,7 @@ def test_cross_tenant_or_run_is_rejected_before_materialization(
     assert attempts.put_count == 0
 
 
-def test_bundle_parser_rejects_scope_tampering() -> None:
+def test_bundle_parser_rejects_scope_tampering(tmp_path) -> None:
     fixture = _dispatched("run-subagent-tamper")
     (
         _activity_runtime,
@@ -576,6 +711,7 @@ def test_bundle_parser_rejects_scope_tampering() -> None:
     ) = _stack(
         fixture,
         HarnessWorkerResult(status="succeeded", output={"result": "ok"}),
+        tmp_path,
     )
     binding = adapter.binding_for_activity(
         activity=fixture.activity,

@@ -12,7 +12,7 @@ from framework.harness.ref_snapshot_store import REF_SNAPSHOT_EVENT_TYPE
 from framework.events.runtime.models import StreamReadRequest
 from tests.backend.research.integration.test_dynamic_paper_analysis_task_plan import _DynamicTaskPlanFactory, _analyze
 from tests.framework.harness.test_ref_snapshot_store import _store
-from framework.harness import FakeArtifactPort
+from framework.harness import FakeArtifactPort, TaskPlanReplayReducer
 
 
 class _RecordingAdmission(HarnessRefAdmissionService):
@@ -28,7 +28,7 @@ class _RecordingAdmission(HarnessRefAdmissionService):
 
 
 @pytest.mark.parametrize("authorize_results", (False, True))
-def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path, authorize_results):
+def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path, monkeypatch, authorize_results):
     store, events = _store(tmp_path)
     admission = _RecordingAdmission(store)
     factory = _DynamicTaskPlanFactory(
@@ -100,3 +100,23 @@ def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path,
         assert {grant.parent_snapshot_ref for grant in results} == {grant.snapshot_ref for grant in children}
         assert all(grant.policy.shared_read_only_refs == () and grant.policy.writable_refs == () for grant in results)
         assert all({item.artifact_type for item in grant.descriptors} == {"subagent_context", "subagent_output", "subagent_transcript"} for grant in results)
+    else:
+        # The explicit test-store fixture exercises input admission in isolation.
+        # Its successful online candidate is not authority for a later replay.
+        transcript_store = factory.transcript_stores[0]
+
+        def unexpected_read(*args, **kwargs):
+            pytest.fail("ungranted replay must reject before reading result payload")
+
+        for name in ("read", "read_context", "read_output", "verify", "find_by_identity"):
+            monkeypatch.setattr(transcript_store, name, unexpected_read)
+        plan_store = factory.stores[0]
+        plan = plan_store.plan(root.run_id, root.stage_id)
+        assert plan is not None
+        records = plan_store.results_for(root.run_id, root.stage_id, plan.plan_id, plan.version)
+        assert len(records) == 3
+        with pytest.raises(HarnessValidationError) as replay_error:
+            TaskPlanReplayReducer(transcript_store).replay(
+                (plan,), plan_store.read_events(root.run_id, root.stage_id), results=records,
+            )
+        assert replay_error.value.code == "task_plan_result_ref_authority_required"

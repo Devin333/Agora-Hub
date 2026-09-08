@@ -35,7 +35,6 @@ from framework.harness import (
     HarnessWorkerResult,
     InMemoryHarnessEventPort,
     InMemoryTaskPlanStore,
-    FakeSubAgentTranscriptStore,
     ResolvedSubAgentTaskAdapter,
     SubAgentRuntime,
     SubAgentStatus,
@@ -63,6 +62,9 @@ from framework.harness.graph.validation import HarnessGraphPreflightPolicy
 from framework.harness.task_plan import task_plan_context_identities
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
+from framework.harness.ref_admission import HarnessRefAdmissionService
+from framework.harness.ref_results import HarnessResultRefAuthority
+from tests.framework.harness.test_ref_snapshot_store import _store as _snapshot_store
 from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
 from interfaces.services.research_service import (
@@ -153,20 +155,35 @@ class _PlanOutlineWorker:
         return outline if self._transform is None else self._transform(outline)
 
 
+class _RecordedInputAdmission(HarnessRefAdmissionService):
+    def __init__(self, store):
+        super().__init__(store)
+        self.task = None
+        self.snapshot = None
+
+    def admit_graph_inputs(self, task, **kwargs):
+        snapshot = super().admit_graph_inputs(task, **kwargs)
+        self.task = deepcopy(task)
+        self.snapshot = snapshot
+        return snapshot
+
+
 class _DynamicTaskPlanFactory:
     def __init__(
         self,
         *,
         outline_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
-        transcript_root: Path | None = None,
+        transcript_root: Path,
         crash_after_receipt_once: bool = False,
         ref_admission_service=None,
-        authorize_results: bool = False,
+        authorize_results: bool = True,
     ) -> None:
         self.outline_transform = outline_transform
         self.transcript_root = transcript_root
         self.crash_after_receipt_once = crash_after_receipt_once
-        self.ref_admission_service = ref_admission_service
+        self.ref_admission_service = ref_admission_service or _RecordedInputAdmission(
+            _snapshot_store(transcript_root.parent / "grants")[0]
+        )
         self.authorize_results = authorize_results
         self._crashed_after_receipt = False
         self.stores: list[InMemoryTaskPlanStore] = []
@@ -201,11 +218,7 @@ class _DynamicTaskPlanFactory:
             for capability, worker in workers.items()
         }
         registry = build_research_analysis_capability_registry(bindings)
-        transcript_store = (
-            FilesystemSubAgentTranscriptStore(self.transcript_root)
-            if self.transcript_root is not None
-            else FakeSubAgentTranscriptStore()
-        )
+        transcript_store = FilesystemSubAgentTranscriptStore(self.transcript_root)
         result_authority = None
         if self.authorize_results:
             from framework.harness.ref_results import HarnessResultRefAuthority
@@ -414,8 +427,8 @@ class _DynamicTaskPlanFactory:
         return stage_worker
 
 
-def test_dynamic_task_plan_fake_llm_and_subagents_publish_through_fixed_path() -> None:
-    factory = _DynamicTaskPlanFactory()
+def test_dynamic_task_plan_fake_llm_and_subagents_publish_through_fixed_path(tmp_path) -> None:
+    factory = _DynamicTaskPlanFactory(transcript_root=tmp_path / "transcripts")
     artifact_port = FakeArtifactPort()
     result = _analyze(
         "dynamic-task-plan-success",
@@ -486,7 +499,7 @@ def test_dynamic_task_plan_fake_llm_and_subagents_publish_through_fixed_path() -
     assert publish_result["status"] == "succeeded"
 
 
-def test_missing_dynamic_role_stops_before_subagent_and_publication() -> None:
+def test_missing_dynamic_role_stops_before_subagent_and_publication(tmp_path) -> None:
     def remove_experiments(outline: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(outline)
         result["tasks"] = [
@@ -496,7 +509,9 @@ def test_missing_dynamic_role_stops_before_subagent_and_publication() -> None:
         ]
         return result
 
-    factory = _DynamicTaskPlanFactory(outline_transform=remove_experiments)
+    factory = _DynamicTaskPlanFactory(
+        outline_transform=remove_experiments, transcript_root=tmp_path / "transcripts",
+    )
     result = _analyze(
         "dynamic-task-plan-missing-role",
         dynamic=True,
@@ -526,8 +541,8 @@ def test_missing_dynamic_role_stops_before_subagent_and_publication() -> None:
     }
 
 
-def test_dynamic_claim_gate_failure_blocks_quality_reader_and_publication() -> None:
-    factory = _DynamicTaskPlanFactory()
+def test_dynamic_claim_gate_failure_blocks_quality_reader_and_publication(tmp_path) -> None:
+    factory = _DynamicTaskPlanFactory(transcript_root=tmp_path / "transcripts")
     result = _analyze(
         "dynamic-task-plan-gate-failure",
         dynamic=True,
@@ -553,12 +568,12 @@ def test_dynamic_claim_gate_failure_blocks_quality_reader_and_publication() -> N
     )
 
 
-def test_static_and_dynamic_public_result_and_artifact_contracts_match() -> None:
+def test_static_and_dynamic_public_result_and_artifact_contracts_match(tmp_path) -> None:
     static = _analyze("static-parity", dynamic=False)
     dynamic = _analyze(
         "dynamic-parity",
         dynamic=True,
-        dynamic_factory=_DynamicTaskPlanFactory(),
+        dynamic_factory=_DynamicTaskPlanFactory(transcript_root=tmp_path / "transcripts"),
     )
 
     assert static.succeeded is dynamic.succeeded is True
@@ -571,10 +586,10 @@ def test_static_and_dynamic_public_result_and_artifact_contracts_match() -> None
     )
 
 
-def test_dynamic_replay_uses_recorded_outer_result_without_live_plan_or_subagents() -> None:
+def test_dynamic_replay_uses_recorded_outer_result_without_live_plan_or_subagents(tmp_path) -> None:
     event_port = InMemoryHarnessEventPort()
     artifact_port = FakeArtifactPort()
-    factory = _DynamicTaskPlanFactory()
+    factory = _DynamicTaskPlanFactory(transcript_root=tmp_path / "transcripts")
     runtime = _runtime(
         dynamic_factory=factory,
         artifact_port=artifact_port,
@@ -645,7 +660,14 @@ def test_dynamic_task_plan_filesystem_transcripts_reopen_and_replay_offline(
         capability: len(worker.calls)
         for capability, worker in factory.subagent_workers[0].items()
     }
-    replay = TaskPlanReplayReducer(reopened).replay(
+    original = factory.subagent_runtimes[0].result_ref_authority
+    authority = HarnessResultRefAuthority(
+        original.store, transcript_store=reopened, tenant_id=original._tenant_id,
+    )
+    execution = factory.ref_admission_service.snapshot.execution_identity
+    replay = TaskPlanReplayReducer(
+        reopened, result_ref_authority=authority, execution_identity=execution,
+    ).replay(
         (plan,),
         store.read_events(result.run_id, plan.stage_id),
         results=records,
@@ -722,18 +744,9 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
         ),
     ).to_dict()
 
-    resumed = factory.stage_workers[0].run(
-        {
-            "run_id": request.run_id,
-            "step_id": "dynamic_analysis_stage",
-            "worker_type": HarnessWorkerType.TASK_PLAN.value,
-            "inputs": {
-                "document": {},
-                "evidence_pack": {},
-            },
-            HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY: activity_context,
-        }
-    )
+    original_task = deepcopy(factory.ref_admission_service.task)
+    original_task[HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY] = activity_context
+    resumed = factory.stage_workers[0].run(original_task)
 
     assert resumed.status.value == "succeeded"
     assert all(len(worker.calls) == 1 for worker in first_workers.values())
@@ -755,7 +768,11 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
             for event in parallel_events
         }
     ) == 1
-    replay = TaskPlanReplayReducer(factory.transcript_stores[0]).replay(
+    replay = TaskPlanReplayReducer(
+        factory.transcript_stores[0],
+        result_ref_authority=factory.subagent_runtimes[0].result_ref_authority,
+        execution_identity=factory.ref_admission_service.snapshot.execution_identity,
+    ).replay(
         (plan,),
         store.read_events(request.run_id, plan.stage_id),
         results=records,

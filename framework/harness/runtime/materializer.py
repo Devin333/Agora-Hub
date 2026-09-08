@@ -465,6 +465,11 @@ class ResultMaterializer:
         self._clock = clock
         self._observation_sink = observation_sink
 
+    @property
+    def artifact_catalog(self) -> ArtifactCatalogPort:
+        """The metadata owner used when committing materialized artifacts."""
+        return self._catalog
+
     def materialize(
         self,
         request: NodeResultRequest,

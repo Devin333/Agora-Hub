@@ -365,11 +365,27 @@ class TaskPlanReplayReducer:
         if result_ref_authority is not None:
             from framework.harness.ref_results import HarnessResultRefAuthority
 
-            if not isinstance(result_ref_authority, HarnessResultRefAuthority) or result_ref_authority.transcript_store is not transcript_store:
+            if (
+                not isinstance(result_ref_authority, HarnessResultRefAuthority)
+                or result_ref_authority.transcript_store is not transcript_store
+            ):
                 raise TypeError("result_ref_authority must own this transcript store")
+            if not result_ref_authority.is_durable:
+                raise HarnessValidationError(
+                    "authorized replay requires durable result authority",
+                    code="task_plan_result_ref_authority_not_durable",
+                )
         self._result_ref_authority = result_ref_authority
-        if result_ref_authority is not None and not isinstance(execution_identity, GraphExecutionIdentity):
-            raise HarnessValidationError("authorized replay requires its recorded Graph activity", code="task_plan_execution_identity_required")
+        if result_ref_authority is not None and not isinstance(
+            execution_identity,
+            GraphExecutionIdentity,
+        ):
+            raise HarnessValidationError(
+                "authorized replay requires its recorded Graph activity",
+                code="task_plan_execution_identity_required",
+            )
+        # Metadata-only plans can carry a recorded Graph identity without a
+        # SubAgent payload capability. Require authority at the evidence ingress.
         self._execution_identity = execution_identity
 
     def reduce(
@@ -2392,25 +2408,42 @@ def _verify_replay_subagent_evidence(
             code="task_plan_subagent_evidence_required",
             details={"task_id": result.task_id},
         )
+    # ValidatedTaskPlan accepts Graph v2 only; legacy data belongs to migration
+    # tooling and cannot create a raw-store branch in this reducer.
+    if result_ref_authority is None:
+        raise HarnessValidationError(
+            "Graph-only TaskPlan replay requires durable result authority",
+            code="task_plan_result_ref_authority_required",
+            details={"task_id": result.task_id},
+        )
     if transcript_store is None:
         raise HarnessValidationError(
             "TaskPlan replay requires a subagent transcript store",
             code="task_plan_subagent_transcript_store_required",
         )
-    if result_ref_authority is not None:
-        from framework.harness.task_plan.verification import authorized_task_result_store
-
-        if execution_identity is None:
-            raise HarnessValidationError("authorized replay requires its recorded Graph activity", code="task_plan_execution_identity_required")
-        transcript_store = authorized_task_result_store(
-            result_ref_authority, plan=plan, task=definition,
-            instance=task_instance_for_attempt(plan, result.task_id, result.attempt, task_instance_id=result.task_instance_id),
-            execution_identity=execution_identity,
+    if not result_ref_authority.is_durable:
+        raise HarnessValidationError(
+            "authorized replay requires durable result authority",
+            code="task_plan_result_ref_authority_not_durable",
         )
-        if result.status is TaskLifecycle.SUCCEEDED:
-            transcript_store.authorize_artifacts(result.output_refs, include_materialized=True)
-        else:
-            transcript_store.authorize_original_artifacts()
+    if result_ref_authority.transcript_store is not transcript_store:
+        raise HarnessValidationError(
+            "replay result authority no longer owns the transcript store",
+            code="REF_SNAPSHOT_BINDING_MISMATCH",
+        )
+    from framework.harness.task_plan.verification import authorized_task_result_store
+
+    if execution_identity is None:
+        raise HarnessValidationError("authorized replay requires its recorded Graph activity", code="task_plan_execution_identity_required")
+    transcript_store = authorized_task_result_store(
+        result_ref_authority, plan=plan, task=definition,
+        instance=task_instance_for_attempt(plan, result.task_id, result.attempt, task_instance_id=result.task_instance_id),
+        execution_identity=execution_identity,
+    )
+    if result.status is TaskLifecycle.SUCCEEDED:
+        transcript_store.authorize_artifacts(result.output_refs, include_materialized=True)
+    else:
+        transcript_store.authorize_original_artifacts()
     transcript = transcript_store.read(result.transcript_ref)
     output = transcript_store.read_output(result.subagent_output_ref)
     stored = transcript_store.find_by_identity(transcript.identity)
@@ -2425,11 +2458,6 @@ def _verify_replay_subagent_evidence(
         or stored.output_ref != result.subagent_output_ref
         or stored.output_checksum != result.subagent_output_checksum
         or output.output_checksum != result.subagent_output_checksum
-        or (
-            result.status is TaskLifecycle.SUCCEEDED
-            and result_ref_authority is None
-            and output.artifact_refs != result.output_refs
-        )
         or output.identity != transcript.identity
         or transcript.output_ref != output.ref
         or transcript.output_checksum != output.output_checksum
@@ -2455,7 +2483,7 @@ def _verify_replay_subagent_evidence(
         )
     transcript_store.verify(stored)
     _verify_replay_artifact_references(
-        result.output_refs if result_ref_authority is not None and result.status is TaskLifecycle.SUCCEEDED else output.artifact_refs,
+        result.output_refs if result.status is TaskLifecycle.SUCCEEDED else output.artifact_refs,
         expected_run_id=result.run_id,
         verifier=artifact_reference_verifier,
     )

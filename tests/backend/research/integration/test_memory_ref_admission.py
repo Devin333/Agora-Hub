@@ -119,7 +119,7 @@ def test_real_graph_admits_exact_memory_and_children_inherit_only_read_only_refs
 def test_graph_memory_metadata_cannot_fabricate_actor_scope(tmp_path, mismatch):
     snapshots, events = _store(tmp_path)
     admission = _ScopedMemoryAdmission(snapshots, tmp_path / "namespaces", mismatch=mismatch)
-    factory = _DynamicTaskPlanFactory(ref_admission_service=admission)
+    factory = _DynamicTaskPlanFactory(ref_admission_service=admission, transcript_root=tmp_path / "transcripts")
     result = _analyze("denied-memory", dynamic=True, dynamic_factory=factory, artifact_port=FakeArtifactPort())
     assert result.status != "succeeded"
     assert not any(worker.calls for group in factory.subagent_workers for worker in group.values())
@@ -130,7 +130,7 @@ def test_private_namespace_cannot_be_shared_with_children(tmp_path, monkeypatch)
     _request_memory(monkeypatch)
     snapshots, _ = _store(tmp_path)
     admission = _ScopedMemoryAdmission(snapshots, tmp_path / "namespaces", shared=False)
-    factory = _DynamicTaskPlanFactory(ref_admission_service=admission)
+    factory = _DynamicTaskPlanFactory(ref_admission_service=admission, transcript_root=tmp_path / "transcripts")
     result = _analyze("private-memory", dynamic=True, dynamic_factory=factory, artifact_port=FakeArtifactPort())
     assert result.status != "succeeded"
     assert not any(worker.calls for group in factory.subagent_workers for worker in group.values())
@@ -140,7 +140,7 @@ def test_allowlisted_namespace_name_without_admitted_revision_cannot_start_child
     _request_memory(monkeypatch)
     snapshots, _ = _store(tmp_path)
     admission = build_harness_ref_admission_service(snapshot_store=snapshots, namespace_root=tmp_path / "namespaces")
-    factory = _DynamicTaskPlanFactory(ref_admission_service=admission)
+    factory = _DynamicTaskPlanFactory(ref_admission_service=admission, transcript_root=tmp_path / "transcripts")
     result = _analyze("unbound-memory", dynamic=True, dynamic_factory=factory, artifact_port=FakeArtifactPort())
     assert result.status != "succeeded"
     assert not any(worker.calls for group in factory.subagent_workers for worker in group.values())

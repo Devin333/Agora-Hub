@@ -1119,19 +1119,85 @@ request can serialize this capability. Production Research Graph/HTTP/CLI
 callers do not yet automatically supply it, so production memory remains off
 by default and task 1.5 is still unchecked.
 
-Remaining verified 1.5 gaps:
+Remaining verified 1.5 gaps after the ingress batch below:
 
 - Bind `task://producer/output` to accepted predecessor result/grant identity
   before downstream dispatch. Current plan validation accepts the DAG reference,
   but child admission only inherits root input descriptors and rejects it.
   Replacement rewrites require the same exact-result binding; do not weaken the
   single-parent CHILD_INPUT grant invariant to add an unproven descriptor.
-- Require result authority and the recorded execution at generic Graph subagent
-  replay/recovery payload ingress. The stage-owned replay path already supplies
-  both; the public reducer still has a raw-store path when authority is omitted.
-- Close manual physical SubAgent composition checks and supply the RAG memory
-  capability from the real Harness admission path before claiming production
-  consumption. Child AgentRunner/tool receipts remain tasks 2.6/2.7.
+- Supply the RAG memory capability from the real Harness admission path before
+  claiming production consumption. Child AgentRunner/tool receipts remain
+  tasks 2.6/2.7.
+
+Manual physical SubAgent composition and generic replay/recovery ingress are
+covered by the following batch; its integrated validation is recorded there.
+
+### Task 1.5 physical SubAgent and replay ingress (2026-09-08)
+
+The physical SubAgent activity constructor, execute/recover entrypoints and
+adapter Graph-binding entrypoint now require durable result authority. Runtime
+and acceptance share the same authority/transcript owner; materialization and
+authority share the exact artifact catalog. Dependency changes after construction
+are checked before worker or evidence payload access. Existing bundle,
+materialization, scope and restart tests retain their assertions and now use
+real durable input/result grants and transcript storage. Negative tests cover
+missing/non-durable/mixed authority and metadata owners with zero worker/payload,
+artifact-write and Graph-commit access.
+
+Generic SubAgent replay now has no raw-store fallback: its accepted Graph v2
+plan/task and caller-supplied execution select the committed attempt grant before
+payload access. Recovery receives explicit dependencies and constructs its own
+reducer. Pure metadata replay/recovery can carry a Graph identity without an
+unused payload capability. Replays reject missing authority/execution, changed
+durability/transcript owner, missing grants and conflicting grants before payload
+reads; authorized recovery must preserve the replay checksum and grant event
+count. Research integration fixtures now supply the same durable input/result
+authority, and crash recovery reuses the exact original Graph inputs.
+
+First integrated smoke: `3193 passed, 1 failed, 23 deselected, 23 warnings in
+1831.20s`. The failure was an incorrect new test expectation: the explicit
+test-store fixture intentionally isolates input admission and can execute online
+without result authority. Its original input-grant assertions were restored;
+the same ungranted history now additionally proves offline replay rejects before
+any result payload read. No production check was relaxed. Compile, offline
+AgentLoop smoke and source validation passed in that run; the command returned
+1 because of the failed assertion.
+
+The second integrated run returned `3193 passed, 1 failed, 23 deselected,
+23 warnings in 1844.75s`. The new negative replay assertions passed, but two
+original positive result-grant assertions had been placed under the wrong
+parameter branch and raised `UnboundLocalError`. Both assertions were restored
+to the authorized branch without changing their predicates. Compile, offline
+AgentLoop smoke and source validation also passed in that run. No production
+code changed between these runs.
+
+Final integrated validation after the complete edit batch:
+
+- `openspec validate harness-codex-style-parallel-agent-orchestration --strict`:
+  passed. All 11 changed source/test files retained their validation-start
+  SHA-256 values through smoke completion.
+- `.venv/Scripts/python.exe -m scripts.dev smoke --keep-going`: exit 0. Compile
+  passed; the fixed smoke test selection returned `3194 passed, 23 deselected,
+  23 warnings in 1850.29s` (30m50s). Deselection follows the existing repository
+  marker policy; warnings are existing FastAPI/Starlette deprecations. The only
+  additional pytest option was `--durations=10`, which reports timing without
+  changing collection or assertions.
+- The slowest cases were fifty same-paper actor-isolated runs (218.31s), complete
+  SubAgent result materialization and lineage projection (145.03s), and the full
+  recorded production Research transport (132.88s). These are integrated test
+  timings, not production latency measurements.
+- Offline AgentLoop `test-agent-loop-3a96769e3bd34682a98f31de5dd26a49`: succeeded,
+  3 fixture LLM calls, 1 successful real memory tool call, 1 judge retry,
+  60 fixture tokens and 0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-3a96769e3bd34682a98f31de5dd26a49/manifest.json`,
+  hash `sha256:832e31d2c94da0ada90bb4296507f2f22b1c23983f350481b468b8f0d5b91202`.
+- Source validation: `is_valid=true`, `error_count=0`, `warning_count=0`.
+
+Validation used full smoke runs after completed edit batches; no separate
+focused pytest runs were added. Task 1.5 remains unchecked;
+dependency/replacement input binding and production Harness-to-RAG capability
+issuance remain open.
 
 ### Broader Acceptance
 
