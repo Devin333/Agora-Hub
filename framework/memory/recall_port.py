@@ -21,4 +21,11 @@ class ExecutionMemoryRecallPort(Protocol):
         query: MemoryQuery | dict[str, Any] | str,
         *,
         policy: MemoryPolicy | None = None,
-    ) -> MemoryRecallResult: ...
+    ) -> MemoryRecallResult:
+        """Return verified records with admission lineage in diagnostics.
+
+        input_snapshot_ref and execution_identity identify the grant;
+        record_namespace_refs maps returned record IDs to exact revisions,
+        whose checksums are in namespace_checksums.
+        """
+        ...

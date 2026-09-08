@@ -13,7 +13,8 @@ import os
 from threading import Condition, Lock
 from typing import Any, Callable, cast
 
-from framework.memory.runtime import MemoryRuntime
+from framework.harness.control_plane.errors import HarnessValidationError
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from infrastructure.external.reranker import CrossEncoderReranker
 from infrastructure.storage.postgres.paper_chunk_repository import PaperChunkRepository
 from infrastructure.storage.vector.paper_chunk_store import PaperChunkStore
@@ -23,7 +24,6 @@ from infrastructure.storage.vector.paper_visual_chunk_store import (
     paper_visual_chunk_store_from_env,
 )
 from infrastructure.storage.vector.qdrant_store import qdrant_store_from_env
-from infrastructure.storage.memory import DEFAULT_MEMORY_COLLECTION, VectorMemoryStoreAdapter
 
 from backend.research.document.chunk_storage import (
     PaperChunkRepositoryAdapter,
@@ -123,7 +123,6 @@ class PaperRagRuntimeResources:
         self._visual_chunk_store: PaperVisualChunkStore | None | object = _UNSET
         self._reranker: _SynchronizedReranker | None = None
         self._retrieval_policy: Any = _UNSET
-        self._memory: ResearchRAGMemoryPort | None | object = _UNSET
         self._answer_worker: Any = _UNSET
         self._plan_worker: Any = _UNSET
         self._owned_resources: list[Any] = []
@@ -169,15 +168,16 @@ class PaperRagRuntimeResources:
         with_reranker: bool = True,
         plan_worker: Any | None = None,
         with_answer_worker: bool = False,
+        memory_recall: ExecutionMemoryRecallPort | None = None,
     ) -> PaperRAGSession:
         with self._lock:
             self._ensure_open_locked()
+            memory = build_rag_memory_port(memory_recall=memory_recall)
             chunk_store = self._chunk_store_locked()
             field_store = self._field_chunk_store_locked()
             visual_store = self._visual_chunk_store_locked()
             reranker = self._reranker_locked() if with_reranker else None
             retrieval_policy = self._retrieval_policy_locked()
-            memory = self._memory_locked()
             answer_worker = (
                 self._answer_worker_locked() if with_answer_worker else None
             )
@@ -221,7 +221,6 @@ class PaperRagRuntimeResources:
             self._visual_chunk_store = _UNSET
             self._reranker = None
             self._retrieval_policy = _UNSET
-            self._memory = _UNSET
             self._answer_worker = _UNSET
             self._plan_worker = _UNSET
 
@@ -287,17 +286,6 @@ class PaperRagRuntimeResources:
         if self._retrieval_policy is _UNSET:
             self._retrieval_policy = self._retrieval_policy_factory()
         return self._retrieval_policy
-
-    def _memory_locked(self) -> ResearchRAGMemoryPort | None:
-        if self._memory is _UNSET:
-            if _env_truthy(os.environ.get(NEWS_RAG_MEMORY_ENV)):
-                self._memory = build_rag_memory_port(
-                    vector_store=self._vector_store_locked()
-                )
-            else:
-                self._memory = None
-        value = self._memory
-        return cast(ResearchRAGMemoryPort | None, value)
 
     def _answer_worker_locked(self) -> Any:
         if self._answer_worker is _UNSET:
@@ -382,21 +370,16 @@ def build_visual_chunk_store() -> PaperVisualChunkStore | None:
 
 def build_rag_memory_port(
     *,
-    vector_store: Any | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
 ) -> ResearchRAGMemoryPort | None:
     if not _env_truthy(os.environ.get(NEWS_RAG_MEMORY_ENV)):
         return None
-    collection = os.environ.get(NEWS_RAG_MEMORY_COLLECTION_ENV) or DEFAULT_MEMORY_COLLECTION
-    actual_vector_store = (
-        vector_store if vector_store is not None else qdrant_store_from_env()
-    )
-    ensure_collections = getattr(actual_vector_store, "ensure_collections", None)
-    if callable(ensure_collections):
-        ensure_collections([collection])
-    memory_runtime = MemoryRuntime(
-        VectorMemoryStoreAdapter(actual_vector_store, collection=collection)
-    )
-    return ResearchRAGMemoryPort(memory_runtime)
+    if os.environ.get(NEWS_RAG_MEMORY_COLLECTION_ENV):
+        raise HarnessValidationError("RAG memory collection selection is removed; use an admitted namespace revision", code="REF_UNAUTHORIZED")
+    if not isinstance(memory_recall, ExecutionMemoryRecallPort):
+        raise HarnessValidationError("RAG memory requires an admitted execution-bound recall capability", code="REF_UNAUTHORIZED")
+    memory_recall.validate_execution(memory_recall.execution_identity)
+    return ResearchRAGMemoryPort(memory_recall)
 
 
 def build_chunk_pipeline(
@@ -434,12 +417,14 @@ def build_paper_rag_session(
     plan_worker=None,
     with_answer_worker: bool = False,
     runtime_resources: PaperRagRuntimeResources | None = None,
+    memory_recall: ExecutionMemoryRecallPort | None = None,
 ) -> PaperRAGSession:
     resources = runtime_resources or _default_runtime_resources()
     return resources.build_paper_rag_session(
         with_reranker=with_reranker,
         plan_worker=plan_worker,
         with_answer_worker=with_answer_worker,
+        memory_recall=memory_recall,
     )
 
 

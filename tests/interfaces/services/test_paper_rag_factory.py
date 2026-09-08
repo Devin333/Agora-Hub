@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from interfaces.services import paper_rag_factory
+from framework.harness.control_plane.errors import HarnessValidationError
+from tests.fixtures.admitted_memory import admitted_memory
 
 
 @pytest.fixture(autouse=True)
@@ -55,24 +57,6 @@ class _FakeVisualStore:
 
     def ensure_collection(self) -> None:
         self.ensure_called = True
-
-
-class _FakeVectorMemoryStore:
-    def __init__(self) -> None:
-        self.collections = []
-
-    def ensure_collections(self, collections):
-        self.collections = list(collections)
-        return []
-
-    def upsert_documents(self, docs):
-        pass
-
-    def search(self, query):
-        return []
-
-    def get_document(self, collection, document_id):
-        return None
 
 
 class _FakePipeline:
@@ -291,38 +275,60 @@ def test_build_rag_memory_port_is_disabled_by_default() -> None:
     assert paper_rag_factory.build_rag_memory_port() is None
 
 
-def test_build_rag_memory_port_uses_vector_memory_store_when_enabled(monkeypatch):
-    vector_store = _FakeVectorMemoryStore()
+def test_build_rag_memory_port_requires_grant_without_opening_vector_store(monkeypatch):
+    monkeypatch.setenv("NEWS_RAG_MEMORY", "1")
+    monkeypatch.setattr(paper_rag_factory, "qdrant_store_from_env", lambda: pytest.fail("mutable memory access"))
+    with pytest.raises(HarnessValidationError, match="admitted execution-bound"):
+        paper_rag_factory.build_rag_memory_port()
+
+
+def test_build_rag_memory_port_rejects_mutable_collection_selector(tmp_path, monkeypatch):
+    fixture = admitted_memory(tmp_path)
     monkeypatch.setenv("NEWS_RAG_MEMORY", "1")
     monkeypatch.setenv("NEWS_RAG_MEMORY_COLLECTION", "rag_memories")
-    monkeypatch.setattr(paper_rag_factory, "qdrant_store_from_env", lambda: vector_store)
-
-    memory = paper_rag_factory.build_rag_memory_port()
-
-    assert isinstance(memory, paper_rag_factory.ResearchRAGMemoryPort)
-    assert vector_store.collections == ["rag_memories"]
+    with pytest.raises(HarnessValidationError, match="collection selection is removed"):
+        paper_rag_factory.build_rag_memory_port(memory_recall=fixture.recall)
 
 
-def test_paper_rag_session_factory_wires_memory_port_when_enabled(monkeypatch):
-    memory = object()
+def test_paper_rag_session_factory_never_caches_execution_memory(tmp_path, monkeypatch):
+    first = admitted_memory(tmp_path / "first")
+    second = admitted_memory(tmp_path / "second", activity_id="second-activity")
     monkeypatch.setenv("NEWS_RAG_MEMORY", "1")
     monkeypatch.setattr(paper_rag_factory, "PaperRAGSession", _FakeSession)
     monkeypatch.setattr(paper_rag_factory, "build_chunk_store", lambda: _FakeStore())
     monkeypatch.setattr(paper_rag_factory, "build_field_chunk_store", lambda: _FakeStore())
     monkeypatch.setattr(paper_rag_factory, "build_visual_chunk_store", lambda: None)
     monkeypatch.setattr(paper_rag_factory, "build_retrieval_policy_from_env", lambda: object())
-    monkeypatch.setattr(
-        paper_rag_factory,
-        "build_rag_memory_port",
-        lambda *, vector_store=None: memory,
-    )
-
-    paper_rag_factory.build_paper_rag_session(
+    resources = _runtime_resources()
+    session_one = paper_rag_factory.build_paper_rag_session(
         with_reranker=False,
-        runtime_resources=_runtime_resources(),
+        runtime_resources=resources,
+        memory_recall=first.recall,
     )
+    session_two = paper_rag_factory.build_paper_rag_session(
+        with_reranker=False, runtime_resources=resources, memory_recall=second.recall,
+    )
+    memory_one = session_one.kwargs["memory"]
+    memory_two = session_two.kwargs["memory"]
+    assert memory_one is not memory_two
+    assert memory_one.execution_identity == first.root.execution_identity
+    assert memory_two.execution_identity == second.root.execution_identity
+    with pytest.raises(HarnessValidationError, match="caller differs"):
+        memory_one.validate_execution(second.root.execution_identity)
+    with pytest.raises(HarnessValidationError, match="admitted execution-bound"):
+        resources.build_paper_rag_session(with_reranker=False)
+    monkeypatch.setenv("NEWS_RAG_MEMORY", "0")
+    disabled = resources.build_paper_rag_session(with_reranker=False)
+    assert disabled.kwargs["memory"] is None
 
-    assert _FakeSession.last_kwargs["memory"] is memory
+
+def test_session_missing_memory_authority_fails_before_resource_initialization(monkeypatch):
+    monkeypatch.setenv("NEWS_RAG_MEMORY", "1")
+    resources = paper_rag_factory.PaperRagRuntimeResources(
+        vector_store_factory=lambda: pytest.fail("resources initialized before memory admission"),
+    )
+    with pytest.raises(HarnessValidationError, match="admitted execution-bound"):
+        resources.build_paper_rag_session()
 
 
 def test_paper_rag_session_factory_false_env_leaves_llm_planner_disabled(monkeypatch):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +19,8 @@ from backend.research.rag.evaluation.paper_evidence_eval import EvidenceQAPair
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from interfaces.services.paper_rag_service import PaperRagApplicationService
 from interfaces.services.paper_rag_transcript_store import PaperRagTranscriptArtifact, PaperRagTranscriptFileStore
+from framework.harness.control_plane.errors import HarnessValidationError
+from tests.fixtures.admitted_memory import admitted_memory
 
 
 @dataclass
@@ -94,6 +96,46 @@ def _graph_identity() -> object:
         activity_id="activity-paper-rag-test",
         activity_attempt=1,
     )
+
+
+def test_service_forwards_only_the_current_calls_admitted_memory(tmp_path):
+    fixture = admitted_memory(tmp_path)
+    result = _session_result(
+        status=RAGSessionStatus.ANSWERED, decision_type=RAGDecisionType.RETURN_ANSWER,
+        answer=_answer(abstained=False),
+    )
+    session = _Session(result)
+    factories = []
+
+    def factory(**kwargs):
+        factories.append(kwargs)
+        return session
+
+    service = PaperRagApplicationService(
+        retriever=_Retriever(), session_factory=factory, transcript_store=_RecordingTranscriptStore(),
+    )
+    service.rag_ask(
+        "p1", "ablation evidence", generate=True, graph_identity=fixture.graph,
+        tenant_id="tenant-1", user_id="owner-1", memory_recall=fixture.recall,
+    )
+    service.rag_ask("p1", "method evidence", generate=True, graph_identity=fixture.graph)
+    assert factories[0]["memory_recall"] is fixture.recall
+    assert "memory_recall" not in factories[1]
+    assert session.calls[0][1]["graph_identity"] == fixture.graph
+
+
+def test_service_rejects_foreign_memory_before_session_creation(tmp_path, monkeypatch):
+    fixture = admitted_memory(tmp_path)
+    monkeypatch.setattr(fixture.namespaces, "read", lambda ref: pytest.fail("foreign namespace read"))
+    service = PaperRagApplicationService(
+        retriever=_Retriever(),
+        session_factory=lambda **kwargs: pytest.fail("session created with foreign authority"),
+    )
+    with pytest.raises(HarnessValidationError, match="caller differs"):
+        service.rag_ask(
+            "p1", "method evidence", generate=True,
+            graph_identity=replace(fixture.graph, activity_id="another-activity"), memory_recall=fixture.recall,
+        )
 
 
 def test_service_constructor_closes_owned_resources_on_graph_failure(

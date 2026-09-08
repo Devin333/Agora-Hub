@@ -28,6 +28,7 @@ def test_recall_reads_real_revision_with_bounded_context_and_lineage(tmp_path):
     assert result.diagnostics["input_snapshot_ref"] == root.snapshot_ref
     assert result.diagnostics["namespace_refs"] == [metadata.exact_ref]
     assert result.diagnostics["namespace_checksums"] == {metadata.exact_ref: metadata.source_checksum}
+    assert result.diagnostics["record_namespace_refs"] == {"note-1": metadata.exact_ref}
     assert not any(hasattr(runtime, name) for name in ("store", "write", "promote", "get"))
 
 

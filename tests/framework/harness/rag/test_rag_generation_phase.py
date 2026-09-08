@@ -59,7 +59,9 @@ def test_generation_phase_forwards_physical_execution_identity() -> None:
         ),
     )
 
-    result = _controller(worker).run(spec)
+    result = _controller(
+        worker, memory=_ExecutionBoundMemory(spec.graph_identity.to_graph_execution_identity()),
+    ).run(spec)
 
     assert result.status == RAGSessionStatus.ANSWERED
     assert worker.execution_identities == [spec.graph_identity.to_graph_execution_identity()]
@@ -252,13 +254,25 @@ def _controller(
     worker: _AnswerWorker,
     *,
     retrieval: FakeRetrievalPort | _SequentialRetrievalPort | None = None,
+    memory: FakeMemoryPort | None = None,
 ) -> BoundedRAGSessionController:
     return BoundedRAGSessionController(
         retrieval=retrieval or FakeRetrievalPort(fake_research_evidence_packs()[:1]),
         planner=FakeRAGPlanner(),
-        memory=FakeMemoryPort(fake_reader_repair_memory()),
+        memory=memory or FakeMemoryPort(fake_reader_repair_memory()),
         answer_worker=worker,
     )
+
+
+class _ExecutionBoundMemory(FakeMemoryPort):
+    """Keep the identity propagation fixture bound to its physical caller."""
+
+    def __init__(self, execution_identity):
+        super().__init__(fake_reader_repair_memory())
+        self.execution_identity = execution_identity
+
+    def validate_execution(self, execution_identity):
+        assert execution_identity == self.execution_identity
 
 
 def _generation_spec(

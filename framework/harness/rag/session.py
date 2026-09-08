@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
-from framework.harness.memory.ports import MemoryPort
+from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.memory.ports import ExecutionBoundMemoryPort, MemoryPort
 from framework.harness.mcp.policy import MCPToolRequest
 from framework.harness.mcp.ports import MCPToolPort
 from framework.harness.rag.answer_gate import RAGAnswerGate, unsupported_claims_from_answer_gate
@@ -113,12 +114,24 @@ class BoundedRAGSessionController(RAGSessionController):
         self.telemetry = telemetry or RAGTelemetry()
 
     def run(self, spec: RAGSessionSpec) -> RAGSessionResult:
+        self._validate_memory_execution(spec)
         policy = RAGExecutionPolicy.from_session_spec(spec)
         with self.telemetry.start_session(spec, policy) as telemetry:
             result = self._run_with_policy(spec, policy, telemetry)
             if result.metrics is not None:
                 telemetry.finish_session(status=result.status, decision=result.decision, metrics=result.metrics)
             return result
+
+    def _validate_memory_execution(self, spec: RAGSessionSpec) -> None:
+        if self.memory is None:
+            return
+        if not spec.graph_identity.has_physical_activity:
+            if isinstance(self.memory, ExecutionBoundMemoryPort):
+                raise HarnessValidationError("bound RAG memory requires a physical Graph execution", code="REF_SNAPSHOT_BINDING_MISMATCH")
+            return
+        if not isinstance(self.memory, ExecutionBoundMemoryPort):
+            raise HarnessValidationError("physical RAG execution requires bound memory", code="REF_UNAUTHORIZED")
+        self.memory.validate_execution(spec.graph_identity.to_graph_execution_identity())
 
     def _run_with_policy(
         self,
@@ -703,12 +716,19 @@ class BoundedRAGSessionController(RAGSessionController):
                 graph_identity=state.spec.graph_identity,
                 errors=("memory port is not configured",),
             )
+        self._validate_memory_execution(state.spec)
         hits = self.memory.recall(
             {
                 "query": step.query,
                 "namespace": step.memory_namespace,
                 "limit": step.max_results,
                 "goal": state.spec.goal.to_dict(),
+                "tenant_id": state.spec.source_policy.get("tenant_id"),
+                "owner_id": _session_scope_metadata(state.spec).get("user_id"),
+                "execution_identity": (
+                    state.spec.graph_identity.to_graph_execution_identity().to_dict()
+                    if state.spec.graph_identity.has_physical_activity else None
+                ),
             }
         )
         accepted_hits = []

@@ -6,6 +6,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.shared.json import to_jsonable
+from framework.shared.graph_identity import GraphExecutionIdentity
 
 
 class MemoryWriteStatus(StrEnum):
@@ -51,4 +52,12 @@ class MemoryPort(Protocol):
         ...
 
 
-__all__ = ["MemoryPort", "MemoryWriteCandidate", "MemoryWriteStatus"]
+@runtime_checkable
+class ExecutionBoundMemoryPort(MemoryPort, Protocol):
+    @property
+    def execution_identity(self) -> GraphExecutionIdentity: ...
+
+    def validate_execution(self, execution_identity: GraphExecutionIdentity) -> None: ...
+
+
+__all__ = ["ExecutionBoundMemoryPort", "MemoryPort", "MemoryWriteCandidate", "MemoryWriteStatus"]

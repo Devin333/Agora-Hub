@@ -377,6 +377,16 @@ Harness MUST apply one `RefAuthority` boundary to input refs, result refs, plann
 - **AND** disabling automatic recall alone MUST still allow an explicitly authorized memory tool under the same bounded MemoryPolicy
 - **AND** direct Graph AgentLoop/ToolExecutor callers MUST NOT reuse standalone memory registrations
 
+#### Scenario: RAG consumes only its current execution's admitted memory
+
+- **WHEN** a physical RAG session enables memory recall
+- **THEN** it MUST receive an execution-bound read-only capability for committed immutable namespace revisions
+- **AND** the controller MUST reject missing or mismatched authority before planner or retrieval calls
+- **AND** shared process resources MUST NOT cache or reuse another execution's memory capability
+- **AND** mutable collection selectors and namespace names MUST NOT grant access
+- **AND** each retained memory hit MUST identify its exact namespace revision, record, checksum, input snapshot and execution
+- **AND** offline RAG context replay MUST use recorded memory evidence without current namespace reads or new grants
+
 ### Requirement: Spawn SHALL use a durable intent receipt and reconciliation protocol
 
 Each attempt MUST have `spawn_operation_key = group_id + wave_id + task_instance_id + attempt`. Wave admission, reservation ledger and `TASK_ATTEMPT_SPAWN_INTENT` MUST be committed in one transaction or equivalent durable batch before spawn. `ChildAgentSupervisor` MUST handle the operation key idempotently and persist `SPAWN_CONFIRMED` or `SPAWN_UNKNOWN` receipts. `TASK_WAVE_DISPATCHED` requires known spawn status and trackable children for all selected tasks. Partially successful batches MUST reconcile each task independently. Identical verified receipt redelivery MUST be reused; conflicting identity/checksum evidence MUST halt rather than overwrite history.

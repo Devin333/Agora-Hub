@@ -1068,6 +1068,71 @@ Online recall retains normal record expiry rules; offline observation replay
 must consume recorded evidence rather than rerun recall against the current
 clock. Namespace reopen tests are not full offline AgentLoop replay evidence.
 
+### Task 1.5 RAG memory consumer boundary (2026-09-08)
+
+`ResearchRAGMemoryPort` now consumes the execution-bound immutable recall port.
+Physical controllers validate their full Graph activity before planning or
+retrieval and again before memory recall. Namespace, tenant and owner selectors
+narrow admitted descriptors; `user_id` supplies the owner selector. Each hit
+retains the exact revision/record ref, namespace checksum, input snapshot and
+execution identity through context-pack trimming. Empty summaries use verified
+record content. Process-scoped Paper RAG resources no longer cache a memory
+adapter or query mutable vector memory; enabled memory requires a committed
+capability supplied to that invocation, and collection selectors fail closed.
+
+The focused matrix covered framework memory/RAG, reference memory readers,
+Research RAG adapters, PaperRAGSession, and Paper RAG factory/service:
+`656 passed in 125.81s`. Initial failures were fixture issues: the existing
+physical generation fixture supplied an unbound memory fake, and a new test
+attempted an already-forbidden ambiguous namespace alias. The former now uses
+an explicitly identity-bound fake; the latter tests owner narrowing across
+distinct admitted private/shared namespaces. Production authorization was not
+relaxed. Real durable grant tests prove missing/foreign authority fails before
+payload IO, newer publications do not redirect old grants, and persisted RAG
+context replay performs zero live namespace/recall/planner/retrieval calls or
+grant writes. RAG context replay does not prove complete TaskPlan grant replay.
+
+Final integrated validation after all code/fixture edits:
+
+- `openspec validate harness-codex-style-parallel-agent-orchestration --strict`
+  and scoped `git diff --check`: passed.
+- `.venv/Scripts/python.exe -m scripts.dev smoke`: exit 0; compile passed,
+  `3171 passed, 23 deselected, 23 warnings in 1647.16s` (27m27s). Deselection
+  follows the existing marker policy; warnings are FastAPI/Starlette deprecations.
+- Offline AgentLoop `test-agent-loop-c108e8619278449d8f9ff88fa617f042`: succeeded,
+  3 fixture LLM calls, 1 successful real memory tool call, 1 judge retry,
+  60 fixture tokens, 0 network calls. Manifest:
+  `.newsroom/smoke/test-agent-loop-c108e8619278449d8f9ff88fa617f042/manifest.json`,
+  hash `sha256:d2c3813d82b19a6e9b39948db74b3d40f7a861d8d100b0ea39c0a18e6ffc0609`.
+- Source validation: `is_valid=true`, `error_count=0`, `warning_count=0`.
+
+The first focused run exposed the two fixture failures described above; both
+were repaired together, then the complete focused matrix passed. The full smoke
+was run once after the final batch edits. Concurrent frontend edits are outside
+this commit and outside this validation claim.
+
+This is consumer integration and trusted in-process dependency injection.
+`ExecutionMemoryRecallPort` is an interface, not a sandbox for arbitrary Python
+objects; the real Harness implementation verifies committed grants. Multiple
+bounded queries within one admitted execution are permitted. No HTTP/LLM
+request can serialize this capability. Production Research Graph/HTTP/CLI
+callers do not yet automatically supply it, so production memory remains off
+by default and task 1.5 is still unchecked.
+
+Remaining verified 1.5 gaps:
+
+- Bind `task://producer/output` to accepted predecessor result/grant identity
+  before downstream dispatch. Current plan validation accepts the DAG reference,
+  but child admission only inherits root input descriptors and rejects it.
+  Replacement rewrites require the same exact-result binding; do not weaken the
+  single-parent CHILD_INPUT grant invariant to add an unproven descriptor.
+- Require result authority and the recorded execution at generic Graph subagent
+  replay/recovery payload ingress. The stage-owned replay path already supplies
+  both; the public reducer still has a raw-store path when authority is omitted.
+- Close manual physical SubAgent composition checks and supply the RAG memory
+  capability from the real Harness admission path before claiming production
+  consumption. Child AgentRunner/tool receipts remain tasks 2.6/2.7.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

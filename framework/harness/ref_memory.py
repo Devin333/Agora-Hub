@@ -204,11 +204,13 @@ class HarnessMemoryRecallRuntime:
             self._reader.describe(descriptor.ref)
         records = []
         seen_ids = set()
+        record_namespace_refs = {}
         for descriptor in descriptors:
             for record in self._reader.read(descriptor.ref).records():
                 if record.memory_id in seen_ids:
                     raise HarnessValidationError("admitted memory revisions have ambiguous record identities", code="REF_SNAPSHOT_CONFLICT")
                 seen_ids.add(record.memory_id)
+                record_namespace_refs[record.memory_id] = descriptor.ref
                 records.append(record)
         result = SimpleMemoryRecallStrategy().recall(
             effective, store=_RevisionSearch(tuple(records)), policy=requested_policy,
@@ -219,6 +221,7 @@ class HarnessMemoryRecallRuntime:
             "input_snapshot_ref": self._reader.snapshot.snapshot_ref,
             "namespace_refs": [item.ref for item in descriptors],
             "namespace_checksums": {item.ref: item.source_checksum for item in descriptors},
+            "record_namespace_refs": {item.memory_id: record_namespace_refs[item.memory_id] for item in result.results},
             "execution_identity": self.execution_identity.to_dict(),
         })
 

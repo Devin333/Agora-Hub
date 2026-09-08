@@ -303,6 +303,11 @@ def _assembly_summary(
 def _trim_memory_hit(item: dict[str, Any]) -> dict[str, Any]:
     preserved = {
         "memory_ref",
+        "memory_id",
+        "namespace_ref",
+        "namespace_checksum",
+        "input_snapshot_ref",
+        "execution_identity",
         "ref",
         "namespace",
         "title",
@@ -314,7 +319,7 @@ def _trim_memory_hit(item: dict[str, Any]) -> dict[str, Any]:
         "source_refs",
     }
     result = {key: value for key, value in item.items() if key in preserved}
-    if "summary" not in result and "content" in item:
+    if not result.get("summary") and "content" in item:
         result["summary"] = str(item["content"])[:500]
     return result
 

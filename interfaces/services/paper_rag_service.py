@@ -12,6 +12,7 @@ from backend.research.rag.retrieval.paper_retriever import RetrievalRequest
 from backend.research.services.tenant_visibility import chunk_visible_to_tenant, public_metrics
 from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.rag.visibility import evidence_visible_to_tenant
+from framework.memory.recall_port import ExecutionMemoryRecallPort
 from interfaces.services.paper_rag_factory import PaperRagRuntimeResources
 from interfaces.services.paper_rag_transcript_store import SCHEMA_VERSION, PaperRagTranscriptFileStore
 
@@ -127,6 +128,7 @@ class PaperRagApplicationService:
         user_id: str | None = None,
         memory_namespace: str | None = None,
         graph_identity: ContextGraphIdentity | None = None,
+        memory_recall: ExecutionMemoryRecallPort | None = None,
     ) -> dict[str, Any]:
         with self._operation():
             return self._rag_ask(
@@ -140,6 +142,7 @@ class PaperRagApplicationService:
                 user_id=user_id,
                 memory_namespace=memory_namespace,
                 graph_identity=graph_identity,
+                memory_recall=memory_recall,
             )
 
     def _rag_ask(
@@ -155,6 +158,7 @@ class PaperRagApplicationService:
         user_id: str | None,
         memory_namespace: str | None,
         graph_identity: ContextGraphIdentity | None,
+        memory_recall: ExecutionMemoryRecallPort | None,
     ) -> dict[str, Any]:
         if generate and not gated:
             raise ValueError(
@@ -171,7 +175,10 @@ class PaperRagApplicationService:
                 user_id=user_id,
                 memory_namespace=memory_namespace,
                 graph_identity=graph_identity,
+                memory_recall=memory_recall,
             )
+        if memory_recall is not None:
+            raise ValueError("execution-bound memory requires gated Harness generation")
         result = self._retriever.retrieve(RetrievalRequest(
             paper_id=paper_id,
             question=question,
@@ -220,6 +227,7 @@ class PaperRagApplicationService:
         user_id: str | None,
         memory_namespace: str | None,
         graph_identity: ContextGraphIdentity | None,
+        memory_recall: ExecutionMemoryRecallPort | None,
     ) -> dict[str, Any]:
         if not isinstance(graph_identity, ContextGraphIdentity):
             raise ValueError(
@@ -229,10 +237,16 @@ class PaperRagApplicationService:
             raise ValueError(
                 "Graph-bound paper RAG generation requires a physical activity identity"
             )
-        session = self._session_factory(
-            with_reranker=self._with_reranker,
-            with_answer_worker=True,
-        )
+        session_kwargs: dict[str, Any] = {
+            "with_reranker": self._with_reranker,
+            "with_answer_worker": True,
+        }
+        if memory_recall is not None:
+            if not isinstance(memory_recall, ExecutionMemoryRecallPort):
+                raise TypeError("RAG memory requires execution-bound recall")
+            memory_recall.validate_execution(graph_identity.to_graph_execution_identity())
+            session_kwargs["memory_recall"] = memory_recall
+        session = self._session_factory(**session_kwargs)
         goal = self._ask_use_case.build_paper_ask_goal(
             paper_id=paper_id,
             question=question,
