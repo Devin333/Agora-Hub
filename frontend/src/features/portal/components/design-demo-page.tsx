@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useTransition, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 import { ArrowRight, BookOpen, Check, ChevronDown, ClipboardCheck, Github, LoaderCircle, Quote, Sparkles, WandSparkles, X, Link2 } from "lucide-react"
-import { PortalAccountControl } from "@/components/auth/portal-account-control"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { autoExamples, moduleInfo, researchModules, resolveResearchIntent, type ResearchMode, type ResearchModule } from "@/lib/research/entry"
 import { historyState, prepareResearchResume, researchResumeHref, saveResearchMaterial, type ResearchVisit } from "@/lib/research/history"
@@ -78,8 +77,7 @@ export function DesignDemoPage() {
     <header className="h-[var(--header-height)] border-b border-[#eee8f5] bg-white">
       <nav className="mx-auto flex h-full max-w-[1280px] items-center justify-between px-10" aria-label="主导航">
         <a href="/design-demo" className={`flex items-center gap-2.5 rounded-lg ${focusStyle}`}><span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span><span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span></a>
-        <div className="flex items-center gap-8 text-base text-[#6d6286]"><ResearchCommandPalette inline />{!guided.active && <a href="#modules" className={`rounded-md hover:text-[#6735d3] ${focusStyle}`}>研究模块</a>}</div>
-        <div className="flex items-center gap-3"><PortalAccountControl /><button type="button" onClick={guided.active ? newResearch : focusInput} className={`inline-flex h-11 items-center rounded-xl bg-[#7c3aed] px-5 text-base font-semibold text-white shadow-[0_5px_14px_rgba(124,58,237,0.25)] hover:bg-[#6d28d9] ${focusStyle}`}>{guided.active ? "开始新研究" : "开始研究"}</button></div>
+        <div className="ml-auto flex items-center gap-8 text-base text-[#6d6286]"><ResearchCommandPalette inline />{!guided.active && <a href="#modules" className={`rounded-md hover:text-[#6735d3] ${focusStyle}`}>研究模块</a>}</div>
       </nav>
     </header>
     <div className="flex h-[calc(100svh-var(--header-height))]">
