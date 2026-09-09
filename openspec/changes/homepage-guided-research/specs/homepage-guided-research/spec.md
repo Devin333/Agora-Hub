@@ -77,3 +77,18 @@ Delivery SHALL include focused service/schema/UI tests, real desktop browser evi
 #### Scenario: Acceptance audit
 - **WHEN** completion is claimed
 - **THEN** every requirement has current code and appropriately scoped verification evidence, with external limitations stated explicitly
+
+### Requirement: Conversation message index
+The active research SHALL expose a compact index along the left edge of its conversation area. The index SHALL contain the initial question, follow-up questions and clarification answers from that conversation only. Each entry SHALL preview the corresponding message on hover or keyboard focus, scroll directly to its message without navigation or another search, and identify the current reading position. It SHALL remain usable with long conversations, keyboard input and reduced motion while the follow-up composer remains at the workspace bottom. User message bubbles SHALL use the homepage purple and readable white text without a repeated follow-up label.
+
+#### Scenario: Jump between earlier messages
+- **WHEN** a user selects a message in the index
+- **THEN** that message becomes visible above the bottom composer, the corresponding entry becomes current, and the draft and conversation remain intact
+
+#### Scenario: Restore and switch conversations
+- **WHEN** the user reloads a saved conversation, resumes another conversation or starts a new research
+- **THEN** the index follows the currently displayed conversation and reading position without retaining entries from another conversation
+
+#### Scenario: Keyboard and reduced motion
+- **WHEN** a user focuses and activates an index entry using the keyboard or has enabled reduced motion
+- **THEN** the preview and jump remain available with visible focus, and reduced motion uses an immediate scroll

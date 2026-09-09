@@ -24,3 +24,9 @@
 - [x] 4.2 Exercise real desktop paper and project workflows, source links, history restore and failure recovery; record evidence.
 - [x] 4.3 Run frontend test/typecheck/lint/build, strict OpenSpec and required smoke; fix root causes and audit every requirement.
 - [x] 4.4 Commit only scoped changes, verify the working frontend and record exact remaining external limitations if any.
+
+## 5. Conversation navigation polish
+
+- [x] 5.1 Remove the repeated follow-up label and use the homepage purple with readable white text for user message bubbles.
+- [x] 5.2 Add a compact index of the current conversation's user messages with previews, direct scroll navigation, current-position tracking and keyboard/reduced-motion support.
+- [x] 5.3 Verify multi-turn navigation, reload/session isolation, long questions and the bottom composer in the browser; run the frontend build, strict OpenSpec and required smoke before a scoped commit.

@@ -1,12 +1,13 @@
 "use client"
 
 import { ArrowUp, BookOpen, Check, ExternalLink, Github, LoaderCircle, RotateCcw, Square } from "lucide-react"
-import { useRef, useState, type FormEvent } from "react"
+import { useMemo, useRef, useState, type FormEvent } from "react"
 import type { useGuidedResearch } from "@/lib/research/use-guided-research"
 import { conversationHref, type ResearchIntent, type ResearchResult, type ResearchSource } from "@/lib/research/conversation"
 import styles from "./guided-research.module.css"
 import { ResearchComposerContext, ResearchContextSummary } from "./research-composer-context"
 import { ResearchSourceEntry } from "./research-source-entry"
+import { ResearchConversationIndex } from "./research-conversation-index"
 
 type Research = ReturnType<typeof useGuidedResearch>
 const labels: Record<ResearchSource, string> = { papers: "论文", projects: "开源项目" }
@@ -39,7 +40,13 @@ function ProgressCard({ phase, sources, onStop }: { phase: keyof typeof phaseLab
 
 export function GuidedResearchView({ research }: { research: Research }) {
   const input = useRef<HTMLTextAreaElement>(null)
+  const transcript = useRef<HTMLDivElement>(null)
   const active = research.active
+  const conversationId = active?.id, turns = active?.conversation.turns
+  const entries = useMemo(() => turns?.flatMap(turn => {
+    const id = `research-message-${conversationId}-${turn.id}`
+    return [{ id, label: turn.question }, ...turn.answers.map((answer, index) => ({ id: `${id}-answer-${index}`, label: answer }))]
+  }) ?? [], [conversationId, turns])
   if (!active) return null
   const last = active.conversation.turns.at(-1)!
   function submit(event: FormEvent) {
@@ -48,17 +55,20 @@ export function GuidedResearchView({ research }: { research: Research }) {
   }
   const firstQuestion = active.conversation.turns[0].question
   return <main className={styles.workspace} aria-label="当前研究">
-    <div className={styles.transcript} role="region" aria-label="研究对话内容" tabIndex={0}>
-    <header className={styles.intro}>
+    <div className={styles.readingPane}>
+    <ResearchConversationIndex key={active.id} entries={entries} transcriptRef={transcript} />
+    <div ref={transcript} className={styles.transcript} role="region" aria-label="研究对话内容" tabIndex={0}>
+    <header id={entries[0].id} className={styles.intro} tabIndex={-1}>
       <div className={styles.introEyebrow}><span className={styles.phaseBadge}>{phaseLabels[last.phase]}</span></div>
       <h1>{firstQuestion}</h1>
     </header>
     <div className={styles.turns}>
       {active.conversation.turns.map((turn, index) => {
         const current = index === active.conversation.turns.length - 1
+        const messageId = `research-message-${active.id}-${turn.id}`
         return <section key={turn.id} className={styles.turn} aria-label={`第 ${index + 1} 轮研究`}>
-          {index > 0 && <div className={styles.question}><span className={styles.questionLabel}>继续提问</span>{turn.question}</div>}
-          {turn.answers.map((answer, i) => <p key={i} className={styles.answer}>补充：{answer}</p>)}
+          {index > 0 && <div id={messageId} className={styles.question} tabIndex={-1}>{turn.question}</div>}
+          {turn.answers.map((answer, i) => <p id={`${messageId}-answer-${i}`} key={i} className={styles.answer} tabIndex={-1}>补充：{answer}</p>)}
           {turn.intent?.clarification && turn.phase === "clarifying" && current && <div className={styles.clarification}>
             <p>{turn.intent.clarification.question}</p>
             <div className={styles.choices}>{turn.intent.clarification.options.map(option => <button type="button" key={option} onClick={() => research.followUp(option)}>{option}</button>)}</div>
@@ -78,6 +88,7 @@ export function GuidedResearchView({ research }: { research: Research }) {
           <details className={styles.events}><summary>查看查找进展</summary><ol>{turn.events.map((event, i) => <li key={i}>{({ understanding: "开始理解问题", clarifying: "等待补充", confirming: "等待确认", searching: "开始查找", results: "收到查找结果", stopped: "查找暂停", error: "本轮未完成" })[event.phase]}<time>{new Date(event.at).toLocaleTimeString("zh-CN")}</time></li>)}</ol></details>
         </section>
       })}
+    </div>
     </div>
     </div>
     <form className={styles.composer} onSubmit={submit} aria-label="继续研究输入区">

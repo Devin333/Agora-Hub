@@ -1,0 +1,102 @@
+.index {
+  position: absolute;
+  left: -36px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  display: block;
+  width: 32px;
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.list {
+  display: flex;
+  width: 100%;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.item {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+
+.button {
+  display: grid;
+  width: 28px;
+  min-height: 24px;
+  align-items: center;
+  justify-items: center;
+  border: 0;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.button:hover .mark {
+  width: 22px;
+  background: #a98bdf;
+}
+
+.index .button:focus-visible {
+  outline: 2px solid #9462df;
+  outline-offset: -2px;
+}
+
+.preview {
+  max-width: min(320px, calc(100vw - 32px));
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.6;
+  background: #fff;
+  color: #35274f;
+  border-color: #e5d9f0;
+}
+
+.mark {
+  display: block;
+  width: 13px;
+  height: 2px;
+  border-radius: 999px;
+  background: #d4c7e7;
+  transition: width 140ms ease, background-color 140ms ease, height 140ms ease;
+}
+
+.current .mark {
+  width: 23px;
+  height: 3px;
+  background: #7c3aed;
+  box-shadow: 0 0 0 2px #7c3aed1f;
+}
+
+.current:hover .mark {
+  width: 25px;
+  background: #6d28d9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mark {
+    transition: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .index {
+    left: -28px;
+    width: 24px;
+  }
+
+  .button {
+    width: 24px;
+  }
+}
