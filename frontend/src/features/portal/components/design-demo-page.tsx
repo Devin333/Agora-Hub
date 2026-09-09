@@ -16,7 +16,6 @@ import { ResearchComposerContext, ResearchContextSummary } from "./research-comp
 import { ResearchSourceEntry } from "./research-source-entry"
 import { useGuidedResearch } from "@/lib/research/use-guided-research"
 import { GuidedResearchView } from "./guided-research-view"
-import { ResearchCommandPalette } from "./research-command-palette"
 
 const icons = { auto: Sparkles, plan: Sparkles, papers: BookOpen, projects: Github, community: Quote, reports: ClipboardCheck }
 const focusStyle = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6] focus-visible:ring-offset-2"
@@ -77,7 +76,6 @@ export function DesignDemoPage() {
     <header className="h-[var(--header-height)] border-b border-[#eee8f5] bg-white">
       <nav className="mx-auto flex h-full max-w-[1280px] items-center justify-between px-10" aria-label="主导航">
         <a href="/design-demo" className={`flex items-center gap-2.5 rounded-lg ${focusStyle}`}><span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span><span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span></a>
-        <div className="ml-auto flex items-center gap-8 text-base text-[#6d6286]">{!guided.active && <a href="#modules" className={`rounded-md hover:text-[#6735d3] ${focusStyle}`}>研究模块</a>}<ResearchCommandPalette inline /></div>
       </nav>
     </header>
     <div className="flex h-[calc(100svh-var(--header-height))]">

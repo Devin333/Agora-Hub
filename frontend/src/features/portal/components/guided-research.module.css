@@ -3,7 +3,6 @@
 .introEyebrow { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
 .phaseBadge { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 10px; border: 1px solid #e5d9f0; border-radius: 999px; background: #fff; color: #6d4a8d; }
 .intro h1 { max-width: 760px; margin: 8px 0 0; font-size: 28px; font-weight: 700; line-height: 1.35; letter-spacing: 0; overflow-wrap: anywhere; }
-.introConditions { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
 .turns { display: grid; gap: 38px; padding: 26px 0 14px; }
 .turn { min-width: 0; }
 .question { margin-left: auto; width: fit-content; max-width: 76%; padding: 13px 18px; border-radius: 18px 18px 5px 18px; background: #eee5fa; white-space: pre-wrap; overflow-wrap: anywhere; }

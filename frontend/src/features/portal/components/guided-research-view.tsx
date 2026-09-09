@@ -20,21 +20,6 @@ const phaseLabels = {
   error: "本轮未完成",
 } as const
 
-function intentConditions(intent?: ResearchIntent) {
-  if (!intent) return "正在整理你的需求"
-  const sources = intent.sources.map(source => labels[source]).join(" + ")
-  const conditions = [
-    intent.constraints.recentYear && "最近一年",
-    intent.constraints.hasCode && "附带代码",
-    intent.constraints.localRunnable && "有运行说明",
-    intent.constraints.recentlyActive && "近期活跃",
-    intent.constraints.language,
-    intent.constraints.license,
-    intent.constraints.paperType === "survey" && "综述论文",
-  ].filter(Boolean)
-  return `${sources}${conditions.length ? ` · ${conditions.join(" · ")}` : " · 时间不限"}`
-}
-
 function ProgressCard({ phase, sources, onStop }: { phase: keyof typeof phaseLabels; sources: ResearchSource[]; onStop: () => void }) {
   const searching = phase === "searching"
   const currentIndex = searching ? 2 : 1
@@ -62,12 +47,10 @@ export function GuidedResearchView({ research }: { research: Research }) {
     if (!research.busy && active?.conversation.draft.trim()) research.followUp(active.conversation.draft)
   }
   const firstQuestion = active.conversation.turns[0].question
-  const currentIntent = last.intent
   return <main className={styles.workspace} aria-label="当前研究">
     <header className={styles.intro}>
-      <div className={styles.introEyebrow}><span>本次研究</span><span className={styles.phaseBadge}>{phaseLabels[last.phase]}</span></div>
+      <div className={styles.introEyebrow}><span className={styles.phaseBadge}>{phaseLabels[last.phase]}</span></div>
       <h1>{firstQuestion}</h1>
-      <p className={styles.introConditions}>{intentConditions(currentIntent)}</p>
     </header>
     <div className={styles.turns}>
       {active.conversation.turns.map((turn, index) => {
