@@ -49,6 +49,7 @@
 .bottom { margin-top: auto; flex-shrink: 0; border-top: 1px solid #e6deed; padding: 15px 21px; }
 .saveState { display: flex; align-items: center; gap: 7px; color: #897990; font-size: 12px; }
 .login { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-top: 13px; font-size: 13px; color: #7442a6; }
+.accountControl { margin-top: 13px; }
 .import { margin-bottom: 12px; font-size: 12px; line-height: 1.6; }
 .import > div { display: flex; gap: 14px; margin-top: 5px; }
 .import button:first-child { color: #743abb; }
@@ -60,7 +61,11 @@
 .collapsed .top { padding-top: 14px; }
 .collapsed .newResearch { width: 42px; padding: 0; justify-content: center; }
 .collapsed .navItem { width: 42px; padding: 0; justify-content: center; }
-.collapsed .bottom { padding: 20px 23px; }
+.collapsed .bottom { padding: 20px 10px; }
+.collapsed .saveState { justify-content: center; }
+.collapsed .login { width: 44px; height: 40px; justify-content: center; border-radius: 6px; }
+.collapsed .login:hover { background: #ebe4f3; }
+.collapsed .accountControl { display: flex; justify-content: center; }
 .overlay { position: fixed; inset: 0; z-index: 60; background: #30233d40; backdrop-filter: blur(4px); }
 .dialog { position: fixed; z-index: 61; top: 50%; left: 50%; transform: translate(-50%,-50%); width: min(440px,calc(100vw - 48px)); background: #fff; color: #41314f; border: 1px solid #dfd3eb; border-radius: 12px; padding: 28px; box-shadow: 0 20px 80px #35203d30; font-family: Arial,"Microsoft YaHei",sans-serif; }
 .dialogTitle { font-size: 20px; font-weight: 600; padding-right: 20px; }

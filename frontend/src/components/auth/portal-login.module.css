@@ -55,6 +55,7 @@
 .accountMenu { background: white; color: #594f71; z-index: 102; }
 .accountMenu > div { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; }
 .accountError { position: absolute; right: 0; top: 45px; width: 240px; z-index: 30; background: white; padding: 12px; border-radius: 8px; box-shadow: 0 6px 25px #30264020; color: #a33545; font-size: 13px; }
+.account[data-side="top"] .accountError { top: auto; bottom: 45px; left: 0; right: auto; }
 .spinner { animation: spin 800ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes appear { from { opacity: 0; } to { opacity: 1; } }

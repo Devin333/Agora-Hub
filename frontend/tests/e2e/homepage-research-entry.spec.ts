@@ -8,6 +8,11 @@ async function openHome(page: Page) {
 test("desktop composer is centered beside the sidebar and keeps the 2x2 modules", async ({ page }) => {
   for (const viewport of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
     await page.setViewportSize(viewport); await openHome(page)
+    const navigation = page.getByRole("navigation", { name: "主导航", exact: true })
+    await expect(navigation.getByRole("button", { name: "登录", exact: true })).toHaveCount(0)
+    const searchButton = await navigation.getByRole("button", { name: "搜索研究和模块" }).boundingBox()
+    const modulesLink = await navigation.getByRole("link", { name: "研究模块", exact: true }).boundingBox()
+    expect(searchButton!.x).toBeGreaterThan(modulesLink!.x + modulesLink!.width)
     const box = await page.getByRole("region", { name: "研究提问框" }).boundingBox()
     const workspace = await page.getByLabel("研究工作区", { exact: true }).boundingBox()
     expect(Math.abs(box!.x + box!.width / 2 - (workspace!.x + workspace!.width / 2))).toBeLessThan(2)
@@ -37,6 +42,34 @@ test("desktop composer is centered beside the sidebar and keeps the 2x2 modules"
   await page.getByRole("button", { name: "登录同步研究", exact: true }).click()
   await expect(page.getByRole("dialog")).toBeVisible(); await page.keyboard.press("Escape")
   await expect(input).toHaveValue("找 Agent 的相关研究")
+  await page.getByRole("button", { name: "收起研究侧栏" }).click()
+  await page.getByRole("button", { name: "登录同步研究", exact: true }).click()
+  await expect(page.getByRole("dialog")).toBeVisible(); await page.keyboard.press("Escape")
+  await expect(input).toHaveValue("找 Agent 的相关研究")
+})
+
+test("account actions stay in the sidebar when expanded or collapsed", async ({ page }) => {
+  let logoutCalls = 0
+  await page.route("**/api/auth/session", route => route.fulfill({ json: { success: true, data: { session: { sessionId: "header-test-session", expiresAt: "2099-12-31T00:00:00Z", user: { userId: "header-test-user", username: "Researcher", role: "user" } } } } }))
+  await page.route("**/api/research/history", route => route.fulfill({ json: { success: true, data: { visits: [], groups: [], revision: 0 } } }))
+  await page.route("**/api/auth/logout", route => {
+    logoutCalls++
+    return route.fulfill({ json: { success: true, data: { revoked: true } } })
+  })
+  await openHome(page)
+  const sidebar = page.getByRole("complementary", { name: "研究历史侧栏" })
+  const accountMenu = sidebar.getByRole("button", { name: "账户菜单" })
+  await expect(accountMenu).toHaveText(/Researcher/)
+  await expect(page.getByRole("navigation", { name: "主导航", exact: true }).getByRole("button", { name: "账户菜单" })).toHaveCount(0)
+  await accountMenu.click()
+  await expect(page.getByRole("menuitem", { name: "退出登录" })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "收起研究侧栏" }).click()
+  await expect(accountMenu).toBeVisible()
+  await accountMenu.click()
+  await page.getByRole("menuitem", { name: "退出登录" }).click()
+  await expect(sidebar.getByRole("button", { name: "登录同步研究" })).toBeVisible()
+  expect(logoutCalls).toBe(1)
 })
 
 test("plan choices, partial-source recovery, continuation and reload work in a browser", async ({ page }) => {

@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import * as Dialog from "@radix-ui/react-dialog"
-import { Archive, BookOpen, Check, ChevronDown, ChevronRight, Cloud, Download, Folder, FolderPlus, Github, History, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Quote, RotateCcw, Search, Star, Trash2, X, ClipboardCheck } from "lucide-react"
+import { Archive, BookOpen, Check, ChevronDown, ChevronRight, Cloud, Download, Folder, FolderPlus, Github, History, Laptop, LoaderCircle, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Quote, RotateCcw, Search, Star, Trash2, X, ClipboardCheck, UserRound } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { usePortalAccount } from "@/components/auth/portal-account-provider"
+import { PortalAccountControl } from "@/components/auth/portal-account-control"
 import { historyState, importGuestHistory, readGuestHistory, removeResearchGroup, removeResearchVisit, restoreResearchVisit, saveResearchGroup, updateResearchVisit, type ResearchGroup, type ResearchVisit } from "@/lib/research/history"
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
 import { reloadHistoryEvent, retryHistoryEvent } from "@/lib/research/history-sync"
@@ -123,7 +124,7 @@ export function ResearchSidebar({ collapsed, onToggle, onNew, onResume, onSelect
           </div>
         </div>}
         <div className={styles.saveState} title={state.owner ? "历史保存到当前账号" : "历史仅保存在当前浏览器"}>{state.status === "saving" || state.status === "loading" ? <LoaderCircle size={16} className={styles.spinner} /> : state.owner ? <Cloud size={16} /> : <Laptop size={16} />}{!collapsed && <span>{state.status === "saving" ? "正在同步…" : state.status === "synced" ? "已同步到账号" : state.status === "loading" ? "正在加载…" : state.status === "error" || state.status === "conflict" ? "尚未保存" : "历史保存在本机"}</span>}</div>
-        {!collapsed && !state.owner && account && <button className={styles.login} type="button" onClick={event => account.openLogin(event.currentTarget)}>登录同步研究<ChevronRight size={14} /></button>}
+        {account?.session ? <div className={styles.accountControl}><PortalAccountControl compact={collapsed} side="top" /></div> : account && <button className={styles.login} type="button" aria-label="登录同步研究" title={collapsed ? "登录同步研究" : undefined} onClick={event => account.openLogin(event.currentTarget)}>{collapsed ? <UserRound size={18} /> : <>登录同步研究<ChevronRight size={14} /></>}</button>}
       </div>
     </aside>
     {undo && <div role="status" className={styles.toast}><span>已删除“{undo.title}”</span><button type="button" onClick={() => { if (restoreResearchVisit(undo.id)) setUndo(null) }}><RotateCcw size={15} />撤销</button><button type="button" aria-label="关闭删除提示" onClick={() => setUndo(null)}><X size={15} /></button></div>}
