@@ -1,7 +1,7 @@
 """Canonical-history constraints shared by admission commits and replay."""
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Protocol
 
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -65,6 +65,7 @@ def validate_wave_admission_slot(
 def validate_parallel_admission_append(
     history: Iterable[_AdmissionEvent],
     events: Iterable[_AdmissionEvent],
+    *, plan_lookup: Callable[[int], ValidatedTaskPlan | None] | None = None,
 ) -> None:
     """Check admission against the exact prefix protected by the store CAS.
 
@@ -72,6 +73,22 @@ def validate_parallel_admission_append(
     its revision; task outcomes and full lifecycle validation remain in replay.
     """
     batch = tuple(events)
+    history = tuple(history)
+    from framework.harness.task_plan.attempt_history_index import validate_attempt_history_append
+
+    validate_attempt_history_append(history, batch)
+    if plan_lookup is not None:
+        from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
+        from framework.harness.task_plan.attempt_history_index import validate_history_record
+
+        for index, event in enumerate(batch):
+            if event.event_type != "TASK_ATTEMPT_RECORDED":
+                continue
+            record = TaskAttemptHistoryRecord.from_dict(event.payload["history_record"])
+            plan = plan_lookup(record.plan_version)
+            if plan is None:
+                raise HarnessValidationError("attempt history plan is missing", code="task_plan_attempt_history_identity_mismatch")
+            validate_history_record(record, plan, (*history, *batch[:index]))
     if not any(
         event.event_type in {"TASK_GROUP_ADMITTED", "TASK_WAVE_ADMITTED", "TASK_WAVE_COMPLETED"}
         or (event.event_type.startswith("TASK_GROUP_") and "group" in event.payload)

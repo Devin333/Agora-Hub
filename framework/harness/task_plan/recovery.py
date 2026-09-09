@@ -8,6 +8,7 @@ from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.ref_results import HarnessResultRefAuthority
 from framework.harness.subagents.transcript import SubAgentTranscriptStorePort
+from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     identifier,
@@ -197,6 +198,10 @@ class TaskPlanRecovery:
     @property
     def pending_terminal_results(self) -> tuple[TaskResultRecord, ...]:
         return self.report.pending_terminal_results
+
+    @property
+    def attempt_history(self) -> tuple[TaskAttemptHistoryRecord, ...]:
+        return self.report.attempt_history
 
     def checksum_projection(self) -> dict[str, Any]:
         payload = {

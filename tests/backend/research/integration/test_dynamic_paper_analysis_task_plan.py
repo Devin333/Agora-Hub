@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,10 @@ from framework.harness.graph.model import (
 )
 from framework.harness.graph.validation import HarnessGraphPreflightPolicy
 from framework.harness.task_plan import task_plan_context_identities
+from framework.harness.task_plan.attempt_history import TaskAttemptOutcome
+from framework.harness.task_plan.attempt_history_index import validate_history_record, validate_attempt_history_append
+from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.subagents.transcript import SubAgentTranscriptReceipt
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
@@ -372,10 +377,7 @@ class _DynamicTaskPlanFactory:
                 )
             )
             assert result is not None
-            if (
-                self.crash_after_receipt_once
-                and not self._crashed_after_receipt
-            ):
+            if self.crash_after_receipt_once and not self._crashed_after_receipt:
                 self._crashed_after_receipt = True
                 raise RuntimeError("injected post-receipt crash")
             return result
@@ -763,6 +765,11 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
         for state in projection.tasks
     ) == 2
     assert sum(state.status is TaskLifecycle.PENDING for state in projection.tasks) == 1
+    initial_history = store.result_history_for(request.run_id, plan.stage_id, plan.plan_id, plan.version)
+    wrapper_failures = tuple(item for item in initial_history if item.outcome is TaskAttemptOutcome.FAILED and item.result is None)
+    assert len(wrapper_failures) == 1
+    original_failure = wrapper_failures[0]
+    assert original_failure.terminal_receipt["status"] == "FAILED"
 
     recovery = event_port.recover_graph(request.run_id)
     recovery_state = recovery.state
@@ -785,12 +792,49 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
     original_task[HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY] = activity_context
     resumed = factory.stage_workers[0].run(original_task)
 
-    assert resumed.status.value == "succeeded"
+    assert resumed.status.value == "succeeded", resumed
     assert all(len(worker.calls) == 1 for worker in first_workers.values())
     records = store.results_for(request.run_id, plan.stage_id, plan.plan_id, plan.version)
     assert len(records) == 3
     assert all(record.transcript_ref for record in records)
     assert all(record.subagent_output_ref for record in records)
+    history = store.result_history_for(request.run_id, plan.stage_id, plan.plan_id, plan.version)
+    assert original_failure in history
+    recovered_records = tuple(item for item in history if item.recovered_from is not None)
+    assert len(recovered_records) == 1
+    recovered_record = recovered_records[0]
+    assert recovered_record.outcome is TaskAttemptOutcome.ACCEPTED
+    assert recovered_record.recovered_from == original_failure.record_checksum
+    assert recovered_record.task_instance_id == original_failure.task_instance_id
+    assert recovered_record.terminal_receipt == original_failure.terminal_receipt
+    assert recovered_record.recovery_receipt["transcript_ref"] == recovered_record.result.transcript_ref
+    events = store.read_events(request.run_id, plan.stage_id)
+    recovery_index = next(index for index, event in enumerate(events)
+                          if event.event_type == "TASK_ATTEMPT_RECORDED"
+                          and event.payload["history_record"]["record_checksum"] == recovered_record.record_checksum)
+    with pytest.raises(HarnessValidationError) as source_error:
+        validate_history_record(replace(recovered_record, recovered_from="sha256:" + "0" * 64),
+                                plan, events[:recovery_index])
+    assert source_error.value.code == "task_plan_attempt_recovery_source_missing"
+    receipt = SubAgentTranscriptReceipt.from_dict(dict(recovered_record.recovery_receipt))
+    with pytest.raises(HarnessValidationError) as receipt_error:
+        replace(recovered_record, recovery_receipt=replace(receipt, transcript_ref="transcript://other"))
+    assert receipt_error.value.code == "task_plan_attempt_recovery_evidence_mismatch"
+    with pytest.raises(HarnessValidationError) as quarantine_error:
+        replace(recovered_record, outcome=TaskAttemptOutcome.QUARANTINED, reason_code="late_result")
+    assert quarantine_error.value.code == "task_plan_attempt_recovery_evidence_mismatch"
+    for reason, outcome in (("gate_failed", TaskAttemptOutcome.REJECTED),
+                            ("task_worker_failed", TaskAttemptOutcome.FAILED)):
+        rejected_result = replace(recovered_record.result, status=TaskLifecycle.FAILED, error_code=reason,
+                                  result_ref=None, output_refs=(), output_roles=())
+        rejected_record = replace(recovered_record, result=rejected_result, outcome=outcome, reason_code=reason)
+        recovery_event = events[recovery_index]
+        rejected_event = replace(recovery_event, payload={**dict(recovery_event.payload),
+                                                        "history_record": rejected_record.to_dict(),
+                                                        "idempotency_key": rejected_record.record_checksum,
+                                                        "parallel_event_idempotency_key": rejected_record.record_checksum})
+        validate_attempt_history_append(events[:recovery_index], (rejected_event,))
+        validate_history_record(rejected_record, plan, events[:recovery_index])
     parallel_events = [
         event
         for event in store.read_events(request.run_id, plan.stage_id)
@@ -805,19 +849,30 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
             for event in parallel_events
         }
     ) == 1
-    replay = TaskPlanReplayReducer(
+    reducer = TaskPlanReplayReducer(
         factory.transcript_stores[0],
         result_ref_authority=factory.subagent_runtimes[0].result_ref_authority,
         execution_identity=factory.ref_admission_service.snapshot.execution_identity,
-    ).replay(
-        (plan,),
-        store.read_events(request.run_id, plan.stage_id),
-        results=records,
     )
+    replay = reducer.replay((plan,), events, results=records)
     assert len(replay.parallel_groups) == 1
+    assert replay.attempt_history == history
     assert {
         group["state"] for group in replay.parallel_groups.values()
     } == {"SUCCEEDED"}
+    for index, event in enumerate(events):
+        if event.event_type != "TASK_GROUP_RECOVERY" or not event.payload["recovered_results"]:
+            continue
+        stale_results = [dict(item) for item in event.payload["recovered_results"]]
+        stale_results[0]["task_instance_id"] = "stale-instance"
+        forged = replace(event, payload={**dict(event.payload), "recovered_results": stale_results})
+        with pytest.raises(HarnessValidationError) as replay_error:
+            reducer.replay((plan,), (*events[:index], forged, *events[index + 1:]), results=records)
+        assert replay_error.value.code == "task_plan_replay_parallel_mismatch"
+        break
+    else:
+        raise AssertionError("receipt recovery must record the recovered attempt identity")
+
 
 
 def test_production_shaped_stage_worker_rejects_in_memory_store_by_default() -> None:

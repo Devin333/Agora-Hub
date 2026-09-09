@@ -41,6 +41,7 @@ from framework.harness.task_plan.canonical import (
     identifier,
     optional_text,
     stable_text_tuple,
+    thaw_mapping,
 )
 from framework.harness.task_plan.models import (
     ResolvedTaskSpec,
@@ -49,7 +50,7 @@ from framework.harness.task_plan.models import (
     ValidatedTaskPlan,
 )
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
-from framework.harness.task_plan.store import TaskResultRecord
+from framework.harness.task_plan.store import TaskPlanEvent, TaskResultRecord
 from framework.harness.workers.result import (
     HarnessWorkerEvidence,
     HarnessWorkerResult,
@@ -213,6 +214,8 @@ class TaskPlanResultVerificationRequest:
     instance: TaskInstance
     worker_result: HarnessWorkerResult
     execution_identity: GraphExecutionIdentity | None = None
+    admission_event: TaskPlanEvent | None = None
+    spawn_intent: TaskPlanEvent | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.plan, ValidatedTaskPlan):
@@ -224,6 +227,38 @@ class TaskPlanResultVerificationRequest:
         if not isinstance(self.worker_result, HarnessWorkerResult):
             raise TypeError("worker_result must be HarnessWorkerResult")
         _require_plan_task_instance_identity(self.plan, self.task, self.instance)
+        if self.admission_event is None and self.spawn_intent is not None:
+            raise HarnessValidationError("spawn intent requires its wave admission", code="task_plan_result_admission_mismatch")
+        if self.admission_event is not None:
+            from framework.harness.task_plan.parallel import DispatchGroup, DispatchWave, spawn_operation_key
+            from framework.harness.task_plan.parallel_admission import validate_group_plan_binding
+
+            event = self.admission_event
+            if not isinstance(event, TaskPlanEvent) or event.event_type != "TASK_WAVE_ADMITTED" or not event.matches_contract_identity(self.plan):
+                raise HarnessValidationError("verification requires a canonical wave admission", code="task_plan_result_admission_mismatch")
+            admission = thaw_mapping(event.payload)
+            group = DispatchGroup.from_dict(admission["group"])
+            wave = DispatchWave.from_dict(admission["wave"])
+            validate_group_plan_binding(event.payload["group"], self.plan)
+            reservation = next((item for item in wave.reservations if item.task_id == self.instance.task_id), None)
+            if (wave.group_id != group.group_id or reservation is None
+                or reservation.idempotency_key != self.instance.idempotency_key
+                or dict(reservation.budget) != self.instance.budget_snapshot.to_dict()):
+                raise HarnessValidationError("verification differs from its wave reservation", code="task_plan_result_admission_mismatch")
+            if wave.execution_mode == "SUPERVISED":
+                intent = self.spawn_intent
+                expected = {
+                    "group_id": group.group_id, "wave_id": wave.wave_id,
+                    "task_id": self.instance.task_id, "task_instance_id": self.instance.task_instance_id,
+                    "attempt": self.instance.attempt,
+                    "operation_key": spawn_operation_key(group.group_id, wave.wave_id, self.instance.task_instance_id, self.instance.attempt),
+                }
+                if (not isinstance(intent, TaskPlanEvent) or intent.event_type != "TASK_ATTEMPT_SPAWN_INTENT"
+                    or not intent.matches_contract_identity(self.plan)
+                    or any(intent.payload.get(key) != value for key, value in expected.items())):
+                    raise HarnessValidationError("verification differs from its admitted spawn intent", code="task_plan_result_admission_mismatch")
+            elif self.spawn_intent is not None:
+                raise HarnessValidationError("serial verification cannot fabricate a spawn intent", code="task_plan_result_admission_mismatch")
         if self.execution_identity is not None:
             if not isinstance(self.execution_identity, GraphExecutionIdentity):
                 raise TypeError("execution_identity must be GraphExecutionIdentity")

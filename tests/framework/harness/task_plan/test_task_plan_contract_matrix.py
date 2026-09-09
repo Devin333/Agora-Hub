@@ -639,8 +639,13 @@ def test_scheduler_queue_projection_and_result_identity_are_deterministic():
     assert missing_identity.value.code == "task_plan_queue_transport_mismatch"
 
     projection = scheduler.reserve_ready_tasks(store.load_projection(plan.run_id, plan.stage_id), decision)
-    projection = scheduler.mark_dispatched(projection, instance)
-    store.update_projection(projection)
+    for event_type, transition in (("TASK_READY", lambda value: value), ("TASK_DISPATCHED", lambda value: scheduler.mark_dispatched(value, instance))):
+        projection = replace(transition(projection), last_sequence=len(store.read_events(plan.run_id, plan.stage_id)) + 1)
+        store.commit_event(TaskPlanEvent.for_plan(
+            event_type, plan, sequence=projection.last_sequence,
+            task_id=instance.task_id, task_instance_id=instance.task_instance_id,
+            attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
+        ), projection)
     accepted = TaskResultRecord(
         run_id=plan.run_id,
         stage_id=plan.stage_id,

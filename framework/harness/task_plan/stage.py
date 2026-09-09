@@ -6,7 +6,9 @@ from typing import Any, Callable
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.scheduler import HarnessScheduler
+from framework.harness.subagents.transcript import SubAgentTranscriptReceipt
 from framework.harness.task_plan.aggregator import TaskPlanAggregator
+from framework.harness.task_plan.attempt_history_index import recovery_results_from_history
 from framework.harness.task_plan.binding import TaskPlanCapabilityRegistry
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.capacity import CapacityPool, capacity_now_ms
@@ -66,6 +68,7 @@ from framework.harness.task_plan.planning_observation import (
     PlanningObservationRequest,
 )
 from framework.harness.task_plan.verification import (
+    SUBAGENT_ATTEMPT_EVIDENCE_TYPE,
     TaskPlanResultVerificationRequest,
     TaskPlanResultVerifier,
 )
@@ -744,33 +747,34 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     event_sink=event_sink,
                 )
                 continue
-            durable_results = self.store.results_for(
-                request.run_id,
-                request.stage_id,
-                plan.plan_id,
-                plan.version,
-            )
             durable_result_history = self.store.result_history_for(
                 request.run_id,
                 request.stage_id,
                 plan.plan_id,
                 plan.version,
             )
+            durable_results = recovery_results_from_history(durable_result_history, projection)
+            durable_events = self.store.read_events(request.run_id, request.stage_id)
             # Recovery must run even when the parent store has no result yet:
             # a child may have durably reached SUCCEEDED before a process crash
             # interrupted the parent result append. The coordinator can then
             # recover its checksum-bound terminal envelope and hand the typed
             # result back to this stage for the normal store transition.
             durable_result_history_checksums = {
-                (item.task_id, item.result_checksum)
-                for item in durable_result_history
+                (item.task_id, item.payload.get("result_checksum"))
+                for item in durable_events
+                if item.event_type in {"TASK_RESULT_ACCEPTED", "TASK_RESULT_REJECTED"}
             }
             recovered_dispatch = self.parallel_coordinator.recover(
                 admission,
                 durable_results,
+                attempt_history=durable_result_history,
+                recover_result=(lambda instance: self._recover_parallel_subagent_result(request, plan, instance))
+                if self.worker_result_recovery is not None else None,
                 historical_wave_ordinals=self._historical_parallel_wave_ordinals(
                     request,
                     group_id=group.group_id,
+                    events=durable_events,
                 ),
                 limits=limits,
                 event_sink=event_sink,
@@ -913,6 +917,22 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 self.store.append_result(result)
             for result in dispatched.results:
                 self._handle_parallel_result(request, plan, result)
+            recovered_sources = {
+                item.recovered_from for item in dispatched.attempt_history
+                if item.recovered_from is not None and item.result is not None
+                and item.outcome.value in {"ACCEPTED", "REJECTED", "FAILED"}
+            }
+            unresolved_terminals = [item for item in dispatched.attempt_history
+                                    if item.result is None and item.outcome.value in {"RECLAIMED", "CANCELLED", "FAILED"}
+                                    and item.record_checksum not in recovered_sources]
+            if unresolved_terminals:
+                record = unresolved_terminals[0]
+                raise HarnessValidationError(
+                    "child terminated without a candidate result; recorded lifecycle recovery is required",
+                    code=record.reason_code or "task_plan_attempt_terminated",
+                    details={"task_id": record.task_id, "task_instance_id": record.task_instance_id,
+                             "outcome": record.outcome.value, "history_record_checksum": record.record_checksum},
+                )
         raise HarnessValidationError(
             "parallel TaskPlan execution exceeded bounded rounds",
             code="task_plan_execution_bound_exceeded",
@@ -1140,11 +1160,12 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         request: TaskPlanStageRequest,
         *,
         group_id: str,
+        events: tuple[TaskPlanEvent, ...] | None = None,
     ) -> tuple[int, ...]:
         """Read admitted wave ordinals without reconstructing live workers."""
 
         ordinals: list[int] = []
-        for event in self.store.read_events(request.run_id, request.stage_id):
+        for event in events if events is not None else self.store.read_events(request.run_id, request.stage_id):
             if event.event_type != "TASK_WAVE_ADMITTED":
                 continue
             wave = event.payload.get("wave")
@@ -1251,7 +1272,8 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 continue
             batch.append(
                 TaskPlanEvent.for_plan(
-                    event_type, plan,
+                    event_type,
+                    self.store.plan(request.run_id, request.stage_id) if event_type == "TASK_ATTEMPT_RECORDED" else plan,
                     input_checksum=event_checksum,
                     reason_code=event.get("reason_code") if isinstance(event.get("reason_code"), str) else None,
                     payload={**event, "parallel_event_idempotency_key": durable_key},
@@ -1483,6 +1505,10 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
     ) -> bool:
         if self.worker_result_recovery is None:
             return False
+        if self._parallel_runtime_requested(request.policy, plan):
+            # Parallel recovery must reconcile the admitted supervisor receipt
+            # before a child result can cross the parent acceptance boundary.
+            return False
         recovered_any = False
         definitions = {item.task_id: item for item in plan.tasks}
         for state in projection.tasks:
@@ -1542,6 +1568,30 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             recovered_any = True
         return recovered_any
 
+    def _recover_parallel_subagent_result(
+        self,
+        request: TaskPlanStageRequest,
+        plan: ValidatedTaskPlan,
+        instance: TaskInstance,
+    ) -> tuple[TaskResultRecord, SubAgentTranscriptReceipt] | None:
+        definition = next(item for item in plan.tasks if item.task_id == instance.task_id)
+        if definition.subagent_id is None or self.worker_result_recovery is None:
+            return None
+        binding = self.capability_registry.resolve(definition.task.worker_capability, request.policy)
+        candidate = (self.worker_result_recovery(binding, instance)
+                     if request.execution_identity is None else self.worker_result_recovery(binding, instance, request.execution_identity))
+        if candidate is None:
+            return None
+        if not isinstance(candidate, HarnessWorkerResult):
+            raise HarnessValidationError("subagent recovery returned invalid evidence", code="task_plan_result_invalid")
+        verified = self.result_verifier.verify(candidate, task=definition, request=TaskPlanResultVerificationRequest(
+            plan=plan, task=definition, instance=instance, worker_result=candidate,
+            execution_identity=request.execution_identity, **self._verification_admission(plan, instance)))
+        entries = tuple(item for item in candidate.evidence if item.evidence_type == SUBAGENT_ATTEMPT_EVIDENCE_TYPE)
+        if len(entries) != 1:
+            raise HarnessValidationError("subagent recovery requires one committed receipt", code="task_plan_subagent_evidence_required")
+        return verified, SubAgentTranscriptReceipt.from_dict(entries[0].payload)
+
     def _commit_task_transition(
         self,
         request: TaskPlanStageRequest,
@@ -1591,9 +1641,28 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 instance=task_request,
                 worker_result=worker_result,
                 execution_identity=execution_identity,
+                **self._verification_admission(plan, task_request),
             ),
         )
         return verified
+
+    def _verification_admission(self, plan: ValidatedTaskPlan, instance: TaskInstance) -> dict[str, Any]:
+        history = self.store.read_events(plan.run_id, plan.stage_id)
+        admissions = [event for event in history if event.event_type == "TASK_WAVE_ADMITTED"
+                      and event.plan_id == plan.plan_id and any(
+                          reservation.get("idempotency_key") == instance.idempotency_key
+                          for reservation in event.payload["wave"]["reservations"])]
+        if not admissions:
+            if any(event.event_type == "TASK_GROUP_ADMITTED" and event.plan_id == plan.plan_id for event in history):
+                raise HarnessValidationError("parallel result has no admitted wave", code="task_plan_result_admission_mismatch")
+            return {}
+        if len(admissions) != 1:
+            raise HarnessValidationError("result has conflicting wave admissions", code="task_plan_result_admission_mismatch")
+        intents = [event for event in history if event.event_type == "TASK_ATTEMPT_SPAWN_INTENT"
+                   and event.payload.get("task_instance_id") == instance.task_instance_id]
+        if len(intents) > 1:
+            raise HarnessValidationError("result has conflicting spawn intents", code="task_plan_result_admission_mismatch")
+        return {"admission_event": admissions[0], "spawn_intent": intents[0] if intents else None}
 
     def _call_binding(
         self,

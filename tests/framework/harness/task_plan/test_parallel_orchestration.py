@@ -950,6 +950,16 @@ def test_fail_fast_isolates_late_child_and_releases_unstarted_wave() -> None:
         assert joined.group.state is DispatchGroupState.INDETERMINATE
         assert "task-3" not in invoked
         assert joined.results == ()
+        attempt_history = joined.attempt_history
+        assert {item.task_id: item.outcome.value for item in attempt_history} == {
+            "task-1": "REJECTED", "task-2": "INDETERMINATE",
+        }
+        assert all(item.group["group_id"] == group.group_id for item in attempt_history)
+        assert all(item.terminal_receipt is not None for item in attempt_history)
+        assert len({item.task_instance_id for item in attempt_history}) == 2
+        assert [item.to_dict() for item in attempt_history] == [
+            event["history_record"] for event in events if event["event_type"] == "TASK_ATTEMPT_RECORDED"
+        ]
         assert "TASK_GROUP_CANCEL_REQUESTED" in [event["event_type"] for event in events]
         assert "TASK_GROUP_INDETERMINATE" in [event["event_type"] for event in events]
         assert all(
@@ -1036,6 +1046,118 @@ def test_recovery_reuses_terminal_worker_result_after_parent_append_crash() -> N
         supervisor.shutdown()
 
 
+def test_reconcile_closed_child_reuses_original_receipt_without_worker_reinvocation() -> None:
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    request = _request(plan)
+    durable_events: list[dict[str, object]] = []
+    supervisor = ChildAgentSupervisor(max_children=2)
+    worker_calls = 0
+    fail_once = True
+    release_sibling = Event()
+
+    def invoke(instance):
+        nonlocal worker_calls
+        worker_calls += 1
+        if instance.task_id == "task-2":
+            assert release_sibling.wait(timeout=2)
+        return _result(plan, instance)
+
+    def fail_after_dispatch(event):
+        nonlocal fail_once
+        durable_events.append(dict(event))
+        if event["event_type"] == "TASK_WAVE_DISPATCHED" and fail_once:
+            fail_once = False
+            raise RuntimeError("simulated parent crash after dispatch")
+
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        child_supervisor=supervisor,
+        event_sink=ParallelEventSink(
+            fail_after_dispatch,
+            lambda batch: durable_events.extend(dict(item) for item in batch),
+        ),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="parent crash after dispatch"):
+            coordinator.dispatch(request, invoke)
+
+        intents = tuple(
+            item for item in durable_events
+            if item["event_type"] == "TASK_ATTEMPT_SPAWN_INTENT"
+        )
+        assert len(intents) == 2
+        intent = next(item for item in intents if item["task_id"] == "task-1")
+        session = coordinator._sessions[intent["group_id"]]
+        admitted_wave = session.waves[0]
+        handle = supervisor.status(
+            f"parallel-{intent['task_instance_id']}",
+            operation_id=intent["operation_key"],
+        )
+        terminal = supervisor.wait(
+            handle.child_id,
+            operation_id=handle.operation_id,
+            timeout_seconds=1,
+        )
+        assert terminal.receipt is not None
+        assert terminal.receipt.status.value == "SUCCEEDED"
+        supervisor.close(handle.child_id, operation_id=handle.operation_id)
+        assert supervisor.status(
+            handle.child_id,
+            operation_id=handle.operation_id,
+        ).state.value == "CLOSED"
+        assert worker_calls >= 1
+        release_sibling.set()
+        sibling_intent = next(item for item in intents if item["task_id"] == "task-2")
+        sibling_handle = supervisor.status(
+            f"parallel-{sibling_intent['task_instance_id']}",
+            operation_id=sibling_intent["operation_key"],
+        )
+        sibling_terminal = supervisor.wait(
+            sibling_handle.child_id,
+            operation_id=sibling_handle.operation_id,
+            timeout_seconds=1,
+        )
+        assert sibling_terminal.receipt is not None
+        assert worker_calls == 2
+
+        recovery_events: list[dict[str, object]] = []
+        restarted = ParallelAgentCoordinator(
+            max_workers=2,
+            child_supervisor=supervisor,
+        )
+        reconciled = restarted.reconcile_spawn_intents(
+            _admitted_request(request),
+            intents,
+            invoke,
+            admitted_waves=(admitted_wave,),
+            admitted_group=session.group,
+            event_sink=recovery_events.append,
+        )
+        recovered = restarted.recover(
+            request,
+            (),
+            event_sink=recovery_events.append,
+        )
+
+        assert reconciled.group.state is DispatchGroupState.RUNNING
+        assert [item.task_id for item in recovered.results] == ["task-1", "task-2"]
+        recovered_by_task = {item.task_id: item for item in recovered.results}
+        assert recovered_by_task["task-1"].result_checksum == terminal.result["task_result_checksum"]
+        assert recovered_by_task["task-2"].result_checksum == sibling_terminal.result["task_result_checksum"]
+        assert {
+            item.task_id: item.terminal_receipt
+            for item in recovered.attempt_history
+        } == {
+            "task-1": terminal.receipt.to_dict(),
+            "task-2": sibling_terminal.receipt.to_dict(),
+        }
+        assert worker_calls == 2
+    finally:
+        release_sibling.set()
+        supervisor.shutdown()
+
+
 def test_fresh_coordinator_recovers_embedded_terminal_task_result() -> None:
     plan = _accepted_parallel_plan(("task-1",))
     request = _request(plan)
@@ -1070,15 +1192,25 @@ def test_fresh_coordinator_recovers_embedded_terminal_task_result() -> None:
             max_workers=1,
             child_supervisor=restored_supervisor,
         )
-        restored_coordinator.create_group(
+        restored_coordinator.restore_group(
             request,
-            event_sink=lambda _event: None,
-            check_capacity=False,
+            session.group,
+            tuple(session.waves),
         )
         restored_session = next(iter(restored_coordinator._sessions.values()))
         restored_session.active_children["task-1"] = (restored_handles[0], None)
 
-        recovered = restored_coordinator.recover(request, (), event_sink=lambda _event: None)
+        valid_result = _result(plan, request.task_instances[0])
+        for stale in (
+            replace(valid_result, task_instance_id="stale-instance"),
+            replace(valid_result, attempt=valid_result.attempt + 1),
+            replace(valid_result, plan_version=plan.version + 1),
+        ):
+            with pytest.raises(HarnessValidationError) as rejected:
+                restored_coordinator.recover(request, (stale,))
+            assert rejected.value.code == "TASK_GROUP_RECOVERY_IDENTITY_MISMATCH"
+        recovered_events = []
+        recovered = restored_coordinator.recover(request, (), event_sink=recovered_events.append)
 
         assert recovered.group.state is DispatchGroupState.RUNNING
         assert [item.task_id for item in recovered.results] == ["task-1"]
@@ -1086,6 +1218,14 @@ def test_fresh_coordinator_recovers_embedded_terminal_task_result() -> None:
             plan, request.task_instances[0]
         ).result_checksum
         assert restored_session.active_children == {}
+        recovery_event = next(event for event in recovered_events if event["event_type"] == "TASK_GROUP_RECOVERY")
+        assert recovery_event["recovered_results"] == [{
+            "task_id": valid_result.task_id,
+            "task_instance_id": valid_result.task_instance_id,
+            "attempt": valid_result.attempt,
+            "status": valid_result.status.value,
+            "result_checksum": valid_result.result_checksum,
+        }]
     finally:
         supervisor.shutdown()
         if "restored_supervisor" in locals():

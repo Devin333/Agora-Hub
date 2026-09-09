@@ -9,6 +9,7 @@ from threading import RLock
 from typing import Any, Protocol, runtime_checkable
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     checksum,
@@ -106,6 +107,8 @@ class TaskPlanCheckpoint:
     parallel_reservations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     parallel_diagnostics: tuple[Mapping[str, Any], ...] = ()
     parallel_event_sequence: int = 0
+    attempt_history: tuple[TaskAttemptHistoryRecord | Mapping[str, Any], ...] = ()
+    parallel_spawn_operations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     schema_version: str = TASK_PLAN_CHECKPOINT_SCHEMA
     reducer_version: str = TASK_PLAN_REPLAY_REDUCER_VERSION
     checkpoint_checksum: str = field(init=False)
@@ -325,16 +328,43 @@ class TaskPlanCheckpoint:
             self.parallel_event_sequence,
             "parallel_event_sequence",
         )
+        attempt_history = tuple(
+            TaskAttemptHistoryRecord.from_dict(item)
+            if isinstance(item, Mapping)
+            else item
+            for item in self.attempt_history
+        )
+        if any(not isinstance(item, TaskAttemptHistoryRecord) for item in attempt_history):
+            raise TypeError(
+                "attempt_history must contain TaskAttemptHistoryRecord values"
+            )
+        if len({item.record_checksum for item in attempt_history}) != len(attempt_history):
+            raise HarnessValidationError(
+                "TaskPlan checkpoint contains duplicate attempt history facts",
+                code="task_plan_checkpoint_attempt_history_conflict",
+            )
+        for record in attempt_history:
+            if not _attempt_history_matches_checkpoint(record, self):
+                raise HarnessValidationError(
+                    "TaskPlan checkpoint attempt history has mismatched Graph identity",
+                    code="task_plan_checkpoint_attempt_history_identity_mismatch",
+                    details={"task_instance_id": record.task_instance_id},
+                )
+        parallel_spawn_operations = _freeze_parallel_projection_mapping(
+            self.parallel_spawn_operations,
+            "parallel_spawn_operations",
+        )
         has_parallel_facts = bool(
             parallel_groups
             or parallel_waves
             or parallel_reservations
             or parallel_diagnostics
+            or parallel_spawn_operations
         )
         if self.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V2:
-            if has_parallel_facts or parallel_event_sequence:
+            if has_parallel_facts or parallel_event_sequence or attempt_history:
                 raise HarnessValidationError(
-                    "parallel checkpoint facts require schema v3",
+                    "attempt and parallel checkpoint facts require schema v3",
                     code="task_plan_checkpoint_parallel_schema_required",
                 )
         else:
@@ -358,6 +388,12 @@ class TaskPlanCheckpoint:
         object.__setattr__(self, "parallel_reservations", parallel_reservations)
         object.__setattr__(self, "parallel_diagnostics", parallel_diagnostics)
         object.__setattr__(self, "parallel_event_sequence", parallel_event_sequence)
+        object.__setattr__(self, "attempt_history", attempt_history)
+        object.__setattr__(
+            self,
+            "parallel_spawn_operations",
+            parallel_spawn_operations,
+        )
         expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
         if self.reducer_version != expected_reducer_version:
             raise HarnessValidationError(
@@ -436,6 +472,8 @@ class TaskPlanCheckpoint:
             parallel_reservations=report.parallel_reservations,
             parallel_diagnostics=report.parallel_diagnostics,
             parallel_event_sequence=report.parallel_event_sequence,
+            attempt_history=report.attempt_history,
+            parallel_spawn_operations=report.parallel_spawn_operations,
             schema_version=TASK_PLAN_CHECKPOINT_SCHEMA_V3,
             reducer_version=report.reducer_version,
             **graph_identity,
@@ -474,6 +512,14 @@ class TaskPlanCheckpoint:
             "parallel_event_sequence": (
                 self.parallel_event_sequence,
                 report.parallel_event_sequence,
+            ),
+            "attempt_history": (
+                tuple(item.to_dict() for item in self.attempt_history),
+                tuple(item.to_dict() for item in report.attempt_history),
+            ),
+            "parallel_spawn_operations": (
+                thaw_mapping(self.parallel_spawn_operations),
+                thaw_mapping(report.parallel_spawn_operations),
             ),
         }
         mismatches = sorted(name for name, values in checks.items() if values[0] != values[1])
@@ -531,6 +577,12 @@ class TaskPlanCheckpoint:
                         thaw_mapping(item) for item in self.parallel_diagnostics
                     ],
                     "parallel_event_sequence": self.parallel_event_sequence,
+                    "attempt_history": [
+                        item.to_dict() for item in self.attempt_history
+                    ],
+                    "parallel_spawn_operations": thaw_mapping(
+                        self.parallel_spawn_operations
+                    ),
                 }
             )
         return payload
@@ -578,6 +630,8 @@ class TaskPlanCheckpoint:
                 "parallel_reservations",
                 "parallel_diagnostics",
                 "parallel_event_sequence",
+                "attempt_history",
+                "parallel_spawn_operations",
             }
         )
         identity = frozenset(_GRAPH_CHECKPOINT_IDENTITY_FIELDS)
@@ -756,6 +810,30 @@ def _result_matches_checkpoint_projection(
         return False
     return all(
         getattr(result, field_name) == getattr(projection, field_name)
+        for field_name in (*_GRAPH_CHECKPOINT_IDENTITY_FIELDS, "graph_checksum")
+    )
+
+
+def _attempt_history_matches_checkpoint(
+    record: TaskAttemptHistoryRecord,
+    checkpoint: TaskPlanCheckpoint,
+) -> bool:
+    instance = record.instance
+    if (
+        instance.run_id != checkpoint.run_id
+        or instance.stage_id != checkpoint.stage_id
+        or instance.plan_version > checkpoint.plan_version
+        or (
+            instance.plan_version == checkpoint.plan_version
+            and (
+                instance.plan_id != checkpoint.plan_id
+                or instance.plan_checksum != checkpoint.plan_checksum
+            )
+        )
+    ):
+        return False
+    return all(
+        getattr(instance, field_name) == getattr(checkpoint, field_name)
         for field_name in (*_GRAPH_CHECKPOINT_IDENTITY_FIELDS, "graph_checksum")
     )
 

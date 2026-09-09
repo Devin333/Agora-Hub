@@ -5,6 +5,10 @@ from dataclasses import replace
 import pytest
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.task_plan.attempt_history import (
+    TaskAttemptHistoryRecord,
+    TaskAttemptOutcome,
+)
 from framework.harness.task_plan import (
     InMemoryTaskPlanStore,
     PlanBuildBudget,
@@ -38,6 +42,7 @@ from framework.harness.task_plan.checkpoint import (
     JsonlTaskPlanCheckpointStore,
 )
 from framework.harness.task_plan.models import PlanPatch, PlanPatchOperation, PlanPatchOperationType
+from framework.harness.task_plan.recovery import TaskPlanRecovery
 from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
 from framework.harness.graph.activity import HarnessWorkerType
@@ -206,6 +211,36 @@ def _result(plan, instance):
     )
 
 
+def _attempt_history_record(
+    plan,
+    instance,
+    outcome: TaskAttemptOutcome,
+) -> TaskAttemptHistoryRecord:
+    result = None
+    if outcome in {TaskAttemptOutcome.ACCEPTED, TaskAttemptOutcome.QUARANTINED}:
+        result = _result(plan, instance)
+    elif outcome is TaskAttemptOutcome.REJECTED:
+        result = replace(
+            _result(plan, instance),
+            status=TaskLifecycle.FAILED,
+            result_ref=None,
+            output_refs=(),
+            output_roles=(),
+            error_code="verification_rejected",
+        )
+    return TaskAttemptHistoryRecord(
+        instance=instance,
+        binding_checksum=plan.tasks[0].binding_checksum,
+        outcome=outcome,
+        result=result,
+        reason_code=(
+            None
+            if outcome is TaskAttemptOutcome.ACCEPTED
+            else outcome.value.lower()
+        ),
+    )
+
+
 def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline():
     plan, base_events, worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
@@ -241,6 +276,7 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
         "active_task_instances",
         "aggregate_checksum",
         "aggregate_ref",
+        "attempt_history",
         "budget_snapshot",
             "checkpoint_checksum",
             "checkpoint_id",
@@ -259,6 +295,7 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
         "parallel_event_sequence",
         "parallel_groups",
         "parallel_reservations",
+        "parallel_spawn_operations",
         "parallel_waves",
         "plan_checksum",
         "plan_id",
@@ -315,6 +352,8 @@ def test_checkpoint_v2_payload_remains_readable_without_parallel_projection() ->
         "parallel_reservations",
         "parallel_diagnostics",
         "parallel_event_sequence",
+        "attempt_history",
+        "parallel_spawn_operations",
         "checkpoint_checksum",
     ):
         legacy_payload.pop(field_name)
@@ -386,6 +425,18 @@ def test_checkpoint_copies_and_validates_parallel_replay_projection() -> None:
             },
         ),
         parallel_event_sequence=3,
+        parallel_spawn_operations={
+            "spawn-operation": {
+                "group_id": "dispatch-group",
+                "wave_id": "dispatch-wave",
+                "task_id": instance.task_id,
+                "task_instance_id": instance.task_instance_id,
+                "attempt": instance.attempt,
+                "operation_key": "spawn-operation",
+                "status": "SPAWN_CONFIRMED",
+                "budget_reservation": instance.budget_snapshot.to_dict(),
+            }
+        },
     )
 
     checkpoint = TaskPlanCheckpoint.from_replay(
@@ -401,12 +452,98 @@ def test_checkpoint_copies_and_validates_parallel_replay_projection() -> None:
     assert restored.parallel_reservations == parallel_report.parallel_reservations
     assert restored.parallel_diagnostics == parallel_report.parallel_diagnostics
     assert restored.parallel_event_sequence == 3
+    assert (
+        restored.parallel_spawn_operations
+        == parallel_report.parallel_spawn_operations
+    )
     restored.verify_replay(parallel_report)
 
     tampered = replace(parallel_report, parallel_event_sequence=2)
     with pytest.raises(HarnessValidationError) as exc_info:
         restored.verify_replay(tampered)
     assert exc_info.value.code == "task_plan_checkpoint_replay_mismatch"
+
+    changed_spawn = replace(
+        parallel_report,
+        parallel_spawn_operations={
+            "spawn-operation": {
+                **parallel_report.parallel_spawn_operations["spawn-operation"],
+                "status": "SPAWN_UNKNOWN",
+            }
+        },
+    )
+    with pytest.raises(HarnessValidationError) as spawn_error:
+        restored.verify_replay(changed_spawn)
+    assert spawn_error.value.code == "task_plan_checkpoint_replay_mismatch"
+    assert "parallel_spawn_operations" in spawn_error.value.details["mismatches"]
+
+
+@pytest.mark.parametrize("outcome", tuple(TaskAttemptOutcome))
+def test_checkpoint_roundtrips_every_attempt_history_outcome(outcome) -> None:
+    plan, base_events, _worker = _history_fixture()
+    instance = task_instance_for_attempt(plan, "recover-task", 1)
+    report = TaskPlanReplayReducer().replay(
+        (plan,),
+        (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance)),
+    )
+    record = _attempt_history_record(plan, instance, outcome)
+    history_report = replace(report, attempt_history=(record,))
+
+    checkpoint = TaskPlanCheckpoint.from_replay(
+        f"checkpoint-{outcome.value.lower()}",
+        plan,
+        history_report,
+        created_at="2026-08-01T00:00:01Z",
+    )
+    restored = TaskPlanCheckpoint.from_dict(checkpoint.to_dict())
+
+    assert restored.attempt_history == (record,)
+    assert restored.to_dict()["attempt_history"] == [record.to_dict()]
+    restored.verify_replay(history_report)
+    recovery = TaskPlanRecovery(
+        report=history_report,
+        checkpoint_verified=False,
+        recovered_from_sequence=history_report.projection.last_sequence,
+    )
+    assert recovery.attempt_history is history_report.attempt_history
+
+
+def test_checkpoint_detects_attempt_history_changes() -> None:
+    plan, base_events, _worker = _history_fixture()
+    instance = task_instance_for_attempt(plan, "recover-task", 1)
+    report = TaskPlanReplayReducer().replay(
+        (plan,),
+        (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance)),
+    )
+    indeterminate = _attempt_history_record(
+        plan,
+        instance,
+        TaskAttemptOutcome.INDETERMINATE,
+    )
+    checkpoint_report = replace(report, attempt_history=(indeterminate,))
+    checkpoint = TaskPlanCheckpoint.from_replay(
+        "checkpoint-attempt-history",
+        plan,
+        checkpoint_report,
+        created_at="2026-08-01T00:00:01Z",
+    )
+    quarantined = _attempt_history_record(
+        plan,
+        instance,
+        TaskAttemptOutcome.QUARANTINED,
+    )
+
+    changed_payload = checkpoint.to_dict()
+    changed_payload["attempt_history"] = [quarantined.to_dict()]
+    with pytest.raises(HarnessValidationError) as checksum_error:
+        TaskPlanCheckpoint.from_dict(changed_payload)
+    assert checksum_error.value.code == "task_plan_checkpoint_checksum_mismatch"
+
+    changed_report = replace(report, attempt_history=(quarantined,))
+    with pytest.raises(HarnessValidationError) as replay_error:
+        checkpoint.verify_replay(changed_report)
+    assert replay_error.value.code == "task_plan_checkpoint_replay_mismatch"
+    assert "attempt_history" in replay_error.value.details["mismatches"]
 
 
 def test_legacy_replay_rejects_plan_history_with_changed_graph_checksum():

@@ -60,7 +60,7 @@ TASK_PLAN_EVENT_SCHEMA_V2 = "newsroom.harness-task-plan-event/v2"
 TASK_PLAN_EVENT_SCHEMA = TASK_PLAN_EVENT_SCHEMA_V2
 TASK_PLAN_PARALLEL_EVENT_TYPES = (
     "TASK_GROUP_ADMITTED", "TASK_WAVE_ADMITTED", "TASK_ATTEMPT_SPAWN_INTENT",
-    "TASK_ATTEMPT_SPAWN_CONFIRMED", "TASK_ATTEMPT_SPAWN_UNKNOWN",
+    "TASK_ATTEMPT_SPAWN_CONFIRMED", "TASK_ATTEMPT_SPAWN_UNKNOWN", "TASK_ATTEMPT_RECORDED",
     "TASK_WAVE_DISPATCHED",
     "TASK_WAVE_COMPLETED", "TASK_GROUP_JOIN_WAITING", "TASK_GROUP_JOINED",
     "TASK_GROUP_FAILED", "TASK_GROUP_REPLAN_PENDING", "TASK_GROUP_CANCEL_REQUESTED",
@@ -1359,6 +1359,17 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "recovery_outcome": _TEXT,
         "recovery_id": _TEXT,
         "operation_key": _TEXT,
+        "history_record": object_schema({
+            "schema_version": {"const": "newsroom.harness-task-attempt-history/v1"},
+            "instance": {"type": "object"}, "binding_checksum": _CHECKSUM_TEXT,
+            "outcome": {"enum": ["ACCEPTED", "REJECTED", "FAILED", "CANCELLED", "INDETERMINATE", "RECLAIMED", "QUARANTINED"]},
+            "result": {"type": ["object", "null"]},
+            "group": {"anyOf": [group, {"type": "null"}]},
+            "wave": {"anyOf": [wave, {"type": "null"}]},
+            "operation_key": nullable_text, "child_id": nullable_text,
+            "terminal_receipt": {"type": ["object", "null"]},
+            "reason_code": nullable_text, "record_checksum": _CHECKSUM_TEXT,
+        }),
         "budget_before_checksum": _CHECKSUM_TEXT,
         "budget_after_checksum": _CHECKSUM_TEXT,
         "budget_reservation": {
@@ -1414,6 +1425,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "TASK_ATTEMPT_SPAWN_INTENT": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "idempotency_key", "budget_reservation"],
         "TASK_ATTEMPT_SPAWN_CONFIRMED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "spawn_status", "child_id", "idempotency_key"],
         "TASK_ATTEMPT_SPAWN_UNKNOWN": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "spawn_status", "idempotency_key"],
+        "TASK_ATTEMPT_RECORDED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "history_record", "idempotency_key"],
         "TASK_WAVE_DISPATCHED": ["group_id", "wave_id", "task_ids", "idempotency_key"],
         "TASK_WAVE_COMPLETED": ["group_id", "wave_id", "task_ids", "terminal_outcome"],
         "TASK_GROUP_JOIN_WAITING": ["group", "observation", "idempotency_key"],

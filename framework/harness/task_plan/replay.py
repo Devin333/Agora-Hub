@@ -23,6 +23,11 @@ from framework.harness.task_plan.canonical import (
     thaw_mapping,
 )
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord, TaskAttemptOutcome
+from framework.harness.task_plan.attempt_history_index import (
+    ATTEMPT_HISTORY_EVENT, history_record_for_result, validate_history_record,
+    validate_attempt_history_append,
+)
 from framework.harness.task_plan.models import (
     TaskInstance,
     TaskLifecycle,
@@ -135,6 +140,8 @@ class TaskPlanReplayReport:
     parallel_reservations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     parallel_diagnostics: tuple[Mapping[str, Any], ...] = ()
     parallel_event_sequence: int = 0
+    attempt_history: tuple[TaskAttemptHistoryRecord, ...] = ()
+    parallel_spawn_operations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     replay_checksum: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -291,6 +298,19 @@ class TaskPlanReplayReport:
                 code="task_plan_replay_parallel_sequence_mismatch",
             )
         object.__setattr__(self, "parallel_event_sequence", parallel_event_sequence)
+        history = tuple(self.attempt_history)
+        if any(not isinstance(item, TaskAttemptHistoryRecord) for item in history):
+            raise TypeError("attempt_history must contain TaskAttemptHistoryRecord values")
+        if len({item.record_checksum for item in history}) != len(history):
+            raise HarnessValidationError("duplicate attempt history fact", code="task_plan_attempt_history_conflict")
+        for item in history:
+            TaskAttemptHistoryRecord.from_dict(item.to_dict())
+            if item.run_id != self.projection.run_id or item.stage_id != self.projection.stage_id or item.plan_version > self.projection.plan_version:
+                raise HarnessValidationError("attempt history exceeds replay scope", code="task_plan_attempt_history_identity_mismatch")
+        object.__setattr__(self, "attempt_history", history)
+        object.__setattr__(self, "parallel_spawn_operations", _freeze_parallel_projection_mapping(
+            self.parallel_spawn_operations, "parallel_spawn_operations",
+        ))
         object.__setattr__(self, "replay_checksum", canonical_payload_checksum(self.checksum_projection()))
 
     def checksum_projection(self) -> dict[str, Any]:
@@ -310,6 +330,10 @@ class TaskPlanReplayReport:
             "aggregate_checksum": self.aggregate_checksum,
             "verified": self.verified,
         }
+        if self.attempt_history:
+            projection["attempt_history"] = [item.to_dict() for item in self.attempt_history]
+        if self.parallel_spawn_operations:
+            projection["parallel_spawn_operations"] = thaw_mapping(self.parallel_spawn_operations)
         # Preserve the established v2 checksum for histories that predate
         # parallel orchestration. Parallel facts become checksum-relevant only
         # once a durable parallel event has actually been reduced.
@@ -393,7 +417,7 @@ class TaskPlanReplayReducer:
         plan: ValidatedTaskPlan | Iterable[ValidatedTaskPlan],
         events: Iterable[TaskPlanEvent],
         *,
-        results: Iterable[TaskResultRecord] = (),
+        results: Iterable[TaskResultRecord | TaskAttemptHistoryRecord] = (),
         patches: Iterable[PlanPatch] = (),
         require_terminal_events: bool = False,
     ) -> TaskPlanProjection:
@@ -412,7 +436,7 @@ class TaskPlanReplayReducer:
         plans: Iterable[ValidatedTaskPlan],
         events: Iterable[TaskPlanEvent],
         *,
-        results: Iterable[TaskResultRecord] = (),
+        results: Iterable[TaskResultRecord | TaskAttemptHistoryRecord] = (),
         patches: Iterable[PlanPatch] = (),
         through_sequence: int | None = None,
         require_terminal_events: bool = True,
@@ -427,7 +451,8 @@ class TaskPlanReplayReducer:
             through_sequence=through_sequence,
         )
         _validate_atomic_wave_intents(ordered_events)
-        results_by_attempt = _validated_results(results, plan_history)
+        supplied_results = tuple(results)
+        results_by_attempt = _validated_results(supplied_results, plan_history)
         patches_by_checksum = _validated_patches(patches, plan_history)
         validate_submission_event_append((), ordered_events)
         submissions = submissions_from_events(ordered_events)
@@ -453,6 +478,7 @@ class TaskPlanReplayReducer:
         parallel_diagnostics: list[dict[str, Any]] = []
         parallel_spawn_operations: dict[str, dict[str, Any]] = {}
         parallel_event_sequence = 0
+        attempt_history: dict[str, TaskAttemptHistoryRecord] = {}
         ready_batch_budget_checksum: str | None = None
         ready_batch_tasks: list[str] = []
 
@@ -599,6 +625,27 @@ class TaskPlanReplayReducer:
                 else:
                     _require_recorded_instance(instances, instance, event)
                     projection = TaskPlanScheduler.mark_started(projection, instance)
+            elif event.event_type == ATTEMPT_HISTORY_EVENT:
+                record = TaskAttemptHistoryRecord.from_dict(event.payload["history_record"])
+                record_plan = plans_by_version.get(record.plan_version)
+                if record_plan is None:
+                    raise HarnessValidationError("attempt history plan is unavailable", code="task_plan_attempt_history_identity_mismatch")
+                prefix = ordered_events[:event.sequence - 1]
+                validate_attempt_history_append(prefix, (event,))
+                validate_history_record(record, record_plan, prefix)
+                if record.recovery_receipt is not None and record.result is not None:
+                    _verify_replay_subagent_evidence(
+                        record.result,
+                        definition=next(item for item in record_plan.tasks if item.task_id == record.task_id),
+                        transcript_store=self._transcript_store,
+                        artifact_reference_verifier=self._artifact_reference_verifier,
+                        result_ref_authority=self._result_ref_authority,
+                        execution_identity=self._execution_identity,
+                        plan=record_plan,
+                        expected_receipt_checksum=record.recovery_receipt["receipt_checksum"],
+                    )
+                attempt_history.setdefault(record.record_checksum, record)
+                parallel_event_sequence = event.sequence
             elif event.event_type in _TASK_RESULT_EVENTS:
                 projection = _require_projection(projection, event)
                 task_plan = _task_plan_for_event(event, plans_by_version)
@@ -613,6 +660,8 @@ class TaskPlanReplayReducer:
                     result_ref_authority=self._result_ref_authority,
                     execution_identity=self._execution_identity,
                 )
+                record = history_record_for_result(task_plan, result, ordered_events[:event.sequence - 1])
+                attempt_history.setdefault(record.record_checksum, record)
                 pending_results[(instance.task_instance_id, instance.attempt, task_plan.version)] = result
             elif event.event_type in _TASK_TERMINAL_EVENTS:
                 projection = _require_projection(projection, event)
@@ -746,6 +795,7 @@ class TaskPlanReplayReducer:
                     parallel_reservations,
                     parallel_diagnostics,
                     parallel_spawn_operations,
+                    attempt_history,
                 )
                 if event.event_type == "TASK_WAVE_ADMITTED":
                     for task_id in event.payload["wave"]["task_ids"]:
@@ -836,6 +886,12 @@ class TaskPlanReplayReducer:
         history_checksum = canonical_payload_checksum(
             {"event_checksums": [event.event_checksum for event in ordered_events]}
         )
+        for supplied in supplied_results:
+            if not isinstance(supplied, TaskAttemptHistoryRecord):
+                continue
+            TaskAttemptHistoryRecord.from_dict(supplied.to_dict())
+            if through_sequence is None and supplied.record_checksum not in attempt_history:
+                raise HarnessValidationError("supplied attempt history has no canonical event evidence", code="task_plan_attempt_history_conflict")
         return TaskPlanReplayReport(
             projection=projection,
             active_task_instances=active_instances,
@@ -853,6 +909,8 @@ class TaskPlanReplayReducer:
             parallel_reservations=parallel_reservations,
             parallel_diagnostics=tuple(parallel_diagnostics),
             parallel_event_sequence=parallel_event_sequence,
+            attempt_history=tuple(attempt_history.values()),
+            parallel_spawn_operations=parallel_spawn_operations,
         )
 
     def decision_checksum(self, projection: TaskPlanProjection) -> str:
@@ -973,6 +1031,7 @@ def _apply_parallel_event(
     reservations: dict[str, dict[str, Any]],
     diagnostics: list[dict[str, Any]],
     spawn_operations: dict[str, dict[str, Any]] | None = None,
+    attempt_history: Mapping[str, TaskAttemptHistoryRecord] | None = None,
 ) -> None:
     """Reduce orchestration facts without letting them mutate task outcomes.
 
@@ -981,6 +1040,7 @@ def _apply_parallel_event(
     and safely recover a parallel dispatch group.
     """
     spawn_operations = spawn_operations if spawn_operations is not None else {}
+    attempt_history = attempt_history if attempt_history is not None else {}
     payload = thaw_mapping(event.payload)
     group_payload = payload.get("group")
     group_id = _parallel_group_id(payload, group_payload)
@@ -1350,7 +1410,7 @@ def _apply_parallel_event(
                         event,
                     )
     elif event.event_type == "TASK_GROUP_RECOVERY":
-        _apply_parallel_recovery(payload, group, projection, event)
+        _apply_parallel_recovery(payload, group, projection, event, attempt_history)
         diagnostics.append(_parallel_diagnostic(event, group_id, payload))
         return
     elif event.event_type == "DEGRADED_SERIAL":
@@ -1582,6 +1642,7 @@ def _apply_parallel_recovery(
     group: dict[str, Any],
     projection: TaskPlanProjection,
     event: TaskPlanEvent,
+    attempt_history: Mapping[str, TaskAttemptHistoryRecord],
 ) -> None:
     """Validate a recovery transition without replaying worker side effects."""
 
@@ -1632,20 +1693,42 @@ def _apply_parallel_recovery(
         if task_id not in expected_task_ids or task_id in seen:
             _parallel_error("parallel recovery task scope is invalid", event)
         seen.add(task_id)
-        if value.get("status") != TaskLifecycle.SUCCEEDED.value:
-            _parallel_error("parallel recovery must contain successful results", event)
+        if value.get("status") not in {TaskLifecycle.SUCCEEDED.value, TaskLifecycle.FAILED.value}:
+            _parallel_error("parallel recovery must contain verified terminal candidates", event)
         if isinstance(value.get("attempt"), bool) or not isinstance(value.get("attempt"), int) or value["attempt"] < 1:
             _parallel_error("parallel recovered attempt is invalid", event)
         if not isinstance(value.get("result_checksum"), str) or not value["result_checksum"].startswith("sha256:"):
             _parallel_error("parallel recovered checksum is invalid", event)
         task = task_states.get(task_id)
-        if (
-            task is None
-            or task.status is not TaskLifecycle.SUCCEEDED
-            or task.result is None
-            or task.result.result_checksum != value["result_checksum"]
-        ):
+        if task is None or task.attempts != value["attempt"]:
             _parallel_error("parallel recovery does not match task projection", event)
+        # Receipt reconciliation precedes the parent's result event. Only
+        # previously verified history for this active attempt bridges the gap.
+        recovered_history = tuple(
+            record for record in attempt_history.values()
+            if record.outcome in {TaskAttemptOutcome.ACCEPTED, TaskAttemptOutcome.REJECTED, TaskAttemptOutcome.FAILED}
+            and record.result is not None
+            and record.result.status.value == value["status"]
+            and record.result.result_checksum == value["result_checksum"]
+            and record.group is not None and record.group["group_id"] == group["group_id"]
+            and record.task_id == task_id
+            and record.task_instance_id == value["task_instance_id"]
+            and record.attempt == value["attempt"]
+        )
+        if len(recovered_history) != 1:
+            _parallel_error("parallel recovery has no matching recorded candidate", event)
+        if (
+            task.status is TaskLifecycle.SUCCEEDED
+            and value["status"] == TaskLifecycle.SUCCEEDED.value
+            and task.result is not None
+            and task.result.result_checksum == value["result_checksum"]
+        ):
+            continue
+        if (
+            task.status not in {TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
+            or task.active_instance_id != value["task_instance_id"]
+        ):
+            _parallel_error("parallel recovery does not match its recorded active attempt", event)
     if group["state"] == DispatchGroupState.INDETERMINATE.value:
         group["state"] = DispatchGroupState.RUNNING.value
     else:
@@ -2097,12 +2180,16 @@ def _validated_event_prefix(
 
 
 def _validated_results(
-    results: Iterable[TaskResultRecord],
+    results: Iterable[TaskResultRecord | TaskAttemptHistoryRecord],
     plans: tuple[ValidatedTaskPlan, ...],
 ) -> dict[tuple[str, int, int], TaskResultRecord]:
     plans_by_version = {item.version: item for item in plans}
     result_map: dict[tuple[str, int, int], TaskResultRecord] = {}
     for result in results:
+        if isinstance(result, TaskAttemptHistoryRecord):
+            if result.outcome not in {TaskAttemptOutcome.ACCEPTED, TaskAttemptOutcome.REJECTED, TaskAttemptOutcome.FAILED} or result.result is None:
+                continue
+            result = result.result
         if not isinstance(result, TaskResultRecord):
             raise TypeError("results must contain TaskResultRecord values")
         expected_checksum = canonical_payload_checksum(result.checksum_projection())
@@ -2400,6 +2487,7 @@ def _verify_replay_subagent_evidence(
     result_ref_authority: HarnessResultRefAuthority | None,
     execution_identity: GraphExecutionIdentity | None,
     plan: ValidatedTaskPlan,
+    expected_receipt_checksum: str | None = None,
 ) -> None:
     if definition.subagent_id is None:
         return
@@ -2459,7 +2547,8 @@ def _verify_replay_subagent_evidence(
             code="subagent_transcript_not_found",
         )
     if (
-        stored.transcript_ref != result.transcript_ref
+        (expected_receipt_checksum is not None and stored.receipt_checksum != expected_receipt_checksum)
+        or stored.transcript_ref != result.transcript_ref
         or stored.transcript_checksum != result.transcript_checksum
         or stored.output_ref != result.subagent_output_ref
         or stored.output_checksum != result.subagent_output_checksum

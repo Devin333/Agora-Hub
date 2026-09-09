@@ -597,8 +597,15 @@ def test_store_accepts_duplicate_identical_result_once():
     store.accept_plan(plan)
     scheduler = TaskPlanScheduler()
     decision = scheduler.next_ready_tasks(store.load_projection("run", "dynamic_stage"), 1, plan=plan, policy=policy, available_input_refs=("document",))
-    store.update_projection(scheduler.mark_dispatched(scheduler.reserve_ready_tasks(store.load_projection("run", "dynamic_stage"), decision), decision.task_instances[0]))
     instance = decision.task_instances[0]
+    projection = scheduler.reserve_ready_tasks(store.load_projection("run", "dynamic_stage"), decision)
+    for event_type, transition in (("TASK_READY", lambda value: value), ("TASK_DISPATCHED", lambda value: scheduler.mark_dispatched(value, instance))):
+        projection = replace(transition(projection), last_sequence=len(store.read_events(plan.run_id, plan.stage_id)) + 1)
+        store.commit_event(TaskPlanEvent.for_plan(
+            event_type, plan, sequence=projection.last_sequence,
+            task_id=instance.task_id, task_instance_id=instance.task_instance_id,
+            attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
+        ), projection)
     result = TaskResultRecord.for_plan(
         plan,
         task_id="a",

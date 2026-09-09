@@ -4,7 +4,10 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from hashlib import sha256
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
+
+if TYPE_CHECKING:
+    from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 
 from framework.agent.artifacts.models import ArtifactRef, ArtifactWriteRequest
 from framework.events.canonical import (
@@ -860,6 +863,8 @@ class DurableTaskPlanStore:
                 "task result identity does not match accepted plan",
                 code="task_plan_result_identity_mismatch",
             )
+        from framework.harness.task_plan.attempt_history_index import history_record_for_result
+
         if not projection.matches_plan_identity(plan):
             raise HarnessValidationError(
                 "TaskPlan projection does not match accepted plan identity",
@@ -904,6 +909,7 @@ class DurableTaskPlanStore:
                 "task already has a committed terminal result",
                 code="task_plan_duplicate_result_conflict",
             )
+        history_record_for_result(plan, result, events)
         _require_subagent_result_evidence(result, definition)
         _validate_result_usage(result, definition)
 
@@ -1065,29 +1071,34 @@ class DurableTaskPlanStore:
     ) -> tuple[TaskResultRecord, ...]:
         history = self.result_history_for(run_id, stage_id, plan_id, plan_version)
         projection = self.load_projection(run_id, stage_id)
-        successful = {
-            item.task_id
+        accepted_checksums = {
+            item.result.result_checksum
             for item in projection.tasks
-            if item.status is TaskLifecycle.SUCCEEDED
+            if item.status is TaskLifecycle.SUCCEEDED and item.result is not None
         }
-        records: dict[str, TaskResultRecord] = {}
-        for record in history:
-            if record.task_id not in successful or record.status is not TaskLifecycle.SUCCEEDED:
-                continue
-            existing = records.get(record.task_id)
-            if existing is None or (record.attempt, record.result_checksum) > (
-                existing.attempt,
-                existing.result_checksum,
-            ):
-                records[record.task_id] = record
-        return tuple(
-            sorted(
-                records.values(),
-                key=lambda item: (item.task_id, item.attempt, item.result_checksum),
-            )
+        matching = (
+            record.result for record in history
+            if record.result is not None
+            and record.result.result_checksum in accepted_checksums
+            and record.outcome.value == "ACCEPTED"
         )
+        return tuple(sorted(matching, key=lambda item: (item.task_id, item.attempt, item.result_checksum)))
 
     def result_history_for(
+        self, run_id: str, stage_id: str, plan_id: str, plan_version: int,
+    ) -> tuple["TaskAttemptHistoryRecord", ...]:
+        from framework.harness.task_plan.attempt_history_index import result_history_from_events
+
+        requested = self.plan(run_id, stage_id, plan_version)
+        if requested is None or requested.plan_id != plan_id:
+            return ()
+        return result_history_from_events(
+            (self.plan(run_id, stage_id, version) for version in range(1, plan_version + 1)),
+            self.read_events(run_id, stage_id),
+            self._result_records_for(run_id, stage_id, plan_id, plan_version),
+        )
+
+    def _result_records_for(
         self,
         run_id: str,
         stage_id: str,
@@ -1109,6 +1120,8 @@ class DurableTaskPlanStore:
         records: dict[tuple[str, int, int, str], TaskResultRecord] = {}
         for event in self.read_events(run, stage):
             if event.event_type not in {"TASK_RESULT_ACCEPTED", "TASK_RESULT_REJECTED"}:
+                continue
+            if event.plan_version is not None and event.plan_version > plan_version:
                 continue
             raw_checksum = event.payload.get("result_checksum")
             if not isinstance(raw_checksum, str):
@@ -1195,7 +1208,7 @@ class DurableTaskPlanStore:
         from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
         validate_submission_event_append(events, (event,))
-        validate_parallel_admission_append(events, (event,))
+        validate_parallel_admission_append(events, (event,), plan_lookup=lambda version: self.plan(event.run_id, event.stage_id, version))
         refs: dict[str, _DocumentReference] = {}
         current = self._optional_projection(event.run_id, event.stage_id)
         if current is not None:
@@ -1229,7 +1242,7 @@ class DurableTaskPlanStore:
         from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
         validate_submission_event_append(history, batch)
-        validate_parallel_admission_append(history, batch)
+        validate_parallel_admission_append(history, batch, plan_lookup=lambda version: self.plan(run_id, stage_id, version))
         current = self._optional_projection(run_id, stage_id)
         refs: list[dict[str, _DocumentReference]] = []
         for event in batch:
@@ -1310,7 +1323,7 @@ class DurableTaskPlanStore:
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
             validate_submission_event_append(history, batch)
-            validate_parallel_admission_append(history, batch)
+            validate_parallel_admission_append(history, batch, plan_lookup=lambda version: self.plan(first.run_id, first.stage_id, version))
             # Immutable artifacts become authoritative only with their event batch.
             refs = tuple({"projection": self._put_projection(projection)} for projection in projections)
         self._publish(batch, refs)

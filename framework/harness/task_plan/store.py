@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from threading import RLock
-from typing import Any, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 
 from framework.events.schema.catalog import TASK_PLAN_EVENT_TYPES
 from framework.harness.graph.versioning import (
@@ -754,7 +757,7 @@ class TaskPlanStorePort(Protocol):
     def read_events(self, run_id: str, stage_id: str) -> tuple[TaskPlanEvent, ...]: ...
     def update_projection(self, projection: TaskPlanProjection) -> None: ...
     def results_for(self, run_id: str, stage_id: str, plan_id: str, plan_version: int) -> tuple[TaskResultRecord, ...]: ...
-    def result_history_for(self, run_id: str, stage_id: str, plan_id: str, plan_version: int) -> tuple[TaskResultRecord, ...]: ...
+    def result_history_for(self, run_id: str, stage_id: str, plan_id: str, plan_version: int) -> tuple[TaskAttemptHistoryRecord, ...]: ...
     def append_event(self, event: TaskPlanEvent) -> str: ...
     def append_events(self, events: tuple[TaskPlanEvent, ...]) -> tuple[str, ...]: ...
     def commit_events(
@@ -1213,6 +1216,8 @@ class InMemoryTaskPlanStore:
                     "task result identity does not match accepted plan",
                     code="task_plan_result_identity_mismatch",
                 )
+            from framework.harness.task_plan.attempt_history_index import history_record_for_result
+
             if not projection.matches_plan_identity(plan):
                 raise HarnessValidationError(
                     "TaskPlan projection does not match accepted plan identity",
@@ -1235,6 +1240,7 @@ class InMemoryTaskPlanStore:
                 raise HarnessValidationError("task result belongs to a different attempt", code="task_plan_wrong_attempt")
             if task.status in {TaskLifecycle.SUCCEEDED, TaskLifecycle.SKIPPED}:
                 raise HarnessValidationError("task already has a committed terminal result", code="task_plan_duplicate_result_conflict")
+            history_record_for_result(plan, result, self.read_events(result.run_id, result.stage_id))
             _require_subagent_result_evidence(result, definition)
             _validate_result_usage(result, definition)
             if result.status is TaskLifecycle.SUCCEEDED:
@@ -1337,25 +1343,29 @@ class InMemoryTaskPlanStore:
             self._projections[(projection.run_id, projection.stage_id)] = projection
 
     def results_for(self, run_id: str, stage_id: str, plan_id: str, plan_version: int) -> tuple[TaskResultRecord, ...]:
-        history = self.result_history_for(run_id, stage_id, plan_id, plan_version)
+        from framework.harness.task_plan.attempt_history_index import accepted_results_from_history
+
         with self._lock:
+            history = self.result_history_for(run_id, stage_id, plan_id, plan_version)
             projection = self._projections.get((run_id, stage_id))
-            valid_task_ids = {
-                item.task_id
-                for item in (projection.tasks if projection else ())
-                if item.status is TaskLifecycle.SUCCEEDED
-            }
-            matching = [item for item in history if item.task_id in valid_task_ids and item.status is TaskLifecycle.SUCCEEDED]
-            unique: dict[str, TaskResultRecord] = {}
-            for item in sorted(
-                matching,
-                key=lambda value: (value.task_id, value.attempt, value.result_checksum),
-                reverse=True,
-            ):
-                unique.setdefault(item.task_id, item)
-            return tuple(sorted(unique.values(), key=lambda item: (item.task_id, item.attempt, item.result_checksum)))
+            return accepted_results_from_history(history, projection)
 
     def result_history_for(
+        self, run_id: str, stage_id: str, plan_id: str, plan_version: int,
+    ) -> tuple[TaskAttemptHistoryRecord, ...]:
+        from framework.harness.task_plan.attempt_history_index import result_history_from_events
+
+        with self._lock:
+            requested = self._plans.get((run_id, stage_id, plan_version))
+            if requested is None or requested.plan_id != plan_id:
+                return ()
+            return result_history_from_events(
+                (self._plans[(run_id, stage_id, version)] for version in range(1, plan_version + 1)),
+                self.read_events(run_id, stage_id),
+                self._result_records_for(run_id, stage_id, plan_id, plan_version),
+            )
+
+    def _result_records_for(
         self,
         run_id: str,
         stage_id: str,
@@ -1410,7 +1420,8 @@ class InMemoryTaskPlanStore:
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
             validate_submission_event_append(self._events.get((event.run_id, event.stage_id), ()), (event,))
-            validate_parallel_admission_append(self._events.get((event.run_id, event.stage_id), ()), (event,))
+            validate_parallel_admission_append(self._events.get((event.run_id, event.stage_id), ()), (event,),
+                                               plan_lookup=lambda version: self.plan(event.run_id, event.stage_id, version))
             self._append_event(event)
             key = (event.run_id, event.stage_id)
             projection = self._projections.get(key)
@@ -1444,7 +1455,7 @@ class InMemoryTaskPlanStore:
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
             validate_submission_event_append(history, batch)
-            validate_parallel_admission_append(history, batch)
+            validate_parallel_admission_append(history, batch, plan_lookup=lambda version: self.plan(run_id, stage_id, version))
             self._events.setdefault(key, []).extend(batch)
             projection = self._projections.get(key)
             if projection is not None:
@@ -1520,7 +1531,7 @@ class InMemoryTaskPlanStore:
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
             validate_submission_event_append(history, batch)
-            validate_parallel_admission_append(history, batch)
+            validate_parallel_admission_append(history, batch, plan_lookup=lambda version: self.plan(first.run_id, first.stage_id, version))
             prior_events = (
                 None
                 if key not in self._events

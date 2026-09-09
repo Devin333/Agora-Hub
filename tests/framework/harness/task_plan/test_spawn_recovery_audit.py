@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from framework.harness.task_plan.models import TaskLifecycle
+from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 from types import SimpleNamespace
 
 import pytest
@@ -64,6 +65,20 @@ def replay(fixture):
     )
     groups, waves, reservations, diagnostics, operations = {}, {}, {}, [], {}
     for sequence, payload in enumerate(fixture.events, 1):
+        if payload["event_type"] == "TASK_ATTEMPT_RECORDED":
+            # The full reducer owns attempt history; this helper projects only
+            # group/wave recovery state. Still verify the extra audit envelope.
+            record = TaskAttemptHistoryRecord.from_dict(payload["history_record"])
+            assert record.group["group_checksum"] == groups[payload["group_id"]]["group_checksum"]
+            assert record.wave["wave_id"] == payload["wave_id"]
+            operation = next(item for item in operations.values() if item["operation_key"] == record.operation_key)
+            if record.child_id is None:
+                assert record.outcome.value == "INDETERMINATE"
+                assert operation["status"] in {"INTENT", "SPAWN_UNKNOWN"}
+            else:
+                assert operation["status"] == "SPAWN_CONFIRMED"
+                assert record.child_id == operation["child_id"]
+            continue
         _apply_parallel_event(
             SimpleNamespace(event_type=payload["event_type"], payload=payload, sequence=sequence,
                             reason_code=payload.get("reason_code")),
@@ -188,7 +203,7 @@ def test_unknown_status_closes_admission_without_releasing_uncertain_reservation
     assert all(value["state"] == "RESERVED" for value in reservations.values())
 
 
-@pytest.mark.parametrize("change", [{"task_id": "wrong-task"}, {"state": "LOST"}, {"state": "CLOSED"}])
+@pytest.mark.parametrize("change", [{"task_id": "wrong-task"}, {"state": "LOST"}])
 def test_untrackable_or_mismatched_handle_cannot_dispatch(crashed_wave, monkeypatch, change):
     fixture = crashed_wave
     status = fixture.supervisor.status

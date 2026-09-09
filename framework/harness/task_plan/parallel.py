@@ -58,6 +58,7 @@ from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.control_plane.budget_reservation import BudgetReservation
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.store import TaskResultRecord
+from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord, TaskAttemptOutcome
 from framework.shared.graph_identity import GraphExecutionIdentity
 
 
@@ -763,6 +764,7 @@ class ParallelDispatchResult:
     aggregate_checksum: str | None = None
     projected_observation: Mapping[str, Any] = field(default_factory=dict)
     schema_version: str = PARALLEL_DISPATCH_RESULT_SCHEMA
+    attempt_history: tuple[TaskAttemptHistoryRecord, ...] = ()
     dispatch_checksum: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -794,6 +796,11 @@ class ParallelDispatchResult:
             )
         object.__setattr__(self, "waves", waves)
         object.__setattr__(self, "results", results)
+        history = tuple(self.attempt_history)
+        if any(not isinstance(item, TaskAttemptHistoryRecord) or item.group is None
+               or item.group["group_id"] != self.group.group_id for item in history):
+            raise HarnessValidationError("attempt history belongs to another group", code="RESULT_IDENTITY_MISMATCH")
+        object.__setattr__(self, "attempt_history", history)
         object.__setattr__(self, "projected_observation", projected_observation)
         object.__setattr__(
             self,
@@ -804,6 +811,7 @@ class ParallelDispatchResult:
                     "group": self.group.to_dict(),
                     "waves": [item.to_dict() for item in waves],
                     "results": [item.to_dict() for item in results],
+                    "attempt_history": [item.to_dict() for item in history],
                     "observation": self.observation.to_dict(),
                     "projected_observation": thaw_mapping(projected_observation),
                     "aggregate_ref": self.aggregate_ref,
@@ -822,6 +830,7 @@ class ParallelDispatchResult:
             "group": self.group.to_dict(),
             "waves": [item.to_dict() for item in self.waves],
             "results": [item.to_dict() for item in self.results],
+            "attempt_history": [item.to_dict() for item in self.attempt_history],
             "observation": self.observation.to_dict(),
             "projected_observation": thaw_mapping(self.projected_observation),
             "aggregate_ref": self.aggregate_ref,
@@ -836,6 +845,9 @@ class _GroupSession:
     request: ParallelDispatchRequest
     waves: list[DispatchWave] = field(default_factory=list)
     results: dict[str, TaskResultRecord] = field(default_factory=dict)
+    attempt_history: dict[str, TaskAttemptHistoryRecord] = field(default_factory=dict)
+    attempt_receipts: dict[str, Any] = field(default_factory=dict)
+    wave_instances: dict[str, tuple[TaskInstance, ...]] = field(default_factory=dict)
     blocked_task_ids: set[str] = field(default_factory=set)
     blocked_task_checksums: dict[str, str] = field(default_factory=dict)
     failed_task_ids: set[str] = field(default_factory=set)
@@ -870,6 +882,7 @@ class _WaveRunOutcome:
     released_task_ids: frozenset[str] = frozenset()
     consumed_task_ids: frozenset[str] = frozenset()
     quarantined_task_ids: frozenset[str] = frozenset()
+    reclaimed_task_ids: frozenset[str] = frozenset()
 
 
 class _SupervisorTaskWorker:
@@ -1293,6 +1306,16 @@ class ParallelAgentCoordinator:
                 raise HarnessValidationError("group admission is still being committed", code="TASK_GROUP_DISPATCH_BUSY")
             session = _GroupSession(group=group, request=request)
             session.waves = list(ordered)
+            for wave in ordered:
+                instances = []
+                for reservation in wave.reservations:
+                    allocated = [task_instance_for_attempt(request.plan, reservation.task_id, attempt)
+                                 for attempt in range(1, request.plan.limits.max_task_attempts + 1)]
+                    instance = next((item for item in allocated if item.idempotency_key == reservation.idempotency_key), None)
+                    if instance is None:
+                        raise HarnessValidationError("wave reservation has no accepted attempt", code="TASK_GROUP_RECOVERY_IDENTITY_MISMATCH")
+                    instances.append(instance)
+                session.wave_instances[wave.wave_id] = tuple(instances)
             session.next_wave_ordinal = len(ordered) + 1
             session.reserved.update(
                 reservation.task_id for wave in ordered for reservation in wave.reservations
@@ -1307,6 +1330,8 @@ class ParallelAgentCoordinator:
         recovered_results: tuple[TaskResultRecord, ...],
         *,
         historical_wave_ordinals: tuple[int, ...] = (),
+        attempt_history: tuple[TaskAttemptHistoryRecord, ...] = (),
+        recover_result: Callable[[TaskInstance], tuple[TaskResultRecord, Any] | None] | None = None,
         limits: ParentObservationLimits | None = None,
         event_sink: Callable[[Mapping[str, Any]], Any] | None = None,
     ) -> ParallelDispatchResult:
@@ -1340,6 +1365,21 @@ class ParallelAgentCoordinator:
         # Recovery must not re-run admission against current live capacity:
         # a confirmed child may itself occupy the last supervisor slot.
         group = self.create_group(request, event_sink=event_sink, check_capacity=False)
+        with self._lock:
+            session = self._sessions[group.group_id]
+            admitted_attempts = {
+                instance.task_id: instance
+                for wave in session.waves
+                for instance in session.wave_instances.get(wave.wave_id, ())
+            }
+            if not session.waves:
+                admitted_attempts = {instance.task_id: instance for instance in request.task_instances}
+            for record in attempt_history:
+                if record.group is None or record.group["group_id"] != group.group_id:
+                    continue
+                if not record.instance.matches_plan_identity(request.plan):
+                    raise HarnessValidationError("recovered attempt history scope mismatch", code="TASK_GROUP_RECOVERY_IDENTITY_MISMATCH")
+                self._sessions[group.group_id].attempt_history.setdefault(record.record_checksum, record)
         by_task: dict[str, TaskResultRecord] = {}
         for result in results:
             if (
@@ -1348,8 +1388,16 @@ class ParallelAgentCoordinator:
                 or result.plan_id != group.plan_id
                 or result.plan_version != group.plan_version
                 or result.task_id not in group.task_ids
-                or result.status is not TaskLifecycle.SUCCEEDED
+                or result.status not in {TaskLifecycle.SUCCEEDED, TaskLifecycle.FAILED}
+                or (result.status is TaskLifecycle.FAILED and not any(
+                    record.result is not None and record.result.result_checksum == result.result_checksum
+                    and record.outcome in {TaskAttemptOutcome.REJECTED, TaskAttemptOutcome.FAILED}
+                    for record in attempt_history
+                ))
                 or not result.matches_plan_identity(request.plan)
+                or result.task_id not in admitted_attempts
+                or result.task_instance_id != admitted_attempts[result.task_id].task_instance_id
+                or result.attempt != admitted_attempts[result.task_id].attempt
             ):
                 raise HarnessValidationError(
                     "recovered result does not match dispatch group",
@@ -1472,17 +1520,44 @@ class ParallelAgentCoordinator:
                             details={"task_id": task_id, "child_id": handle.child_id},
                         )
                     worker_result = recovered_result
+            admitted_instance = task_instance_for_attempt(
+                request.plan, handle.task_id, handle.attempt,
+                task_instance_id=handle.task_instance_id,
+            )
+            admitted_wave = _wave_for_child(session, handle)
+            recovered_from = None
+            recovery_receipt = None
+            if worker_result is None and receipt.status is ChildAgentState.FAILED and recover_result is not None:
+                original_failure = self._record_attempt(
+                    session, admitted_wave, admitted_instance,
+                    outcome=TaskAttemptOutcome.FAILED, receipt=receipt,
+                    reason_code=receipt.reason_code, event_sink=event_sink,
+                )
+                previous = next((item for item in session.attempt_history.values()
+                                 if item.recovered_from == original_failure.record_checksum), None)
+                if previous is not None:
+                    worker_result, recovery_receipt = previous.result, previous.recovery_receipt
+                else:
+                    recovered = recover_result(admitted_instance)
+                    if recovered is None:
+                        raise HarnessValidationError(
+                            "failed wrapper has no verifiable committed subagent result",
+                            code="task_plan_subagent_attempt_indeterminate",
+                            details={"task_id": task_id, "child_id": handle.child_id},
+                        )
+                    worker_result, recovery_receipt = recovered
+                recovered_from = original_failure.record_checksum
             if worker_result is not None:
                 try:
-                    admitted_instance = task_instance_for_attempt(
-                        request.plan, handle.task_id, handle.attempt,
-                        task_instance_id=handle.task_instance_id,
-                    )
                     recovered_worker_results[task_id] = _validated_supervised_task_result(
                         worker_result,
                         admitted_instance,
                         request.plan,
                     )
+                    session.attempt_receipts[admitted_instance.task_instance_id] = receipt
+                    self._record_attempt(session, admitted_wave, admitted_instance, result=worker_result,
+                                         receipt=receipt, event_sink=event_sink,
+                                         recovered_from=recovered_from, recovery_receipt=recovery_receipt)
                 except HarnessValidationError as exc:
                     raise HarnessValidationError(
                         "terminal child result does not match its admitted attempt",
@@ -1540,7 +1615,10 @@ class ParallelAgentCoordinator:
                     "status": item.status.value,
                     "result_checksum": item.result_checksum,
                 }
-                for item in sorted(by_task.values(), key=lambda value: value.task_id)
+                for item in sorted(
+                    {**by_task, **recovered_worker_results}.values(),
+                    key=lambda value: value.task_id,
+                )
             )
             recovery_checksum = canonical_payload_checksum(
                 {
@@ -1629,6 +1707,7 @@ class ParallelAgentCoordinator:
                 )
             if not any(item.wave_id == wave.wave_id for item in session.waves):
                 session.waves.append(wave)
+                session.wave_instances[wave.wave_id] = tuple(instance for instance, _spawn in tasks)
                 session.waves.sort(key=lambda item: item.ordinal)
                 session.reserved.update(wave.task_ids)
                 session.next_wave_ordinal = max(session.next_wave_ordinal, wave.ordinal + 1)
@@ -1799,7 +1878,7 @@ class ParallelAgentCoordinator:
                     diagnostics=("SPAWN_IDENTITY_CONFLICT",),
                 )
                 raise HarnessValidationError("supervisor handle identity mismatch", code="TASK_GROUP_RECOVERY_IDENTITY_MISMATCH")
-            if handle is not None and handle.state in {ChildAgentState.LOST, ChildAgentState.CLOSED}:
+            if handle is not None and handle.state is ChildAgentState.LOST:
                 self._emit(
                     "RECOVERY_HALTED", event_sink=event_sink, **identity,
                     recovery_id=recovery_id, reason_code="CHILD_NOT_TRACKABLE",
@@ -2028,6 +2107,7 @@ class ParallelAgentCoordinator:
                 session.next_wave_ordinal += 1
                 session.reserved.update(wave.task_ids)
                 session.waves.append(wave)
+                session.wave_instances[wave.wave_id] = batch
                 session.wave_admitted_at[wave.wave_id] = monotonic()
                 session.group = session.group.transitioned(DispatchGroupState.DISPATCHING)
             if monotonic() - session.started_at > request.max_group_runtime_seconds:
@@ -2063,8 +2143,15 @@ class ParallelAgentCoordinator:
                 session = self._sessions[group.group_id]
                 if not _GROUP_TRANSITIONS[session.group.state]:
                     session.quarantined_task_ids.update(item.task_id for item in outcome.results)
+                    for result in outcome.results:
+                        self._record_attempt(session, wave, next(item for item in batch if item.task_id == result.task_id),
+                                             outcome=TaskAttemptOutcome.QUARANTINED, result=result, event_sink=event_sink,
+                                             receipt=session.attempt_receipts.get(result.task_instance_id), reason_code="group_closed")
                     break
                 for result in sorted(outcome.results, key=lambda item: item.task_id):
+                    self._record_attempt(session, wave, next(item for item in batch if item.task_id == result.task_id),
+                                         result=result, event_sink=event_sink,
+                                         receipt=session.attempt_receipts.get(result.task_instance_id))
                     session.results[result.task_id] = result
                 session.reserved.difference_update(wave.task_ids)
                 session.quarantined_task_ids.update(outcome.quarantined_task_ids)
@@ -2113,8 +2200,11 @@ class ParallelAgentCoordinator:
                         for task_id, state in reservation_states.items()
                     },
                     child_states={
+                        **{task_id: TaskLifecycle.FAILED.value for task_id in outcome.reclaimed_task_ids},
+                        **{
                         item.task_id: item.status.value
                         for item in sorted(outcome.results, key=lambda item: item.task_id)
+                        },
                     },
                     terminal_outcome=terminal_wave.terminal_outcome.value,
                     run_duration_ms=_elapsed_ms(dispatched_at),
@@ -2294,6 +2384,19 @@ class ParallelAgentCoordinator:
         if self.child_supervisor is not None:
             for task_id, (handle, _worker) in active:
                 operation = self.child_supervisor.cancel(handle.child_id, operation_id=handle.operation_id, reason=reason_code)
+                instance = task_instance_for_attempt(request.plan, task_id, handle.attempt,
+                                                     task_instance_id=handle.task_instance_id)
+                wave = _wave_for_child(session, handle)
+                receipt = operation.receipt
+                candidate = _worker.result if _worker is not None else None
+                if candidate is None and operation.result is not None and isinstance(operation.result.get("task_result"), Mapping):
+                    candidate = TaskResultRecord.from_dict(operation.result["task_result"])
+                outcome = (TaskAttemptOutcome.INDETERMINATE if receipt is None or not receipt.termination_confirmed
+                           else TaskAttemptOutcome.CANCELLED if receipt.status is ChildAgentState.CANCELLED
+                           else TaskAttemptOutcome.QUARANTINED)
+                self._record_attempt(session, wave, instance, outcome=outcome,
+                                     result=candidate if outcome is TaskAttemptOutcome.QUARANTINED else None,
+                                     receipt=receipt, reason_code=reason_code, event_sink=event_sink)
                 if operation.receipt is None or not operation.receipt.termination_confirmed:
                     unconfirmed = True
                     continue
@@ -2302,7 +2405,18 @@ class ParallelAgentCoordinator:
                     self._sessions[group_id].active_children.pop(task_id, None)
         with self._lock:
             session = self._sessions[group_id]
-            self._release_pending_waves(session, event_sink=event_sink, reason_code=reason_code)
+            recorded_instances = {item.task_instance_id for item in session.attempt_history.values()}
+            for wave in session.waves:
+                for instance in session.wave_instances.get(wave.wave_id, ()):
+                    if instance.task_instance_id in recorded_instances:
+                        continue
+                    never_started = wave.execution_mode != "SUPERVISED" and wave.state is DispatchWaveState.ADMITTED
+                    self._record_attempt(session, wave, instance,
+                                         outcome=TaskAttemptOutcome.CANCELLED if never_started else TaskAttemptOutcome.INDETERMINATE,
+                                         reason_code=reason_code, event_sink=event_sink)
+                    unconfirmed = unconfirmed or not never_started
+            self._release_pending_waves(session, event_sink=event_sink,
+                                        reason_code="termination_unconfirmed" if unconfirmed else reason_code)
             state = DispatchGroupState.INDETERMINATE if unconfirmed else DispatchGroupState.CANCELLED
             session.group = session.group.transitioned(state)
             self._emit(
@@ -2379,6 +2493,43 @@ class ParallelAgentCoordinator:
             session.waves = [running if item.wave_id == wave.wave_id else item for item in session.waves]
             session.wave_dispatched_at[wave.wave_id] = dispatched_at
 
+    def _record_attempt(
+        self, session: _GroupSession, wave: DispatchWave, instance: TaskInstance,
+        *, event_sink: Callable[[Mapping[str, Any]], Any] | None,
+        outcome: TaskAttemptOutcome | None = None, result: TaskResultRecord | None = None,
+        receipt: Any | None = None, reason_code: str | None = None,
+        recovered_from: str | None = None, recovery_receipt: Any | None = None,
+    ) -> TaskAttemptHistoryRecord:
+        group = replace(session.group, state=DispatchGroupState.ADMITTED)
+        admitted_wave = replace(wave, state=DispatchWaveState.ADMITTED, terminal_outcome=None,
+                                reservations=tuple(replace(item, state=ReservationState.RESERVED) for item in wave.reservations))
+        operation_key = spawn_operation_key(group.group_id, wave.wave_id, instance.task_instance_id, instance.attempt) if wave.execution_mode == "SUPERVISED" else None
+        child_id = receipt.child_id if receipt is not None else (session.spawn_receipts.get(operation_key, (None, None))[1] if operation_key else None)
+        kwargs = dict(group=group, wave=admitted_wave, operation_key=operation_key,
+                      child_id=child_id, terminal_receipt=receipt,
+                      recovered_from=recovered_from, recovery_receipt=recovery_receipt)
+        if outcome is None and session.group.state in {
+            DispatchGroupState.CANCELLED, DispatchGroupState.HALTED, DispatchGroupState.SUPERSEDED,
+        }:
+            outcome = TaskAttemptOutcome.QUARANTINED
+            reason_code = "group_closed"
+        if outcome is None:
+            record = TaskAttemptHistoryRecord.for_result(session.request.plan, result, instance=instance, **kwargs)
+        else:
+            definition = next(item for item in session.request.plan.tasks if item.task_id == instance.task_id)
+            record = TaskAttemptHistoryRecord(instance, definition.binding_checksum, outcome, result=result,
+                                              reason_code=reason_code, **kwargs)
+        with self._lock:
+            previous = session.attempt_history.get(record.record_checksum)
+            if previous is not None:
+                return previous
+            self._emit("TASK_ATTEMPT_RECORDED", event_sink=event_sink,
+                       group_id=group.group_id, wave_id=wave.wave_id, task_id=instance.task_id,
+                       task_instance_id=instance.task_instance_id, attempt=instance.attempt,
+                       history_record=record.to_dict(), idempotency_key=record.record_checksum)
+            session.attempt_history[record.record_checksum] = record
+        return record
+
     def _run_wave(
         self,
         session: _GroupSession,
@@ -2407,6 +2558,7 @@ class ParallelAgentCoordinator:
                 self.serial_executor.execute(item, invoke),
                 item,
             )
+            self._record_attempt(session, wave, item, result=result, event_sink=event_sink)
             return _WaveRunOutcome(
                 (result,),
                 consumed_task_ids=frozenset((item.task_id,)),
@@ -2442,8 +2594,11 @@ class ParallelAgentCoordinator:
                             raise HarnessValidationError("parallel worker returned invalid result", code="RESULT_SCHEMA_INVALID")
                         consumed.add(item.task_id)
                         if should_stop:
+                            self._record_attempt(session, wave, item, outcome=TaskAttemptOutcome.QUARANTINED,
+                                                 result=result, reason_code="fail_fast", event_sink=event_sink)
                             quarantined.add(item.task_id)
                             continue
+                        self._record_attempt(session, wave, item, result=result, event_sink=event_sink)
                         results.append(result)
                         if (
                             request.join_policy is JoinPolicy.FAIL_FAST
@@ -2461,8 +2616,11 @@ class ParallelAgentCoordinator:
                     )
                     for sibling_future, sibling in pending.items():
                         if sibling_future.cancel():
+                            self._record_attempt(session, wave, sibling, outcome=TaskAttemptOutcome.CANCELLED,
+                                                 reason_code="fail_fast", event_sink=event_sink)
                             released.add(sibling.task_id)
                             continue
+                        late_result = None
                         try:
                             late_result = sibling_future.result()
                         except BaseException:
@@ -2475,6 +2633,8 @@ class ParallelAgentCoordinator:
                                 )
                             consumed.add(sibling.task_id)
                         quarantined.add(sibling.task_id)
+                        self._record_attempt(session, wave, sibling, outcome=TaskAttemptOutcome.QUARANTINED,
+                                             result=late_result, reason_code="fail_fast", event_sink=event_sink)
                     break
             return _WaveRunOutcome(
                 tuple(results),
@@ -2581,6 +2741,7 @@ class ParallelAgentCoordinator:
         consumed: set[str] = set()
         quarantined: set[str] = set()
         deadline = monotonic() + request.max_join_wait_seconds
+        reclaimed_task_ids: set[str] = set()
         try:
             pending = {
                 item.task_id: (item, worker, handle)
@@ -2598,6 +2759,7 @@ class ParallelAgentCoordinator:
                     receipt = operation.receipt
                     if receipt is None:
                         continue
+                    session.attempt_receipts[item.task_instance_id] = receipt
                     progressed = True
                     pending.pop(task_id)
                     if receipt.status is ChildAgentState.LOST:
@@ -2605,19 +2767,9 @@ class ParallelAgentCoordinator:
                             receipt.termination_confirmed
                             and receipt.reason_code == "child_lease_expired"
                         ):
-                            reclaimed = TaskResultRecord.for_plan(
-                                request.plan,
-                                task_id=item.task_id,
-                                task_instance_id=item.task_instance_id,
-                                attempt=item.attempt,
-                                status=TaskLifecycle.FAILED,
-                                output_schema_ref=(
-                                    definitions[item.task_id]
-                                    .task.output_contract.schema_ref
-                                ),
-                                error_code="child_lease_expired",
-                            )
-                            results.append(reclaimed)
+                            self._record_attempt(session, wave, item, outcome=TaskAttemptOutcome.RECLAIMED,
+                                                 receipt=receipt, reason_code="child_lease_expired", event_sink=event_sink)
+                            reclaimed_task_ids.add(item.task_id)
                             released.add(item.task_id)
                             self.child_supervisor.close(
                                 handle.child_id,
@@ -2655,22 +2807,8 @@ class ParallelAgentCoordinator:
                             "child_lease_expired",
                             "termination_unconfirmed",
                         }:
-                            self._emit(
-                                "TASK_GROUP_RECLAIMED",
-                                event_sink=event_sink,
-                                group_id=session.group.group_id,
-                                wave_id=wave.wave_id,
-                                task_ids=[item.task_id],
-                                task_instance_id=item.task_instance_id,
-                                attempt=item.attempt,
-                                child_id=handle.child_id,
-                                reason_code="lease_expiry_unconfirmed",
-                                retry_eligible=False,
-                                idempotency_key=(
-                                    f"{session.group.group_id}:"
-                                    f"{item.task_instance_id}:indeterminate"
-                                ),
-                            )
+                            self._record_attempt(session, wave, item, outcome=TaskAttemptOutcome.INDETERMINATE,
+                                                 receipt=receipt, reason_code="lease_expiry_unconfirmed", event_sink=event_sink)
                             raise HarnessValidationError(
                                 "child lease termination could not be confirmed",
                                 code="TASK_GROUP_LEASE_UNCONFIRMED",
@@ -2680,6 +2818,13 @@ class ParallelAgentCoordinator:
                                 },
                             )
                     if receipt.status is not ChildAgentState.SUCCEEDED or worker.result is None:
+                        terminal_outcome = (
+                            TaskAttemptOutcome.FAILED if receipt.status is ChildAgentState.FAILED
+                            else TaskAttemptOutcome.CANCELLED if receipt.status is ChildAgentState.CANCELLED
+                            else TaskAttemptOutcome.INDETERMINATE
+                        )
+                        self._record_attempt(session, wave, item, outcome=terminal_outcome, receipt=receipt,
+                                             reason_code=receipt.reason_code, event_sink=event_sink)
                         raise HarnessValidationError(
                             "child runtime did not produce a verified task result",
                             code="TASK_GROUP_INDETERMINATE",
@@ -2690,6 +2835,7 @@ class ParallelAgentCoordinator:
                         item,
                         request.plan,
                     )
+                    self._record_attempt(session, wave, item, result=result, receipt=receipt, event_sink=event_sink)
                     results.append(result)
                     consumed.add(item.task_id)
                     self.child_supervisor.close(
@@ -2719,10 +2865,14 @@ class ParallelAgentCoordinator:
                                 reason="fail_fast",
                             )
                             cancelled_receipt = cancelled.receipt
+                            if cancelled_receipt is not None:
+                                session.attempt_receipts[sibling.task_instance_id] = cancelled_receipt
                             if (
                                 cancelled_receipt is None
                                 or not cancelled_receipt.termination_confirmed
                             ):
+                                self._record_attempt(session, wave, sibling, outcome=TaskAttemptOutcome.INDETERMINATE,
+                                                     receipt=cancelled_receipt, reason_code="termination_unconfirmed", event_sink=event_sink)
                                 raise HarnessValidationError(
                                     "fail-fast sibling cancellation could not be confirmed",
                                     code="TASK_GROUP_INDETERMINATE",
@@ -2739,8 +2889,15 @@ class ParallelAgentCoordinator:
                                 session.active_children.pop(sibling.task_id, None)
                             pending.pop(sibling_task_id)
                             if cancelled_receipt.status is ChildAgentState.CANCELLED:
+                                self._record_attempt(session, wave, sibling, outcome=TaskAttemptOutcome.CANCELLED,
+                                                     receipt=cancelled_receipt, reason_code="fail_fast", event_sink=event_sink)
                                 released.add(sibling.task_id)
                             else:
+                                late_result = _sibling_worker.result
+                                if late_result is None and cancelled.result is not None and isinstance(cancelled.result.get("task_result"), Mapping):
+                                    late_result = TaskResultRecord.from_dict(cancelled.result["task_result"])
+                                self._record_attempt(session, wave, sibling, outcome=TaskAttemptOutcome.QUARANTINED,
+                                                     result=late_result, receipt=cancelled_receipt, reason_code="fail_fast", event_sink=event_sink)
                                 consumed.add(sibling.task_id)
                                 quarantined.add(sibling.task_id)
                         break
@@ -2761,6 +2918,7 @@ class ParallelAgentCoordinator:
             frozenset(released),
             frozenset(consumed),
             frozenset(quarantined),
+            frozenset(reclaimed_task_ids),
         )
 
     def _release_pending_waves(
@@ -2839,6 +2997,12 @@ class ParallelAgentCoordinator:
                 return
             if session.group.state is DispatchGroupState.INDETERMINATE:
                 return
+            recorded_instances = {item.task_instance_id for item in session.attempt_history.values()}
+            for wave in session.waves:
+                for instance in session.wave_instances.get(wave.wave_id, ()):
+                    if instance.task_instance_id not in recorded_instances:
+                        self._record_attempt(session, wave, instance, outcome=TaskAttemptOutcome.INDETERMINATE,
+                                             reason_code=reason_code, event_sink=event_sink)
             self._release_pending_waves(session, event_sink=event_sink, reason_code=reason_code)
             session.group = session.group.transitioned(DispatchGroupState.INDETERMINATE)
             self._emit(
@@ -2939,6 +3103,7 @@ class ParallelAgentCoordinator:
             aggregate_ref,
             aggregate_checksum,
             projected_observation,
+            attempt_history=tuple(session.attempt_history.values()),
         )
 
     def _emit(
@@ -3012,6 +3177,12 @@ def _terminal_wave_outcome(outcome: _WaveRunOutcome) -> DispatchWaveTerminalOutc
     """Derive the immutable terminal classification from verified wave facts."""
 
     results = tuple(outcome.results)
+    if outcome.reclaimed_task_ids:
+        if not results:
+            return DispatchWaveTerminalOutcome.RECLAIMED
+        return (DispatchWaveTerminalOutcome.PARTIAL_FAILED
+                if any(item.status is TaskLifecycle.SUCCEEDED for item in results)
+                else DispatchWaveTerminalOutcome.FAILED)
     if not results:
         return (
             DispatchWaveTerminalOutcome.CANCELLED
@@ -3020,8 +3191,6 @@ def _terminal_wave_outcome(outcome: _WaveRunOutcome) -> DispatchWaveTerminalOutc
         )
     succeeded = sum(item.status is TaskLifecycle.SUCCEEDED for item in results)
     failed = sum(item.status is TaskLifecycle.FAILED for item in results)
-    if failed and all(item.error_code == "child_lease_expired" for item in results):
-        return DispatchWaveTerminalOutcome.RECLAIMED
     if failed and succeeded:
         return DispatchWaveTerminalOutcome.PARTIAL_FAILED
     if failed:
@@ -3029,6 +3198,13 @@ def _terminal_wave_outcome(outcome: _WaveRunOutcome) -> DispatchWaveTerminalOutc
     if succeeded == len(results):
         return DispatchWaveTerminalOutcome.SUCCEEDED
     return DispatchWaveTerminalOutcome.INDETERMINATE
+
+
+def _wave_for_child(session: _GroupSession, handle: ChildAgentHandle) -> DispatchWave:
+    for wave in session.waves:
+        if spawn_operation_key(session.group.group_id, wave.wave_id, handle.task_instance_id, handle.attempt) == handle.operation_id:
+            return wave
+    raise HarnessValidationError("child has no admitted wave", code="TASK_GROUP_RECOVERY_IDENTITY_MISMATCH")
 
 
 def _validated_task_result(

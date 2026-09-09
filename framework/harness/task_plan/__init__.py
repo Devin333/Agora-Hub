@@ -9,6 +9,11 @@ from framework.harness.task_plan.canonical import (
     canonical_json,
     canonical_payload_checksum,
 )
+from framework.harness.task_plan.attempt_history import (
+    TASK_ATTEMPT_HISTORY_SCHEMA,
+    TaskAttemptHistoryRecord,
+    TaskAttemptOutcome,
+)
 from framework.harness.task_plan.forbidden import (
     FORBIDDEN_CANDIDATE_FIELDS,
     ensure_candidate_only,
@@ -338,4 +343,7 @@ __all__ = [
     "TaskPlanTraceEvent",
     "task_plan_metric_samples",
     "task_plan_trace_events",
+    "TASK_ATTEMPT_HISTORY_SCHEMA",
+    "TaskAttemptHistoryRecord",
+    "TaskAttemptOutcome",
 ]

@@ -1468,3 +1468,57 @@ processes so tool-session loss does not erase the result.
   lease-expired and serial-fallback groups, with no live execution during replay.
 - Capture rollout telemetry and replay evidence before enabling any default or
   presenting the dynamic Research entrypoint as production-ready.
+
+### Task 1.8 implementation batch (2026-09-09, verified)
+
+- Worktree: `F:/github/NewsRoom-harness-task-1.8`, branch
+  `codex/harness-task-1-8`, initially based on `4d0b2760`, then fast-forwarded
+  to `b2e25f36` before final smoke to include the separately committed frontend
+  and Guided Research work. This change only modifies the TaskPlan surfaces.
+- Added a versioned `TaskAttemptHistoryRecord` with seven explicit outcomes,
+  immutable attempt/group/wave admission identity, binding, optional verified
+  candidate result, and supervisor terminal receipt. Cancellation and lease
+  reclaim do not fabricate a `TaskResultRecord`.
+- Canonical `TASK_ATTEMPT_RECORDED` facts bind to prior READY/wave/spawn
+  evidence. Store and replay validate the accepted task binding independently
+  of the submitted record checksum. Superseded/closed groups cannot append a
+  normal accepted result; late quarantine facts remain independently visible.
+- `result_history_for()` exposes typed history in causal order, including
+  failed/rejected attempts and replaced plans. `results_for()` selects the
+  exact accepted result checksums from the current task projection.
+- Result verification receives its canonical wave admission and spawn intent.
+  Supervisor receipt checks bind the complete task-result envelope to its
+  admitted operation. Existing cancellation, fail-fast, lease expiry and
+  recovery paths retain lifecycle facts instead of only task ids.
+- Replay, checkpoint and recovery expose complete attempt history and spawn
+  operations. Added model, store/reopen, retry/replacement, receipt forgery,
+  quarantine, checkpoint and recovery coverage.
+- Receipt recovery preserves a wrapper's confirmed `FAILED` fact and links
+  its separately verified inner result through `recovered_from` and the exact
+  `SubAgentTranscriptReceipt`. It never rewrites the wrapper receipt to success.
+  Rejected/failed candidates remain terminal candidate facts, while quarantine
+  cannot resolve the original failure. Missing or mismatched evidence fails closed.
+- Recovery inputs are restricted to current task/attempt identity. A closed
+  child with a committed receipt can be reconciled without respawning; an
+  unconfirmed/lost child remains blocked. Replay checks recovery result identity
+  against prior history even when the parent result projection is not appended
+  until after the recovery event.
+- Final frozen-code validation: `python -m scripts.dev smoke --keep-going`
+  passed with exit code 0 on baseline `b2e25f36`: **3370 passed, 23 deselected,
+  31 existing dependency deprecation warnings**, pytest duration 2600.17 s.
+  The 23 live-network cases are excluded by the existing repository smoke
+  configuration; no assertion or case was weakened for this change.
+  Compile passed, offline AgentLoop Graph execution succeeded with zero network
+  calls, and source validation returned `is_valid=true`, zero errors/warnings.
+  Logs, JUnit and durable exit receipt:
+  `.newsroom/verification/task-1.8-smoke-round-8.{log,xml,exit.json}`.
+- Earlier focused validation passed 1378 tests before the final recovery
+  refinements. The final full smoke supersedes that earlier evidence for the
+  changed Harness/Research paths. Earlier failed/interrupted smoke runs are not
+  counted as completed passing gates. Failed-first/new-file-first ordering and
+  fail-fast were used only to shorten feedback; the successful final run still
+  executed the complete configured smoke collection.
+- `openspec validate harness-codex-style-parallel-agent-orchestration --strict`
+  and `git diff --check` passed. After code freeze, only acceptance documentation
+  and task status were updated. Task 1.8 is checked; Task 1.9 and the remaining
+  G1-G5 gates remain open, so this is not full-change production acceptance.

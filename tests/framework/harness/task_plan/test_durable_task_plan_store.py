@@ -953,9 +953,9 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     assert record["reserved_revision"] == 1
     assert record["settled_revision"] == 2
     assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
-    # Ledger v2 includes the versioned settlement receipt in canonical history.
+    # Replay also binds the complete accepted attempt, alongside its ledger receipt.
     assert report.replay_checksum == (
-        "sha256:9b4561d1c8622fcb5dbba6ec6c4a5e610eb821617efb666c3330a2c4a0f08487"
+        "sha256:7ceff633d9fad993ca3d8ac7910e612099c0f5c5a106fcfdcc2a224ecce415c9"
     )
     assert report.projection.projection_checksum == projection.projection_checksum
     assert report.projection.matches_plan_identity(plan)
