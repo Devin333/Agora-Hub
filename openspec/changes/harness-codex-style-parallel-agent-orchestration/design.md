@@ -148,6 +148,14 @@ predecessor 不可恢复失败后，coordinator 按 stable DAG order 将未 admi
 
 版本化 `BudgetReservation` 包含 token/time/tool-call/optional-cost 上限、owner scope、reservation key、parent/attempt allocation 和 ledger version。对每种预算维度保持 `consumed + released + outstanding_reserved <= group_envelope`；wave admission 原子预留，硬上限耗尽停止执行并记录 `BUDGET_EXCEEDED`，按已消费和未消费部分结算。retry 使用新 attempt reservation，cancel/reclaim/reconcile 按 key 幂等结算；replan 不直接继承旧 group 未结算余额。
 
+1.7 的账本增量保留现有四维 `TaskBudget` 的静态调用形态；显式 execution allocation 必须同时给出 `token_limit` 和 `time_limit_ms`，`cost_limit` 可选。token 为总输入加输出 token，上限不得小于 `max_output_tokens`；time 使用整数毫秒；cost 固定为整数 USD micro-units，凭据写入 `cost_unit=USD_MICRO`，不得使用浮点金额。缺省 cost 表示未配置计费维度，显式零表示该维度不能消费，不能将两者混同。policy、parent 和 attempt 必须使用同一组维度。
+
+`agora.task-plan-budget-ledger/v2` 与 record v2 将已消费、已释放和未结算预留纳入同一确定性账本。新增的 `agora.harness-budget-reservation/v2` 是账本的不可变 child projection，不是另一套可写账本。`agora.task-plan-budget-settlement/v1` 将完整 instance checksum、reservation key、source receipt checksum、终止确认、reason 和 usage 绑定到一个 checksum，并完整保存于 TERMINATED record；相同凭据重投不增加 revision，冲突或未确认终止不得释放。`BUDGET_EXCEEDED` 是预算耗尽的统一原因。缺少计量时保守全额计入 consumed，released 不重新变为可预留余额。
+
+该增量不把 checksum 当成来源授权：`settle_terminated` 必须从注入的 Harness `BudgetSettlementReadPort` 读取已认证 evidence，并与 supplied receipt 完整比较，缺 authority 或自洽低报的 usage 均拒绝。真实 meter、运行中断与取消恢复接线留在 2.6/2.11。历史 ledger/child receipt v1 不由当前 v2 reader 猜测转换，迁移必须是单独离线操作。四维 `TaskBudget` 只保留现有静态合同；live group（含显式 serial fallback）在任何 admission event 前要求完整 token/time policy，supervised spawn、event schema 和 replay 均只接收 child receipt v2。
+
+Research 的显式每 attempt envelope 为 total token 32768、output token 4096、time 900000ms；aggregate 保留现有三个分析分支的总额，即 total token 98304、output token 12288、time 2700000ms。aggregate time 是跨 child 计量之和，不改变 group wall-clock deadline；该 contract 配置不构成真实 meter/enforcement 的验收证据。
+
 ### 7. State machine and event contract
 
 G1 task contract 使用 `TaskProjection`、`TaskInstance`、`TaskPlanProjection` v3，包含 `ADMITTED`、`CANCELLED`、`INDETERMINATE`、`QUARANTINED` 和既有 `BLOCKED_DEPENDENCY`；Graph-only `TaskInstance` 保留既有 deterministic ID 算法，但构造和反序列化均验证 task-instance/idempotency/fencing identity，不能用重算 envelope checksum 掩盖身份替换。旧 v2 只属于离线 migration 范围，不由 live reader 静默解释。task transition 不得改变 task definition、跳过 attempt 序号、替换 active attempt 或改写终态证据。`READY`、`ADMITTED`、`DISPATCHED`、`RUNNING` 必须持有已分配的 active attempt。成功状态只携带已提交 result；`PENDING`、`BLOCKED_DEPENDENCY`、`CANCELLED`、`INDETERMINATE`、`QUARANTINED` 不携带 active instance。所有失败终态共享 dependency failure 分类，关闭未 admission 的后继；只有 policy 尚允许的 `FAILED` retry 暂不传播终态。

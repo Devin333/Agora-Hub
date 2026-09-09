@@ -283,7 +283,7 @@ class TaskPlanValidator:
             by_id.setdefault(task.task_id, task)
         depths = self._validate_dag(by_id, policy.max_depth, diagnostics)
         resolved: dict[str, ResolvedTaskSpec] = {}
-        aggregate = {"max_turns": 0, "max_tool_calls": 0, "max_memory_ops": 0, "max_output_tokens": 0}
+        aggregate = dict.fromkeys(policy.aggregate_task_budget.to_dict(), 0)
         for task in candidate.tasks:
             self._validate_task(task, by_id, policy, capabilities, context, diagnostics)
             self._validate_task_refs(task, by_id, context, diagnostics)
@@ -303,7 +303,9 @@ class TaskPlanValidator:
         if aggregate_exceeded:
             diagnostics.append(_diag("aggregate_budget_exceeded", "candidate exceeds aggregate task budget", "budget", details={"fields": aggregate_exceeded}))
         if context.remaining_task_budget is not None:
-            remaining_exceeded = [name for name, value in aggregate.items() if value > getattr(context.remaining_task_budget, name)]
+            remaining = context.remaining_task_budget.to_dict()
+            remaining_exceeded = sorted(set(aggregate) ^ set(remaining))
+            remaining_exceeded.extend(name for name, value in aggregate.items() if name in remaining and value > remaining[name])
             if remaining_exceeded:
                 diagnostics.append(_diag("remaining_budget_exceeded", "candidate exceeds remaining run budget", "budget", details={"fields": remaining_exceeded}))
         self._validate_outputs(by_id, depths, policy, context, diagnostics)

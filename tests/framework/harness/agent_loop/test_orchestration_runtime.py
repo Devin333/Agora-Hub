@@ -89,8 +89,18 @@ def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admi
         max_plan_build_calls=1,
         max_plan_build_turns=1,
         max_plan_build_tool_calls=0,
-        per_task_budget=TaskBudget(max_turns=1),
-        aggregate_task_budget=TaskBudget(max_turns=2),
+        # This fixture exercises the supervised path, so it must provide the
+        # same explicit execution limits required by live child admission.
+        per_task_budget=TaskBudget(
+            max_turns=1,
+            token_limit=4096,
+            time_limit_ms=900_000,
+        ),
+        aggregate_task_budget=TaskBudget(
+            max_turns=2,
+            token_limit=8192,
+            time_limit_ms=1_800_000,
+        ),
         capability_capacity=2,
         available_concurrency_reservations=2,
         max_tasks_per_group=2,

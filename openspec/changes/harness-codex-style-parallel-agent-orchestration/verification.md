@@ -1378,6 +1378,78 @@ Earlier smoke evidence remains scoped as recorded above, including its
 explicit exact-final fence-test limitation. This documentation-only closure
 does not claim a new full smoke run.
 
+### Task 1.7 Integer Allocation and Settlement Contract Closure
+
+The current increment extends the existing TaskPlan ledger, rather than adding
+a second writable accounting authority. Explicit execution allocations carry
+total-token and integer-millisecond limits plus optional integer USD micro-unit
+cost. Reservation receipts are immutable projections of exact ledger records.
+Versioned settlement receipts bind reservation identity, full instance checksum,
+source receipt checksum, usage, reason and termination confirmation; the complete
+receipt is retained in terminal ledger history. Live lifecycle settlement requires
+a Harness-owned read port and exact equality with authenticated source evidence;
+offline snapshot validation only inspects the recorded receipt and accounting.
+
+Focused coverage includes atomic multi-dimensional admission, conservative
+missing measurements, idempotent result/cancel/reclaim/recovery settlement,
+non-reusable released allocations, conflicting or corrupted receipt rejection,
+queue transport, durable result rollback/reopen, offline replay/checkpoint equality,
+event-schema validation and supervisor cost arithmetic above 2**53.
+
+Live group admission now rejects missing token/time policy before emitting any
+admission event, including serial fallback. Child spawn, canonical event schema
+and replay require receipt v2; no v1 downgrade is supported. Research pins a
+32768-token / 900000ms per-attempt envelope and a three-branch aggregate envelope.
+Actual metering, runtime interruption and production lifecycle-adapter composition
+remain tasks 2.6/2.11. Task 1.7 is complete at its G1 contract scope. Progress is
+17/46; task 1.8 is the next unfinished task and has not started.
+
+The complete nine-file focused batch passed: `196 passed in 93.99s`, exit 0.
+This includes the execution-budget contract, durable store, spawn admission,
+recovery, stage runner, parallel orchestration, admission transaction, parent
+orchestration and event-schema suites. Strict OpenSpec validation and
+`git diff --check` passed as well.
+
+The shared-checkout smoke completed with exit 1: `3316 passed, 1 failed,
+23 deselected in 2227.09s`. Compile, the zero-network AgentLoop smoke and source
+validation passed. Its sole failure was the concurrently edited HTTP Research
+router importing `backend.research.application.guided_research`, outside this
+task's changed paths. The complete task 1.7 batch was then validated in an
+isolated checkout of `3cffbbe4` with the same 23 code/test file hashes.
+Unrelated Guided Research work remains in the shared checkout and is excluded
+from the task 1.7 commit. This does not waive or weaken the architecture test.
+
+The isolated required smoke completed with exit 1: `3316 passed, 1 failed,
+23 deselected in 2207.69s`. Compile, the zero-network AgentLoop smoke and source
+validation passed. The HTTP boundary check passed in this checkout. The only
+failure was `FileNotFoundError` for the existing operator-owned-data retirement
+note, `docs/operations/agent-session-retirement.md`: the global `docs/` ignore
+rule had left this required test input untracked. The existing note is now
+included unchanged in version control so clean checkouts retain the documented
+data-protection policy. No historical database was copied or modified.
+
+After this documentation-only repair, the entire architecture suite passed:
+`225 passed, 4 warnings in 127.20s`, exit 0. All 23 production/test file hashes
+remained identical to the focused and isolated full-smoke runs. No test or
+assertion was skipped or weakened. Validation combines the frozen-code smoke
+evidence with this complete architecture recheck; no third full smoke was run
+for the documentation-only repair, and neither failed smoke exit is reported
+as zero. Existing dependency deprecation warnings remain outside this change.
+
+Local logs, JUnit reports and durable exits are retained under
+`.newsroom/verification/task-1.7-*-final.*` for the focused, shared smoke,
+isolated smoke and isolated architecture runs.
+
+The earlier smoke attempt stopped after 91% progress with seven failure marks
+and no durable final exit; it is not counted as a completed validation run.
+The repaired cases retain strict assertions: valid v2 reservations with false
+ledger contents, distinct checksum diagnostics, explicit positive-path execution
+budgets, and exact replay goldens. Replacing only the ledger/record schema version
+and removing the new settlement-receipt field reproduces both previous golden
+checksums exactly; the updated goldens reflect that intentional wire change.
+Final validation runs persist their logs and exit receipts in independent local
+processes so tool-session loss does not erase the result.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

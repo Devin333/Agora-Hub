@@ -97,8 +97,20 @@ def _accepted_parallel_plan(
         max_plan_build_calls=1,
         max_plan_build_turns=2,
         max_plan_build_tool_calls=0,
-        per_task_budget=TaskBudget(max_turns=1, max_tool_calls=1),
-        aggregate_task_budget=TaskBudget(max_turns=8, max_tool_calls=8),
+        # Supervised child admission requires explicit execution limits.  The
+        # aggregate envelope is sized for the policy's eight-task maximum.
+        per_task_budget=TaskBudget(
+            max_turns=1,
+            max_tool_calls=1,
+            token_limit=4096,
+            time_limit_ms=900_000,
+        ),
+        aggregate_task_budget=TaskBudget(
+            max_turns=8,
+            max_tool_calls=8,
+            token_limit=32_768,
+            time_limit_ms=7_200_000,
+        ),
     )
     stage_binding = build_task_plan_stage_binding(
         graph_id="parallel.acceptance",
@@ -137,7 +149,12 @@ def _accepted_parallel_plan(
                 acceptance_criteria=TaskAcceptanceCriteria(("ResultGate@1",)),
                 requested_tools=("research.read",),
                 requested_memory_namespaces=("research.public",),
-                budget_request=TaskBudget(max_turns=1, max_tool_calls=1),
+                budget_request=TaskBudget(
+                    max_turns=1,
+                    max_tool_calls=1,
+                    token_limit=4096,
+                    time_limit_ms=900_000,
+                ),
                 retry_policy=TaskRetryPolicy(max_attempts=1),
             )
         )
@@ -1173,12 +1190,40 @@ def test_supervised_spawn_budget_carries_versioned_reservation_identity() -> Non
     )
     item = request.task_instances[0]
     spawn = ParallelAgentCoordinator._spawn_request(_admitted_request(request), wave, item)
-    assert spawn.budget["schema_version"] == "agora.harness-budget-reservation/v1"
+    assert spawn.budget["schema_version"] == "agora.harness-budget-reservation/v2"
     assert spawn.budget["ledger_version"] == 1
     assert spawn.budget["reservation_key"] == spawn.operation_id
     assert spawn.budget["reservation_checksum"].startswith("sha256:")
-    assert spawn.budget["attempt_allocation"]["turns"] == 1
-    assert spawn.budget["parent_allocation"]["turns"] == plan.limits.aggregate_task_budget.max_turns
+    assert spawn.budget["attempt_allocation"]["max_turns"] == 1
+    assert spawn.budget["parent_allocation"]["max_turns"] == plan.limits.aggregate_task_budget.max_turns
+    assert spawn.budget["token_limit"] == 4096
+    assert spawn.budget["time_limit_ms"] == 900_000
+
+
+def test_live_group_admission_rejects_static_budget_before_persisting_event() -> None:
+    """Static planning budgets cannot enter a live (including serial) group."""
+
+    from tests.framework.harness.task_plan.test_durable_task_plan_store import (
+        _accepted_plan as accepted_static_plan,
+        _task as static_task,
+    )
+
+    candidate, plan, _policy, _registry = accepted_static_plan((static_task("a"),))
+    del candidate  # The admission boundary only needs the accepted plan.
+    events: list[dict[str, object]] = []
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+        event_sink=events.append,
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        coordinator.create_group(
+            replace(_request(plan), serial_fallback=True),
+        )
+
+    assert exc_info.value.code == "task_plan_budget_policy_missing"
+    assert events == []
 
 
 @pytest.mark.parametrize(

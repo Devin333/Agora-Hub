@@ -159,7 +159,7 @@ class TaskPlanPatchValidator:
         available = frozenset(
             reference(item, "available_input_refs") for item in available_input_refs
         )
-        totals = {"max_turns": 0, "max_tool_calls": 0, "max_memory_ops": 0, "max_output_tokens": 0}
+        totals = dict.fromkeys(policy.aggregate_task_budget.to_dict(), 0)
         producers: dict[str, list[str]] = {}
         for task_id, resolved in next_definitions.items():
             for name, value in resolved.normalized_budget.to_dict().items():

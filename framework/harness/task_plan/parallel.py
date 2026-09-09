@@ -55,6 +55,7 @@ from framework.harness.task_plan.parallel_state import validate_group_transition
 from framework.harness.task_plan.capacity import CapacityPool, PoolReservation, TaskCapacityDemand, capacity_now_ms, pack_first_fit
 from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.control_plane.budget_reservation import BudgetReservation
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.store import TaskResultRecord
 from framework.shared.graph_identity import GraphExecutionIdentity
@@ -951,33 +952,62 @@ def child_budget_reservation(
         raise HarnessValidationError("child has no matching attempt reservation", code="task_plan_budget_identity_conflict")
     task_budget = instance.budget_snapshot.to_dict()
     aggregate_budget = ledger.parent_allocation
+    # Supervised children must carry the versioned execution reservation.
+    # Legacy receipts require offline migration, never implicit live fallback.
+    if "token_limit" not in task_budget or "time_limit_ms" not in task_budget:
+        raise HarnessValidationError(
+            "supervised child requires explicit token and time budget limits",
+            code="task_plan_budget_policy_missing",
+            details={"task_id": instance.task_id, "task_instance_id": instance.task_instance_id},
+        )
+    if "token_limit" not in aggregate_budget or "time_limit_ms" not in aggregate_budget:
+        raise HarnessValidationError(
+            "supervised child requires an explicit parent execution budget envelope",
+            code="task_plan_budget_policy_missing",
+            details={"task_id": instance.task_id, "task_instance_id": instance.task_instance_id},
+        )
+    return BudgetReservation(
+        owner_scope=f"{ledger.run_id}:{ledger.stage_id}:{group_id}",
+        reservation_key=spawn_operation_key(group_id, wave_id, instance.task_instance_id, instance.attempt),
+        parent_allocation=aggregate_budget,
+        attempt_allocation=task_budget,
+        ledger_version=record["reserved_revision"],
+    ).to_dict()
 
-    dimensions = (
-        ("turns", "max_turns"),
-        ("tool_calls", "max_tool_calls"),
-        ("memory_ops", "max_memory_ops"),
-        ("output_tokens", "max_output_tokens"),
+
+def _require_live_execution_budget(plan: ValidatedTaskPlan) -> None:
+    """Require versioned execution dimensions before live group admission.
+
+    A static four-field ``TaskBudget`` remains valid for non-live planning and
+    historical read paths.  Once a group is about to become durable, however,
+    every accepted task and both policy envelopes must carry the token/time
+    dimensions consumed by the v2 child reservation contract.  This check is
+    deliberately independent of transport selection, so serial fallback and
+    supervised dispatch share the same fail-closed admission boundary.
+    """
+
+    budgets = [
+        ("per_task_budget", plan.limits.per_task_budget),
+        ("aggregate_task_budget", plan.limits.aggregate_task_budget),
+        *(
+            (f"task:{item.task_id}", item.normalized_budget)
+            for item in plan.tasks
+        ),
+    ]
+    missing = sorted(
+        {
+            f"{owner}.{dimension}"
+            for owner, budget in budgets
+            for dimension in ("token_limit", "time_limit_ms")
+            if dimension not in budget.to_dict()
+        }
     )
-    reservation: dict[str, Any] = {
-        "schema_version": "agora.harness-budget-reservation/v1",
-        "ledger_version": record["reserved_revision"],
-        "owner_scope": f"{ledger.run_id}:{ledger.stage_id}:{group_id}",
-        "reservation_key": spawn_operation_key(group_id, wave_id, instance.task_instance_id, instance.attempt),
-        "parent_allocation": {},
-        "attempt_allocation": {},
-    }
-    for amount_key, limit_key in dimensions:
-        raw_amount = task_budget.get(limit_key)
-        if isinstance(raw_amount, bool) or not isinstance(raw_amount, int) or raw_amount <= 0:
-            continue
-        reservation[amount_key] = raw_amount
-        reservation["attempt_allocation"][amount_key] = raw_amount
-        raw_limit = aggregate_budget.get(limit_key)
-        if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) and raw_limit > 0:
-            reservation[f"remaining_{amount_key}"] = raw_limit
-            reservation["parent_allocation"][amount_key] = raw_limit
-    reservation["reservation_checksum"] = canonical_payload_checksum(reservation)
-    return reservation
+    if missing:
+        raise HarnessValidationError(
+            "live parallel group requires explicit token and time budget limits",
+            code="task_plan_budget_policy_missing",
+            details={"missing_dimensions": missing},
+        )
 
 
 class ParallelAgentCoordinator:
@@ -1163,6 +1193,9 @@ class ParallelAgentCoordinator:
         event_sink: Callable[[Mapping[str, Any]], Any] | None = None,
         check_capacity: bool = True,
     ) -> DispatchGroup:
+        # Validate the complete execution budget before any group admission
+        # event can be emitted or persisted, including serial fallback.
+        _require_live_execution_budget(request.plan)
         group = self._group_definition(request)
         with self._lock:
             session = self._sessions.get(group.group_id)

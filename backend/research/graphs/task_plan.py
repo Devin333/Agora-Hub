@@ -157,7 +157,17 @@ _RESEARCH_SUBAGENT_OUTPUT_SCHEMAS = MappingProxyType(
 def build_research_analysis_task_plan_policy() -> TaskPlanPolicy:
     """Return the pinned policy for the Research dynamic analysis stage."""
 
-    budget = TaskBudget(max_turns=4, max_tool_calls=4, max_memory_ops=2, max_output_tokens=4096)
+    # Pin total input/output tokens separately from the 4096 output cap.
+    # Each attempt shares the existing 900-second upper bound; the aggregate
+    # accounts for the three analysis branches, not elapsed wall-clock time.
+    budget = TaskBudget(
+        max_turns=4,
+        max_tool_calls=4,
+        max_memory_ops=2,
+        max_output_tokens=4096,
+        token_limit=32768,
+        time_limit_ms=900_000,
+    )
     return TaskPlanPolicy(
         policy_id="research.analysis",
         version="1",
@@ -188,7 +198,14 @@ def build_research_analysis_task_plan_policy() -> TaskPlanPolicy:
         max_plan_build_turns=4,
         max_plan_build_tool_calls=2,
         per_task_budget=budget,
-        aggregate_task_budget=TaskBudget(max_turns=12, max_tool_calls=12, max_memory_ops=6, max_output_tokens=12288),
+        aggregate_task_budget=TaskBudget(
+            max_turns=12,
+            max_tool_calls=12,
+            max_memory_ops=6,
+            max_output_tokens=12288,
+            token_limit=98304,
+            time_limit_ms=2_700_000,
+        ),
         # The three Research analyses are independent, read-only candidates.
         # Harness still owns admission, join, verification, and publication.
         join_policy="wait_all",

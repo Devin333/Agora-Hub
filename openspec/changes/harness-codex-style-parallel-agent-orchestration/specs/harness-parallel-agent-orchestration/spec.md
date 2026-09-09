@@ -484,6 +484,36 @@ Task demand MUST identify every required capability pool, quantity, resource con
 
 `BudgetReservation` MUST carry token, time, tool-call and optional cost limits, owner scope, reservation key, parent/attempt allocations and ledger version. For each dimension `consumed + released + outstanding_reserved <= group_envelope` MUST hold. Attempt hard-limit violations MUST stop execution with `BUDGET_EXCEEDED`; consumed and unused portions MUST be settled separately. Retry requires a new attempt reservation. Cancel, reclaim and crash reconciliation MUST settle by key idempotently. Replan MUST NOT treat unsettled old-group allocations as available new-group budget.
 
+Execution allocations MUST use integer total-token counts, integer milliseconds,
+integer tool-call counts and optional integer USD micro-units. An omitted cost
+limit and an explicit zero cost limit MUST remain distinct. Parent and attempt
+allocations MUST have identical dimensions. A zero token or cost limit permits
+no consumption in that dimension. New supervised execution MUST NOT silently
+generate a legacy budget receipt when required token/time policy is missing.
+Lifecycle settlement MUST compare the supplied versioned receipt to evidence
+returned by the Harness-owned settlement read port before changing the ledger.
+The receipt MUST bind the full instance checksum, reservation key, source receipt
+checksum, termination confirmation, usage and reason; offline parsing MUST
+validate recorded receipt/accounting equality without calling the live port.
+
+#### Scenario: Execution policy is missing
+
+- **WHEN** supervised execution lacks explicit token or time limits
+- **THEN** Harness MUST reject admission before publishing a group or starting a child
+- **AND** it MUST NOT replace the missing policy with a legacy reservation
+
+#### Scenario: A self-consistent receipt disagrees with authenticated evidence
+
+- **WHEN** a settlement candidate has a valid checksum but its usage, reason or source differs from the Harness evidence
+- **THEN** the ledger MUST reject the settlement and preserve the full outstanding reservation
+- **AND** repeated authentic evidence MUST produce the same ledger version and accounting
+
+#### Scenario: Event commit fails after a result artifact is written
+
+- **WHEN** terminal result event publication fails during a budget transition
+- **THEN** reopening the durable store MUST recover the original outstanding allocation without partial consumption or release
+- **AND** retrying the same result commit MUST settle once and offline replay MUST reproduce all configured budget dimensions
+
 #### Scenario: Attempt cancellation is reconciled twice
 
 - **WHEN** cancellation and recovery both settle the same attempt reservation

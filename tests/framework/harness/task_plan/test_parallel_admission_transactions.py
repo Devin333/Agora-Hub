@@ -27,7 +27,7 @@ def _parallel_event(plan, kind, sequence, payload):
 def admitted(request):
     candidate, plan, _, _ = _accepted_plan((
         _task("a"), _task("b", capability="research.helper", role="analysis.helper"),
-    ), two_tasks=True)
+    ), two_tasks=True, explicit_execution_budget=True)
     store = InMemoryTaskPlanStore() if request.param == "memory" else _store(_EventStore(), _ArtifactStore())
     store.append_candidate(candidate)
     store.accept_plan(plan)

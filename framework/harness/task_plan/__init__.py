@@ -174,6 +174,8 @@ from framework.harness.task_plan.capacity import (
     pack_first_fit,
 )
 from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
+from framework.harness.control_plane.budget_reservation import BudgetReservation
+from framework.harness.task_plan.budget_settlement import BudgetSettlementReadPort, BudgetSettlementReceipt
 from framework.harness.task_plan.mutation_fence import MutationFence, MutationFenceState
 from framework.harness.task_plan.observability import (
     TaskPlanMetricSample,
@@ -323,6 +325,9 @@ __all__ = [
     "DispatchWaveTerminalOutcome",
     "CapacityPool",
     "TaskCapacityPolicy",
+    "BudgetReservation",
+    "BudgetSettlementReceipt",
+    "BudgetSettlementReadPort",
     "MutationFence",
     "MutationFenceState",
     "TaskCapacityDemand",

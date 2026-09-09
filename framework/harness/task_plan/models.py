@@ -44,6 +44,7 @@ from framework.harness.task_plan.schema import (
     TaskPlanContractKind,
 )
 from framework.shared.time import format_datetime, parse_datetime
+from framework.harness.control_plane.budget_allocation import EXECUTION_BUDGET_FIELDS, TASK_BUDGET_FIELDS, budget_allocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +53,19 @@ class TaskBudget:
     max_tool_calls: int = 0
     max_memory_ops: int = 0
     max_output_tokens: int = 0
+    token_limit: int | None = field(default=None, kw_only=True)
+    time_limit_ms: int | None = field(default=None, kw_only=True)
+    cost_limit: int | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "max_turns", positive_int(self.max_turns, "max_turns"))
         for field_name in ("max_tool_calls", "max_memory_ops", "max_output_tokens"):
             object.__setattr__(self, field_name, non_negative_int(getattr(self, field_name), field_name))
+        budget_allocation(self.to_dict())
+        if self.time_limit_ms is not None:
+            positive_int(self.time_limit_ms, "time_limit_ms")
+            if self.max_output_tokens > self.token_limit:
+                raise HarnessValidationError("output token limit exceeds total token limit", code="task_plan_budget_exceeded")
 
     def to_dict(self) -> dict[str, int]:
         return {
@@ -64,6 +73,7 @@ class TaskBudget:
             "max_tool_calls": self.max_tool_calls,
             "max_memory_ops": self.max_memory_ops,
             "max_output_tokens": self.max_output_tokens,
+            **{name: getattr(self, name) for name in EXECUTION_BUDGET_FIELDS if getattr(self, name) is not None},
         }
 
     @classmethod
@@ -71,23 +81,24 @@ class TaskBudget:
         payload = exact_keys(
             value,
             required=frozenset({"max_turns", "max_tool_calls", "max_memory_ops", "max_output_tokens"}),
+            optional=frozenset(EXECUTION_BUDGET_FIELDS),
             model=cls.__name__,
         )
+        budget_allocation(payload)
         return cls(**payload)
 
     def plus(self, other: TaskBudget) -> TaskBudget:
-        return TaskBudget(
-            max_turns=self.max_turns + other.max_turns,
-            max_tool_calls=self.max_tool_calls + other.max_tool_calls,
-            max_memory_ops=self.max_memory_ops + other.max_memory_ops,
-            max_output_tokens=self.max_output_tokens + other.max_output_tokens,
-        )
+        left, right = self.to_dict(), other.to_dict()
+        if set(left) != set(right):
+            raise HarnessValidationError("budget dimensions differ", code="task_plan_budget_policy_missing")
+        return TaskBudget(**{name: left[name] + right[name] for name in left})
 
     def exceeds(self, limit: TaskBudget) -> tuple[str, ...]:
         return tuple(
             field_name
-            for field_name in ("max_turns", "max_tool_calls", "max_memory_ops", "max_output_tokens")
-            if getattr(self, field_name) > getattr(limit, field_name)
+            for field_name in (*TASK_BUDGET_FIELDS, *EXECUTION_BUDGET_FIELDS)
+            if (getattr(self, field_name) is None) != (getattr(limit, field_name) is None)
+            or (getattr(self, field_name) is not None and getattr(limit, field_name) is not None and getattr(self, field_name) > getattr(limit, field_name))
         )
 
 
@@ -734,6 +745,11 @@ class TaskPlanLimits:
             "aggregate_task_budget",
             _model(self.aggregate_task_budget, TaskBudget, "aggregate_task_budget"),
         )
+        if self.per_task_budget.exceeds(self.aggregate_task_budget):
+            raise HarnessValidationError(
+                "per-task budget must fit within aggregate task budget",
+                code="invalid_task_plan_budget_policy",
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {

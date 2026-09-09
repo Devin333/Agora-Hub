@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.control_plane.budget_reservation import BudgetReservation
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.task_plan.parallel import (
     DispatchGroupState,
@@ -14,7 +15,6 @@ from framework.harness.task_plan.parallel import (
 )
 from framework.harness.task_plan.replay import TaskPlanReplayReducer, _apply_parallel_event, _projection_for_plan
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
-from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.task_plan.models import TaskLifecycle
 from framework.harness.task_plan.recovery import TaskPlanRecoveryService
 from framework.harness.task_plan.checkpoint import TaskPlanCheckpoint
@@ -335,10 +335,16 @@ def test_replay_rejects_tampered_spawn_budget_reservation(spawn_history):
 def test_replay_rejects_self_consistent_budget_not_backed_by_ledger(spawn_history, field):
     projection, events = spawn_history
     intent = next(item for item in events if item["event_type"] == "TASK_ATTEMPT_SPAWN_INTENT")
-    budget = dict(intent["budget_reservation"])
-    budget[field] = 99 if field == "ledger_version" else {"turns": 99}
-    budget["reservation_checksum"] = canonical_payload_checksum({name: value for name, value in budget.items() if name != "reservation_checksum"})
-    intent["budget_reservation"] = budget
+    budget = BudgetReservation.from_dict(intent["budget_reservation"])
+    if field == "ledger_version":
+        changed = replace(budget, ledger_version=99)
+    else:
+        allocation = dict(getattr(budget, field))
+        allocation["time_limit_ms"] += 1 if field == "parent_allocation" else -1
+        changed = replace(budget, **{field: allocation})
+    # Keep every v2 projection and checksum valid so replay must compare the
+    # reservation with the authoritative ledger, beyond schema validation.
+    intent["budget_reservation"] = changed.to_dict()
     with pytest.raises(HarnessValidationError, match="differs from attempt ledger"):
         _replay(projection, events)
 

@@ -1368,7 +1368,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
                 "parent_allocation", "attempt_allocation", "reservation_checksum",
             ],
             "properties": {
-                "schema_version": {"const": "agora.harness-budget-reservation/v1"},
+                "schema_version": {"const": "agora.harness-budget-reservation/v2"},
                 "ledger_version": _POSITIVE_INTEGER,
                 "owner_scope": _TEXT,
                 "reservation_key": _TEXT,
@@ -1379,6 +1379,12 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
                 "tool_calls": non_negative, "remaining_tool_calls": non_negative,
                 "memory_ops": non_negative, "remaining_memory_ops": non_negative,
                 "output_tokens": non_negative, "remaining_output_tokens": non_negative,
+                "tokens": non_negative, "remaining_tokens": non_negative,
+                "time_ms": non_negative, "remaining_time_ms": non_negative,
+                "cost_microusd": non_negative, "remaining_cost_microusd": non_negative,
+                "token_limit": non_negative, "time_limit_ms": _POSITIVE_INTEGER,
+                "tool_call_limit": non_negative, "cost_limit": non_negative,
+                "cost_unit": {"const": "USD_MICRO"},
             },
         },
         "spawn_status": {"enum": ["SPAWN_CONFIRMED", "SPAWN_UNKNOWN"]},
@@ -1386,6 +1392,22 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "recovered_results": {"type": "array", "items": recovered_result, "maxItems": 128},
         "observation": observation,
     }
+    fields["budget_reservation"]["allOf"] = [{
+        "if": {"properties": {"schema_version": {"const": "agora.harness-budget-reservation/v2"}}},
+        "then": {
+            "required": ["token_limit", "time_limit_ms", "tool_call_limit"],
+            "dependentRequired": {"cost_limit": ["cost_unit"], "cost_unit": ["cost_limit"]},
+            "properties": {
+                name: object_schema({
+                    "max_turns": _POSITIVE_INTEGER, "max_tool_calls": _NONNEGATIVE_INTEGER,
+                    "max_memory_ops": _NONNEGATIVE_INTEGER, "max_output_tokens": _NONNEGATIVE_INTEGER,
+                    "token_limit": _NONNEGATIVE_INTEGER, "time_limit_ms": _POSITIVE_INTEGER,
+                    "cost_limit": _NONNEGATIVE_INTEGER,
+                }, required=["max_turns", "max_tool_calls", "max_memory_ops", "max_output_tokens", "token_limit", "time_limit_ms"])
+                for name in ("parent_allocation", "attempt_allocation")
+            },
+        },
+    }]
     required_by_type = {
         "TASK_GROUP_ADMITTED": ["group", "requested_parallelism", "effective_parallelism", "idempotency_key"],
         "TASK_WAVE_ADMITTED": ["group", "wave", "idempotency_key", "budget_before_checksum", "budget_after_checksum"],

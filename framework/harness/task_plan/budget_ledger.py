@@ -7,6 +7,10 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.control_plane.budget_allocation import USAGE_FIELDS, budget_allocation, budget_counter_keys
+from framework.harness.task_plan.budget_settlement import (
+    BUDGET_EXCEEDED, BudgetSettlementReadPort, BudgetSettlementReceipt, SETTLEMENT_REASONS,
+)
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     checksum,
@@ -25,13 +29,11 @@ if TYPE_CHECKING:
     from framework.harness.task_plan.store import TaskResultRecord
 
 
-TASK_PLAN_BUDGET_LEDGER_SCHEMA = "agora.task-plan-budget-ledger/v1"
-TASK_PLAN_BUDGET_RECORD_SCHEMA = "agora.task-plan-budget-record/v1"
-BUDGET_DIMENSIONS = ("max_turns", "max_tool_calls", "max_memory_ops", "max_output_tokens")
-_COUNTERS = frozenset(f"{prefix}_{name}" for prefix in ("reserved", "consumed", "released") for name in BUDGET_DIMENSIONS)
+TASK_PLAN_BUDGET_LEDGER_SCHEMA = "agora.task-plan-budget-ledger/v2"
+TASK_PLAN_BUDGET_RECORD_SCHEMA = "agora.task-plan-budget-record/v2"
 _RECORD_KEYS = frozenset({
     "schema_version", "reservation_key", "instance", "status", "consumed", "released",
-    "result_checksum", "reason_code", "reserved_revision", "settled_revision",
+    "result_checksum", "reason_code", "reserved_revision", "settled_revision", "settlement_receipt",
 })
 _LEDGER_KEYS = frozenset({
     "schema_version", "run_id", "stage_id", "policy_ref", "parent_allocation",
@@ -57,6 +59,8 @@ class TaskPlanBudgetLedger:
         non_negative_int(self.ledger_version, "ledger_version")
         parent = _allocation(self.parent_allocation)
         records = frozen_mapping(self.records, "budget_records")
+        if len(records) > 4096:
+            _fail("budget reservation history exceeds its bound")
         revisions: list[int] = []
         identities: set[tuple[str, str, int]] = set()
         instance_ids: set[str] = set()
@@ -74,30 +78,39 @@ class TaskPlanBudgetLedger:
             instance_ids.add(instance.task_instance_id)
             identities.add(identity)
             consumed, released = _allocation(record["consumed"]), _allocation(record["released"])
+            if any(set(value) != set(parent) for value in (consumed, released, instance.budget_snapshot.to_dict())):
+                _fail("reservation dimensions differ from parent policy", "task_plan_budget_policy_missing")
             reserved_revision = positive_int(record["reserved_revision"], "reserved_revision")
             revisions.append(reserved_revision)
             status = record["status"]
             if status == "RESERVED":
-                if any(consumed.values()) or any(released.values()) or any(record[name] is not None for name in ("settled_revision", "result_checksum", "reason_code")):
+                if any(consumed.values()) or any(released.values()) or any(record[name] is not None for name in ("settled_revision", "result_checksum", "reason_code", "settlement_receipt")):
                     _fail("outstanding budget reservation contains terminal accounting")
                 if instance.task_id in outstanding:
                     _fail("retry cannot overlap an outstanding reservation", "task_plan_budget_identity_conflict")
                 outstanding.add(instance.task_id)
-            elif status in {"SETTLED", "RELEASED"}:
+            elif status in {"SETTLED", "RELEASED", "TERMINATED"}:
                 settled_revision = positive_int(record["settled_revision"], "settled_revision")
                 if settled_revision <= reserved_revision:
                     _fail("budget settlement revision must follow reservation")
                 revisions.append(settled_revision)
-                if any(consumed[name] + released[name] != getattr(instance.budget_snapshot, name) for name in BUDGET_DIMENSIONS):
+                if any(consumed[name] + released[name] != getattr(instance.budget_snapshot, name) for name in parent):
                     _fail("budget settlement does not partition the reservation")
                 if status == "SETTLED":
                     checksum(record["result_checksum"], "result_checksum")
-                    if record["reason_code"] is not None:
+                    if record["reason_code"] is not None or record["settlement_receipt"] is not None:
                         _fail("result settlement cannot contain a release reason")
-                else:
+                elif status == "RELEASED":
                     required_text(record["reason_code"], "reason_code")
-                    if any(consumed.values()) or record["result_checksum"] is not None:
+                    if any(consumed.values()) or record["result_checksum"] is not None or record["settlement_receipt"] is not None:
                         _fail("unstarted release cannot contain consumption or a result")
+                else:
+                    receipt = BudgetSettlementReceipt.from_dict(record["settlement_receipt"])
+                    if record["result_checksum"] is not None or record["reason_code"] not in SETTLEMENT_REASONS:
+                        _fail("terminated budget requires attributable lifecycle evidence")
+                    _validate_termination_receipt(instance, receipt)
+                    if receipt.reason_code != record["reason_code"] or result_budget_usage(receipt.usage, instance.budget_snapshot.to_dict()) != consumed:
+                        _fail("termination receipt differs from recorded accounting")
             else:
                 _fail("budget reservation status is invalid")
         # Bound the validation work by actual records, not an untrusted revision.
@@ -124,7 +137,10 @@ class TaskPlanBudgetLedger:
 
     @classmethod
     def from_snapshot(cls, snapshot: Mapping[str, Any]) -> TaskPlanBudgetLedger:
-        data = exact_keys(snapshot, required=_COUNTERS | {"ledger"}, model="TaskPlanBudgetSnapshot")
+        if not isinstance(snapshot, Mapping) or not isinstance(snapshot.get("ledger"), Mapping):
+            _fail("budget snapshot requires a ledger")
+        parent = _allocation(snapshot["ledger"].get("parent_allocation"))
+        data = exact_keys(snapshot, required=budget_counter_keys(parent) | {"ledger"}, model="TaskPlanBudgetSnapshot")
         raw = exact_keys(data["ledger"], required=_LEDGER_KEYS, model="TaskPlanBudgetLedger")
         supplied = checksum(raw.pop("ledger_checksum"), "ledger_checksum")
         if raw.pop("schema_version") != TASK_PLAN_BUDGET_LEDGER_SCHEMA:
@@ -151,9 +167,9 @@ class TaskPlanBudgetLedger:
         return {**self.counters(), "ledger": self.to_dict()}
 
     def counters(self) -> dict[str, int]:
-        counters = dict.fromkeys(sorted(_COUNTERS), 0)
+        counters = dict.fromkeys(sorted(budget_counter_keys(self.parent_allocation)), 0)
         for record in self.records.values():
-            for name in BUDGET_DIMENSIONS:
+            for name in self.parent_allocation:
                 counters[f"consumed_{name}"] += record["consumed"][name]
                 counters[f"released_{name}"] += record["released"][name]
                 if record["status"] == "RESERVED":
@@ -162,7 +178,7 @@ class TaskPlanBudgetLedger:
 
     def allocated_totals(self) -> dict[str, int]:
         counters = self.counters()
-        return {name: sum(counters[f"{prefix}_{name}"] for prefix in ("consumed", "released", "reserved")) for name in BUDGET_DIMENSIONS}
+        return {name: sum(counters[f"{prefix}_{name}"] for prefix in ("consumed", "released", "reserved")) for name in self.parent_allocation}
 
     def reserve(self, instances: Sequence[TaskInstance]) -> TaskPlanBudgetLedger:
         from framework.harness.task_plan.models import TaskInstance
@@ -193,10 +209,11 @@ class TaskPlanBudgetLedger:
             records[key] = {
                 "schema_version": TASK_PLAN_BUDGET_RECORD_SCHEMA,
                 "reservation_key": key, "instance": identity, "status": "RESERVED",
-                "consumed": dict.fromkeys(BUDGET_DIMENSIONS, 0),
-                "released": dict.fromkeys(BUDGET_DIMENSIONS, 0),
+                "consumed": dict.fromkeys(self.parent_allocation, 0),
+                "released": dict.fromkeys(self.parent_allocation, 0),
                 "result_checksum": None, "reason_code": None,
                 "reserved_revision": revision, "settled_revision": None,
+                "settlement_receipt": None,
             }
         return self if revision == self.ledger_version else replace(self, records=records, ledger_version=revision)
 
@@ -215,7 +232,7 @@ class TaskPlanBudgetLedger:
         if expected_allocation is not None and _allocation(expected_allocation) != allocation:
             _fail("accepted allocation and budget reservation identity conflicts", "task_plan_budget_identity_conflict")
         consumed = result_budget_usage(result.usage, allocation)
-        released = {name: allocation[name] - consumed[name] for name in BUDGET_DIMENSIONS}
+        released = {name: allocation[name] - consumed[name] for name in allocation}
         if record["status"] == "SETTLED" and record["result_checksum"] == result.result_checksum:
             if record["consumed"] != consumed or record["released"] != released:
                 _fail("recorded settlement conflicts with result usage", "task_plan_budget_settlement_conflict")
@@ -241,6 +258,40 @@ class TaskPlanBudgetLedger:
             "reason_code": reason_code,
         })
 
+    def settle_terminated(
+        self, instance: TaskInstance, *, receipt: BudgetSettlementReceipt,
+        authority: BudgetSettlementReadPort,
+    ) -> TaskPlanBudgetLedger:
+        """Account a Harness-verified cancel/reclaim/recovery receipt once.
+
+        The receipt must match evidence read from the Harness lifecycle owner.
+        Uncertain termination retains the entire outstanding charge.
+        """
+        from framework.harness.task_plan.models import TaskInstance
+
+        if not isinstance(instance, TaskInstance):
+            _fail("budget settlement requires a typed attempt", "task_plan_budget_identity_conflict")
+        _validate_termination_receipt(instance, receipt)
+        if not isinstance(authority, BudgetSettlementReadPort):
+            _fail("budget settlement authority is required", "task_plan_budget_authority_missing")
+        verified = authority.read_budget_settlement(
+            source_receipt_checksum=receipt.source_receipt_checksum,
+            reservation_key=receipt.reservation_key,
+        )
+        if not isinstance(verified, BudgetSettlementReceipt) or verified.to_dict() != receipt.to_dict():
+            _fail("budget settlement differs from authenticated evidence", "task_plan_budget_receipt_unverified")
+        key, record = self._attempt(instance.task_instance_id, instance.task_id, instance.attempt)
+        if thaw_mapping(record["instance"]) != instance.to_dict():
+            _fail("lifecycle receipt differs from reserved attempt", "task_plan_budget_identity_conflict")
+        consumed = result_budget_usage(receipt.usage, instance.budget_snapshot.to_dict())
+        released = {name: amount - consumed[name] for name, amount in instance.budget_snapshot.to_dict().items()}
+        updates = {"status": "TERMINATED", "consumed": consumed, "released": released, "reason_code": receipt.reason_code, "settlement_receipt": receipt.to_dict()}
+        if record["status"] != "RESERVED":
+            if all(record[name] == value for name, value in updates.items()):
+                return self
+            _fail("conflicting lifecycle budget settlement", "task_plan_budget_settlement_conflict")
+        return self._terminal(key, updates)
+
     def _attempt(self, task_instance_id: str | None, task_id: str, attempt: int) -> tuple[str, Mapping[str, Any]]:
         for key, record in self.records.items():
             identity = record["instance"]
@@ -255,8 +306,7 @@ class TaskPlanBudgetLedger:
 
 
 def _allocation(value: Mapping[str, Any]) -> dict[str, int]:
-    data = exact_keys(value, required=frozenset(BUDGET_DIMENSIONS), model="TaskBudgetAllocation")
-    return {name: non_negative_int(data[name], name) for name in BUDGET_DIMENSIONS}
+    return budget_allocation(value)
 
 
 def result_budget_usage(usage: Mapping[str, Any], allocation: Mapping[str, Any]) -> dict[str, int]:
@@ -264,15 +314,29 @@ def result_budget_usage(usage: Mapping[str, Any], allocation: Mapping[str, Any])
     if not isinstance(usage, Mapping):
         _fail("task result usage must be an object", "task_plan_result_usage_invalid")
     actual: dict[str, int] = {}
-    for name in BUDGET_DIMENSIONS:
-        values = [usage[key] for key in (name.removeprefix("max_"), name) if key in usage]
+    for name in requested:
+        values = [usage[key] for key in (USAGE_FIELDS[name], name) if key in usage]
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values) or (len(values) == 2 and values[0] != values[1]):
             _fail("task result usage must be non-negative integers with consistent aliases", "task_plan_result_usage_invalid")
         # Missing measurements are charged conservatively, never silently freed.
         actual[name] = values[0] if values else requested[name]
         if actual[name] > requested[name]:
-            _fail("task result usage exceeds the accepted task budget", "task_plan_result_budget_exceeded")
+            _fail("task result usage exceeds the accepted task budget", BUDGET_EXCEEDED)
+    output_measured = any(key in usage for key in ("output_tokens", "max_output_tokens"))
+    if "token_limit" in actual and output_measured and actual["max_output_tokens"] > actual["token_limit"]:
+        _fail("output token usage exceeds total token usage", "task_plan_result_usage_invalid")
+    if "token_limit" in actual and not output_measured:
+        # Without separate output metering the total measurement is an upper
+        # bound on output usage; do not fabricate more output than total tokens.
+        actual["max_output_tokens"] = min(actual["max_output_tokens"], actual["token_limit"])
     return actual
+
+
+def _validate_termination_receipt(instance: TaskInstance, receipt: BudgetSettlementReceipt) -> None:
+    if not isinstance(receipt, BudgetSettlementReceipt) or not receipt.termination_confirmed:
+        _fail("budget settlement requires confirmed termination", "task_plan_budget_termination_unconfirmed")
+    if receipt.reservation_key != instance.idempotency_key or receipt.instance_checksum != instance.instance_checksum:
+        _fail("lifecycle receipt differs from reserved attempt", "task_plan_budget_identity_conflict")
 
 
 def _fail(message: str, code: str = "task_plan_budget_snapshot_invalid") -> None:

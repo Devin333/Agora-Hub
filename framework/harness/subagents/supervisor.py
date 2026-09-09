@@ -21,6 +21,8 @@ import re
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
+from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.control_plane.budget_allocation import USAGE_FIELDS
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.json import stable_json_dumps
 
@@ -102,7 +104,7 @@ _POSITIVE_BUDGET_KEYS = frozenset(
         "max_cpu_seconds",
     }
 )
-_BUDGET_DIMENSIONS = ("turns", "tokens", "tool_calls", "memory_ops", "cpu_seconds")
+_BUDGET_DIMENSIONS = ("turns", "tokens", "tool_calls", "memory_ops", "cpu_seconds", "output_tokens", "time_ms", "cost_microusd")
 _WORKER_NOT_SUPPLIED = object()
 
 
@@ -134,6 +136,15 @@ def _budget(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError("budget must be an object")
     normalized = dict(value)
+    if "schema_version" in normalized and normalized["schema_version"] != "agora.harness-budget-reservation/v2":
+        raise ValueError("unsupported versioned child budget reservation")
+    if normalized.get("schema_version") == "agora.harness-budget-reservation/v2":
+        from framework.harness.control_plane.budget_reservation import BudgetReservation
+
+        try:
+            BudgetReservation.from_dict(normalized)
+        except HarnessValidationError as exc:
+            raise ValueError("invalid versioned child budget reservation") from exc
     stable_json_dumps(normalized)
     for key, raw in normalized.items():
         if key not in _POSITIVE_BUDGET_KEYS:
@@ -154,27 +165,31 @@ def _budget(value: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _budget_amounts(value: Mapping[str, Any]) -> dict[str, float]:
+def _budget_amounts(value: Mapping[str, Any]) -> dict[str, int | float]:
     """Normalize the reservation charged to one child request."""
-    amounts: dict[str, float] = {}
+    if value.get("schema_version") == "agora.harness-budget-reservation/v2":
+        return {USAGE_FIELDS[name]: amount for name, amount in value["attempt_allocation"].items()}
+    amounts: dict[str, int | float] = {}
     for dimension in _BUDGET_DIMENSIONS:
         raw = value.get(dimension)
         if raw is None:
             raw = value.get(f"max_{dimension}")
         if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
-            amounts[dimension] = float(raw)
+            amounts[dimension] = raw
     return amounts
 
 
-def _budget_limits(value: Mapping[str, Any]) -> dict[str, float]:
+def _budget_limits(value: Mapping[str, Any]) -> dict[str, int | float]:
     """Read parent limits carried alongside a child admission request."""
-    limits: dict[str, float] = {}
+    if value.get("schema_version") == "agora.harness-budget-reservation/v2":
+        return {USAGE_FIELDS[name]: amount for name, amount in value["parent_allocation"].items()}
+    limits: dict[str, int | float] = {}
     for dimension in _BUDGET_DIMENSIONS:
         raw = value.get(f"remaining_{dimension}")
         if raw is None:
             raw = value.get(f"max_{dimension}")
         if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
-            limits[dimension] = float(raw)
+            limits[dimension] = raw
     return limits
 
 
@@ -548,10 +563,10 @@ class ChildAgentSupervisor:
         self._cancel_timeout_seconds = float(cancel_timeout_seconds)
         self._handles: dict[str, ChildAgentHandle] = {}
         self._operations: dict[str, ChildAgentOperationResult] = {}
-        self._budget_reservations: dict[str, dict[str, float]] = {}
-        self._budget_consumed: dict[str, dict[str, float]] = {}
-        self._budget_limits_by_key: dict[str, dict[str, float]] = {}
-        self._budget_by_operation: dict[str, tuple[str, dict[str, float]]] = {}
+        self._budget_reservations: dict[str, dict[str, int | float]] = {}
+        self._budget_consumed: dict[str, dict[str, int | float]] = {}
+        self._budget_limits_by_key: dict[str, dict[str, int | float]] = {}
+        self._budget_by_operation: dict[str, tuple[str, dict[str, int | float]]] = {}
         self._workers: dict[str, Any] = {}
         self._futures: dict[str, Future[Any]] = {}
         self._reserved_spawn_operations: set[str] = set()
@@ -1394,8 +1409,8 @@ class ChildAgentSupervisor:
         if not amounts:
             return
         limits = _budget_limits(budget)
+        existing_limits = dict(self._budget_limits_by_key.get(budget_key, {}))
         if limits:
-            existing_limits = self._budget_limits_by_key.setdefault(budget_key, {})
             for dimension, limit in limits.items():
                 previous = existing_limits.get(dimension)
                 if previous is not None and previous != limit:
@@ -1404,18 +1419,20 @@ class ChildAgentSupervisor:
                         code="child_budget_conflict",
                     )
                 existing_limits[dimension] = limit
-        reserved = self._budget_reservations.setdefault(budget_key, {})
+        reserved = dict(self._budget_reservations.get(budget_key, {}))
         consumed = self._budget_consumed.get(budget_key, {})
-        known_limits = self._budget_limits_by_key.get(budget_key, {})
+        known_limits = existing_limits
         for dimension, amount in amounts.items():
             limit = known_limits.get(dimension)
-            if limit is not None and reserved.get(dimension, 0.0) + consumed.get(dimension, 0.0) + amount > limit:
+            if limit is not None and reserved.get(dimension, 0) + consumed.get(dimension, 0) + amount > limit:
                 raise ChildAgentAdmissionError(
                     f"child budget exceeds remaining {dimension} capacity",
                     code="child_budget_exhausted",
                 )
         for dimension, amount in amounts.items():
-            reserved[dimension] = reserved.get(dimension, 0.0) + amount
+            reserved[dimension] = reserved.get(dimension, 0) + amount
+        self._budget_limits_by_key[budget_key] = existing_limits
+        self._budget_reservations[budget_key] = reserved
         self._budget_by_operation[operation_id] = (budget_key, amounts)
 
     def _finalize_budget_for_operation(self, operation_id: str, *, consume: bool) -> None:
@@ -1426,13 +1443,13 @@ class ChildAgentSupervisor:
         current = self._budget_reservations.get(budget_key, {})
         consumed = self._budget_consumed.setdefault(budget_key, {})
         for dimension, amount in amounts.items():
-            remaining = current.get(dimension, 0.0) - amount
+            remaining = current.get(dimension, 0) - amount
             if remaining > 0:
                 current[dimension] = remaining
             else:
                 current.pop(dimension, None)
             if consume:
-                consumed[dimension] = consumed.get(dimension, 0.0) + amount
+                consumed[dimension] = consumed.get(dimension, 0) + amount
         if not current:
             self._budget_reservations.pop(budget_key, None)
         self._budget_by_operation.pop(operation_id, None)
@@ -1461,13 +1478,13 @@ class ChildAgentSupervisor:
         if receipt is None or not receipt.termination_confirmed:
             reserved = self._budget_reservations.setdefault(budget_key, {})
             for dimension, amount in amounts.items():
-                reserved[dimension] = reserved.get(dimension, 0.0) + amount
+                reserved[dimension] = reserved.get(dimension, 0) + amount
             self._budget_by_operation[handle.operation_id] = (budget_key, amounts)
             return
         if receipt.status in {ChildAgentState.SUCCEEDED, ChildAgentState.FAILED}:
             consumed = self._budget_consumed.setdefault(budget_key, {})
             for dimension, amount in amounts.items():
-                consumed[dimension] = consumed.get(dimension, 0.0) + amount
+                consumed[dimension] = consumed.get(dimension, 0) + amount
 
     def _require(self, child_id: str) -> ChildAgentHandle:
         try:

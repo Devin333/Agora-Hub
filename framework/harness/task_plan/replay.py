@@ -1998,34 +1998,16 @@ def _validate_spawn_budget_reservation(
     operation_key: str,
     event: TaskPlanEvent,
 ) -> None:
-    required = {
-        "schema_version", "ledger_version", "owner_scope", "reservation_key",
-        "parent_allocation", "attempt_allocation", "reservation_checksum",
-    }
-    if not required.issubset(value):
-        _parallel_error("spawn budget reservation is incomplete", event)
-    if value.get("schema_version") != "agora.harness-budget-reservation/v1":
-        _parallel_error("spawn budget reservation schema is invalid", event)
-    if value.get("reservation_key") != operation_key:
+    from framework.harness.control_plane.budget_reservation import BudgetReservation
+
+    try:
+        reservation = BudgetReservation.from_dict(value)
+    except HarnessValidationError as error:
+        if error.code == "task_plan_budget_checksum_mismatch":
+            _parallel_error("spawn budget reservation checksum or projection is invalid", event)
+        _parallel_error("spawn budget reservation contract is invalid", event)
+    if reservation.reservation_key != operation_key:
         _parallel_error("spawn budget reservation key differs from operation key", event)
-    if (
-        isinstance(value.get("ledger_version"), bool)
-        or not isinstance(value.get("ledger_version"), int)
-        or value["ledger_version"] < 1
-        or not isinstance(value.get("owner_scope"), str)
-        or not value["owner_scope"].strip()
-        or not isinstance(value.get("parent_allocation"), Mapping)
-        or not isinstance(value.get("attempt_allocation"), Mapping)
-    ):
-        _parallel_error("spawn budget reservation metadata is invalid", event)
-    supplied = value.get("reservation_checksum")
-    if not isinstance(supplied, str) or not supplied.startswith("sha256:"):
-        _parallel_error("spawn budget reservation checksum is invalid", event)
-    expected = canonical_payload_checksum(
-        {key: item for key, item in value.items() if key != "reservation_checksum"}
-    )
-    if supplied != expected:
-        _parallel_error("spawn budget reservation checksum does not match its snapshot", event)
 
 
 def _validated_plan_history(

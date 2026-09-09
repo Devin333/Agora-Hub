@@ -541,6 +541,7 @@ def _task_instance_from_queue_wire(value: Mapping[str, Any]) -> TaskInstance:
     budget = exact_keys(
         payload["budget_snapshot"],
         required=_QUEUE_BUDGET_FIELDS,
+        optional=frozenset({"token_limit", "time_limit_ms", "cost_limit"}),
         model="TaskPlanQueueTaskBudget",
     )
     budget["max_output_tokens"] = budget.pop("max_output_units")

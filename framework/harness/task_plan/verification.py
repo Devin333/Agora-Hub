@@ -856,36 +856,9 @@ def _require_task_instance_identity(task: ResolvedTaskSpec, instance: TaskInstan
 
 
 def _validate_worker_usage(value: Mapping[str, Any], task: ResolvedTaskSpec) -> None:
-    if not isinstance(value, Mapping):
-        raise HarnessValidationError("worker metrics must be an object", code="task_plan_result_invalid")
-    limits = {
-        "turns": task.normalized_budget.max_turns,
-        "tool_calls": task.normalized_budget.max_tool_calls,
-        "memory_ops": task.normalized_budget.max_memory_ops,
-        "output_tokens": task.normalized_budget.max_output_tokens,
-    }
-    aliases = {
-        "max_turns": "turns",
-        "max_tool_calls": "tool_calls",
-        "max_memory_ops": "memory_ops",
-        "max_output_tokens": "output_tokens",
-    }
-    for raw_key, value_item in value.items():
-        key = aliases.get(str(raw_key), str(raw_key))
-        if key not in limits:
-            continue
-        if isinstance(value_item, bool) or not isinstance(value_item, int) or value_item < 0:
-            raise HarnessValidationError(
-                "dynamic task usage must be a non-negative integer",
-                code="task_plan_result_usage_invalid",
-                details={"field": key},
-            )
-        if value_item > limits[key]:
-            raise HarnessValidationError(
-                "dynamic task usage exceeds its pinned budget",
-                code="task_plan_result_budget_exceeded",
-                details={"field": key, "used": value_item, "limit": limits[key]},
-            )
+    from framework.harness.task_plan.budget_ledger import result_budget_usage
+
+    result_budget_usage(value, task.normalized_budget.to_dict())
 
 
 def _validate_worker_boundary_diagnostics(value: Mapping[str, Any], task: ResolvedTaskSpec) -> None:

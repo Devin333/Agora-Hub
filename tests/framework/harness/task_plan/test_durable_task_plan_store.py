@@ -314,7 +314,7 @@ def _runtime(store: _EventStore) -> EventRuntime:
     return EventRuntime(store=store, schema_catalog=default_event_schema_catalog(), monotonic=lambda: 1.0)
 
 
-def _policy_and_registry(*, two_tasks: bool = False):
+def _policy_and_registry(*, two_tasks: bool = False, explicit_execution_budget: bool = False):
     capabilities = ("research.structure", "research.helper") if two_tasks else ("research.structure",)
     roles = ("analysis.structure", "analysis.helper") if two_tasks else ("analysis.structure",)
     workers = [_Worker(f"{capability}-worker") for capability in capabilities]
@@ -331,6 +331,16 @@ def _policy_and_registry(*, two_tasks: bool = False):
             output_schema_ref=f"schema://{roles[index]}@1",
         )
         for index, (capability, worker) in enumerate(zip(capabilities, workers, strict=True))
+    )
+    per_task_budget = (
+        TaskBudget(max_turns=1, token_limit=4096, time_limit_ms=900_000)
+        if explicit_execution_budget
+        else TaskBudget(max_turns=1)
+    )
+    aggregate_task_budget = (
+        TaskBudget(max_turns=8, token_limit=32_768, time_limit_ms=7_200_000)
+        if explicit_execution_budget
+        else TaskBudget(max_turns=8)
     )
     policy = TaskPlanPolicy(
         policy_id="research.analysis",
@@ -356,8 +366,8 @@ def _policy_and_registry(*, two_tasks: bool = False):
         max_plan_build_calls=1,
         max_plan_build_turns=1,
         max_plan_build_tool_calls=0,
-        per_task_budget=TaskBudget(max_turns=1),
-        aggregate_task_budget=TaskBudget(max_turns=8),
+        per_task_budget=per_task_budget,
+        aggregate_task_budget=aggregate_task_budget,
     )
     return policy, TaskCapabilityRegistry(registrations)
 
@@ -391,8 +401,21 @@ def _candidate(tasks: tuple[TaskSpec, ...], *, stage_binding, two_tasks: bool = 
     )
 
 
-def _accepted_plan(tasks: tuple[TaskSpec, ...], *, two_tasks: bool = False):
-    policy, registry = _policy_and_registry(two_tasks=two_tasks)
+def _accepted_plan(
+    tasks: tuple[TaskSpec, ...],
+    *,
+    two_tasks: bool = False,
+    explicit_execution_budget: bool = False,
+):
+    policy, registry = _policy_and_registry(
+        two_tasks=two_tasks,
+        explicit_execution_budget=explicit_execution_budget,
+    )
+    if explicit_execution_budget:
+        tasks = tuple(
+            replace(task, budget_request=policy.per_task_budget)
+            for task in tasks
+        )
     stage_binding = build_task_plan_stage_binding(
         graph_id="research.dynamic",
         stage_id=policy.stage_id,
@@ -930,8 +953,9 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     assert record["reserved_revision"] == 1
     assert record["settled_revision"] == 2
     assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+    # Ledger v2 includes the versioned settlement receipt in canonical history.
     assert report.replay_checksum == (
-        "sha256:80e1a892f5ab03807f230a281b84c2490e9427210fc39b6e99f91cecbfba2546"
+        "sha256:9b4561d1c8622fcb5dbba6ec6c4a5e610eb821617efb666c3330a2c4a0f08487"
     )
     assert report.projection.projection_checksum == projection.projection_checksum
     assert report.projection.matches_plan_identity(plan)

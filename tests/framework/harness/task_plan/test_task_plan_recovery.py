@@ -230,8 +230,9 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
     assert record["settled_revision"] is None
     assert restored.budget_snapshot["reserved_max_turns"] == instance.budget_snapshot.max_turns
     assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+    # Ledger v2 includes the versioned settlement receipt in canonical history.
     assert report.replay_checksum == (
-        "sha256:5a6cc8001a7772c85321715bc124c1878f2c55c7f2f11c9ee9da38cd1b71111f"
+        "sha256:2f56d6f8b32e7b38de0ba5103771265e59815c2e23c841d79d38971edd096d27"
     )
     assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
     assert checkpoint.checkpoint_checksum.startswith("sha256:")

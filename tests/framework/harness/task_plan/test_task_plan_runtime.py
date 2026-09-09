@@ -506,13 +506,37 @@ def test_terminal_failure_closes_unadmitted_dependency_chain_without_child_calls
         roles=("role_a", "role_b", "role_c", "role_d"),
         capabilities=("cap_a", "cap_b", "cap_c", "cap_d"),
     )
+    task_budget = TaskBudget(
+        max_turns=1,
+        token_limit=4_096,
+        time_limit_ms=1_000,
+    )
+    policy = replace(
+        policy,
+        per_task_budget=TaskBudget(
+            max_turns=2,
+            token_limit=4_096,
+            time_limit_ms=1_000,
+        ),
+        aggregate_task_budget=TaskBudget(
+            max_turns=8,
+            token_limit=16_384,
+            time_limit_ms=4_000,
+        ),
+    )
     candidate = _candidate(
         graph,
         (
-            _task("a", "cap_a", "role_a"),
-            _task("b", "cap_b", "role_b", depends_on=("a",)),
-            _task("c", "cap_c", "role_c", depends_on=("b",)),
-            _task("d", "cap_d", "role_d"),
+            replace(_task("a", "cap_a", "role_a"), budget_request=task_budget),
+            replace(
+                _task("b", "cap_b", "role_b", depends_on=("a",)),
+                budget_request=task_budget,
+            ),
+            replace(
+                _task("c", "cap_c", "role_c", depends_on=("b",)),
+                budget_request=task_budget,
+            ),
+            replace(_task("d", "cap_d", "role_d"), budget_request=task_budget),
         ),
         roles=("role_a", "role_b", "role_c", "role_d"),
     )
@@ -721,16 +745,32 @@ def test_runner_recovers_failed_result_before_retry_event_without_redispatching_
 
 def test_parallel_runner_retries_with_a_new_attempt_in_the_same_dispatch_group():
     graph, policy, registry = _setup()
+    task_budget = TaskBudget(
+        max_turns=1,
+        token_limit=4_096,
+        time_limit_ms=1_000,
+    )
     policy = replace(
         policy,
         capability_capacity=2,
         available_concurrency_reservations=2,
+        per_task_budget=TaskBudget(
+            max_turns=2,
+            token_limit=4_096,
+            time_limit_ms=1_000,
+        ),
+        aggregate_task_budget=TaskBudget(
+            max_turns=8,
+            token_limit=8_192,
+            time_limit_ms=2_000,
+        ),
     )
     candidate = _candidate(
         graph,
         (
             replace(
                 _task("a"),
+                budget_request=task_budget,
                 retry_policy={
                     "max_attempts": 2,
                     "retryable_reason_codes": ("transport",),
