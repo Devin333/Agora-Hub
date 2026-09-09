@@ -21,6 +21,7 @@
 }
 
 .trigger:hover { border-color: #8b5cf6; background: var(--popover); }
+.inlineTrigger { position: static; display: flex; box-shadow: none; border-radius: 12px; background: #faf7ff; color: #6d28d9; }
 .trigger:focus-visible, .close:focus-visible { outline: 3px solid color-mix(in srgb, #8b5cf6 55%, transparent); outline-offset: 2px; }
 .trigger kbd { padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted-foreground); background: var(--muted); font: 500 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; }
 

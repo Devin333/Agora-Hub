@@ -74,6 +74,9 @@ ALLOWED_BUSINESS_IMPORTS = {
         "backend.research.domain.paper",
         "backend.research.ports.source_resolver",
     },
+    "infrastructure/research/document_repository.py": {"backend.research.domain.document"},
+    "infrastructure/research/github_guided_search.py": {"backend.research.ports.guided_research"},
+    "infrastructure/research/public_paper_cache.py": {"backend.research.ports.guided_research"},
 }
 
 SOURCE_ADAPTER_BUSINESS_IMPORTS = {
@@ -139,6 +142,9 @@ RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
         "backend.research.domain.paper",
         "backend.research.ports.source_resolver",
     },
+    "infrastructure/research/document_repository.py": {"backend.research.domain.document"},
+    "infrastructure/research/github_guided_search.py": {"backend.research.ports.guided_research"},
+    "infrastructure/research/public_paper_cache.py": {"backend.research.ports.guided_research"},
 }
 
 

@@ -1,4 +1,5 @@
 import { researchModuleForPath, safeResearchHref, type ResearchModule } from "./entry"
+import { validResearchConversation, type ResearchConversation } from "./conversation"
 import { validActivity, validComposerDraft, validMaterial, validPrompt, validReportDraft, type ResearchActivity, type ResearchComposerDraft, type ResearchMaterial, type ResearchPrompt, type ResearchReportDraft } from "./workspace-items"
 
 export type ResearchVisit = {
@@ -7,6 +8,7 @@ export type ResearchVisit = {
   createdAt: number; updatedAt: number; deletedAt: number | null
   archivedAt?: number | null
   activity?: ResearchActivity | null
+  conversation?: ResearchConversation
 }
 export type ResearchGroup = { id: string; name: string; createdAt: number; updatedAt: number }
 export type ResearchWorkspace = {
@@ -37,7 +39,8 @@ export function validateVisit(value: unknown): ResearchVisit | null {
   if (v.activity != null && !validActivity(v.activity)) return null
   if (v.activity?.kind === "reader" && v.module !== "papers") return null
   if (v.activity?.kind === "report" && v.module !== "reports") return null
-  return { id: v.id, module: v.module, question: v.question, href, scrollY: v.scrollY, title: v.title.trim(), groupId: v.groupId, isFavorite: v.isFavorite, createdAt: v.createdAt, updatedAt: v.updatedAt, deletedAt: v.deletedAt, ...(v.archivedAt !== undefined ? { archivedAt: v.archivedAt } : {}), ...(v.activity !== undefined ? { activity: v.activity } : {}) }
+  if (v.conversation !== undefined && (!validResearchConversation(v.conversation) || v.conversation.turns[0].question !== v.question || !["papers", "projects"].includes(v.module))) return null
+  return { id: v.id, module: v.module, question: v.question, href, scrollY: v.scrollY, title: v.title.trim(), groupId: v.groupId, isFavorite: v.isFavorite, createdAt: v.createdAt, updatedAt: v.updatedAt, deletedAt: v.deletedAt, ...(v.archivedAt !== undefined ? { archivedAt: v.archivedAt } : {}), ...(v.activity !== undefined ? { activity: v.activity } : {}), ...(v.conversation !== undefined ? { conversation: v.conversation } : {}) }
 }
 
 export function validateWorkspace(value: unknown): ResearchWorkspace | null {

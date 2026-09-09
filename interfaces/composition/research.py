@@ -55,6 +55,7 @@ from backend.research.document.cascade_parser import (
     CascadeArxivDocumentParser,
     CascadeDocumentParser,
     PyMuPDFTextDocumentParser,
+    SelectableTextPdfDocumentParser,
 )
 from backend.research.document.format_router import MultiFormatDocumentParser
 from backend.research.document.chunk_manifest import ChunkManifestManager
@@ -1437,13 +1438,16 @@ def _build_configured_composition(
         catalog_store = FilesystemResearchCatalogStore(
             settings.research_root / "paper-catalog"
         )
+        from infrastructure.research.document_repository import FilesystemResearchDocumentRepository
+
+        documents = FilesystemResearchDocumentRepository(catalog_store)
         catalog_service = ResearchPaperCatalogService(
             catalog_repository=catalog_store,
             identity_repository=catalog_store,
             relation_repository=catalog_store,
             source_snapshot_repository=catalog_store,
             paper_repository=catalog_store,
-            document_repository=catalog_store,
+            document_repository=documents,
             evidence_repository=catalog_store,
             code_profile_repository=catalog_store,
             sota_claim_repository=catalog_store,
@@ -1463,13 +1467,14 @@ def _build_configured_composition(
             paper_repository=catalog_store,
             identity_repository=catalog_store,
             source_snapshot_repository=catalog_store,
-            document_repository=catalog_store,
+            document_repository=documents,
             evidence_repository=catalog_store,
             document_parser=MultiFormatDocumentParser(
                 arxiv_parser=_build_research_multi_format_parser(
                     settings.parser,
                     execution_composition=execution_composition,
-                )
+                ),
+                pdf_parser=SelectableTextPdfDocumentParser(),
             ),
             document_compiler=document_compiler,
             artifact_store=catalog_store,

@@ -6,6 +6,7 @@ from typing import Any, Callable
 from fastapi import Request
 
 from interfaces.composition.research import build_research_application_service
+from interfaces.composition.guided_research import build_guided_research_service
 from interfaces.models import ActorContext, actor_context_from_headers
 from interfaces.services.artifact_service import ArtifactInspectionService
 from interfaces.services.auth_service import AuthApplicationService
@@ -20,6 +21,7 @@ from interfaces.services.harness_wait_service import HarnessWaitApplicationServi
 from interfaces.services.project_service import ProjectApplicationService
 from interfaces.services.research_service import ResearchApplicationService
 from interfaces.services.research_history_service import ResearchHistoryService
+from interfaces.services.guided_research_service import GuidedResearchService
 from interfaces.services.report_service import ReportApplicationService
 from interfaces.services.run_inspection_service import GraphRunInspectionService
 from interfaces.services.run_inspection_factory import (
@@ -59,6 +61,7 @@ AuthServiceFactory = Callable[[], AuthApplicationService]
 ProjectServiceFactory = Callable[[], ProjectApplicationService]
 ResearchServiceFactory = Callable[[], ResearchApplicationService]
 ResearchHistoryServiceFactory = Callable[[], ResearchHistoryService]
+GuidedResearchServiceFactory = Callable[[], GuidedResearchService]
 RuntimeOperatorStatusServiceFactory = Callable[[], RuntimeOperatorStatusService]
 
 
@@ -83,6 +86,7 @@ class ApiServices:
     project_service_factory: ProjectServiceFactory
     research_service_factory: ResearchServiceFactory
     research_history_service_factory: ResearchHistoryServiceFactory
+    guided_research_service_factory: GuidedResearchServiceFactory
     harness_graph_service_factory: HarnessGraphServiceFactory | None = None
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None
     runtime_operator_status_service_factory: RuntimeOperatorStatusServiceFactory | None = None
@@ -122,6 +126,7 @@ def build_api_services(
     project_service_factory: ProjectServiceFactory = ProjectApplicationService,
     research_service_factory: ResearchServiceFactory = build_research_application_service,
     research_history_service_factory: ResearchHistoryServiceFactory = ResearchHistoryService,
+    guided_research_service_factory: GuidedResearchServiceFactory = build_guided_research_service,
     harness_graph_service_factory: HarnessGraphServiceFactory | None = None,
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None,
     runtime_operator_status_service_factory: RuntimeOperatorStatusServiceFactory | None = None,
@@ -147,6 +152,7 @@ def build_api_services(
         project_service_factory=project_service_factory,
         research_service_factory=research_service_factory,
         research_history_service_factory=research_history_service_factory,
+        guided_research_service_factory=guided_research_service_factory,
         harness_graph_service_factory=harness_graph_service_factory,
         harness_wait_service_factory=harness_wait_service_factory,
         runtime_operator_status_service_factory=runtime_operator_status_service_factory,

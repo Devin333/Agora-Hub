@@ -43,7 +43,9 @@ export function useResearchDraft() {
   } : emptyDraft()
   function update(patch: Partial<ResearchComposerDraft>) {
     if (!ready) return
-    const next = { ...draft, ...patch, submittedSessionId: patch.submittedSessionId, updatedAt: Date.now() }
+    // Multiple composer controls may update in one event before React renders again.
+    // Read the latest draft rather than overwriting the preceding update with this render's copy.
+    const next = { ...current.current.draft, ...patch, submittedSessionId: patch.submittedSessionId, updatedAt: Date.now() }
     current.current = { ...current.current, draft: next }
     setLocal(current.current); setRestored(false)
     return saveComposerDraft(next, local.owner)

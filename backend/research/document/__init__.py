@@ -3,7 +3,9 @@ from backend.research.document.cascade_parser import (
     CascadeArxivDocumentParser,
     CascadeDocumentParser,
     DocumentQualityProbe,
+    PdfTextExtractionError,
     PyMuPDFTextDocumentParser,
+    SelectableTextPdfDocumentParser,
 )
 from backend.research.document.chunker import PaperDocumentChunker
 from backend.research.document.async_preprocessor import AsyncChunkPreprocessor
@@ -24,10 +26,12 @@ __all__ = [
     "PaperChunk",
     "PaperDocumentChunker",
     "ParseSource",
+    "PdfTextExtractionError",
     "MarkerPdfDocumentParser",
     "MinerUPdfDocumentParser",
     "PdfDocumentParser",
     "PyMuPDFTextDocumentParser",
+    "SelectableTextPdfDocumentParser",
     "SectionRole",
     "SourceFormat",
     "detect_source_format",

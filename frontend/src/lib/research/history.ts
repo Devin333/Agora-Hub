@@ -1,4 +1,6 @@
 import { researchModuleForPath, safeResearchHref } from "./entry"
+import { conversationHref, validResearchConversation, type ResearchConversation } from "./conversation"
+import { researchQuestionHref } from "./entry"
 import { emptyWorkspace, legacyHistoryId, migrateLegacyHistory, sessionParameter, validateVisit, validateWorkspace, validHistoryId, type ResearchVisit, type ResearchWorkspace } from "./history-model"
 import { validMaterial, validReportDraft, validPrompt, validActivity, type ResearchMaterial, type ResearchReportDraft, type ResearchPrompt, type ResearchComposerDraft, type ResearchActivity } from "./workspace-items"
 export type { ResearchVisit, ResearchGroup, ResearchWorkspace } from "./history-model"
@@ -164,6 +166,7 @@ export function rememberResearchActivity(sessionId: string, activity: ResearchAc
   return updateResearchWorkspace(workspace => ({ ...workspace, visits: workspace.visits.map(v => v.id === sessionId ? { ...v, activity, updatedAt: Math.max(v.updatedAt, activity.updatedAt) } : v) }), expectedOwner)
 }
 export function researchResumeHref(visit: ResearchVisit): string {
+  if (visit.conversation) return conversationHref(visit.id)
   const activity = visit.activity
   if (!activity) return visit.href
   if (activity.kind === "report") {
@@ -177,6 +180,19 @@ export function researchResumeHref(visit: ResearchVisit): string {
   if (activity.sectionId) url.searchParams.set("resumeSection", activity.sectionId)
   if (activity.pdfPage) url.searchParams.set("resumePage", String(activity.pdfPage))
   return url.pathname + url.search
+}
+
+/** Atomic conversation + visit update retains a single history identity across follow-ups. */
+export function saveResearchConversation(id: string, conversation: ResearchConversation, groupId: string | null, expectedOwner: string | null | undefined, scrollY?: number): boolean {
+  if (!validHistoryId(id) || !validResearchConversation(conversation)) return false
+  return updateResearchWorkspace(workspace => {
+    const existing = workspace.visits.find(visit => visit.id === id)
+    if (existing?.deletedAt) return workspace
+    const question = conversation.turns[0].question, now = Date.now()
+    const researchModule = existing?.module ?? conversation.turns[0].intent?.sources[0] ?? "papers"
+    const visit: ResearchVisit = { id, module: researchModule, question, href: researchQuestionHref(researchModule, question, id), title: existing?.title ?? question.slice(0, 40), groupId: existing ? existing.groupId : groupId, isFavorite: existing?.isFavorite ?? false, createdAt: existing?.createdAt ?? now, deletedAt: null, ...existing, updatedAt: now, conversation, scrollY: scrollY ?? existing?.scrollY ?? 0 }
+    return { ...workspace, ...(!existing && workspace.composerDraft?.question.trim() === question ? { composerDraft: null } : {}), visits: [visit, ...workspace.visits.filter(item => item.id !== id)] }
+  }, expectedOwner)
 }
 export function prepareResearchResume(visit: ResearchVisit) {
   const valid = validateVisit(visit)

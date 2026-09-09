@@ -11,6 +11,15 @@ const MAX_SOURCE_BYTES = 16 * 1024 * 1024
 const MAX_CACHE_BYTES = 48 * 1024 * 1024
 const TTL = 30 * 60 * 1000
 
+/** Readiness reflects an existing, verified full-text artifact; never compile during search. */
+export function cachedReaderReady(paperId: string): boolean {
+  return Array.from(sources.values()).some(entry => entry.expires > Date.now()
+    && entry.payload.document?.paperId === paperId
+    && entry.payload.document.status === "compiled"
+    && entry.payload.status.status === "compiled"
+    && entry.payload.status.gateReport?.passed === true)
+}
+
 export function arxivSourceHtmlUrl(paper: Paper): string | undefined {
   for (const value of [paper.arxivUrl, paper.paperUrl, paper.pdfUrl]) {
     if (!value) continue

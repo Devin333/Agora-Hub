@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { paperQuestionHref, paperReaderHref, rememberPaperScroll, restorePaperScroll, safePaperReturnTo } from "../discovery-navigation"
 
 describe("paper discovery navigation", () => {
+  it("returns to the original guided research conversation", () => {
+    const returnTo = "/design-demo?researchSession=owned-session"
+    expect(safePaperReturnTo(returnTo)).toBe(returnTo)
+    expect(new URL(paperReaderHref("paper", returnTo), "http://localhost").searchParams.get("returnTo")).toBe(returnTo)
+  })
   beforeEach(() => sessionStorage.clear())
   it.each(["https://evil.test/papers", "//evil.test/papers", "/\\evil.test", "/login", "/papers/../login", "javascript:alert(1)"])("rejects unsafe destination %s", (value) => {
     expect(safePaperReturnTo(value)).toBe("/papers")

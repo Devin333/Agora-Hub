@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, Request
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from interfaces.services.guided_research_service import GuidedConstraints, GuidedIntent, GuidedResearchError
 
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
 from interfaces.models import ActorContext
@@ -15,7 +17,9 @@ from interfaces.services.research_service import (
     ResearchServiceError,
     bind_research_actor_input,
 )
-from interfaces.services.research_import_service import ResearchImportError, ResearchImportService
+from interfaces.services.research_import_service import MAX_IMPORT_BYTES, ResearchImportError, ResearchImportService
+from interfaces.services.research_import_application import ResearchImportApplication
+from interfaces.services.research_conversation_model import ConversationTurn
 
 
 class ResearchAnalyzeRequest(BaseModel):
@@ -85,18 +89,109 @@ class ResearchCatalogRefreshRequest(BaseModel):
     memoryNamespace: str | None = None
 
 
+class GuidedRequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class GuidedPublicSource(GuidedRequestModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9:_-]{1,128}$")
+    kind: Literal["paper", "project", "discussion", "note"]
+    title: str = Field(min_length=1, max_length=500)
+    url: str = Field(default="", max_length=2000)
+    notes: str = Field(default="", max_length=4000)
+
+
+class GuidedIntentRequest(GuidedRequestModel):
+    question: str = Field(min_length=1, max_length=2000)
+    answers: list[str] = Field(default_factory=list, max_length=2)
+    previous: list[ConversationTurn] = Field(default_factory=list, max_length=19)
+    materialIds: list[str] = Field(default_factory=list, max_length=50)
+    publicSources: list[GuidedPublicSource] = Field(default_factory=list, max_length=50)
+    skipClarification: bool = False
+    requestedSources: list[Literal["papers", "projects"]] | None = Field(default=None, min_length=1, max_length=2)
+    constraints: GuidedConstraints | None = None
+
+    @model_validator(mode="after")
+    def unique_references(self) -> "GuidedIntentRequest":
+        if len(set(self.materialIds)) != len(self.materialIds):
+            raise ValueError("materialIds must be unique")
+        if len(self.materialIds) + len(self.publicSources) > 50:
+            raise ValueError("combined materials must not exceed 50")
+        if self.requestedSources and len(set(self.requestedSources)) != len(self.requestedSources):
+            raise ValueError("requestedSources must be unique")
+        return self
+
+
+class GuidedSearchRequest(GuidedRequestModel):
+    source: Literal["papers", "projects"]
+    intent: GuidedIntent
+    materialIds: list[str] = Field(default_factory=list, max_length=50)
+    publicSources: list[GuidedPublicSource] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def unique_materials(self) -> "GuidedSearchRequest":
+        if len(set(self.materialIds)) != len(self.materialIds):
+            raise ValueError("materialIds must be unique")
+        if len(self.materialIds) + len(self.publicSources) > 50:
+            raise ValueError("combined materials must not exceed 50")
+        return self
+
+
 def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
     router = APIRouter()
     imports = ResearchImportService()
+
+    @router.post("/api/v1/research/guided/intent")
+    def guided_intent(payload: GuidedIntentRequest, x_newsroom_session: str | None = Header(default=None)):
+        try:
+            user_id = _optional_authenticated_user(services, x_newsroom_session)
+            return helpers.success(services.guided_research_service_factory().interpret(payload, user_id=user_id))
+        except GuidedResearchError as exc:
+            return helpers.error(
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+                details=exc.details,
+                retryable=exc.retryable,
+                user_action_required=exc.user_action_required,
+            )
+
+    @router.post("/api/v1/research/guided/search")
+    def guided_search(payload: GuidedSearchRequest, x_newsroom_session: str | None = Header(default=None)):
+        try:
+            user_id = _optional_authenticated_user(services, x_newsroom_session)
+            return helpers.success(
+                services.guided_research_service_factory().search(
+                    source=payload.source,
+                    intent=payload.intent,
+                    material_ids=payload.materialIds,
+                    public_sources=payload.publicSources,
+                    user_id=user_id,
+                )
+            )
+        except GuidedResearchError as exc:
+            return helpers.error(
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+                details=exc.details,
+                retryable=exc.retryable,
+                user_action_required=exc.user_action_required,
+            )
 
     @router.post("/api/v1/research/imports")
     async def create_research_import(request: Request, x_newsroom_session: str | None = Header(default=None)):
         import_id: str | None = None
         try:
             user_id = _authenticated_import_user(services, x_newsroom_session)
-            record = imports.create_received(user_id=user_id, content=await request.body(), filename=request.headers.get("x-filename"))
+            content = bytearray()
+            async for chunk in request.stream():
+                if len(content) + len(chunk) > MAX_IMPORT_BYTES:
+                    raise ResearchImportError("pdf_too_large", "PDF 超过 50 MB 限制", status_code=413)
+                content.extend(chunk)
+            record = imports.create_received(user_id=user_id, content=bytes(content), filename=request.headers.get("x-filename"))
             import_id = str(record["importId"])
-            return _run_import(services, helpers, imports, user_id=user_id, import_id=import_id)
+            return helpers.success(record)
         except ResearchImportError as exc:
             if import_id and "user_id" in locals():
                 imports.mark_failed(user_id=user_id, import_id=import_id, code=exc.code, message=str(exc))
@@ -552,25 +647,23 @@ def _authenticated_import_user(services: ApiServices, session_token: str | None)
         raise ResearchImportError("auth_required", "Valid account session required", status_code=401) from exc
 
 
-def _run_import(services: ApiServices, helpers: ApiRouteHelpers, imports: ResearchImportService, *, user_id: str, import_id: str):
-    imports.mark_parsing(user_id=user_id, import_id=import_id)
+def _optional_authenticated_user(services: ApiServices, session_token: str | None) -> str | None:
+    if not session_token:
+        return None
     try:
-        result = services.research_service_factory().parse_paper(
-            ResearchParseInput(
-                source=f"file://{imports.source_path(user_id=user_id, import_id=import_id)}",
-                source_type="pdf",
-                options={"quality_profile": "reading", "include_catalog": True, "include_chunks": True},
-                metadata={"import_id": import_id},
-                user_id=user_id,
-            )
-        )
-        return helpers.success(imports.mark_completed(user_id=user_id, import_id=import_id, result=result))
-    except ResearchServiceError as exc:
-        imports.mark_failed(user_id=user_id, import_id=import_id, code=exc.code, message=exc.public_message)
-        return helpers.error(status_code=exc.status_code, code=exc.code, message=exc.public_message, details=exc.details, retryable=exc.retryable, user_action_required=exc.user_action_required)
-    except Exception as exc:  # parser adapters are isolated behind a truthful retryable state
-        imports.mark_failed(user_id=user_id, import_id=import_id, code="research_parse_failed", message="PDF conversion failed; retry when the parser is available")
-        return helpers.error(status_code=503, code="research_parse_failed", message="PDF conversion failed; retry when the parser is available", details={"error_type": type(exc).__name__}, retryable=True, user_action_required=True)
+        return services.auth_service_factory().get_session(session_token).user.userId
+    except Exception as exc:
+        raise GuidedResearchError(
+            "auth_required",
+            "登录状态已失效，请重新登录。",
+            status_code=401,
+            user_action_required=True,
+        ) from exc
+
+
+def _run_import(services: ApiServices, helpers: ApiRouteHelpers, imports: ResearchImportService, *, user_id: str, import_id: str):
+    application = ResearchImportApplication(imports, services.research_service_factory())
+    return helpers.success(application.process(user_id=user_id, import_id=import_id))
 
 
 __all__ = [
@@ -579,5 +672,7 @@ __all__ = [
     "ResearchRagAskRequest",
     "ResearchParseRequest",
     "ResearchCatalogRefreshRequest",
+    "GuidedIntentRequest",
+    "GuidedSearchRequest",
     "create_router",
 ]

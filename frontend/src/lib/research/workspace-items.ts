@@ -73,7 +73,7 @@ export function validMaterial(value: unknown): value is ResearchMaterial {
   if (!value || typeof value !== "object") return false
   const m = value as ResearchMaterial
   return validWorkspaceId(m.id) && group(m.groupId) && ["paper", "project", "discussion", "note", "pdf"].includes(m.kind)
-    && text(m.title, 500, true) && safeWorkspaceSource(m.url) && (m.kind === "note" || Boolean(m.url) || Boolean(m.readerHref))
+    && text(m.title, 500, true) && safeWorkspaceSource(m.url) && (m.kind === "note" || Boolean(m.url) || Boolean(m.readerHref) || (m.kind === "pdf" && Boolean(m.referenceId)))
     && text(m.notes, 10000) && (m.referenceId === undefined || text(m.referenceId, 200, true))
     && (m.readerHref === undefined || safeWorkspaceReader(m.readerHref))
     && validWorkspaceTime(m.createdAt) && validWorkspaceTime(m.updatedAt) && m.updatedAt >= m.createdAt

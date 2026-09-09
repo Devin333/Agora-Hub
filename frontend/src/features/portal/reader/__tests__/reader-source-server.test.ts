@@ -10,11 +10,13 @@ describe("source acquisition and asset publication", () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it("publishes only complete verified assets and reuses the bounded source cache", async () => {
-    const { loadReaderSource } = await import("../reader-source-server")
+    const { loadReaderSource, cachedReaderReady } = await import("../reader-source-server")
+    expect(cachedReaderReady(sourcePaper.id)).toBe(false)
     vi.mocked(fetch).mockImplementation(async (url) => String(url).endsWith(".png")
       ? new Response(png, { headers: { "content-type": "image/png" } })
       : new Response(sourceHtml(true), { headers: { "content-type": "text/html" } }))
     const result = await loadReaderSource(sourcePaper)
+    expect(cachedReaderReady(sourcePaper.id)).toBe(true)
     expect(result?.payload.status).toMatchObject({ status: "compiled", gateReport: { passed: true, verifiedAssets: 2 } })
     expect(result?.payload.manifest?.assets[0]).toMatchObject({ width: 1, height: 1, checksum: createHash("sha256").update(png).digest("hex"), fileSize: png.length })
     expect(result?.payload.manifest?.assets[0].metadata?.publicUrl).toContain("?v=")

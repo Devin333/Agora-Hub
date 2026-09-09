@@ -87,7 +87,7 @@ class ResearchMaterial(WorkspaceModel):
     def validate_source_and_time(self) -> ResearchMaterial:
         if self.updatedAt < self.createdAt:
             raise ValueError("updatedAt cannot precede createdAt")
-        if self.kind != "note" and not self.url and not self.readerHref:
+        if self.kind != "note" and not self.url and not self.readerHref and not (self.kind == "pdf" and self.referenceId):
             raise ValueError("a material must retain its source")
         return self
 

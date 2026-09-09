@@ -17,6 +17,7 @@ from interfaces.services.json_file_store import (
     write_json_object_unlocked,
 )
 from interfaces.services.research_workspace_model import activity_adapter, validate_workspace_items
+from interfaces.services.research_conversation_model import ResearchConversation
 
 
 DEFAULT_RESEARCH_HISTORY_PATH = ".newsroom/research/history.json"
@@ -198,7 +199,7 @@ def _validate_visits(values: Any) -> list[dict[str, Any]]:
 def _validate_visit(value: Any, *, index: int) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ResearchHistoryError(f"visit {index} must be an object")
-    allowed = {"id", "module", "question", "href", "scrollY", "createdAt", "updatedAt", "title", "groupId", "isFavorite", "deletedAt", "archivedAt", "activity"}
+    allowed = {"id", "module", "question", "href", "scrollY", "createdAt", "updatedAt", "title", "groupId", "isFavorite", "deletedAt", "archivedAt", "activity", "conversation"}
     unknown = set(value) - allowed
     if unknown:
         raise ResearchHistoryError(f"visit {index} contains unsupported fields")
@@ -233,6 +234,14 @@ def _validate_visit(value: Any, *, index: int) -> dict[str, Any]:
     if deleted_at is not None:
         deleted_at = _positive_safe_integer(deleted_at, f"visit {index}.deletedAt")
     extras: dict[str, Any] = {}
+    if "conversation" in value:
+        try:
+            conversation = ResearchConversation.model_validate(value["conversation"])
+        except ValueError as exc:
+            raise ResearchHistoryError(f"visit {index}.conversation is invalid") from exc
+        if module not in {"papers", "projects"} or conversation.turns[0].question != question:
+            raise ResearchHistoryError(f"visit {index}.conversation does not match its original question")
+        extras["conversation"] = conversation.model_dump(exclude_unset=True)
     if "archivedAt" in value:
         archived = value["archivedAt"]
         extras["archivedAt"] = None if archived is None else _positive_safe_integer(archived, f"visit {index}.archivedAt")

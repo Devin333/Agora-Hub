@@ -20,6 +20,18 @@ def items() -> dict:
 GROUPS = [{"id": "group-a", "name": "Agent", "createdAt": 1, "updatedAt": 2}]
 
 
+def test_private_pdf_source_identity_survives_history_without_a_reader_link(tmp_path: Path) -> None:
+    service = ResearchHistoryService(tmp_path / "history.json")
+    pdf = {**items()["materials"][0], "kind": "pdf", "url": "", "referenceId": "private-paper"}
+    saved = service.replace(user_id="a", revision=0, visits=[], groups=GROUPS, workspace_items={"materials": [pdf]})
+    assert saved.workspace_items["materials"] == [pdf]
+    assert ResearchHistoryService(tmp_path / "history.json").read(user_id="a").workspace_items["materials"] == [pdf]
+    assert service.read(user_id="b").workspace_items == {}
+    del pdf["referenceId"]
+    with pytest.raises(ResearchHistoryError):
+        service.replace(user_id="a", revision=1, visits=[], groups=GROUPS, workspace_items={"materials": [pdf]})
+
+
 def visit(module: str = "reports") -> dict:
     return {"id": "visit-a", "module": module, "question": "Agent", "href": f"/{module}?question=Agent&researchSession=visit-a", "scrollY": 20, "title": "Agent", "groupId": "group-a", "isFavorite": False, "createdAt": 1, "updatedAt": 2, "deletedAt": None, "archivedAt": 2,
             "activity": {"kind": "report", "draftId": "draft-a", "title": "Agent report", "updatedAt": 2}}

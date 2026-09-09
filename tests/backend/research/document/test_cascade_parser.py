@@ -9,7 +9,9 @@ from backend.research.document.cascade_parser import (
     CascadeArxivDocumentParser,
     CascadeDocumentParser,
     DocumentQualityProbe,
+    PdfTextExtractionError,
     PyMuPDFTextDocumentParser,
+    SelectableTextPdfDocumentParser,
     parser_cascade_backend_names,
 )
 from backend.research.domain.common import SourceLineage
@@ -208,6 +210,7 @@ def test_cascade_uses_pymupdf_fallback_after_all_attempts_fail() -> None:
     attempts = doc.metadata["parser_cascade"]["attempts"]
     assert doc.metadata["parse_source"] == "pymupdf"
     assert doc.metadata["degraded"] is True
+    assert doc.status == "degraded"
     assert attempts[-1]["backend"] == "pymupdf"
     assert attempts[-1]["status"] == "fallback"
     assert doc.sections[0].title == "PDF Text Page 1"
@@ -227,6 +230,45 @@ def test_pymupdf_fallback_extracts_gzipped_pdf_via_cascade_arxiv_parser() -> Non
     assert latex.calls == 0
     assert doc.metadata["parse_source"] == "pymupdf"
     assert "Gzipped PDF text." in doc.sections[0].text
+
+
+def test_selectable_text_pdf_parser_admits_bounded_native_text() -> None:
+    parser = SelectableTextPdfDocumentParser(probe=_probe())
+
+    doc = parser.parse("paper-1", _pdf(["Methods " + "m" * 80, "Results " + "r" * 80]))
+
+    assert doc.status == "parsed"
+    assert doc.metadata["text_only"] is True
+    assert doc.metadata["compiled_reader_ready"] is False
+    assert doc.metadata["text_admission"]["passed"] is True
+    assert all(section.source_ref.startswith("paper://paper-1/pdf#page=") for section in doc.sections)
+
+
+def test_selectable_text_pdf_parser_rejects_scan_and_insufficient_text() -> None:
+    parser = SelectableTextPdfDocumentParser(probe=_probe())
+
+    with pytest.raises(PdfTextExtractionError, match="pdf_no_extractable_text"):
+        parser.parse("scan", _pdf([""]))
+    with pytest.raises(PdfTextExtractionError, match="sections_below_threshold"):
+        parser.parse("short", _pdf(["Only one short page."]))
+
+
+def test_selectable_text_pdf_parser_rejects_garbled_extraction() -> None:
+    extractor = _Parser(_doc("paper-1", "pymupdf", sections=2, chars=80).model_copy(update={
+        "sections": [
+            ResearchSection(
+                section_id=f"garbled-{index}",
+                title=f"Page {index}",
+                text="\ufffd" * 80,
+                source_ref=f"paper://paper-1/pdf#page={index}",
+            )
+            for index in range(1, 3)
+        ]
+    }))
+    parser = SelectableTextPdfDocumentParser(extractor=extractor, probe=_probe())
+
+    with pytest.raises(PdfTextExtractionError, match="replacement_char_ratio_above_threshold"):
+        parser.parse("paper-1", b"%PDF-1.7")
 
 
 def test_cascade_arxiv_parser_forwards_execution_identity_to_pdf_cascade() -> None:

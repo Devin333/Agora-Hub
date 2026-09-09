@@ -5,6 +5,8 @@ import json
 import pytest
 
 from backend.research.domain import ResearchPaper
+from backend.research.domain.catalog import ResearchSourceSnapshot
+from backend.research.domain.common import SourceLineage
 from infrastructure.research.catalog_store import (
     CATALOG_STORE_SCHEMA_VERSION,
     FilesystemResearchCatalogStore,
@@ -47,6 +49,39 @@ def test_catalog_store_keeps_actor_scopes_isolated(tmp_path) -> None:
 
     assert store.get_paper("paper-a", actor_scope={"tenant_id": "b"}) is None
     assert store.get_paper("paper-a", actor_scope={"tenant_id": "a"}) is not None
+
+
+def test_snapshot_roundtrip_preserves_immutable_content_with_flat_actor_scope(tmp_path) -> None:
+    scope = {"user_id": "alice", "memory_namespace": "research:user:alice"}
+    snapshot = ResearchSourceSnapshot(snapshot_id="source-1", paper_id="paper-1", external_id="paper.pdf", source_type="local", source_hash="abc", lineage=SourceLineage(source_refs=["paper://paper-1/pdf"], source_hash="abc"))
+    snapshot = snapshot.model_copy(update={"actor_scope": scope, "metadata": dict(scope), "lineage": snapshot.lineage.model_copy(update={"metadata": dict(scope)})})
+    store = FilesystemResearchCatalogStore(tmp_path)
+    store.save(snapshot)
+    original = store.path.read_bytes()
+    reopened = FilesystemResearchCatalogStore(tmp_path)
+    restored = reopened.get_snapshot("source-1", actor_scope=scope)
+    assert restored is not None
+    reopened.save(restored)
+    assert store.path.read_bytes() == original
+    assert reopened.get_snapshot("source-1", actor_scope={"user_id": "bob"}) is None
+    with pytest.raises(ResearchCatalogStoreError, match="immutable"):
+        reopened.save(restored.model_copy(update={"source_hash": "different", "checksum": "different"}))
+
+
+def test_existing_flat_snapshot_normalization_does_not_rewrite_observation() -> None:
+    from copy import deepcopy
+    from infrastructure.research.catalog_store import _put_immutable_snapshot
+
+    raw = ResearchSourceSnapshot(snapshot_id="source-1", paper_id="paper-1", external_id="paper.pdf", lineage=SourceLineage(source_refs=["paper://paper-1/pdf"])).model_dump(mode="json", exclude_none=True)
+    raw["actor_scope"] = {"user_id": "alice"}
+    raw["metadata"] = {"user_id": "alice"}
+    raw["lineage"]["metadata"] = {"user_id": "alice"}
+    state = {"snapshots": {"source-1": deepcopy(raw)}}
+    restored = ResearchSourceSnapshot.model_validate(raw)
+    _put_immutable_snapshot(state, "source-1", restored)
+    assert state["snapshots"]["source-1"] == raw
+    with pytest.raises(ResearchCatalogStoreError, match="immutable"):
+        _put_immutable_snapshot(state, "source-1", restored.model_copy(update={"metadata": {**restored.metadata, "new_claim": "changed"}}))
 
 
 def test_catalog_artifact_read_requires_scope_and_commit_marker(tmp_path) -> None:

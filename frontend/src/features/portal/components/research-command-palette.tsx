@@ -30,7 +30,7 @@ function desktopShortcutEnabled() {
   return typeof window.matchMedia !== "function" || window.matchMedia("(min-width: 1024px)").matches
 }
 
-export function ResearchCommandPalette() {
+export function ResearchCommandPalette({ inline = false }: { inline?: boolean }) {
   const router = useRouter()
   const state = useOwnedResearchWorkspace()
   const [open, setOpen] = useState(false)
@@ -90,7 +90,7 @@ export function ResearchCommandPalette() {
       <Dialog.Trigger asChild>
         <button
           type="button"
-          className={styles.trigger}
+          className={`${styles.trigger} ${inline ? styles.inlineTrigger : ""}`}
           onClick={() => { shortcutOrigin.current = null }}
           aria-label="搜索研究和模块"
           aria-keyshortcuts="Control+K Meta+K"

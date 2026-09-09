@@ -3,6 +3,7 @@ import { sortPapers } from "@/lib/papers/format"
 import type { MethodRef, Paper, PaperPeriod, PaperSort, TaskRef } from "@/lib/papers/types"
 
 export type PaperQuery = {
+  paperType?: "survey"
   q?: string
   period?: PaperPeriod
   sort?: PaperSort
@@ -15,6 +16,7 @@ export type PaperQuery = {
 }
 
 export type NormalizedPaperQuery = {
+  paperType?: "survey"
   q: string
   terms: string[]
   period: PaperPeriod
@@ -50,6 +52,7 @@ export function queryPapers(papers: Paper[], input: PaperQuery = {}, now: Date |
   const to = parseDateBoundary(query.to, "to")
 
   const filtered = publicPapers.filter((paper) => {
+    if (query.paperType === "survey" && !/survey|review|综述/i.test(paper.title)) return false
     const publishedAt = validTimestamp(paper.publishedAt)
     if ((periodStart !== undefined || from !== undefined || to !== undefined) && publishedAt === undefined) {
       return false
@@ -92,6 +95,7 @@ export function normalizePaperQuery(input: PaperQuery = {}): NormalizedPaperQuer
   const requestedSort = isPaperSort(input.sort) ? input.sort : q ? "relevance" : "trending"
 
   return {
+    paperType: input.paperType === "survey" ? "survey" : undefined,
     q,
     terms,
     period,

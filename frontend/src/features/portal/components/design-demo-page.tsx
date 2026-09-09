@@ -13,8 +13,11 @@ import { ResearchPromptMenu } from "./research-prompt-menu"
 import { ResearchSidebar } from "./research-sidebar"
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
 import type { ResearchConstraints } from "@/lib/research/workspace-items"
-import { ResearchComposerContext } from "./research-composer-context"
+import { ResearchComposerContext, ResearchContextSummary } from "./research-composer-context"
 import { ResearchSourceEntry } from "./research-source-entry"
+import { useGuidedResearch } from "@/lib/research/use-guided-research"
+import { GuidedResearchView } from "./guided-research-view"
+import { ResearchCommandPalette } from "./research-command-palette"
 
 const icons = { auto: Sparkles, plan: Sparkles, papers: BookOpen, projects: Github, community: Quote, reports: ClipboardCheck }
 const focusStyle = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6] focus-visible:ring-offset-2"
@@ -23,10 +26,9 @@ export function DesignDemoPage() {
   const router = useRouter()
   const { query, setQuery, mode, setMode, constraints, setConstraints, groupId, setGroupId, materialIds, setMaterialIds, ready, restored, clear, markSubmitted, continueEditing } = useResearchDraft()
   const workspace = useOwnedResearchWorkspace()
+  const guided = useGuidedResearch()
   const inputRef = useRef<HTMLInputElement>(null)
   const composing = useRef(false)
-  const [choices, setChoices] = useState<ResearchModule[]>([])
-  const [planReady, setPlanReady] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [destination, setDestination] = useState<ResearchModule | null>(null)
   const [error, setError] = useState("")
@@ -54,7 +56,7 @@ export function DesignDemoPage() {
       href = researchEntryHref(module, query, sessionId, { constraints: Object.keys(constraints).length ? constraints : inferResearchConstraints(query, module), groupId, materialIds })
     }
     const target = href
-    setError(""); setChoices([]); setPlanReady(false); setDestination(module)
+    setError(""); setDestination(module)
     startTransition(() => {
       try { if (restoring) router.push(target, { scroll: false }); else router.push(target) }
       catch { setDestination(null); setError("暂时无法打开页面，请重试。你的问题已保留。") }
@@ -63,18 +65,12 @@ export function DesignDemoPage() {
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!query.trim() || composing.current || destination || pending) return
-    if (mode === "plan") { setPlanReady(true); setChoices([]); setError(""); return }
     const candidates = resolveResearchIntent(query, mode)
-    if (candidates.length === 1) navigate(candidates[0])
-    else { setChoices(candidates); setError("") }
+    if (mode === "community" || mode === "reports" || (mode === "auto" && candidates.length === 1 && (candidates[0] === "community" || candidates[0] === "reports"))) { navigate(candidates[0]); return }
+    guided.start(query, mode === "plan" ? "plan" : "auto", groupId, materialIds, constraints, mode === "papers" || mode === "projects" ? [mode] : undefined)
   }
-  function startPlan(module?: ResearchModule) {
-    const candidates = module ? [module] : resolveResearchIntent(query, "auto")
-    if (candidates.length === 1) navigate(candidates[0])
-    else { setPlanReady(false); setChoices(candidates) }
-  }
-  function resume(visit: ResearchVisit) { prepareResearchResume(visit); navigate(visit.module, researchResumeHref(visit), true) }
-  function newResearch() { clear(); setChoices([]); setPlanReady(false); setError(""); setDestination(null); focusInput() }
+  function resume(visit: ResearchVisit) { if (guided.resume(visit)) return; guided.reset(); prepareResearchResume(visit); navigate(visit.module, researchResumeHref(visit), true) }
+  function newResearch() { guided.reset(); clear(); setError(""); setDestination(null); requestAnimationFrame(focusInput) }
   function toggleSidebar() { setCollapsed(value => { const next = !value; try { localStorage.setItem("agora-research-sidebar-collapsed", String(next)) } catch { /* Layout remains usable. */ } return next }) }
   const busy = Boolean(!ready || destination || pending)
 
@@ -82,36 +78,36 @@ export function DesignDemoPage() {
     <header className="h-[var(--header-height)] border-b border-[#eee8f5] bg-white">
       <nav className="mx-auto flex h-full max-w-[1280px] items-center justify-between px-10" aria-label="主导航">
         <a href="/design-demo" className={`flex items-center gap-2.5 rounded-lg ${focusStyle}`}><span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span><span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span></a>
-        <div className="flex items-center gap-8 text-base text-[#6d6286]"><a href="#modules" className={`rounded-md hover:text-[#6735d3] ${focusStyle}`}>研究模块</a></div>
-        <div className="flex items-center gap-3"><PortalAccountControl /><button type="button" onClick={focusInput} className={`inline-flex h-11 items-center rounded-xl bg-[#7c3aed] px-5 text-base font-semibold text-white shadow-[0_5px_14px_rgba(124,58,237,0.25)] hover:bg-[#6d28d9] ${focusStyle}`}>开始研究</button></div>
+        <div className="flex items-center gap-8 text-base text-[#6d6286]"><ResearchCommandPalette inline />{!guided.active && <a href="#modules" className={`rounded-md hover:text-[#6735d3] ${focusStyle}`}>研究模块</a>}</div>
+        <div className="flex items-center gap-3"><PortalAccountControl /><button type="button" onClick={guided.active ? newResearch : focusInput} className={`inline-flex h-11 items-center rounded-xl bg-[#7c3aed] px-5 text-base font-semibold text-white shadow-[0_5px_14px_rgba(124,58,237,0.25)] hover:bg-[#6d28d9] ${focusStyle}`}>{guided.active ? "开始新研究" : "开始研究"}</button></div>
       </nav>
     </header>
     <div className="flex h-[calc(100svh-var(--header-height))]">
     <ResearchSidebar busy={busy} collapsed={collapsed} onToggle={toggleSidebar} onNew={newResearch} onResume={resume} onSelectGroup={setGroupId} />
     <div className="min-w-0 flex-1 overflow-y-auto" aria-label="研究工作区">
+    {guided.active ? <GuidedResearchView research={guided} /> : <>
     {/* The composer is centered within the right workspace, accounting for the header. */}
     <main id="workspace" className="grid h-[calc(100svh-var(--header-height)-var(--header-height))] min-h-[520px] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)]">
       <h1 className="mx-auto w-[calc(100%-80px)] max-w-[900px] self-start pt-[clamp(5rem,12vh,9rem)] text-center font-sans text-[56px] font-bold leading-[1.2]"><span className="text-[#35274f]">Ask.</span>{" "}<span className="text-[#7c3aed]">Discover.</span></h1>
       <section aria-label="研究提问框" className="relative mx-auto w-[calc(100%-80px)] max-w-[960px] rounded-3xl border border-[#e7dff1] bg-white p-8 shadow-[0_18px_45px_rgba(86,58,127,0.13)]">
         {restored && <div role="status" className="mb-4 flex items-center justify-between rounded-xl bg-[#f6f0fd] px-4 py-3 text-sm text-[#684b82]"><span>已恢复一条尚未发送的研究问题</span><span className="flex items-center gap-3"><button type="button" onClick={continueEditing} className={`rounded-md px-2 py-1 text-[#6d28d9] ${focusStyle}`}>继续编辑</button><button type="button" onClick={clear} aria-label="清除未发送的问题" className={`rounded-md ${focusStyle}`}><X size={16} /></button></span></div>}
         <form onSubmit={submit} aria-busy={busy} className="flex min-h-[72px] flex-wrap items-center gap-3 rounded-[24px] border border-[#ded4ec] bg-[#fefeff] p-2.5 pl-3 shadow-[0_3px_12px_rgba(86,58,127,0.06)] focus-within:border-[#a783ec] focus-within:ring-2 focus-within:ring-[#f0e9ff]">
+          <ResearchComposerContext key={workspace.owner ?? "guest"} groupId={groupId} setGroupId={setGroupId} materialIds={materialIds} setMaterialIds={setMaterialIds} disabled={busy} />
           <DropdownMenu modal={false}><DropdownMenuTrigger disabled={busy} aria-label="选择研究模式" className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-xl px-3 text-base font-semibold text-[#5b4c76] hover:bg-[#f3edff] ${focusStyle}`}><span className="flex size-8 items-center justify-center rounded-lg bg-[#f0e9ff] text-[#7c3aed]"><ModeIcon size={18} /></span>{mode === "auto" ? "自动" : mode === "plan" ? "计划" : moduleInfo[mode].command}<ChevronDown size={16} /></DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-80 rounded-2xl border-[#e4d9ef] bg-white p-2 text-[#3f3158] shadow-[0_14px_36px_rgba(60,41,93,0.16)]">
-              {(["auto", "plan", ...researchModules] as ResearchMode[]).map(item => { const Icon = icons[item]; const label = item === "auto" ? "自动" : item === "plan" ? "计划" : moduleInfo[item].command; const description = item === "auto" ? "根据问题选择合适的模块" : item === "plan" ? "先聊清楚，再帮你查找" : moduleInfo[item].description; return <DropdownMenuItem key={item} onSelect={() => { setMode(item); setConstraints(item === "auto" || item === "plan" ? {} : inferResearchConstraints(query, item)); setChoices([]); setPlanReady(false); setError("") }} className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 focus:bg-[#f3edff]"><Icon className="size-5 shrink-0 text-[#7c3aed]" /><span className="flex-1"><span className="block text-base font-semibold">{label}</span><span className="mt-1 block text-sm text-[#766885]">{description}</span></span>{mode === item && <Check className="size-4 text-[#7c3aed]" />}</DropdownMenuItem> })}
+              {(["auto", "plan", ...researchModules] as ResearchMode[]).map(item => { const Icon = icons[item]; const label = item === "auto" ? "自动" : item === "plan" ? "计划" : moduleInfo[item].command; const description = item === "auto" ? "根据问题查找相关内容" : item === "plan" ? "先聊清楚，再帮你查找" : moduleInfo[item].description; return <DropdownMenuItem key={item} onSelect={() => { setMode(item); setConstraints(item === "auto" || item === "plan" ? {} : inferResearchConstraints(query, item)); setError("") }} className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 focus:bg-[#f3edff]"><Icon className="size-5 shrink-0 text-[#7c3aed]" /><span className="flex-1"><span className="block text-base font-semibold">{label}</span><span className="mt-1 block text-sm text-[#766885]">{description}</span></span>{mode === item && <Check className="size-4 text-[#7c3aed]" />}</DropdownMenuItem> })}
             </DropdownMenuContent>
           </DropdownMenu>
-          <ResearchComposerContext key={workspace.owner ?? "guest"} groupId={groupId} setGroupId={setGroupId} materialIds={materialIds} setMaterialIds={setMaterialIds} disabled={busy} onAddLink={link => { setQuery(link); setError(""); inputRef.current?.focus() }} />
-          <input ref={inputRef} value={query} maxLength={2000} onChange={event => { setQuery(event.target.value); setChoices([]); setError("") }} onCompositionStart={() => { composing.current = true }} onCompositionEnd={() => { composing.current = false }} onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)) event.preventDefault() }} aria-label="向 Agora AI 提问" placeholder="输入你想研究的问题…" className="min-w-0 flex-1 bg-transparent px-1 text-lg text-[#3a304f] outline-none placeholder:text-[#93879f]" />
+          <input ref={inputRef} value={query} maxLength={2000} onChange={event => { setQuery(event.target.value); setError("") }} onCompositionStart={() => { composing.current = true }} onCompositionEnd={() => { composing.current = false }} onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current)) event.preventDefault() }} aria-label="向 Agora AI 提问" placeholder="输入你想研究的问题…" className="min-w-0 flex-1 bg-transparent px-1 text-lg text-[#3a304f] outline-none placeholder:text-[#93879f]" />
           <ResearchPromptMenu question={query} mode={mode} constraints={constraints} onSelect={prompt => { setQuery(prompt.question); setMode(prompt.mode); setConstraints(prompt.constraints); inputRef.current?.focus() }} />
           <button disabled={!query.trim() || busy} type="submit" aria-label="发送问题" className={`flex size-12 shrink-0 items-center justify-center rounded-full bg-[#7c3aed] text-white transition-colors hover:bg-[#6d28d9] disabled:cursor-not-allowed disabled:bg-[#c3abea] ${focusStyle}`}>{busy ? <LoaderCircle className="size-5 animate-spin motion-reduce:animate-none" /> : <ArrowRight size={21} />}</button>
         </form>
+        <ResearchContextSummary groupId={groupId} setGroupId={setGroupId} materialIds={materialIds} setMaterialIds={setMaterialIds} disabled={busy} />
         {mode !== "auto" && mode !== "plan" && <ConstraintControls module={mode} constraints={constraints} setConstraints={setConstraints} />}
-        <div className="mt-5 flex flex-wrap items-center gap-2.5 px-1"><span className="mr-1 text-[15px] text-[#756982]">试试：</span>{examples.map(prompt => <button key={prompt} disabled={busy} type="button" onClick={() => { setQuery(prompt); setChoices([]); setError(""); inputRef.current?.focus() }} className={`rounded-xl border border-[#e7dff1] bg-white px-3.5 py-2.5 text-left text-[15px] leading-5 text-[#6b607e] transition-colors hover:border-[#b99beb] hover:bg-[#faf7ff] disabled:opacity-60 ${focusStyle}`}>{prompt}</button>)}</div>
-        {choices.length > 0 && <div className="mt-5 flex flex-wrap items-center gap-2 rounded-xl bg-[#faf7ff] p-3 text-[15px]" role="group" aria-label="确认研究方向"><span className="mr-1 text-[#6b607e]">你更想了解哪一类？</span>{choices.map(module => <button key={module} type="button" onClick={() => navigate(module)} className={`rounded-lg border border-[#dac9f4] bg-white px-3 py-2 text-[#6d28d9] hover:bg-[#f0e9ff] ${focusStyle}`}>{moduleInfo[module].command}</button>)}</div>}
-        {planReady && <div className="mt-5 rounded-2xl border border-[#e7dff1] bg-[#faf7ff] p-5 text-[15px]" role="status" aria-label="确认研究计划"><p className="text-[#4b3a65]">我会帮你找与“{query.trim()}”相关的论文和项目。</p><div className="mt-4 flex flex-wrap items-center gap-2"><span className="mr-1 text-[#756982]">你更想看：</span>{(["papers", "projects"] as ResearchModule[]).map(module => <button key={module} type="button" onClick={() => startPlan(module)} className={`rounded-full border border-[#dac9f4] bg-white px-3 py-1.5 text-[#6d28d9] hover:bg-[#f0e9ff] ${focusStyle}`}>{module === "papers" ? "论文" : "开源项目"}</button>)}<button type="button" onClick={() => startPlan()} className={`rounded-full border border-[#dac9f4] bg-white px-3 py-1.5 text-[#6d28d9] hover:bg-[#f0e9ff] ${focusStyle}`}>都可以</button></div><div className="mt-4 flex flex-wrap gap-3"><button type="button" onClick={focusInput} className={`rounded-lg px-2 py-1 text-[#6d28d9] ${focusStyle}`}>改一下</button><button type="button" onClick={() => startPlan()} className={`rounded-lg bg-[#7c3aed] px-4 py-2 text-white hover:bg-[#6d28d9] ${focusStyle}`}>开始查找</button></div></div>}
+        <div className="mt-5 flex flex-wrap items-center gap-2.5 px-1"><span className="mr-1 text-[15px] text-[#756982]">试试：</span>{examples.map(prompt => <button key={prompt} disabled={busy} type="button" onClick={() => { setQuery(prompt); setError(""); inputRef.current?.focus() }} className={`rounded-xl border border-[#e7dff1] bg-white px-3.5 py-2.5 text-left text-[15px] leading-5 text-[#6b607e] transition-colors hover:border-[#b99beb] hover:bg-[#faf7ff] disabled:opacity-60 ${focusStyle}`}>{prompt}</button>)}</div>
         <SourceHint query={query} />
-        <ResearchSourceEntry />
-        <div aria-live="polite" role="status" className="text-[15px] text-[#6d28d9]">{destination && mode === "plan" ? <div className="mt-5 rounded-2xl border border-[#e7dff1] bg-[#faf7ff] p-4"><p className="font-medium">正在帮你找相关内容</p><p className="mt-2 text-[#756982]">✓ 已理解你的问题</p><p className="mt-1 text-[#756982]">✓ 正在查找{moduleInfo[destination].name}</p><p className="mt-1 text-[#9b8dac]">○ 正在整理结果</p></div> : destination && <p className="mt-4">正在打开{moduleInfo[destination].name}…</p>}</div>
+        <ResearchSourceEntry onAttach={id => setMaterialIds([...new Set([...materialIds, id])])} />
+        <div aria-live="polite" role="status" className="text-[15px] text-[#6d28d9]">{destination && <p className="mt-4">正在打开{moduleInfo[destination].name}…</p>}</div>
         {error && <p role="alert" className="mt-4 text-[15px] text-[#a02b47]">{error}</p>}
       </section>
       <div className="mt-10 min-h-0 self-start bg-[#fbf8ff]">
@@ -121,6 +117,7 @@ export function DesignDemoPage() {
         <footer className="px-10 py-10"><div className="mx-auto flex max-w-[1280px] items-center justify-between text-base text-[#82758f]"><span>Agora Hub Research</span><span>用 AI 开始你的下一次研究</span></div></footer>
       </div>
     </main>
+    </>}
     </div>
     </div>
   </div>

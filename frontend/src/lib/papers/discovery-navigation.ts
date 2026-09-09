@@ -1,6 +1,6 @@
 import { papersRoutes } from "./routes"
 
-const returnPaths = new Set(["/design-demo/papers", "/papers", "/papers/methods", "/papers/tasks"])
+const returnPaths = new Set(["/design-demo", "/design-demo/papers", "/papers", "/papers/methods", "/papers/tasks"])
 
 export function safePaperReturnTo(value?: string | null): string {
   if (!value || !value.startsWith("/") || value.startsWith("//") || /[\\\r\n]/.test(value)) return "/papers"

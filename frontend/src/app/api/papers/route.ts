@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic"
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams
   const result = await getPaperListResult({
+    paperType: params.get("paperType") === "survey" ? "survey" : undefined,
     q: params.get("q") ?? undefined,
     period: parsePeriod(params.get("period")),
     sort: parseSort(params.get("sort")),

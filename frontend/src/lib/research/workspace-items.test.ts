@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { acceptAccountHistory, historyState, importGuestHistory, readResearchWorkspace, recordResearchVisit, rememberResearchActivity, removeResearchGroup, removeResearchMaterial, removeWorkspaceReport, researchResumeHref, saveComposerDraft, saveResearchGroup, saveResearchMaterial, saveResearchPrompt, saveWorkspaceReport, selectHistoryOwner } from "./history"
 import { validateWorkspace } from "./history-model"
 import { researchQuestionHref } from "./entry"
-import { type ResearchMaterial, type ResearchReportDraft } from "./workspace-items"
+import { validMaterial, type ResearchMaterial, type ResearchReportDraft } from "./workspace-items"
 import { importLegacyReportDrafts, readReportDrafts } from "@/features/reports/lib/report-drafts"
 
 const material: ResearchMaterial = { id: "paper-a", groupId: "group-a", kind: "paper", title: "Source paper", url: "https://arxiv.org/abs/2605.22343", notes: "Review methods", createdAt: 1, updatedAt: 2 }
@@ -10,6 +10,12 @@ const report: ResearchReportDraft = { id: "report-a", groupId: "group-a", questi
 
 describe("owned research workspace", () => {
   beforeEach(() => { localStorage.clear(); sessionStorage.clear(); selectHistoryOwner(null) })
+  it("accepts private PDF identities without inventing reader links and rejects missing sources", () => {
+    const pdf = { ...material, groupId: null, kind: "pdf", url: "", referenceId: "private-paper" }
+    expect(validMaterial(pdf)).toBe(true)
+    expect(validMaterial({ ...pdf, referenceId: undefined })).toBe(false)
+    expect(validMaterial({ ...pdf, kind: "project" })).toBe(false)
+  })
   function populate() {
     saveResearchGroup("Agent", "group-a")
     expect(saveResearchMaterial(material)).toBe(true)

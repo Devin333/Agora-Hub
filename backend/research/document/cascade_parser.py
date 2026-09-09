@@ -50,6 +50,20 @@ class QualityProbeResult:
         }
 
 
+class PdfTextExtractionError(ValueError):
+    """A PDF cannot be admitted as trustworthy selectable text."""
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        metrics: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.metrics = dict(metrics or {})
+
+
 @dataclass(frozen=True)
 class DocumentQualityProbe:
     min_sections: int = 3
@@ -117,18 +131,46 @@ class DocumentQualityProbe:
 
 
 class PyMuPDFTextDocumentParser:
-    """Terminal PDF fallback that extracts native page text only."""
+    """Extract native page text without OCR or external processes."""
+
+    def __init__(self, *, max_pages: int = 500, max_text_chars: int = 2_000_000) -> None:
+        if isinstance(max_pages, bool) or not 1 <= int(max_pages) <= 5_000:
+            raise ValueError("max_pages must be between 1 and 5000")
+        if isinstance(max_text_chars, bool) or not 1_000 <= int(max_text_chars) <= 10_000_000:
+            raise ValueError("max_text_chars must be between 1000 and 10000000")
+        self._max_pages = int(max_pages)
+        self._max_text_chars = int(max_text_chars)
 
     def parse(self, paper_id: str, source_bytes: bytes) -> ResearchDocument:
-        source_ref = f"arxiv://{paper_id}/pdf"
+        source_ref = f"paper://{paper_id}/pdf"
         source_hash = sha256(source_bytes).hexdigest()
         sections: list[ResearchSection] = []
-        doc = fitz.open(stream=source_bytes, filetype="pdf")
+        extracted_chars = 0
         try:
+            doc = fitz.open(stream=source_bytes, filetype="pdf")
+        except Exception as exc:
+            raise PdfTextExtractionError("pdf_open_failed") from exc
+        try:
+            if doc.needs_pass:
+                raise PdfTextExtractionError("pdf_password_required")
+            if doc.page_count > self._max_pages:
+                raise PdfTextExtractionError(
+                    "pdf_page_limit_exceeded",
+                    metrics={"pages": doc.page_count, "max_pages": self._max_pages},
+                )
             for page_index, page in enumerate(doc, start=1):
-                text = page.get_text("text").strip()
+                text = page.get_text("text", sort=True).strip()
                 if not text:
                     continue
+                extracted_chars += len(text)
+                if extracted_chars > self._max_text_chars:
+                    raise PdfTextExtractionError(
+                        "pdf_text_limit_exceeded",
+                        metrics={
+                            "text_chars": extracted_chars,
+                            "max_text_chars": self._max_text_chars,
+                        },
+                    )
                 locator = f"{source_ref}#page={page_index}"
                 sections.append(ResearchSection(
                     section_id=build_stable_id("sec", paper_id, "pymupdf", str(page_index)),
@@ -141,27 +183,16 @@ class PyMuPDFTextDocumentParser:
                     metadata={
                         "parse_source": "pymupdf",
                         "source_locator": locator,
-                        "fallback_reason": "parser_cascade_terminal_fallback",
                     },
                 ))
+        except PdfTextExtractionError:
+            raise
+        except Exception as exc:
+            raise PdfTextExtractionError("pdf_text_extraction_failed") from exc
         finally:
             doc.close()
         if not sections:
-            locator = f"{source_ref}#page=1"
-            sections.append(ResearchSection(
-                section_id=build_stable_id("sec", paper_id, "pymupdf", "empty"),
-                title="PDF Text",
-                level=1,
-                text="No extractable PDF text.",
-                page_start=1,
-                page_end=1,
-                source_ref=locator,
-                metadata={
-                    "parse_source": "pymupdf",
-                    "source_locator": locator,
-                    "fallback_reason": "parser_cascade_no_extractable_text",
-                },
-            ))
+            raise PdfTextExtractionError("pdf_no_extractable_text")
         return ResearchDocument(
             paper_id=paper_id,
             source_hash=source_hash,
@@ -170,8 +201,6 @@ class PyMuPDFTextDocumentParser:
             metadata={
                 "parse_source": "pymupdf",
                 "parser_backend": "pymupdf",
-                "degraded": True,
-                "fallback_reason": "parser_cascade_terminal_fallback",
                 "parse_quality": {
                     "sections": {
                         "total": len(sections),
@@ -183,6 +212,44 @@ class PyMuPDFTextDocumentParser:
                     "equations": {"total": 0},
                 },
             },
+        )
+
+
+class SelectableTextPdfDocumentParser:
+    """Admit only bounded PDFs whose embedded text passes deterministic quality checks."""
+
+    def __init__(
+        self,
+        *,
+        extractor: DocumentParserPort | None = None,
+        probe: DocumentQualityProbe | None = None,
+    ) -> None:
+        self._extractor = extractor or PyMuPDFTextDocumentParser()
+        self._probe = probe or DocumentQualityProbe.from_env()
+
+    def parse(self, paper_id: str, source_bytes: bytes) -> ResearchDocument:
+        document = self._extractor.parse(paper_id, source_bytes)
+        quality = self._probe.evaluate(document)
+        if not quality.passed:
+            raise PdfTextExtractionError(
+                quality.reason or "pdf_text_quality_rejected",
+                metrics=quality.metrics,
+            )
+        metadata = {
+            **dict(document.metadata),
+            "parse_source": "pymupdf",
+            "parser_backend": "pymupdf",
+            "text_only": True,
+            "compiled_reader_ready": False,
+            "text_admission": quality.to_dict(),
+        }
+        return document.model_copy(
+            update={
+                "parser_backend": "pymupdf",
+                "parser_version": str(fitz.version[0]),
+                "normalization_version": "native-page-text-v1",
+                "metadata": metadata,
+            }
         )
 
 
@@ -365,7 +432,12 @@ def _with_cascade_metadata(
     }
     if degraded:
         metadata["degraded"] = True
-    return document.model_copy(update={"metadata": metadata})
+    return document.model_copy(
+        update={
+            "metadata": metadata,
+            **({"status": "degraded"} if degraded else {}),
+        }
+    )
 
 
 def _elapsed_ms(started: float) -> float:
@@ -431,8 +503,10 @@ __all__ = [
     "CascadeDocumentParser",
     "DocumentQualityProbe",
     "ParserAttempt",
+    "PdfTextExtractionError",
     "PyMuPDFTextDocumentParser",
     "QualityProbeResult",
+    "SelectableTextPdfDocumentParser",
     "build_default_pdf_cascade_parser",
     "parser_cascade_backend_names",
 ]

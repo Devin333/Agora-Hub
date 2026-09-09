@@ -25,6 +25,8 @@ const PAPER_PAGE_SIZE = 15
 type PaperDataContext = { source?: string; collectedAt?: string }
 
 export type PapersDiscoveryViewModel = {
+  paperType?: "survey"
+  onPaperTypeClear?: () => void
   locale: Locale
   papers: Paper[]
   metrics: PaperPortalMetrics
@@ -78,6 +80,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   const sort = parseSort(searchParams.get("sort"), Boolean(renderView && searchParams.get("q")))
   const page = parsePage(searchParams.get("page"))
   const query = searchParams.get("q") ?? ""
+  const paperType: "survey" | undefined = searchParams.get("paperType") === "survey" ? "survey" : undefined
   const topic = searchParams.get("topic") ?? ""
   const method = searchParams.get("method") ?? ""
   const task = searchParams.get("task") ?? ""
@@ -88,7 +91,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   const view = requestedView === "reading" || requestedView === "compare" ? requestedView : "discover"
   const featureFilters = useMemo(() => parsePaperFeatureFilters(new URLSearchParams(searchText).get("has")), [searchText])
   const deepLinkedPaperId = searchParams.get("paper")
-  const initialPublishedPapers = useMemo(() => fallbackPaperQuery(papers, { query, period, sort, topic, method, task, from, to, has: featureFilters }), [featureFilters, papers, period, query, sort, topic, method, task, from, to])
+  const initialPublishedPapers = useMemo(() => fallbackPaperQuery(papers, { query, period, sort, topic, method, task, from, to, paperType, has: featureFilters }), [featureFilters, papers, period, query, sort, topic, method, task, from, to, paperType])
   const [dashboardPapers, setDashboardPapers] = useState(initialPublishedPapers)
   const [visiblePapers, setVisiblePapers] = useState(initialPublishedPapers.slice((page - 1) * PAPER_PAGE_SIZE, page * PAPER_PAGE_SIZE))
   const [paperTotalCount, setPaperTotalCount] = useState(initialPublishedPapers.length)
@@ -139,7 +142,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
     setIsLoading(true)
     setHasDataIssue(false)
     const has = serializePaperFeatureFilters(featureFilters)
-    const refinements = { ...(topic ? { topic } : {}), ...(method ? { method } : {}), ...(task ? { task } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}) }
+    const refinements = { ...(topic ? { topic } : {}), ...(method ? { method } : {}), ...(task ? { task } : {}), ...(from ? { from } : {}), ...(to ? { to } : {}), ...(paperType ? { paperType } : {}) }
     Promise.allSettled([
       fetchPapers({ q: query, period, sort, ...refinements, ...(has ? { has } : {}), limit: PAPER_PAGE_SIZE, offset: pageOffset }),
       fetchPapers({ q: query, period, sort, ...refinements, ...(has ? { has } : {}), limit: PAPER_DASHBOARD_LIMIT })
@@ -156,7 +159,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
           throw firstRejectedReason(pageSettled, dashboardSettled) ?? new Error("Papers request failed")
         }
 
-        const fallbackPapers = dashboardResult ? [] : fallbackPaperQuery(papers, { query, period, sort, topic, method, task, from, to, has: featureFilters })
+        const fallbackPapers = dashboardResult ? [] : fallbackPaperQuery(papers, { query, period, sort, topic, method, task, from, to, paperType, has: featureFilters })
         const pagePapers = pageResult ? publicPapers(pageResult.papers) : null
         const dashboardResultPapers = dashboardResult ? publicPapers(dashboardResult.papers) : null
         const nextDashboardPapers = dashboardResultPapers ?? fallbackPapers
@@ -194,7 +197,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
       })
       .catch(() => {
         if (!cancelled) {
-          const fallbackPapers = fallbackPaperQuery(papers, { query, period, sort, topic, method, task, from, to, has: featureFilters })
+          const fallbackPapers = fallbackPaperQuery(papers, { query, period, sort, topic, method, task, from, to, paperType, has: featureFilters })
           setVisiblePapers(fallbackPapers.slice(pageOffset, pageOffset + PAPER_PAGE_SIZE))
           setDashboardPapers(fallbackPapers)
           setPaperTotalCount(fallbackPapers.length)
@@ -215,7 +218,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
     return () => {
       cancelled = true
     }
-  }, [featureFilters, locale, page, pageOffset, papers, period, query, sort, topic, method, task, from, to, updatePage])
+  }, [featureFilters, locale, page, pageOffset, papers, period, query, sort, topic, method, task, from, to, paperType, updatePage])
 
   const returnParams = new URLSearchParams(searchText)
   returnParams.delete("paper")
@@ -277,7 +280,8 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   if (renderView) {
     return renderView({
       locale, papers: visiblePapers, metrics: portalMetrics, query, period, sort,
-      topic, method, task, from, to, question, view, returnTo, catalog: papers,
+      topic, method, task, from, to, question, view, returnTo, catalog: papers, paperType,
+      onPaperTypeClear: () => updateQuery({ paperType: null, page: null }),
       source: dataContext.source, collectedAt: dataContext.collectedAt, latestPublishedAt, hasDataIssue,
       filters: featureFilters, isLoading,
       emptyDescription: paperEmptyDescription({ query, hasFilters: featureFilters.length > 0, notices, hasDataIssue, locale }),
@@ -297,7 +301,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
       onPeriodChange: updatePeriod,
       onSortChange: updateSort,
       onFilterToggle: updateFeatureFilter,
-      onReset: () => updateQuery({ q: null, has: null, topic: null, method: null, task: null, from: null, to: null, period: null, sort: null, page: null, paper: null }),
+      onReset: () => updateQuery({ q: null, has: null, topic: null, method: null, task: null, from: null, to: null, period: null, sort: null, page: null, paper: null, paperType: null }),
       onPreview: previewPaper
     })
   }

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
 from interfaces.services.auth_service import AuthSessionInvalidError
 from interfaces.services.research_workspace_model import ResearchActivity, WorkspaceItems
+from interfaces.services.research_conversation_model import ResearchConversation
 from interfaces.services.research_history_service import (
     MAX_GROUPS,
     MAX_VISITS,
@@ -33,6 +34,7 @@ class ResearchHistoryVisitInput(BaseModel):
     deletedAt: int | float | None
     archivedAt: int | None = None
     activity: ResearchActivity | None = None
+    conversation: ResearchConversation | None = None
 
 
 class ResearchHistoryGroupInput(BaseModel):

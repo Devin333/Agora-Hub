@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { usePathname } from "next/navigation"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useUiStore } from "@/stores/ui-store"
@@ -36,6 +37,12 @@ function ThemeBridge() {
   return null
 }
 
+function GlobalResearchCommands() {
+  const pathname = usePathname()
+  // The homepage owns an inline header trigger so search never covers its composer.
+  return pathname === "/design-demo" ? null : <ResearchCommandPalette />
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = React.useState(
     () =>
@@ -55,7 +62,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <ThemeBridge />
         <PortalAccountProvider>
           <ResearchHistoryRuntime />
-          <ResearchCommandPalette />
+          <GlobalResearchCommands />
           {children}
         </PortalAccountProvider>
       </TooltipProvider>

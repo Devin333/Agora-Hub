@@ -11,7 +11,8 @@ import { POST as logout } from "@/app/api/auth/logout/route"
 import { authResponse, isSameOrigin, safeReturnPath } from "./portal-server"
 
 vi.mock("@/lib/api/server", () => ({ safeApiGet: vi.fn(), safeApiPost: vi.fn() }))
-vi.mock("next/headers", () => ({ cookies: () => ({ get: () => ({ value: "private-session-token" }) }) }))
+const sessionCookie = vi.hoisted(() => ({ value: "private-session-token" as string | undefined }))
+vi.mock("next/headers", () => ({ cookies: () => ({ get: () => sessionCookie.value ? { value: sessionCookie.value } : undefined }) }))
 const binding = "a".repeat(43)
 const origin = "http://localhost:3000"
 function post(path: string, body: unknown, headers: Record<string, string> = {}) {
@@ -22,7 +23,14 @@ function callbackRequest(query: string, cookies = "newsroom_auth_callback=valid-
 }
 
 describe("public auth BFF", () => {
-  beforeEach(() => { vi.mocked(safeApiGet).mockReset(); vi.mocked(safeApiPost).mockReset() })
+  beforeEach(() => { vi.mocked(safeApiGet).mockReset(); vi.mocked(safeApiPost).mockReset(); sessionCookie.value = "private-session-token" })
+  it("allows a guest to use local research without waiting on the authentication backend", async () => {
+    sessionCookie.value = undefined
+    const result = await session()
+    expect(await result.json()).toEqual({ success: true, data: { session: null } })
+    expect(result.headers.get("cache-control")).toBe("no-store")
+    expect(safeApiGet).not.toHaveBeenCalled()
+  })
   it("issues a private browser binding when fetching noncached method capabilities", async () => {
     vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { methods: {} } })
     const result = await methods(new NextRequest(`${origin}/api/auth/methods`))

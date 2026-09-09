@@ -54,7 +54,7 @@ export function PapersDiscoveryView({ model, categories }: { model: PapersDiscov
   useEffect(() => setDraft(query), [query])
   useResearchReturnContext("papers", draft, (saved) => { if (typeof saved === "string") setDraft(saved) })
   const hasTime = model.period !== "all" || Boolean(model.from || model.to)
-  const hasFilters = Boolean(query || filters.length || model.topic || model.method || model.task || hasTime || model.sort !== "trending")
+  const hasFilters = Boolean(query || filters.length || model.topic || model.method || model.task || model.paperType || hasTime || model.sort !== "trending")
   const latest = model.latestPublishedAt ? formatPaperDate(model.latestPublishedAt, locale) : null
   const timeBeyondCorpus = isTimeBeyondCorpus(model)
   const stale = model.latestPublishedAt && Date.now() - Date.parse(model.latestPublishedAt) > 30 * 86400000
@@ -65,6 +65,7 @@ export function PapersDiscoveryView({ model, categories }: { model: PapersDiscov
     { key: "task", value: canonicalRefSlug(model.task, "task"), items: categories.tasks, remove: () => model.onTaskChange("") }
   ]
   const chips = [
+    ...(model.paperType ? [{ key: "paperType", label: zh ? "综述论文" : "Surveys", remove: () => model.onPaperTypeClear?.() }] : []),
     ...(query ? [{ key: "query", label: query, remove: () => model.onSearch("") }] : []),
     ...categoryFilters.filter(item => item.value).map(item => { const category = item.items.find(category => category.value === item.value); return { key: item.key, label: (zh ? category?.nameZh || category?.name : category?.name) || item.value, remove: item.remove } }),
     ...(hasTime ? [{ key: "time", label: model.from || model.to ? `${model.from || "…"} – ${model.to || "…"}` : periods.find((period) => period.value === model.period)![locale], remove: () => model.onPeriodChange("all") }] : [])

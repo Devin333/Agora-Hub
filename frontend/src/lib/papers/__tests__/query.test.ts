@@ -3,6 +3,10 @@ import { normalizePaperQuery, queryPapers } from "@/lib/papers/query"
 import type { Paper } from "@/lib/papers/types"
 
 describe("paper catalogue query", () => {
+  it("keeps the survey condition when opening more guided results", () => {
+    const items = [paper({ id: "survey", title: "Agent Survey" }), paper({ id: "review", title: "Agent Review" }), paper({ id: "other", title: "Agent Experiments" })]
+    expect(queryPapers(items, { q: "agent", paperType: "survey" }).papers.map(item => item.id).sort()).toEqual(["review", "survey"])
+  })
   it("intersects lexical terms, topic, feature, and closed date filters", () => {
     const matching = paper({
       id: "matching",

@@ -895,12 +895,17 @@ def _dump(value: Any) -> dict[str, Any]:
 
 
 def _put_immutable_snapshot(state: dict[str, Any], key: str, snapshot: ResearchSourceSnapshot) -> None:
-    value = _dump(snapshot)
+    # model_copy() may leave flat scope metadata unnormalized until a read.
+    # Compare canonical model representations, retaining the original immutable
+    # observation when only that deterministic round-trip normalization differs.
+    value = _dump(ResearchSourceSnapshot.model_validate(_dump(snapshot)))
     existing = state["snapshots"].get(key)
-    if existing is not None and existing != value:
-        raise ResearchCatalogStoreError(
-            "source snapshot is immutable and conflicts with an existing snapshot_id"
-        )
+    if existing is not None:
+        if _dump(_model(ResearchSourceSnapshot, existing)) != value:
+            raise ResearchCatalogStoreError(
+                "source snapshot is immutable and conflicts with an existing snapshot_id"
+            )
+        return
     state["snapshots"][key] = value
 
 

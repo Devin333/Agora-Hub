@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from urllib.parse import unquote
 
 from interfaces.services.json_file_store import locked_json_file, read_json_object_unlocked, write_json_object_unlocked
 
@@ -54,6 +56,8 @@ class ResearchImportService:
     def mark_completed(self, *, user_id: str, import_id: str, result: dict[str, Any]) -> dict[str, Any]:
         record = self._owned(user_id, import_id)
         paper_id = _first_value(result, "paperId", "paper_id", "id") or _first_value(result.get("metadata"), "paperId", "paper_id", "id")
+        if not paper_id:
+            raise ResearchImportError("import_document_missing", "转换未生成可阅读的论文，请重试。", status_code=502, retryable=True)
         record.update(status="completed", updatedAt=_now(), paperId=paper_id, result=_public_result(result), error=None)
         self._write_record(record)
         return _public(record)
@@ -70,6 +74,17 @@ class ResearchImportService:
         if self.root not in path.parents or path.suffix.casefold() != ".pdf" or not path.is_file():
             raise ResearchImportError("import_file_missing", "Imported PDF is unavailable", status_code=404)
         return path
+
+    @contextmanager
+    def processing(self, *, user_id: str, import_id: str):
+        """Only one parser may own an import, including across API processes.
+
+        A process exit releases the OS lock, so an interrupted parsing record is
+        recoverable without allowing concurrent retries to execute twice.
+        """
+        source = self.source_path(user_id=user_id, import_id=import_id)
+        with locked_json_file(source.with_suffix(".processing")):
+            yield self.get(user_id=user_id, import_id=import_id)
 
     def _owned(self, user_id: str, import_id: str) -> dict[str, Any]:
         records = self._read_records()
@@ -124,7 +139,7 @@ def _first_value(value: Any, *keys: str) -> str | None:
 
 
 def _safe_filename(value: str | None) -> str:
-    name = Path(str(value or "paper.pdf")).name.strip() or "paper.pdf"
+    name = Path(unquote(str(value or "paper.pdf")).replace("\\", "/")).name.strip() or "paper.pdf"
     return name if name.casefold().endswith(".pdf") else f"{name}.pdf"
 
 

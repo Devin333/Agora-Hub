@@ -43,6 +43,7 @@ type ApiEnvelope<T> = {
 }
 
 export type PaperListParams = {
+  paperType?: "survey"
   q?: string
   period?: PaperPeriod
   sort?: PaperSort
