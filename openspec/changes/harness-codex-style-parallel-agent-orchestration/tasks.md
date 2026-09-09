@@ -21,7 +21,7 @@ only unchanged, focused surfaces; each gate requires all its own exit evidence.
 ## 2. G2 Coordinator
 
 - [x] 2.1 Connect `TaskPlanStageRunner` to the Harness-owned group/wave coordinator port instead of its implicit synchronous worker loop.
-- [ ] 2.2 Complete immutable group admission and single-active-wave admission transaction with durable, idempotent membership, policy and budget-envelope pinning.
+- [x] 2.2 Complete immutable group admission and single-active-wave admission transaction with durable, idempotent membership, policy and budget-envelope pinning.
 - [ ] 2.3 Implement deterministic first-fit multi-pool packing, all-or-nothing task reservations, stable overflow READY order and pool evidence in wave checksums.
 - [x] 2.4 Commit wave admission, ledger and `TASK_ATTEMPT_SPAWN_INTENT` atomically before supervisor spawn; persist per-task confirmed/unknown receipts using unique operation keys.
 - [ ] 2.5 Reconcile crashes around admission/intent/receipt/dispatch using audited supervisor status; never duplicate confirmed children or treat missing receipts as proof of no spawn.

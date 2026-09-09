@@ -174,11 +174,15 @@ class _UnitOfWork:
         self.finished = False
 
     def __enter__(self) -> "_UnitOfWork":
+        self.store._lock.acquire()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> bool:
-        if not self.finished:
-            self.rollback()
+        try:
+            if not self.finished:
+                self.rollback()
+        finally:
+            self.store._lock.release()
         return False
 
     def append_event(
@@ -211,8 +215,7 @@ class _UnitOfWork:
     def commit(self) -> None:
         if self.finished:
             raise RuntimeError("unit of work already finished")
-        with self.store._lock:
-            self.store._events.extend(self.pending)
+        self.store._events.extend(self.pending)
         self.finished = True
 
     def rollback(self) -> None:
