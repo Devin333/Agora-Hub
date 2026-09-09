@@ -10,6 +10,47 @@ import { ResearchSourceEntry } from "./research-source-entry"
 
 type Research = ReturnType<typeof useGuidedResearch>
 const labels: Record<ResearchSource, string> = { papers: "论文", projects: "开源项目" }
+const phaseLabels = {
+  understanding: "正在整理需求",
+  clarifying: "等待补充信息",
+  confirming: "等待确认范围",
+  searching: "正在查找资料",
+  results: "本轮查找完成",
+  stopped: "查找已暂停",
+  error: "本轮未完成",
+} as const
+
+function intentConditions(intent?: ResearchIntent) {
+  if (!intent) return "正在整理你的需求"
+  const sources = intent.sources.map(source => labels[source]).join(" + ")
+  const conditions = [
+    intent.constraints.recentYear && "最近一年",
+    intent.constraints.hasCode && "附带代码",
+    intent.constraints.localRunnable && "有运行说明",
+    intent.constraints.recentlyActive && "近期活跃",
+    intent.constraints.language,
+    intent.constraints.license,
+    intent.constraints.paperType === "survey" && "综述论文",
+  ].filter(Boolean)
+  return `${sources}${conditions.length ? ` · ${conditions.join(" · ")}` : " · 时间不限"}`
+}
+
+function ProgressCard({ phase, sources, onStop }: { phase: keyof typeof phaseLabels; sources: ResearchSource[]; onStop: () => void }) {
+  const searching = phase === "searching"
+  const currentIndex = searching ? 2 : 1
+  const steps = ["已收到问题", "正在整理需求", `查找${sources.map(source => labels[source]).join("和")}`, "整理结果"]
+  return <div className={styles.progressCard} role="status" aria-live="polite">
+    <div className={styles.progressHeader}>
+      <span className={styles.progressTitle}><LoaderCircle size={18} className={styles.spinner} />{phaseLabels[phase]}</span>
+      <button type="button" onClick={onStop}><Square size={13} />停止</button>
+    </div>
+    <ol className={styles.progressSteps}>
+      {steps.map((step, index) => <li key={step} className={index < currentIndex ? styles.stepDone : index === currentIndex ? styles.stepCurrent : styles.stepPending}>
+        <span aria-hidden="true">{index < currentIndex ? "✓" : index === currentIndex ? "●" : "○"}</span>{step}
+      </li>)}
+    </ol>
+  </div>
+}
 
 export function GuidedResearchView({ research }: { research: Research }) {
   const input = useRef<HTMLTextAreaElement>(null)
@@ -20,13 +61,19 @@ export function GuidedResearchView({ research }: { research: Research }) {
     event.preventDefault()
     if (!research.busy && active?.conversation.draft.trim()) research.followUp(active.conversation.draft)
   }
+  const firstQuestion = active.conversation.turns[0].question
+  const currentIntent = last.intent
   return <main className={styles.workspace} aria-label="当前研究">
-    <div className={styles.intro}><span>本次研究</span><p>{active.conversation.turns[0].question}</p></div>
+    <header className={styles.intro}>
+      <div className={styles.introEyebrow}><span>本次研究</span><span className={styles.phaseBadge}>{phaseLabels[last.phase]}</span></div>
+      <h1>{firstQuestion}</h1>
+      <p className={styles.introConditions}>{intentConditions(currentIntent)}</p>
+    </header>
     <div className={styles.turns}>
       {active.conversation.turns.map((turn, index) => {
         const current = index === active.conversation.turns.length - 1
         return <section key={turn.id} className={styles.turn} aria-label={`第 ${index + 1} 轮研究`}>
-          <div className={styles.question}>{turn.question}</div>
+          {index > 0 && <div className={styles.question}><span className={styles.questionLabel}>继续提问</span>{turn.question}</div>}
           {turn.answers.map((answer, i) => <p key={i} className={styles.answer}>补充：{answer}</p>)}
           {turn.intent?.clarification && turn.phase === "clarifying" && current && <div className={styles.clarification}>
             <p>{turn.intent.clarification.question}</p>
@@ -34,7 +81,7 @@ export function GuidedResearchView({ research }: { research: Research }) {
             <div className={styles.actions}><button type="button" onClick={() => input.current?.focus()}>我再补充</button><button type="button" onClick={research.skip}>先帮我找找</button></div>
           </div>}
           {turn.intent && turn.phase === "confirming" && current && <IntentConfirmation key={turn.id} intent={turn.intent} onChange={research.editIntent} onRevise={research.followUp} onConfirm={research.confirm} />}
-          {current && research.busy && <div className={styles.progress} role="status"><LoaderCircle size={18} className={styles.spinner} /><span>{turn.phase === "understanding" ? "正在理解你的问题…" : "正在查找相关资料…"}</span><button type="button" onClick={research.stop}><Square size={13} />停止</button></div>}
+          {current && research.busy && <ProgressCard phase={turn.phase as "understanding" | "searching"} sources={turn.intent?.sources ?? ["papers", "projects"]} onStop={research.stop} />}
           {turn.searches.map(search => <section key={search.source} className={styles.resultSection} aria-label={`${labels[search.source]}查找结果`}>
             <div className={styles.sectionHeading}><h2>{labels[search.source]}</h2><span>{search.total} 条相关结果</span></div>
             {!search.results.length ? <div className={styles.empty}><p>暂时没找到符合这些条件的{labels[search.source]}。</p>{current && <div className={styles.actions}><button type="button" onClick={() => { research.setDraft("扩大时间范围，时间不限"); input.current?.focus() }}>扩大时间范围</button><button type="button" onClick={() => input.current?.focus()}>补充或修改问题</button></div>}</div> : <ol className={styles.results}>{search.results.map((result, position) => <li key={result.id}><ResultCard result={result} position={position + 1} returnTo={conversationHref(active.id)} /></li>)}</ol>}
@@ -53,6 +100,10 @@ export function GuidedResearchView({ research }: { research: Research }) {
       <div className={styles.inputRow}><ResearchComposerContext groupId={active.groupId} setGroupId={research.setGroupId} materialIds={active.conversation.materialIds} setMaterialIds={research.setMaterialIds} disabled={research.busy} /><textarea id="research-follow-up" ref={input} rows={1} maxLength={2000} value={active.conversation.draft} onChange={e => research.setDraft(e.target.value)} placeholder={last.phase === "clarifying" ? "也可以直接告诉我你的想法…" : "补充要求，或针对某一条结果继续提问…"} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!research.busy && active.conversation.draft.trim()) research.followUp(active.conversation.draft) } }} /><button type="submit" disabled={research.busy || !active.conversation.draft.trim()} aria-label="发送补充"><ArrowUp size={21} /></button></div>
       <ResearchContextSummary groupId={active.groupId} setGroupId={research.setGroupId} materialIds={active.conversation.materialIds} setMaterialIds={research.setMaterialIds} disabled={research.busy} />
       <ResearchSourceEntry onAttach={id => research.setMaterialIds([...new Set([...active.conversation.materialIds, id])])} />
+      {last.phase === "results" && !research.busy && <div className={styles.suggestions} aria-label="推荐继续提问">
+        <span>推荐继续</span>
+        {["比较前两条结果", "只看带代码的项目", "换一个方向继续找"].map(suggestion => <button type="button" key={suggestion} onClick={() => research.setDraft(suggestion)}>{suggestion}</button>)}
+      </div>}
       {research.saveError && <p role="alert" className={styles.saveError}>{research.saveError}</p>}
     </form>
   </main>

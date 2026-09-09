@@ -1,16 +1,19 @@
-.workspace { --ink: #35274f; --muted: #756782; --accent: #7540d8; max-width: 1040px; margin: 0 auto; padding: 42px 40px 0; color: var(--ink); font-size: 17px; line-height: 1.65; }
-.intro { padding-bottom: 24px; border-bottom: 1px solid #e8dff2; }
-.intro span { font-size: 13px; color: var(--muted); }
-.intro p { font-size: 22px; font-weight: 600; margin: 4px 0 0; }
-.turns { display: grid; gap: 48px; padding: 28px 0; }
+.workspace { --ink: #35274f; --muted: #756782; --accent: #7540d8; box-sizing: border-box; width: min(100%, 900px); margin: 0 auto; padding: 48px 48px 24px; color: var(--ink); font-size: 16px; line-height: 1.65; }
+.intro { padding-bottom: 22px; border-bottom: 1px solid #e8dff2; }
+.introEyebrow { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
+.phaseBadge { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 10px; border: 1px solid #e5d9f0; border-radius: 999px; background: #fff; color: #6d4a8d; }
+.intro h1 { max-width: 760px; margin: 8px 0 0; font-size: 28px; font-weight: 700; line-height: 1.35; letter-spacing: 0; overflow-wrap: anywhere; }
+.introConditions { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+.turns { display: grid; gap: 38px; padding: 26px 0 14px; }
 .turn { min-width: 0; }
-.question { margin-left: auto; width: fit-content; max-width: 85%; padding: 14px 20px; border-radius: 22px 22px 6px 22px; background: #eee5fa; white-space: pre-wrap; overflow-wrap: anywhere; }
+.question { margin-left: auto; width: fit-content; max-width: 76%; padding: 13px 18px; border-radius: 18px 18px 5px 18px; background: #eee5fa; white-space: pre-wrap; overflow-wrap: anywhere; }
+.questionLabel { display: block; margin-bottom: 3px; color: #856ca0; font-size: 12px; }
 .answer { text-align: right; font-size: 15px; color: var(--muted); margin: 12px 0; }
-.clarification, .confirmation { margin-top: 28px; padding: 26px; border: 1px solid #e1d5ee; border-radius: 22px; background: #ffffffb8; box-shadow: 0 10px 32px #55387908; }
+.clarification, .confirmation { margin-top: 24px; padding: 24px; border: 1px solid #e1d5ee; border-radius: 18px; background: #fffffff2; box-shadow: 0 10px 32px #55387908; }
 .confirmation strong { font-weight: 500; }
 .choices, .actions, .links { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .choices span { font-size: 15px; color: var(--muted); margin-right: 6px; }
-.choices button, .actions button, .links a, .stopped button, .error button { border: 1px solid #ded1ef; border-radius: 999px; padding: 8px 16px; background: #fff; color: var(--accent); font-size: 15px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.choices button, .actions button, .links a, .stopped button, .error button { min-height: 42px; border: 1px solid #ded1ef; border-radius: 999px; padding: 8px 16px; background: #fff; color: var(--accent); font-size: 14px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 .choices button:hover, .actions button:hover, .links a:hover { background: #f5eeff; }
 .choices button[aria-pressed="true"] { border-color: #9161d7; background: #ece0fd; color: #5827a0; }
 .actions { justify-content: flex-end; }
@@ -20,18 +23,26 @@
 .conditions button { margin-left: 12px; color: var(--accent); text-decoration: underline; }
 .editLabel { display: grid; gap: 8px; }
 .editLabel textarea { width: 100%; min-height: 90px; padding: 12px; border: 1px solid #ccb7e8; border-radius: 12px; resize: vertical; background: white; }
-.progress { display: flex; align-items: center; gap: 10px; margin: 28px 0; color: var(--accent); }
-.progress button { margin-left: auto; display: flex; gap: 6px; align-items: center; font-size: 14px; padding: 6px 12px; }
+.progressCard { margin: 24px 0 4px; padding: 16px 18px 17px; border: 1px solid #e3d8ef; border-radius: 16px; background: #fffffff2; box-shadow: 0 8px 26px #5538790b; }
+.progressHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.progressTitle { display: inline-flex; align-items: center; gap: 9px; color: var(--accent); font-size: 15px; font-weight: 600; }
+.progressHeader button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 12px; border: 1px solid #e0d4eb; border-radius: 999px; color: #7540a0; font-size: 13px; }
+.progressHeader button:hover { background: #f6f0fd; }
+.progressSteps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; color: #a093ad; font-size: 12px; }
+.progressSteps li { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.progressSteps li span { font-size: 11px; }
+.stepDone { color: #6d4a8d; }
+.stepCurrent { color: var(--accent); font-weight: 600; }
 .spinner { animation: spin 1s linear infinite; }
-.resultSection { margin-top: 30px; }
-.sectionHeading { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
-.sectionHeading h2 { font-size: 19px; font-weight: 600; }
+.resultSection { margin-top: 30px; padding-top: 24px; border-top: 1px solid #e8dff2; }
+.sectionHeading { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+.sectionHeading h2 { font-size: 20px; font-weight: 700; }
 .sectionHeading span { font-size: 14px; color: var(--muted); }
 .results { padding: 0; list-style: none; display: grid; gap: 14px; }
-.result { padding: 24px; border: 1px solid #e8dff2; background: #ffffffbd; border-radius: 20px; }
+.result { padding: 20px 22px; border: 1px solid #e8dff2; background: #fffffff2; border-radius: 16px; }
 .resultTitle { display: flex; align-items: flex-start; gap: 10px; }
 .resultTitle svg { flex-shrink: 0; margin-top: 5px; color: var(--accent); }
-.resultTitle h3 { font-size: 19px; font-weight: 600; line-height: 1.5; }
+.resultTitle h3 { font-size: 18px; font-weight: 650; line-height: 1.5; }
 .resultTitle a:hover { color: var(--accent); text-decoration: underline; }
 .resultNumber { flex-shrink: 0; width: 23px; margin-top: 2px; color: var(--muted); font-size: 15px; }
 .metadata { font-size: 13px; color: var(--muted); margin-top: 10px; }
@@ -48,13 +59,23 @@
 .events ol { padding: 12px 20px; }
 .events li { padding: 3px 0; }
 .events time { margin-left: 15px; font-size: 12px; }
-.composer { position: sticky; bottom: 0; padding: 18px 0 26px; background: linear-gradient(#fbf8ff00, #fbf8ff 16px); }
+.composer { position: sticky; bottom: 0; z-index: 2; padding: 18px 0 26px; background: linear-gradient(#fbf8ff00, #fbf8ff 22px); }
 .composer label { display: block; margin: 0 12px 8px; font-size: 13px; color: var(--muted); }
-.inputRow { display: flex; align-items: flex-end; gap: 16px; border: 1px solid #d5c1ee; padding: 14px; border-radius: 26px; background: #ffffffed; backdrop-filter: blur(16px); box-shadow: 0 6px 30px #55387912; }
+.inputRow { display: flex; align-items: flex-end; gap: 14px; border: 1px solid #d5c1ee; padding: 12px 14px; border-radius: 22px; background: #fffffff2; backdrop-filter: blur(16px); box-shadow: 0 6px 30px #55387912; }
 .composer textarea { flex: 1; min-height: 42px; max-height: 180px; padding: 6px 10px; resize: vertical; background: transparent; outline: none; }
 .composer button[type="submit"] { width: 44px; height: 44px; border-radius: 50%; background: #7c3aed; color: white; display: grid; place-items: center; }
 .composer button[type="submit"]:disabled { background: #c3abea; cursor: not-allowed; }
 .saveError { font-size: 14px; color: #963451; padding: 8px; }
+.suggestions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 11px 12px 0; color: var(--muted); font-size: 13px; }
+.suggestions button { min-height: 34px; padding: 5px 12px; border: 1px solid #e1d5ee; border-radius: 999px; background: #fff; color: #6d4a8d; font-size: 13px; }
+.suggestions button:hover { background: #f6f0fd; border-color: #cdb5e7; }
 .workspace :focus-visible { outline: 2px solid #9462df; outline-offset: 4px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+@media (max-width: 760px) {
+  .workspace { padding: 30px 20px 0; }
+  .intro h1 { font-size: 24px; }
+  .question { max-width: 92%; }
+  .progressSteps { grid-template-columns: repeat(2, 1fr); row-gap: 9px; }
+  .inputRow { gap: 8px; padding: 10px; }
+}
