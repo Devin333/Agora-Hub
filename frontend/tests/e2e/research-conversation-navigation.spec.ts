@@ -10,6 +10,31 @@ async function assertComposerVisible(page: Page) {
   await expect(page.getByRole("textbox", { name: "继续这次研究" })).toBeInViewport()
 }
 
+async function assertResearchEdges(page: Page) {
+  const workspace = (await page.getByLabel("研究工作区", { exact: true }).boundingBox())!
+  const research = (await page.getByRole("main", { name: "当前研究", exact: true }).boundingBox())!
+  const transcript = page.getByRole("region", { name: "研究对话内容", exact: true })
+  const transcriptBox = (await transcript.boundingBox())!
+  const indexBox = (await page.getByRole("navigation", { name: "聊天索引" }).boundingBox())!
+  const transcriptSurface = (await page.getByTestId("research-transcript-surface").boundingBox())!
+  const composerSurface = (await page.getByTestId("research-composer-surface").boundingBox())!
+  expect(Math.abs(research.x - workspace.x)).toBeLessThan(2)
+  expect(Math.abs(research.width - workspace.width)).toBeLessThan(2)
+  expect(Math.abs(indexBox.x - workspace.x)).toBeLessThan(2)
+  expect(indexBox.x + indexBox.width).toBeLessThanOrEqual(transcriptSurface.x + 1)
+  expect(Math.abs(transcriptBox.x + transcriptBox.width - workspace.x - workspace.width)).toBeLessThan(2)
+  expect(Math.abs(transcriptSurface.x - composerSurface.x)).toBeLessThan(2)
+  expect(Math.abs(transcriptSurface.width - composerSurface.width)).toBeLessThan(2)
+  expect(Math.abs(transcriptSurface.x + transcriptSurface.width / 2 - workspace.x - workspace.width / 2)).toBeLessThan(2)
+  const metrics = await transcript.evaluate(element => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    overflowY: getComputedStyle(element).overflowY,
+  }))
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth)
+  expect(metrics.overflowY).toBe("auto")
+}
+
 test("message index previews and jumps through questions and answers without changing the research", async ({ page }, testInfo) => {
   let intentCalls = 0, searchCalls = 0
   await page.route("**/api/research/intent", route => {
@@ -61,10 +86,14 @@ test("message index previews and jumps through questions and answers without cha
   await transcript.focus()
   await page.keyboard.press("Control+End")
   await expect(entries.last()).toHaveAttribute("aria-current", "location")
+  await page.setViewportSize({ width: 900, height: 900 })
   await assertComposerVisible(page)
+  await assertResearchEdges(page)
   await page.getByRole("button", { name: "收起研究侧栏" }).click()
   await assertComposerVisible(page)
+  await assertResearchEdges(page)
   await page.getByRole("button", { name: "展开研究侧栏" }).click()
+  await assertResearchEdges(page)
   await entries.nth(2).click()
   await expect(entries.nth(2)).toHaveAttribute("aria-current", "location")
   await page.waitForTimeout(800)
@@ -123,8 +152,9 @@ test("a full conversation index supports long previews and keyboard navigation w
   await expect(entries.last()).toHaveAttribute("aria-current", "location")
   await assertComposerVisible(page)
   const navBox = (await nav.boundingBox())!
-  const transcriptBox = (await transcript.boundingBox())!
-  expect(navBox.x + navBox.width).toBeLessThanOrEqual(transcriptBox.x)
+  const transcriptSurfaceBox = (await page.getByTestId("research-transcript-surface").boundingBox())!
+  expect(navBox.x + navBox.width).toBeLessThanOrEqual(transcriptSurfaceBox.x + 1)
+  await assertResearchEdges(page)
   await entries.last().focus()
   await page.keyboard.press("Home")
   await expect(entries.first()).toBeFocused()

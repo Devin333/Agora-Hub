@@ -6,9 +6,10 @@ async function openHome(page: Page) {
 }
 
 test("desktop composer is centered beside the sidebar and keeps the 2x2 modules", async ({ page }) => {
-  for (const viewport of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  for (const viewport of [{ width: 2560, height: 1279 }, { width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
     await page.setViewportSize(viewport); await openHome(page)
     const navigation = page.getByRole("navigation", { name: "主导航", exact: true })
+    expect((await navigation.getByRole("link", { name: "AgoraAI" }).boundingBox())!.x).toBe(24)
     await expect(navigation.getByRole("button", { name: "登录", exact: true })).toHaveCount(0)
     await expect(navigation.getByRole("link", { name: "研究模块", exact: true })).toHaveCount(0)
     await expect(navigation.getByRole("button", { name: "搜索研究和模块" })).toHaveCount(0)
@@ -104,7 +105,7 @@ test("plan choices, partial-source recovery, continuation and reload work in a b
   await expect(page.getByRole("button", { name: "继续研究：找 Agent 的论文和项目", exact: true })).toHaveCount(1)
 })
 
-test("follow-up composer stays at the workspace bottom while research scrolls above it", async ({ page }) => {
+test("follow-up composer stays at the workspace bottom while research scrolls above it", async ({ page }, testInfo) => {
   await page.route("**/api/research/intent", route => route.fulfill({ json: { success: true, data: { summary: "Agent 记忆", query: "Agent memory", sources: ["papers"], constraints: {}, clarification: null } } }))
   await page.route("**/api/research/search", route => route.fulfill({ json: { success: true, data: { source: "papers", total: 10, results: Array.from({ length: 10 }, (_, index) => ({ id: `layout-paper-${index}`, kind: "papers", title: `布局回归论文 ${index + 1}`, description: "用于验证长结果列表不会遮挡追问输入框。", source: "arXiv", url: `https://arxiv.org/abs/2605.${String(22343 + index)}` })) } } }))
   await openHome(page)
@@ -116,16 +117,42 @@ test("follow-up composer stays at the workspace bottom while research scrolls ab
   const composer = page.getByRole("form", { name: "继续研究输入区" })
   const transcript = page.getByRole("region", { name: "研究对话内容", exact: true })
   const followUp = page.getByRole("textbox", { name: "继续这次研究" })
-  const assertDocked = async () => {
+  const assertDocked = async (expectOverflow = false) => {
     const workspaceBox = (await page.getByLabel("研究工作区", { exact: true }).boundingBox())!
+    const researchBox = (await page.getByRole("main", { name: "当前研究", exact: true }).boundingBox())!
     const composerBox = (await composer.boundingBox())!
     const transcriptBox = (await transcript.boundingBox())!
+    const transcriptSurface = (await page.getByTestId("research-transcript-surface").boundingBox())!
+    const composerSurface = (await page.getByTestId("research-composer-surface").boundingBox())!
+    const indexBox = (await page.getByRole("navigation", { name: "聊天索引" }).boundingBox())!
+    expect(Math.abs(researchBox.x - workspaceBox.x)).toBeLessThan(2)
+    expect(Math.abs(researchBox.width - workspaceBox.width)).toBeLessThan(2)
+    expect(Math.abs(transcriptBox.x - workspaceBox.x)).toBeLessThan(2)
+    expect(Math.abs(transcriptBox.x + transcriptBox.width - workspaceBox.x - workspaceBox.width)).toBeLessThan(2)
+    expect(Math.abs(composerBox.x - workspaceBox.x)).toBeLessThan(2)
+    expect(Math.abs(composerBox.width - workspaceBox.width)).toBeLessThan(2)
+    expect(Math.abs(indexBox.x - workspaceBox.x)).toBeLessThan(2)
+    expect(indexBox.x + indexBox.width).toBeLessThanOrEqual(transcriptSurface.x + 1)
+    expect(Math.abs(transcriptSurface.x - composerSurface.x)).toBeLessThan(2)
+    expect(Math.abs(transcriptSurface.width - composerSurface.width)).toBeLessThan(2)
+    expect(transcriptSurface.width).toBeLessThanOrEqual(1041)
+    if (workspaceBox.width >= 1200) expect(Math.abs(transcriptSurface.width - 1040)).toBeLessThan(2)
+    expect(Math.abs(transcriptSurface.x + transcriptSurface.width / 2 - workspaceBox.x - workspaceBox.width / 2)).toBeLessThan(2)
     expect(Math.abs(composerBox.y + composerBox.height - workspaceBox.y - workspaceBox.height)).toBeLessThan(2)
-    expect(Math.abs(composerBox.x + composerBox.width / 2 - workspaceBox.x - workspaceBox.width / 2)).toBeLessThan(2)
     expect(transcriptBox.y + transcriptBox.height).toBeLessThanOrEqual(composerBox.y + 1)
+    const transcriptMetrics = await transcript.evaluate(element => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      gutter: getComputedStyle(element).scrollbarGutter,
+    }))
+    if (expectOverflow) expect(transcriptMetrics.scrollHeight).toBeGreaterThan(transcriptMetrics.clientHeight)
+    expect(transcriptMetrics.scrollWidth).toBeLessThanOrEqual(transcriptMetrics.clientWidth)
+    expect(transcriptMetrics.gutter).toContain("stable")
     await expect(followUp).toBeInViewport()
   }
-  for (const viewport of [{ width: 1280, height: 1274 }, { width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+  for (const viewport of [{ width: 2560, height: 1279 }, { width: 1920, height: 1080 }, { width: 1280, height: 1274 }, { width: 1440, height: 900 }, { width: 1366, height: 768 }, { width: 900, height: 900 }]) {
     await page.setViewportSize(viewport)
     await assertDocked()
   }
@@ -135,12 +162,13 @@ test("follow-up composer stays at the workspace bottom while research scrolls ab
   await page.getByRole("button", { name: "展开研究侧栏" }).click()
   await page.getByRole("button", { name: "开始查找", exact: true }).click()
   await expect(transcript.getByRole("article")).toHaveCount(10)
+  await assertDocked(true)
   const beforeScroll = (await composer.boundingBox())!
   await transcript.focus()
   await page.keyboard.press("Control+End")
   const lastLink = transcript.getByRole("link", { name: "打开原文" }).last()
   await expect(lastLink).toBeInViewport()
-  await assertDocked()
+  await assertDocked(true)
   expect((await composer.boundingBox())!.y).toBe(beforeScroll.y)
   const lastLinkBox = (await lastLink.boundingBox())!
   expect(lastLinkBox.y + lastLinkBox.height).toBeLessThan(beforeScroll.y)
@@ -151,7 +179,11 @@ test("follow-up composer stays at the workspace bottom while research scrolls ab
   await page.reload()
   await expect(followUp).toHaveValue("还有 RAG 相关的")
   await expect(lastLink).toBeInViewport()
-  await assertDocked()
+  await assertDocked(true)
+  await page.setViewportSize({ width: 2560, height: 1279 })
+  await assertDocked(true)
+  await transcript.evaluate(element => { element.scrollTop = 0 })
+  await page.screenshot({ path: testInfo.outputPath("wide-research-workspace.png") })
 })
 
 test("report preparation retains the existing editable workflow", async ({ page }) => {

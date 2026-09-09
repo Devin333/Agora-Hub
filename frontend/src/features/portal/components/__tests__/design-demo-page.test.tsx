@@ -45,11 +45,29 @@ describe("guided research homepage", () => {
     await screen.findByRole("link", { name: "打开 GitHub" }); expect(fetch).toHaveBeenCalledTimes(3)
   })
 
+  it("keeps progress in the conversation without duplicate header or composer labels", async () => {
+    let resolve: (value: Response) => void = () => {}
+    vi.mocked(fetch).mockImplementation(() => new Promise(done => { resolve = done }))
+    render(<DesignDemoPage />); send()
+    const progress = await screen.findByRole("status")
+    expect(progress).toHaveTextContent("正在整理需求")
+    const heading = screen.getByRole("heading", { level: 1, name: "找 Agent 论文和项目" })
+    expect(heading.closest("header")).toHaveTextContent(/^找 Agent 论文和项目$/)
+    expect(screen.queryByText("继续这次研究")).not.toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "继续这次研究" })).toBeInTheDocument()
+    fireEvent.click(within(progress).getByRole("button", { name: "停止" }))
+    await act(async () => resolve(success(intent)))
+    expect(heading.closest("header")).toHaveTextContent(/^找 Agent 论文和项目$/)
+  })
+
   it("bounds clarification to two answers even if a candidate keeps asking", async () => {
     vi.mocked(fetch).mockImplementation(async () => success({ ...intent, clarification: { question: "你想先了解，还是找项目试试？", options: ["先了解一下", "找项目试试"] } }))
     sessionStorage.setItem("agora-home-draft:v1", JSON.stringify({ query: "Agent", mode: "plan" }))
     render(<DesignDemoPage />); fireEvent.click(screen.getByRole("button", { name: "发送问题" }))
-    fireEvent.click(await screen.findByRole("button", { name: "先了解一下" })); fireEvent.click(await screen.findByRole("button", { name: "找项目试试" }))
+    const firstChoice = await screen.findByRole("button", { name: "先了解一下" })
+    expect(screen.queryByText("补充你的想法")).not.toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "补充你的想法" })).toBeInTheDocument()
+    fireEvent.click(firstChoice); fireEvent.click(await screen.findByRole("button", { name: "找项目试试" }))
     await screen.findByRole("region", { name: "确认研究计划" })
     expect(readResearchWorkspace().visits[0].conversation?.turns[0].answers).toEqual(["先了解一下", "找项目试试"])
     expect(JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)).skipClarification).toBe(true)

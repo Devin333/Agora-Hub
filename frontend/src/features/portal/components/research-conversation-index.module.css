@@ -1,6 +1,6 @@
 .index {
   position: absolute;
-  left: -36px;
+  left: 0;
   top: 50%;
   transform: translateY(-50%);
   z-index: 2;
@@ -92,7 +92,6 @@
 
 @media (max-width: 760px) {
   .index {
-    left: -28px;
     width: 24px;
   }
 

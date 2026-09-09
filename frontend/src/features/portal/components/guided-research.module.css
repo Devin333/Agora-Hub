@@ -1,10 +1,10 @@
-.workspace { --ink: #35274f; --muted: #756782; --accent: #7540d8; box-sizing: border-box; display: flex; flex-direction: column; width: min(100%, 900px); height: 100%; margin: 0 auto; padding: 0 40px; color: var(--ink); font-size: 16px; line-height: 1.65; }
-.readingPane { position: relative; display: flex; flex: 1; min-height: 0; }
-.transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 48px 8px 24px; scroll-padding-block: 24px; scrollbar-width: thin; }
+.workspace { --ink: #35274f; --muted: #756782; --accent: #7540d8; box-sizing: border-box; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; overflow: hidden; color: var(--ink); font-size: 16px; line-height: 1.65; }
+.readingPane { position: relative; display: flex; flex: 1; width: 100%; min-width: 0; min-height: 0; }
+.transcript { flex: 1; width: 100%; min-width: 0; min-height: 0; overflow-y: auto; scroll-padding-block: 24px; scrollbar-gutter: stable both-edges; scrollbar-width: thin; }
+.transcriptContent, .composerContent { box-sizing: border-box; width: min(100%, 1120px); margin-inline: auto; padding-inline: 40px; }
+.transcriptContent { padding-top: 48px; padding-bottom: 24px; }
 .intro { padding-bottom: 22px; border-bottom: 1px solid #e8dff2; }
-.introEyebrow { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
-.phaseBadge { display: inline-flex; align-items: center; min-height: 26px; padding: 2px 10px; border: 1px solid #e5d9f0; border-radius: 999px; background: #fff; color: #6d4a8d; }
-.intro h1 { max-width: 760px; margin: 8px 0 0; font-size: 28px; font-weight: 700; line-height: 1.35; letter-spacing: 0; overflow-wrap: anywhere; }
+.intro h1 { max-width: 760px; margin: 0; font-size: 28px; font-weight: 700; line-height: 1.35; letter-spacing: 0; overflow-wrap: anywhere; }
 .turns { display: grid; gap: 38px; padding: 26px 0 14px; }
 .turn { min-width: 0; }
 .question { margin-left: auto; width: fit-content; max-width: 76%; padding: 13px 18px; border-radius: 18px 18px 5px 18px; background: #7c3aed; color: #fff; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -59,11 +59,12 @@
 .events ol { padding: 12px 20px; }
 .events li { padding: 3px 0; }
 .events time { margin-left: 15px; font-size: 12px; }
-.composer { flex: 0 0 auto; min-height: 0; max-height: 50%; overflow-y: auto; padding: 18px 8px 24px; background: #fbf8ff; scrollbar-width: thin; }
-.composer label { display: block; margin: 0 12px 8px; font-size: 13px; color: var(--muted); }
-.inputRow { display: flex; align-items: flex-end; gap: 14px; border: 1px solid #d5c1ee; padding: 12px 14px; border-radius: 22px; background: #fffffff2; backdrop-filter: blur(16px); box-shadow: 0 6px 30px #55387912; }
-.composer textarea { flex: 1; min-height: 42px; max-height: 180px; padding: 6px 10px; resize: vertical; background: transparent; outline: none; }
-.composer button[type="submit"] { width: 44px; height: 44px; border-radius: 50%; background: #7c3aed; color: white; display: grid; place-items: center; }
+.composer { flex: 0 0 auto; width: 100%; min-width: 0; min-height: 0; max-height: 50%; overflow-y: auto; background: #fbf8ff; scrollbar-gutter: stable both-edges; scrollbar-width: thin; }
+.composerContent { padding-top: 18px; padding-bottom: 24px; }
+.inputRow { display: flex; align-items: flex-end; gap: 14px; border: 1px solid #e4e1e8; padding: 12px 14px; border-radius: 28px; background: #fff; box-shadow: 0 3px 18px #35274f08; }
+.inputRow:has(textarea:focus-visible) { outline: 2px solid #8b8396; outline-offset: -1px; }
+.composer textarea, .composer textarea:focus-visible { flex: 1; min-width: 0; min-height: 42px; max-height: 180px; padding: 6px 10px; border: 0; resize: none; overflow-y: auto; background: transparent; outline: none; box-shadow: none; }
+.composer button[type="submit"] { flex-shrink: 0; width: 44px; height: 44px; border-radius: 50%; background: #7c3aed; color: white; display: grid; place-items: center; }
 .composer button[type="submit"]:disabled { background: #c3abea; cursor: not-allowed; }
 .saveError { font-size: 14px; color: #963451; padding: 8px; }
 .suggestions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 11px 12px 0; color: var(--muted); font-size: 13px; }
@@ -73,8 +74,8 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 @media (max-width: 760px) {
-  .workspace { padding: 0 12px; }
-  .transcript { padding-top: 30px; }
+  .transcriptContent, .composerContent { padding-inline: 36px; }
+  .transcriptContent { padding-top: 30px; }
   .intro h1 { font-size: 24px; }
   .question { max-width: 92%; }
   .progressSteps { grid-template-columns: repeat(2, 1fr); row-gap: 9px; }
