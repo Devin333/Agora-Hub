@@ -6,6 +6,7 @@ from typing import Any
 
 from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.task_plan.planning_observation import PlanningObservationReceipt
 from framework.harness.ref_results import HarnessResultRefAuthority
 from framework.harness.subagents.transcript import SubAgentTranscriptStorePort
 from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
@@ -268,6 +269,7 @@ class TaskPlanRecoveryService:
         *,
         results: Iterable[TaskResultRecord] = (),
         patches: Iterable[Any] = (),
+        planning_receipts: Iterable[PlanningObservationReceipt] = (),
         checkpoint: TaskPlanCheckpoint | None = None,
         queued_instance_ids: Iterable[str] = (),
         queue_name: str = "framework:queue:default",
@@ -275,6 +277,7 @@ class TaskPlanRecoveryService:
         plan_history = tuple(plans)
         recorded_events = tuple(events)
         recorded_results = tuple(results)
+        recorded_planning = tuple(planning_receipts)
         if not plan_history:
             raise HarnessValidationError(
                 "TaskPlan recovery requires accepted plan history",
@@ -311,6 +314,7 @@ class TaskPlanRecoveryService:
                 recorded_events,
                 results=recorded_results,
                 patches=patches,
+                planning_receipts=recorded_planning,
                 through_sequence=checkpoint.last_sequence,
                 require_terminal_events=False,
                 apply_unterminated_results=False,
@@ -325,6 +329,7 @@ class TaskPlanRecoveryService:
             recorded_events,
             results=recorded_results,
             patches=patches,
+            planning_receipts=recorded_planning,
             require_terminal_events=False,
             apply_unterminated_results=False,
         )
@@ -382,9 +387,12 @@ class TaskPlanRecoveryService:
                 if states[instance.task_id].status is TaskLifecycle.READY
             )
         )
-        raw_readbacks = queue_reader.read_task_plan_queue(
-            queue_name=queue_name,
-            task_instance_ids=ready_instance_ids,
+        raw_readbacks = (
+            queue_reader.read_task_plan_queue(
+                queue_name=queue_name,
+                task_instance_ids=ready_instance_ids,
+            )
+            if ready_instance_ids else ()
         )
         if raw_readbacks is None:
             raise TypeError(

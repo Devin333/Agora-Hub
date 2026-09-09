@@ -15,7 +15,7 @@ from framework.harness.ref_snapshot import (
     SnapshotRefResolutionPort,
 )
 from framework.harness.task_plan.planning_observation import (
-    PlanningObservationReceipt, PlanningObservationStorePort,
+    PlanningCallIntent, PlanningObservationReceipt, PlanningObservationRequest, PlanningObservationStorePort,
 )
 from framework.harness.task_plan.planning_metadata import (
     PlanningObservationDescriptor, PlanningObservationDescriptorPort,
@@ -239,3 +239,9 @@ class AuthorizedPlanningObservationStore:
         if self.by_request(request.request_checksum) != receipt:
             raise _error("planning writer did not preserve its receipt", "REF_CHECKSUM_MISMATCH")
         return receipt.receipt_checksum
+
+    def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None:
+        if not self._allow_registration:
+            raise _error("offline planning replay cannot reserve calls")
+        self._authority.require_scope(request.run_id, request.stage_id, request.policy_checksum, request.planner_turn_id)
+        return self._store.reserve_call(request, tool_call_id, max_calls, timeout_ms)

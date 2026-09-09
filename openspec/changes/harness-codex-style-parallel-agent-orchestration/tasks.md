@@ -16,7 +16,7 @@ only unchanged, focused surfaces; each gate requires all its own exit evidence.
 - [x] 1.7 Define versioned token/time/tool/cost budget allocations and ledger settlement; prove consumed/released/outstanding invariants, no partial reservation and idempotent retry/cancel/recovery accounting.
 - [x] 1.8 Preserve complete accepted/rejected/failed/cancelled/indeterminate/reclaimed/quarantined attempt history and group/wave/plan/task/binding/receipt identity in result verification and replay.
 - [x] 1.9 Extend canonical events/checkpoints with spawn intent/receipt, ledger, complete history index, continuation and aggregate/observation checksums; reject corrupt/conflicting histories.
-- [ ] 1.10 Complete bounded planning calls/timeouts/retries/failure accounting with durable receipts and strict source-observation validation.
+- [x] 1.10 Complete bounded planning calls/timeouts/retries/failure accounting with durable receipts and strict source-observation validation.
 
 ## 2. G2 Coordinator
 

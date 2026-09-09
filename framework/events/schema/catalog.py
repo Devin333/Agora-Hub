@@ -70,6 +70,8 @@ TASK_PLAN_PARALLEL_EVENT_TYPES = (
     "PARENT_OBSERVATION_CONTINUATION",
 )
 TASK_PLAN_EVENT_TYPES = (
+    "PLAN_BUILD_INTENT",
+    "PLAN_BUILD_RECEIPT",
     "PLAN_CANDIDATE_BUILT",
     "PLAN_CANDIDATE_REJECTED",
     "PLAN_VALIDATION_FAILED",
@@ -1534,6 +1536,29 @@ def _task_plan_event_payload_schema(
             "blocking_predecessor_ids": _ARRAY_OF_TEXT,
         },
     }
+    if event_type in {"PLAN_BUILD_INTENT", "PLAN_BUILD_RECEIPT"}:
+        fields = {
+            "schema_version": {"const": "newsroom.harness-plan-build-attempt/v1"},
+            "request_checksum": _CHECKSUM_TEXT,
+            "policy_checksum": _CHECKSUM_TEXT,
+            "attempt": _POSITIVE_INTEGER,
+            "max_calls": _POSITIVE_INTEGER,
+            "timeout_ms": _POSITIVE_INTEGER,
+            "status": {"enum": ["STARTED"] if event_type == "PLAN_BUILD_INTENT" else ["SUCCEEDED", "FAILED", "TIMED_OUT"]},
+            "retryable": {"type": "boolean"},
+            "elapsed_ms": {"type": "integer", "minimum": 0},
+            "reason_code": nullable_text,
+            "candidate_checksum": nullable_checksum,
+            "receipt_checksum": _CHECKSUM_TEXT,
+        }
+        safe_payload = {
+            "type": "object", "additionalProperties": False,
+            "required": ["build_attempt"],
+            "properties": {"build_attempt": {
+                "type": "object", "additionalProperties": False,
+                "required": list(fields), "properties": fields,
+            }},
+        }
     if event_type == "PLAN_CANDIDATE_BUILT":
         safe_payload["properties"]["submission"] = _candidate_submission_schema()
     if event_type in {"TASK_PLAN_VERIFIED", "TASK_PLAN_HALTED"}:

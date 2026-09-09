@@ -108,6 +108,18 @@ AgentLoop MAY request a planning observation through a Harness-controlled `ToolE
 - **THEN** candidate validation MUST fail closed
 - **AND** AgentLoop MUST not dispatch child tasks based on that observation
 
+#### Scenario: Several planning calls share one turn deadline
+
+- **WHEN** another permitted planning tool call is admitted in the same planner turn
+- **THEN** Harness MUST reuse the durable deadline fixed by the first call and pass only its remaining time to execution
+- **AND** reopening the store MUST NOT reset that deadline or forget an unresolved call's budget consumption
+
+#### Scenario: Planning evidence is inspected through standalone offline recovery
+
+- **WHEN** an accepted plan contains planning observation references
+- **THEN** those references and the planner turn MUST be pinned by the plan checksum
+- **AND** standalone replay and recovery MUST require matching recorded successful receipts and reject missing, corrupt or cross-scope evidence without invoking live tools
+
 ### Requirement: Parent submission and continuation SHALL be durable and distinct from terminal observation
 
 `AgentOrchestrationPort.submit(candidate)` MUST return a durable `submission_id`, `group_id`, dedup status and bounded wait information. The port MAY wait for the terminal outcome within the bound. Capacity waits, online recovery and unfinished joins MUST return a `PENDING` submission receipt when that wait expires, without starting a new parent reasoning turn or appending a terminal observation. Harness MUST resume the same parent turn through durable continuation and append exactly one terminal observation using `observation_id + observation_version`. Progress is inspection-only; `REPLAN_PENDING` MUST NOT be exposed as a final parent outcome.

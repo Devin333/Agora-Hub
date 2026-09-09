@@ -196,20 +196,27 @@ class PlanCandidateBuilderPort(Protocol):
 
 
 class HarnessPlanCandidateBuilder:
-    """Adapter that exposes only approved stage context references."""
+    """Adapter for a worker with an explicit bounded planning entrypoint."""
 
     def __init__(self, worker: Any) -> None:
         self.worker = worker
 
     def build_candidate(self, request: PlanBuildRequest) -> PlanCandidate:
-        generate = getattr(self.worker, "generate", None)
+        generate = getattr(self.worker, "generate_bounded", None)
         if not callable(generate):
-            raise TypeError("plan builder must implement generate")
+            raise HarnessValidationError(
+                "plan builder requires a bounded worker entrypoint",
+                code="task_plan_bounded_builder_required",
+            )
         result = generate(
             {
                 "stage": request.to_dict(),
                 "policy": _planner_policy_projection(request.policy),
-            }
+            },
+            timeout_seconds=float(request.policy.planning_timeout_seconds),
+            max_turns=request.policy.max_plan_build_turns,
+            max_tool_calls=request.policy.max_plan_build_tool_calls,
+            max_transport_attempts=1,
         )
         if not isinstance(result, HarnessWorkerResult):
             raise HarnessValidationError(

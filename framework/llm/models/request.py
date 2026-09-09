@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any, cast
 
 from framework.llm.models.message import LLMMessage
@@ -23,6 +24,8 @@ class LLMRequest:
     tools: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     execution_identity: GraphExecutionIdentity | None = None
+    timeout_seconds: float | None = None
+    max_transport_attempts: int | None = None
     response_format: str | dict[str, Any] | None = None
     output_schema: Any | None = None
     output_schema_name: str = "structured_output"
@@ -49,6 +52,18 @@ class LLMRequest:
     )
 
     def __post_init__(self) -> None:
+        if self.timeout_seconds is not None and (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or not isfinite(self.timeout_seconds) or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and positive")
+        if self.max_transport_attempts is not None and (
+            isinstance(self.max_transport_attempts, bool)
+            or not isinstance(self.max_transport_attempts, int)
+            or self.max_transport_attempts <= 0
+        ):
+            raise ValueError("max_transport_attempts must be a positive integer")
         object.__setattr__(
             self,
             "messages",
@@ -123,6 +138,8 @@ class LLMRequest:
             "tools": deepcopy(self.tools),
             "metadata": deepcopy(self.metadata),
             "execution_identity": self.execution_identity,
+            "timeout_seconds": self.timeout_seconds,
+            "max_transport_attempts": self.max_transport_attempts,
             "response_format": deepcopy(self.response_format),
             "output_schema": self.structured_output_schema_source(),
             "output_schema_name": self.output_schema_name,
@@ -160,6 +177,10 @@ class LLMRequest:
         }
         if self.execution_identity is not None:
             payload["execution_identity"] = self.execution_identity.to_dict()
+        if self.timeout_seconds is not None:
+            payload["timeout_seconds"] = self.timeout_seconds
+        if self.max_transport_attempts is not None:
+            payload["max_transport_attempts"] = self.max_transport_attempts
         if self.model is not None:
             payload["model"] = self.model
         if self.temperature is not None:
@@ -210,4 +231,3 @@ def _message_to_dict(message: dict[str, Any] | LLMMessage) -> dict[str, Any]:
     if isinstance(message, LLMMessage):
         return message.to_dict()
     return dict(message)
-

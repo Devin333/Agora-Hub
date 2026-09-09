@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from framework.events.canonical import checksum_for
+from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.ref_authority import RefAccessPolicy, RefDescriptor
 from framework.harness.ref_snapshot import RefAuthoritySnapshot, RefSnapshotPhase
 from framework.harness.task_plan.planning_metadata import (
@@ -31,6 +32,80 @@ from infrastructure.storage.harness import planning_observation as storage_modul
 from infrastructure.storage.harness.planning_observation import (
     FilesystemPlanningObservationStore,
 )
+
+
+def test_call_intent_survives_restart_without_reexecution(tmp_path) -> None:
+    snapshot = _snapshot()
+    request = _request(snapshot)
+    store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    assert store.reserve_call(request, "call-1", 1)
+    restored = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    with pytest.raises(HarnessValidationError) as error:
+        restored.reserve_call(request, "call-2", 1)
+    assert error.value.code == "planning_call_outcome_unconfirmed"
+    assert not restored.reserve_call(replace(request, request_id="next-request"), "call-3", 1)
+    assert restored.by_request(request.request_checksum) is None
+
+
+def test_parallel_store_instances_share_one_planning_budget(tmp_path) -> None:
+    snapshot = _snapshot()
+
+    def reserve(index):
+        store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+        return bool(store.reserve_call(_request(snapshot, request_id=f"request-{index}"), f"call-{index}", 1))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(reserve, range(2)))
+    assert sorted(results) == [False, True]
+
+
+def test_receipt_must_match_persisted_call_identity(tmp_path) -> None:
+    snapshot = _snapshot()
+    store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    receipt = _receipt(snapshot)
+    assert store.reserve_call(receipt.request, "admitted-call", 1)
+    with pytest.raises(HarnessValidationError) as error:
+        store.save(receipt)
+    assert error.value.code == "planning_call_receipt_mismatch"
+    assert store.by_request(receipt.request.request_checksum) is None
+
+
+def test_completed_receipt_and_intent_consume_only_one_slot(tmp_path) -> None:
+    snapshot = _snapshot()
+    store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    receipt = _receipt(snapshot)
+    assert store.reserve_call(receipt.request, receipt.tool_call_id, 2)
+    store.save(receipt)
+    restored = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    assert restored.reserve_call(_request(snapshot, request_id="second"), "call-2", 2)
+    assert not restored.reserve_call(_request(snapshot, request_id="third"), "call-3", 2)
+
+
+def test_existing_intent_pins_planning_budget(tmp_path) -> None:
+    snapshot = _snapshot()
+    store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    assert store.reserve_call(_request(snapshot), "call-1", 1)
+    with pytest.raises(HarnessValidationError) as error:
+        store.reserve_call(_request(snapshot, request_id="second"), "call-2", 10)
+    assert error.value.code == "planning_call_policy_conflict"
+
+
+def test_filesystem_intent_preserves_turn_deadline_on_reopen(monkeypatch, tmp_path):
+    from framework.harness.task_plan import planning_observation as planning_module
+
+    snapshot = _snapshot()
+    clock = {"ms": 100000}
+    monkeypatch.setattr(planning_module, "time_ns", lambda: clock["ms"] * 1_000_000)
+    store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    first = store.reserve_call(_request(snapshot), "call-1", 3, timeout_ms=2000)
+    clock["ms"] += 1000
+    restored = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    second = restored.reserve_call(_request(snapshot, request_id="second"), "call-2", 3, timeout_ms=2000)
+    assert first.turn_deadline_ms == second.turn_deadline_ms == 102000
+    clock["ms"] = 102000
+    with pytest.raises(HarnessValidationError) as error:
+        restored.reserve_call(_request(snapshot, request_id="third"), "call-3", 3, timeout_ms=2000)
+    assert error.value.code == "planning_turn_timeout"
 
 
 def _snapshot() -> RefAuthoritySnapshot:

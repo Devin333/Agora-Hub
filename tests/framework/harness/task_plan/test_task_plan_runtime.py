@@ -15,8 +15,10 @@ from framework.harness.ref_authority import (
 )
 from framework.harness.task_plan import (
     FakePlanCandidateBuilder,
+    HarnessPlanCandidateBuilder,
     InMemoryTaskPlanStore,
     PlanBuildBudget,
+    PlanBuildRequest,
     PlanCandidate,
     PlanPatch,
     PlanPatchOperation,
@@ -184,6 +186,95 @@ def test_task_plan_policy_observation_defaults_and_checksum_roundtrip() -> None:
     changed = replace(policy, parent_observation_limits={**expected, "max_summary_bytes": 1024})
     assert changed.policy_checksum != policy.policy_checksum
     assert TaskPlanPolicy.from_dict(changed.to_dict()).policy_checksum == changed.policy_checksum
+
+
+def test_builder_retry_receipts_survive_runner_recreation():
+    from framework.harness.task_plan.planning_build import validate_build_history
+
+    binding, policy, registry = _setup()
+    policy = replace(policy, max_plan_build_calls=2)
+    candidate = _candidate(binding, (_task("task-1"),))
+    store = InMemoryTaskPlanStore()
+
+    class RetryableProviderError(RuntimeError):
+        retryable = True
+
+    class Builder:
+        calls = 0
+
+        def build_candidate(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                raise RetryableProviderError("temporary provider failure")
+            return candidate
+
+    builder = Builder()
+    request = TaskPlanStageRequest(run_id="run", stage_binding=binding,
+                                   context_refs={"document": "document"}, policy=policy,
+                                   accepted_at="2026-08-17T00:00:00Z")
+    build = PlanBuildRequest(run_id="run", stage_binding=binding,
+                             context_refs=request.context_refs, policy=policy)
+    runner = TaskPlanStageRunner(candidate_builder=builder, capability_registry=registry, store=store)
+    assert runner._build_candidate(request, build) == candidate
+    history = validate_build_history(store.read_events("run", binding.stage_id))
+    assert [attempt.status for attempt in history] == ["FAILED", "SUCCEEDED"]
+    assert history[0].retryable
+    restored = TaskPlanStageRunner(candidate_builder=builder, capability_registry=registry, store=store)
+    assert restored._build_candidate(request, build) == candidate
+    assert builder.calls == 2
+
+
+def test_builder_unconfirmed_attempt_is_not_repeated():
+    binding, policy, registry = _setup()
+    store = InMemoryTaskPlanStore()
+
+    class Builder:
+        calls = 0
+
+        def build_candidate(self, request):
+            self.calls += 1
+            raise SystemExit("crash before candidate receipt")
+
+    builder = Builder()
+    request = TaskPlanStageRequest(run_id="run", stage_binding=binding,
+                                   context_refs={"document": "document"}, policy=policy,
+                                   accepted_at="2026-08-17T00:00:00Z")
+    build = PlanBuildRequest(run_id="run", stage_binding=binding,
+                             context_refs=request.context_refs, policy=policy)
+    runner = TaskPlanStageRunner(candidate_builder=builder, capability_registry=registry, store=store)
+    with pytest.raises(SystemExit):
+        runner._build_candidate(request, build)
+    with pytest.raises(HarnessValidationError) as error:
+        runner._build_candidate(request, build)
+    assert error.value.code == "task_plan_build_outcome_unconfirmed"
+    assert builder.calls == 1
+
+
+def test_generic_builder_requires_explicit_bounded_worker_contract():
+    binding, policy, _ = _setup()
+    candidate = _candidate(binding, (_task("task-1"),))
+    request = PlanBuildRequest(run_id="run", stage_binding=binding,
+                              context_refs={"document": "document"}, policy=policy)
+    observed = []
+
+    class Worker:
+        def generate_bounded(self, payload, **limits):
+            observed.append((payload, limits))
+            return HarnessWorkerResult(status="succeeded", output={"candidate": candidate.to_dict()})
+
+    assert HarnessPlanCandidateBuilder(Worker()).build_candidate(request) == candidate
+    assert observed[0][1] == {
+        "timeout_seconds": 30.0, "max_turns": 2,
+        "max_tool_calls": 0, "max_transport_attempts": 1,
+    }
+
+    class UnboundedWorker:
+        def generate(self, payload):
+            raise AssertionError("unbounded entrypoint must not run")
+
+    with pytest.raises(HarnessValidationError) as error:
+        HarnessPlanCandidateBuilder(UnboundedWorker()).build_candidate(request)
+    assert error.value.code == "task_plan_bounded_builder_required"
 
 
 def test_stage_runner_forwards_shared_ref_authority_into_plan_validation() -> None:

@@ -659,6 +659,32 @@ def test_graph_only_candidate_and_plan_round_trip_through_durable_event_store():
     assert mismatch.value.code == "task_plan_event_identity_mismatch"
 
 
+def test_planning_receipts_round_trip_through_canonical_event_store():
+    from framework.harness.task_plan.planning_build import PlanBuildAttempt, validate_build_history
+    from framework.harness.task_plan.store import _task_plan_event_identity_kwargs
+
+    artifacts = _ArtifactStore()
+    event_store = _EventStore()
+    store = _store(event_store, artifacts)
+    candidate, plan = _graph_only_candidate_and_plan()
+    intent = PlanBuildAttempt(request_checksum=canonical_payload_checksum({"request": "planning"}),
+                              policy_checksum=plan.policy_checksum, attempt=1, max_calls=1, timeout_ms=30000)
+    identity = _task_plan_event_identity_kwargs(candidate)
+    store.append_event(TaskPlanEvent("PLAN_BUILD_INTENT", **identity,
+                                    payload={"build_attempt": intent.to_dict()}, sequence=1))
+    store.append_candidate(candidate)
+    receipt = replace(intent, status="SUCCEEDED", elapsed_ms=1, candidate_checksum=candidate.candidate_checksum)
+    store.append_event(TaskPlanEvent("PLAN_BUILD_RECEIPT", **identity,
+                                    payload={"build_attempt": receipt.to_dict()}, sequence=3))
+    store.accept_plan(plan)
+    reopened = _store(event_store, artifacts)
+    events = reopened.read_events(plan.run_id, plan.stage_id)
+    assert validate_build_history(events) == (receipt,)
+    assert reopened.candidate_for(plan.run_id, plan.stage_id, receipt.candidate_checksum) == candidate
+    projection = TaskPlanReplayReducer().reduce(plan, events, require_terminal_events=False)
+    assert projection.last_sequence == 4
+
+
 def test_graph_only_patch_is_bound_to_its_base_plan_and_replays_after_replan():
     artifacts = _ArtifactStore()
     event_store = _EventStore()

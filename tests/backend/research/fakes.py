@@ -147,6 +147,8 @@ class FakeResearchLLMWorker:
         task: str,
         payload: dict[str, Any],
         execution_identity: GraphExecutionIdentity | None = None,
+        timeout_seconds: float | None = None,
+        max_transport_attempts: int | None = None,
     ) -> dict[str, Any]:
         del execution_identity
         if task == "candidate_task_plan":

@@ -14,7 +14,7 @@
       "usage": "Draft 2020-12 semantic coverage checklist only; no upstream test case is copied."
     }
   ],
-  "license_disposition": "All cases in this file are Agora Hub-authored synthetic schemas under the repository Apache-2.0 license. JSONSchemaBench has no repository license file at the pinned revision, so its dataset rows are deliberately not copied or redistributed.",
+  "license_disposition": "All cases in this file are NewsRoom-authored synthetic schemas under the repository Apache-2.0 license. JSONSchemaBench has no repository license file at the pinned revision, so its dataset rows are deliberately not copied or redistributed.",
   "cases": [
     {
       "case_id": "object-required-closed-v1",

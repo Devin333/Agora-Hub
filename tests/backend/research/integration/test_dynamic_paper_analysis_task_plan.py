@@ -150,13 +150,19 @@ class _PlanOutlineWorker:
         task: str,
         payload: dict[str, Any],
         execution_identity: GraphExecutionIdentity | None = None,
+        timeout_seconds: float | None = None,
+        max_transport_attempts: int | None = None,
     ):
         assert task == "candidate_task_plan"
+        assert timeout_seconds == 30.0
+        assert max_transport_attempts == 1
         self.calls += 1
         outline = self._source.generate_candidate(
             task=task,
             payload=payload,
             execution_identity=execution_identity,
+            timeout_seconds=timeout_seconds,
+            max_transport_attempts=max_transport_attempts,
         )
         return outline if self._transform is None else self._transform(outline)
 
@@ -474,7 +480,9 @@ def test_dynamic_task_plan_fake_llm_and_subagents_publish_through_fixed_path(tmp
         "dynamic_analysis_stage",
     )
     event_types = [event.event_type for event in store_events]
-    assert event_types[0:2] == ["PLAN_CANDIDATE_BUILT", "PLAN_ACCEPTED"]
+    assert event_types[0:4] == [
+        "PLAN_BUILD_INTENT", "PLAN_CANDIDATE_BUILT", "PLAN_BUILD_RECEIPT", "PLAN_ACCEPTED",
+    ]
     assert event_types[-2:] == ["STAGE_OUTPUT_AGGREGATED", "TASK_PLAN_VERIFIED"]
     experiment_dispatch = next(
         event.sequence
@@ -519,10 +527,11 @@ def test_dynamic_dependency_public_output_reaches_the_research_llm(tmp_path) -> 
             super().__init__()
             self.experiment_inputs = []
 
-        def generate_candidate(self, *, task, payload, execution_identity=None):
+        def generate_candidate(self, *, task, payload, execution_identity=None, timeout_seconds=None, max_transport_attempts=None):
             if task == "candidate_experiment_claims":
                 self.experiment_inputs.append(deepcopy(payload))
-            return super().generate_candidate(task=task, payload=payload, execution_identity=execution_identity)
+            return super().generate_candidate(task=task, payload=payload, execution_identity=execution_identity,
+                                              timeout_seconds=timeout_seconds, max_transport_attempts=max_transport_attempts)
 
     llm = RecordingWorker()
     factory = _DynamicTaskPlanFactory(outline_transform=dependent_input, transcript_root=tmp_path / "transcripts")

@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.task_plan.planning_build import PLAN_BUILD_INTENT, PLAN_BUILD_RECEIPT, validate_build_history
+from framework.harness.task_plan.planning_observation import PlanningObservationReceipt
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.harness.subagents.transcript import SubAgentTranscriptStorePort
 from framework.harness.task_plan.canonical import (
@@ -477,6 +479,7 @@ class TaskPlanReplayReducer:
         *,
         results: Iterable[TaskResultRecord | TaskAttemptHistoryRecord] = (),
         patches: Iterable[PlanPatch] = (),
+        planning_receipts: Iterable[PlanningObservationReceipt] = (),
         require_terminal_events: bool = False,
     ) -> TaskPlanProjection:
         plan_history = (plan,) if isinstance(plan, ValidatedTaskPlan) else tuple(plan)
@@ -485,6 +488,7 @@ class TaskPlanReplayReducer:
             events,
             results=results,
             patches=patches,
+            planning_receipts=planning_receipts,
             require_terminal_events=require_terminal_events,
             apply_unterminated_results=False,
         ).projection
@@ -496,12 +500,14 @@ class TaskPlanReplayReducer:
         *,
         results: Iterable[TaskResultRecord | TaskAttemptHistoryRecord] = (),
         patches: Iterable[PlanPatch] = (),
+        planning_receipts: Iterable[PlanningObservationReceipt] = (),
         through_sequence: int | None = None,
         require_terminal_events: bool = True,
         apply_unterminated_results: bool = False,
         require_latest_plan: bool = True,
     ) -> TaskPlanReplayReport:
         plan_history = _validated_plan_history(plans)
+        _validate_planning_receipts(plan_history, tuple(planning_receipts))
         plans_by_version = {item.version: item for item in plan_history}
         ordered_events = _validated_event_prefix(
             tuple(events),
@@ -513,6 +519,7 @@ class TaskPlanReplayReducer:
         results_by_attempt = _validated_results(supplied_results, plan_history)
         patches_by_checksum = _validated_patches(patches, plan_history)
         validate_submission_event_append((), ordered_events)
+        build_history = validate_build_history(ordered_events)
         submissions = submissions_from_events(ordered_events)
         admitted_submissions: dict[str, CandidateSubmission] = {}
 
@@ -558,6 +565,12 @@ class TaskPlanReplayReducer:
                 )
             if event.event_type == "PLAN_ACCEPTED":
                 accepted = _accepted_plan_for_event(event, plans_by_version)
+                if accepted.version == 1 and build_history and (
+                    build_history[-1].status != "SUCCEEDED"
+                    or build_history[-1].candidate_checksum != accepted.source_candidate_ref
+                    or build_history[-1].policy_checksum != accepted.policy_checksum
+                ):
+                    raise HarnessValidationError("accepted plan differs from planning receipt", code="task_plan_build_history_invalid")
                 if accepted.version == 1 and submissions:
                     matching = [
                         item for item in admitted_submissions.values()
@@ -949,6 +962,10 @@ class TaskPlanReplayReducer:
                     ready_batch_budget_checksum = None
                     ready_batch_tasks = []
                 parallel_event_sequence = event.sequence
+            elif event.event_type in {PLAN_BUILD_INTENT, PLAN_BUILD_RECEIPT}:
+                # The complete causal attempt history is validated before reduction.
+                if current_plan is not None:
+                    raise HarnessValidationError("planning attempt follows plan acceptance", code="task_plan_build_history_invalid")
             elif event.event_type == "TASK_PLAN_HALTED":
                 if submissions or any(key in event.payload for key in ("submission_key", "terminal_result", "terminal_result_checksum")):
                     _require_terminal_submission(event, admitted_submissions, plan_history[0])
@@ -1065,6 +1082,31 @@ class TaskPlanReplayReducer:
 
     def decision_checksum(self, projection: TaskPlanProjection) -> str:
         return canonical_payload_checksum(projection.checksum_projection())
+
+
+def _validate_planning_receipts(
+    plans: tuple[ValidatedTaskPlan, ...], receipts: tuple[PlanningObservationReceipt, ...],
+) -> None:
+    recorded: dict[str, PlanningObservationReceipt] = {}
+    for receipt in receipts:
+        if not isinstance(receipt, PlanningObservationReceipt):
+            raise HarnessValidationError("planning replay requires typed receipts", code="planning_observation_receipt_invalid")
+        verified = PlanningObservationReceipt.from_dict(receipt.to_dict())
+        if verified.source_ref in recorded and recorded[verified.source_ref] != verified:
+            raise HarnessValidationError("planning replay has conflicting evidence", code="planning_observation_receipt_corrupt")
+        recorded[verified.source_ref] = verified
+    for plan in plans:
+        for source_ref in plan.source_observation_refs:
+            receipt = recorded.get(source_ref)
+            if receipt is None:
+                raise HarnessValidationError("planning replay receipt is missing", code="planning_observation_receipt_missing")
+            request = receipt.request
+            if (request.run_id, request.stage_id, request.planner_turn_id, request.policy_checksum) != (
+                plan.run_id, plan.stage_id, plan.planner_turn_id, plan.policy_checksum,
+            ):
+                raise HarnessValidationError("planning replay receipt is outside accepted scope", code="planning_observation_receipt_scope_mismatch")
+            if receipt.status != "SUCCEEDED" or receipt.tool_call_id is None or receipt.result_checksum is None:
+                raise HarnessValidationError("planning replay receipt has no successful call evidence", code="planning_observation_receipt_unusable")
 
 
 def _freeze_parallel_projection_mapping(

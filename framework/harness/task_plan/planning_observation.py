@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import RLock
+from time import perf_counter, time_ns
 from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ from framework.tool.models import ToolSideEffect, ToolStatus
 
 PLANNING_OBSERVATION_REQUEST_SCHEMA = "newsroom.harness-planning-observation-request/v1"
 PLANNING_OBSERVATION_RECEIPT_SCHEMA = "newsroom.harness-planning-observation-receipt/v1"
+PLANNING_CALL_INTENT_SCHEMA = "newsroom.harness-planning-call-intent/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,13 +223,33 @@ class PlanningObservationReceipt:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "PlanningObservationReceipt":
+        if not isinstance(value, Mapping):
+            raise HarnessValidationError("planning observation receipt must be an object", code="planning_observation_receipt_corrupt")
+        allowed = {
+            "request", "request_checksum", "status", "reason_code", "tool_call_id",
+            "observation_summary", "artifact_refs", "result_checksum", "elapsed_ms",
+            "schema_version", "receipt_checksum", "source_ref",
+        }
+        if set(value) != allowed:
+            raise HarnessValidationError("planning observation receipt fields do not match schema", code="planning_observation_receipt_corrupt")
         request_payload = value.get("request")
         if not isinstance(request_payload, Mapping):
             raise HarnessValidationError("planning observation receipt request is missing", code="planning_observation_receipt_invalid")
+        request_fields = {
+            "request_id", "run_id", "stage_id", "planner_turn_id", "policy_checksum",
+            "correlation_id", "tool_name", "purpose", "arguments", "attempt",
+            "schema_version", "request_checksum",
+        }
+        if set(request_payload) != request_fields:
+            raise HarnessValidationError("planning observation request fields do not match schema", code="planning_observation_receipt_corrupt")
+        if not isinstance(value["artifact_refs"], (list, tuple)):
+            raise HarnessValidationError("planning observation artifact refs must be an array", code="planning_observation_receipt_corrupt")
         expected_request_checksum = request_payload.get("request_checksum")
         request = PlanningObservationRequest(**{key: item for key, item in request_payload.items() if key != "request_checksum"})
         if request.request_checksum != expected_request_checksum:
             raise HarnessValidationError("planning observation request checksum mismatch", code="planning_observation_receipt_corrupt")
+        if value.get("request_checksum") != request.request_checksum:
+            raise HarnessValidationError("planning observation receipt request checksum mismatch", code="planning_observation_receipt_corrupt")
         receipt = cls(
             request=request,
             status=value.get("status"),
@@ -246,10 +268,101 @@ class PlanningObservationReceipt:
 
 @runtime_checkable
 class PlanningObservationStorePort(Protocol):
+    def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None: ...
     def save(self, receipt: PlanningObservationReceipt) -> str: ...
     def by_request(self, request_checksum: str) -> PlanningObservationReceipt | None: ...
     def by_source_ref(self, source_ref: str) -> PlanningObservationReceipt | None: ...
     def receipts_for_scope(self, run_id: str, stage_id: str, planner_turn_id: str) -> tuple[PlanningObservationReceipt, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningCallIntent:
+    """Durable budget consumption before execution, not evidence of success."""
+
+    request: PlanningObservationRequest
+    tool_call_id: str
+    max_calls: int
+    timeout_ms: int = 30000
+    admitted_at_ms: int = field(default_factory=lambda: time_ns() // 1_000_000)
+    turn_deadline_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, PlanningObservationRequest):
+            raise TypeError("request must be PlanningObservationRequest")
+        identifier(self.tool_call_id, "tool_call_id")
+        non_negative_int(self.max_calls, "max_calls")
+        positive_int(self.timeout_ms, "timeout_ms")
+        positive_int(self.admitted_at_ms, "admitted_at_ms")
+        if self.turn_deadline_ms is None:
+            object.__setattr__(self, "turn_deadline_ms", self.admitted_at_ms + self.timeout_ms)
+        positive_int(self.turn_deadline_ms, "turn_deadline_ms")
+        if not self.admitted_at_ms < self.turn_deadline_ms <= self.admitted_at_ms + self.timeout_ms:
+            raise HarnessValidationError("planning intent deadline is invalid", code="planning_call_intent_corrupt")
+
+    def to_dict(self) -> dict[str, Any]:
+        body = {
+            "schema_version": PLANNING_CALL_INTENT_SCHEMA,
+            "request": self.request.to_dict(),
+            "tool_call_id": self.tool_call_id,
+            "max_calls": self.max_calls,
+            "timeout_ms": self.timeout_ms,
+            "admitted_at_ms": self.admitted_at_ms,
+            "turn_deadline_ms": self.turn_deadline_ms,
+        }
+        return {**body, "intent_checksum": canonical_payload_checksum(body)}
+
+    def require_receipt(self, receipt: PlanningObservationReceipt) -> None:
+        if receipt.request != self.request or receipt.tool_call_id != self.tool_call_id:
+            raise HarnessValidationError("planning receipt differs from admitted call", code="planning_call_receipt_mismatch")
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "PlanningCallIntent":
+        if not isinstance(payload, Mapping) or set(payload) != {
+            "schema_version", "request", "tool_call_id", "max_calls", "intent_checksum",
+            "timeout_ms", "admitted_at_ms", "turn_deadline_ms",
+        } or payload["schema_version"] != PLANNING_CALL_INTENT_SCHEMA:
+            raise HarnessValidationError("planning call intent schema mismatch", code="planning_call_intent_corrupt")
+        body = {key: value for key, value in payload.items() if key != "intent_checksum"}
+        if canonical_payload_checksum(body) != payload["intent_checksum"]:
+            raise HarnessValidationError("planning call intent checksum mismatch", code="planning_call_intent_corrupt")
+        raw = payload["request"]
+        if not isinstance(raw, Mapping):
+            raise HarnessValidationError("planning call intent request is invalid", code="planning_call_intent_corrupt")
+        try:
+            request = PlanningObservationRequest(**{key: value for key, value in raw.items() if key != "request_checksum"})
+        except (TypeError, ValueError) as exc:
+            raise HarnessValidationError("planning call intent request is invalid", code="planning_call_intent_corrupt") from exc
+        if request.to_dict() != raw:
+            raise HarnessValidationError("planning call intent request mismatch", code="planning_call_intent_corrupt")
+        return cls(request, payload["tool_call_id"], payload["max_calls"], payload["timeout_ms"], payload["admitted_at_ms"], payload["turn_deadline_ms"])
+
+
+def admit_planning_call(
+    intent: PlanningCallIntent,
+    intents: tuple[PlanningCallIntent, ...],
+    receipts: tuple[PlanningObservationReceipt, ...],
+) -> PlanningCallIntent | None:
+    """Caller owns the atomic read/check/create transaction."""
+    request = intent.request
+    scope = (request.run_id, request.stage_id, request.planner_turn_id)
+    if any(item.request.policy_checksum != request.policy_checksum for item in receipts):
+        raise HarnessValidationError("planning receipts use a different budget policy", code="planning_call_policy_conflict")
+    consumed = {item.request.request_checksum for item in receipts if item.tool_call_id is not None}
+    deadline = intent.turn_deadline_ms
+    previous_admission = 0
+    for prior in intents:
+        if (prior.request.run_id, prior.request.stage_id, prior.request.planner_turn_id) != scope:
+            continue
+        if prior.request.policy_checksum != request.policy_checksum or prior.max_calls != intent.max_calls or prior.timeout_ms != intent.timeout_ms:
+            raise HarnessValidationError("planning call budget policy changed", code="planning_call_policy_conflict")
+        if prior.request.request_checksum == request.request_checksum:
+            raise HarnessValidationError("planning call already admitted; reconcile its recorded outcome", code="planning_call_outcome_unconfirmed")
+        consumed.add(prior.request.request_checksum)
+        deadline = min(deadline, prior.turn_deadline_ms)
+        previous_admission = max(previous_admission, prior.admitted_at_ms)
+    if intent.admitted_at_ms < previous_admission or intent.admitted_at_ms >= deadline:
+        raise HarnessValidationError("planning turn deadline exhausted or clock moved backwards", code="planning_turn_timeout")
+    return replace(intent, turn_deadline_ms=deadline) if len(consumed) < intent.max_calls else None
 
 
 class InMemoryPlanningObservationStore:
@@ -262,10 +375,23 @@ class InMemoryPlanningObservationStore:
     def __init__(self) -> None:
         self._by_request: dict[str, PlanningObservationReceipt] = {}
         self._by_source: dict[str, PlanningObservationReceipt] = {}
+        self._intents: dict[str, PlanningCallIntent] = {}
         self._lock = RLock()
+
+    def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None:
+        intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
+        with self._lock:
+            intent = admit_planning_call(intent, tuple(self._intents.values()), self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id))
+            if intent is None:
+                return None
+            self._intents[request.request_checksum] = intent
+            return intent
 
     def save(self, receipt: PlanningObservationReceipt) -> str:
         with self._lock:
+            intent = self._intents.get(receipt.request.request_checksum)
+            if intent is not None:
+                intent.require_receipt(receipt)
             existing = self._by_request.get(receipt.request.request_checksum)
             if existing is not None:
                 if existing.receipt_checksum != receipt.receipt_checksum:
@@ -300,21 +426,69 @@ class JsonlPlanningObservationStore(InMemoryPlanningObservationStore):
     """Append-only durable receipt store used where no project event store is bound."""
 
     is_durable = True
+    _path_locks: dict[str, Any] = {}
+    _path_locks_guard = RLock()
 
     def __init__(self, path: str | Path) -> None:
         super().__init__()
-        self._path = Path(path)
+        self._path = Path(path).resolve()
+        with self._path_locks_guard:
+            self._lock = self._path_locks.setdefault(os.path.normcase(str(self._path)), RLock())
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            self._reload()
+
+    def _reload(self) -> None:
+        self._by_request.clear()
+        self._by_source.clear()
+        self._intents.clear()
         if self._path.exists():
             for line in self._path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
-                    super().save(PlanningObservationReceipt.from_dict(json.loads(line)))
+                    payload = json.loads(line)
+                    if payload.get("schema_version") == PLANNING_CALL_INTENT_SCHEMA:
+                        intent = PlanningCallIntent.from_dict(payload)
+                        existing = self._intents.get(intent.request.request_checksum)
+                        if existing is not None and existing != intent:
+                            raise HarnessValidationError("planning call intent conflicts", code="planning_call_intent_corrupt")
+                        self._intents[intent.request.request_checksum] = intent
+                    else:
+                        super().save(PlanningObservationReceipt.from_dict(payload))
+
+    def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None:
+        intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
+        with self._lock:
+            self._reload()
+            intent = admit_planning_call(intent, tuple(self._intents.values()), self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id))
+            if intent is None:
+                return None
+            encoded = json.dumps(intent.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
+            with self._path.open("a", encoding="utf-8") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._intents[request.request_checksum] = intent
+            return intent
+
+    def by_request(self, request_checksum: str) -> PlanningObservationReceipt | None:
+        with self._lock:
+            self._reload()
+            return super().by_request(request_checksum)
+
+    def by_source_ref(self, source_ref: str) -> PlanningObservationReceipt | None:
+        with self._lock:
+            self._reload()
+            return super().by_source_ref(source_ref)
 
     def save(self, receipt: PlanningObservationReceipt) -> str:
         with self._lock:
+            self._reload()
             existing = self.by_request(receipt.request.request_checksum)
             if existing is not None:
                 return super().save(receipt)
+            intent = self._intents.get(receipt.request.request_checksum)
+            if intent is not None:
+                intent.require_receipt(receipt)
             encoded = json.dumps(receipt.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
             with self._path.open("a", encoding="utf-8") as handle:
                 handle.write(encoded)
@@ -423,17 +597,10 @@ class HarnessPlanningObservationService:
         if existing is not None:
             if existing.request != request:
                 raise HarnessValidationError("planning request differs from recorded receipt", code="planning_observation_receipt_scope_mismatch")
-            return existing
+            return PlanningObservationReceipt.from_dict(existing.to_dict())
         reason = self._admission_reason(request)
         if reason is not None:
             return self._persist(PlanningObservationReceipt(request=request, status="REJECTED", reason_code=reason))
-        prior_calls = sum(
-            1
-            for item in store.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id)
-            if item.tool_call_id is not None
-        )
-        if prior_calls >= self._policy.max_tool_calls:
-            return self._persist(PlanningObservationReceipt(request=request, status="REJECTED", reason_code="planning_tool_budget_exhausted"))
         call = ToolCall.new(
             request.tool_name,
             thaw_mapping(request.arguments),
@@ -444,6 +611,14 @@ class HarnessPlanningObservationService:
                 "planner_turn_id": request.planner_turn_id,
             },
         )
+        intent = store.reserve_call(request, call.call_id, self._policy.max_tool_calls, self._policy.timeout_seconds * 1000)
+        if intent is None:
+            return self._persist(PlanningObservationReceipt(request=request, status="REJECTED", reason_code="planning_tool_budget_exhausted"))
+        remaining_ms = intent.turn_deadline_ms - time_ns() // 1_000_000
+        if remaining_ms <= 0:
+            return self._persist(PlanningObservationReceipt(request=request, status="TIMED_OUT", reason_code="planning_turn_timeout", tool_call_id=call.call_id))
+        effective_timeout = remaining_ms / 1000
+        started_at = perf_counter()
         try:
             observation = self._executor.execute(
                 call,
@@ -453,21 +628,43 @@ class HarnessPlanningObservationService:
                     allow_network_access=False,
                     allow_dangerous_tools=False,
                     require_approval_for_side_effects=True,
-                    default_timeout_seconds=float(self._policy.timeout_seconds),
-                    timeout_seconds_default=float(self._policy.timeout_seconds),
+                    default_timeout_seconds=effective_timeout,
+                    timeout_seconds_default=effective_timeout,
                     max_tool_calls_per_iteration=1,
                     max_tool_calls_per_agent=1,
                 ),
             )
         except Exception:
+            elapsed_ms = max(1, int((perf_counter() - started_at) * 1000))
+            timed_out = elapsed_ms > remaining_ms
             return self._persist(
                 PlanningObservationReceipt(
                     request=request,
-                    status="FAILED",
-                    reason_code="planning_tool_execution_failed",
+                    status="TIMED_OUT" if timed_out else "FAILED",
+                    reason_code="planning_tool_timeout" if timed_out else "planning_tool_execution_failed",
+                    tool_call_id=call.call_id,
+                    elapsed_ms=elapsed_ms,
                 )
             )
-        return self._persist(_receipt_from_observation(request, observation, self._policy.timeout_seconds))
+        elapsed_ms = max(1, int((perf_counter() - started_at) * 1000))
+        if elapsed_ms > remaining_ms:
+            return self._persist(PlanningObservationReceipt(
+                request=request, status="TIMED_OUT", reason_code="planning_tool_timeout",
+                tool_call_id=call.call_id, elapsed_ms=elapsed_ms,
+            ))
+        if not isinstance(observation, ToolObservation) or observation.call != call:
+            return self._persist(PlanningObservationReceipt(
+                request=request, status="FAILED", reason_code="planning_tool_observation_mismatch",
+                tool_call_id=call.call_id, elapsed_ms=elapsed_ms,
+            ))
+        try:
+            receipt = _receipt_from_observation(request, observation, effective_timeout)
+        except (HarnessValidationError, TypeError, ValueError):
+            receipt = PlanningObservationReceipt(
+                request=request, status="FAILED", reason_code="planning_tool_observation_invalid",
+                tool_call_id=call.call_id, elapsed_ms=elapsed_ms,
+            )
+        return self._persist(receipt)
 
     def replay(self, request: PlanningObservationRequest) -> PlanningObservationReceipt:
         """Return recorded evidence only. This method must never invoke the executor."""
@@ -481,7 +678,7 @@ class HarnessPlanningObservationService:
             raise HarnessValidationError("planning observation receipt is unavailable for replay", code="planning_observation_receipt_missing")
         if receipt.request != request:
             raise HarnessValidationError("planning observation replay request does not match receipt", code="planning_observation_receipt_scope_mismatch")
-        return receipt
+        return PlanningObservationReceipt.from_dict(receipt.to_dict())
 
     def validate_source_refs(
         self,
@@ -495,6 +692,8 @@ class HarnessPlanningObservationService:
         """Fail closed before plan acceptance when a candidate cites stale evidence."""
 
         refs = stable_text_tuple(source_observation_refs, "source_observation_refs", item_kind="reference")
+        if policy_checksum != self._policy.policy_checksum:
+            raise HarnessValidationError("planning observation policy differs from candidate policy", code="planning_policy_checksum_mismatch")
         if self.planning_ref_authority is not None:
             self.planning_ref_authority.require_scope(run_id, stage_id, policy_checksum, planner_turn_id)
         if self._ref_authority is not None:
@@ -523,6 +722,7 @@ class HarnessPlanningObservationService:
                     code="planning_observation_receipt_corrupt",
                     details={"source_ref": source_ref},
                 )
+            receipt = PlanningObservationReceipt.from_dict(receipt.to_dict())
             request = receipt.request
             if (request.run_id, request.stage_id, request.planner_turn_id, request.policy_checksum) != (run_id, stage_id, planner_turn_id, policy_checksum):
                 raise HarnessValidationError("planning observation receipt is outside candidate scope", code="planning_observation_receipt_scope_mismatch", details={"source_ref": source_ref})
@@ -543,9 +743,13 @@ class HarnessPlanningObservationService:
         return tuple(receipts)
 
     def _persist(self, receipt: PlanningObservationReceipt) -> PlanningObservationReceipt:
-        if self._store_for(online=True).save(receipt) != receipt.receipt_checksum:
+        store = self._store_for(online=True)
+        if store.save(receipt) != receipt.receipt_checksum:
             raise HarnessValidationError("planning store returned a different receipt", code="planning_observation_receipt_corrupt")
-        return receipt
+        recorded = store.by_request(receipt.request.request_checksum)
+        if recorded is None or recorded != receipt:
+            raise HarnessValidationError("planning store did not retain the committed receipt", code="planning_observation_receipt_corrupt")
+        return PlanningObservationReceipt.from_dict(recorded.to_dict())
 
     def _admission_reason(self, request: PlanningObservationRequest) -> str | None:
         if request.policy_checksum != self._policy.policy_checksum:
@@ -566,9 +770,17 @@ class HarnessPlanningObservationService:
 def _receipt_from_observation(
     request: PlanningObservationRequest,
     observation: ToolObservation,
-    timeout_seconds: int,
+    timeout_seconds: float,
 ) -> PlanningObservationReceipt:
     elapsed_ms = max(1, int(round(observation.elapsed_ms)))
+    if observation.status is ToolStatus.TIMEOUT or elapsed_ms > timeout_seconds * 1000:
+        return PlanningObservationReceipt(
+            request=request,
+            status="TIMED_OUT",
+            reason_code="planning_tool_timeout",
+            tool_call_id=observation.tool_call_id,
+            elapsed_ms=elapsed_ms,
+        )
     if observation.status is ToolStatus.SUCCEEDED:
         result_checksum = canonical_payload_checksum(observation.to_dict())
         return PlanningObservationReceipt(
@@ -578,14 +790,6 @@ def _receipt_from_observation(
             observation_summary=observation.summary,
             artifact_refs=tuple(item.uri for item in observation.result.artifact_refs),
             result_checksum=result_checksum,
-            elapsed_ms=elapsed_ms,
-        )
-    if observation.status is ToolStatus.TIMEOUT or elapsed_ms > timeout_seconds * 1000:
-        return PlanningObservationReceipt(
-            request=request,
-            status="TIMED_OUT",
-            reason_code="planning_tool_timeout",
-            tool_call_id=observation.tool_call_id,
             elapsed_ms=elapsed_ms,
         )
     return PlanningObservationReceipt(

@@ -23,8 +23,12 @@ class _IdentityRecordingWorker:
         task: str,
         payload: dict[str, object],
         execution_identity: GraphExecutionIdentity | None = None,
+        timeout_seconds: float | None = None,
+        max_transport_attempts: int | None = None,
     ) -> dict[str, object]:
         assert task == "candidate_task_plan"
+        assert timeout_seconds == 30.0
+        assert max_transport_attempts == 1
         assert payload["stage"]
         self.identities.append(execution_identity)
         return {

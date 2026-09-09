@@ -268,6 +268,8 @@ class ResearchAnalysisPlanCandidateBuilder(PlanCandidateBuilderPort):
             )
         candidate_request = {
             "task": "candidate_task_plan",
+            "timeout_seconds": float(request.policy.planning_timeout_seconds),
+            "max_transport_attempts": 1,
             "payload": {
                 "stage": request.to_dict(),
                 "required_output_roles": list(request.policy.required_output_roles),

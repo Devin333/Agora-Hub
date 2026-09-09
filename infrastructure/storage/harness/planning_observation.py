@@ -30,7 +30,10 @@ from framework.harness.task_plan.planning_metadata import (
     PlanningObservationStorageError,
 )
 from framework.harness.task_plan.planning_observation import (
+    PlanningCallIntent,
     PlanningObservationReceipt,
+    PlanningObservationRequest,
+    admit_planning_call,
 )
 from framework.shared.json import stable_json_dumps
 
@@ -98,11 +101,63 @@ class FilesystemPlanningObservationStore:
                 "planning observation snapshot path must be a real directory",
             )
 
+    def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None:
+        self._require_request_scope(request)
+        intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
+        intent_path = self._paths(request.request_checksum)[0].with_suffix(".intent")
+        lock_path = self._storage_root / "planning-admission.lock"
+        try:
+            with verified_exclusive_file_lock(lock_path, root=self.root, identity=self.input_snapshot.snapshot_ref):
+                paths = tuple(sorted(self._storage_root.glob("po_*.intent")))
+                if len(paths) >= self.max_descriptors:
+                    raise _store_error("planning_observation_query_limit_exceeded", "planning intent count exceeds its bound")
+                intents = tuple(self._read_intent(path) for path in paths)
+                receipts = self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id)
+                intent = admit_planning_call(intent, intents, receipts)
+                if intent is None:
+                    return None
+                payload = (stable_json_dumps(intent.to_dict()) + "\n").encode("utf-8")
+                if len(payload) > self.max_receipt_bytes:
+                    raise _corrupt("planning intent exceeds its size limit")
+                if not verified_atomic_create(intent_path, payload, root=self.root, identity=request.request_checksum):
+                    raise _corrupt("planning intent appeared during admission")
+                if self._read_intent(intent_path) != intent:
+                    raise _corrupt("planning intent changed during admission")
+                return intent
+        except (ArtifactStoreMetadataError, OSError) as exc:
+            raise _store_error("planning_observation_store_unavailable", "planning intent admission failed") from exc
+
+    def _read_intent(self, path: Path) -> PlanningCallIntent:
+        try:
+            before = self._regular_stat_or_none(path, "call intent")
+            if before is None or before.st_size > self.max_receipt_bytes:
+                raise _corrupt("planning intent is missing or oversized")
+            with path.open("rb") as handle:
+                if not os.path.samestat(before, os.fstat(handle.fileno())):
+                    raise _corrupt("planning intent changed while opening")
+                payload = handle.read(self.max_receipt_bytes + 1)
+            reject_link_chain(path, root=self.root, identity=path.name, role="planning call intent")
+            after = self._regular_stat_or_none(path, "call intent")
+            if after is None or not os.path.samestat(before, after) or len(payload) != before.st_size:
+                raise _corrupt("planning intent changed while reading")
+            intent = PlanningCallIntent.from_dict(_object(json.loads(payload)))
+            self._require_request_scope(intent.request)
+            if self._paths(intent.request.request_checksum)[0].with_suffix(".intent") != path:
+                raise _corrupt("planning intent path differs from identity")
+            if (stable_json_dumps(intent.to_dict()) + "\n").encode("utf-8") != payload:
+                raise _corrupt("planning intent is not canonical")
+            return intent
+        except (ArtifactStoreMetadataError, OSError, ValueError, TypeError) as exc:
+            raise _corrupt("planning intent is corrupt") from exc
+
     def save(self, receipt: PlanningObservationReceipt) -> str:
         if not isinstance(receipt, PlanningObservationReceipt):
             raise TypeError("receipt must be PlanningObservationReceipt")
         self._require_receipt_scope(receipt)
         request_checksum = receipt.request.request_checksum
+        intent_path = self._paths(request_checksum)[0].with_suffix(".intent")
+        if self._regular_stat_or_none(intent_path, "call intent") is not None:
+            self._read_intent(intent_path).require_receipt(receipt)
         payload = self._payload_bytes(receipt)
         descriptor = PlanningObservationDescriptor.for_receipt(
             receipt,
@@ -374,6 +429,9 @@ class FilesystemPlanningObservationStore:
             )
             if expected != descriptor:
                 raise _corrupt("planning observation payload differs from metadata")
+            intent_path = self._paths(receipt.request.request_checksum)[0].with_suffix(".intent")
+            if self._regular_stat_or_none(intent_path, "call intent") is not None:
+                self._read_intent(intent_path).require_receipt(receipt)
             return receipt
         except PlanningObservationStorageError:
             raise
@@ -398,7 +456,9 @@ class FilesystemPlanningObservationStore:
         return info
 
     def _require_receipt_scope(self, receipt: PlanningObservationReceipt) -> None:
-        request = receipt.request
+        self._require_request_scope(receipt.request)
+
+    def _require_request_scope(self, request: PlanningObservationRequest) -> None:
         if (
             request.run_id != self.input_snapshot.run_id
             or request.stage_id != self.input_snapshot.stage_id

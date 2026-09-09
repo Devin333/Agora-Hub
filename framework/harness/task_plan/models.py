@@ -918,6 +918,8 @@ class ValidatedTaskPlan:
     limits: TaskPlanLimits | Mapping[str, Any]
     accepted_at: str
     policy_checksum: str | None = None
+    source_observation_refs: tuple[str, ...] = ()
+    planner_turn_id: str | None = None
     graph_id: str | None = None
     graph_version: str | None = None
     graph_ref: str | None = None
@@ -952,6 +954,13 @@ class ValidatedTaskPlan:
                 code="task_plan_policy_checksum_required",
             )
         object.__setattr__(self, "source_candidate_ref", reference(self.source_candidate_ref, "source_candidate_ref"))
+        object.__setattr__(self, "source_observation_refs", stable_text_tuple(
+            self.source_observation_refs, "source_observation_refs", item_kind="reference",
+        ))
+        if self.source_observation_refs:
+            object.__setattr__(self, "planner_turn_id", identifier(self.planner_turn_id, "planner_turn_id"))
+        elif self.planner_turn_id is not None:
+            raise HarnessValidationError("planner turn without planning sources is invalid", code="task_plan_planning_scope_invalid")
         object.__setattr__(self, "policy_ref", exact_reference(self.policy_ref, "policy_ref"))
         object.__setattr__(
             self,
@@ -989,6 +998,9 @@ class ValidatedTaskPlan:
         }
         if self.policy_checksum is not None:
             projection["policy_checksum"] = self.policy_checksum
+        if self.source_observation_refs:
+            projection["source_observation_refs"] = list(self.source_observation_refs)
+            projection["planner_turn_id"] = self.planner_turn_id
         return projection
 
     def to_dict(self) -> dict[str, Any]:
@@ -1049,6 +1061,8 @@ class ValidatedTaskPlan:
             limits=limits,
             accepted_at=accepted_at,
             schema_version=GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
+            source_observation_refs=candidate.source_observation_refs,
+            planner_turn_id=candidate.metadata.get("planner_turn_id") if candidate.source_observation_refs else None,
             **identity_values,
         )
 
@@ -1081,7 +1095,7 @@ class ValidatedTaskPlan:
                 }
             )
             | identity_fields,
-            optional=frozenset({"policy_checksum"}),
+            optional=frozenset({"policy_checksum", "source_observation_refs", "planner_turn_id"}),
             model=cls.__name__,
         )
         supplied = checksum(payload.pop("plan_checksum"), "plan_checksum")

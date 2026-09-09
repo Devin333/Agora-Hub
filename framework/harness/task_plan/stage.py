@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from collections.abc import Mapping
 from typing import Any, Callable
+from time import perf_counter
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.scheduler import HarnessScheduler
@@ -22,7 +23,7 @@ from framework.harness.task_plan.ports import (
     TaskPlanStageRunnerPort,
 )
 from framework.harness.task_plan.patches import TaskPlanPatchValidator
-from framework.harness.task_plan.models import PlanPatch
+from framework.harness.task_plan.models import PlanCandidate, PlanPatch
 from framework.harness.task_plan.observability import task_plan_metric_samples
 from framework.harness.task_plan.checkpoint import (
     TaskPlanCheckpoint,
@@ -44,6 +45,9 @@ from framework.harness.task_plan.submission_result import submission_result_from
 from framework.harness.task_plan.validation import TaskPlanValidationContext, TaskPlanValidator
 from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
 from framework.harness.task_plan.canonical import canonical_payload_checksum, thaw_mapping
+from framework.harness.task_plan.planning_build import (
+    PLAN_BUILD_INTENT, PLAN_BUILD_RECEIPT, PlanBuildAttempt, validate_build_history,
+)
 from framework.harness.task_plan.dependency import (
     TASK_BLOCKED_UPSTREAM_FAILURE,
     block_dependency_task,
@@ -351,6 +355,71 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 raise HarnessValidationError("submission does not own the accepted plan", code="task_plan_submission_binding_conflict")
         return self._recorded_submission_result(request, plan)
 
+    def _build_candidate(self, request: TaskPlanStageRequest, build_request: PlanBuildRequest):
+        for _ in range(request.policy.max_plan_build_calls):
+            try:
+                return self._build_candidate_once(request, build_request)
+            except Exception:
+                history = validate_build_history(self.store.read_events(request.run_id, request.stage_id))
+                if not history or not history[-1].retryable or history[-1].attempt >= history[-1].max_calls:
+                    raise
+        raise HarnessValidationError("planning call budget exhausted", code="task_plan_build_budget_exhausted")
+
+    def _build_candidate_once(self, request: TaskPlanStageRequest, build_request: PlanBuildRequest):
+        request_checksum = canonical_payload_checksum({
+            "request": build_request.to_dict(),
+            "metadata": thaw_mapping(build_request.metadata),
+            "policy_checksum": request.policy.policy_checksum,
+        })
+        history = validate_build_history(self.store.read_events(request.run_id, request.stage_id))
+        if history:
+            previous = history[-1]
+            if previous.request_checksum != request_checksum or previous.policy_checksum != request.policy.policy_checksum:
+                raise HarnessValidationError("planning recovery request differs from recorded input", code="task_plan_build_request_mismatch")
+            if previous.status == "SUCCEEDED":
+                candidate = self.store.candidate_for(request.run_id, request.stage_id, previous.candidate_checksum)
+                if candidate is None or candidate.candidate_checksum != previous.candidate_checksum:
+                    raise HarnessValidationError("planning receipt lost its candidate", code="task_plan_build_candidate_missing")
+                return candidate
+            if previous.status == "STARTED":
+                raise HarnessValidationError("planning attempt outcome is unconfirmed", code="task_plan_build_outcome_unconfirmed")
+            if not previous.retryable or previous.attempt >= previous.max_calls:
+                raise HarnessValidationError("recorded planning attempt failed or exhausted its budget", code=previous.reason_code)
+        intent = PlanBuildAttempt(
+            request_checksum=request_checksum, policy_checksum=request.policy.policy_checksum,
+            attempt=len(history) + 1, max_calls=request.policy.max_plan_build_calls,
+            timeout_ms=request.policy.planning_timeout_seconds * 1000,
+        )
+        self._append_build_attempt(request, intent)
+        started = perf_counter()
+        try:
+            candidate = self.candidate_builder.build_candidate(build_request)
+        except Exception as exc:
+            elapsed = max(0, int((perf_counter() - started) * 1000))
+            timed_out = elapsed > intent.timeout_ms
+            receipt = replace(intent, status="TIMED_OUT" if timed_out else "FAILED", elapsed_ms=elapsed,
+                              reason_code="task_plan_builder_timeout" if timed_out else "task_plan_builder_failed",
+                              retryable=not timed_out and getattr(exc, "retryable", False) is True)
+            self._append_build_attempt(request, receipt)
+            raise
+        elapsed = max(0, int((perf_counter() - started) * 1000))
+        if elapsed > intent.timeout_ms:
+            self._append_build_attempt(request, replace(intent, status="TIMED_OUT", elapsed_ms=elapsed, reason_code="task_plan_builder_timeout"))
+            raise HarnessValidationError("planning candidate arrived after deadline", code="task_plan_builder_timeout")
+        if not isinstance(candidate, PlanCandidate) or not candidate.matches_stage_identity(request.stage_identity):
+            self._append_build_attempt(request, replace(intent, status="FAILED", elapsed_ms=elapsed, reason_code="task_plan_invalid_builder_result"))
+            raise HarnessValidationError("planning builder returned invalid candidate", code="task_plan_invalid_builder_result")
+        self.store.append_candidate(candidate)
+        self._append_build_attempt(request, replace(intent, status="SUCCEEDED", elapsed_ms=elapsed, candidate_checksum=candidate.candidate_checksum))
+        return candidate
+
+    def _append_build_attempt(self, request: TaskPlanStageRequest, attempt: PlanBuildAttempt) -> None:
+        self.store.append_event(TaskPlanEvent(
+            PLAN_BUILD_INTENT if attempt.status == "STARTED" else PLAN_BUILD_RECEIPT,
+            **_task_plan_event_identity_kwargs(request.stage_identity),
+            payload={"build_attempt": attempt.to_dict()}, sequence=self._next_sequence(request),
+        ))
+
     def _ensure_plan(self, request: TaskPlanStageRequest) -> ValidatedTaskPlan:
         if request.policy_ref is not None and request.policy_ref != request.policy.exact_ref:
             raise HarnessValidationError("TaskPlan request policy ref is not pinned to the supplied policy", code="task_plan_policy_mismatch")
@@ -386,7 +455,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     code="task_plan_artifact_missing",
                 )
         if candidate is None:
-            candidate = self.candidate_builder.build_candidate(PlanBuildRequest(
+            candidate = self._build_candidate(request, PlanBuildRequest(
                 run_id=request.run_id,
                 stage_binding=request.stage_binding,
                 context_refs=request.context_refs,
@@ -414,7 +483,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 ),
             )
         self._validate_planning_observations(request, candidate)
-        if submission is None:
+        if submission is None and self.store.candidate_for(request.run_id, request.stage_id, candidate.candidate_checksum) is None:
             self.store.append_candidate(candidate)
         ref_options = {
             "ref_authority": request.ref_authority,
@@ -551,25 +620,25 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 request.policy.policy_checksum,
             )
 
-    def _validate_recorded_planning(self, request: TaskPlanStageRequest, initial: ValidatedTaskPlan | None) -> None:
-        if getattr(self.planning_observation_port, "planning_ref_authority", None) is None:
-            return
+    def _validate_recorded_planning(self, request: TaskPlanStageRequest, initial: ValidatedTaskPlan | None) -> tuple[PlanningObservationReceipt, ...]:
         self._require_planning_execution(request)
         candidate = None if initial is None else self.store.candidate_for(
             request.run_id, request.stage_id, initial.source_candidate_ref,
         )
         if candidate is None or candidate.candidate_checksum != initial.source_candidate_ref:
             raise HarnessValidationError("planning recovery is missing its accepted candidate", code="task_plan_replay_candidate_mismatch")
-        self._validate_planning_observations(request, candidate)
+        if candidate.source_observation_refs != initial.source_observation_refs:
+            raise HarnessValidationError("accepted plan lost its candidate planning sources", code="task_plan_replay_candidate_mismatch")
+        return self._validate_planning_observations(request, candidate)
 
     def _validate_planning_observations(
         self,
         request: TaskPlanStageRequest,
         candidate: Any,
-    ) -> None:
+    ) -> tuple[PlanningObservationReceipt, ...]:
         source_refs = tuple(getattr(candidate, "source_observation_refs", ()))
         if not source_refs:
-            return
+            return ()
         if self.planning_observation_port is None:
             raise HarnessValidationError(
                 "planning observation receipts require a configured validation port",
@@ -582,7 +651,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 code="planning_observation_planner_turn_missing",
             )
         self._require_planning_execution(request)
-        self.planning_observation_port.validate_source_refs(
+        return self.planning_observation_port.validate_source_refs(
             source_refs,
             run_id=request.run_id,
             stage_id=request.stage_id,
@@ -1759,7 +1828,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 "TaskPlan history is missing its accepted plan",
                 code="task_plan_replay_plan_missing",
             )
-        self._validate_recorded_planning(request, plan_history[0])
+        planning_receipts = self._validate_recorded_planning(request, plan_history[0])
         patch_reader = getattr(self.store, "patches_for", None)
         patches = (
             tuple(patch_reader(request.run_id, request.stage_id))
@@ -1776,6 +1845,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             events,
             results=results,
             patches=patches,
+            planning_receipts=planning_receipts,
             require_terminal_events=False,
             require_latest_plan=False,
             apply_unterminated_results=False,

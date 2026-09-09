@@ -510,6 +510,8 @@ class StructuredResearchCandidateWorker:
         task: str,
         payload: dict[str, Any],
         execution_identity: GraphExecutionIdentity | None = None,
+        timeout_seconds: float | None = None,
+        max_transport_attempts: int | None = None,
     ) -> dict[str, Any]:
         """Generate one candidate and return only schema-approved fields."""
 
@@ -549,6 +551,7 @@ class StructuredResearchCandidateWorker:
             messages=messages,
             execution_identity=execution_identity,
         )
+        request = request.clone(timeout_seconds=timeout_seconds, max_transport_attempts=max_transport_attempts)
 
         try:
             response = self._client.complete(request)

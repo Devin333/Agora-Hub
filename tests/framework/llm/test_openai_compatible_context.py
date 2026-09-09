@@ -31,6 +31,30 @@ def _config() -> OpenAICompatibleConfig:
     )
 
 
+def test_request_budget_limits_transport_timeout_and_retry_count(monkeypatch):
+    monkeypatch.setenv("TEST_CONTEXT_API_KEY", "test-key")
+    timeouts = []
+
+    def fail(_request, timeout):
+        timeouts.append(timeout)
+        raise TimeoutError("provider did not respond")
+
+    client = OpenAICompatibleClient(_config(), transport=fail)
+    request = LLMRequest(messages=[{"role": "user", "content": "plan"}], timeout_seconds=2.0, max_transport_attempts=1)
+    assert request.clone().timeout_seconds == 2.0
+    assert request.clone().max_transport_attempts == 1
+    with pytest.raises(LLMProviderError):
+        client.complete(request)
+    assert len(timeouts) == 1
+    assert 0 < timeouts[0] <= 2.0
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, float("nan"), float("inf")])
+def test_request_rejects_invalid_timeout(timeout):
+    with pytest.raises(ValueError):
+        LLMRequest(messages=[], timeout_seconds=timeout)
+
+
 def _success_body() -> bytes:
     return json.dumps(
         {

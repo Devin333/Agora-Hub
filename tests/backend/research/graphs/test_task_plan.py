@@ -77,7 +77,9 @@ class _OutlineWorker:
         self.outline = outline
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def generate_candidate(self, *, task: str, payload: dict[str, object]):
+    def generate_candidate(self, *, task: str, payload: dict[str, object], timeout_seconds=None, max_transport_attempts=None):
+        assert timeout_seconds == 30.0
+        assert max_transport_attempts == 1
         self.calls.append((task, payload))
         return self.outline
 

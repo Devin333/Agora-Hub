@@ -176,12 +176,18 @@ def test_graph_only_preplan_failure_records_v2_halt_without_workflow_alias() -> 
 
     assert result.status.value == "blocked"
     assert result.diagnostics["reason_code"] == "planner_unavailable"
-    assert len(events) == 1
-    assert events[0].event_type == "TASK_PLAN_HALTED"
-    assert events[0].schema_version == TASK_PLAN_EVENT_SCHEMA_V2
-    assert events[0].is_graph_only is True
-    assert not hasattr(events[0], "workflow_id")
-    assert "workflow_id" not in events[0].to_dict()
+    assert [event.event_type for event in events] == [
+        "PLAN_BUILD_INTENT", "PLAN_BUILD_RECEIPT", "TASK_PLAN_HALTED",
+    ]
+    assert events[0].payload["build_attempt"]["status"] == "STARTED"
+    assert events[1].payload["build_attempt"]["status"] == "FAILED"
+    assert events[1].payload["build_attempt"]["retryable"] is False
+    assert events[0].payload["build_attempt"]["request_checksum"] == events[1].payload["build_attempt"]["request_checksum"]
+    for event in events:
+        assert event.schema_version == TASK_PLAN_EVENT_SCHEMA_V2
+        assert event.is_graph_only is True
+        assert not hasattr(event, "workflow_id")
+        assert "workflow_id" not in event.to_dict()
 
 
 def test_graph_only_stage_identity_rejects_alias_tamper_and_cross_graph_restore() -> None:

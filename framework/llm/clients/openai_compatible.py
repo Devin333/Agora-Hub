@@ -243,10 +243,17 @@ class OpenAICompatibleClient:
 
         api_key = self.config.resolve_api_key()
 
-        for attempt in range(1, self._retry_policy.max_attempts + 1):
+        max_attempts = min(self._retry_policy.max_attempts, request.max_transport_attempts or self._retry_policy.max_attempts)
+        deadline = time.monotonic() + request.timeout_seconds if request.timeout_seconds is not None else None
+        for attempt in range(1, max_attempts + 1):
             http_request = self._build_http_request(api_key, payload)
             try:
-                raw_body = self._transport(http_request, self.config.timeout_seconds)
+                remaining = self.config.timeout_seconds if deadline is None else min(self.config.timeout_seconds, deadline - time.monotonic())
+                if remaining <= 0:
+                    raise TimeoutError("LLM request deadline exhausted")
+                raw_body = self._transport(http_request, remaining)
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError("LLM response arrived after request deadline")
             except HTTPError as exc:
                 error = self._error_from_http(exc, attempts=attempt)
             except (TimeoutError, URLError, OSError) as exc:
@@ -261,15 +268,18 @@ class OpenAICompatibleClient:
                     projection=projection,
                 )
 
-            if not error.retryable or attempt >= self._retry_policy.max_attempts:
+            if not error.retryable or attempt >= max_attempts:
                 raise error
 
-            self._sleep(self._retry_policy.delay_after_attempt(attempt))
+            delay = self._retry_policy.delay_after_attempt(attempt)
+            if deadline is not None and time.monotonic() + delay >= deadline:
+                raise error
+            self._sleep(delay)
 
         raise LLMProviderError(
             f"{self.config.provider} request failed before sending",
             provider=self.config.provider,
-            attempts=self._retry_policy.max_attempts,
+            attempts=max_attempts,
         )
 
     def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
@@ -305,7 +315,8 @@ class OpenAICompatibleClient:
 
         http_request = self._build_http_request(api_key, payload)
         try:
-            lines = iter(self._stream_transport(http_request, self.config.timeout_seconds))
+            timeout = min(self.config.timeout_seconds, request.timeout_seconds) if request.timeout_seconds is not None else self.config.timeout_seconds
+            lines = iter(self._stream_transport(http_request, timeout))
             first_line = next(lines)
         except StopIteration:
             first_line = None

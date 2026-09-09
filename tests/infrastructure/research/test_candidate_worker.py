@@ -64,6 +64,24 @@ def test_worker_uses_task_specific_strict_schema_and_returns_candidate(
     assert "quality or gate results" in request["messages"][0]["content"]
 
 
+def test_planning_limits_reach_the_llm_request(monkeypatch):
+    worker, _ = _recorded_worker(monkeypatch, _valid_output("candidate_task_plan"))
+    complete = worker._client.complete
+    limits = []
+
+    def record(request):
+        limits.append((request.timeout_seconds, request.max_transport_attempts))
+        return complete(request)
+
+    monkeypatch.setattr(worker._client, "complete", record)
+    result = worker.generate_candidate(
+        task="candidate_task_plan", payload=_valid_payload("candidate_task_plan"),
+        timeout_seconds=30.0, max_transport_attempts=1,
+    )
+    assert result == _valid_output("candidate_task_plan")
+    assert limits == [(30.0, 1)]
+
+
 def test_every_candidate_schema_rejects_extra_fields_at_each_object_boundary() -> None:
     for task, schema in CANDIDATE_TASK_SCHEMAS.items():
         _assert_strict_objects(schema, path=task)
