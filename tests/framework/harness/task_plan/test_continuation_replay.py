@@ -133,4 +133,3 @@ def test_replay_rejects_pending_continuation_for_unknown_group() -> None:
         )
 
     assert exc_info.value.code == "parent_continuation_scope_mismatch"
-
