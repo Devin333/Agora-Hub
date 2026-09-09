@@ -66,7 +66,7 @@ export function useGuidedResearch() {
   useEffect(() => () => { generation.current++; controller.current?.abort() }, [])
   useEffect(() => {
     if (!activeId) return
-    const element = document.querySelector<HTMLElement>('[aria-label="研究工作区"]')
+    const element = document.querySelector<HTMLElement>('[aria-label="研究对话内容"]')
     if (!element) return
     const visit = historyState().workspace.visits.find(item => item.id === activeId)
     element.scrollTop = visit?.scrollY ?? 0

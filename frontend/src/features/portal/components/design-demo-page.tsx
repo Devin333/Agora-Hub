@@ -80,7 +80,7 @@ export function DesignDemoPage() {
     </header>
     <div className="flex h-[calc(100svh-var(--header-height))]">
     <ResearchSidebar busy={busy} collapsed={collapsed} onToggle={toggleSidebar} onNew={newResearch} onResume={resume} onSelectGroup={setGroupId} />
-    <div className="min-w-0 flex-1 overflow-y-auto" aria-label="研究工作区">
+    <div className={`min-w-0 flex-1 ${guided.active ? "overflow-hidden" : "overflow-y-auto"}`} aria-label="研究工作区">
     {guided.active ? <GuidedResearchView research={guided} /> : <>
     {/* The composer is centered within the right workspace, accounting for the header. */}
     <main id="workspace" className="grid h-[calc(100svh-var(--header-height)-var(--header-height))] min-h-[520px] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)]">

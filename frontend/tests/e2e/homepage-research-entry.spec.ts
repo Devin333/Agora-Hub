@@ -104,6 +104,56 @@ test("plan choices, partial-source recovery, continuation and reload work in a b
   await expect(page.getByRole("button", { name: "继续研究：找 Agent 的论文和项目", exact: true })).toHaveCount(1)
 })
 
+test("follow-up composer stays at the workspace bottom while research scrolls above it", async ({ page }) => {
+  await page.route("**/api/research/intent", route => route.fulfill({ json: { success: true, data: { summary: "Agent 记忆", query: "Agent memory", sources: ["papers"], constraints: {}, clarification: null } } }))
+  await page.route("**/api/research/search", route => route.fulfill({ json: { success: true, data: { source: "papers", total: 10, results: Array.from({ length: 10 }, (_, index) => ({ id: `layout-paper-${index}`, kind: "papers", title: `布局回归论文 ${index + 1}`, description: "用于验证长结果列表不会遮挡追问输入框。", source: "arXiv", url: `https://arxiv.org/abs/2605.${String(22343 + index)}` })) } } }))
+  await openHome(page)
+  await page.getByRole("button", { name: "选择研究模式" }).click()
+  await page.getByRole("menuitem").filter({ hasText: "先聊清楚" }).click()
+  await page.getByRole("textbox", { name: "向 Agora AI 提问" }).fill("找 Agent 记忆相关论文")
+  await page.getByRole("button", { name: "发送问题" }).click()
+  await expect(page.getByRole("region", { name: "确认研究计划" })).toBeVisible()
+  const composer = page.getByRole("form", { name: "继续研究输入区" })
+  const transcript = page.getByRole("region", { name: "研究对话内容", exact: true })
+  const followUp = page.getByRole("textbox", { name: "继续这次研究" })
+  const assertDocked = async () => {
+    const workspaceBox = (await page.getByLabel("研究工作区", { exact: true }).boundingBox())!
+    const composerBox = (await composer.boundingBox())!
+    const transcriptBox = (await transcript.boundingBox())!
+    expect(Math.abs(composerBox.y + composerBox.height - workspaceBox.y - workspaceBox.height)).toBeLessThan(2)
+    expect(Math.abs(composerBox.x + composerBox.width / 2 - workspaceBox.x - workspaceBox.width / 2)).toBeLessThan(2)
+    expect(transcriptBox.y + transcriptBox.height).toBeLessThanOrEqual(composerBox.y + 1)
+    await expect(followUp).toBeInViewport()
+  }
+  for (const viewport of [{ width: 1280, height: 1274 }, { width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
+    await page.setViewportSize(viewport)
+    await assertDocked()
+  }
+  await followUp.fill("还有 RAG 相关的")
+  await page.getByRole("button", { name: "收起研究侧栏" }).click()
+  await assertDocked()
+  await page.getByRole("button", { name: "展开研究侧栏" }).click()
+  await page.getByRole("button", { name: "开始查找", exact: true }).click()
+  await expect(transcript.getByRole("article")).toHaveCount(10)
+  const beforeScroll = (await composer.boundingBox())!
+  await transcript.focus()
+  await page.keyboard.press("Control+End")
+  const lastLink = transcript.getByRole("link", { name: "打开原文" }).last()
+  await expect(lastLink).toBeInViewport()
+  await assertDocked()
+  expect((await composer.boundingBox())!.y).toBe(beforeScroll.y)
+  const lastLinkBox = (await lastLink.boundingBox())!
+  expect(lastLinkBox.y + lastLinkBox.height).toBeLessThan(beforeScroll.y)
+  await expect(followUp).toHaveValue("还有 RAG 相关的")
+  await composer.getByRole("button", { name: "添加到本次研究" }).click()
+  await expect(page.getByRole("menuitem", { name: "添加论文或项目链接" })).toBeInViewport()
+  await page.keyboard.press("Escape")
+  await page.reload()
+  await expect(followUp).toHaveValue("还有 RAG 相关的")
+  await expect(lastLink).toBeInViewport()
+  await assertDocked()
+})
+
 test("report preparation retains the existing editable workflow", async ({ page }) => {
   await openHome(page)
   await page.getByRole("textbox", { name: "向 Agora AI 提问" }).fill("整理 Agent 研究报告")

@@ -48,6 +48,7 @@ export function GuidedResearchView({ research }: { research: Research }) {
   }
   const firstQuestion = active.conversation.turns[0].question
   return <main className={styles.workspace} aria-label="当前研究">
+    <div className={styles.transcript} role="region" aria-label="研究对话内容" tabIndex={0}>
     <header className={styles.intro}>
       <div className={styles.introEyebrow}><span className={styles.phaseBadge}>{phaseLabels[last.phase]}</span></div>
       <h1>{firstQuestion}</h1>
@@ -78,7 +79,8 @@ export function GuidedResearchView({ research }: { research: Research }) {
         </section>
       })}
     </div>
-    <form className={styles.composer} onSubmit={submit}>
+    </div>
+    <form className={styles.composer} onSubmit={submit} aria-label="继续研究输入区">
       <label htmlFor="research-follow-up">{last.phase === "clarifying" ? "补充你的想法" : "继续这次研究"}</label>
       <div className={styles.inputRow}><ResearchComposerContext groupId={active.groupId} setGroupId={research.setGroupId} materialIds={active.conversation.materialIds} setMaterialIds={research.setMaterialIds} disabled={research.busy} /><textarea id="research-follow-up" ref={input} rows={1} maxLength={2000} value={active.conversation.draft} onChange={e => research.setDraft(e.target.value)} placeholder={last.phase === "clarifying" ? "也可以直接告诉我你的想法…" : "补充要求，或针对某一条结果继续提问…"} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!research.busy && active.conversation.draft.trim()) research.followUp(active.conversation.draft) } }} /><button type="submit" disabled={research.busy || !active.conversation.draft.trim()} aria-label="发送补充"><ArrowUp size={21} /></button></div>
       <ResearchContextSummary groupId={active.groupId} setGroupId={research.setGroupId} materialIds={active.conversation.materialIds} setMaterialIds={research.setMaterialIds} disabled={research.busy} />
