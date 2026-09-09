@@ -67,6 +67,7 @@ TASK_PLAN_PARALLEL_EVENT_TYPES = (
     "TASK_GROUP_CANCELLED", "TASK_GROUP_INDETERMINATE", "TASK_GROUP_HALTED",
     "TASK_GROUP_SUPERSEDED", "TASK_GROUP_RECLAIMED", "TASK_GROUP_RECOVERY", "DEGRADED_SERIAL",
     "RECOVERY_STATUS_READ", "RECOVERY_RECONCILED", "RECOVERY_HALTED",
+    "PARENT_OBSERVATION_CONTINUATION",
 )
 TASK_PLAN_EVENT_TYPES = (
     "PLAN_CANDIDATE_BUILT",
@@ -1337,7 +1338,22 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "aggregate_ref": nullable_text, "aggregate_checksum": nullable_checksum,
         "diagnostics": _ARRAY_OF_TEXT, "result_refs": _ARRAY_OF_TEXT,
         "truncated": {"type": "boolean"},
-    })
+        "observation_checksum": _CHECKSUM_TEXT,
+    }, required=["observation_checksum"])
+    continuation = object_schema({
+        "schema_version": {"const": "newsroom.harness-parent-continuation/v1"},
+        "run_id": _TEXT, "stage_id": _TEXT, "parent_turn_id": _TEXT,
+        "observation_id": _TEXT, "observation_version": _POSITIVE_INTEGER,
+        "group_id": _TEXT, "observation_checksum": _CHECKSUM_TEXT,
+        "status": {"enum": ["PENDING", "DELIVERED", "CANCELLED"]},
+        "submission_id": nullable_text, "group_state": nullable_text,
+        "metadata": {"type": "object", "additionalProperties": True},
+        "continuation_checksum": _CHECKSUM_TEXT,
+    }, required=[
+        "schema_version", "run_id", "stage_id", "parent_turn_id", "observation_id",
+        "observation_version", "group_id", "observation_checksum", "status",
+        "submission_id", "group_state", "metadata", "continuation_checksum",
+    ])
     recovered_result = object_schema({
         "task_id": _TEXT, "task_instance_id": _TEXT, "attempt": _POSITIVE_INTEGER,
         "status": {"enum": ["succeeded", "failed"]}, "result_checksum": _CHECKSUM_TEXT,
@@ -1402,6 +1418,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "terminal_outcome": wave_terminal_outcome,
         "recovered_results": {"type": "array", "items": recovered_result, "maxItems": 128},
         "observation": observation,
+        "continuation": continuation,
     }
     fields["budget_reservation"]["allOf"] = [{
         "if": {"properties": {"schema_version": {"const": "agora.harness-budget-reservation/v2"}}},
@@ -1430,6 +1447,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "TASK_WAVE_COMPLETED": ["group_id", "wave_id", "task_ids", "terminal_outcome"],
         "TASK_GROUP_JOIN_WAITING": ["group", "observation", "idempotency_key"],
         "TASK_GROUP_JOINED": ["group", "observation", "idempotency_key"],
+        "PARENT_OBSERVATION_CONTINUATION": ["continuation", "idempotency_key"],
         "TASK_GROUP_RECOVERY": ["group", "group_id", "recovered_results", "recovery_outcome", "idempotency_key"],
         "RECOVERY_STATUS_READ": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "recovery_outcome", "idempotency_key"],
         "RECOVERY_RECONCILED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "recovery_outcome", "idempotency_key"],
@@ -1443,7 +1461,8 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
     if event_type == "RECOVERY_RECONCILED":
         required.append("child_id")
     result = object_schema(fields, required=required)
-    result["anyOf"] = [{"required": ["group"]}, {"required": ["group_id"]}]
+    if event_type != "PARENT_OBSERVATION_CONTINUATION":
+        result["anyOf"] = [{"required": ["group"]}, {"required": ["group_id"]}]
     if event_type in {"TASK_ATTEMPT_SPAWN_CONFIRMED", "TASK_ATTEMPT_SPAWN_UNKNOWN"}:
         result["properties"]["spawn_status"] = {
             "const": "SPAWN_CONFIRMED" if event_type.endswith("CONFIRMED") else "SPAWN_UNKNOWN"

@@ -738,6 +738,9 @@ class ParentObservation:
                 or tuple(diagnostics) != self.diagnostics[: limits.max_diagnostics]
             ),
         }
+        # Reserve the fixed checksum envelope while enforcing the byte limit;
+        # the final digest is filled after truncation is complete.
+        projected["observation_checksum"] = "sha256:" + "0" * 64
         removable = ("diagnostics", "tasks", "result_refs", "waves")
         while _encoded_json_size(projected) > limits.max_observation_bytes:
             for field_name in removable:
@@ -751,6 +754,13 @@ class ParentObservation:
                     "parent observation byte limit cannot hold its identity envelope",
                     code="PARENT_OBSERVATION_LIMIT_TOO_SMALL",
                 )
+        projected["observation_checksum"] = canonical_payload_checksum(
+            {
+                key: value
+                for key, value in projected.items()
+                if key != "observation_checksum"
+            }
+        )
         return projected
 
 
@@ -772,6 +782,19 @@ class ParallelDispatchResult:
             raise HarnessValidationError("unsupported parallel dispatch result schema", code="RESULT_SCHEMA_INVALID")
         waves = tuple(self.waves)
         results = tuple(self.results)
+        task_order = {task_id: index for index, task_id in enumerate(self.group.task_ids)}
+        result_task_ids = [item.task_id for item in results]
+        if len(result_task_ids) != len(set(result_task_ids)):
+            raise HarnessValidationError(
+                "joined result contains duplicate task identities",
+                code="RESULT_IDENTITY_CONFLICT",
+            )
+        if any(item.task_id not in task_order for item in results):
+            raise HarnessValidationError(
+                "joined result contains a task outside group scope",
+                code="RESULT_IDENTITY_MISMATCH",
+            )
+        results = tuple(sorted(results, key=lambda item: task_order[item.task_id]))
         if any(item.group_id != self.group.group_id for item in waves):
             raise HarnessValidationError("wave belongs to another dispatch group", code="RESULT_IDENTITY_MISMATCH")
         if any(
@@ -794,6 +817,39 @@ class ParallelDispatchResult:
                 "projected observation belongs to another dispatch group",
                 code="RESULT_IDENTITY_MISMATCH",
             )
+        projected_checksum = projected_observation.get("observation_checksum")
+        expected_projected_checksum = canonical_payload_checksum({
+            key: value for key, value in thaw_mapping(projected_observation).items()
+            if key != "observation_checksum"
+        })
+        if projected_checksum != expected_projected_checksum:
+            raise HarnessValidationError(
+                "projected observation checksum does not match content",
+                code="RESULT_OBSERVATION_CHECKSUM_MISMATCH",
+            )
+        if (
+            projected_observation.get("aggregate_ref") != self.aggregate_ref
+            or projected_observation.get("aggregate_checksum") != self.aggregate_checksum
+            or self.observation.aggregate_ref != self.aggregate_ref
+            or self.observation.aggregate_checksum != self.aggregate_checksum
+        ):
+            raise HarnessValidationError(
+                "aggregate evidence differs from the joined observation",
+                code="RESULT_AGGREGATE_CHECKSUM_MISMATCH",
+            )
+        if self.group.state is DispatchGroupState.SUCCEEDED:
+            expected_aggregate = canonical_payload_checksum({
+                "group_id": self.group.group_id,
+                "results": [
+                    {"task_id": item.task_id, "result_checksum": item.result_checksum}
+                    for item in results
+                ],
+            })
+            if self.aggregate_checksum != expected_aggregate:
+                raise HarnessValidationError(
+                    "joined aggregate checksum does not match task results",
+                    code="RESULT_AGGREGATE_CHECKSUM_MISMATCH",
+                )
         object.__setattr__(self, "waves", waves)
         object.__setattr__(self, "results", results)
         history = tuple(self.attempt_history)

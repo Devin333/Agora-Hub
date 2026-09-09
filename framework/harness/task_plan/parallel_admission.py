@@ -77,6 +77,9 @@ def validate_parallel_admission_append(
     from framework.harness.task_plan.attempt_history_index import validate_attempt_history_append
 
     validate_attempt_history_append(history, batch)
+    from framework.harness.task_plan.continuation import validate_parent_continuation_append
+
+    validate_parent_continuation_append(history, batch)
     if plan_lookup is not None:
         from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
         from framework.harness.task_plan.attempt_history_index import validate_history_record

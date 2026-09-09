@@ -277,6 +277,7 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
         "aggregate_checksum",
         "aggregate_ref",
         "attempt_history",
+        "budget_ledger",
         "budget_snapshot",
             "checkpoint_checksum",
             "checkpoint_id",
@@ -354,9 +355,13 @@ def test_checkpoint_v2_payload_remains_readable_without_parallel_projection() ->
         "parallel_event_sequence",
         "attempt_history",
         "parallel_spawn_operations",
+        "budget_ledger",
+        "history_index_checksum",
+        "observation_checksum",
+        "continuation",
         "checkpoint_checksum",
     ):
-        legacy_payload.pop(field_name)
+        legacy_payload.pop(field_name, None)
 
     legacy_checkpoint = TaskPlanCheckpoint(**legacy_payload)
     restored = TaskPlanCheckpoint.from_dict(legacy_checkpoint.to_dict())
@@ -537,7 +542,7 @@ def test_checkpoint_detects_attempt_history_changes() -> None:
     changed_payload["attempt_history"] = [quarantined.to_dict()]
     with pytest.raises(HarnessValidationError) as checksum_error:
         TaskPlanCheckpoint.from_dict(changed_payload)
-    assert checksum_error.value.code == "task_plan_checkpoint_checksum_mismatch"
+    assert checksum_error.value.code == "task_plan_attempt_history_index_checksum_mismatch"
 
     changed_report = replace(report, attempt_history=(quarantined,))
     with pytest.raises(HarnessValidationError) as replay_error:

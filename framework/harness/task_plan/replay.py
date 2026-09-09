@@ -28,6 +28,13 @@ from framework.harness.task_plan.attempt_history_index import (
     ATTEMPT_HISTORY_EVENT, history_record_for_result, validate_history_record,
     validate_attempt_history_append,
 )
+from framework.harness.task_plan.continuation import (
+    PARENT_CONTINUATION_EVENT,
+    ParentContinuation,
+    continuation_from_event,
+    validate_continuation_projection,
+    validate_parent_continuation_append,
+)
 from framework.harness.task_plan.models import (
     TaskInstance,
     TaskLifecycle,
@@ -111,6 +118,7 @@ _PARALLEL_EVENT_TYPES = frozenset(
         "RECOVERY_RECONCILED",
         "RECOVERY_HALTED",
         "DEGRADED_SERIAL",
+        PARENT_CONTINUATION_EVENT,
     }
 )
 _PARALLEL_GROUP_STATES = frozenset(item.value for item in DispatchGroupState)
@@ -142,6 +150,10 @@ class TaskPlanReplayReport:
     parallel_event_sequence: int = 0
     attempt_history: tuple[TaskAttemptHistoryRecord, ...] = ()
     parallel_spawn_operations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    budget_ledger: Mapping[str, Any] = field(default_factory=dict)
+    continuation: Mapping[str, Any] | None = None
+    observation_checksum: str | None = None
+    history_index_checksum: str | None = field(init=False)
     replay_checksum: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -311,6 +323,43 @@ class TaskPlanReplayReport:
         object.__setattr__(self, "parallel_spawn_operations", _freeze_parallel_projection_mapping(
             self.parallel_spawn_operations, "parallel_spawn_operations",
         ))
+        budget_ledger = frozen_mapping(self.budget_ledger, "budget_ledger")
+        if budget_ledger:
+            TaskPlanBudgetLedger.from_snapshot(thaw_mapping(budget_ledger))
+            if budget_ledger != self.projection.consumed_budget:
+                raise HarnessValidationError(
+                    "TaskPlan replay budget ledger differs from projection",
+                    code="task_plan_replay_budget_mismatch",
+                )
+        object.__setattr__(self, "budget_ledger", budget_ledger)
+        continuation = (
+            frozen_mapping(self.continuation, "continuation")
+            if self.continuation is not None else None
+        )
+        if continuation is not None:
+            typed_continuation = ParentContinuation.from_dict(thaw_mapping(continuation))
+            validate_continuation_projection(
+                typed_continuation,
+                run_id=self.projection.run_id,
+                stage_id=self.projection.stage_id,
+                group=parallel_groups.get(typed_continuation.group_id),
+                observation_checksum=_latest_observation_checksum(
+                    diagnostics, group_id=typed_continuation.group_id,
+                ),
+            )
+            continuation = frozen_mapping(typed_continuation.to_dict(), "continuation")
+        object.__setattr__(self, "continuation", continuation)
+        if self.observation_checksum is not None:
+            object.__setattr__(self, "observation_checksum", checksum(self.observation_checksum, "observation_checksum"))
+        expected_history_checksum = canonical_payload_checksum({
+            "record_checksums": sorted(item.record_checksum for item in history),
+        })
+        object.__setattr__(self, "history_index_checksum", expected_history_checksum if history else None)
+        if _latest_observation_checksum(diagnostics) != self.observation_checksum:
+            raise HarnessValidationError(
+                "TaskPlan replay observation checksum differs from recorded observation",
+                code="task_plan_observation_checksum_mismatch",
+            )
         object.__setattr__(self, "replay_checksum", canonical_payload_checksum(self.checksum_projection()))
 
     def checksum_projection(self) -> dict[str, Any]:
@@ -330,6 +379,10 @@ class TaskPlanReplayReport:
             "aggregate_checksum": self.aggregate_checksum,
             "verified": self.verified,
         }
+        if self.continuation is not None:
+            projection["continuation"] = thaw_mapping(self.continuation)
+        if self.observation_checksum is not None:
+            projection["observation_checksum"] = self.observation_checksum
         if self.attempt_history:
             projection["attempt_history"] = [item.to_dict() for item in self.attempt_history]
         if self.parallel_spawn_operations:
@@ -357,7 +410,12 @@ class TaskPlanReplayReport:
         return projection
 
     def to_dict(self) -> dict[str, Any]:
-        return {**self.checksum_projection(), "replay_checksum": self.replay_checksum}
+        payload = {**self.checksum_projection(), "replay_checksum": self.replay_checksum}
+        if self.history_index_checksum is not None:
+            payload["history_index_checksum"] = self.history_index_checksum
+        if self.budget_ledger:
+            payload["budget_ledger"] = thaw_mapping(self.budget_ledger)
+        return payload
 
 
 class TaskPlanReplayReducer:
@@ -479,6 +537,8 @@ class TaskPlanReplayReducer:
         parallel_spawn_operations: dict[str, dict[str, Any]] = {}
         parallel_event_sequence = 0
         attempt_history: dict[str, TaskAttemptHistoryRecord] = {}
+        continuation: ParentContinuation | None = None
+        continuation_events: list[TaskPlanEvent] = []
         ready_batch_budget_checksum: str | None = None
         ready_batch_tasks: list[str] = []
 
@@ -781,6 +841,89 @@ class TaskPlanReplayReducer:
                     )
             elif event.event_type in _PARALLEL_EVENT_TYPES:
                 projection = _require_projection(projection, event)
+                if event.event_type == PARENT_CONTINUATION_EVENT:
+                    candidate = continuation_from_event(event)
+                    if (
+                        candidate.run_id != projection.run_id
+                        or candidate.stage_id != projection.stage_id
+                        or candidate.group_id not in parallel_groups
+                    ):
+                        raise HarnessValidationError(
+                            "parent continuation is outside replay scope",
+                            code="parent_continuation_scope_mismatch",
+                        )
+                    group_snapshot = parallel_groups[candidate.group_id]
+                    group_submission = next(
+                        (item for item in admitted_submissions.values()
+                         if item.plan_id == group_snapshot["plan_id"]),
+                        None,
+                    )
+                    if candidate.submission_id is not None:
+                        matching_submission = next(
+                            (
+                                item for item in admitted_submissions.values()
+                                if item.submission_id == candidate.submission_id
+                            ),
+                            None,
+                        )
+                        if (
+                            matching_submission is None
+                            or matching_submission != group_submission
+                            or matching_submission.identity.parent_turn_id != candidate.parent_turn_id
+                            or matching_submission.identity.run_id != candidate.run_id
+                            or matching_submission.identity.stage_id != candidate.stage_id
+                        ):
+                            raise HarnessValidationError(
+                                "parent continuation submission identity is not recorded",
+                                code="parent_continuation_scope_mismatch",
+                            )
+                    prior_observation_checksum = _latest_observation_checksum(
+                        parallel_diagnostics,
+                        group_id=candidate.group_id,
+                    )
+                    if (
+                        prior_observation_checksum is not None
+                        and prior_observation_checksum != candidate.observation_checksum
+                    ):
+                        raise HarnessValidationError(
+                            "parent continuation observation checksum differs from join evidence",
+                            code="parent_continuation_observation_mismatch",
+                        )
+                    if candidate.status in {"DELIVERED", "CANCELLED"}:
+                        if (
+                            candidate.group_state != group_snapshot["state"]
+                            or group_snapshot["state"] not in _PARALLEL_GROUP_STATES
+                            or group_snapshot["state"] not in {
+                                DispatchGroupState.SUCCEEDED.value,
+                                DispatchGroupState.FAILED.value,
+                                DispatchGroupState.CANCELLED.value,
+                                DispatchGroupState.INDETERMINATE.value,
+                                DispatchGroupState.HALTED.value,
+                                DispatchGroupState.SUPERSEDED.value,
+                            }
+                            or prior_observation_checksum is None
+                        ):
+                            raise HarnessValidationError(
+                                "terminal parent continuation lacks matching group observation",
+                                code="parent_continuation_terminal_mismatch",
+                            )
+                    if group_submission is not None and candidate.submission_id is None:
+                        raise HarnessValidationError(
+                            "parent continuation is missing its submission identity",
+                            code="parent_continuation_scope_mismatch",
+                        )
+                    # Use the same redelivery and version rules as canonical append.
+                    validate_parent_continuation_append(continuation_events, (event,))
+                    continuation_events.append(event)
+                    if (
+                        continuation is None
+                        or candidate.parent_scope()[:3] != continuation.parent_scope()[:3]
+                        or candidate.observation_version >= continuation.observation_version
+                    ):
+                        continuation = candidate
+                    parallel_event_sequence = event.sequence
+                    projection = replace(projection, last_sequence=event.sequence)
+                    continue
                 if event.event_type == "TASK_GROUP_ADMITTED":
                     validate_group_plan_binding(event.payload.get("group", {}), current_plan)
                 if event.event_type == "TASK_WAVE_ADMITTED":
@@ -911,6 +1054,13 @@ class TaskPlanReplayReducer:
             parallel_event_sequence=parallel_event_sequence,
             attempt_history=tuple(attempt_history.values()),
             parallel_spawn_operations=parallel_spawn_operations,
+            budget_ledger=(
+                projection.consumed_budget
+                if "ledger" in projection.consumed_budget
+                else {}
+            ),
+            observation_checksum=_latest_observation_checksum(parallel_diagnostics),
+            continuation=continuation.to_dict() if continuation is not None else None,
         )
 
     def decision_checksum(self, projection: TaskPlanProjection) -> str:
@@ -2053,7 +2203,32 @@ def _record_parallel_observation(
     if observation is not None:
         if not isinstance(observation, Mapping) or observation.get("group_id") != group_id:
             _parallel_error("parallel observation does not match group", event)
-        diagnostics.append({"event_type": event.event_type, "group_id": group_id, "observation": thaw_mapping(frozen_mapping(observation, "parallel_observation"))})
+        normalized = thaw_mapping(frozen_mapping(observation, "parallel_observation"))
+        supplied = normalized.get("observation_checksum")
+        if not isinstance(supplied, str):
+            _parallel_error("parallel observation is missing its checksum", event)
+        expected = canonical_payload_checksum({
+            key: value for key, value in normalized.items()
+            if key != "observation_checksum"
+        })
+        if supplied != expected:
+            _parallel_error("parallel observation checksum does not match content", event)
+        diagnostics.append({"event_type": event.event_type, "group_id": group_id, "observation": normalized})
+
+
+def _latest_observation_checksum(
+    diagnostics: Iterable[Mapping[str, Any]],
+    *,
+    group_id: str | None = None,
+) -> str | None:
+    latest: str | None = None
+    for diagnostic in diagnostics:
+        if group_id is not None and diagnostic.get("group_id") != group_id:
+            continue
+        observation = diagnostic.get("observation")
+        if isinstance(observation, Mapping) and observation.get("observation_checksum") is not None:
+            latest = checksum(observation["observation_checksum"], "observation_checksum")
+    return latest
 
 
 def _parallel_diagnostic(

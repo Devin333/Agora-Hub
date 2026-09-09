@@ -132,6 +132,14 @@ from framework.harness.task_plan.checkpoint import (
     TaskPlanCheckpointStorePort,
 )
 from framework.harness.task_plan.recovery import TaskPlanRecovery, TaskPlanRecoveryService
+from framework.harness.task_plan.continuation import (
+    PARENT_CONTINUATION_EVENT,
+    PARENT_CONTINUATION_SCHEMA,
+    ParentContinuation,
+    continuation_from_event,
+    validate_continuation_append,
+    validate_parent_continuation_append,
+)
 from framework.harness.task_plan.queue import (
     TASK_PLAN_QUEUE_METADATA_KEY,
     TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2,
@@ -290,6 +298,12 @@ __all__ = [
     "TaskPlanCheckpointStorePort",
     "TaskPlanRecovery",
     "TaskPlanRecoveryService",
+    "PARENT_CONTINUATION_EVENT",
+    "PARENT_CONTINUATION_SCHEMA",
+    "ParentContinuation",
+    "continuation_from_event",
+    "validate_continuation_append",
+    "validate_parent_continuation_append",
     "TaskPlanGateCallable",
     "TaskPlanGateEvidence",
     "TaskPlanGateEvaluatorPort",

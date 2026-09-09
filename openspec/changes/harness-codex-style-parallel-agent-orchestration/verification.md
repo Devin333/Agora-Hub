@@ -1450,6 +1450,23 @@ checksums exactly; the updated goldens reflect that intentional wire change.
 Final validation runs persist their logs and exit receipts in independent local
 processes so tool-session loss does not erase the result.
 
+### Task 1.9 implementation batch (2026-09-09, verification in progress)
+
+- Added canonical parent continuation envelopes with typed schema/checksum,
+  idempotent redelivery, immutable submission identity and contiguous
+  observation versions. Replay binds continuation to the recorded group and
+  group-specific observation checksum.
+- Extended parallel event schema and checkpoint/replay projections with spawn
+  intent/receipt facts, budget ledger snapshots, complete attempt-history index,
+  aggregate checksum and observation checksum. Store append paths validate the
+  same continuation and history contracts before durable mutation.
+- `ParentObservation.project` reserves its checksum envelope while enforcing
+  the configured UTF-8 byte limit. Joined result aggregation normalizes stable
+  plan order and rejects duplicate or out-of-scope result identities.
+- Added regression coverage for continuation redelivery/status/version rules,
+  malformed or conflicting checkpoint evidence, ledger/history/observation
+  checksum tampering, aggregate identity and projection byte bounds.
+
 ### Broader Acceptance
 
 - Route generic children through the real controlled Agent runtime and persist

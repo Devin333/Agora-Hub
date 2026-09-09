@@ -270,6 +270,9 @@ def validate_submission_event_append(
     history: Sequence["TaskPlanEvent"], events: Sequence["TaskPlanEvent"],
 ) -> None:
     """Enforce submission ownership and immutable outcomes at the store CAS."""
+    from framework.harness.task_plan.continuation import validate_parent_continuation_append
+
+    validate_parent_continuation_append(history, events)
     relevant_types = {
         "PLAN_CANDIDATE_BUILT", "PLAN_ACCEPTED", "TASK_GROUP_ADMITTED",
         "TASK_PLAN_VERIFIED", "TASK_PLAN_HALTED",

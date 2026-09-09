@@ -10,6 +10,9 @@ from typing import Any, Protocol, runtime_checkable
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
+from framework.harness.task_plan.continuation import (
+    ParentContinuation, validate_continuation_projection,
+)
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     checksum,
@@ -33,6 +36,7 @@ from framework.harness.task_plan.replay import (
     TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
     TaskPlanReplayReport,
     _freeze_parallel_projection_mapping,
+    _latest_observation_checksum,
     _validate_parallel_report_projection,
 )
 from framework.harness.task_plan.store import TaskResultRecord
@@ -109,6 +113,10 @@ class TaskPlanCheckpoint:
     parallel_event_sequence: int = 0
     attempt_history: tuple[TaskAttemptHistoryRecord | Mapping[str, Any], ...] = ()
     parallel_spawn_operations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    budget_ledger: Mapping[str, Any] = field(default_factory=dict)
+    continuation: Mapping[str, Any] | None = None
+    observation_checksum: str | None = None
+    history_index_checksum: str | None = None
     schema_version: str = TASK_PLAN_CHECKPOINT_SCHEMA
     reducer_version: str = TASK_PLAN_REPLAY_REDUCER_VERSION
     checkpoint_checksum: str = field(init=False)
@@ -394,6 +402,65 @@ class TaskPlanCheckpoint:
             "parallel_spawn_operations",
             parallel_spawn_operations,
         )
+        budget_ledger = frozen_mapping(self.budget_ledger, "budget_ledger")
+        if budget_ledger:
+            from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+            TaskPlanBudgetLedger.from_snapshot(thaw_mapping(budget_ledger))
+            if thaw_mapping(budget_ledger) != thaw_mapping(projection.consumed_budget):
+                raise HarnessValidationError(
+                    "TaskPlan checkpoint budget ledger does not match projection",
+                    code="task_plan_checkpoint_budget_mismatch",
+                )
+        object.__setattr__(self, "budget_ledger", budget_ledger)
+        continuation = (
+            frozen_mapping(self.continuation, "continuation")
+            if self.continuation is not None else None
+        )
+        if continuation is not None:
+            typed_continuation = ParentContinuation.from_dict(thaw_mapping(continuation))
+            validate_continuation_projection(
+                typed_continuation,
+                run_id=self.run_id,
+                stage_id=self.stage_id,
+                group=parallel_groups.get(typed_continuation.group_id),
+                observation_checksum=_latest_observation_checksum(
+                    parallel_diagnostics, group_id=typed_continuation.group_id,
+                ),
+            )
+            continuation = frozen_mapping(typed_continuation.to_dict(), "continuation")
+        object.__setattr__(self, "continuation", continuation)
+        if self.observation_checksum is not None:
+            object.__setattr__(self, "observation_checksum", checksum(self.observation_checksum, "observation_checksum"))
+        expected_history_checksum = canonical_payload_checksum({
+            "record_checksums": sorted(item.record_checksum for item in attempt_history),
+        })
+        if self.history_index_checksum is None and attempt_history:
+            object.__setattr__(self, "history_index_checksum", expected_history_checksum)
+        elif self.history_index_checksum is not None:
+            supplied_history_checksum = checksum(self.history_index_checksum, "history_index_checksum")
+            if supplied_history_checksum != expected_history_checksum:
+                raise HarnessValidationError(
+                    "TaskPlan checkpoint history index checksum does not match records",
+                    code="task_plan_attempt_history_index_checksum_mismatch",
+                )
+            object.__setattr__(self, "history_index_checksum", supplied_history_checksum)
+        if _latest_observation_checksum(parallel_diagnostics) != self.observation_checksum:
+            raise HarnessValidationError(
+                "TaskPlan checkpoint observation checksum does not match diagnostics",
+                code="task_plan_observation_checksum_mismatch",
+            )
+        for key, operation in parallel_spawn_operations.items():
+            if (
+                not isinstance(operation, Mapping)
+                or not isinstance(key, str)
+                or not isinstance(operation.get("operation_key"), str)
+                or not operation.get("operation_key")
+                or operation.get("status") not in {"INTENT", "SPAWN_CONFIRMED", "SPAWN_UNKNOWN"}
+            ):
+                raise HarnessValidationError(
+                    "TaskPlan checkpoint spawn operation identity is invalid",
+                    code="task_plan_checkpoint_spawn_identity_mismatch",
+                )
         expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
         if self.reducer_version != expected_reducer_version:
             raise HarnessValidationError(
@@ -474,6 +541,10 @@ class TaskPlanCheckpoint:
             parallel_event_sequence=report.parallel_event_sequence,
             attempt_history=report.attempt_history,
             parallel_spawn_operations=report.parallel_spawn_operations,
+            budget_ledger=getattr(report, "budget_ledger", {}),
+            continuation=getattr(report, "continuation", None),
+            observation_checksum=getattr(report, "observation_checksum", None),
+            history_index_checksum=getattr(report, "history_index_checksum", None),
             schema_version=TASK_PLAN_CHECKPOINT_SCHEMA_V3,
             reducer_version=report.reducer_version,
             **graph_identity,
@@ -521,6 +592,13 @@ class TaskPlanCheckpoint:
                 thaw_mapping(self.parallel_spawn_operations),
                 thaw_mapping(report.parallel_spawn_operations),
             ),
+            "budget_ledger": (thaw_mapping(self.budget_ledger), thaw_mapping(report.budget_ledger)),
+            "continuation": (
+                thaw_mapping(self.continuation) if self.continuation is not None else None,
+                thaw_mapping(report.continuation) if report.continuation is not None else None,
+            ),
+            "observation_checksum": (self.observation_checksum, report.observation_checksum),
+            "history_index_checksum": (self.history_index_checksum, report.history_index_checksum),
         }
         mismatches = sorted(name for name, values in checks.items() if values[0] != values[1])
         if report.reducer_version != self.reducer_version:
@@ -585,6 +663,14 @@ class TaskPlanCheckpoint:
                     ),
                 }
             )
+            if self.budget_ledger:
+                payload["budget_ledger"] = thaw_mapping(self.budget_ledger)
+            if self.continuation is not None:
+                payload["continuation"] = thaw_mapping(self.continuation)
+            if self.observation_checksum is not None:
+                payload["observation_checksum"] = self.observation_checksum
+            if self.history_index_checksum is not None:
+                payload["history_index_checksum"] = self.history_index_checksum
         return payload
 
     def to_dict(self) -> dict[str, Any]:
@@ -634,12 +720,39 @@ class TaskPlanCheckpoint:
                 "parallel_spawn_operations",
             }
         )
+        optional_parallel = frozenset({
+            "budget_ledger", "continuation", "observation_checksum", "history_index_checksum",
+        })
+        if schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3:
+            if value.get("attempt_history") and "history_index_checksum" not in value:
+                raise HarnessValidationError(
+                    "parallel checkpoint is missing its history index checksum",
+                    code="task_plan_checkpoint_history_index_missing",
+                )
+            diagnostics = value.get("parallel_diagnostics", ())
+            has_observation = any(
+                isinstance(item, Mapping) and isinstance(item.get("observation"), Mapping)
+                for item in diagnostics
+            )
+            if has_observation and "observation_checksum" not in value:
+                raise HarnessValidationError(
+                    "parallel checkpoint is missing its observation checksum",
+                    code="task_plan_checkpoint_observation_checksum_missing",
+                )
+            if value.get("parallel_reservations") and "budget_ledger" not in value:
+                projection_budget = value.get("projection", {}).get("consumed_budget", {})
+                if isinstance(projection_budget, Mapping) and "ledger" in projection_budget:
+                    raise HarnessValidationError(
+                        "parallel checkpoint is missing its budget ledger",
+                        code="task_plan_checkpoint_budget_ledger_missing",
+                    )
         identity = frozenset(_GRAPH_CHECKPOINT_IDENTITY_FIELDS)
         payload = exact_keys(
             value,
             required=(common | identity | parallel)
             if schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
             else common | identity,
+            optional=optional_parallel if schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3 else frozenset(),
             model=cls.__name__,
         )
         supplied = checksum(payload.pop("checkpoint_checksum"), "checkpoint_checksum")
