@@ -545,6 +545,20 @@ validate recorded receipt/accounting equality without calling the live port.
 
 Every recovery live call MUST record `RECOVERY_STATUS_READ`, `RECOVERY_RECONCILED`, `RECOVERY_RETRY_ADMITTED` or `RECOVERY_HALTED` with run/stage/plan/group/wave/attempt correlation. G1 Contract, G2 Coordinator, G3 AgentLoop, G4 Research and G5 Release MUST be evaluated independently. Feature enablement belongs to G5 and MUST NOT substitute for implementation, telemetry, alert, recovery or rollback evidence. Running groups MUST retain pinned policy through rollback and preserve inspection/replay history.
 
+#### Scenario: Online recovery waits for or closes an existing child
+
+- **WHEN** recovery waits for an admitted child to terminate or closes its verified terminal handle
+- **THEN** each supervisor operation MUST persist `RECOVERY_OPERATION_INTENT` before the live call and matching `RECOVERY_OPERATION_RECONCILED` or `RECOVERY_OPERATION_HALTED` evidence before dependent recovery progress
+- **AND** the evidence MUST identify the supervisor operation and its child/attempt, distinguishing spawn confirmation from terminal-receipt verification and closure
+- **AND** failure to persist the request MUST prevent the live call; failure to persist the outcome MUST prevent dependent dispatch, settlement or successful recovery
+- **AND** repeated recovery MUST preserve operation identity, receipt integrity and unique budget accounting without hiding subsequent live calls behind an earlier audit id
+- **AND** offline replay MUST verify recorded request/outcome linkage without invoking supervisor wait, status or close
+
+These operation audit events extend the recovery evidence family above; they
+MUST NOT reinterpret a spawn-status confirmation as a terminal-operation result.
+Successful operation evidence MUST include a validated terminal receipt and
+the observed child state, bound to the original admitted operation identity.
+
 #### Scenario: Feature flag is disabled during an active group
 
 - **WHEN** an operator disables the feature for new submissions

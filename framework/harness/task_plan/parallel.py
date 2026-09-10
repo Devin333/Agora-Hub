@@ -20,9 +20,11 @@ from framework.agent.models.orchestration import ParentObservationLimits, trunca
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.subagents.supervisor import (
     ChildAgentHandle,
+    ChildAgentOperationResult,
     ChildAgentSpawnRequest,
     ChildAgentState,
     ChildAgentSupervisorError,
+    ChildAgentTerminalReceipt,
     ChildAgentOperationConflict,
     ChildAgentSupervisor,
 )
@@ -1664,10 +1666,18 @@ class ParallelAgentCoordinator:
         recovered_task_ids = frozenset(missing_results)
         for task_id, (handle, worker) in active:
             assert self.child_supervisor is not None
-            operation = self.child_supervisor.wait(
-                handle.child_id,
-                operation_id=handle.operation_id,
-                timeout_seconds=request.max_join_wait_seconds,
+            admitted_wave = _wave_for_child(session, handle)
+            operation = self._recovery_supervisor_call(
+                session,
+                admitted_wave,
+                handle,
+                recovery_operation="wait",
+                event_sink=event_sink,
+                invoke=lambda: self.child_supervisor.wait(
+                    handle.child_id,
+                    operation_id=handle.operation_id,
+                    timeout_seconds=request.max_join_wait_seconds,
+                ),
             )
             receipt = operation.receipt
             if receipt is None or not receipt.termination_confirmed:
@@ -1681,9 +1691,16 @@ class ParallelAgentCoordinator:
                 # recovered before this coordinator pass. The child receipt
                 # still must prove terminal termination, but its FAILED or
                 # CANCELLED state must not discard the verified parent result.
-                self.child_supervisor.close(
-                    handle.child_id,
-                    operation_id=handle.operation_id,
+                self._recovery_supervisor_call(
+                    session,
+                    admitted_wave,
+                    handle,
+                    recovery_operation="close",
+                    event_sink=event_sink,
+                    invoke=lambda: self.child_supervisor.close(
+                        handle.child_id,
+                        operation_id=handle.operation_id,
+                    ),
                 )
                 with self._lock:
                     self._sessions[group.group_id].active_children.pop(task_id, None)
@@ -1718,7 +1735,6 @@ class ParallelAgentCoordinator:
                 request.plan, handle.task_id, handle.attempt,
                 task_instance_id=handle.task_instance_id,
             )
-            admitted_wave = _wave_for_child(session, handle)
             recovered_from = None
             recovery_receipt = None
             if worker_result is None and receipt.status is ChildAgentState.FAILED and recover_result is not None:
@@ -1758,9 +1774,16 @@ class ParallelAgentCoordinator:
                         code="TASK_GROUP_RECOVERY_RESULT_CONFLICT",
                         details={"task_id": task_id, "child_id": handle.child_id},
                     ) from exc
-            self.child_supervisor.close(
-                handle.child_id,
-                operation_id=handle.operation_id,
+            self._recovery_supervisor_call(
+                session,
+                admitted_wave,
+                handle,
+                recovery_operation="close",
+                event_sink=event_sink,
+                invoke=lambda: self.child_supervisor.close(
+                    handle.child_id,
+                    operation_id=handle.operation_id,
+                ),
             )
             with self._lock:
                 self._sessions[group.group_id].active_children.pop(task_id, None)
@@ -1851,6 +1874,176 @@ class ParallelAgentCoordinator:
                 idempotency_key=recovery_checksum,
             )
             return self._result_for_session(session, request, limits=limits)
+
+    def _recovery_supervisor_call(
+        self,
+        session: _GroupSession,
+        wave: DispatchWave,
+        handle: ChildAgentHandle,
+        *,
+        recovery_operation: str,
+        event_sink: Callable[[Mapping[str, Any]], Any] | None,
+        invoke: Callable[[], Any],
+    ) -> Any:
+        """Audit one online supervisor call before and after it is allowed.
+
+        ``recover()`` is an online path even when the outer stage is resuming a
+        durable group.  A status reconciliation only proves that a handle is
+        trackable; each subsequent ``wait`` and ``close`` remains a separate
+        live effect.  The intent is therefore durable before the call, and a
+        failed audit write cannot silently advance to the supervisor.
+        """
+
+        if recovery_operation not in {"wait", "close"}:
+            raise ValueError("recovery_operation must be wait or close")
+        # Recovery is an online side-effect path.  Unlike ordinary in-memory
+        # coordination, it must never call a supervisor unless the pre-call
+        # fact can be durably recorded.  ``_emit`` deliberately supports
+        # sink-less local use elsewhere, so enforce the stricter contract at
+        # this recovery boundary instead of changing global emission rules.
+        if event_sink is None and self.event_sink is None:
+            raise HarnessValidationError(
+                "online recovery supervisor call requires a durable audit sink",
+                code="TASK_GROUP_RECOVERY_AUDIT_REQUIRED",
+            )
+        instance = task_instance_for_attempt(
+            session.request.plan,
+            handle.task_id,
+            handle.attempt,
+            task_instance_id=handle.task_instance_id,
+        )
+        expected_operation = spawn_operation_key(
+            session.group.group_id,
+            wave.wave_id,
+            instance.task_instance_id,
+            instance.attempt,
+        )
+        if handle.operation_id != expected_operation:
+            raise HarnessValidationError(
+                "recovery supervisor handle differs from admitted operation",
+                code="TASK_GROUP_RECOVERY_IDENTITY_MISMATCH",
+            )
+        recovery_id = f"recovery-{uuid4().hex}"
+        identity = {
+            "group_id": session.group.group_id,
+            "wave_id": wave.wave_id,
+            "task_id": instance.task_id,
+            "task_instance_id": instance.task_instance_id,
+            "attempt": instance.attempt,
+            "operation_key": expected_operation,
+            "child_id": handle.child_id,
+            "recovery_id": recovery_id,
+            "recovery_operation": recovery_operation,
+        }
+        self._emit(
+            "RECOVERY_OPERATION_INTENT",
+            event_sink=event_sink,
+            **identity,
+            idempotency_key=f"{recovery_id}:{recovery_operation}:intent",
+        )
+        try:
+            outcome = invoke()
+            receipt = self._validated_recovery_operation_result(
+                session,
+                handle,
+                expected_operation,
+                recovery_operation=recovery_operation,
+                outcome=outcome,
+            )
+        except BaseException:
+            self._emit(
+                "RECOVERY_OPERATION_HALTED",
+                event_sink=event_sink,
+                **identity,
+                reason_code=(
+                    "RECOVERY_WAIT_FAILED"
+                    if recovery_operation == "wait"
+                    else "RECOVERY_CLOSE_FAILED"
+                ),
+                idempotency_key=f"{recovery_id}:{recovery_operation}:halted",
+            )
+            raise
+        self._emit(
+            "RECOVERY_OPERATION_RECONCILED",
+            event_sink=event_sink,
+            **identity,
+            recovery_outcome=(
+                "wait_terminal"
+                if recovery_operation == "wait"
+                else "close_confirmed"
+            ),
+            child_state=outcome.handle.state.value,
+            terminal_receipt=receipt.to_dict(),
+            idempotency_key=f"{recovery_id}:{recovery_operation}:reconciled",
+        )
+        return outcome
+
+    @staticmethod
+    def _validated_recovery_operation_result(
+        session: _GroupSession,
+        admitted_handle: ChildAgentHandle,
+        expected_operation: str,
+        *,
+        recovery_operation: str,
+        outcome: Any,
+    ) -> ChildAgentTerminalReceipt:
+        """Require a typed, admitted and terminal fact before recovery succeeds."""
+
+        if not isinstance(outcome, ChildAgentOperationResult):
+            raise HarnessValidationError(
+                "recovery supervisor returned an invalid operation result",
+                code="TASK_GROUP_RECOVERY_OPERATION_INVALID",
+            )
+        handle = outcome.handle
+        if (
+            outcome.operation_id != expected_operation
+            or outcome.child_id != admitted_handle.child_id
+            or handle.child_id != admitted_handle.child_id
+            or handle.operation_id != expected_operation
+            or handle.task_id != admitted_handle.task_id
+            or handle.task_instance_id != admitted_handle.task_instance_id
+            or handle.attempt != admitted_handle.attempt
+            or handle.parent_graph_identity != session.group.parent_graph_identity
+        ):
+            raise HarnessValidationError(
+                "recovery supervisor result differs from admitted child identity",
+                code="TASK_GROUP_RECOVERY_IDENTITY_MISMATCH",
+            )
+        receipt = outcome.receipt
+        if (
+            not isinstance(receipt, ChildAgentTerminalReceipt)
+            or receipt.child_id != admitted_handle.child_id
+            or receipt.operation_id != expected_operation
+            or receipt.parent_graph_identity != session.group.parent_graph_identity
+            or not receipt.termination_confirmed
+        ):
+            raise HarnessValidationError(
+                "child termination could not be confirmed during recovery",
+                code="TASK_GROUP_RECOVERY_UNCONFIRMED",
+                details={
+                    "task_id": admitted_handle.task_id,
+                    "child_id": admitted_handle.child_id,
+                },
+            )
+        if recovery_operation == "wait":
+            # A prior close may have succeeded just before its outcome audit
+            # failed.  Repeating recovery must be able to re-read that same
+            # immutable terminal receipt from a CLOSED handle; this is not a
+            # relaxation for non-terminal states.
+            allowed_states = {receipt.status, ChildAgentState.CLOSED}
+        else:
+            allowed_states = {ChildAgentState.CLOSED}
+        if handle.state not in allowed_states:
+            raise HarnessValidationError(
+                "recovery supervisor operation state is not terminally verified",
+                code="TASK_GROUP_RECOVERY_OPERATION_INVALID",
+                details={
+                    "task_id": admitted_handle.task_id,
+                    "child_id": admitted_handle.child_id,
+                    "recovery_operation": recovery_operation,
+                },
+            )
+        return receipt
 
     def reconcile_spawn_intents(
         self,
@@ -3346,17 +3539,24 @@ class ParallelAgentCoordinator:
                         self._record_attempt(session, wave, instance, outcome=TaskAttemptOutcome.INDETERMINATE,
                                              reason_code=reason_code, event_sink=event_sink)
             self._release_pending_waves(session, event_sink=event_sink, reason_code=reason_code)
-            session.group = session.group.transitioned(DispatchGroupState.INDETERMINATE)
+            indeterminate_group = session.group.transitioned(
+                DispatchGroupState.INDETERMINATE
+            )
             self._emit(
                 "TASK_GROUP_INDETERMINATE",
                 event_sink=event_sink,
-                group=session.group.to_dict(),
+                group=indeterminate_group.to_dict(),
                 group_id=group_id,
                 reason_code=reason_code,
                 diagnostics=list(diagnostics),
                 group_duration_ms=_elapsed_ms(session.started_at),
                 idempotency_key=group_id,
             )
+            # Publish the canonical transition before advancing local state.
+            # Otherwise a failed durable write leaves this coordinator at
+            # INDETERMINATE and a retry returns early, permanently hiding the
+            # missing terminal fact from recovery and offline replay.
+            session.group = indeterminate_group
 
     def _terminal_state(self, session: _GroupSession) -> tuple[DispatchGroupState, tuple[str, ...]]:
         results = tuple(session.results.values())

@@ -67,6 +67,7 @@ TASK_PLAN_PARALLEL_EVENT_TYPES = (
     "TASK_GROUP_CANCELLED", "TASK_GROUP_INDETERMINATE", "TASK_GROUP_HALTED",
     "TASK_GROUP_SUPERSEDED", "TASK_GROUP_RECLAIMED", "TASK_GROUP_RECOVERY", "DEGRADED_SERIAL",
     "RECOVERY_STATUS_READ", "RECOVERY_RECONCILED", "RECOVERY_HALTED",
+    "RECOVERY_OPERATION_INTENT", "RECOVERY_OPERATION_RECONCILED", "RECOVERY_OPERATION_HALTED",
     "PARENT_OBSERVATION_CONTINUATION", "TASK_GROUP_CAPACITY_WAITING",
 )
 TASK_PLAN_EVENT_TYPES = (
@@ -1418,6 +1419,26 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "task_id": _TEXT, "task_instance_id": _TEXT, "attempt": _POSITIVE_INTEGER,
         "status": {"enum": ["succeeded", "failed"]}, "result_checksum": _CHECKSUM_TEXT,
     })
+    # Recovery wait/close events carry the complete signed terminal receipt,
+    # rather than a bare outcome label.  The replay reducer reconstructs and
+    # checks this receipt against the admitted child operation before granting
+    # the recovery audit any authority.
+    recovery_terminal_receipt = object_schema({
+        "child_id": _TEXT,
+        "operation_id": _TEXT,
+        "parent_graph_identity": {"type": "object"},
+        "status": {"enum": ["SUCCEEDED", "FAILED", "CANCELLED", "LOST"]},
+        "reason_code": _TEXT,
+        "result_ref": nullable_text,
+        "result_checksum": nullable_checksum,
+        "termination_confirmed": {"type": "boolean"},
+        "completed_at": _TEXT,
+        "receipt_checksum": _CHECKSUM_TEXT,
+    }, required=[
+        "child_id", "operation_id", "parent_graph_identity", "status",
+        "reason_code", "result_ref", "result_checksum",
+        "termination_confirmed", "completed_at", "receipt_checksum",
+    ])
     fields = {
         "event_type": {"const": event_type}, "parallel_event_idempotency_key": _TEXT,
         "idempotency_key": _TEXT, "group": group, "wave": wave,
@@ -1434,6 +1455,14 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "child_states": {"type": "object", "additionalProperties": _TEXT, "maxProperties": 128},
         "recovery_outcome": _TEXT,
         "recovery_id": _TEXT,
+        "recovery_operation": {"enum": ["wait", "close"]},
+        "child_state": {
+            "enum": [
+                "STARTING", "RUNNING", "WAITING", "SUCCEEDED", "FAILED",
+                "CANCEL_REQUESTED", "CANCELLED", "LOST", "CLOSED",
+            ],
+        },
+        "terminal_receipt": recovery_terminal_receipt,
         "operation_key": _TEXT,
         "history_record": object_schema({
             "schema_version": {"const": "newsroom.harness-task-attempt-history/v1"},
@@ -1537,12 +1566,18 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "RECOVERY_STATUS_READ": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "recovery_outcome", "idempotency_key"],
         "RECOVERY_RECONCILED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "recovery_outcome", "idempotency_key"],
         "RECOVERY_HALTED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "reason_code", "idempotency_key"],
+        "RECOVERY_OPERATION_INTENT": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "child_id", "recovery_operation", "idempotency_key"],
+        "RECOVERY_OPERATION_RECONCILED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "child_id", "recovery_operation", "recovery_outcome", "child_state", "terminal_receipt", "idempotency_key"],
+        "RECOVERY_OPERATION_HALTED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "child_id", "recovery_operation", "reason_code", "idempotency_key"],
         "TASK_GROUP_RECLAIMED": ["group_id", "wave_id", "task_ids", "task_instance_id", "attempt", "child_id", "retry_eligible"],
         "DEGRADED_SERIAL": ["group_id", "reason_code"],
     }
     required = ["event_type", "parallel_event_idempotency_key", *required_by_type.get(event_type, ["reason_code"])]
     if event_type.startswith("RECOVERY_"):
         required.append("recovery_id")
+    # Operation audit schemas already declare child_id in required_by_type.
+    # The legacy spawn reconciliation schema adds it here because its base
+    # required list is shared with RECOVERY_STATUS_READ / RECOVERY_HALTED.
     if event_type == "RECOVERY_RECONCILED":
         required.append("child_id")
     result = object_schema(fields, required=required)
@@ -1565,6 +1600,10 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         }
     if event_type == "RECOVERY_HALTED":
         result["properties"]["reason_code"] = {"enum": ["SPAWN_UNKNOWN", "SPAWN_IDENTITY_CONFLICT", "CHILD_NOT_TRACKABLE"]}
+    if event_type == "RECOVERY_OPERATION_RECONCILED":
+        result["properties"]["recovery_outcome"] = {"enum": ["wait_terminal", "close_confirmed"]}
+    if event_type == "RECOVERY_OPERATION_HALTED":
+        result["properties"]["reason_code"] = {"enum": ["RECOVERY_WAIT_FAILED", "RECOVERY_CLOSE_FAILED"]}
     return result
 
 

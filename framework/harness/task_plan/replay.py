@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -26,6 +27,7 @@ from framework.harness.task_plan.canonical import (
 )
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord, TaskAttemptOutcome
+from framework.harness.subagents.supervisor import ChildAgentState, ChildAgentTerminalReceipt
 from framework.harness.task_plan.attempt_history_index import (
     ATTEMPT_HISTORY_EVENT, history_record_for_result, validate_history_record,
     validate_attempt_history_append,
@@ -125,6 +127,9 @@ _PARALLEL_EVENT_TYPES = frozenset(
         "RECOVERY_STATUS_READ",
         "RECOVERY_RECONCILED",
         "RECOVERY_HALTED",
+        "RECOVERY_OPERATION_INTENT",
+        "RECOVERY_OPERATION_RECONCILED",
+        "RECOVERY_OPERATION_HALTED",
         "DEGRADED_SERIAL",
         PARENT_CONTINUATION_EVENT,
     }
@@ -1151,6 +1156,10 @@ class TaskPlanReplayReducer:
             TaskAttemptHistoryRecord.from_dict(supplied.to_dict())
             if through_sequence is None and supplied.record_checksum not in attempt_history:
                 raise HarnessValidationError("supplied attempt history has no canonical event evidence", code="task_plan_attempt_history_conflict")
+        _validate_recovery_operation_attempt_history(
+            parallel_spawn_operations,
+            attempt_history,
+        )
         return TaskPlanReplayReport(
             projection=projection,
             active_task_instances=active_instances,
@@ -1862,6 +1871,21 @@ def _apply_spawn_recovery_audit(
     )):
         _parallel_error("recovery audit identity differs from spawn intent", event)
     recovery_id = _parallel_identifier(payload.get("recovery_id"), "recovery_id", event)
+    if event.event_type in {
+        "RECOVERY_OPERATION_INTENT",
+        "RECOVERY_OPERATION_RECONCILED",
+        "RECOVERY_OPERATION_HALTED",
+    }:
+        _apply_recovery_operation_audit(
+            event,
+            payload,
+            group,
+            operation,
+            operations,
+            recovery_id,
+            diagnostics,
+        )
+        return
     suffix = {
         "RECOVERY_STATUS_READ": "status-read",
         "RECOVERY_RECONCILED": "reconciled",
@@ -1876,7 +1900,11 @@ def _apply_spawn_recovery_audit(
             _parallel_error("recovery status read outcome is invalid", event)
         if prior is not None:
             _parallel_error("recovery status call was recorded more than once", event)
-        if any(recovery_id in item.get("recovery_reads", {}) for item in operations.values()):
+        if any(
+            recovery_id in item.get("recovery_reads", {})
+            or recovery_id in item.get("recovery_operations", {})
+            for item in operations.values()
+        ):
             _parallel_error("recovery status identity belongs to another operation", event)
         reads[recovery_id] = "REQUESTED"
         operation["latest_recovery_id"] = recovery_id
@@ -1921,6 +1949,166 @@ def _apply_spawn_recovery_audit(
         **{name: payload[name] for name in ("child_id", "recovery_outcome", "reason_code") if name in payload},
         "audit_checksum": canonical_payload_checksum(payload),
     })
+
+
+def _apply_recovery_operation_audit(
+    event: TaskPlanEvent,
+    payload: Mapping[str, Any],
+    group: Mapping[str, Any],
+    operation: dict[str, Any],
+    operations: Mapping[str, dict[str, Any]],
+    recovery_id: str,
+    diagnostics: list[dict[str, Any]],
+) -> None:
+    """Validate the pre-call and result audit for recovery wait/close calls."""
+
+    child_id = _parallel_identifier(payload.get("child_id"), "child_id", event)
+    if child_id != operation.get("child_id") or operation.get("status") != "SPAWN_CONFIRMED":
+        _parallel_error("recovery operation has no confirmed tracked child", event)
+    recovery_operation = payload.get("recovery_operation")
+    if recovery_operation not in {"wait", "close"}:
+        _parallel_error("recovery operation is invalid", event)
+    suffix = {
+        "RECOVERY_OPERATION_INTENT": "intent",
+        "RECOVERY_OPERATION_RECONCILED": "reconciled",
+        "RECOVERY_OPERATION_HALTED": "halted",
+    }[event.event_type]
+    if payload.get("idempotency_key") != f"{recovery_id}:{recovery_operation}:{suffix}":
+        _parallel_error("recovery operation idempotency key is invalid", event)
+    recovery_operations = operation.setdefault("recovery_operations", {})
+    prior = recovery_operations.get(recovery_id)
+    if event.event_type == "RECOVERY_OPERATION_INTENT":
+        if prior is not None:
+            _parallel_error("recovery operation intent was recorded more than once", event)
+        if any(
+            recovery_id in item.get("recovery_reads", {})
+            or recovery_id in item.get("recovery_operations", {})
+            for item in operations.values()
+        ):
+            _parallel_error("recovery operation identity belongs to another call", event)
+        recovery_operations[recovery_id] = {
+            "operation": recovery_operation,
+            "outcome": "INTENT",
+        }
+    else:
+        if not isinstance(prior, Mapping) or prior.get("operation") != recovery_operation or prior.get("outcome") != "INTENT":
+            _parallel_error("recovery operation decision has no unmatched intent", event)
+        if event.event_type == "RECOVERY_OPERATION_RECONCILED":
+            expected_outcome = (
+                "wait_terminal" if recovery_operation == "wait" else "close_confirmed"
+            )
+            if payload.get("recovery_outcome") != expected_outcome:
+                _parallel_error("recovery operation outcome is invalid", event)
+            receipt = _recovery_terminal_receipt(payload.get("terminal_receipt"), event)
+            if (
+                receipt.child_id != child_id
+                or receipt.operation_id != operation.get("operation_key")
+                or receipt.parent_graph_identity.to_dict() != group.get("parent_graph_identity")
+                or not receipt.termination_confirmed
+            ):
+                _parallel_error("recovery operation receipt differs from admitted child", event)
+            expected_states = (
+                {receipt.status.value, ChildAgentState.CLOSED.value}
+                if recovery_operation == "wait"
+                else {ChildAgentState.CLOSED.value}
+            )
+            if payload.get("child_state") not in expected_states:
+                _parallel_error("recovery operation state is not terminally verified", event)
+            bound_checksum = operation.get("terminal_receipt_checksum")
+            if bound_checksum is None:
+                operation["terminal_receipt_checksum"] = receipt.receipt_checksum
+                operation["terminal_receipt"] = receipt.to_dict()
+            elif bound_checksum != receipt.receipt_checksum:
+                _parallel_error("recovery operation replaced its terminal receipt", event)
+            outcome = expected_outcome
+        else:
+            expected_reason = (
+                "RECOVERY_WAIT_FAILED" if recovery_operation == "wait" else "RECOVERY_CLOSE_FAILED"
+            )
+            if payload.get("reason_code") != expected_reason:
+                _parallel_error("recovery operation halt reason is invalid", event)
+            outcome = expected_reason
+        recovery_operations[recovery_id] = {
+            "operation": recovery_operation,
+            "outcome": outcome,
+        }
+    diagnostics.append({
+        "event_type": event.event_type,
+        "sequence": event.sequence,
+        **{name: payload[name] for name in (
+            "group_id", "wave_id", "task_id", "task_instance_id", "attempt",
+            "operation_key", "child_id", "recovery_id", "recovery_operation",
+        )},
+        **{name: payload[name] for name in ("recovery_outcome", "reason_code") if name in payload},
+        "audit_checksum": canonical_payload_checksum(payload),
+    })
+
+
+def _recovery_terminal_receipt(
+    value: Any,
+    event: TaskPlanEvent,
+) -> ChildAgentTerminalReceipt:
+    """Parse an audit receipt without accepting a re-signed replacement."""
+
+    if not isinstance(value, Mapping):
+        _parallel_error("recovery operation is missing its terminal receipt", event)
+    payload = thaw_mapping(value)
+    required = {
+        "child_id",
+        "operation_id",
+        "parent_graph_identity",
+        "status",
+        "reason_code",
+        "result_ref",
+        "result_checksum",
+        "termination_confirmed",
+        "completed_at",
+        "receipt_checksum",
+    }
+    if set(payload) != required:
+        _parallel_error("recovery operation terminal receipt has invalid fields", event)
+    try:
+        supplied_checksum = checksum(payload.pop("receipt_checksum"), "receipt_checksum")
+        completed_at = payload.get("completed_at")
+        if isinstance(completed_at, str):
+            payload["completed_at"] = datetime.fromisoformat(completed_at)
+        receipt = ChildAgentTerminalReceipt(**payload)
+    except (TypeError, ValueError, HarnessValidationError) as exc:
+        raise HarnessValidationError(
+            "recovery operation terminal receipt is invalid",
+            code="task_plan_replay_parallel_mismatch",
+        ) from exc
+    if supplied_checksum != receipt.receipt_checksum:
+        _parallel_error("recovery operation terminal receipt checksum is invalid", event)
+    return receipt
+
+
+def _validate_recovery_operation_attempt_history(
+    operations: Mapping[str, Mapping[str, Any]],
+    attempt_history: Mapping[str, TaskAttemptHistoryRecord],
+) -> None:
+    """Bind recovery audit receipts to any later durable attempt history."""
+
+    for operation in operations.values():
+        bound_checksum = operation.get("terminal_receipt_checksum")
+        if bound_checksum is None:
+            continue
+        for record in attempt_history.values():
+            if (
+                record.operation_key != operation.get("operation_key")
+                or record.terminal_receipt is None
+            ):
+                continue
+            receipt = record.terminal_receipt
+            if (
+                receipt.get("receipt_checksum") != bound_checksum
+                or receipt.get("child_id") != operation.get("child_id")
+                or receipt.get("operation_id") != operation.get("operation_key")
+            ):
+                raise HarnessValidationError(
+                    "recovery audit receipt differs from attempt history",
+                    code="task_plan_replay_parallel_mismatch",
+                )
 
 
 def _normalize_parallel_group(
