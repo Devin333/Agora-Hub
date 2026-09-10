@@ -56,6 +56,69 @@ class _AcquireFailureConnection(_LifecycleConnection):
         pass
 
 
+class _TransactionalStateCursor:
+    def __init__(self, connection: _TransactionalStateConnection) -> None:
+        self.connection = connection
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self._result: tuple[object, ...] | None = None
+        self.rowcount = -1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def execute(self, query: object, params: tuple[object, ...]) -> None:
+        sql = str(query)
+        self.executed.append((sql, params))
+        self.connection.executed.append((sql, params))
+        self.rowcount = -1
+        if "SELECT namespace, state_key, revision, checksum, payload" in sql:
+            self._result = self.connection.state_row
+        elif "INSERT INTO event_transactional_states" in sql:
+            self.connection.state_row = (
+                params[0],
+                params[1],
+                params[2],
+                params[3],
+                params[4],
+            )
+            self.rowcount = 1
+            self._result = None
+        elif "UPDATE event_transactional_states" in sql:
+            current = self.connection.state_row
+            if current is not None and current[2:4] == params[5:7]:
+                self.connection.state_row = (
+                    params[3],
+                    params[4],
+                    params[0],
+                    params[1],
+                    params[2],
+                )
+                self.rowcount = 1
+            else:
+                self.rowcount = 0
+            self._result = None
+        else:
+            self._result = None
+
+    def fetchone(self):
+        result = self._result
+        self._result = None
+        return result
+
+
+class _TransactionalStateConnection(_LifecycleConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.state_row: tuple[object, ...] | None = None
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+
+    def cursor(self) -> _TransactionalStateCursor:
+        return _TransactionalStateCursor(self)
+
+
 class _AdvisoryCursor:
     def __init__(self, *try_results: bool) -> None:
         self.executed: list[tuple[str, tuple[object, ...]]] = []
@@ -165,6 +228,44 @@ def test_unit_of_work_commit_closes_exactly_once_and_exit_is_idempotent() -> Non
     assert connection.closes == 1
     with pytest.raises(EventStoreError, match="already closed"):
         unit_of_work.commit()
+
+
+def test_postgres_transactional_state_ddl_is_idempotent_and_uow_uses_row_lock() -> None:
+    from framework.events.runtime import TransactionalStateSnapshot
+    from infrastructure.storage.events.postgres import (
+        POSTGRES_TRANSACTIONAL_STATE_DDL,
+    )
+
+    assert "CREATE TABLE IF NOT EXISTS event_transactional_states" in (
+        POSTGRES_TRANSACTIONAL_STATE_DDL
+    )
+    connection = _TransactionalStateConnection()
+    unit_of_work = _store(_LifecycleFactory(connection)).unit_of_work()
+    initial = TransactionalStateSnapshot.create(
+        namespace="harness.capacity",
+        key="tenant-a:pool-a",
+        revision=1,
+        payload={"available": 2},
+    )
+
+    with unit_of_work:
+        persisted = unit_of_work.cas_transactional_state(
+            namespace=initial.namespace,
+            key=initial.key,
+            expected_revision=None,
+            expected_checksum=None,
+            next_snapshot=initial,
+        )
+        assert unit_of_work.load_transactional_state(
+            initial.namespace,
+            initial.key,
+        ) == initial
+        unit_of_work.commit()
+
+    assert persisted == initial
+    assert connection.commits == 1
+    assert any("pg_advisory_xact_lock" in sql for sql, _ in connection.executed)
+    assert any("FOR UPDATE" in sql for sql, _ in connection.executed)
 
 
 def test_store_close_does_not_close_caller_owned_connection_factory() -> None:

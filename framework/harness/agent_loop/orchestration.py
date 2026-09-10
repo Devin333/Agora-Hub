@@ -397,6 +397,10 @@ class HarnessAgentOrchestrationRuntime:
                     wait_status="rejected",
                 ),
             )
+        waiting_for_capacity = (
+            _reason_from_worker_result(run_result, "")
+            == "TASK_GROUP_CAPACITY_WAITING"
+        )
         return self._joined_result(
             request,
             run_result,
@@ -404,7 +408,7 @@ class HarnessAgentOrchestrationRuntime:
                 request,
                 original,
                 dedup_status="accepted",
-                wait_status="terminal",
+                wait_status="pending" if waiting_for_capacity else "terminal",
             ),
         )
 
@@ -590,6 +594,13 @@ class HarnessAgentOrchestrationRuntime:
             plan=plan,
         )
         status = _worker_result_status(run_result)
+        reason_code = _reason_from_worker_result(
+            run_result,
+            "agent_orchestration_group_not_succeeded",
+        )
+        waiting_for_capacity = (
+            status == "blocked" and reason_code == "TASK_GROUP_CAPACITY_WAITING"
+        )
         succeeded = status == "succeeded" and group.get("state") == "SUCCEEDED"
         summaries = tuple(
             ParentTaskSummary(
@@ -624,10 +635,7 @@ class HarnessAgentOrchestrationRuntime:
         covered_roles = tuple(
             sorted({role for item in results for role in getattr(item, "output_roles", ())})
         )
-        terminal_reason = None if succeeded else _reason_from_worker_result(
-            run_result,
-            "agent_orchestration_group_not_succeeded",
-        )
+        terminal_reason = None if succeeded or waiting_for_capacity else reason_code
         observation = ParentObservation(
             group_id=str(group["group_id"]),
             group_status=str(group["state"]).casefold(),
@@ -653,9 +661,13 @@ class HarnessAgentOrchestrationRuntime:
             covered_output_roles=covered_roles,
         )
         return AgentOrchestrationResult(
-            status="succeeded" if succeeded else "partial_failure",
+            status=(
+                "succeeded" if succeeded
+                else "waiting" if waiting_for_capacity
+                else "partial_failure"
+            ),
             observation=observation,
-            reason_code=None if succeeded else _reason_from_worker_result(run_result, "agent_orchestration_group_not_succeeded"),
+            reason_code=None if succeeded else reason_code,
             submission_receipt=submission_receipt,
         )
 

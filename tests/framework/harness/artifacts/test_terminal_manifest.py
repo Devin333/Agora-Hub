@@ -40,6 +40,7 @@ from framework.harness.graph import (
     HarnessGraphCompiler,
     NormalizedHarnessGraph,
 )
+from framework.harness.task_plan.store import TASK_PLAN_EVENT_SCHEMA_V3
 
 
 _NOW = datetime(2026, 8, 14, 10, 30, tzinfo=UTC)
@@ -353,7 +354,10 @@ def test_execution_versions_pin_dynamic_task_plan_support_contracts() -> None:
 
     assert task_plan_node.task_plan_schema is not None
     assert task_plan_node.task_plan_support_refs["checkpoint_ref"]
-    assert task_plan_node.task_plan_support_refs["event_schema"].endswith("/v2")
+    assert (
+        task_plan_node.task_plan_support_refs["event_schema"]
+        == TASK_PLAN_EVENT_SCHEMA_V3
+    )
     with pytest.raises(TypeError):
         task_plan_node.task_plan_support_refs["event_schema"] = "tampered/v1"
 

@@ -22,8 +22,15 @@ class TaskLifecycle(StrEnum):
     BLOCKED_DEPENDENCY = "blocked_dependency"
 
 
+class TaskAdmissionOwner(StrEnum):
+    """Durable owner of an allocated execution attempt."""
+
+    QUEUE = "QUEUE"
+    GROUP_WAVE = "GROUP_WAVE"
+
+
 ACTIVE_TASK_STATES = frozenset({
-    TaskLifecycle.READY, TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING,
+    TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING,
 })
 
 DEPENDENCY_FAILURE_STATES = frozenset({
@@ -41,9 +48,9 @@ _TASK_TRANSITIONS = {
         TaskLifecycle.READY, TaskLifecycle.SKIPPED, TaskLifecycle.BLOCKED,
         TaskLifecycle.BLOCKED_DEPENDENCY, TaskLifecycle.CANCELLED,
     }),
-    TaskLifecycle.READY: _ATTEMPT_OUTCOMES | frozenset({
-        TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.SKIPPED,
-        TaskLifecycle.BLOCKED, TaskLifecycle.BLOCKED_DEPENDENCY,
+    TaskLifecycle.READY: frozenset({
+        TaskLifecycle.ADMITTED, TaskLifecycle.SKIPPED, TaskLifecycle.BLOCKED,
+        TaskLifecycle.BLOCKED_DEPENDENCY, TaskLifecycle.CANCELLED,
     }),
     TaskLifecycle.ADMITTED: _ATTEMPT_OUTCOMES | frozenset({
         TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING,
@@ -52,6 +59,9 @@ _TASK_TRANSITIONS = {
         TaskLifecycle.RUNNING, TaskLifecycle.READY,
     }),
     TaskLifecycle.RUNNING: _ATTEMPT_OUTCOMES | frozenset({TaskLifecycle.READY}),
+    # Returning an active attempt to logical readiness is a structural
+    # transition only. Runtime owners must first pass their durable settlement
+    # or reclaim gate and clear the active identity and admission owner.
     # The retry owner must validate policy and budget before resetting the task.
     TaskLifecycle.FAILED: frozenset({TaskLifecycle.PENDING}),
     TaskLifecycle.SUCCEEDED: frozenset(),
@@ -83,4 +93,10 @@ def validate_task_transition(
         )
 
 
-__all__ = ["ACTIVE_TASK_STATES", "DEPENDENCY_FAILURE_STATES", "TaskLifecycle", "validate_task_transition"]
+__all__ = [
+    "ACTIVE_TASK_STATES",
+    "DEPENDENCY_FAILURE_STATES",
+    "TaskAdmissionOwner",
+    "TaskLifecycle",
+    "validate_task_transition",
+]

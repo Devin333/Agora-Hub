@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -56,10 +56,13 @@ from framework.harness.task_plan.dependency import (
     dependency_blocking_predecessor_ids,
 )
 from framework.harness.task_plan.store import (
+    LogicalTaskReadiness,
+    TaskQueueAdmissionEvidence,
     TaskPlanEvent,
     TaskResultRecord,
     _projection_for_plan,
     _settle_result_budget,
+    _validate_logical_readiness_order,
 )
 from framework.harness.task_plan.models import PlanPatch
 from framework.harness.task_plan.parallel_state import (
@@ -75,11 +78,13 @@ from framework.harness.task_plan.submission import (
 from framework.harness.task_plan.submission_result import submission_result_from_event
 from framework.harness.task_plan.parallel_admission import validate_group_plan_binding, validate_wave_admission_slot
 from framework.harness.task_plan.task_lifecycle import ACTIVE_TASK_STATES as _ACTIVE_TASK_STATES
+from framework.harness.task_plan.task_lifecycle import TaskAdmissionOwner
 
 
 TASK_PLAN_REPLAY_REDUCER_VERSION_V3 = "newsroom.harness-task-plan-replay/v3"
-TASK_PLAN_REPLAY_REDUCER_VERSION = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
-TASK_PLAN_REPLAY_REDUCER_VERSIONS = (TASK_PLAN_REPLAY_REDUCER_VERSION_V3,)
+TASK_PLAN_REPLAY_REDUCER_VERSION_V4 = "newsroom.harness-task-plan-replay/v4"
+TASK_PLAN_REPLAY_REDUCER_VERSION = TASK_PLAN_REPLAY_REDUCER_VERSION_V4
+TASK_PLAN_REPLAY_REDUCER_VERSIONS = (TASK_PLAN_REPLAY_REDUCER_VERSION_V4,)
 _GRAPH_REPLAY_IDENTITY_FIELDS = (
     "graph_id",
     "graph_version",
@@ -106,6 +111,7 @@ _PARALLEL_EVENT_TYPES = frozenset(
         "TASK_WAVE_DISPATCHED",
         "TASK_WAVE_COMPLETED",
         "TASK_GROUP_JOIN_WAITING",
+        "TASK_GROUP_CAPACITY_WAITING",
         "TASK_GROUP_JOINED",
         "TASK_GROUP_FAILED",
         "TASK_GROUP_REPLAN_PENDING",
@@ -135,7 +141,8 @@ _PARALLEL_RESERVATION_STATES = frozenset({"RESERVED", "CONSUMED", "RELEASED"})
 class TaskPlanReplayReport:
     projection: TaskPlanProjection
     active_task_instances: tuple[TaskInstance, ...]
-    ready_order: tuple[str, ...]
+    logical_ready_order: tuple[str, ...]
+    active_attempt_order: tuple[str, ...]
     accepted_output_refs: tuple[str, ...]
     pending_terminal_results: tuple[TaskResultRecord, ...]
     retry_counts: Mapping[str, int]
@@ -170,17 +177,31 @@ class TaskPlanReplayReport:
                 "TaskPlan replay contains duplicate active task instances",
                 code="task_plan_replay_duplicate_instance",
             )
-        ready_order = tuple(identifier(item, "ready_order") for item in self.ready_order)
-        if len(ready_order) != len(set(ready_order)):
+        logical_ready_order = tuple(
+            identifier(item, "logical_ready_order")
+            for item in self.logical_ready_order
+        )
+        if len(logical_ready_order) != len(set(logical_ready_order)):
             raise HarnessValidationError(
-                "TaskPlan replay ready order contains duplicates",
+                "TaskPlan replay logical ready order contains duplicates",
                 code="task_plan_replay_duplicate_ready_task",
             )
-        active_task_ids = {item.task_id for item in instances}
-        if set(ready_order) != active_task_ids:
+        if logical_ready_order != self.projection.logical_ready_order:
             raise HarnessValidationError(
-                "TaskPlan replay ready order does not match active task instances",
+                "TaskPlan replay logical ready order does not match projection",
                 code="task_plan_replay_ready_order_mismatch",
+            )
+        active_attempt_order = tuple(
+            identifier(item, "active_attempt_order")
+            for item in self.active_attempt_order
+        )
+        if (
+            len(active_attempt_order) != len(set(active_attempt_order))
+            or active_attempt_order != tuple(item.task_instance_id for item in instances)
+        ):
+            raise HarnessValidationError(
+                "TaskPlan replay active attempt order does not match instances",
+                code="task_plan_replay_active_attempt_order_mismatch",
             )
         output_refs = tuple(sorted(reference(item, "accepted_output_refs") for item in self.accepted_output_refs))
         if len(output_refs) != len(set(output_refs)):
@@ -204,7 +225,7 @@ class TaskPlanReplayReport:
             identifier(task_id, "retry_counts.task_id"): non_negative_int(count, "retry_counts.count")
             for task_id, count in self.retry_counts.items()
         }
-        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V4
         if self.reducer_version != expected_reducer_version:
             raise HarnessValidationError(
                 "unsupported TaskPlan replay reducer",
@@ -222,6 +243,17 @@ class TaskPlanReplayReport:
                 "TaskPlan replay active attempt identity does not match projection",
                 code="task_plan_replay_identity_mismatch",
             )
+        projection_active_ids = {
+            item.active_instance_id
+            for item in self.projection.tasks
+            if item.status in _ACTIVE_TASK_STATES
+            and item.active_instance_id is not None
+        }
+        if projection_active_ids != set(active_attempt_order):
+            raise HarnessValidationError(
+                "TaskPlan replay active attempts do not match projection",
+                code="task_plan_replay_attempt_missing",
+            )
         if any(
             not _result_matches_projection_identity(item, self.projection)
             for item in pending_results
@@ -231,7 +263,8 @@ class TaskPlanReplayReport:
                 code="task_plan_replay_result_mismatch",
             )
         object.__setattr__(self, "active_task_instances", instances)
-        object.__setattr__(self, "ready_order", ready_order)
+        object.__setattr__(self, "logical_ready_order", logical_ready_order)
+        object.__setattr__(self, "active_attempt_order", active_attempt_order)
         object.__setattr__(self, "accepted_output_refs", output_refs)
         object.__setattr__(
             self,
@@ -369,7 +402,8 @@ class TaskPlanReplayReport:
             "reducer_version": self.reducer_version,
             "projection": self.projection.to_dict(),
             "active_task_instances": [item.to_dict() for item in self.active_task_instances],
-            "ready_order": list(self.ready_order),
+            "logical_ready_order": list(self.logical_ready_order),
+            "active_attempt_order": list(self.active_attempt_order),
             "accepted_output_refs": list(self.accepted_output_refs),
             "pending_terminal_results": [
                 item.to_dict() for item in self.pending_terminal_results
@@ -526,7 +560,7 @@ class TaskPlanReplayReducer:
         projection: TaskPlanProjection | None = None
         current_plan: ValidatedTaskPlan | None = None
         instances: dict[str, TaskInstance] = {}
-        ready_sequences: dict[str, int] = {}
+        active_sequences: dict[str, int] = {}
         pending_results: dict[tuple[str, int, int], TaskResultRecord] = {}
         failed_result_checksums: dict[tuple[str, int, int], str] = {}
         retry_counts: dict[str, int] = {}
@@ -546,17 +580,8 @@ class TaskPlanReplayReducer:
         attempt_history: dict[str, TaskAttemptHistoryRecord] = {}
         continuation: ParentContinuation | None = None
         continuation_events: list[TaskPlanEvent] = []
-        ready_batch_budget_checksum: str | None = None
-        ready_batch_tasks: list[str] = []
 
         for event in ordered_events:
-            if event.event_type == "TASK_READY" and projection is not None:
-                if not ready_batch_tasks:
-                    ready_batch_budget_checksum = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget).to_dict()["ledger_checksum"]
-                ready_batch_tasks.append(event.task_id)
-            elif event.event_type != "TASK_WAVE_ADMITTED":
-                ready_batch_budget_checksum = None
-                ready_batch_tasks = []
             if accepted_patch is not None and event.event_type != "PLAN_ACCEPTED":
                 raise HarnessValidationError(
                     "accepted TaskPlan patch is not followed by its new plan",
@@ -676,27 +701,64 @@ class TaskPlanReplayReducer:
                             code="task_plan_replay_patch_mismatch",
                         )
                     accepted_patch = (event, patch)
-            elif event.event_type in {
-                "TASK_READY",
-                "TASK_DISPATCHED",
-                "TASK_STARTED",
-            }:
+            elif event.event_type == "TASK_READY":
+                projection = _require_projection(projection, event)
+                task_plan = _task_plan_for_event(event, plans_by_version)
+                readiness = _logical_readiness_for_event(event, task_plan)
+                projection = TaskPlanScheduler().reserve_ready_tasks(
+                    projection,
+                    TaskPlanReadyDecision(
+                        logical_ready_task_ids=readiness.logical_ready_order
+                    ),
+                )
+            elif event.event_type == "TASK_QUEUE_ADMITTED":
+                projection = _require_projection(projection, event)
+                task_plan = _task_plan_for_event(event, plans_by_version)
+                raw_admission = event.payload.get("queue_admission")
+                if not isinstance(raw_admission, Mapping):
+                    raise HarnessValidationError(
+                        "queue admission is missing canonical evidence",
+                        code="task_plan_queue_admission_invalid",
+                    )
+                admission = TaskQueueAdmissionEvidence.from_dict(raw_admission)
+                instance = admission.task_instance
+                if not instance.matches_plan_identity(task_plan):
+                    raise HarnessValidationError(
+                        "queue admission attempt differs from the accepted plan",
+                        code="task_plan_queue_admission_invalid",
+                    )
+                before = TaskPlanBudgetLedger.from_snapshot(
+                    projection.consumed_budget
+                ).to_dict()["ledger_checksum"]
+                if admission.budget_before_checksum != before:
+                    raise HarnessValidationError(
+                        "queue admission budget predecessor differs from history",
+                        code="task_plan_budget_checksum_mismatch",
+                    )
+                projection = TaskPlanScheduler.admit_ready_tasks(
+                    projection,
+                    (instance,),
+                    admission_owner=TaskAdmissionOwner.QUEUE,
+                )
+                after = TaskPlanBudgetLedger.from_snapshot(
+                    projection.consumed_budget
+                ).to_dict()["ledger_checksum"]
+                if admission.budget_after_checksum != after:
+                    raise HarnessValidationError(
+                        "queue admission budget result differs from history",
+                        code="task_plan_budget_checksum_mismatch",
+                    )
+                instances[instance.task_instance_id] = instance
+                active_sequences[instance.task_instance_id] = event.sequence
+            elif event.event_type in {"TASK_DISPATCHED", "TASK_STARTED"}:
                 projection = _require_projection(projection, event)
                 task_plan = _task_plan_for_event(event, plans_by_version)
                 instance = _instance_for_event(event, task_plan)
                 _require_projection_task_definition(projection, instance)
-                if event.event_type == "TASK_READY":
-                    projection = TaskPlanScheduler().reserve_ready_tasks(
-                        projection,
-                        TaskPlanReadyDecision((instance,)),
-                    )
-                    ready_sequences[instance.task_instance_id] = event.sequence
-                    instances[instance.task_instance_id] = instance
-                elif event.event_type == "TASK_DISPATCHED":
-                    _require_recorded_instance(instances, instance, event)
+                _require_recorded_instance(instances, instance, event)
+                if event.event_type == "TASK_DISPATCHED":
                     projection = TaskPlanScheduler.mark_dispatched(projection, instance)
                 else:
-                    _require_recorded_instance(instances, instance, event)
                     projection = TaskPlanScheduler.mark_started(projection, instance)
             elif event.event_type == ATTEMPT_HISTORY_EVENT:
                 record = TaskAttemptHistoryRecord.from_dict(event.payload["history_record"])
@@ -761,7 +823,7 @@ class TaskPlanReplayReducer:
                     failed_result_checksums[
                         (instance.task_instance_id, instance.attempt, task_plan.version)
                     ] = result.result_checksum
-                ready_sequences.pop(instance.task_instance_id, None)
+                active_sequences.pop(instance.task_instance_id, None)
             elif event.event_type == "TASK_RETRY_SCHEDULED":
                 projection = _require_projection(projection, event)
                 task_plan = _task_plan_for_event(event, plans_by_version)
@@ -775,7 +837,7 @@ class TaskPlanReplayReducer:
                         (instance.task_instance_id, instance.attempt, task_plan.version)
                     ),
                 )
-                ready_sequences.pop(instance.task_instance_id, None)
+                active_sequences.pop(instance.task_instance_id, None)
                 retry_counts[instance.task_id] = retry_counts.get(instance.task_id, 0) + 1
             elif event.event_type == "TASK_REPLACED":
                 projection = _require_projection(projection, event)
@@ -940,9 +1002,51 @@ class TaskPlanReplayReducer:
                 if event.event_type == "TASK_GROUP_ADMITTED":
                     validate_group_plan_binding(event.payload.get("group", {}), current_plan)
                 if event.event_type == "TASK_WAVE_ADMITTED":
-                    before = ready_batch_budget_checksum or TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget).to_dict()["ledger_checksum"]
-                    if event.payload.get("budget_before_checksum") != before or not set(ready_batch_tasks).issubset(event.payload.get("wave", {}).get("task_ids", ())):
+                    before = TaskPlanBudgetLedger.from_snapshot(
+                        projection.consumed_budget
+                    ).to_dict()["ledger_checksum"]
+                    wave_payload = event.payload.get("wave")
+                    if not isinstance(wave_payload, Mapping):
+                        _parallel_error("wave admission has no selected task order", event)
+                    from framework.harness.task_plan.parallel import DispatchWave
+
+                    try:
+                        typed_wave = DispatchWave.from_dict(
+                            thaw_mapping(wave_payload)
+                        )
+                    except (HarnessValidationError, TypeError, ValueError) as exc:
+                        raise HarnessValidationError(
+                            "wave admission snapshot is invalid",
+                            code="task_plan_replay_parallel_mismatch",
+                            details={
+                                "event_type": event.event_type,
+                                "sequence": event.sequence,
+                            },
+                        ) from exc
+                    selected_task_ids = typed_wave.task_ids
+                    if not selected_task_ids:
+                        _parallel_error("wave admission has no selected task order", event)
+                    task_states = {item.task_id: item for item in projection.tasks}
+                    if any(task_id not in task_states for task_id in selected_task_ids):
+                        _parallel_error("wave admission selects a task outside the plan", event)
+                    selected_instances = tuple(
+                        task_instance_for_attempt(
+                            current_plan,
+                            task_id,
+                            task_states[task_id].attempts + 1,
+                        )
+                        for task_id in selected_task_ids
+                    )
+                    projection = TaskPlanScheduler.admit_ready_tasks(
+                        projection,
+                        selected_instances,
+                        admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+                    )
+                    if event.payload.get("budget_before_checksum") != before:
                         _parallel_error("wave admission budget predecessor differs from history", event)
+                    for instance in selected_instances:
+                        instances[instance.task_instance_id] = instance
+                        active_sequences[instance.task_instance_id] = event.sequence
                 _apply_parallel_event(
                     event,
                     projection,
@@ -953,14 +1057,6 @@ class TaskPlanReplayReducer:
                     parallel_spawn_operations,
                     attempt_history,
                 )
-                if event.event_type == "TASK_WAVE_ADMITTED":
-                    for task_id in event.payload["wave"]["task_ids"]:
-                        state = next(item for item in projection.tasks if item.task_id == task_id)
-                        projection = TaskPlanScheduler.mark_admitted(
-                            projection, task_instance_for_attempt(current_plan, task_id, state.attempts),
-                        )
-                    ready_batch_budget_checksum = None
-                    ready_batch_tasks = []
                 parallel_event_sequence = event.sequence
             elif event.event_type in {PLAN_BUILD_INTENT, PLAN_BUILD_RECEIPT}:
                 # The complete causal attempt history is validated before reduction.
@@ -1029,13 +1125,16 @@ class TaskPlanReplayReducer:
             for instance_id in sorted(
                 active_states,
                 key=lambda instance_id: (
-                    ready_sequences.get(instance_id, 2**63 - 1),
+                    active_sequences.get(instance_id, 2**63 - 1),
                     active_states[instance_id].task_id,
                     instance_id,
                 ),
             )
         )
-        ready_order = tuple(item.task_id for item in active_instances)
+        logical_ready_order = projection.logical_ready_order
+        active_attempt_order = tuple(
+            item.task_instance_id for item in active_instances
+        )
         accepted_output_refs = tuple(
             sorted(
                 item.result.result_ref
@@ -1055,7 +1154,8 @@ class TaskPlanReplayReducer:
         return TaskPlanReplayReport(
             projection=projection,
             active_task_instances=active_instances,
-            ready_order=ready_order,
+            logical_ready_order=logical_ready_order,
+            active_attempt_order=active_attempt_order,
             accepted_output_refs=accepted_output_refs,
             pending_terminal_results=pending_report,
             retry_counts=retry_counts,
@@ -1063,7 +1163,7 @@ class TaskPlanReplayReducer:
             event_history_checksum=history_checksum,
             aggregate_ref=aggregate_ref,
             aggregate_checksum=aggregate_checksum,
-            reducer_version=TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
+            reducer_version=TASK_PLAN_REPLAY_REDUCER_VERSION_V4,
             parallel_groups=parallel_groups,
             parallel_waves=parallel_waves,
             parallel_reservations=parallel_reservations,
@@ -1256,6 +1356,107 @@ def _apply_parallel_event(
         snapshot = _normalize_parallel_group(group_payload, projection, event)
         _require_same_parallel_group(group, snapshot, event)
 
+    if event.event_type == "TASK_GROUP_CAPACITY_WAITING":
+        raw_waiting = payload.get("waiting")
+        if not isinstance(raw_waiting, Mapping):
+            _parallel_error("capacity wait is missing versioned evidence", event)
+        waiting = thaw_mapping(frozen_mapping(raw_waiting, "capacity_waiting"))
+        expected_fields = {
+            "schema_version",
+            "group_id",
+            "group_checksum",
+            "logical_ready_order",
+            "reasons",
+            "capacity_snapshot",
+            "budget_checksum",
+            "packing_checksum",
+            "absolute_deadline_ms",
+            "waiting_key",
+        }
+        if set(waiting) != expected_fields or waiting.get("schema_version") != "agora.task-group-capacity-waiting/v1":
+            _parallel_error("capacity wait evidence schema is invalid", event)
+        stable_payload = {
+            key: value for key, value in waiting.items() if key != "waiting_key"
+        }
+        expected_key = "capacity-wait:" + canonical_payload_checksum(stable_payload)
+        raw_logical_order = waiting.get("logical_ready_order")
+        if (
+            isinstance(raw_logical_order, (str, bytes, bytearray, Mapping, set, frozenset))
+            or not isinstance(raw_logical_order, Sequence)
+        ):
+            _parallel_error("capacity wait READY order must be an array", event)
+        logical_order = tuple(raw_logical_order)
+        reasons = waiting.get("reasons")
+        if (
+            waiting.get("waiting_key") != expected_key
+            or payload.get("idempotency_key") != expected_key
+            or waiting.get("group_id") != group_id
+            or waiting.get("group_checksum") != group.get("group_checksum")
+            or waiting.get("absolute_deadline_ms") != group.get("absolute_deadline_ms")
+            or logical_order != projection.logical_ready_order
+            or not logical_order
+            or not isinstance(reasons, Mapping)
+            or set(reasons) != set(logical_order)
+            or any(
+                not isinstance(reason, str)
+                or reason not in {
+                    "CAPACITY_NOT_AVAILABLE", "RESOURCE_CONFLICT", "BUDGET_EXCEEDED"
+                }
+                for reason in reasons.values()
+            )
+            # Budget-ineligible tasks stay in the complete READY evidence,
+            # but a wait must still have a genuinely temporary blocker.
+            or not any(
+                reason in {"CAPACITY_NOT_AVAILABLE", "RESOURCE_CONFLICT"}
+                for reason in reasons.values()
+            )
+        ):
+            _parallel_error("capacity wait evidence differs from durable READY state", event)
+        from framework.harness.task_plan.capacity import CapacityScopeSnapshot
+
+        raw_capacity = waiting.get("capacity_snapshot")
+        # A concurrency-slot-only wait has no shared pool scope, so its
+        # canonical capacity evidence is null.  Pool-backed dispatch already
+        # fails closed before emission unless an authoritative snapshot is
+        # present; replay must preserve that distinction rather than invent a
+        # synthetic empty scope.
+        if raw_capacity is not None:
+            if not isinstance(raw_capacity, Mapping):
+                _parallel_error("capacity wait snapshot is invalid", event)
+            CapacityScopeSnapshot.from_dict(raw_capacity)
+        ledger_checksum = TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"]
+        if waiting.get("budget_checksum") != ledger_checksum:
+            _parallel_error("capacity wait budget differs from projection", event)
+        if any(
+            state.active_instance_id is not None
+            for state in projection.tasks
+            if state.task_id in set(logical_order)
+        ):
+            _parallel_error("capacity wait allocated an execution attempt", event)
+        existing = next(
+            (
+                item
+                for item in diagnostics
+                if item.get("event_type") == "TASK_GROUP_CAPACITY_WAITING"
+                and item.get("waiting_key") == expected_key
+            ),
+            None,
+        )
+        if existing is None:
+            diagnostics.append(
+                {
+                    "event_type": event.event_type,
+                    "sequence": event.sequence,
+                    "group_id": group_id,
+                    "waiting_key": expected_key,
+                    "waiting": waiting,
+                    "audit_checksum": canonical_payload_checksum(payload),
+                }
+            )
+        return
+
     if event.event_type.startswith("RECOVERY_"):
         _apply_spawn_recovery_audit(event, payload, group, waves, spawn_operations, diagnostics)
         return
@@ -1356,6 +1557,19 @@ def _apply_parallel_event(
         if wave["state"] != DispatchWaveState.ADMITTED.value:
             _parallel_error("wave admission snapshot is not admitted", event)
         validate_wave_admission_slot(group, wave, waves.values(), code="task_plan_replay_parallel_mismatch")
+        from framework.harness.task_plan.parallel import DispatchWave
+        from framework.harness.task_plan.store import _validate_capacity_admission_contract
+
+        typed_wave = DispatchWave.from_dict(thaw_mapping(wave_payload))
+        if typed_wave.packing.capacity_before is not None:
+            _validate_capacity_admission_contract(
+                (event,),
+                expected_capacity_revision=typed_wave.packing.capacity_before.revision,
+                capacity_scope=typed_wave.packing.capacity_before.owner_scope,
+                capacity_before_checksum=typed_wave.packing.capacity_before.snapshot_checksum,
+                capacity_after=typed_wave.packing.capacity_after,
+                pool_reservations=typed_wave.packing.reservations,
+            )
         wave_id = wave["wave_id"]
         ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
         if payload.get("budget_after_checksum") != ledger.to_dict()["ledger_checksum"] or group["budget_envelope"] != dict(ledger.parent_allocation):
@@ -1364,8 +1578,14 @@ def _apply_parallel_event(
         for reservation in wave_payload.get("reservations", ()):
             record = ledger.records.get(reservation["idempotency_key"])
             state = states.get(reservation["task_id"])
-            if record is None or record["status"] != "RESERVED" or state is None or state.status is not TaskLifecycle.READY:
-                _parallel_error("wave task has no ready ledger reservation", event)
+            if (
+                record is None
+                or record["status"] != "RESERVED"
+                or state is None
+                or state.status is not TaskLifecycle.ADMITTED
+                or state.admission_owner is not TaskAdmissionOwner.GROUP_WAVE
+            ):
+                _parallel_error("wave task has no admitted ledger reservation", event)
             instance = record["instance"]
             if instance["task_id"] != state.task_id or instance["task_instance_id"] != state.active_instance_id or instance["attempt"] != state.attempts or instance["budget_snapshot"] != reservation["budget"]:
                 _parallel_error("wave reservation differs from attempt ledger", event)
@@ -1443,6 +1663,13 @@ def _apply_parallel_event(
             resolved_reservation_states,
             payload.get("child_states"),
             event,
+        )
+        _validate_replay_capacity_settlement(
+            wave,
+            resolved_reservation_states,
+            payload,
+            event,
+            attempt_history=attempt_history or {},
         )
         _transition_parallel_wave(wave, DispatchWaveState.TERMINAL, event)
         wave["terminal_outcome"] = terminal_outcome
@@ -1756,76 +1983,29 @@ def _normalize_parallel_wave(
     group: Mapping[str, Any],
     event: TaskPlanEvent,
 ) -> dict[str, Any]:
-    value = thaw_mapping(frozen_mapping(raw, "parallel_wave"))
-    required = {
-        "schema_version",
-        "wave_id", "group_id", "ordinal", "task_ids", "effective_parallelism",
-        "reservations", "state", "terminal_outcome", "execution_mode",
-    }
-    if (
-        not required.issubset(value)
-        or set(value) - required
-        or value.get("schema_version") != "agora.harness-dispatch-wave/v3"
-        or value.get("group_id") != group["group_id"]
-    ):
+    from framework.harness.task_plan.parallel import DispatchWave
+
+    try:
+        value = DispatchWave.from_dict(thaw_mapping(raw)).to_dict()
+    except (HarnessValidationError, TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "parallel wave snapshot is invalid",
+            code="task_plan_replay_parallel_mismatch",
+        ) from exc
+    if value.get("group_id") != group["group_id"]:
         _parallel_error("parallel wave identity is invalid", event)
-    wave_id = _parallel_identifier(value.get("wave_id"), "wave_id", event)
-    task_ids = _parallel_task_ids(value.get("task_ids"), event)
+    wave_id = value["wave_id"]
+    task_ids = tuple(value["task_ids"])
     if not set(task_ids).issubset(set(group["task_ids"])):
         _parallel_error("parallel wave exceeds group task scope", event)
-    if isinstance(value.get("ordinal"), bool) or not isinstance(value.get("ordinal"), int) or value["ordinal"] < 1:
-        _parallel_error("parallel wave ordinal is invalid", event)
-    if isinstance(value.get("effective_parallelism"), bool) or not isinstance(value.get("effective_parallelism"), int) or value["effective_parallelism"] < 1:
-        _parallel_error("parallel wave capacity is invalid", event)
     if value["effective_parallelism"] > group["max_parallelism"]:
         _parallel_error("parallel wave exceeds group capacity", event)
-    if value["execution_mode"] not in {"SUPERVISED", "SERIAL", "INLINE_TEST"}:
-        _parallel_error("parallel wave execution mode is invalid", event)
-    if value["execution_mode"] == "SERIAL" and (value["effective_parallelism"] != 1 or len(task_ids) != 1):
-        _parallel_error("serial wave must have one task and slot", event)
-    if value.get("state") not in _PARALLEL_WAVE_STATES or not isinstance(value.get("reservations"), list):
-        _parallel_error("parallel wave snapshot is invalid", event)
-    wave_outcome = value.get("terminal_outcome")
-    wave_outcomes = {
-        "SUCCEEDED", "PARTIAL_FAILED", "FAILED", "CANCELLED", "INDETERMINATE",
-        "RECLAIMED", "DEADLINE_EXCEEDED",
-    }
-    if value["state"] == "TERMINAL":
-        if wave_outcome not in wave_outcomes:
-            _parallel_error("terminal parallel wave is missing typed outcome", event)
-    elif wave_outcome is not None:
-        _parallel_error("non-terminal parallel wave has a terminal outcome", event)
-    if {item.get("task_id") for item in value["reservations"] if isinstance(item, Mapping)} != set(task_ids) or len(value["reservations"]) != len(task_ids):
-        _parallel_error("parallel wave reservations do not cover task scope", event)
-    expected_wave_id = canonical_payload_checksum(
-        {
-            "schema_version": value.get("schema_version"),
-            "group_id": value["group_id"],
-            "ordinal": value["ordinal"],
-            "task_ids": value["task_ids"],
-            "effective_parallelism": value["effective_parallelism"],
-            "execution_mode": value["execution_mode"],
-            "reservations": [
-                {
-                    "task_id": item["task_id"],
-                    "idempotency_key": item["idempotency_key"],
-                    "budget": item["budget"],
-                    **({"capacity_allocations": item["capacity_allocations"]} if "capacity_allocations" in item else {}),
-                    **({"capacity_policy_checksums": item["capacity_policy_checksums"]} if "capacity_policy_checksums" in item else {}),
-                    **({"capacity_reservation": _pool_admission_snapshot(item["capacity_reservation"])} if "capacity_reservation" in item else {}),
-                }
-                for item in value["reservations"]
-            ],
-        }
-    )
-    if wave_id != f"dw_{expected_wave_id.removeprefix('sha256:')[:32]}":
-        _parallel_error("parallel wave id does not match its snapshot", event)
     return {
         **value,
         "wave_id": wave_id,
         "task_ids": list(task_ids),
         "state": value["state"],
-        "terminal_outcome": wave_outcome,
+        "terminal_outcome": value.get("terminal_outcome"),
     }
 
 
@@ -2129,6 +2309,101 @@ def _validate_parallel_terminal_outcome(
         DispatchWaveTerminalOutcome.DEADLINE_EXCEEDED.value,
     } and released != len(wave["task_ids"]):
         _parallel_error("cancelled wave outcome has unreleased reservations", event)
+
+
+def _validate_replay_capacity_settlement(
+    wave: Mapping[str, Any],
+    reservation_states: Mapping[str, str],
+    payload: Mapping[str, Any],
+    event: TaskPlanEvent,
+    *,
+    attempt_history: Mapping[str, TaskAttemptHistoryRecord],
+) -> None:
+    """Verify recorded capacity release without consulting live pool state."""
+
+    from framework.harness.task_plan.capacity import CapacityScopeSnapshot, PoolReservation
+
+    raw_before = payload.get("capacity_before")
+    raw_after = payload.get("capacity_after")
+    if (raw_before is None) != (raw_after is None):
+        _parallel_error("wave completion capacity snapshots must be paired", event)
+    packing = wave.get("packing")
+    raw_reservations = packing.get("reservations", ()) if isinstance(packing, Mapping) else ()
+    typed_reservations = tuple(
+        PoolReservation.from_dict(item) for item in raw_reservations
+    )
+    released = {reservation.task_id: reservation for reservation in typed_reservations
+                if reservation_states.get(reservation.task_id) in {"CONSUMED", "RELEASED"}}
+    if raw_before is None:
+        if released:
+            _parallel_error("settled pool reservations require capacity snapshots", event)
+        return
+    if not isinstance(raw_before, Mapping) or not isinstance(raw_after, Mapping):
+        _parallel_error("wave completion capacity snapshots are invalid", event)
+    before = CapacityScopeSnapshot.from_dict(raw_before)
+    after = CapacityScopeSnapshot.from_dict(raw_after)
+    if not released:
+        if before != after:
+            _parallel_error("unsettled wave completion changed capacity", event)
+        return
+    if (
+        before.owner_scope != after.owner_scope
+        or after.revision != before.revision + 1
+    ):
+        _parallel_error("wave completion capacity revision is invalid", event)
+    terminal_outcomes = {
+        TaskAttemptOutcome.ACCEPTED,
+        TaskAttemptOutcome.REJECTED,
+        TaskAttemptOutcome.FAILED,
+        TaskAttemptOutcome.CANCELLED,
+        TaskAttemptOutcome.RECLAIMED,
+    }
+    for task_id in released:
+        records = tuple(
+            record
+            for record in attempt_history.values()
+            if record.task_id == task_id
+            and record.wave is not None
+            and record.wave.get("wave_id") == wave.get("wave_id")
+            and record.outcome in terminal_outcomes
+        )
+        if not records or (
+            wave.get("execution_mode") == "SUPERVISED"
+            and not any(
+                record.terminal_receipt is not None
+                and record.terminal_receipt.get("termination_confirmed") is True
+                for record in records
+            )
+        ):
+            _parallel_error(
+                "wave completion capacity release lacks terminal attempt evidence",
+                event,
+            )
+    quantities = {pool.pool_id: 0 for pool in before.pools}
+    for reservation in released.values():
+        for pool_id, quantity in reservation.allocations.items():
+            if pool_id not in quantities:
+                _parallel_error("wave completion releases an unknown pool", event)
+            quantities[pool_id] += quantity
+    before_pools = {pool.pool_id: pool for pool in before.pools}
+    after_pools = {pool.pool_id: pool for pool in after.pools}
+    if tuple(before_pools) != tuple(after_pools):
+        _parallel_error("wave completion changes the pinned pool set", event)
+    for pool_id, before_pool in before_pools.items():
+        after_pool = after_pools[pool_id]
+        quantity = quantities[pool_id]
+        if quantity > before_pool.reserved or (
+            after_pool.capacity != before_pool.capacity
+            or after_pool.policy_version != before_pool.policy_version
+            or after_pool.policy_checksum != before_pool.policy_checksum
+            or after_pool.owner_scope != before_pool.owner_scope
+            or after_pool.reservation_key != before_pool.reservation_key
+            or after_pool.expires_at_ms != before_pool.expires_at_ms
+            or after_pool.reserved != before_pool.reserved - quantity
+            or after_pool.reservation_version
+            != before_pool.reservation_version + int(quantity > 0)
+        ):
+            _parallel_error("wave completion pool release is invalid", event)
 
 
 def _validate_reservation_checksum(payload: Mapping[str, Any]) -> None:
@@ -2610,6 +2885,44 @@ def _instance_for_event(event: TaskPlanEvent, plan: ValidatedTaskPlan) -> TaskIn
     )
 
 
+def _logical_readiness_for_event(
+    event: TaskPlanEvent,
+    plan: ValidatedTaskPlan,
+) -> LogicalTaskReadiness:
+    if event.task_id is None or event.task_instance_id is not None or event.attempt is not None:
+        raise HarnessValidationError(
+            "logical TASK_READY event has an execution attempt identity",
+            code="task_plan_replay_identity_mismatch",
+            details={"event_type": event.event_type},
+        )
+    definition = next((item for item in plan.tasks if item.task_id == event.task_id), None)
+    if definition is None:
+        raise HarnessValidationError(
+            "logical TASK_READY event references an unknown task",
+            code="task_plan_replay_unknown_task",
+            details={"task_id": event.task_id, "plan_version": plan.version},
+        )
+    raw = event.payload.get("logical_readiness")
+    if not isinstance(raw, Mapping):
+        raise HarnessValidationError(
+            "logical TASK_READY event is missing readiness evidence",
+            code="task_plan_logical_readiness_missing",
+        )
+    readiness = LogicalTaskReadiness.from_dict(raw)
+    if (
+        readiness.task_id != event.task_id
+        or readiness.task_definition_checksum != definition.task_definition_checksum
+        or event.input_checksum != definition.task_definition_checksum
+    ):
+        raise HarnessValidationError(
+            "logical TASK_READY evidence differs from the accepted task",
+            code="task_plan_replay_task_checksum_mismatch",
+            details={"task_id": event.task_id},
+        )
+    _validate_logical_readiness_order(readiness, plan)
+    return readiness
+
+
 def _require_projection_task_definition(
     projection: TaskPlanProjection,
     instance: TaskInstance,
@@ -2631,7 +2944,7 @@ def _require_recorded_instance(
     recorded = instances.get(instance.task_instance_id)
     if recorded is None or recorded.instance_checksum != instance.instance_checksum:
         raise HarnessValidationError(
-            "TaskPlan lifecycle event has no matching TASK_READY evidence",
+            "TaskPlan lifecycle event has no matching canonical admission evidence",
             code="task_plan_replay_attempt_missing",
             details={"task_id": instance.task_id, "event_type": event.event_type},
         )
@@ -2837,7 +3150,7 @@ def _apply_terminal_result(
         state is None
         or state.active_instance_id != result.task_instance_id
         or state.attempts != result.attempt
-        or state.status not in {TaskLifecycle.READY, TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
+        or state.status not in {TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
     ):
         raise HarnessValidationError(
             "TaskPlan terminal result does not match active projection",
@@ -2898,6 +3211,7 @@ def _apply_terminal_result(
         updated = state.transitioned(
             TaskLifecycle.SUCCEEDED,
             active_instance_id=None,
+            admission_owner=None,
             result=reference_value,
             failure_reason_code=None,
         )
@@ -2909,7 +3223,8 @@ def _apply_terminal_result(
             )
         updated = state.transitioned(
             TaskLifecycle.FAILED,
-            active_instance_id=result.task_instance_id,
+            active_instance_id=None,
+            admission_owner=None,
             failure_reason_code=result.error_code or event.reason_code or "task_failed",
         )
     definition = next(
@@ -2946,7 +3261,8 @@ def _schedule_retry(
     if (
         state is None
         or state.status is not TaskLifecycle.FAILED
-        or state.active_instance_id != instance.task_instance_id
+        or state.active_instance_id is not None
+        or state.admission_owner is not None
         or state.attempts != instance.attempt
     ):
         raise HarnessValidationError(
@@ -2993,6 +3309,7 @@ def _schedule_retry(
     updated = state.transitioned(
         TaskLifecycle.PENDING,
         active_instance_id=None,
+        admission_owner=None,
         failure_reason_code=None,
     )
     return replace(
@@ -3113,6 +3430,7 @@ def _apply_replacement(
         state,
         status=TaskLifecycle.SKIPPED,
         active_instance_id=None,
+        admission_owner=None,
         failure_reason_code="plan_patch_replaced",
     )
     return replace(
@@ -3182,6 +3500,7 @@ def _apply_non_result_terminal(
         state,
         status=target,
         active_instance_id=None,
+        admission_owner=None,
         failure_reason_code=event.reason_code,
     )
     return replace(
@@ -3298,6 +3617,7 @@ def _subagent_identity_matches_result(identity: Any, result: TaskResultRecord) -
 __all__ = [
     "TASK_PLAN_REPLAY_REDUCER_VERSION",
     "TASK_PLAN_REPLAY_REDUCER_VERSION_V3",
+    "TASK_PLAN_REPLAY_REDUCER_VERSION_V4",
     "TASK_PLAN_REPLAY_REDUCER_VERSIONS",
     "TaskPlanReplayReducer",
     "TaskPlanReplayReport",

@@ -12,9 +12,20 @@ from framework.harness.task_plan.aggregator import TaskPlanAggregator
 from framework.harness.task_plan.attempt_history_index import recovery_results_from_history
 from framework.harness.task_plan.binding import TaskPlanCapabilityRegistry
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
-from framework.harness.task_plan.capacity import CapacityPool, capacity_now_ms
+from framework.harness.task_plan.capacity import (
+    CapacityPool,
+    CapacityScopeSnapshot,
+    PoolReservation,
+    capacity_now_ms,
+)
 from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
-from framework.harness.task_plan.models import TaskLifecycle, ValidatedTaskPlan, TaskInstance, TaskPlanProjection
+from framework.harness.task_plan.models import (
+    TaskAdmissionOwner,
+    TaskLifecycle,
+    ValidatedTaskPlan,
+    TaskInstance,
+    TaskPlanProjection,
+)
 from framework.harness.task_plan.ports import (
     PlanBuildRequest,
     PlanCandidateBuilderPort,
@@ -35,6 +46,8 @@ from framework.harness.task_plan.scheduler import (
     task_instance_for_attempt,
 )
 from framework.harness.task_plan.store import (
+    LogicalTaskReadiness,
+    TaskQueueAdmissionEvidence,
     TaskPlanEvent,
     TaskPlanStorePort,
     TaskResultRecord,
@@ -66,6 +79,7 @@ from framework.harness.task_plan.parallel import (
     SideEffectClass,
     child_budget_reservation,
 )
+from framework.harness.task_plan.parallel_lifecycle import ReservationState
 from framework.harness.task_plan.planning_observation import (
     PlanningObservationPort,
     PlanningObservationReceipt,
@@ -315,6 +329,11 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 error=reason_code if request.submission_identity is not None else str(exc),
                 diagnostics={"reason_code": reason_code},
             )
+            if reason_code == "TASK_GROUP_CAPACITY_WAITING":
+                # Capacity exhaustion is a durable, deadline-bounded waiting
+                # state.  It is not a TaskPlan halt and must remain resumable
+                # by the parent scheduler without a new attempt allocation.
+                return result
             if exc.code in {
                 "CANDIDATE_IDEMPOTENCY_CONFLICT",
                 "task_plan_submission_binding_conflict",
@@ -683,106 +702,154 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 continue
             if self._recover_failed_task_retries(request, plan, projection):
                 continue
-            decision = self.scheduler.next_task_plan_decision(
-                projection,
-                plan.limits.max_parallelism,
-                plan=plan,
-                policy=request.policy,
-                available_input_refs=tuple(request.context_refs.values()),
+            admitted_queue = tuple(
+                item for item in projection.tasks
+                if item.status is TaskLifecycle.ADMITTED
+                and item.admission_owner is TaskAdmissionOwner.QUEUE
             )
-            if not decision.task_requests:
-                pending = [item.task_id for item in projection.tasks if item.status in {TaskLifecycle.PENDING, TaskLifecycle.READY, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}]
-                failed = [item.task_id for item in projection.tasks if item.status is TaskLifecycle.FAILED]
-                if pending or failed:
-                    raise HarnessValidationError("TaskPlan cannot make further progress", code="task_plan_task_blocked", details={"pending": pending, "failed": failed, "blocked": list(decision.blocked_task_ids)})
-                return
-            for task_request in decision.task_requests:
+            if len(admitted_queue) > 1:
+                raise HarnessValidationError(
+                    "serial queue owns multiple admitted attempts",
+                    code="task_plan_queue_admission_conflict",
+                )
+            if admitted_queue:
+                state = admitted_queue[0]
+                task_request = task_instance_for_attempt(
+                    plan,
+                    state.task_id,
+                    state.attempts,
+                    task_instance_id=state.active_instance_id,
+                )
+            else:
+                readiness = self.scheduler.next_task_plan_decision(
+                    projection,
+                    plan.limits.max_parallelism,
+                    plan=plan,
+                    policy=request.policy,
+                    available_input_refs=tuple(request.context_refs.values()),
+                )
+                if readiness.logical_ready_task_ids:
+                    self._persist_logical_readiness(
+                        request,
+                        plan,
+                        projection,
+                        readiness,
+                    )
+                    projection = self.store.load_projection(
+                        request.run_id, request.stage_id
+                    )
+                if not projection.logical_ready_order:
+                    pending = [item.task_id for item in projection.tasks if item.status in {TaskLifecycle.PENDING, TaskLifecycle.READY, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}]
+                    failed = [item.task_id for item in projection.tasks if item.status is TaskLifecycle.FAILED]
+                    if pending or failed:
+                        raise HarnessValidationError("TaskPlan cannot make further progress", code="task_plan_task_blocked", details={"pending": pending, "failed": failed, "blocked": list(readiness.blocked_task_ids)})
+                    return
+                task_id = projection.logical_ready_order[0]
+                state = next(
+                    item for item in projection.tasks if item.task_id == task_id
+                )
+                task_request = task_instance_for_attempt(
+                    plan,
+                    task_id,
+                    state.attempts + 1,
+                )
                 current = self.store.load_projection(request.run_id, request.stage_id)
-                reserved = self.scheduler.reserve_task_plan_tasks(
+                admitted = self.scheduler.mark_task_plan_admitted(
                     current,
-                    TaskPlanReadyDecision((task_request,)),
+                    task_request,
+                    admission_owner=TaskAdmissionOwner.QUEUE,
                 )
-                self._commit_task_transition(
+                self._commit_queue_admission(
                     request,
                     plan,
                     task_request,
-                    "TASK_READY",
-                    reserved,
+                    current,
+                    admitted,
                 )
-                projection = self.scheduler.mark_task_plan_dispatched(
-                    self.store.load_projection(request.run_id, request.stage_id),
-                    task_request,
-                )
-                self._commit_task_transition(
-                    request,
-                    plan,
-                    task_request,
-                    "TASK_DISPATCHED",
-                    projection,
-                )
-                projection = self.scheduler.mark_task_plan_started(
-                    self.store.load_projection(request.run_id, request.stage_id),
-                    task_request,
-                )
-                self._commit_task_transition(
-                    request,
-                    plan,
-                    task_request,
-                    "TASK_STARTED",
-                    projection,
-                )
-                result = self._invoke(
-                    task_request,
-                    plan,
-                    request.policy,
-                    execution_identity=request.execution_identity,
-                )
-                self.store.append_result(result)
-                if result.status is TaskLifecycle.FAILED:
-                    resolved = next(item for item in plan.tasks if item.task_id == result.task_id)
-                    retryable_codes = set(resolved.normalized_retry_policy.retryable_reason_codes)
-                    if (
-                        result.error_code in retryable_codes
-                        and result.attempt < resolved.normalized_retry_policy.max_attempts
+            projection = self.scheduler.mark_task_plan_dispatched(
+                self.store.load_projection(request.run_id, request.stage_id),
+                task_request,
+            )
+            self._commit_task_transition(
+                request,
+                plan,
+                task_request,
+                "TASK_DISPATCHED",
+                projection,
+            )
+            projection = self.scheduler.mark_task_plan_started(
+                self.store.load_projection(request.run_id, request.stage_id),
+                task_request,
+            )
+            self._commit_task_transition(
+                request,
+                plan,
+                task_request,
+                "TASK_STARTED",
+                projection,
+            )
+            result = self._invoke(
+                task_request,
+                plan,
+                request.policy,
+                execution_identity=request.execution_identity,
+            )
+            self.store.append_result(result)
+            if result.status is TaskLifecycle.FAILED:
+                resolved = next(item for item in plan.tasks if item.task_id == result.task_id)
+                retryable_codes = set(resolved.normalized_retry_policy.retryable_reason_codes)
+                if (
+                    result.error_code in retryable_codes
+                    and result.attempt < resolved.normalized_retry_policy.max_attempts
+                ):
+                    current = self.store.load_projection(request.run_id, request.stage_id)
+                    retry_tasks = tuple(
+                        item.transitioned(
+                            TaskLifecycle.PENDING,
+                            active_instance_id=None,
+                            admission_owner=None,
+                            failure_reason_code=None,
+                        )
+                        if item.task_id == result.task_id
+                        else item
+                        for item in current.tasks
+                    )
+                    sequence = self._next_sequence(request)
+                    retry_projection = replace(
+                        current,
+                        tasks=retry_tasks,
+                        last_sequence=sequence,
+                    )
+                    self.store.commit_event(TaskPlanEvent.for_plan(
+                        "TASK_RETRY_SCHEDULED", plan,
+                        task_id=result.task_id, task_instance_id=result.task_instance_id, attempt=result.attempt,
+                        input_checksum=result.result_checksum, reason_code=result.error_code, sequence=sequence,
+                    ), retry_projection)
+                elif result.error_code not in retryable_codes:
+                    while self._propagate_dependency_blocks(
+                        request,
+                        plan,
+                        self.store.load_projection(request.run_id, request.stage_id),
                     ):
-                        current = self.store.load_projection(request.run_id, request.stage_id)
-                        retry_tasks = tuple(item.transitioned(TaskLifecycle.PENDING, active_instance_id=None, failure_reason_code=None) if item.task_id == result.task_id else item for item in current.tasks)
-                        sequence = self._next_sequence(request)
-                        retry_projection = replace(
-                            current,
-                            tasks=retry_tasks,
-                            last_sequence=sequence,
-                        )
-                        self.store.commit_event(TaskPlanEvent.for_plan(
-                            "TASK_RETRY_SCHEDULED", plan,
-                            task_id=result.task_id, task_instance_id=result.task_instance_id, attempt=result.attempt,
-                            input_checksum=result.result_checksum, reason_code=result.error_code, sequence=sequence,
-                        ), retry_projection)
-                    elif result.error_code not in retryable_codes:
-                        while self._propagate_dependency_blocks(
-                            request,
-                            plan,
-                            self.store.load_projection(request.run_id, request.stage_id),
-                        ):
-                            pass
-                        raise HarnessValidationError(
-                            "task failure is outside the task retry policy",
-                            code="task_plan_retry_not_allowed",
-                            details={
-                                "task_id": result.task_id,
-                                "attempt": result.attempt,
-                                "error_code": result.error_code,
-                                "retryable_reason_codes": sorted(retryable_codes),
-                            },
-                        )
-                    else:
-                        while self._propagate_dependency_blocks(
-                            request,
-                            plan,
-                            self.store.load_projection(request.run_id, request.stage_id),
-                        ):
-                            pass
-                        raise HarnessValidationError("task retry budget exhausted", code="task_plan_retry_exhausted", details={"task_id": result.task_id})
+                        pass
+                    raise HarnessValidationError(
+                        "task failure is outside the task retry policy",
+                        code="task_plan_retry_not_allowed",
+                        details={
+                            "task_id": result.task_id,
+                            "attempt": result.attempt,
+                            "error_code": result.error_code,
+                            "retryable_reason_codes": sorted(retryable_codes),
+                        },
+                    )
+                else:
+                    while self._propagate_dependency_blocks(
+                        request,
+                        plan,
+                        self.store.load_projection(request.run_id, request.stage_id),
+                    ):
+                        pass
+                    raise HarnessValidationError("task retry budget exhausted", code="task_plan_retry_exhausted", details={"task_id": result.task_id})
         raise HarnessValidationError("TaskPlan execution exceeded bounded rounds", code="task_plan_execution_bound_exceeded")
 
     def _execute_plan_parallel(self, request: TaskPlanStageRequest, plan: ValidatedTaskPlan) -> None:
@@ -900,12 +967,40 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             if admitted_instances:
                 decision = TaskPlanReadyDecision(admitted_instances)
             else:
-                decision = self.scheduler.next_task_plan_decision(
+                readiness = self.scheduler.next_task_plan_decision(
                     projection,
                     dispatch_capacity,
                     plan=plan,
                     policy=policy,
                     available_input_refs=tuple(request.context_refs.values()),
+                )
+                if readiness.logical_ready_task_ids:
+                    self._persist_logical_readiness(
+                        request,
+                        plan,
+                        projection,
+                        readiness,
+                    )
+                    projection = self.store.load_projection(
+                        request.run_id, request.stage_id
+                    )
+                prospective_instances = tuple(
+                    task_instance_for_attempt(
+                        plan,
+                        task_id,
+                        next(
+                            state.attempts
+                            for state in projection.tasks
+                            if state.task_id == task_id
+                        ) + 1,
+                    )
+                    for task_id in projection.logical_ready_order
+                )
+                decision = TaskPlanReadyDecision(
+                    prospective_instances,
+                    logical_ready_task_ids=projection.logical_ready_order,
+                    blocked_task_ids=readiness.blocked_task_ids,
+                    reason_code=readiness.reason_code,
                 )
             if not decision.task_requests:
                 pending = [
@@ -982,6 +1077,11 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 finalize=False,
                 event_sink=event_sink,
             )
+            if "CAPACITY_WAITING" in dispatched.observation.diagnostics:
+                raise HarnessValidationError(
+                    "parallel TaskPlan is waiting for shared capacity",
+                    code="TASK_GROUP_CAPACITY_WAITING",
+                )
             for result in dispatched.results:
                 self.store.append_result(result)
             for result in dispatched.results:
@@ -1006,6 +1106,91 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             "parallel TaskPlan execution exceeded bounded rounds",
             code="task_plan_execution_bound_exceeded",
         )
+
+    def _persist_logical_readiness(
+        self,
+        request: TaskPlanStageRequest,
+        plan: ValidatedTaskPlan,
+        projection: TaskPlanProjection,
+        decision: TaskPlanReadyDecision,
+    ) -> None:
+        """Commit every newly READY task without allocating an attempt.
+
+        Each event carries the complete ordered READY set produced by the
+        pinned scheduler key at that transition.  The final projection must
+        therefore exactly match the scheduler decision, including a stable
+        reordering when a newly eligible higher-priority task appears.
+        """
+
+        target_order = decision.logical_ready_task_ids
+        if not target_order:
+            return
+        states = {item.task_id: item for item in projection.tasks}
+        existing_ready = {
+            item.task_id for item in projection.tasks
+            if item.status is TaskLifecycle.READY
+        }
+        if not existing_ready.issubset(target_order):
+            raise HarnessValidationError(
+                "scheduler omitted an already READY task",
+                code="task_plan_projection_ready_order_mismatch",
+            )
+        newly_ready = tuple(
+            task_id for task_id in target_order
+            if states[task_id].status is TaskLifecycle.PENDING
+        )
+        if not newly_ready:
+            if projection.logical_ready_order != target_order:
+                raise HarnessValidationError(
+                    "durable READY order differs from the pinned scheduler order",
+                    code="task_plan_projection_ready_order_mismatch",
+                )
+            return
+
+        definitions = {item.task_id: item for item in plan.tasks}
+        history_length = len(self.store.read_events(request.run_id, request.stage_id))
+        projected = projection
+        events: list[TaskPlanEvent] = []
+        projections: list[TaskPlanProjection] = []
+        committed_ready = set(existing_ready)
+        for task_id in newly_ready:
+            committed_ready.add(task_id)
+            ordered_prefix = tuple(
+                item for item in target_order if item in committed_ready
+            )
+            projected = self.scheduler.reserve_task_plan_tasks(
+                projected,
+                TaskPlanReadyDecision(logical_ready_task_ids=ordered_prefix),
+            )
+            readiness = LogicalTaskReadiness(
+                task_id=task_id,
+                task_definition_checksum=(
+                    definitions[task_id].task_definition_checksum
+                ),
+                logical_ready_order=ordered_prefix,
+            )
+            sequence = history_length + len(events) + 1
+            events.append(TaskPlanEvent.for_plan(
+                "TASK_READY",
+                plan,
+                task_id=task_id,
+                input_checksum=definitions[task_id].task_definition_checksum,
+                payload={"logical_readiness": readiness.to_dict()},
+                sequence=sequence,
+            ))
+            projected = replace(projected, last_sequence=sequence)
+            projections.append(projected)
+        if projected.logical_ready_order != target_order:
+            raise HarnessValidationError(
+                "logical readiness batch did not produce the full scheduler order",
+                code="task_plan_projection_ready_order_mismatch",
+            )
+        self.store.commit_events(
+            tuple(events),
+            tuple(projections),
+            expected_projection_checksum=projection.projection_checksum,
+        )
+        self._persist_checkpoint(request, plan)
 
     def _propagate_dependency_blocks(
         self,
@@ -1061,6 +1246,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 item.transitioned(
                     TaskLifecycle.PENDING,
                     active_instance_id=None,
+                    admission_owner=None,
                     failure_reason_code=None,
                 )
                 if item.task_id == result.task_id
@@ -1132,11 +1318,84 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         policy = request.policy
         capacity_pools = ()
         capacity_demands = {}
+        capacity_snapshot = None
+        history = self.store.read_events(request.run_id, request.stage_id)
         if policy.capacity_policy is not None:
-            if self.capacity_snapshot_reader is None:
-                raise HarnessValidationError("required capacity snapshot reader is unavailable", code="CAPACITY_POLICY_MISSING")
-            capacity_pools = tuple(self.capacity_snapshot_reader(policy.capacity_policy))
-            capacity_demands = policy.capacity_policy.resolve(plan, capacity_pools, now_ms=capacity_now_ms())
+            recorded_owner_scopes: set[str] = set()
+            for event in history:
+                raw_snapshot = None
+                if event.event_type == "TASK_GROUP_CAPACITY_WAITING":
+                    waiting = event.payload.get("waiting")
+                    if isinstance(waiting, Mapping):
+                        raw_snapshot = waiting.get("capacity_snapshot")
+                elif event.event_type == "TASK_WAVE_ADMITTED":
+                    wave = event.payload.get("wave")
+                    packing = wave.get("packing") if isinstance(wave, Mapping) else None
+                    if isinstance(packing, Mapping):
+                        raw_snapshot = packing.get("capacity_before")
+                if isinstance(raw_snapshot, Mapping):
+                    recorded_owner_scopes.add(
+                        CapacityScopeSnapshot.from_dict(
+                            thaw_mapping(raw_snapshot)
+                        ).owner_scope
+                    )
+            if len(recorded_owner_scopes) > 1:
+                raise HarnessValidationError(
+                    "durable plan history references multiple capacity scopes",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                )
+            if recorded_owner_scopes:
+                owner_scope = next(iter(recorded_owner_scopes))
+                capacity_snapshot = self.store.load_capacity_snapshot(owner_scope)
+            else:
+                if self.capacity_snapshot_reader is None:
+                    raise HarnessValidationError("required capacity snapshot reader is unavailable", code="CAPACITY_POLICY_MISSING")
+                bootstrap_pools = tuple(self.capacity_snapshot_reader(policy.capacity_policy))
+                owner_scopes = {pool.owner_scope for pool in bootstrap_pools}
+                if not bootstrap_pools or len(owner_scopes) != 1:
+                    raise HarnessValidationError(
+                        "capacity policy must resolve one non-empty shared owner scope",
+                        code="CAPACITY_POLICY_MISSING",
+                    )
+                owner_scope = next(iter(owner_scopes))
+                try:
+                    capacity_snapshot = self.store.load_capacity_snapshot(owner_scope)
+                except HarnessValidationError as exc:
+                    if exc.code != "CAPACITY_POLICY_MISSING":
+                        raise
+                    installed = CapacityScopeSnapshot(
+                        owner_scope=owner_scope,
+                        pools=tuple(sorted(bootstrap_pools, key=lambda item: item.pool_id)),
+                        revision=1,
+                        expires_at_ms=min(pool.expires_at_ms for pool in bootstrap_pools),
+                    )
+                    self.store.install_capacity_snapshot(installed)
+                    capacity_snapshot = self.store.load_capacity_snapshot(owner_scope)
+            capacity_pools = capacity_snapshot.pools
+            capacity_demands = policy.capacity_policy.resolve(
+                plan,
+                capacity_pools,
+                now_ms=capacity_now_ms(),
+            )
+        admitted_at_ms = absolute_deadline_ms = None
+        admitted_groups = []
+        for event in history:
+            if event.event_type != "TASK_GROUP_ADMITTED":
+                continue
+            raw_group = event.payload.get("group")
+            if not isinstance(raw_group, Mapping):
+                continue
+            group = DispatchGroup.from_dict(thaw_mapping(raw_group))
+            if group.plan_id == plan.plan_id and group.plan_version == plan.version:
+                admitted_groups.append(group)
+        if len(admitted_groups) > 1:
+            raise HarnessValidationError(
+                "accepted plan owns multiple durable dispatch groups",
+                code="TASK_GROUP_ADMISSION_CONFLICT",
+            )
+        if admitted_groups:
+            admitted_at_ms = admitted_groups[0].admitted_at_ms
+            absolute_deadline_ms = admitted_groups[0].absolute_deadline_ms
         return ParallelDispatchRequest(
             plan=plan,
             task_instances=tuple(task_instances),
@@ -1163,6 +1422,9 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             capacity_pools=capacity_pools,
             task_capacity_demands=capacity_demands,
             capacity_policy=policy.capacity_policy,
+            capacity_snapshot=capacity_snapshot,
+            group_admitted_at_ms=admitted_at_ms,
+            group_absolute_deadline_ms=absolute_deadline_ms,
         )
 
     def _parallel_group_id(self, request: TaskPlanStageRequest, plan: ValidatedTaskPlan) -> str:
@@ -1353,6 +1615,10 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         if reused:
             if batch:
                 raise HarnessValidationError("atomic admission is partially present", code="task_plan_event_history_conflict")
+            # Exact redelivery is proved from the original immutable event and
+            # transition projection.  Do not consult the latest shared pool:
+            # later plans may already have advanced that authority.
+            self._replay_history(request, plan)
             return
         if not batch:
             return
@@ -1373,33 +1639,154 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             projections.append(projected)
 
         admissions = [event for event in batch if event.event_type == "TASK_WAVE_ADMITTED"]
+        admitted_wave: DispatchWave | None = None
         if admissions:
             instances = self._validate_wave_admission(plan, tuple(batch), current)
-            for instance in instances:
-                reserved = self.scheduler.reserve_task_plan_tasks(projected, TaskPlanReadyDecision((instance,)))
-                if next(state for state in projected.tasks if state.task_id == instance.task_id).status is not TaskLifecycle.READY:
-                    append_transition(instance, "TASK_READY", reserved)
-                else:
-                    projected = reserved
+            admitted_wave = DispatchWave.from_dict(
+                thaw_mapping(admissions[0].payload["wave"])
+            )
+            projected = self.scheduler.admit_task_plan_tasks(
+                projected,
+                instances,
+                admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+            )
         elif any(event.event_type == "TASK_ATTEMPT_SPAWN_INTENT" for event in batch):
             raise HarnessValidationError("spawn intent requires atomic wave admission", code="task_plan_parallel_event_invalid")
         for event in batch:
             sequence = len(history) + len(transitions) + 1
             transitions.append(replace(event, sequence=sequence))
-            if event.event_type == "TASK_WAVE_ADMITTED":
-                for instance in instances:
-                    projected = self.scheduler.mark_task_plan_admitted(projected, instance)
             projected = replace(projected, last_sequence=sequence)
             projections.append(projected)
             if event.event_type == "TASK_WAVE_DISPATCHED":
                 for instance in self._dispatched_wave_instances(plan, event, history, projected):
                     append_transition(instance, "TASK_DISPATCHED", self.scheduler.mark_task_plan_dispatched(projected, instance))
                     append_transition(instance, "TASK_STARTED", self.scheduler.mark_task_plan_started(projected, instance))
-        self.store.commit_events(
-            tuple(transitions), tuple(projections),
-            expected_projection_checksum=current.projection_checksum,
+        completed_capacity = self._capacity_completion_evidence(
+            tuple(batch),
+            tuple(history),
         )
+        if admitted_wave is not None and admitted_wave.packing.capacity_before is not None:
+            packing = admitted_wave.packing
+            self.store.commit_wave_admission(
+                tuple(transitions),
+                tuple(projections),
+                expected_projection_checksum=current.projection_checksum,
+                expected_capacity_revision=packing.capacity_before.revision,
+                capacity_scope=packing.capacity_before.owner_scope,
+                capacity_before_checksum=packing.capacity_before.snapshot_checksum,
+                capacity_after=packing.capacity_after,
+                pool_reservations=packing.reservations,
+            )
+        elif completed_capacity is not None:
+            capacity_before, capacity_after, settlements = completed_capacity
+            self.store.commit_wave_completion(
+                tuple(transitions),
+                tuple(projections),
+                expected_projection_checksum=current.projection_checksum,
+                expected_capacity_revision=capacity_before.revision,
+                capacity_scope=capacity_before.owner_scope,
+                capacity_before_checksum=capacity_before.snapshot_checksum,
+                capacity_after=capacity_after,
+                settled_pool_reservations=settlements,
+            )
+        else:
+            self.store.commit_events(
+                tuple(transitions), tuple(projections),
+                expected_projection_checksum=current.projection_checksum,
+            )
         self._persist_checkpoint(request, plan)
+
+    @staticmethod
+    def _capacity_completion_evidence(
+        events: tuple[TaskPlanEvent, ...],
+        history: tuple[TaskPlanEvent, ...],
+    ) -> tuple[
+        CapacityScopeSnapshot,
+        CapacityScopeSnapshot,
+        tuple[PoolReservation, ...],
+    ] | None:
+        """Recover exact settlement rows from the admitted wave evidence.
+
+        The completion event carries only terminal states.  Reservation
+        identity, pool versions and policy checksums remain pinned by the
+        original ``TASK_WAVE_ADMITTED`` packing record.
+        """
+
+        completions = tuple(
+            event for event in events if event.event_type == "TASK_WAVE_COMPLETED"
+        )
+        if not completions:
+            return None
+        if len(completions) != 1 or len(events) != 1:
+            raise HarnessValidationError(
+                "capacity settlement requires an isolated wave completion",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        completion = completions[0]
+        raw_before = completion.payload.get("capacity_before")
+        raw_after = completion.payload.get("capacity_after")
+        if raw_before is None and raw_after is None:
+            return None
+        if not isinstance(raw_before, Mapping) or not isinstance(raw_after, Mapping):
+            raise HarnessValidationError(
+                "wave completion capacity evidence is incomplete",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        before = CapacityScopeSnapshot.from_dict(thaw_mapping(raw_before))
+        after = CapacityScopeSnapshot.from_dict(thaw_mapping(raw_after))
+        if before == after:
+            # Unknown/unconfirmed children keep their RESERVED capacity.  The
+            # completion fact is durable, but no shared-state CAS is proposed.
+            return None
+        wave_id = completion.payload.get("wave_id")
+        admissions = tuple(
+            event
+            for event in history
+            if event.event_type == "TASK_WAVE_ADMITTED"
+            and isinstance(event.payload.get("wave"), Mapping)
+            and event.payload["wave"].get("wave_id") == wave_id
+        )
+        if len(admissions) != 1:
+            raise HarnessValidationError(
+                "capacity settlement has no unique admitted wave",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        wave = DispatchWave.from_dict(thaw_mapping(admissions[0].payload["wave"]))
+        raw_states = completion.payload.get("reservation_states")
+        if not isinstance(raw_states, Mapping):
+            raise HarnessValidationError(
+                "capacity settlement states are invalid",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        if set(raw_states) != set(wave.task_ids):
+            raise HarnessValidationError(
+                "capacity settlement states differ from admitted wave",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        states: dict[str, ReservationState] = {}
+        for task_id, value in raw_states.items():
+            try:
+                states[task_id] = ReservationState(value)
+            except (TypeError, ValueError) as exc:
+                raise HarnessValidationError(
+                    "capacity settlement state is invalid",
+                    code="CAPACITY_RESERVATION_INVALID",
+                ) from exc
+        settlements = tuple(
+            reservation.settled(
+                states[reservation.task_id],
+                reservation_key=reservation.reservation_key,
+                expected_version=1,
+            )
+            for reservation in wave.packing.reservations
+            if states[reservation.task_id] is not ReservationState.RESERVED
+        )
+        if not settlements:
+            raise HarnessValidationError(
+                "capacity transition has no confirmed settlement",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        return before, after, settlements
 
     @staticmethod
     def _validate_wave_admission(
@@ -1426,11 +1813,18 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         if payload.get("budget_before_checksum") != ledger.to_dict()["ledger_checksum"]:
             raise HarnessValidationError("wave admission uses a stale ledger", code="task_plan_budget_checksum_mismatch")
         states = {state.task_id: state for state in projection.tasks}
-        if not set(wave.task_ids).issubset(states) or any(states[task_id].status not in {TaskLifecycle.PENDING, TaskLifecycle.READY} for task_id in wave.task_ids):
+        if (
+            not set(wave.task_ids).issubset(states)
+            or any(
+                states[task_id].status is not TaskLifecycle.READY
+                for task_id in wave.task_ids
+            )
+            or wave.packing.ready_order != projection.logical_ready_order
+        ):
             raise HarnessValidationError("wave admission requires ready candidates", code="task_plan_parallel_event_invalid")
         instances = tuple(task_instance_for_attempt(
             plan, task_id,
-            states[task_id].attempts + int(states[task_id].status is TaskLifecycle.PENDING),
+            states[task_id].attempts + 1,
         ) for task_id in wave.task_ids)
         for instance, reservation in zip(instances, wave.reservations, strict=True):
             if reservation.task_id != instance.task_id or reservation.idempotency_key != instance.idempotency_key or dict(reservation.budget) != instance.budget_snapshot.to_dict() or reservation.state.value != "RESERVED":
@@ -1438,6 +1832,17 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         admitted = ledger.reserve(instances)
         if payload.get("budget_after_checksum") != admitted.to_dict()["ledger_checksum"]:
             raise HarnessValidationError("wave admission budget checksum differs", code="task_plan_budget_checksum_mismatch")
+        if (
+            payload.get("packing_checksum") != wave.packing.packing_checksum
+            or wave.packing.budget_before_checksum
+            != ledger.to_dict()["ledger_checksum"]
+            or wave.packing.budget_after_checksum
+            != admitted.to_dict()["ledger_checksum"]
+        ):
+            raise HarnessValidationError(
+                "wave admission packing evidence differs from the budget transition",
+                code="task_plan_budget_checksum_mismatch",
+            )
         expected = instances if wave.execution_mode == "SUPERVISED" else ()
         if len(events) - 1 != len(expected):
             raise HarnessValidationError("wave admission has incomplete spawn intents", code="task_plan_parallel_event_invalid")
@@ -1521,10 +1926,15 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                         "attempt": state.attempts,
                     },
                 )
+            failed_instance = task_instance_for_attempt(
+                plan,
+                state.task_id,
+                state.attempts,
+            )
             result_checksum = _failed_result_checksum(
                 self.store.read_events(request.run_id, request.stage_id),
                 task_id=state.task_id,
-                task_instance_id=state.active_instance_id,
+                task_instance_id=failed_instance.task_instance_id,
                 attempt=state.attempts,
             )
             if result_checksum is None:
@@ -1538,6 +1948,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 item.transitioned(
                     TaskLifecycle.PENDING,
                     active_instance_id=None,
+                    admission_owner=None,
                     failure_reason_code=None,
                 )
                 if item.task_id == state.task_id
@@ -1550,7 +1961,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     "TASK_RETRY_SCHEDULED",
                     plan,
                     task_id=state.task_id,
-                    task_instance_id=state.active_instance_id,
+                    task_instance_id=failed_instance.task_instance_id,
                     attempt=state.attempts,
                     input_checksum=result_checksum,
                     reason_code=reason_code,
@@ -1681,6 +2092,40 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                 sequence=sequence,
             ),
             replace(projection, last_sequence=sequence),
+        )
+        self._persist_checkpoint(request, plan)
+
+    def _commit_queue_admission(
+        self,
+        request: TaskPlanStageRequest,
+        plan: ValidatedTaskPlan,
+        instance: TaskInstance,
+        before: TaskPlanProjection,
+        admitted: TaskPlanProjection,
+    ) -> None:
+        """Commit the exact QUEUE-owned attempt before queue publication."""
+
+        before_ledger = TaskPlanBudgetLedger.from_snapshot(before.consumed_budget)
+        after_ledger = TaskPlanBudgetLedger.from_snapshot(admitted.consumed_budget)
+        admission = TaskQueueAdmissionEvidence(
+            task_instance=instance,
+            admission_owner=TaskAdmissionOwner.QUEUE,
+            budget_before_checksum=before_ledger.to_dict()["ledger_checksum"],
+            budget_after_checksum=after_ledger.to_dict()["ledger_checksum"],
+        )
+        sequence = self._next_sequence(request)
+        self.store.commit_event(
+            TaskPlanEvent.for_plan(
+                "TASK_QUEUE_ADMITTED",
+                plan,
+                task_id=instance.task_id,
+                task_instance_id=instance.task_instance_id,
+                attempt=instance.attempt,
+                input_checksum=instance.task_definition_checksum,
+                payload={"queue_admission": admission.to_dict()},
+                sequence=sequence,
+            ),
+            replace(admitted, last_sequence=sequence),
         )
         self._persist_checkpoint(request, plan)
 

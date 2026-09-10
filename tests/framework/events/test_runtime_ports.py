@@ -7,8 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from framework.events import ports
-from framework.events.runtime import models
+from framework.events import (
+    TransactionalStateReaderPort,
+    TransactionalStateRuntimePort,
+    ports,
+)
+from framework.events.runtime import EventRuntime, models
 from framework.events.runtime.models import (
     CheckpointKey,
     ConsumerCheckpoint,
@@ -45,6 +49,84 @@ CHECKSUM_ZERO = "sha256:" + "0" * 64
 CHECKSUM_ONE = "sha256:" + "1" * 64
 
 
+class _ReadOnlyEventReader:
+    """Minimal ordinary reader with no transactional-state capability."""
+
+    def get_event(self, event_id, *, tenant_id=None):  # type: ignore[no-untyped-def]
+        return None
+
+    def read_stream(self, request):  # type: ignore[no-untyped-def]
+        return models.EventPage(
+            stream_id=request.stream_id,
+            events=(),
+            high_watermark=None,
+            tenant_id=request.tenant_id,
+        )
+
+    def get_stream_high_watermark(  # type: ignore[no-untyped-def]
+        self,
+        stream_id,
+        *,
+        tenant_id=None,
+    ):
+        return None
+
+
+class _PublishOnlyRuntime:
+    """Ordinary canonical publisher with no shared-state mutation authority."""
+
+    def publish(self, event, **kwargs):  # type: ignore[no-untyped-def]
+        return event
+
+    def publish_batch(self, events, **kwargs):  # type: ignore[no-untyped-def]
+        return tuple(events)
+
+
+class _TransactionalRuntime(_PublishOnlyRuntime):
+    def publish_batch_with_state_cas(self, events, **kwargs):  # type: ignore[no-untyped-def]
+        return tuple(events), kwargs["next_state"]
+
+    def compare_and_swap_transactional_state(  # type: ignore[no-untyped-def]
+        self,
+        next_snapshot,
+        **kwargs,
+    ):
+        return next_snapshot
+
+
+def test_plain_event_reader_does_not_require_transactional_state_access() -> None:
+    reader = _ReadOnlyEventReader()
+
+    assert isinstance(reader, ports.EventReaderPort)
+    assert not isinstance(reader, ports.TransactionalStateReaderPort)
+    assert TransactionalStateReaderPort is ports.TransactionalStateReaderPort
+
+
+def test_plain_event_runtime_does_not_grant_transactional_state_mutation() -> None:
+    runtime = _PublishOnlyRuntime()
+
+    assert isinstance(runtime, ports.EventRuntimePort)
+    assert not isinstance(runtime, ports.TransactionalStateRuntimePort)
+    assert TransactionalStateRuntimePort is ports.TransactionalStateRuntimePort
+
+
+def test_transactional_state_runtime_composes_the_publish_capability() -> None:
+    runtime = _TransactionalRuntime()
+
+    assert isinstance(runtime, ports.EventRuntimePort)
+    assert isinstance(runtime, ports.TransactionalStateRuntimePort)
+
+
+def test_canonical_event_runtime_implements_transactional_state_capability() -> None:
+    # Protocol conformance is structural and does not require opening a real
+    # adapter merely to inspect the concrete runtime surface.  SQLite/Postgres
+    # transaction semantics are covered by their state-batch integration tests.
+    runtime = object.__new__(EventRuntime)
+
+    assert isinstance(runtime, ports.EventRuntimePort)
+    assert isinstance(runtime, ports.TransactionalStateRuntimePort)
+
+
 def test_framework_event_runtime_has_no_infrastructure_import_boundary() -> None:
     targets = [
         ROOT / "framework" / "events" / "ports.py",
@@ -78,6 +160,7 @@ def test_store_port_exposes_one_backend_neutral_conformance_surface() -> None:
         "get_event",
         "read_stream",
         "get_stream_high_watermark",
+        "load_transactional_state",
         "register_subscription",
         "list_subscriptions",
         "get_subscription_stream_state",
@@ -98,6 +181,7 @@ def test_store_port_exposes_one_backend_neutral_conformance_surface() -> None:
     }
 
     assert required_methods <= set(dir(ports.EventStorePort))
+    assert issubclass(ports.EventStorePort, ports.TransactionalStateReaderPort)
     source = (ROOT / "framework" / "events" / "ports.py").read_text(encoding="utf-8")
     assert "TYPE_CHECKING" in source
     assert "from framework.events.canonical import EventCandidate, StoredEvent" in source

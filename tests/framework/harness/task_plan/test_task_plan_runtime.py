@@ -40,6 +40,16 @@ from framework.harness.task_plan import (
     TaskLifecycle,
 )
 from framework.harness.task_plan.canonical import canonical_payload_checksum
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.models import TaskAdmissionOwner
+from framework.harness.task_plan.scheduler import (
+    TaskPlanReadyDecision,
+    task_instance_for_attempt,
+)
+from framework.harness.task_plan.store import (
+    LogicalTaskReadiness,
+    TaskQueueAdmissionEvidence,
+)
 from framework.harness.task_plan.inspection import (
     TaskPlanInspectionDecision,
     TaskPlanInspectionRequest,
@@ -439,7 +449,8 @@ def test_scheduler_orders_ready_tasks_and_honors_parallelism():
         policy=policy,
         available_input_refs=("document",),
     )
-    assert [item.task_id for item in decision.task_instances] == ["a"]
+    assert decision.task_instances == ()
+    assert decision.logical_ready_task_ids == ("a", "b")
 
 
 def test_ready_task_is_durably_committed_before_worker_invocation() -> None:
@@ -474,8 +485,9 @@ def test_ready_task_is_durably_committed_before_worker_invocation() -> None:
     )
 
     assert result.status.value == "succeeded"
-    assert event_types_at_worker_call[-3:] == [
+    assert event_types_at_worker_call[-4:] == [
         "TASK_READY",
+        "TASK_QUEUE_ADMITTED",
         "TASK_DISPATCHED",
         "TASK_STARTED",
     ]
@@ -688,15 +700,51 @@ def test_store_accepts_duplicate_identical_result_once():
     store.accept_plan(plan)
     scheduler = TaskPlanScheduler()
     decision = scheduler.next_ready_tasks(store.load_projection("run", "dynamic_stage"), 1, plan=plan, policy=policy, available_input_refs=("document",))
-    instance = decision.task_instances[0]
+    instance = task_instance_for_attempt(plan, decision.logical_ready_task_ids[0], 1)
     projection = scheduler.reserve_ready_tasks(store.load_projection("run", "dynamic_stage"), decision)
-    for event_type, transition in (("TASK_READY", lambda value: value), ("TASK_DISPATCHED", lambda value: scheduler.mark_dispatched(value, instance))):
-        projection = replace(transition(projection), last_sequence=len(store.read_events(plan.run_id, plan.stage_id)) + 1)
-        store.commit_event(TaskPlanEvent.for_plan(
-            event_type, plan, sequence=projection.last_sequence,
-            task_id=instance.task_id, task_instance_id=instance.task_instance_id,
-            attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
-        ), projection)
+    sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=decision.logical_ready_task_ids,
+    )
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_READY", plan, sequence=sequence, task_id=instance.task_id,
+        input_checksum=instance.task_definition_checksum,
+        payload={"logical_readiness": readiness.to_dict()},
+    ), projection)
+    before = projection
+    projection = scheduler.mark_admitted(
+        before, instance, admission_owner=TaskAdmissionOwner.QUEUE
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    sequence += 1
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED", plan, sequence=sequence,
+        task_id=instance.task_id, task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
+        payload={"queue_admission": admission.to_dict()},
+    ), projection)
+    sequence += 1
+    projection = replace(
+        scheduler.mark_dispatched(projection, instance),
+        last_sequence=sequence,
+    )
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_DISPATCHED", plan, sequence=sequence,
+        task_id=instance.task_id, task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
+    ), projection)
     result = TaskResultRecord.for_plan(
         plan,
         task_id="a",

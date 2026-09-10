@@ -5,12 +5,25 @@ import pytest
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord, TaskAttemptOutcome
 from framework.harness.task_plan.attempt_history_index import recovery_results_from_history
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.checkpoint import TaskPlanCheckpoint
-from framework.harness.task_plan.models import TaskLifecycle, PlanPatch, PlanPatchOperation, PlanPatchOperationType, TaskRetryPolicy
+from framework.harness.task_plan.models import (
+    PlanPatch,
+    PlanPatchOperation,
+    PlanPatchOperationType,
+    TaskAdmissionOwner,
+    TaskLifecycle,
+    TaskRetryPolicy,
+)
 from framework.harness.task_plan.scheduler import task_instance_for_attempt, TaskPlanScheduler, TaskPlanReadyDecision
 from framework.harness.task_plan.patches import TaskPlanPatchValidator
 from framework.harness.task_plan.replay import TaskPlanReplayReducer
-from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskPlanEvent
+from framework.harness.task_plan.store import (
+    InMemoryTaskPlanStore,
+    LogicalTaskReadiness,
+    TaskPlanEvent,
+    TaskQueueAdmissionEvidence,
+)
 from tests.framework.harness.agent_loop.test_orchestration_runtime import _runtime, _request
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
     _ArtifactStore, _EventStore, _store, _accepted_plan, _task, _start, _result, _lifecycle_event,
@@ -31,13 +44,42 @@ def test_recovery_history_selects_only_the_current_active_attempt():
     projection = replace(projection, tasks=(replace(projection.tasks[0], attempts=2,
                                                     active_instance_id=second.task_instance_id),))
 
+    assert projection.tasks[0].admission_owner is TaskAdmissionOwner.QUEUE
     assert recovery_results_from_history(history, projection) == (second_result,)
+    group_wave_projection = replace(
+        projection,
+        tasks=(replace(
+            projection.tasks[0],
+            admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+        ),),
+    )
+    assert recovery_results_from_history(history, group_wave_projection) == (second_result,)
     for changes in (
         {"plan_id": "other-plan"}, {"plan_version": plan.version + 1},
     ):
         assert recovery_results_from_history(history, replace(projection, **changes)) == ()
-    pending = replace(projection, tasks=(replace(projection.tasks[0], status=TaskLifecycle.PENDING,
-                                                 active_instance_id=None),))
+    ready = replace(
+        projection,
+        tasks=(replace(
+            projection.tasks[0],
+            status=TaskLifecycle.READY,
+            active_instance_id=None,
+            admission_owner=None,
+        ),),
+        logical_ready_order=("structure",),
+    )
+    assert ready.tasks[0].attempts == 2
+    assert recovery_results_from_history(history, ready) == ()
+    pending = replace(
+        projection,
+        tasks=(replace(
+            projection.tasks[0],
+            status=TaskLifecycle.PENDING,
+            active_instance_id=None,
+            admission_owner=None,
+        ),),
+        logical_ready_order=(),
+    )
     assert recovery_results_from_history(history, pending) == ()
     assert tuple(item.result for item in history) == (first_result, second_result)
     for reason in ("gate_failed", "task_worker_failed"):
@@ -64,15 +106,64 @@ def test_retry_keeps_failed_attempt_and_only_projects_the_accepted_result(durabl
                                   task_instance_id=first.task_instance_id, attempt=1,
                                   input_checksum=failed.result_checksum, reason_code=reason,
                                   sequence=projection.last_sequence + 1)
-    projection = replace(projection, tasks=tuple(item.transitioned(TaskLifecycle.PENDING, active_instance_id=None,
-                                                                  failure_reason_code=None) for item in projection.tasks),
+    projection = replace(projection, tasks=tuple(item.transitioned(
+        TaskLifecycle.PENDING,
+        active_instance_id=None,
+        admission_owner=None,
+        failure_reason_code=None,
+    ) for item in projection.tasks),
                          last_sequence=retry.sequence)
     store.commit_event(retry, projection)
     second = task_instance_for_attempt(plan, first.task_id, 2)
     scheduler = TaskPlanScheduler()
-    projection = scheduler.reserve_ready_tasks(projection, TaskPlanReadyDecision((second,)))
+    projection = scheduler.reserve_ready_tasks(
+        projection,
+        TaskPlanReadyDecision(logical_ready_task_ids=(second.task_id,)),
+    )
+    sequence = projection.last_sequence + 1
+    readiness = LogicalTaskReadiness(
+        task_id=second.task_id,
+        task_definition_checksum=second.task_definition_checksum,
+        logical_ready_order=projection.logical_ready_order,
+    )
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_READY",
+        plan,
+        task_id=second.task_id,
+        input_checksum=second.task_definition_checksum,
+        sequence=sequence,
+        payload={"logical_readiness": readiness.to_dict()},
+    ), projection)
+
+    before_admission = projection
+    projection = scheduler.mark_admitted(
+        before_admission,
+        second,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=second,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before_admission.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    sequence += 1
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED",
+        plan,
+        task_id=second.task_id,
+        task_instance_id=second.task_instance_id,
+        attempt=second.attempt,
+        input_checksum=second.task_definition_checksum,
+        sequence=sequence,
+        payload={"queue_admission": admission.to_dict()},
+    ), projection)
     for event_type, transition in (
-        ("TASK_READY", lambda state: state),
         ("TASK_DISPATCHED", lambda state: scheduler.mark_dispatched(state, second)),
         ("TASK_STARTED", lambda state: scheduler.mark_started(state, second)),
     ):

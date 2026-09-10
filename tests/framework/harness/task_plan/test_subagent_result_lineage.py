@@ -79,7 +79,13 @@ from framework.harness.ref_authority import RefAccessPolicy, RefDescriptor
 from framework.harness.ref_results import HarnessResultRefAuthority
 from framework.harness.ref_snapshot import RefAuthoritySnapshot
 from framework.harness.task_plan import task_plan_subagent_attempt_identity
-from framework.harness.task_plan import TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+from framework.harness.task_plan import TASK_PLAN_REPLAY_REDUCER_VERSION_V4
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.models import TaskAdmissionOwner
+from framework.harness.task_plan.store import (
+    LogicalTaskReadiness,
+    TaskQueueAdmissionEvidence,
+)
 from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
 from infrastructure.storage.events import SQLiteEventStore
@@ -539,12 +545,57 @@ def _write_graph_only_attempt(
 
 def _start_attempt(store, plan, instance) -> None:
     scheduler = TaskPlanScheduler()
+    initial = store.load_projection(plan.run_id, plan.stage_id)
     projection = scheduler.reserve_ready_tasks(
-        store.load_projection(plan.run_id, plan.stage_id),
-        TaskPlanReadyDecision((instance,)),
+        initial,
+        TaskPlanReadyDecision(logical_ready_task_ids=(instance.task_id,)),
+    )
+    sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+    projection = replace(projection, last_sequence=sequence)
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=projection.logical_ready_order,
+    )
+    store.commit_event(
+        TaskPlanEvent.for_plan(
+            "TASK_READY",
+            plan,
+            task_id=instance.task_id,
+            input_checksum=instance.task_definition_checksum,
+            payload={"logical_readiness": readiness.to_dict()},
+            sequence=sequence,
+        ),
+        projection,
+    )
+    before = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+    admitted = scheduler.admit_ready_tasks(
+        projection,
+        (instance,),
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    after = TaskPlanBudgetLedger.from_snapshot(admitted.consumed_budget)
+    sequence += 1
+    projection = replace(admitted, last_sequence=sequence)
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=before.to_dict()["ledger_checksum"],
+        budget_after_checksum=after.to_dict()["ledger_checksum"],
+    )
+    store.commit_event(
+        TaskPlanEvent.for_plan(
+            "TASK_QUEUE_ADMITTED",
+            plan,
+            task_id=instance.task_id,
+            task_instance_id=instance.task_instance_id,
+            attempt=instance.attempt,
+            input_checksum=instance.task_definition_checksum,
+            payload={"queue_admission": admission.to_dict()},
+            sequence=sequence,
+        ),
+        projection,
     )
     transitions = (
-        ("TASK_READY", lambda value: value),
         ("TASK_DISPATCHED", lambda value: scheduler.mark_dispatched(value, instance)),
         ("TASK_STARTED", lambda value: scheduler.mark_started(value, instance)),
     )
@@ -733,7 +784,7 @@ def test_graph_only_subagent_invocation_uses_accepted_plan_identity_and_recovery
         context_payload
     )
     assert canonical_payload_checksum(payload) == (
-        "sha256:b41fc6685afa3d120dcf457dd6082c6ecdc4fbb6876983aa974ecc903f5d3651"
+        "sha256:774ccef53c1139765aadee455308724d65f115144e0894ecabffae52c3fcd9f3"
     )
 
     for invalid_context in (
@@ -1078,7 +1129,7 @@ def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(
         results=(record,),
     )
 
-    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V4
     assert report.projection.matches_plan_identity(plan)
     assert report.projection.tasks[0].status is TaskLifecycle.SUCCEEDED
     assert fixture["worker"].calls == worker_calls == 0

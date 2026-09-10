@@ -52,7 +52,15 @@ from framework.harness.task_plan.parallel_lifecycle import (
     _GROUP_TRANSITIONS,
 )
 from framework.harness.task_plan.parallel_state import validate_group_transition, validate_wave_transition
-from framework.harness.task_plan.capacity import CapacityPool, PoolReservation, TaskCapacityDemand, capacity_now_ms, pack_first_fit
+from framework.harness.task_plan.capacity import (
+    CapacityPool,
+    CapacityScopeSnapshot,
+    FirstFitPacking,
+    PoolReservation,
+    TaskCapacityDemand,
+    capacity_now_ms,
+    pack_first_fit,
+)
 from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.control_plane.budget_reservation import BudgetReservation
@@ -62,17 +70,60 @@ from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 from framework.shared.graph_identity import GraphExecutionIdentity
 
 
-PARALLEL_DISPATCH_REQUEST_SCHEMA = "agora.harness-parallel-dispatch-request/v2"
+PARALLEL_DISPATCH_REQUEST_SCHEMA = "agora.harness-parallel-dispatch-request/v3"
 PARALLEL_DISPATCH_RESULT_SCHEMA = "agora.harness-parallel-dispatch-result/v1"
-DISPATCH_GROUP_SCHEMA = "agora.harness-dispatch-group/v2"
-DISPATCH_WAVE_SCHEMA = "agora.harness-dispatch-wave/v3"
+DISPATCH_GROUP_SCHEMA = "agora.harness-dispatch-group/v3"
+DISPATCH_WAVE_SCHEMA = "agora.harness-dispatch-wave/v4"
 TASK_RESERVATION_SCHEMA = "agora.harness-task-reservation/v1"
 PARENT_OBSERVATION_SCHEMA = "agora.harness-parent-observation/v1"
+CAPACITY_WAITING_EVIDENCE_SCHEMA = "agora.task-group-capacity-waiting/v1"
 
 
 class JoinPolicy(StrEnum):
     WAIT_ALL = "wait_all"
     FAIL_FAST = "fail_fast"
+
+
+def _integer_deadline(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise HarnessValidationError(
+            f"{name} must be a positive integer",
+            code="TASK_GROUP_DEADLINE_INVALID",
+        )
+    return value
+
+
+def _capacity_waiting_evidence(
+    group: DispatchGroup,
+    packing: FirstFitPacking,
+    *,
+    budget_checksum: str,
+) -> dict[str, Any]:
+    """Build one stable, non-terminal capacity-wait fact."""
+
+    if packing.selected or not packing.overflow:
+        raise HarnessValidationError(
+            "capacity waiting requires a zero-selection packing pass",
+            code="TASK_GROUP_CAPACITY_WAIT_INVALID",
+        )
+    payload = {
+        "schema_version": CAPACITY_WAITING_EVIDENCE_SCHEMA,
+        "group_id": group.group_id,
+        "group_checksum": group.group_checksum,
+        "logical_ready_order": list(packing.ready_order),
+        "reasons": thaw_mapping(packing.reasons),
+        "capacity_snapshot": (
+            packing.capacity_before.to_dict()
+            if packing.capacity_before is not None else None
+        ),
+        "budget_checksum": checksum(budget_checksum, "budget_checksum"),
+        "packing_checksum": packing.packing_checksum,
+        "absolute_deadline_ms": group.absolute_deadline_ms,
+    }
+    return {
+        **payload,
+        "waiting_key": "capacity-wait:" + canonical_payload_checksum(payload),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +291,8 @@ class DispatchGroup:
     max_waves: int = 16
     max_parallelism: int = 3
     budget_envelope: Mapping[str, int] = field(default_factory=dict)
+    admitted_at_ms: int = 0
+    absolute_deadline_ms: int = 0
     correlation_id: str = ""
     state: DispatchGroupState | str = DispatchGroupState.PLANNED
     schema_version: str = DISPATCH_GROUP_SCHEMA
@@ -281,6 +334,13 @@ class DispatchGroup:
             raise HarnessValidationError("unsupported dispatch group schema", code="PLAN_SCHEMA_INVALID")
         object.__setattr__(self, "correlation_id", identifier(self.correlation_id or f"group-{self.plan_id}", "correlation_id"))
         object.__setattr__(self, "budget_envelope", _non_negative_mapping(self.budget_envelope, "budget_envelope"))
+        _integer_deadline(self.admitted_at_ms, "admitted_at_ms")
+        _integer_deadline(self.absolute_deadline_ms, "absolute_deadline_ms")
+        if self.absolute_deadline_ms <= self.admitted_at_ms:
+            raise HarnessValidationError(
+                "dispatch group deadline must follow admission",
+                code="TASK_GROUP_DEADLINE_INVALID",
+            )
         projection = {
             "schema_version": self.schema_version,
             "run_id": self.run_id,
@@ -298,6 +358,8 @@ class DispatchGroup:
             "max_waves": self.max_waves,
             "max_parallelism": self.max_parallelism,
             "budget_envelope": thaw_mapping(self.budget_envelope),
+            "admitted_at_ms": self.admitted_at_ms,
+            "absolute_deadline_ms": self.absolute_deadline_ms,
             "correlation_id": self.correlation_id,
         }
         object.__setattr__(self, "group_checksum", canonical_payload_checksum(projection))
@@ -331,6 +393,8 @@ class DispatchGroup:
             "max_waves": self.max_waves,
             "max_parallelism": self.max_parallelism,
             "budget_envelope": thaw_mapping(self.budget_envelope),
+            "admitted_at_ms": self.admitted_at_ms,
+            "absolute_deadline_ms": self.absolute_deadline_ms,
             "correlation_id": self.correlation_id,
             "state": self.state.value,
         }
@@ -343,7 +407,8 @@ class DispatchGroup:
                 "schema_version", "group_id", "group_checksum", "run_id", "stage_id",
                 "plan_id", "plan_version", "plan_checksum", "policy_ref", "policy_checksum",
                 "parent_graph_identity", "admission_policy_checksum", "task_ids", "required_output_roles", "join_policy",
-                "max_waves", "max_parallelism", "budget_envelope", "correlation_id", "state",
+                "max_waves", "max_parallelism", "budget_envelope", "admitted_at_ms",
+                "absolute_deadline_ms", "correlation_id", "state",
             }),
             model=cls.__name__,
         )
@@ -396,6 +461,7 @@ class DispatchWave:
     terminal_outcome: DispatchWaveTerminalOutcome | str | None = None
     schema_version: str = DISPATCH_WAVE_SCHEMA
     execution_mode: str = "SUPERVISED"
+    packing: FirstFitPacking | Mapping[str, Any] | None = None
     wave_id: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -405,7 +471,7 @@ class DispatchWave:
         ids = tuple(identifier(item, "task_id") for item in self.task_ids)
         if not ids or len(ids) != len(set(ids)):
             raise HarnessValidationError("wave task ids must be unique and non-empty", code="PLAN_SCHEMA_INVALID")
-        object.__setattr__(self, "task_ids", tuple(sorted(ids)))
+        object.__setattr__(self, "task_ids", ids)
         if isinstance(self.effective_parallelism, bool) or not isinstance(self.effective_parallelism, int) or self.effective_parallelism < 1:
             raise HarnessValidationError("wave parallelism must be positive", code="PLAN_SCHEMA_INVALID")
         reservations = tuple(self.reservations)
@@ -413,7 +479,26 @@ class DispatchWave:
             raise HarnessValidationError("wave reservations must cover exactly its tasks", code="PLAN_SCHEMA_INVALID")
         if len(self.task_ids) > self.effective_parallelism:
             raise HarnessValidationError("wave exceeds its admitted parallelism", code="TASK_WAVE_CAPACITY_EXCEEDED")
-        object.__setattr__(self, "reservations", tuple(sorted(reservations, key=lambda item: item.task_id)))
+        reservations_by_task = {item.task_id: item for item in reservations}
+        object.__setattr__(
+            self,
+            "reservations",
+            tuple(reservations_by_task[task_id] for task_id in ids),
+        )
+        packing = self.packing
+        if isinstance(packing, Mapping):
+            packing = FirstFitPacking.from_dict(packing)
+        if (
+            not isinstance(packing, FirstFitPacking)
+            or packing.selected != ids
+            or tuple(item.task_id for item in packing.reservations)
+            != tuple(item.task_id for item in reservations if item.capacity_allocations)
+        ):
+            raise HarnessValidationError(
+                "dispatch wave requires matching joint packing evidence",
+                code="TASK_WAVE_PACKING_EVIDENCE_INVALID",
+            )
+        object.__setattr__(self, "packing", packing)
         object.__setattr__(self, "state", DispatchWaveState(self.state))
         if self.state is DispatchWaveState.TERMINAL:
             if self.terminal_outcome is None:
@@ -440,7 +525,7 @@ class DispatchWave:
                 "ordinal": self.ordinal,
                 "task_ids": list(self.task_ids),
                 "effective_parallelism": self.effective_parallelism,
-        "execution_mode": self.execution_mode,
+                "execution_mode": self.execution_mode,
                 "reservations": [
                     {
                         "task_id": item.task_id,
@@ -452,6 +537,7 @@ class DispatchWave:
                     }
                     for item in self.reservations
                 ],
+                "packing": self.packing.to_dict(),
             }
         )
         object.__setattr__(self, "wave_id", f"dw_{digest.removeprefix('sha256:')[:32]}")
@@ -466,6 +552,7 @@ class DispatchWave:
             "effective_parallelism": self.effective_parallelism,
             "execution_mode": self.execution_mode,
             "reservations": [item.to_dict() for item in self.reservations],
+            "packing": self.packing.to_dict(),
             "state": self.state.value,
             "terminal_outcome": (
                 self.terminal_outcome.value if self.terminal_outcome is not None else None
@@ -478,7 +565,8 @@ class DispatchWave:
             value,
             required=frozenset({
                 "schema_version", "wave_id", "group_id", "ordinal", "task_ids",
-                "effective_parallelism", "reservations", "state", "terminal_outcome", "execution_mode",
+                "effective_parallelism", "reservations", "state", "terminal_outcome",
+                "execution_mode", "packing",
             }),
             model=cls.__name__,
         )
@@ -551,6 +639,9 @@ class ParallelDispatchRequest:
     capacity_pools: tuple[CapacityPool, ...] = ()
     task_capacity_demands: Mapping[str, TaskCapacityDemand] = field(default_factory=dict)
     capacity_policy: TaskCapacityPolicy | None = None
+    capacity_snapshot: CapacityScopeSnapshot | None = None
+    group_admitted_at_ms: int | None = None
+    group_absolute_deadline_ms: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.plan, ValidatedTaskPlan):
@@ -580,6 +671,20 @@ class ParallelDispatchRequest:
         if any(not isinstance(pool, CapacityPool) for pool in pools) or len({pool.pool_id for pool in pools}) != len(pools):
             raise HarnessValidationError("capacity pools must be unique CapacityPool values", code="CAPACITY_POLICY_INVALID")
         object.__setattr__(self, "capacity_pools", pools)
+        capacity_snapshot = self.capacity_snapshot
+        if capacity_snapshot is not None and (
+            not isinstance(capacity_snapshot, CapacityScopeSnapshot)
+            or capacity_snapshot.pools != tuple(sorted(pools, key=lambda item: item.pool_id))
+        ):
+            raise HarnessValidationError(
+                "dispatch capacity scope differs from its pool snapshot",
+                code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+            )
+        if pools and capacity_snapshot is None:
+            raise HarnessValidationError(
+                "multi-pool dispatch requires an authoritative capacity scope",
+                code="CAPACITY_POLICY_MISSING",
+            )
         demands = dict(self.task_capacity_demands)
         if any(not isinstance(value, TaskCapacityDemand) or key != value.task_id for key, value in demands.items()):
             raise HarnessValidationError("task capacity demands must be keyed by task id", code="CAPACITY_DEMAND_INVALID")
@@ -636,6 +741,21 @@ class ParallelDispatchRequest:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0 or value > 3600:
                 raise HarnessValidationError(f"{name} must be in (0, 3600]", code="PLAN_SCHEMA_INVALID")
             object.__setattr__(self, name, float(value))
+        admitted_at_ms = self.group_admitted_at_ms
+        absolute_deadline_ms = self.group_absolute_deadline_ms
+        if admitted_at_ms is None:
+            admitted_at_ms = capacity_now_ms()
+        _integer_deadline(admitted_at_ms, "group_admitted_at_ms")
+        if absolute_deadline_ms is None:
+            absolute_deadline_ms = admitted_at_ms + int(self.max_group_runtime_seconds * 1000)
+        _integer_deadline(absolute_deadline_ms, "group_absolute_deadline_ms")
+        if absolute_deadline_ms <= admitted_at_ms:
+            raise HarnessValidationError(
+                "dispatch request deadline must follow admission",
+                code="TASK_GROUP_DEADLINE_INVALID",
+            )
+        object.__setattr__(self, "group_admitted_at_ms", admitted_at_ms)
+        object.__setattr__(self, "group_absolute_deadline_ms", absolute_deadline_ms)
         if self.parent_graph_identity is not None:
             identity = self.parent_graph_identity
             if not isinstance(identity, GraphExecutionIdentity):
@@ -927,7 +1047,7 @@ class _GroupSession:
 class _PendingGroupAdmission:
     """Coordinates concurrent attempts before an admission becomes visible."""
 
-    group_checksum: str
+    group: DispatchGroup
     completed: Event = field(default_factory=Event)
     failure: BaseException | None = None
 
@@ -1146,6 +1266,8 @@ class ParallelAgentCoordinator:
             raise HarnessValidationError("multi-pool dispatch requires trusted capacity rules", code="CAPACITY_POLICY_MISSING")
         if request.capacity_policy is not None:
             request.capacity_policy.resolve(request.plan, request.capacity_pools, now_ms=observed_at)
+        if request.capacity_snapshot is not None:
+            request.capacity_snapshot.require_current(now_ms=observed_at)
         for pool in request.capacity_pools:
             pool.require_current(now_ms=observed_at)
 
@@ -1186,6 +1308,12 @@ class ParallelAgentCoordinator:
                 "fenced mutation requires a resource authority and execution lease adapter",
                 code="SIDE_EFFECT_FENCE_REQUIRED",
             )
+        effective = self.effective_parallelism(request)
+        if effective < 1:
+            # Zero live slots is a recoverable scheduling condition.  The
+            # full logical READY set still flows into first-fit so the
+            # coordinator can record one fixed-deadline capacity-wait fact.
+            return 0, "capacity_limited"
         if self._requires_serial_fallback_transport():
             if not request.serial_fallback:
                 raise HarnessValidationError(
@@ -1198,13 +1326,6 @@ class ParallelAgentCoordinator:
                     code="TASK_GROUP_WAVE_ADAPTER_REQUIRED",
                 )
             return 1, "wave_adapter_unavailable"
-
-        effective = self.effective_parallelism(request)
-        if effective < 1:
-            raise HarnessValidationError(
-                "parallel capacity is unavailable",
-                code="CAPACITY_EXHAUSTED",
-            )
         if not request.task_capacity_demands and request.side_effect_class is SideEffectClass.MUTATING_SERIAL:
             return effective, "side_effect_fence"
         requested = request.requested_parallelism or self._group_parallelism_limit(request)
@@ -1250,6 +1371,8 @@ class ParallelAgentCoordinator:
             max_waves=request.max_waves,
             max_parallelism=group_parallelism,
             budget_envelope=request.plan.limits.aggregate_task_budget.to_dict(),
+            admitted_at_ms=request.group_admitted_at_ms,
+            absolute_deadline_ms=request.group_absolute_deadline_ms,
             correlation_id=request.correlation_id,
             state=DispatchGroupState.PLANNED,
         ).transitioned(DispatchGroupState.ADMITTED)
@@ -1269,6 +1392,7 @@ class ParallelAgentCoordinator:
         with self._lock:
             session = self._sessions.get(group.group_id)
             if session is not None:
+                group = _reuse_admission_clock(group, session.group)
                 if session.group.group_checksum != group.group_checksum:
                     raise HarnessValidationError(
                         "dispatch group identity conflicts with immutable admission",
@@ -1277,15 +1401,17 @@ class ParallelAgentCoordinator:
                 return session.group
             pending = self._pending_admissions.get(group.group_id)
             if pending is None:
-                pending = _PendingGroupAdmission(group_checksum=group.group_checksum)
+                pending = _PendingGroupAdmission(group=group)
                 self._pending_admissions[group.group_id] = pending
                 admission_owner = True
             else:
-                if pending.group_checksum != group.group_checksum:
+                group = _reuse_admission_clock(group, pending.group)
+                if pending.group.group_checksum != group.group_checksum:
                     raise HarnessValidationError(
                         "dispatch group identity conflicts with immutable admission",
                         code="TASK_GROUP_ADMISSION_CONFLICT",
                     )
+                group = pending.group
                 admission_owner = False
 
         if not admission_owner:
@@ -1338,7 +1464,19 @@ class ParallelAgentCoordinator:
     ) -> DispatchGroup:
         """Restore canonical replay snapshots without repeating admission or spawn."""
         definition = self._group_definition(request)
-        if not isinstance(group, DispatchGroup) or group.group_checksum != definition.group_checksum:
+        if not isinstance(group, DispatchGroup):
+            raise HarnessValidationError(
+                "durable group differs from immutable admission",
+                code="TASK_GROUP_ADMISSION_CONFLICT",
+            )
+        # ``ParallelDispatchRequest`` materializes a local admission clock
+        # when durable timestamps are not supplied. During reopen that clock
+        # can differ from the original event even though every immutable
+        # admission input is identical. Compare against the original fixed
+        # clock, while retaining strict checksum validation for all other
+        # group fields.
+        definition = _reuse_admission_clock(definition, group)
+        if group.group_checksum != definition.group_checksum:
             raise HarnessValidationError("durable group differs from immutable admission", code="TASK_GROUP_ADMISSION_CONFLICT")
         if any(not isinstance(wave, DispatchWave) for wave in waves):
             raise TypeError("waves must contain DispatchWave values")
@@ -1645,14 +1783,25 @@ class ParallelAgentCoordinator:
                 session.group = replace(session.group, state=DispatchGroupState.RUNNING)
             elif session.group.state is not DispatchGroupState.SUCCEEDED:
                 session.group = session.group.transitioned(DispatchGroupState.RUNNING)
+            recovery_capacity_snapshot = request.capacity_snapshot
             for wave in tuple(session.waves):
                 if wave.state is DispatchWaveState.TERMINAL or not set(wave.task_ids).issubset(session.results):
                     continue
                 wave_results = tuple(session.results[task_id] for task_id in wave.task_ids)
                 outcome = _WaveRunOutcome(wave_results)
+                reservation_states = {
+                    item.task_id: ReservationState.CONSUMED
+                    for item in wave.reservations
+                }
                 terminal = replace(
                     wave.transitioned(DispatchWaveState.TERMINAL, terminal_outcome=_terminal_wave_outcome(outcome)),
                     reservations=tuple(item.settled(ReservationState.CONSUMED) for item in wave.reservations),
+                )
+                capacity_before_release = recovery_capacity_snapshot
+                capacity_after_release = _capacity_release_transition(
+                    capacity_before_release,
+                    wave,
+                    reservation_states,
                 )
                 self._emit(
                     "TASK_WAVE_COMPLETED", event_sink=event_sink,
@@ -1660,7 +1809,16 @@ class ParallelAgentCoordinator:
                     terminal_outcome=terminal.terminal_outcome.value,
                     reservation_states={item.task_id: item.state.value for item in terminal.reservations},
                     child_states={item.task_id: item.status.value for item in wave_results},
+                    capacity_before=(
+                        capacity_before_release.to_dict()
+                        if capacity_before_release is not None else None
+                    ),
+                    capacity_after=(
+                        capacity_after_release.to_dict()
+                        if capacity_after_release is not None else None
+                    ),
                 )
+                recovery_capacity_snapshot = capacity_after_release
                 session.waves = [terminal if item.wave_id == wave.wave_id else item for item in session.waves]
                 session.reserved.difference_update(wave.task_ids)
             recovered_projection = tuple(
@@ -2033,7 +2191,10 @@ class ParallelAgentCoordinator:
                 return self._result_for_session(session, request, limits=limits)
             if any(wave.state is not DispatchWaveState.TERMINAL for wave in session.waves):
                 return self._result_for_session(session, request, limits=limits, diagnostics=("ACTIVE_WAVE_PENDING",))
-            ordered = tuple(sorted(request.task_instances, key=lambda item: item.task_id))
+            # The request order is the scheduler's pinned
+            # priority/dependency-depth/task-id/checksum order.  Never replace
+            # it with coordinator-local task-id sorting.
+            ordered = request.task_instances
             pending = tuple(
                 item
                 for item in ordered
@@ -2061,6 +2222,7 @@ class ParallelAgentCoordinator:
         pending_work = list(pending)
         ledger = TaskPlanBudgetLedger.from_snapshot(request.budget_snapshot)
         pool_state = {pool.pool_id: pool for pool in request.capacity_pools}
+        capacity_snapshot = request.capacity_snapshot
         while pending_work:
             with self._lock:
                 if not _GROUP_TRANSITIONS[session.group.state] or session.group.state in {
@@ -2077,33 +2239,75 @@ class ParallelAgentCoordinator:
                         idempotency_key=group.group_id,
                     )
                     break
-                if pool_state:
-                    packing = pack_first_fit(
-                        [item.task_id for item in pending_work],
-                        request.task_capacity_demands,
-                        pool_state,
-                        max_tasks=effective,
-                        owner_scope=f"{request.plan.run_id}/{request.plan.stage_id}/{request.plan.plan_id}",
-                        reservation_keys={item.task_id: item.idempotency_key for item in pending_work},
+                owner_scope = (
+                    capacity_snapshot.owner_scope
+                    if capacity_snapshot is not None
+                    else f"{request.plan.run_id}/{request.plan.stage_id}/{request.plan.plan_id}"
+                )
+                occupied_resource_demands = tuple(
+                    demand
+                    for task_id in session.reserved
+                    for demand in (request.task_capacity_demands.get(task_id),)
+                    if demand is not None
+                    and demand.resource_conflict_key is not None
+                )
+                packing = pack_first_fit(
+                    [item.task_id for item in pending_work],
+                    request.task_capacity_demands,
+                    pool_state,
+                    max_tasks=effective,
+                    occupied_resource_demands=occupied_resource_demands,
+                    owner_scope=owner_scope,
+                    reservation_keys={item.task_id: item.idempotency_key for item in pending_work},
+                    task_instances={item.task_id: item for item in pending_work},
+                    budget_snapshot=ledger.snapshot(),
+                    capacity_snapshot=capacity_snapshot,
+                )
+                if not packing.selected:
+                    if packing.overflow and all(
+                        packing.reasons[task_id] == "BUDGET_EXCEEDED"
+                        for task_id in packing.overflow
+                    ):
+                        raise HarnessValidationError(
+                            "no logically ready task fits the remaining budget",
+                            code="BUDGET_EXCEEDED",
+                        )
+                    waiting_evidence = _capacity_waiting_evidence(
+                        session.group,
+                        packing,
+                        budget_checksum=ledger.to_dict()["ledger_checksum"],
                     )
-                    if not packing.selected:
-                        session.terminal_diagnostics = ("CAPACITY_NOT_AVAILABLE",)
-                        break
-                    selected_ids = set(packing.selected)
-                    batch = tuple(item for item in pending_work if item.task_id in selected_ids)
-                    reservation_allocations = {item.task_id: dict(item.allocations) for item in packing.reservations}
-                    reservation_policy_checksums = {
-                        item.task_id: dict(item.policy_checksums) for item in packing.reservations
-                    }
-                    pool_reservations = {item.task_id: item for item in packing.reservations}
-                    for reservation in packing.reservations:
-                        for pool_id, quantity in reservation.allocations.items():
-                            pool_state[pool_id] = replace(pool_state[pool_id], reserved=pool_state[pool_id].reserved + quantity)
-                else:
-                    batch = tuple(pending_work[:effective])
-                    reservation_allocations = {item.task_id: {} for item in batch}
-                    reservation_policy_checksums = {item.task_id: {} for item in batch}
-                    pool_reservations = {}
+                    self._emit(
+                        "TASK_GROUP_CAPACITY_WAITING",
+                        event_sink=event_sink,
+                        group_id=group.group_id,
+                        waiting=waiting_evidence,
+                        reason_code="CAPACITY_NOT_AVAILABLE",
+                        idempotency_key=waiting_evidence["waiting_key"],
+                    )
+                    session.terminal_diagnostics = ("CAPACITY_WAITING",)
+                    break
+                # A later dispatch may observe newly available capacity for
+                # the same durable group.  The waiting diagnostic describes
+                # the previous non-terminal observation and must not leak
+                # into the admitted wave's result.
+                session.terminal_diagnostics = ()
+                selected_ids = set(packing.selected)
+                batch = tuple(item for item in pending_work if item.task_id in selected_ids)
+                reservation_allocations = {
+                    item.task_id: dict(item.allocations)
+                    for item in packing.reservations
+                }
+                reservation_policy_checksums = {
+                    item.task_id: dict(item.policy_checksums)
+                    for item in packing.reservations
+                }
+                pool_reservations = {
+                    item.task_id: item for item in packing.reservations
+                }
+                for item in batch:
+                    reservation_allocations.setdefault(item.task_id, {})
+                    reservation_policy_checksums.setdefault(item.task_id, {})
                 wave = DispatchWave(
                     group.group_id,
                     session.next_wave_ordinal,
@@ -2126,8 +2330,11 @@ class ParallelAgentCoordinator:
                         else "INLINE_TEST" if self.child_supervisor is None
                         else "SUPERVISED"
                     ),
+                    packing=packing,
                 )
-                admitted_ledger = ledger.reserve(batch)
+                admitted_ledger = TaskPlanBudgetLedger.from_snapshot(
+                    packing.admitted_budget_snapshot
+                )
                 admitted_request = replace(request, budget_snapshot=admitted_ledger.snapshot())
                 spawn_requests = (
                     tuple(self._spawn_request(admitted_request, wave, item) for item in batch)
@@ -2140,6 +2347,7 @@ class ParallelAgentCoordinator:
                     "effective_parallelism": wave.effective_parallelism,
                     "budget_before_checksum": ledger.to_dict()["ledger_checksum"],
                     "budget_after_checksum": admitted_ledger.to_dict()["ledger_checksum"],
+                    "packing_checksum": packing.packing_checksum,
                     "queue_wait_ms": _elapsed_ms(session.started_at),
                     "idempotency_key": wave.wave_id,
                 }
@@ -2159,6 +2367,11 @@ class ParallelAgentCoordinator:
                 # durable commit. No local admission or child precedes it.
                 self._emit_batch((admission, *intents), event_sink=event_sink)
                 ledger = admitted_ledger
+                if packing.capacity_after is not None:
+                    capacity_snapshot = packing.capacity_after
+                    pool_state = {
+                        pool.pool_id: pool for pool in capacity_snapshot.pools
+                    }
                 pending_work = [item for item in pending_work if item.task_id not in {entry.task_id for entry in batch}]
                 session.next_wave_ordinal += 1
                 session.reserved.update(wave.task_ids)
@@ -2166,7 +2379,7 @@ class ParallelAgentCoordinator:
                 session.wave_instances[wave.wave_id] = batch
                 session.wave_admitted_at[wave.wave_id] = monotonic()
                 session.group = session.group.transitioned(DispatchGroupState.DISPATCHING)
-            if monotonic() - session.started_at > request.max_group_runtime_seconds:
+            if capacity_now_ms() >= session.group.absolute_deadline_ms:
                 self._mark_indeterminate(group.group_id, reason_code="group_runtime_deadline_exceeded", event_sink=event_sink)
                 raise HarnessValidationError("dispatch group runtime deadline exceeded", code="TASK_GROUP_DEADLINE_EXCEEDED")
             with self._lock:
@@ -2211,11 +2424,18 @@ class ParallelAgentCoordinator:
                     session.results[result.task_id] = result
                 session.reserved.difference_update(wave.task_ids)
                 session.quarantined_task_ids.update(outcome.quarantined_task_ids)
+                confirmed_terminal_task_ids = (
+                    set(outcome.consumed_task_ids)
+                    | set(outcome.released_task_ids)
+                    | set(outcome.reclaimed_task_ids)
+                )
                 reservation_states = {
                     item.task_id: (
                         ReservationState.RELEASED
                         if item.task_id in outcome.released_task_ids
                         else ReservationState.CONSUMED
+                        if item.task_id in confirmed_terminal_task_ids
+                        else ReservationState.RESERVED
                     )
                     for item in wave.reservations
                 }
@@ -2232,9 +2452,18 @@ class ParallelAgentCoordinator:
                             reservation_states[item.task_id],
                             item.capacity_allocations,
                             item.capacity_policy_checksums,
-                            capacity_reservation=(item.capacity_reservation.settled(
-                                reservation_states[item.task_id], reservation_key=item.idempotency_key, expected_version=1,
-                            ) if item.capacity_reservation is not None else None),
+                            capacity_reservation=(
+                                item.capacity_reservation
+                                if reservation_states[item.task_id]
+                                is ReservationState.RESERVED
+                                else item.capacity_reservation.settled(
+                                    reservation_states[item.task_id],
+                                    reservation_key=item.idempotency_key,
+                                    expected_version=1,
+                                )
+                                if item.capacity_reservation is not None
+                                else None
+                            ),
                         )
                         for item in wave.reservations
                     ),
@@ -2245,6 +2474,17 @@ class ParallelAgentCoordinator:
                     wave.wave_id,
                     session.wave_admitted_at.get(wave.wave_id, session.started_at),
                 )
+                capacity_before_release = capacity_snapshot
+                capacity_after_release = _capacity_release_transition(
+                    capacity_before_release,
+                    wave,
+                    reservation_states,
+                )
+                if capacity_after_release is not None:
+                    pool_state = {
+                        pool.pool_id: pool
+                        for pool in capacity_after_release.pools
+                    }
                 self._emit(
                     "TASK_WAVE_COMPLETED",
                     event_sink=event_sink,
@@ -2263,19 +2503,28 @@ class ParallelAgentCoordinator:
                         },
                     },
                     terminal_outcome=terminal_wave.terminal_outcome.value,
+                    capacity_before=(
+                        capacity_before_release.to_dict()
+                        if capacity_before_release is not None else None
+                    ),
+                    capacity_after=(
+                        capacity_after_release.to_dict()
+                        if capacity_after_release is not None else None
+                    ),
                     run_duration_ms=_elapsed_ms(dispatched_at),
                 )
-                for reservation in wave.reservations:
-                    for pool_id, quantity in reservation.capacity_allocations.items():
-                        pool = pool_state.get(pool_id)
-                        if pool is not None:
-                            pool_state[pool_id] = replace(pool, reserved=max(0, pool.reserved - quantity))
+                capacity_snapshot = capacity_after_release
                 if request.join_policy is JoinPolicy.FAIL_FAST and any(
                     item.status is TaskLifecycle.FAILED for item in outcome.results
                 ):
                     session.group = session.group.transitioned(DispatchGroupState.FAILED)
                     session.terminal_diagnostics = ("TASK_FAILED",)
-                    self._release_pending_waves(session, event_sink=event_sink, reason_code="fail_fast")
+                    self._release_pending_waves(
+                        session,
+                        event_sink=event_sink,
+                        reason_code="fail_fast",
+                        capacity_snapshot=capacity_after_release,
+                    )
                     self._emit(
                         "TASK_GROUP_FAILED",
                         event_sink=event_sink,
@@ -2322,7 +2571,7 @@ class ParallelAgentCoordinator:
                 # tasks are terminal; otherwise a later dispatch would be an
                 # invalid JOINING -> DISPATCHING transition.
                 state = session.group.state
-                diagnostics = ("JOIN_WAITING",)
+                diagnostics = session.terminal_diagnostics or ("JOIN_WAITING",)
             else:
                 state, diagnostics = self._terminal_state(session)
                 if state is not session.group.state:
@@ -2983,13 +3232,27 @@ class ParallelAgentCoordinator:
         *,
         event_sink: Callable[[Mapping[str, Any]], Any] | None,
         reason_code: str,
-    ) -> None:
+        capacity_snapshot: CapacityScopeSnapshot | None = None,
+    ) -> CapacityScopeSnapshot | None:
         pending = set(session.reserved)
         release_confirmed = reason_code in {"fail_fast", "cancel_requested", "group_runtime_deadline_exceeded"}
         if release_confirmed:
             session.reserved.clear()
         if not pending:
-            return
+            return capacity_snapshot
+        current_capacity = capacity_snapshot
+        if current_capacity is None:
+            recorded_snapshots = tuple(
+                wave.packing.capacity_after
+                for wave in session.waves
+                if pending.intersection(wave.task_ids)
+                and wave.packing.capacity_after is not None
+            )
+            if recorded_snapshots:
+                current_capacity = max(
+                    recorded_snapshots,
+                    key=lambda snapshot: snapshot.revision,
+                )
         updated: list[DispatchWave] = []
         for wave in session.waves:
             if not (pending & set(wave.task_ids)):
@@ -3025,6 +3288,15 @@ class ParallelAgentCoordinator:
                     reservations=reservations,
                 )
             )
+            reservation_states = {
+                item.task_id: item.state for item in reservations
+            }
+            capacity_before_release = current_capacity
+            capacity_after_release = _capacity_release_transition(
+                capacity_before_release,
+                wave,
+                reservation_states,
+            )
             self._emit(
                 "TASK_WAVE_COMPLETED",
                 event_sink=event_sink,
@@ -3034,10 +3306,24 @@ class ParallelAgentCoordinator:
                 reservation_states={
                     item.task_id: item.state.value for item in reservations
                 },
+                child_states={
+                    item.task_id: TaskLifecycle.FAILED.value
+                    for item in reservations
+                },
                 reason_code=reason_code,
                 terminal_outcome=terminal_outcome.value,
+                capacity_before=(
+                    capacity_before_release.to_dict()
+                    if capacity_before_release is not None else None
+                ),
+                capacity_after=(
+                    capacity_after_release.to_dict()
+                    if capacity_after_release is not None else None
+                ),
             )
+            current_capacity = capacity_after_release
         session.waves = updated
+        return current_capacity
 
     def _mark_indeterminate(
         self,
@@ -3121,6 +3407,22 @@ class ParallelAgentCoordinator:
             aggregate_checksum = canonical_payload_checksum({"group_id": session.group.group_id, "results": [{"task_id": item.task_id, "result_checksum": item.result_checksum} for item in ordered]})
             aggregate_ref = f"artifact://task-plan/{aggregate_checksum.removeprefix('sha256:')}"
         refs = tuple(item.result_ref for item in ordered if item.result_ref)
+        if diagnostics is None:
+            diagnostics = session.terminal_diagnostics or (
+                ()
+                if session.group.state is DispatchGroupState.SUCCEEDED
+                else (
+                    ("JOIN_WAITING",)
+                    if session.group.state
+                    in {
+                        DispatchGroupState.ADMITTED,
+                        DispatchGroupState.DISPATCHING,
+                        DispatchGroupState.RUNNING,
+                        DispatchGroupState.JOINING,
+                    }
+                    else ("TASK_FAILED",)
+                )
+            )
         observation = ParentObservation(
             session.group.run_id,
             session.group.stage_id,
@@ -3136,11 +3438,7 @@ class ParallelAgentCoordinator:
             ),
             aggregate_ref=aggregate_ref,
             aggregate_checksum=aggregate_checksum,
-            diagnostics=diagnostics or (
-                ()
-                if session.group.state is DispatchGroupState.SUCCEEDED
-                else (("JOIN_WAITING",) if session.group.state in {DispatchGroupState.ADMITTED, DispatchGroupState.DISPATCHING, DispatchGroupState.RUNNING, DispatchGroupState.JOINING} else ("TASK_FAILED",))
-            ),
+            diagnostics=diagnostics,
             refs=refs,
             requested_parallelism=request.requested_parallelism or session.group.max_parallelism,
             effective_parallelism=max(
@@ -3224,6 +3522,30 @@ def _admission_policy_checksum(request: ParallelDispatchRequest) -> str:
     })
 
 
+def _reuse_admission_clock(
+    proposed: DispatchGroup,
+    admitted: DispatchGroup,
+) -> DispatchGroup:
+    """Compare a redelivery against the first admission's fixed clock.
+
+    ``ParallelDispatchRequest`` assigns the admission instant when a caller
+    does not already have durable group evidence.  A retry of the same
+    logical group may therefore arrive with a later locally observed instant.
+    The first admission owns both timestamps; replacing only those fields
+    keeps the immutable checksum comparison strict for every policy and
+    identity field while making exact redelivery independent of wall-clock
+    observation time.
+    """
+
+    if proposed.group_id != admitted.group_id:
+        return proposed
+    return replace(
+        proposed,
+        admitted_at_ms=admitted.admitted_at_ms,
+        absolute_deadline_ms=admitted.absolute_deadline_ms,
+    )
+
+
 def _elapsed_ms(started_at: float, *, now: float | None = None) -> int:
     finished_at = monotonic() if now is None else now
     return max(0, int(round((finished_at - started_at) * 1000)))
@@ -3254,6 +3576,45 @@ def _terminal_wave_outcome(outcome: _WaveRunOutcome) -> DispatchWaveTerminalOutc
     if succeeded == len(results):
         return DispatchWaveTerminalOutcome.SUCCEEDED
     return DispatchWaveTerminalOutcome.INDETERMINATE
+
+
+def _capacity_release_transition(
+    before: CapacityScopeSnapshot | None,
+    wave: DispatchWave,
+    reservation_states: Mapping[str, ReservationState],
+) -> CapacityScopeSnapshot | None:
+    """Propose one fenced capacity release after confirmed settlement only."""
+
+    if before is None:
+        return None
+    pools = {pool.pool_id: pool for pool in before.pools}
+    affected: set[str] = set()
+    for reservation in wave.reservations:
+        state = reservation_states[reservation.task_id]
+        if state is ReservationState.RESERVED:
+            continue
+        for pool_id, quantity in reservation.capacity_allocations.items():
+            pool = pools.get(pool_id)
+            if pool is None or pool.reserved < quantity:
+                raise HarnessValidationError(
+                    "capacity release differs from authoritative reservation state",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                )
+            pools[pool_id] = replace(pool, reserved=pool.reserved - quantity)
+            affected.add(pool_id)
+    if not affected:
+        return before
+    return before.with_reserved_pools(tuple(
+        replace(
+            pool,
+            reservation_version=(
+                pool.reservation_version + 1
+                if pool.pool_id in affected
+                else pool.reservation_version
+            ),
+        )
+        for pool in sorted(pools.values(), key=lambda item: item.pool_id)
+    ))
 
 
 def _wave_for_child(session: _GroupSession, handle: ChildAgentHandle) -> DispatchWave:

@@ -14,6 +14,7 @@ from framework.harness.task_plan import (
     PlanPatchOperation,
     PlanPatchOperationType,
     TaskAcceptanceCriteria,
+    TaskAdmissionOwner,
     TaskBudget,
     TaskCapabilityRegistration,
     TaskCapabilityRegistry,
@@ -25,7 +26,6 @@ from framework.harness.task_plan import (
     TaskPlanEvent,
     TaskPlanProjection,
     TaskPlanQueueProjection,
-    TaskPlanReadyDecision,
     TaskPlanReplayReducer,
     TaskPlanScheduler,
     TaskPlanStageIdentity,
@@ -38,9 +38,15 @@ from framework.harness.task_plan import (
     TaskSpec,
     ValidatedTaskPlan,
     materialize_queue_task,
+    task_instance_for_attempt,
 )
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.canonical import canonical_payload_checksum
-from framework.harness.task_plan.store import TaskResultRecord
+from framework.harness.task_plan.store import (
+    LogicalTaskReadiness,
+    TaskQueueAdmissionEvidence,
+    TaskResultRecord,
+)
 from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
 from framework.harness.graph.activity import HarnessWorkerType
@@ -618,8 +624,9 @@ def test_scheduler_queue_projection_and_result_identity_are_deterministic():
         worker_capacity=1,
         available_input_refs=("document", "evidence_pack"),
     )
-    assert [instance.task_id for instance in decision.task_instances] == ["a-root"]
-    instance = decision.task_instances[0]
+    assert decision.task_instances == ()
+    assert decision.logical_ready_task_ids == ("a-root", "z-root")
+    instance = task_instance_for_attempt(plan, "a-root", 1)
     queue_task = materialize_queue_task(instance)
     assert queue_task.payload == {}
     assert set(queue_task.metadata) == {"task_plan_queue_projection"}
@@ -639,13 +646,48 @@ def test_scheduler_queue_projection_and_result_identity_are_deterministic():
     assert missing_identity.value.code == "task_plan_queue_transport_mismatch"
 
     projection = scheduler.reserve_ready_tasks(store.load_projection(plan.run_id, plan.stage_id), decision)
-    for event_type, transition in (("TASK_READY", lambda value: value), ("TASK_DISPATCHED", lambda value: scheduler.mark_dispatched(value, instance))):
-        projection = replace(transition(projection), last_sequence=len(store.read_events(plan.run_id, plan.stage_id)) + 1)
-        store.commit_event(TaskPlanEvent.for_plan(
-            event_type, plan, sequence=projection.last_sequence,
-            task_id=instance.task_id, task_instance_id=instance.task_instance_id,
-            attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
-        ), projection)
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=decision.logical_ready_task_ids,
+    )
+    sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_READY", plan, sequence=sequence,
+        task_id=instance.task_id, input_checksum=instance.task_definition_checksum,
+        payload={"logical_readiness": readiness.to_dict()},
+    ), projection)
+    before_admission = projection
+    projection = scheduler.mark_admitted(
+        projection,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    queue_admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before_admission.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    sequence += 1
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED", plan, sequence=sequence,
+        task_id=instance.task_id, task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
+        payload={"queue_admission": queue_admission.to_dict()},
+    ), projection)
+    sequence += 1
+    projection = replace(scheduler.mark_dispatched(projection, instance), last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_DISPATCHED", plan, sequence=sequence,
+        task_id=instance.task_id, task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
+    ), projection)
     accepted = TaskResultRecord(
         run_id=plan.run_id,
         stage_id=plan.stage_id,
@@ -709,33 +751,78 @@ def test_harness_scheduler_and_store_commit_terminal_result_with_budget_parity()
         policy=policy,
         available_input_refs=("document", "evidence_pack"),
     )
-    instance = decision.task_instances[0]
+    assert decision.logical_ready_task_ids == ("structure",)
+    instance = task_instance_for_attempt(plan, "structure", 1)
 
     projection = scheduler.reserve_task_plan_tasks(
         store.load_projection(plan.run_id, plan.stage_id),
         decision,
     )
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=decision.logical_ready_task_ids,
+    )
+    projection = replace(projection, last_sequence=3)
+    store.commit_event(
+        TaskPlanEvent.for_plan(
+            "TASK_READY",
+            plan,
+            sequence=3,
+            task_id=instance.task_id,
+            input_checksum=instance.task_definition_checksum,
+            payload={"logical_readiness": readiness.to_dict()},
+        ),
+        projection,
+    )
+    before_admission = projection
+    projection = scheduler.mark_task_plan_admitted(
+        projection,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before_admission.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    projection = replace(projection, last_sequence=4)
+    store.commit_event(
+        TaskPlanEvent.for_plan(
+            "TASK_QUEUE_ADMITTED",
+            plan,
+            sequence=4,
+            task_id=instance.task_id,
+            task_instance_id=instance.task_instance_id,
+            attempt=instance.attempt,
+            input_checksum=instance.task_definition_checksum,
+            payload={"queue_admission": admission.to_dict()},
+        ),
+        projection,
+    )
     for sequence, event_type in enumerate(
-        ("TASK_READY", "TASK_DISPATCHED", "TASK_STARTED"),
-        start=3,
+        ("TASK_DISPATCHED", "TASK_STARTED"),
+        start=5,
     ):
-        if event_type == "TASK_DISPATCHED":
-            projection = scheduler.mark_task_plan_dispatched(projection, instance)
-        elif event_type == "TASK_STARTED":
-            projection = scheduler.mark_task_plan_started(projection, instance)
-        projection = replace(projection, last_sequence=sequence)
-        store.commit_event(
-            TaskPlanEvent.for_plan(
-                event_type,
-                plan,
-                sequence=sequence,
-                task_id=instance.task_id,
-                task_instance_id=instance.task_instance_id,
-                attempt=instance.attempt,
-                input_checksum=instance.task_definition_checksum,
-            ),
-            projection,
+        projection = (
+            scheduler.mark_task_plan_dispatched(projection, instance)
+            if event_type == "TASK_DISPATCHED"
+            else scheduler.mark_task_plan_started(projection, instance)
         )
+        projection = replace(projection, last_sequence=sequence)
+        store.commit_event(TaskPlanEvent.for_plan(
+            event_type,
+            plan,
+            sequence=sequence,
+            task_id=instance.task_id,
+            task_instance_id=instance.task_instance_id,
+            attempt=instance.attempt,
+            input_checksum=instance.task_definition_checksum,
+        ), projection)
 
     result = TaskResultRecord(
         run_id=plan.run_id,
@@ -774,7 +861,7 @@ def test_harness_scheduler_and_store_commit_terminal_result_with_budget_parity()
         "TASK_RESULT_ACCEPTED",
         "TASK_COMPLETED",
     ]
-    assert projection.last_sequence == len(events) == 7
+    assert projection.last_sequence == len(events) == 8
     assert projection.consumed_budget["reserved_max_turns"] == 0
     assert projection.consumed_budget["consumed_max_turns"] == 1
     assert projection.consumed_budget["consumed_max_tool_calls"] == 1
@@ -850,19 +937,27 @@ def test_patch_history_is_immutable_and_running_tasks_cannot_be_edited():
 
     projection = store.load_projection(plan.run_id, plan.stage_id)
     replacement = next(item for item in next_plan.tasks if item.task_id == "helper-replacement")
-    instance = TaskPlanScheduler().next_ready_tasks(
+    readiness = TaskPlanScheduler().next_ready_tasks(
         projection,
         1,
         plan=next_plan,
         policy=policy,
         available_input_refs=("document", "evidence_pack"),
-    ).task_instances[0]
+    )
+    instance = task_instance_for_attempt(
+        next_plan,
+        readiness.logical_ready_task_ids[0],
+        1,
+    )
+    ready = TaskPlanScheduler().reserve_ready_tasks(projection, readiness)
+    admitted = TaskPlanScheduler.mark_admitted(
+        ready,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
     running = TaskPlanScheduler.mark_started(
         TaskPlanScheduler.mark_dispatched(
-            TaskPlanScheduler().reserve_ready_tasks(
-                projection,
-                TaskPlanReadyDecision((instance,)),
-            ),
+            admitted,
             instance,
         ),
         instance,
@@ -1110,32 +1205,61 @@ def test_replay_uses_only_recorded_evidence_and_matches_projection_checksum():
         policy=policy,
         available_input_refs=("document", "evidence_pack"),
     )
-    instance = decision.task_instances[0]
+    instance = task_instance_for_attempt(plan, "structure", 1)
     projection = scheduler.reserve_ready_tasks(store.load_projection(plan.run_id, plan.stage_id), decision)
-    projection = scheduler.mark_dispatched(projection, instance)
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=decision.logical_ready_task_ids,
+    )
     store.append_event(
         TaskPlanEvent.for_plan(
             "TASK_READY",
             plan,
             sequence=3,
             task_id=instance.task_id,
-            task_instance_id=instance.task_instance_id,
-            attempt=instance.attempt,
             input_checksum=instance.task_definition_checksum,
+            payload={"logical_readiness": readiness.to_dict()},
         )
     )
+    before_admission = projection
+    projection = scheduler.mark_admitted(
+        projection,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before_admission.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    store.append_event(TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED",
+        plan,
+        sequence=4,
+        task_id=instance.task_id,
+        task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt,
+        input_checksum=instance.task_definition_checksum,
+        payload={"queue_admission": admission.to_dict()},
+    ))
+    projection = scheduler.mark_dispatched(projection, instance)
     store.append_event(
         TaskPlanEvent.for_plan(
             "TASK_DISPATCHED",
             plan,
-            sequence=4,
+            sequence=5,
             task_id=instance.task_id,
             task_instance_id=instance.task_instance_id,
             attempt=instance.attempt,
             input_checksum=instance.task_definition_checksum,
         )
     )
-    store.update_projection(replace(projection, last_sequence=4))
+    store.update_projection(replace(projection, last_sequence=5))
     result = TaskResultRecord(
         run_id=plan.run_id,
         stage_id=plan.stage_id,

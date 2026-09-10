@@ -101,9 +101,9 @@ def block_dependency_task(
 ) -> TaskPlanProjection:
     """Return a projection with one unadmitted dependent task closed.
 
-    Reapplying the same block is idempotent. A target that has already entered
-    a retry, dispatch, or running lifecycle is rejected rather than being
-    relabelled as a task that never entered a wave.
+    Reapplying the same block is idempotent. A target with an active admitted,
+    dispatched, or running attempt is rejected rather than bypassing its
+    cancellation and reservation-settlement owner.
     """
 
     definitions, states, _depths = _validated_plan_projection(plan, projection)
@@ -119,7 +119,7 @@ def block_dependency_task(
         return projection
     if not _is_unadmitted_for_dependency_block(state):
         raise HarnessValidationError(
-            "dependency block target has already entered an attempt lifecycle",
+            "dependency block target has an active admitted attempt",
             code="task_plan_dependency_block_not_unadmitted",
             details={"task_id": task_id, "status": state.status.value, "attempts": state.attempts},
         )
@@ -131,17 +131,10 @@ def block_dependency_task(
             details={"task_id": task_id},
         )
 
-    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
-
-    budget = dict(projection.consumed_budget)
-    if state.status is TaskLifecycle.READY:
-        budget = TaskPlanBudgetLedger.from_snapshot(budget).release_unstarted(
-            state.active_instance_id, task_id, state.attempts,
-            reason_code=TASK_BLOCKED_UPSTREAM_FAILURE,
-        ).snapshot()
     blocked = state.transitioned(
         TaskLifecycle.BLOCKED_DEPENDENCY,
         active_instance_id=None,
+        admission_owner=None,
         result=None,
         failure_reason_code=TASK_BLOCKED_UPSTREAM_FAILURE,
     )
@@ -151,7 +144,11 @@ def block_dependency_task(
             blocked if item.task_id == task_id else item
             for item in projection.tasks
         ),
-        consumed_budget=budget,
+        logical_ready_order=tuple(
+            ready_task_id
+            for ready_task_id in projection.logical_ready_order
+            if ready_task_id != task_id
+        ),
     )
 
 
@@ -243,10 +240,12 @@ def _is_recorded_dependency_block(state: TaskProjection) -> bool:
 
 
 def _is_unadmitted_for_dependency_block(state: TaskProjection) -> bool:
-    return (
-        state.status is TaskLifecycle.PENDING and state.attempts == 0
-    ) or (
-        state.status is TaskLifecycle.READY and state.attempts == 1
+    return state.status in {
+        TaskLifecycle.PENDING,
+        TaskLifecycle.READY,
+    } and (
+        state.active_instance_id is None
+        and state.admission_owner is None
     )
 
 

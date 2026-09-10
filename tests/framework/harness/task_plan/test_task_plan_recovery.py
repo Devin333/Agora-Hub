@@ -11,6 +11,7 @@ from framework.harness.task_plan.attempt_history import (
 )
 from framework.harness.task_plan import (
     InMemoryTaskPlanStore,
+    LogicalTaskReadiness,
     PlanBuildBudget,
     PlanCandidate,
     TaskAcceptanceCriteria,
@@ -27,22 +28,25 @@ from framework.harness.task_plan import (
     TaskPlanReplayReducer,
     TaskPlanStageIdentity,
     TaskPlanQueueProjection,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V4,
     TaskPlanValidationContext,
     TaskPlanValidator,
     TaskResultRecord,
+    TaskQueueAdmissionEvidence,
     TaskRetryPolicy,
     TaskSpec,
     task_instance_for_attempt,
 )
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.task_plan.checkpoint import (
-    TASK_PLAN_CHECKPOINT_SCHEMA_V2,
     TASK_PLAN_CHECKPOINT_SCHEMA_V3,
+    TASK_PLAN_CHECKPOINT_SCHEMA_V4,
     JsonlTaskPlanCheckpointStore,
 )
 from framework.harness.task_plan.models import PlanPatch, PlanPatchOperation, PlanPatchOperationType
 from framework.harness.task_plan.recovery import TaskPlanRecovery
+from framework.harness.task_plan.replay import TASK_PLAN_REPLAY_REDUCER_VERSION_V3
 from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
 from framework.harness.graph.activity import HarnessWorkerType
@@ -177,6 +181,39 @@ def _lifecycle_event(event_type, sequence, plan, instance, *, input_checksum=Non
     )
 
 
+def _admission_events(plan, instance, *, sequence: int = 3):
+    definition = next(item for item in plan.tasks if item.task_id == instance.task_id)
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=definition.task_definition_checksum,
+        logical_ready_order=(instance.task_id,),
+    )
+    budget_before = TaskPlanBudgetLedger.for_plan(plan)
+    budget_after = budget_before.reserve((instance,))
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=budget_before.to_dict()["ledger_checksum"],
+        budget_after_checksum=budget_after.to_dict()["ledger_checksum"],
+    )
+    return (
+        TaskPlanEvent.for_plan(
+            "TASK_READY",
+            plan,
+            sequence=sequence,
+            task_id=instance.task_id,
+            input_checksum=instance.task_definition_checksum,
+            payload={"logical_readiness": readiness.to_dict()},
+        ),
+        _lifecycle_event(
+            "TASK_QUEUE_ADMITTED",
+            sequence + 1,
+            plan,
+            instance,
+            payload={"queue_admission": admission.to_dict()},
+        ),
+    )
+
+
 def _result(plan, instance):
     definition = plan.tasks[0]
     return TaskResultRecord(
@@ -244,9 +281,26 @@ def _attempt_history_record(
 def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline():
     plan, base_events, worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
+    readiness_event, queue_admission_event = _admission_events(
+        plan,
+        instance,
+        sequence=3,
+    )
+    readiness_events = (*base_events, readiness_event)
+    readiness_report = TaskPlanReplayReducer().replay((plan,), readiness_events)
+    assert readiness_report.projection.tasks[0].status is TaskLifecycle.READY
+    assert readiness_report.active_task_instances == ()
+    assert readiness_report.projection.consumed_budget["ledger"]["records"] == {}
+    readiness_recovery = TaskPlanRecoveryService(
+        queue_reader=_EmptyQueueReader()
+    ).recover((plan,), readiness_events)
+    assert readiness_recovery.missing_queue_projections == ()
+    assert worker.calls == 0
+
     events = (
         *base_events,
-        _lifecycle_event("TASK_READY", 3, plan, instance),
+        readiness_event,
+        queue_admission_event,
     )
     report = TaskPlanReplayReducer().replay((plan,), events)
     checkpoint = TaskPlanCheckpoint.from_replay(
@@ -264,12 +318,14 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
     assert record["reserved_revision"] == 1
     assert record["settled_revision"] is None
     assert restored.budget_snapshot["reserved_max_turns"] == instance.budget_snapshot.max_turns
-    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
-    # Ledger v2 includes the versioned settlement receipt in canonical history.
-    assert report.replay_checksum == (
-        "sha256:2f56d6f8b32e7b38de0ba5103771265e59815c2e23c841d79d38971edd096d27"
+    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V4
+    wire_report = TaskPlanReplayReducer().replay(
+        (type(plan).from_dict(plan.to_dict()),),
+        tuple(TaskPlanEvent.from_dict(event.to_dict()) for event in events),
     )
-    assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
+    assert wire_report.replay_checksum == report.replay_checksum
+    assert wire_report.projection == report.projection
+    assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V4
     assert checkpoint.checkpoint_checksum.startswith("sha256:")
     assert set(checkpoint.to_dict()) == {
         "accepted_output_refs",
@@ -303,7 +359,8 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
         "plan_version",
         "policy_ref",
         "projection",
-        "ready_order",
+        "logical_ready_order",
+        "active_attempt_order",
         "reducer_version",
         "replan_count",
         "replay_checksum",
@@ -323,7 +380,7 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
     )
 
     assert recovery.checkpoint_verified is True
-    assert recovery.recovered_from_sequence == 3
+    assert recovery.recovered_from_sequence == 4
     assert len(recovery.missing_queue_projections) == 1
     queue_task = recovery.missing_queue_projections[0]
     assert queue_task.task_id == instance.task_instance_id
@@ -332,42 +389,29 @@ def test_checkpoint_roundtrip_and_missing_queue_projection_recovery_are_offline(
     assert worker.calls == 0
 
 
-def test_checkpoint_v2_payload_remains_readable_without_parallel_projection() -> None:
+def test_retired_checkpoint_v3_payload_fails_closed() -> None:
     plan, base_events, _worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
         (plan,),
-        (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance)),
+        (*base_events, *_admission_events(plan, instance, sequence=3)),
     )
     checkpoint = TaskPlanCheckpoint.from_replay(
-        "checkpoint-v2",
+        "checkpoint-v3",
         plan,
         report,
         created_at="2026-08-01T00:00:01Z",
     )
+    with pytest.raises(HarnessValidationError) as reducer_error:
+        replace(report, reducer_version=TASK_PLAN_REPLAY_REDUCER_VERSION_V3)
+    assert reducer_error.value.code == "unsupported_task_plan_replay_reducer"
+
     legacy_payload = checkpoint.to_dict()
-    legacy_payload["schema_version"] = TASK_PLAN_CHECKPOINT_SCHEMA_V2
-    for field_name in (
-        "parallel_groups",
-        "parallel_waves",
-        "parallel_reservations",
-        "parallel_diagnostics",
-        "parallel_event_sequence",
-        "attempt_history",
-        "parallel_spawn_operations",
-        "budget_ledger",
-        "history_index_checksum",
-        "observation_checksum",
-        "continuation",
-        "checkpoint_checksum",
-    ):
-        legacy_payload.pop(field_name, None)
+    legacy_payload["schema_version"] = TASK_PLAN_CHECKPOINT_SCHEMA_V3
 
-    legacy_checkpoint = TaskPlanCheckpoint(**legacy_payload)
-    restored = TaskPlanCheckpoint.from_dict(legacy_checkpoint.to_dict())
-
-    assert restored == legacy_checkpoint
-    assert restored.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V2
+    with pytest.raises(HarnessValidationError) as captured:
+        TaskPlanCheckpoint.from_dict(legacy_payload)
+    assert captured.value.code == "unsupported_task_plan_checkpoint_schema"
 
 
 def test_jsonl_checkpoint_store_reloads_checksummed_snapshots(tmp_path) -> None:
@@ -375,7 +419,7 @@ def test_jsonl_checkpoint_store_reloads_checksummed_snapshots(tmp_path) -> None:
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
         (plan,),
-        (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance)),
+        (*base_events, *_admission_events(plan, instance, sequence=3)),
     )
     checkpoint = TaskPlanCheckpoint.from_replay(
         "checkpoint-jsonl",
@@ -399,7 +443,7 @@ def test_checkpoint_copies_and_validates_parallel_replay_projection() -> None:
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
         (plan,),
-        (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance)),
+        (*base_events, *_admission_events(plan, instance, sequence=3)),
     )
     parallel_report = replace(
         report,
@@ -489,7 +533,7 @@ def test_checkpoint_roundtrips_every_attempt_history_outcome(outcome) -> None:
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
         (plan,),
-        (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance)),
+        (*base_events, *_admission_events(plan, instance, sequence=3)),
     )
     record = _attempt_history_record(plan, instance, outcome)
     history_report = replace(report, attempt_history=(record,))
@@ -518,7 +562,7 @@ def test_checkpoint_detects_attempt_history_changes() -> None:
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
         (plan,),
-        (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance)),
+        (*base_events, *_admission_events(plan, instance, sequence=3)),
     )
     indeterminate = _attempt_history_record(
         plan,
@@ -571,12 +615,12 @@ def test_recovery_preserves_committed_result_until_terminal_event_without_redisp
     result = _result(plan, instance)
     events_before_terminal = (
         *base_events,
-        _lifecycle_event("TASK_READY", 3, plan, instance),
-        _lifecycle_event("TASK_DISPATCHED", 4, plan, instance),
-        _lifecycle_event("TASK_STARTED", 5, plan, instance),
+        *_admission_events(plan, instance, sequence=3),
+        _lifecycle_event("TASK_DISPATCHED", 5, plan, instance),
+        _lifecycle_event("TASK_STARTED", 6, plan, instance),
         _lifecycle_event(
             "TASK_RESULT_ACCEPTED",
-            6,
+            7,
             plan,
             instance,
             output_refs=result.output_refs,
@@ -610,7 +654,7 @@ def test_recovery_preserves_committed_result_until_terminal_event_without_redisp
 
     terminal = _lifecycle_event(
         "TASK_COMPLETED",
-        7,
+        8,
         plan,
         instance,
         input_checksum=result.result_checksum,
@@ -652,12 +696,12 @@ def test_recovery_quarantines_terminal_failure_without_durable_halt() -> None:
     }
     events = (
         *base_events,
-        _lifecycle_event("TASK_READY", 3, plan, instance),
-        _lifecycle_event("TASK_DISPATCHED", 4, plan, instance),
-        _lifecycle_event("TASK_STARTED", 5, plan, instance),
+        *_admission_events(plan, instance, sequence=3),
+        _lifecycle_event("TASK_DISPATCHED", 5, plan, instance),
+        _lifecycle_event("TASK_STARTED", 6, plan, instance),
         _lifecycle_event(
             "TASK_RESULT_REJECTED",
-            6,
+            7,
             plan,
             instance,
             output_refs=result.output_refs,
@@ -665,7 +709,7 @@ def test_recovery_quarantines_terminal_failure_without_durable_halt() -> None:
         ),
         _lifecycle_event(
             "TASK_FAILED",
-            7,
+            8,
             plan,
             instance,
             input_checksum=result.result_checksum,
@@ -682,7 +726,7 @@ def test_recovery_quarantines_terminal_failure_without_durable_halt() -> None:
     halted = TaskPlanEvent.for_plan(
         "TASK_PLAN_HALTED",
         plan,
-        sequence=8,
+        sequence=9,
         reason_code="terminal_failure",
         payload={
             "diagnostic_ref": canonical_payload_checksum(
@@ -706,11 +750,11 @@ def test_replay_fails_closed_for_missing_result_and_tampered_event_checksum():
     result = _result(plan, instance)
     events = (
         *base_events,
-        _lifecycle_event("TASK_READY", 3, plan, instance),
-        _lifecycle_event("TASK_DISPATCHED", 4, plan, instance),
+        *_admission_events(plan, instance, sequence=3),
+        _lifecycle_event("TASK_DISPATCHED", 5, plan, instance),
         _lifecycle_event(
             "TASK_RESULT_ACCEPTED",
-            5,
+            6,
             plan,
             instance,
             output_refs=result.output_refs,

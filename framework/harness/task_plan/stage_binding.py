@@ -22,7 +22,7 @@ from framework.harness.task_plan.schema import (
     DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
     GRAPH_ONLY_TASK_PLAN_STAGE_BINDING_SCHEMA,
     GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
-    TASK_PLAN_EVENT_SCHEMA_V2,
+    TASK_PLAN_EVENT_SCHEMA_V3,
     TaskPlanContractKind,
 )
 
@@ -223,7 +223,7 @@ class TaskPlanStageBinding:
                 code="dynamic_task_plan_support_inexact",
                 details={"stage_id": stage_id, "inexact": sorted(inexact)},
             )
-        expected_event_schema = TASK_PLAN_EVENT_SCHEMA_V2
+        expected_event_schema = TASK_PLAN_EVENT_SCHEMA_V3
         if normalized_support["event_schema"] != expected_event_schema:
             raise HarnessValidationError(
                 "dynamic TaskPlan event schema does not match its Graph identity",

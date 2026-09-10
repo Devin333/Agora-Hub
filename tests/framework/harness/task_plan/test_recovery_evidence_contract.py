@@ -18,8 +18,8 @@ from framework.harness.task_plan.continuation import ParentContinuation
 from framework.harness.task_plan.parallel import ParentObservation
 from tests.framework.harness.task_plan.test_task_plan_recovery import (
     _attempt_history_record,
+    _admission_events,
     _history_fixture,
-    _lifecycle_event,
 )
 
 
@@ -27,7 +27,7 @@ def _checkpoint_with_history() -> dict:
     plan, base_events, _worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
-        (plan,), (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance))
+        (plan,), (*base_events, *_admission_events(plan, instance, sequence=3))
     )
     record = _attempt_history_record(plan, instance, TaskAttemptOutcome.ACCEPTED)
     report = replace(report, attempt_history=(record,))
@@ -44,7 +44,7 @@ def _checkpoint_with_observation() -> dict:
     plan, base_events, _worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
-        (plan,), (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance))
+        (plan,), (*base_events, *_admission_events(plan, instance, sequence=3))
     )
     observation = ParentObservation(
         run_id=plan.run_id,
@@ -78,7 +78,7 @@ def _checkpoint_with_continuation() -> dict:
     plan, base_events, _worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
     report = TaskPlanReplayReducer().replay(
-        (plan,), (*base_events, _lifecycle_event("TASK_READY", 3, plan, instance))
+        (plan,), (*base_events, *_admission_events(plan, instance, sequence=3))
     )
     continuation = ParentContinuation(
         run_id=plan.run_id,

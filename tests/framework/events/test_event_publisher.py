@@ -28,6 +28,7 @@ from framework.events import (
     SecurityClassification,
     SensitivityPolicy,
     StoredEvent,
+    TransactionalStateSnapshot,
 )
 from framework.events.schema import WholeDocumentReferenceDisposition
 from framework.events.telemetry import EventTelemetry
@@ -45,14 +46,22 @@ class _UnitOfWork:
         stored: StoredEvent | None = None,
         commit_error: Exception | None = None,
         append_error: Exception | None = None,
+        transactional_state: TransactionalStateSnapshot | None = None,
+        cas_error: Exception | None = None,
     ) -> None:
         self.stored = stored
         self.commit_error = commit_error
         self.append_error = append_error
+        self.transactional_state = transactional_state
+        self.cas_error = cas_error
         self.appended: list[EventCandidate] = []
         self.expected_last_sequences: list[int | None] = []
         self.commits = 0
         self.rollbacks = 0
+        self.state_reads: list[tuple[str, str]] = []
+        self.state_cas_calls: list[
+            tuple[int | None, str | None, TransactionalStateSnapshot]
+        ] = []
 
     def append_event(
         self,
@@ -77,6 +86,28 @@ class _UnitOfWork:
 
     def settle_delivery(self, settlement):  # pragma: no cover - protocol-only method
         raise NotImplementedError
+
+    def load_transactional_state(self, namespace, key):
+        self.state_reads.append((namespace, key))
+        return self.transactional_state
+
+    def cas_transactional_state(
+        self,
+        *,
+        namespace,
+        key,
+        expected_revision,
+        expected_checksum,
+        next_snapshot,
+    ):
+        if self.cas_error is not None:
+            raise self.cas_error
+        assert (namespace, key) == (next_snapshot.namespace, next_snapshot.key)
+        self.state_cas_calls.append(
+            (expected_revision, expected_checksum, next_snapshot)
+        )
+        self.transactional_state = next_snapshot
+        return next_snapshot
 
     def commit(self) -> None:
         self.commits += 1
@@ -126,6 +157,24 @@ class _SequentialUnitOfWork(_UnitOfWork):
         return AppendResult(
             event=stored,
             created=True,
+            pending_delivery_count=0,
+        )
+
+
+class _DuplicateSequentialUnitOfWork(_SequentialUnitOfWork):
+    def append_event(
+        self,
+        event: EventCandidate,
+        *,
+        expected_last_sequence: int | None = None,
+    ) -> AppendResult:
+        result = super().append_event(
+            event,
+            expected_last_sequence=expected_last_sequence,
+        )
+        return AppendResult(
+            event=result.event,
+            created=False,
             pending_delivery_count=0,
         )
 
@@ -189,6 +238,33 @@ def _request(**changes) -> EventPublishRequest:
     }
     values.update(changes)
     return EventPublishRequest(**values)
+
+
+def _state(revision: int, message: str) -> TransactionalStateSnapshot:
+    return TransactionalStateSnapshot.create(
+        namespace="harness.capacity",
+        key="tenant-a:pool-a",
+        revision=revision,
+        payload={"message": message},
+    )
+
+
+def test_transactional_state_snapshot_is_strict_immutable_and_checksum_bound() -> None:
+    snapshot = _state(1, "installed")
+
+    assert TransactionalStateSnapshot.from_dict(snapshot.to_dict()) == snapshot
+    with pytest.raises(TypeError):
+        snapshot.payload["message"] = "mutated"  # type: ignore[index]
+
+    unknown = snapshot.to_dict()
+    unknown["extra"] = True
+    with pytest.raises(ValueError, match="unknown fields"):
+        TransactionalStateSnapshot.from_dict(unknown)
+
+    tampered = snapshot.to_dict()
+    tampered["payload"] = {"message": "different"}
+    with pytest.raises(ValueError, match="checksum does not match"):
+        TransactionalStateSnapshot.from_dict(tampered)
 
 
 def test_publish_validates_projects_appends_and_commits_before_return() -> None:
@@ -261,6 +337,107 @@ def test_publish_batch_commits_one_contiguous_same_stream_transaction() -> None:
     assert unit_of_work.commits == 1
     assert unit_of_work.rollbacks == 0
     assert store.unit_of_work_calls == 1
+
+
+def test_publish_batch_with_state_cas_commits_one_unit_of_work() -> None:
+    current = _state(1, "before")
+    next_state = _state(2, "after")
+    unit_of_work = _SequentialUnitOfWork()
+    unit_of_work.transactional_state = current
+    store = _Store(unit_of_work)
+    runtime = EventRuntime(store=store, schema_catalog=_catalog())
+
+    stored, persisted = runtime.publish_batch_with_state_cas(
+        [
+            _request(event_id="evt-state-batch-1"),
+            _request(event_id="evt-state-batch-2", payload={"message": "second"}),
+        ],
+        expected_last_sequence=2,
+        state_namespace=next_state.namespace,
+        state_key=next_state.key,
+        expected_state_revision=current.revision,
+        expected_state_checksum=current.checksum,
+        next_state=next_state,
+    )
+
+    assert [event.stream_sequence for event in stored] == [3, 4]
+    assert persisted == next_state
+    assert unit_of_work.state_reads == [(next_state.namespace, next_state.key)]
+    assert unit_of_work.state_cas_calls == [
+        (current.revision, current.checksum, next_state)
+    ]
+    assert unit_of_work.commits == 1
+    assert unit_of_work.rollbacks == 0
+    assert store.unit_of_work_calls == 1
+
+
+def test_publish_batch_with_state_cas_rolls_back_before_append_on_conflict() -> None:
+    next_state = _state(2, "after")
+    unit_of_work = _SequentialUnitOfWork()
+    unit_of_work.cas_error = EventStoreContentionError("stale state")
+    runtime = EventRuntime(store=_Store(unit_of_work), schema_catalog=_catalog())
+
+    with pytest.raises(EventStoreContentionError, match="stale state"):
+        runtime.publish_batch_with_state_cas(
+            [_request(event_id="evt-state-conflict")],
+            expected_last_sequence=2,
+            state_namespace=next_state.namespace,
+            state_key=next_state.key,
+            expected_state_revision=1,
+            expected_state_checksum=CHECKSUM,
+            next_state=next_state,
+        )
+
+    assert unit_of_work.appended == []
+    assert unit_of_work.commits == 0
+    assert unit_of_work.rollbacks == 1
+
+
+def test_publish_batch_with_state_cas_reuses_exact_durable_redelivery() -> None:
+    next_state = _state(2, "after")
+    unit_of_work = _DuplicateSequentialUnitOfWork()
+    unit_of_work.transactional_state = next_state
+    runtime = EventRuntime(store=_Store(unit_of_work), schema_catalog=_catalog())
+
+    stored, persisted = runtime.publish_batch_with_state_cas(
+        [
+            _request(event_id="evt-state-redelivery-1"),
+            _request(
+                event_id="evt-state-redelivery-2",
+                payload={"message": "second"},
+            ),
+        ],
+        expected_last_sequence=2,
+        state_namespace=next_state.namespace,
+        state_key=next_state.key,
+        expected_state_revision=1,
+        expected_state_checksum=CHECKSUM,
+        next_state=next_state,
+    )
+
+    assert [event.stream_sequence for event in stored] == [3, 4]
+    assert persisted == next_state
+    assert unit_of_work.commits == 1
+    assert unit_of_work.rollbacks == 0
+
+
+def test_compare_and_swap_transactional_state_installs_without_events() -> None:
+    initial = _state(1, "installed")
+    unit_of_work = _UnitOfWork()
+    store = _Store(unit_of_work)
+    runtime = EventRuntime(store=store, schema_catalog=_catalog())
+
+    persisted = runtime.compare_and_swap_transactional_state(
+        initial,
+        expected_revision=None,
+        expected_checksum=None,
+    )
+
+    assert persisted == initial
+    assert unit_of_work.appended == []
+    assert unit_of_work.state_cas_calls == [(None, None, initial)]
+    assert unit_of_work.commits == 1
+    assert unit_of_work.rollbacks == 0
 
 
 def test_publish_batch_rejects_cross_stream_input_before_opening_transaction() -> None:

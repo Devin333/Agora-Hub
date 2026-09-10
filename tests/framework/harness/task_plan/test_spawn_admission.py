@@ -15,7 +15,7 @@ from framework.harness.task_plan.parallel import (
 )
 from framework.harness.task_plan.replay import TaskPlanReplayReducer, _apply_parallel_event, _projection_for_plan
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
-from framework.harness.task_plan.models import TaskLifecycle
+from framework.harness.task_plan.models import TaskAdmissionOwner, TaskLifecycle
 from framework.harness.task_plan.recovery import TaskPlanRecoveryService
 from framework.harness.task_plan.checkpoint import TaskPlanCheckpoint
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
@@ -42,7 +42,7 @@ def test_durable_admission_failure_exposes_no_wave_intent_or_child(failed_event)
     assert result.status != "succeeded"
     assert calls == []
     assert not any(event.event_type in {
-        "TASK_READY", "TASK_DISPATCHED", "TASK_STARTED",
+        "TASK_DISPATCHED", "TASK_STARTED",
         "TASK_WAVE_ADMITTED", "TASK_ATTEMPT_SPAWN_INTENT", "TASK_ATTEMPT_SPAWN_CONFIRMED",
         "TASK_WAVE_DISPATCHED",
     } for event in events._events)
@@ -50,7 +50,19 @@ def test_durable_admission_failure_exposes_no_wave_intent_or_child(failed_event)
     ledger = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
     assert ledger.ledger_version == 0 and not ledger.records
     assert not any(ledger.counters().values())
-    assert all(task.status is TaskLifecycle.PENDING and task.attempts == 0 for task in projection.tasks)
+    if failed_event == "TASK_READY":
+        assert not any(event.event_type == "TASK_READY" for event in events._events)
+        assert all(task.status is TaskLifecycle.PENDING for task in projection.tasks)
+        assert projection.logical_ready_order == ()
+    else:
+        assert len([
+            event for event in events._events if event.event_type == "TASK_READY"
+        ]) == 2
+        assert all(task.status is TaskLifecycle.READY for task in projection.tasks)
+        assert projection.logical_ready_order == ("contribution", "structure")
+    assert all(task.attempts == 0 for task in projection.tasks)
+    assert all(task.active_instance_id is None for task in projection.tasks)
+    assert all(task.admission_owner is None for task in projection.tasks)
     runtime._child_supervisor.shutdown()
 
 
@@ -202,11 +214,26 @@ def test_partial_spawn_records_each_outcome_without_dispatch_or_duplicate_child(
         calls.append(instance.task_id)
         return _result(plan, instance)
 
+    first_request = _request(plan)
+    assert first_request.group_admitted_at_ms is not None
+    assert first_request.group_absolute_deadline_ms is not None
     try:
         with pytest.raises(RuntimeError, match="injected partial spawn"):
-            coordinator.dispatch(_request(plan), invoke)
-        result = coordinator.dispatch(_request(plan), invoke)
+            coordinator.dispatch(first_request, invoke)
+        redelivery = replace(
+            _request(plan),
+            group_admitted_at_ms=first_request.group_admitted_at_ms + 1,
+            group_absolute_deadline_ms=(
+                first_request.group_absolute_deadline_ms + 1
+            ),
+        )
+        result = coordinator.dispatch(redelivery, invoke)
         assert result.group.state is DispatchGroupState.INDETERMINATE
+        assert result.group.admitted_at_ms == first_request.group_admitted_at_ms
+        assert (
+            result.group.absolute_deadline_ms
+            == first_request.group_absolute_deadline_ms
+        )
         receipts = [item for item in events if item["event_type"] in {
             "TASK_ATTEMPT_SPAWN_CONFIRMED", "TASK_ATTEMPT_SPAWN_UNKNOWN",
         }]
@@ -260,8 +287,26 @@ def spawn_history():
         assert coordinator.dispatch(request, lambda instance: _result(plan, instance)).succeeded
     finally:
         supervisor.shutdown()
-    projection = TaskPlanScheduler().reserve_ready_tasks(
-        _projection_for_plan(plan, sequence=1), TaskPlanReadyDecision(request.task_instances),
+    scheduler = TaskPlanScheduler()
+    ready_projection = scheduler.reserve_ready_tasks(
+        _projection_for_plan(plan, sequence=1),
+        TaskPlanReadyDecision(
+            logical_ready_task_ids=tuple(
+                item.task_id for item in request.task_instances
+            ),
+        ),
+    )
+    admitted_projection = scheduler.admit_ready_tasks(
+        ready_projection,
+        request.task_instances,
+        admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+    )
+    projection = replace(
+        admitted_projection,
+        # Direct replay feeds the filtered group/wave history below with
+        # normalized sequence numbers; the projection is the state immediately
+        # after that wave admission.
+        last_sequence=2,
     )
     return projection, [dict(item) for item in events if item["event_type"] in {
         "TASK_GROUP_ADMITTED", "TASK_WAVE_ADMITTED", "TASK_WAVE_DISPATCHED",
@@ -342,7 +387,7 @@ def test_replay_rejects_self_consistent_budget_not_backed_by_ledger(spawn_histor
         allocation = dict(getattr(budget, field))
         allocation["time_limit_ms"] += 1 if field == "parent_allocation" else -1
         changed = replace(budget, **{field: allocation})
-    # Keep every v2 projection and checksum valid so replay must compare the
+    # Keep every v4 projection and checksum valid so replay must compare the
     # reservation with the authoritative ledger, beyond schema validation.
     intent["budget_reservation"] = changed.to_dict()
     with pytest.raises(HarnessValidationError, match="differs from attempt ledger"):

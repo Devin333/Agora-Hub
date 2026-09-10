@@ -47,6 +47,7 @@ from framework.events.runtime.models import (
     SubscriptionStreamStatePage,
     SubscriptionStreamStateQuery,
     SubscriptionStatus,
+    TransactionalStateSnapshot,
 )
 
 if TYPE_CHECKING:
@@ -56,7 +57,7 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class EventUnitOfWorkPort(Protocol):
-    """Backend-neutral transaction boundary for event/outbox mutations.
+    """Backend-neutral transaction boundary for event/outbox/state mutations.
 
     ``append_event`` allocates the observation time and 1-based stream sequence,
     persists the immutable event, and materializes every matching pending
@@ -85,6 +86,26 @@ class EventUnitOfWorkPort(Protocol):
         settlement: DeliverySettlement,
     ) -> DeliverySettlementResult:
         """Fence and settle one claim, including inbox/checkpoint/DLQ changes."""
+        ...
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        """Read state through this transaction's connection."""
+        ...
+
+    def cas_transactional_state(
+        self,
+        *,
+        namespace: str,
+        key: str,
+        expected_revision: int | None,
+        expected_checksum: str | None,
+        next_snapshot: TransactionalStateSnapshot,
+    ) -> TransactionalStateSnapshot:
+        """Compare persistent revision/checksum and stage one monotonic update."""
         ...
 
     def commit(self) -> None: ...
@@ -125,6 +146,24 @@ class EventReaderPort(Protocol):
         tenant_id: str | None = None,
     ) -> int | None:
         """Return the last committed 1-based sequence, or ``None`` if empty."""
+        ...
+
+
+@runtime_checkable
+class TransactionalStateReaderPort(EventReaderPort, Protocol):
+    """Event reader that can also observe checksum-bound transactional state.
+
+    Ordinary projections and replay consumers depend only on
+    :class:`EventReaderPort`.  Components that coordinate event publication
+    with a shared state CAS opt into this narrower capability explicitly.
+    """
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        """Load the latest committed checksum-bound state snapshot."""
         ...
 
 
@@ -347,7 +386,7 @@ class ReplayReportStorePort(Protocol):
 
 @runtime_checkable
 class EventStorePort(
-    EventReaderPort,
+    TransactionalStateReaderPort,
     DurableSubscriptionStorePort,
     EventDeliveryLedgerPort,
     EventInboxStorePort,
@@ -366,7 +405,12 @@ class EventStorePort(
 
 @runtime_checkable
 class EventRuntimePort(Protocol):
-    """Canonical publish boundary; dispatch is never part of this call."""
+    """Canonical event publish boundary; dispatch is never part of this call.
+
+    Ordinary publishers should not have to expose shared transactional-state
+    mutation.  Callers that coordinate an event batch with a state CAS depend
+    on :class:`TransactionalStateRuntimePort` explicitly.
+    """
 
     def publish(
         self,
@@ -388,6 +432,35 @@ class EventRuntimePort(Protocol):
         ...
 
 
+@runtime_checkable
+class TransactionalStateRuntimePort(EventRuntimePort, Protocol):
+    """Event publisher with backend-neutral transactional-state CAS support."""
+
+    def publish_batch_with_state_cas(
+        self,
+        events: Sequence[EventPublishRequest],
+        *,
+        expected_last_sequence: int | None,
+        state_namespace: str,
+        state_key: str,
+        expected_state_revision: int | None,
+        expected_state_checksum: str | None,
+        next_state: TransactionalStateSnapshot,
+    ) -> tuple[tuple[StoredEvent, ...], TransactionalStateSnapshot]:
+        """Atomically commit one event batch and one transactional-state CAS."""
+        ...
+
+    def compare_and_swap_transactional_state(
+        self,
+        next_snapshot: TransactionalStateSnapshot,
+        *,
+        expected_revision: int | None,
+        expected_checksum: str | None,
+    ) -> TransactionalStateSnapshot:
+        """Install or advance transactional state without exposing a raw UoW."""
+        ...
+
+
 __all__ = [
     "ConsumerCheckpointStorePort",
     "DeadLetterStorePort",
@@ -398,6 +471,8 @@ __all__ = [
     "EventRuntimePort",
     "EventStorePort",
     "EventUnitOfWorkPort",
+    "TransactionalStateReaderPort",
+    "TransactionalStateRuntimePort",
     "QuarantineStorePort",
     "RedeliveryStorePort",
     "RetirementCancellationStorePort",

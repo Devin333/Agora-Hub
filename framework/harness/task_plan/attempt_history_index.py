@@ -7,10 +7,17 @@ from typing import TYPE_CHECKING
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord, TaskAttemptOutcome
-from framework.harness.task_plan.models import TaskLifecycle, TaskPlanProjection, ValidatedTaskPlan
+from framework.harness.task_plan.canonical import thaw_mapping
+from framework.harness.task_plan.models import (
+    TaskInstance,
+    TaskLifecycle,
+    TaskPlanProjection,
+    ValidatedTaskPlan,
+)
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 
 if TYPE_CHECKING:
+    from framework.harness.task_plan.parallel import DispatchGroup, DispatchWave
     from framework.harness.task_plan.store import TaskPlanEvent, TaskResultRecord
 
 
@@ -94,26 +101,15 @@ def validate_history_admission(
 ) -> None:
     prefix = tuple(history)
     record = TaskAttemptHistoryRecord.from_dict(record.to_dict())
-    if not any(
-        event.event_type == "TASK_READY"
-        and event.plan_id == record.plan_id
-        and event.plan_version == record.plan_version
-        and event.task_id == record.task_id
-        and event.task_instance_id == record.task_instance_id
-        and event.attempt == record.attempt
-        and event.input_checksum == record.instance.task_definition_checksum
-        for event in prefix
-    ):
-        _fail("attempt history requires its durable TASK_READY allocation")
+    queue_admissions = _queue_admissions_for_attempt(record, prefix)
     if record.group is None:
-        if any(
-            event.event_type == "TASK_GROUP_ADMITTED"
-            and event.plan_id == record.plan_id
-            and event.plan_version == record.plan_version
-            for event in prefix
-        ):
-            _fail("parallel attempt cannot omit its group and wave")
+        if len(queue_admissions) != 1:
+            _fail("static attempt history requires one canonical queue admission")
+        if _wave_admissions_for_attempt(record, prefix):
+            _fail("attempt history has conflicting QUEUE and GROUP_WAVE admission")
         return
+    if queue_admissions:
+        _fail("parallel attempt history cannot use QUEUE admission ownership")
     group_id = record.group["group_id"]
     wave_id = record.wave["wave_id"]
     if record.outcome in {TaskAttemptOutcome.ACCEPTED, TaskAttemptOutcome.REJECTED, TaskAttemptOutcome.FAILED}:
@@ -130,26 +126,42 @@ def validate_history_admission(
             or isinstance(event.payload.get("group"), Mapping) and event.payload["group"].get("group_id") == group_id
         ) for event in prefix):
             _fail("closed group outcome must be quarantined", "task_plan_attempt_quarantined")
-    admitted = [
-        event for event in prefix
-        if event.event_type == "TASK_WAVE_ADMITTED"
-        and isinstance(event.payload.get("wave"), Mapping)
-        and event.payload["wave"].get("wave_id") == wave_id
-    ]
+    admitted = _wave_admissions_by_id(record, prefix, wave_id)
     if len(admitted) != 1:
         _fail("attempt history requires one canonical wave admission")
-    admission = admitted[0]
-    group = admission.payload["group"]
-    wave = admission.payload["wave"]
+    admission, group, wave = admitted[0]
+    # Group lifecycle state is mutable after admission (for example, the
+    # second wave is admitted while the durable group is already RUNNING),
+    # whereas attempt history deliberately stores the canonical ADMITTED
+    # admission snapshot.  Compare the immutable group checksum and require
+    # the history snapshot to remain an admission fact instead of comparing
+    # the later mutable state verbatim.
+    from framework.harness.task_plan.parallel import DispatchGroup
+    from framework.harness.task_plan.parallel_lifecycle import DispatchGroupState
+    recorded_group = DispatchGroup.from_dict(thaw_mapping(record.group))
     if (
-        group.get("group_id") != group_id
-        or group.get("group_checksum") != record.group["group_checksum"]
-        or group.get("parent_graph_identity") != record.group["parent_graph_identity"]
-        or wave.get("group_id") != group_id
+        group.group_id != group_id
+        or recorded_group.state is not DispatchGroupState.ADMITTED
+        or recorded_group.group_checksum != group.group_checksum
+        or wave.group_id != group_id
+        or wave.wave_id != wave_id
+        or wave.to_dict() != thaw_mapping(record.wave)
         or admission.plan_id != record.plan_id
         or admission.plan_version != record.plan_version
+        or not _event_matches_instance_scope(admission, record.instance)
     ):
         _fail("attempt history group/wave differs from durable admission")
+    reservations = tuple(
+        reservation
+        for reservation in wave.reservations
+        if reservation.task_id == record.task_id
+    )
+    if (
+        len(reservations) != 1
+        or reservations[0].idempotency_key != record.instance.idempotency_key
+        or dict(reservations[0].budget) != record.instance.budget_snapshot.to_dict()
+    ):
+        _fail("attempt history differs from its exact wave reservation")
     if record.operation_key is not None:
         intents = [
             event for event in prefix
@@ -176,6 +188,123 @@ def validate_history_admission(
             or any(receipts[0].payload.get(key) != value for key, value in identity.items())
         ):
             _fail("attempt terminal receipt has no matching confirmed child")
+
+
+def _queue_admissions_for_attempt(
+    record: TaskAttemptHistoryRecord,
+    history: tuple[TaskPlanEvent, ...],
+) -> tuple[TaskPlanEvent, ...]:
+    """Return exact QUEUE admissions after validating the complete envelope."""
+
+    from framework.harness.task_plan.store import TaskQueueAdmissionEvidence
+
+    admissions: list[TaskPlanEvent] = []
+    for event in history:
+        if (
+            event.event_type != "TASK_QUEUE_ADMITTED"
+            or event.plan_id != record.plan_id
+            or event.plan_version != record.plan_version
+            or event.task_id != record.task_id
+        ):
+            continue
+        raw = event.payload.get("queue_admission")
+        if not isinstance(raw, Mapping):
+            _fail("queue admission is missing its canonical evidence")
+        evidence = TaskQueueAdmissionEvidence.from_dict(raw)
+        instance = evidence.task_instance
+        if (
+            event.task_instance_id != instance.task_instance_id
+            or event.attempt != instance.attempt
+            or event.input_checksum != instance.task_definition_checksum
+            or not _event_matches_instance_scope(event, instance)
+        ):
+            _fail("queue admission event differs from its canonical evidence")
+        if instance == record.instance:
+            admissions.append(event)
+    return tuple(admissions)
+
+
+def _wave_admissions_by_id(
+    record: TaskAttemptHistoryRecord,
+    history: tuple[TaskPlanEvent, ...],
+    wave_id: str,
+) -> tuple[tuple[TaskPlanEvent, DispatchGroup, DispatchWave], ...]:
+    from framework.harness.task_plan.parallel import DispatchGroup, DispatchWave
+
+    admissions = []
+    for event in history:
+        if (
+            event.event_type != "TASK_WAVE_ADMITTED"
+            or event.plan_id != record.plan_id
+            or event.plan_version != record.plan_version
+        ):
+            continue
+        raw_group = event.payload.get("group")
+        raw_wave = event.payload.get("wave")
+        if not isinstance(raw_group, Mapping) or not isinstance(raw_wave, Mapping):
+            _fail("wave admission is missing its canonical group/wave evidence")
+        group = DispatchGroup.from_dict(thaw_mapping(raw_group))
+        wave = DispatchWave.from_dict(thaw_mapping(raw_wave))
+        if wave.wave_id == wave_id:
+            admissions.append((event, group, wave))
+    return tuple(admissions)
+
+
+def _wave_admissions_for_attempt(
+    record: TaskAttemptHistoryRecord,
+    history: tuple[TaskPlanEvent, ...],
+) -> tuple[TaskPlanEvent, ...]:
+    """Find GROUP_WAVE admissions whose reservation owns this exact attempt."""
+
+    from framework.harness.task_plan.parallel import DispatchWave
+
+    admissions = []
+    for event in history:
+        if (
+            event.event_type != "TASK_WAVE_ADMITTED"
+            or event.plan_id != record.plan_id
+            or event.plan_version != record.plan_version
+        ):
+            continue
+        raw_wave = event.payload.get("wave")
+        if not isinstance(raw_wave, Mapping):
+            _fail("wave admission is missing its canonical wave evidence")
+        wave = DispatchWave.from_dict(thaw_mapping(raw_wave))
+        reservations = tuple(
+            reservation
+            for reservation in wave.reservations
+            if reservation.task_id == record.task_id
+            and reservation.idempotency_key == record.instance.idempotency_key
+        )
+        if reservations:
+            if (
+                len(reservations) != 1
+                or dict(reservations[0].budget)
+                != record.instance.budget_snapshot.to_dict()
+            ):
+                _fail("attempt history differs from its exact wave reservation")
+            admissions.append(event)
+    return tuple(admissions)
+
+
+def _event_matches_instance_scope(event: TaskPlanEvent, instance: TaskInstance) -> bool:
+    return all(
+        getattr(event, name) == getattr(instance, name)
+        for name in (
+            "run_id",
+            "stage_id",
+            "graph_id",
+            "graph_version",
+            "graph_ref",
+            "graph_checksum",
+            "graph_schema_version",
+            "compiler_version",
+            "condition_policy_version",
+            "stage_binding_checksum",
+            "stage_identity_schema",
+            "stage_identity_checksum",
+        )
+    )
 
 
 def validate_attempt_history_append(

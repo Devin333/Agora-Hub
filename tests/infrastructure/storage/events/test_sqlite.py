@@ -18,10 +18,11 @@ from framework.events.errors import (
     EventIdentityCollisionError,
     EventStaleLeaseError,
     EventStoreCapacityError,
+    EventStoreContentionError,
     EventStoreCorruptionError,
     EventStreamVersionConflictError,
 )
-from framework.events.ports import EventStorePort
+from framework.events.ports import EventStorePort, TransactionalStateReaderPort
 from framework.events.runtime.models import (
     DeadLetterAction,
     DeadLetterDisposition,
@@ -48,6 +49,7 @@ from framework.events.runtime.models import (
     SubscriptionStartPolicy,
     SubscriptionKey,
     SubscriptionStatus,
+    TransactionalStateSnapshot,
 )
 from framework.events.schema import SecurityClassification
 from infrastructure.storage.events.sqlite import SQLiteEventStore
@@ -97,6 +99,7 @@ def test_sqlite_store_is_file_backed_wal_and_implements_port(tmp_path: Path) -> 
     store = _store(tmp_path)
 
     assert isinstance(store, EventStorePort)
+    assert isinstance(store, TransactionalStateReaderPort)
     assert store.durability_policy == {
         "journal_mode": "WAL",
         "synchronous": "FULL",
@@ -115,6 +118,7 @@ def test_sqlite_store_is_file_backed_wal_and_implements_port(tmp_path: Path) -> 
     assert {
         "durable_events",
         "event_stream_sequences",
+        "event_transactional_states",
         "event_subscriptions",
         "event_subscription_stream_states",
         "event_deliveries",
@@ -236,6 +240,99 @@ def test_unit_of_work_rolls_back_sequence_event_and_outbox(tmp_path: Path) -> No
 
     committed = store.append_event(_candidate(2))
     assert committed.event.stream_sequence == 1
+
+
+def test_transactional_state_cas_is_monotonic_and_exact_redelivery_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    initial = TransactionalStateSnapshot.create(
+        namespace="harness.capacity",
+        key="tenant-a:pool-a",
+        revision=1,
+        payload={"available": 2},
+    )
+    updated = TransactionalStateSnapshot.create(
+        namespace=initial.namespace,
+        key=initial.key,
+        revision=2,
+        payload={"available": 1},
+    )
+
+    with store.unit_of_work() as transaction:
+        installed = transaction.cas_transactional_state(
+            namespace=initial.namespace,
+            key=initial.key,
+            expected_revision=None,
+            expected_checksum=None,
+            next_snapshot=initial,
+        )
+        transaction.commit()
+    assert installed == initial
+    assert store.load_transactional_state(initial.namespace, initial.key) == initial
+
+    with store.unit_of_work() as transaction:
+        persisted = transaction.cas_transactional_state(
+            namespace=updated.namespace,
+            key=updated.key,
+            expected_revision=initial.revision,
+            expected_checksum=initial.checksum,
+            next_snapshot=updated,
+        )
+        transaction.commit()
+    assert persisted == updated
+
+    with store.unit_of_work() as transaction:
+        redelivered = transaction.cas_transactional_state(
+            namespace=updated.namespace,
+            key=updated.key,
+            expected_revision=initial.revision,
+            expected_checksum=initial.checksum,
+            next_snapshot=updated,
+        )
+        transaction.commit()
+    assert redelivered == updated
+
+    conflicting = TransactionalStateSnapshot.create(
+        namespace=updated.namespace,
+        key=updated.key,
+        revision=3,
+        payload={"available": 0},
+    )
+    with pytest.raises(EventStoreContentionError, match="revision/checksum conflict"):
+        with store.unit_of_work() as transaction:
+            transaction.cas_transactional_state(
+                namespace=conflicting.namespace,
+                key=conflicting.key,
+                expected_revision=initial.revision,
+                expected_checksum=initial.checksum,
+                next_snapshot=conflicting,
+            )
+    assert store.load_transactional_state(updated.namespace, updated.key) == updated
+
+
+def test_transactional_state_and_event_roll_back_as_one_unit(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    initial = TransactionalStateSnapshot.create(
+        namespace="harness.capacity",
+        key="tenant-a:pool-a",
+        revision=1,
+        payload={"available": 2},
+    )
+
+    with store.unit_of_work() as transaction:
+        transaction.cas_transactional_state(
+            namespace=initial.namespace,
+            key=initial.key,
+            expected_revision=None,
+            expected_checksum=None,
+            next_snapshot=initial,
+        )
+        transaction.append_event(_candidate(41), expected_last_sequence=0)
+
+    assert store.load_transactional_state(initial.namespace, initial.key) is None
+    assert store.get_event("evt-41", tenant_id="tenant-a") is None
+    assert store.get_stream_high_watermark("run:one", tenant_id="tenant-a") is None
 
 
 def test_stream_pagination_fixes_snapshot_and_filters(tmp_path: Path) -> None:

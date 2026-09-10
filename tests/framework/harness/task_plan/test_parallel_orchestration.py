@@ -47,8 +47,15 @@ from framework.harness.task_plan.parallel import (
     SideEffectClass,
     TaskReservation,
 )
-from framework.harness.task_plan.capacity import TaskCapacityDemand
-from tests.framework.harness.task_plan.capacity_fixtures import capacity_pool as CapacityPool
+from framework.harness.task_plan.capacity import (
+    FirstFitPacking,
+    TaskCapacityDemand,
+    pack_first_fit,
+)
+from tests.framework.harness.task_plan.capacity_fixtures import (
+    capacity_pool as CapacityPool,
+    capacity_scope_snapshot,
+)
 from framework.shared.graph_identity import GraphExecutionIdentity
 from tests.fixtures.task_plan import build_task_plan_stage_binding
 
@@ -211,6 +218,16 @@ def _request(plan, *, join_policy: JoinPolicy = JoinPolicy.WAIT_ALL) -> Parallel
         available_concurrency_reservations=2,
         join_policy=join_policy,
         parent_graph_identity=_parent_identity(plan),
+    )
+
+
+def _packing(*task_ids: str) -> FirstFitPacking:
+    return FirstFitPacking(
+        ready_order=tuple(task_ids),
+        selected=tuple(task_ids),
+        overflow=(),
+        reservations=(),
+        reasons={},
     )
 
 
@@ -427,16 +444,20 @@ def test_group_admission_identity_ignores_live_capacity_availability() -> None:
         task.task_id: TaskCapacityDemand(task.task_id, {"cpu": 1})
         for task in plan.tasks
     }
+    initial_pools = (CapacityPool("cpu", 3, reserved=0, policy_version="v1"),)
     request = replace(
         _request(plan),
         available_concurrency_reservations=2,
-        capacity_pools=(CapacityPool("cpu", 3, reserved=0, policy_version="v1"),),
+        capacity_pools=initial_pools,
+        capacity_snapshot=capacity_scope_snapshot(initial_pools),
         task_capacity_demands=demand,
     )
+    changed_pools = (CapacityPool("cpu", 3, reserved=1, policy_version="v1"),)
     availability_changed = replace(
         request,
         available_concurrency_reservations=1,
-        capacity_pools=(CapacityPool("cpu", 3, reserved=1, policy_version="v1"),),
+        capacity_pools=changed_pools,
+        capacity_snapshot=capacity_scope_snapshot(changed_pools),
     )
     coordinator = ParallelAgentCoordinator(
         max_workers=2,
@@ -472,6 +493,7 @@ def _restore_snapshots(plan, request) -> tuple[DispatchGroup, tuple[DispatchWave
         ),
         DispatchWaveState.TERMINAL,
         terminal_outcome=DispatchWaveTerminalOutcome.SUCCEEDED,
+        packing=_packing(first.task_id),
     )
     active = DispatchWave(
         definition.group_id,
@@ -487,6 +509,7 @@ def _restore_snapshots(plan, request) -> tuple[DispatchGroup, tuple[DispatchWave
             ),
         ),
         DispatchWaveState.ADMITTED,
+        packing=_packing(second.task_id),
     )
     return definition, (terminal, active)
 
@@ -1291,6 +1314,7 @@ def test_parallel_contracts_round_trip_and_validate_derived_identity() -> None:
         1,
         (reservation,),
         DispatchWaveState.ADMITTED,
+        packing=_packing("task-1"),
     )
     assert DispatchWave.from_dict(wave.to_dict()) == wave
     terminal = wave.transitioned(DispatchWaveState.DISPATCHING).transitioned(
@@ -1305,15 +1329,26 @@ def test_parallel_contracts_round_trip_and_validate_derived_identity() -> None:
 def test_parallel_contracts_round_trip_multi_pool_policy_evidence() -> None:
     plan = _accepted_parallel_plan(("task-1",))
     pool = CapacityPool("cpu", 1, policy_version="policy-v1")
+    demand = TaskCapacityDemand("task-1", {"cpu": 1})
+    packing = pack_first_fit(
+        ("task-1",),
+        {"task-1": demand},
+        {"cpu": pool},
+        max_tasks=1,
+        owner_scope=pool.owner_scope,
+        reservation_keys={"task-1": "reservation-key"},
+    )
     reservation = TaskReservation(
         "task-1",
         "reservation-key",
         {"turns": 1},
         capacity_allocations={"cpu": 1},
         capacity_policy_checksums={"cpu": pool.policy_checksum},
+        capacity_reservation=packing.reservations[0],
     )
     wave = DispatchWave(
-        "group-1", 1, ("task-1",), 1, (reservation,), DispatchWaveState.ADMITTED
+        "group-1", 1, ("task-1",), 1, (reservation,), DispatchWaveState.ADMITTED,
+        packing=packing,
     )
     restored = DispatchWave.from_dict(wave.to_dict())
     assert restored == wave
@@ -1327,6 +1362,7 @@ def test_supervised_spawn_budget_carries_versioned_reservation_identity() -> Non
         "group-1", 1, ("task-1",), 1,
         (TaskReservation("task-1", "reservation-key", {"turns": 1}),),
         DispatchWaveState.ADMITTED,
+        packing=_packing("task-1"),
     )
     item = request.task_instances[0]
     spawn = ParallelAgentCoordinator._spawn_request(_admitted_request(request), wave, item)
@@ -1402,7 +1438,8 @@ def test_parallel_replay_requires_versioned_wave_snapshot() -> None:
 
     reservation = TaskReservation("task-1", "reservation-key", {"turns": 1})
     wave = DispatchWave(
-        "group-1", 1, ("task-1",), 1, (reservation,), DispatchWaveState.ADMITTED
+        "group-1", 1, ("task-1",), 1, (reservation,), DispatchWaveState.ADMITTED,
+        packing=_packing("task-1"),
     )
     payload = wave.to_dict()
     payload.pop("schema_version")
@@ -1418,7 +1455,10 @@ def test_parallel_replay_requires_versioned_wave_snapshot() -> None:
 
 def test_parallel_contracts_reject_illegal_state_transitions_and_missing_wave_outcome() -> None:
     reservation = TaskReservation("task-1", "reservation-key", {"turns": 1})
-    wave = DispatchWave("group-1", 1, ("task-1",), 1, (reservation,))
+    wave = DispatchWave(
+        "group-1", 1, ("task-1",), 1, (reservation,),
+        packing=_packing("task-1"),
+    )
     with pytest.raises(HarnessValidationError) as exc_info:
         wave.transitioned(DispatchWaveState.RUNNING)
     assert exc_info.value.code == "TASK_WAVE_INVALID_TRANSITION"

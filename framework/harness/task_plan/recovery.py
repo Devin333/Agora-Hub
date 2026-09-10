@@ -27,6 +27,7 @@ from framework.harness.task_plan.replay import TaskPlanReplayReducer, TaskPlanRe
 from framework.harness.task_plan.schema import GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA
 from framework.harness.task_plan.scheduler import materialize_queue_task
 from framework.harness.task_plan.store import TaskPlanEvent, TaskResultRecord
+from framework.harness.task_plan.task_lifecycle import TaskAdmissionOwner
 from framework.shared.graph_identity import GraphExecutionIdentity
 
 
@@ -78,7 +79,8 @@ class TaskPlanRecovery:
             if (
                 instance is None
                 or state is None
-                or state.status is not TaskLifecycle.READY
+                or state.status is not TaskLifecycle.ADMITTED
+                or state.admission_owner is not TaskAdmissionOwner.QUEUE
                 or not projection.matches_instance(instance)
                 or not projection.task_instance.matches_plan_projection_identity(
                     self.report.projection
@@ -106,7 +108,8 @@ class TaskPlanRecovery:
             if (
                 instance is None
                 or state is None
-                or state.status is not TaskLifecycle.READY
+                or state.status is not TaskLifecycle.ADMITTED
+                or state.admission_owner is not TaskAdmissionOwner.QUEUE
                 or not readback.matches_instance(instance)
             ):
                 raise HarnessValidationError(
@@ -146,6 +149,7 @@ class TaskPlanRecovery:
                 or state is None
                 or state.status
                 not in {TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
+                or state.admission_owner is not TaskAdmissionOwner.QUEUE
             ):
                 raise HarnessValidationError(
                     "TaskPlan reclaim continuation has mismatched Graph identity",
@@ -380,19 +384,23 @@ class TaskPlanRecoveryService:
         active_instances = {
             item.task_instance_id: item for item in report.active_task_instances
         }
-        ready_instance_ids = tuple(
+        queue_admitted_instance_ids = tuple(
             sorted(
                 instance.task_instance_id
                 for instance in report.active_task_instances
-                if states[instance.task_id].status is TaskLifecycle.READY
+                if (
+                    states[instance.task_id].status is TaskLifecycle.ADMITTED
+                    and states[instance.task_id].admission_owner
+                    is TaskAdmissionOwner.QUEUE
+                )
             )
         )
         raw_readbacks = (
             queue_reader.read_task_plan_queue(
                 queue_name=queue_name,
-                task_instance_ids=ready_instance_ids,
+                task_instance_ids=queue_admitted_instance_ids,
             )
-            if ready_instance_ids else ()
+            if queue_admitted_instance_ids else ()
         )
         if raw_readbacks is None:
             raise TypeError(
@@ -424,12 +432,13 @@ class TaskPlanRecoveryService:
             if (
                 instance is None
                 or state is None
-                or state.status is not TaskLifecycle.READY
+                or state.status is not TaskLifecycle.ADMITTED
+                or state.admission_owner is not TaskAdmissionOwner.QUEUE
                 or readback.projection.queue_name != queue_name
                 or not readback.matches_instance(instance)
             ):
                 raise HarnessValidationError(
-                    "TaskPlan queue read-back does not match an active READY attempt",
+                    "TaskPlan queue read-back does not match a QUEUE-owned admitted attempt",
                     code="task_plan_queue_readback_identity_mismatch",
                     details={"task_instance_id": readback.task_instance_id},
                 )
@@ -444,7 +453,10 @@ class TaskPlanRecoveryService:
             state = states[instance.task_id]
             if instance.task_instance_id in pending_result_instances:
                 continue
-            if state.status is TaskLifecycle.READY:
+            if (
+                state.status is TaskLifecycle.ADMITTED
+                and state.admission_owner is TaskAdmissionOwner.QUEUE
+            ):
                 if instance.task_instance_id not in queued:
                     missing_queue.append(
                         materialize_queue_task(
@@ -452,7 +464,10 @@ class TaskPlanRecoveryService:
                             queue_name=queue_name,
                         )
                     )
-            elif state.status in {TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}:
+            elif (
+                state.status in {TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING}
+                and state.admission_owner is TaskAdmissionOwner.QUEUE
+            ):
                 awaiting_reclaim.append(instance)
                 reclaim_continuations.append(
                     TaskPlanQueueReclaimContinuation.for_instance(

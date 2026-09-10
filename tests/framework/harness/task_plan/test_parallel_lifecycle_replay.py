@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from framework.harness.control_plane.errors import HarnessValidationError
-from framework.harness.task_plan import TaskLifecycle
+from framework.harness.task_plan import TaskAdmissionOwner, TaskLifecycle
+from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.capacity import TaskCapacityDemand
-from tests.framework.harness.task_plan.capacity_fixtures import capacity_pool as CapacityPool
-from tests.framework.harness.task_plan.capacity_fixtures import bind_capacity_policy
 from framework.harness.task_plan.parallel import (
     JoinPolicy,
     ParallelAgentCoordinator,
@@ -22,6 +22,11 @@ from framework.harness.task_plan.replay import (
     _validate_parallel_report_projection,
 )
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
+from tests.framework.harness.task_plan.capacity_fixtures import (
+    bind_capacity_policy,
+    capacity_pool as CapacityPool,
+    capacity_scope_snapshot,
+)
 from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _accepted_parallel_plan,
     _request,
@@ -37,20 +42,74 @@ def _event(value: dict[str, object], sequence: int) -> SimpleNamespace:
     )
 
 
-def _reserved_projection(plan):
-    return TaskPlanScheduler().reserve_ready_tasks(
-        _projection_for_plan(plan, sequence=1), TaskPlanReadyDecision(_request(plan).task_instances),
+def _attempt_history(raw_events):
+    records = tuple(
+        TaskAttemptHistoryRecord.from_dict(item["history_record"])
+        for item in raw_events
+        if item["event_type"] == "TASK_ATTEMPT_RECORDED"
     )
+    return {record.record_checksum: record for record in records}
+
+
+def _admitted_projection(plan, raw_events):
+    request = _request(plan)
+    scheduler = TaskPlanScheduler()
+    ready = scheduler.reserve_ready_tasks(
+        _projection_for_plan(plan, sequence=1),
+        TaskPlanReadyDecision(
+            request.task_instances,
+            logical_ready_task_ids=tuple(
+                instance.task_id for instance in request.task_instances
+            ),
+        ),
+    )
+    admission = next(
+        item for item in raw_events if item["event_type"] == "TASK_WAVE_ADMITTED"
+    )
+    wave = admission["wave"]
+    packing = wave["packing"]
+    selected_task_ids = tuple(wave["task_ids"])
+    selected = tuple(
+        instance
+        for instance in request.task_instances
+        if instance.task_id in set(selected_task_ids)
+    )
+    assert tuple(instance.task_id for instance in selected) == selected_task_ids
+    assert tuple(packing["ready_order"]) == ready.logical_ready_order
+    assert tuple(packing["selected"]) == selected_task_ids
+    assert set(packing["selected"]).union(packing["overflow"]) == set(
+        packing["ready_order"]
+    )
+
+    ledger_before = TaskPlanBudgetLedger.from_snapshot(ready.consumed_budget)
+    admitted = scheduler.admit_ready_tasks(
+        ready,
+        selected,
+        admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+    )
+    ledger_after = TaskPlanBudgetLedger.from_snapshot(admitted.consumed_budget)
+    assert admission["budget_before_checksum"] == ledger_before.to_dict()[
+        "ledger_checksum"
+    ]
+    assert admission["budget_after_checksum"] == ledger_after.to_dict()[
+        "ledger_checksum"
+    ]
+    assert packing["budget_before_checksum"] == admission["budget_before_checksum"]
+    assert packing["budget_after_checksum"] == admission["budget_after_checksum"]
+    return admitted
 
 
 def _coordinator_events(*, status: TaskLifecycle = TaskLifecycle.SUCCEEDED, with_capacity: bool = False):
     plan = _accepted_parallel_plan(("task-1",))
     request = replace(_request(plan, join_policy=JoinPolicy.WAIT_ALL), serial_fallback=True)
     if with_capacity:
+        pools = (CapacityPool("cpu", 1, policy_version="policy-v1"),)
+        demands = {"task-1": TaskCapacityDemand("task-1", {"cpu": 1})}
         request = replace(
             request,
-            capacity_pools=(CapacityPool("cpu", 1, policy_version="policy-v1"),),
-            task_capacity_demands={"task-1": TaskCapacityDemand("task-1", {"cpu": 1})},
+            capacity_pools=pools,
+            capacity_snapshot=capacity_scope_snapshot(pools),
+            task_capacity_demands=demands,
         )
         request = bind_capacity_policy(request)
     events: list[dict[str, object]] = []
@@ -65,7 +124,8 @@ def _coordinator_events(*, status: TaskLifecycle = TaskLifecycle.SUCCEEDED, with
 
 def test_capacity_policy_evidence_survives_terminal_replay() -> None:
     plan, raw_events = _coordinator_events(with_capacity=True)
-    projection = _reserved_projection(plan)
+    projection = _admitted_projection(plan, raw_events)
+    attempt_history = _attempt_history(raw_events)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}
@@ -78,7 +138,13 @@ def test_capacity_policy_evidence_survives_terminal_replay() -> None:
     ]
     for sequence, item in enumerate(relevant, start=1):
         _apply_parallel_event(
-            _event(item, sequence), projection, groups, waves, reservations, diagnostics,
+            _event(item, sequence),
+            projection,
+            groups,
+            waves,
+            reservations,
+            diagnostics,
+            attempt_history=attempt_history,
         )
     reservation = next(iter(reservations.values()))
     assert reservation["capacity_allocations"] == {"cpu": 1}
@@ -91,7 +157,7 @@ def test_capacity_policy_evidence_survives_terminal_replay() -> None:
 
 def test_coordinator_wave_events_replay_to_terminal_reservation_checksum() -> None:
     plan, raw_events = _coordinator_events()
-    projection = _reserved_projection(plan)
+    projection = _admitted_projection(plan, raw_events)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}
@@ -132,7 +198,7 @@ def test_coordinator_wave_events_replay_to_terminal_reservation_checksum() -> No
 
 def test_replay_rejects_group_terminal_event_with_wrong_snapshot_target() -> None:
     plan, raw_events = _coordinator_events()
-    projection = _reserved_projection(plan)
+    projection = _admitted_projection(plan, raw_events)
     group_event = next(item for item in raw_events if item["event_type"] == "TASK_GROUP_ADMITTED")
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
@@ -151,7 +217,7 @@ def test_replay_rejects_group_terminal_event_with_wrong_snapshot_target() -> Non
 
 def test_replay_rejects_wave_completion_with_success_outcome_for_failed_child() -> None:
     plan, raw_events = _coordinator_events(status=TaskLifecycle.FAILED)
-    projection = _reserved_projection(plan)
+    projection = _admitted_projection(plan, raw_events)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}
@@ -194,7 +260,7 @@ def test_replay_rejects_wave_completion_with_success_outcome_for_failed_child() 
 
 def test_replay_rejects_second_terminal_group_transition() -> None:
     plan, raw_events = _coordinator_events()
-    projection = _reserved_projection(plan)
+    projection = _admitted_projection(plan, raw_events)
     groups: dict[str, dict[str, object]] = {}
     waves: dict[str, dict[str, object]] = {}
     reservations: dict[str, dict[str, object]] = {}

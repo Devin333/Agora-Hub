@@ -14,7 +14,10 @@ from backend.research.graphs import (
 )
 from framework.agent.artifacts.models import ArtifactRef, ArtifactWriteRequest
 from framework.events.canonical import EventCandidate, StoredEvent
-from framework.events.errors import EventStreamVersionConflictError
+from framework.events.errors import (
+    EventStoreContentionError,
+    EventStreamVersionConflictError,
+)
 from framework.events.projection import (
     GRAPH_EVENT_CONTEXT_EXTENSION,
     graph_event_context,
@@ -23,12 +26,28 @@ from framework.events.runtime.models import (
     AppendResult,
     EventPage,
     StreamReadRequest,
+    TransactionalStateSnapshot,
 )
 from framework.events.runtime.publisher import EventPublishRequest, EventRuntime
 from framework.events.schema import default_event_schema_catalog
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.canonical import canonical_payload_checksum
-from framework.harness.task_plan.checkpoint import TASK_PLAN_CHECKPOINT_SCHEMA_V3
+from framework.harness.task_plan.checkpoint import (
+    TASK_PLAN_CHECKPOINT_SCHEMA_V3,
+    TASK_PLAN_CHECKPOINT_SCHEMA_V4,
+)
+from framework.harness.task_plan.models import TaskAdmissionOwner
+from framework.harness.task_plan.replay import (
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V4,
+)
+from framework.harness.task_plan.store import (
+    LogicalTaskReadiness,
+    TASK_PLAN_EVENT_SCHEMA_V2,
+    TASK_PLAN_EVENT_SCHEMA_V3,
+    TaskQueueAdmissionEvidence,
+)
 from framework.harness.task_plan import (
     DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
     DurableTaskPlanStore,
@@ -37,8 +56,6 @@ from framework.harness.task_plan import (
     GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA,
     GRAPH_ONLY_TASK_PROJECTION_SCHEMA,
     InMemoryTaskPlanStore,
-    TASK_PLAN_EVENT_SCHEMA_V2,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
     TASK_PLAN_QUEUE_METADATA_KEY,
     TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2,
     TASK_PLAN_QUEUE_READBACK_SCHEMA_V2,
@@ -171,6 +188,9 @@ class _UnitOfWork:
     def __init__(self, store: "_EventStore") -> None:
         self.store = store
         self.pending: list[StoredEvent] = []
+        self.pending_states: dict[
+            tuple[str, str], TransactionalStateSnapshot
+        ] = {}
         self.finished = False
 
     def __enter__(self) -> "_UnitOfWork":
@@ -216,11 +236,70 @@ class _UnitOfWork:
         if self.finished:
             raise RuntimeError("unit of work already finished")
         self.store._events.extend(self.pending)
+        self.store._transactional_states.update(self.pending_states)
         self.finished = True
 
     def rollback(self) -> None:
         self.pending.clear()
+        self.pending_states.clear()
         self.finished = True
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        state_key = (namespace, key)
+        return self.pending_states.get(
+            state_key,
+            self.store._transactional_states.get(state_key),
+        )
+
+    def cas_transactional_state(
+        self,
+        *,
+        namespace: str,
+        key: str,
+        expected_revision: int | None,
+        expected_checksum: str | None,
+        next_snapshot: TransactionalStateSnapshot,
+    ) -> TransactionalStateSnapshot:
+        if not isinstance(next_snapshot, TransactionalStateSnapshot):
+            raise TypeError("next_snapshot must be TransactionalStateSnapshot")
+        if (next_snapshot.namespace, next_snapshot.key) != (namespace, key):
+            raise ValueError("next_snapshot namespace/key must match the CAS target")
+        if (expected_revision is None) != (expected_checksum is None):
+            raise ValueError(
+                "expected_revision and expected_checksum must both be set or absent"
+            )
+
+        state_key = (namespace, key)
+        current = self.load_transactional_state(namespace, key)
+        if current == next_snapshot:
+            return current
+        if current is None:
+            if expected_revision is not None or next_snapshot.revision != 1:
+                raise EventStoreContentionError(
+                    "transactional state creation requires revision 1"
+                )
+        else:
+            if expected_revision is None:
+                raise EventStoreContentionError(
+                    "transactional state already exists"
+                )
+            if (
+                current.revision != expected_revision
+                or current.checksum != expected_checksum
+            ):
+                raise EventStoreContentionError(
+                    "transactional state revision/checksum conflict"
+                )
+            if next_snapshot.revision != current.revision + 1:
+                raise ValueError(
+                    "next_snapshot revision must increment current revision by one"
+                )
+        self.pending_states[state_key] = next_snapshot
+        return next_snapshot
 
 
 class _EventStore:
@@ -228,6 +307,9 @@ class _EventStore:
 
     def __init__(self, *, fail_on_event_type: str | None = None) -> None:
         self._events: list[StoredEvent] = []
+        self._transactional_states: dict[
+            tuple[str, str], TransactionalStateSnapshot
+        ] = {}
         self._lock = Lock()
         self.fail_on_event_type = fail_on_event_type
 
@@ -245,6 +327,14 @@ class _EventStore:
         with self._lock:
             events = self._stream_events(stream_id, tenant_id)
             return events[-1].stream_sequence if events else None
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        with self._lock:
+            return self._transactional_states.get((namespace, key))
 
     def read_stream(self, request: StreamReadRequest) -> EventPage:
         with self._lock:
@@ -287,6 +377,35 @@ class _EventStore:
         ]
 
 
+class _ReadOnlyEventReader:
+    """Deliberately lacks the shared transactional-state read capability."""
+
+    def __init__(self, delegate: _EventStore) -> None:
+        self._delegate = delegate
+
+    def get_event(
+        self,
+        event_id: str,
+        *,
+        tenant_id: str | None = None,
+    ) -> StoredEvent | None:
+        return self._delegate.get_event(event_id, tenant_id=tenant_id)
+
+    def read_stream(self, request: StreamReadRequest) -> EventPage:
+        return self._delegate.read_stream(request)
+
+    def get_stream_high_watermark(
+        self,
+        stream_id: str,
+        *,
+        tenant_id: str | None = None,
+    ) -> int | None:
+        return self._delegate.get_stream_high_watermark(
+            stream_id,
+            tenant_id=tenant_id,
+        )
+
+
 class _FailingUnitOfWork(_UnitOfWork):
     def append_event(self, event: EventCandidate, *, expected_last_sequence: int | None = None) -> AppendResult:
         if event.event_type == self.store.fail_on_event_type:
@@ -311,6 +430,32 @@ class _ConflictOnceRuntime:
 
     def publish_batch(self, events: Sequence[EventPublishRequest], *, expected_last_sequence=None):
         return self.delegate.publish_batch(events, expected_last_sequence=expected_last_sequence)
+
+    def publish_batch_with_state_cas(
+        self,
+        events: Sequence[EventPublishRequest],
+        **kwargs,
+    ):
+        return self.delegate.publish_batch_with_state_cas(events, **kwargs)
+
+    def compare_and_swap_transactional_state(self, next_snapshot, **kwargs):
+        return self.delegate.compare_and_swap_transactional_state(
+            next_snapshot,
+            **kwargs,
+        )
+
+
+class _PublishOnlyRuntime:
+    """Implements event publication but intentionally lacks state CAS."""
+
+    def __init__(self, delegate: EventRuntime) -> None:
+        self.delegate = delegate
+
+    def publish(self, event: EventPublishRequest, **kwargs):
+        return self.delegate.publish(event, **kwargs)
+
+    def publish_batch(self, events: Sequence[EventPublishRequest], **kwargs):
+        return self.delegate.publish_batch(events, **kwargs)
 
 
 def _runtime(store: _EventStore) -> EventRuntime:
@@ -414,6 +559,14 @@ def _accepted_plan(
         two_tasks=two_tasks,
         explicit_execution_budget=explicit_execution_budget,
     )
+    if two_tasks:
+        # Multi-task fixtures declare their business execution order explicitly;
+        # the scheduler still materializes every currently eligible task into
+        # the complete logical READY order before admitting its head.
+        tasks = tuple(
+            replace(task, priority=index)
+            for index, task in enumerate(tasks)
+        )
     if explicit_execution_budget:
         tasks = tuple(
             replace(task, budget_request=policy.per_task_budget)
@@ -495,6 +648,30 @@ def _store(event_store: _EventStore, artifacts: _ArtifactStore, *, runtime=None)
     )
 
 
+def test_durable_task_plan_store_requires_transactional_state_reader() -> None:
+    event_store = _EventStore()
+
+    with pytest.raises(TypeError, match="TransactionalStateReaderPort"):
+        DurableTaskPlanStore(
+            _runtime(event_store),
+            _ReadOnlyEventReader(event_store),
+            artifact_store=_ArtifactStore(),
+            clock=lambda: FIXED_NOW,
+        )
+
+
+def test_durable_task_plan_store_requires_transactional_state_runtime() -> None:
+    event_store = _EventStore()
+
+    with pytest.raises(TypeError, match="TransactionalStateRuntimePort"):
+        DurableTaskPlanStore(
+            _PublishOnlyRuntime(_runtime(event_store)),
+            event_store,
+            artifact_store=_ArtifactStore(),
+            clock=lambda: FIXED_NOW,
+        )
+
+
 def _lifecycle_event(event_type: str, sequence: int, plan: ValidatedTaskPlan, instance) -> TaskPlanEvent:
     return TaskPlanEvent.for_plan(
         event_type,
@@ -509,18 +686,98 @@ def _lifecycle_event(event_type: str, sequence: int, plan: ValidatedTaskPlan, in
 
 def _start(store: DurableTaskPlanStore, plan: ValidatedTaskPlan, task_id: str):
     scheduler = TaskPlanScheduler()
-    instance = task_instance_for_attempt(plan, task_id, 1)
     projection = store.load_projection(plan.run_id, plan.stage_id)
-    decision = TaskPlanReadyDecision((instance,))
-    projection = scheduler.reserve_ready_tasks(projection, decision)
-    first_sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
-    for sequence, event_type, transition in (
-        (first_sequence, "TASK_READY", lambda value: value),
-        (first_sequence + 1, "TASK_DISPATCHED", lambda value: scheduler.mark_dispatched(value, instance)),
-        (first_sequence + 2, "TASK_STARTED", lambda value: scheduler.mark_started(value, instance)),
+    decision = scheduler.next_ready_tasks(
+        projection,
+        plan.limits.max_parallelism,
+        plan=plan,
+        available_input_refs=("document",),
+    )
+    target_order = decision.logical_ready_task_ids
+    if task_id not in target_order:
+        raise AssertionError(f"test task is not logically ready: {task_id}")
+    states = {item.task_id: item for item in projection.tasks}
+    newly_ready = tuple(
+        ready_task_id
+        for ready_task_id in target_order
+        if states[ready_task_id].status is TaskLifecycle.PENDING
+    )
+    definitions = {item.task_id: item for item in plan.tasks}
+    committed_ready = set(projection.logical_ready_order)
+    for ready_task_id in newly_ready:
+        committed_ready.add(ready_task_id)
+        ordered_prefix = tuple(
+            candidate
+            for candidate in target_order
+            if candidate in committed_ready
+        )
+        projection = scheduler.reserve_ready_tasks(
+            projection,
+            TaskPlanReadyDecision(logical_ready_task_ids=ordered_prefix),
+        )
+        readiness = LogicalTaskReadiness(
+            task_id=ready_task_id,
+            task_definition_checksum=(
+                definitions[ready_task_id].task_definition_checksum
+            ),
+            logical_ready_order=ordered_prefix,
+        )
+        sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+        projection = replace(projection, last_sequence=sequence)
+        store.commit_event(TaskPlanEvent.for_plan(
+            "TASK_READY",
+            plan,
+            task_id=ready_task_id,
+            input_checksum=readiness.task_definition_checksum,
+            sequence=sequence,
+            payload={"logical_readiness": readiness.to_dict()},
+        ), projection)
+
+    projection = store.load_projection(plan.run_id, plan.stage_id)
+    if not projection.logical_ready_order or projection.logical_ready_order[0] != task_id:
+        raise AssertionError(
+            f"test task does not own the next logical READY position: {task_id}"
+        )
+    state = next(item for item in projection.tasks if item.task_id == task_id)
+    instance = task_instance_for_attempt(plan, task_id, state.attempts + 1)
+    before_admission = projection
+    projection = scheduler.mark_admitted(
+        before_admission,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before_admission.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED",
+        plan,
+        task_id=instance.task_id,
+        task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt,
+        input_checksum=instance.task_definition_checksum,
+        sequence=sequence,
+        payload={"queue_admission": admission.to_dict()},
+    ), projection)
+
+    for event_type, transition in (
+        ("TASK_DISPATCHED", lambda value: scheduler.mark_dispatched(value, instance)),
+        ("TASK_STARTED", lambda value: scheduler.mark_started(value, instance)),
     ):
+        sequence += 1
         projection = replace(transition(projection), last_sequence=sequence)
-        store.commit_event(_lifecycle_event(event_type, sequence, plan, instance), projection)
+        store.commit_event(
+            _lifecycle_event(event_type, sequence, plan, instance),
+            projection,
+        )
     return instance
 
 
@@ -630,7 +887,7 @@ def test_graph_only_candidate_and_plan_round_trip_through_durable_event_store():
         "PLAN_ACCEPTED",
     ]
     assert all(
-        event.schema_version == TASK_PLAN_EVENT_SCHEMA_V2 for event in events
+        event.schema_version == TASK_PLAN_EVENT_SCHEMA_V3 for event in events
     )
     assert events[0].matches_contract_identity(candidate)
     assert events[1].matches_contract_identity(plan)
@@ -638,7 +895,7 @@ def test_graph_only_candidate_and_plan_round_trip_through_durable_event_store():
 
     assert len(event_store._events) == 2
     for stored in event_store._events:
-        assert stored.data_schema == TASK_PLAN_EVENT_SCHEMA_V2
+        assert stored.data_schema == TASK_PLAN_EVENT_SCHEMA_V3
         assert not hasattr(stored.business_context, "workflow_id")
         assert not hasattr(stored.business_context, "step_id")
         assert "workflow_id" not in (stored.payload or {})
@@ -874,14 +1131,71 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     instance = _start(store, plan, plan.tasks[0].task_id)
     result = _result(plan, instance, status=TaskLifecycle.SUCCEEDED)
 
+    expected_instance_projection = {
+        "schema_version": "newsroom.harness-task-instance/v3",
+        "run_id": "durable-run",
+        "graph_id": "research.paper_analysis.dynamic.graph",
+        "graph_version": "1",
+        "graph_ref": "research.paper_analysis.dynamic.graph@1",
+        "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+        "compiler_version": "newsroom.harness-graph-compiler/v2",
+        "condition_policy_version": (
+            "newsroom.harness-graph-condition-policy/v1"
+        ),
+        "graph_checksum": (
+            "sha256:b0c0a7a7e70c512199119fe227145531eb885fae331a97819e04ef3cef16741d"
+        ),
+        "stage_binding_checksum": (
+            "sha256:02bf966fef56dbab04d2fe1b9f2fea33b5dee4f4675af468bc333764534fac97"
+        ),
+        "stage_identity_schema": (
+            "newsroom.harness-task-plan-stage-identity/v2"
+        ),
+        "stage_identity_checksum": (
+            "sha256:0b92442703c5b2cd67e13f5af1e3d51e31e1d3d71d06dd8db2c6d2024f96bd2d"
+        ),
+        "stage_id": "dynamic_analysis_stage",
+        "plan_id": "graph-plan-1",
+        "plan_version": 1,
+        "plan_checksum": (
+            "sha256:3561ba56abd01e55b59cabca911c069e11fc126a520e4638e1089c789e969619"
+        ),
+        "task_id": "structure",
+        "task_definition_checksum": (
+            "sha256:7b9dcd518c41e18f4ede3fb5f7fcf03a8d287b870d79dd16fa7121219e846eef"
+        ),
+        "task_instance_id": (
+            "ti_32c3c023bfa2d3cfa265d2e055ae21cac781dfc93828b3b0b438c7950b8b2bc7"
+        ),
+        "attempt": 1,
+        "worker_ref": "research.structure-worker@1",
+        "idempotency_key": (
+            "idem_32c3c023bfa2d3cfa265d2e055ae21cac781dfc93828b3b0b438c7950b8b2bc7"
+        ),
+        "fencing_token": (
+            "fence_32c3c023bfa2d3cfa265d2e055ae21cac781dfc93828b3b0b438c7950b8b2bc7"
+        ),
+        "budget_snapshot": {
+            "max_turns": 1,
+            "max_tool_calls": 0,
+            "max_memory_ops": 0,
+            "max_output_tokens": 0,
+        },
+    }
+    assert instance.checksum_projection() == expected_instance_projection
     assert instance.schema_version == GRAPH_ONLY_TASK_INSTANCE_SCHEMA
-    assert instance.instance_checksum == (
-        "sha256:206ef6152ec2f2395e2c69796a9f0f3e610758a00bbf7cf93129bc430bbf05c0"
+    assert canonical_payload_checksum(expected_instance_projection) == (
+        "sha256:dd2238f34a23eff3b6303e3dc0b1012eb11eaea833cdcdb067e7da502145bf57"
     )
-    old_instance_identity = instance.checksum_projection()
-    old_instance_identity["schema_version"] = "newsroom.harness-task-instance/v2"
+    assert instance.instance_checksum == (
+        "sha256:dd2238f34a23eff3b6303e3dc0b1012eb11eaea833cdcdb067e7da502145bf57"
+    )
+    old_instance_identity = {
+        **expected_instance_projection,
+        "schema_version": "newsroom.harness-task-instance/v2",
+    }
     assert canonical_payload_checksum(old_instance_identity) == (
-        "sha256:d88ed9b0ca23952947d1b058a4d5c214480df195721bf17f3812542a6d3698a5"
+        "sha256:337199602827337ffa6cb74d3bd8a549c3ac9422be2f53607ce272c8ab2a9dcf"
     )
     assert instance.matches_plan_identity(plan)
     assert "workflow_id" not in instance.to_dict()
@@ -900,10 +1214,81 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     queue_projection = TaskPlanQueueProjection.from_task(queue_task)
     assert queue_task.payload == {}
     assert set(queue_task.metadata) == {TASK_PLAN_QUEUE_METADATA_KEY}
+    expected_queue_projection = {
+        "schema_version": "newsroom.harness-task-plan-queue-projection/v2",
+        "queue_name": "framework:queue:default",
+        "task_type": "harness_task_plan",
+        "max_attempts": 1,
+        "payload": {},
+        "task_instance": {
+            "schema_version": "newsroom.harness-task-instance/v3",
+            "run_id": "durable-run",
+            "graph_id": "research.paper_analysis.dynamic.graph",
+            "graph_version": "1",
+            "graph_ref": "research.paper_analysis.dynamic.graph@1",
+            "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+            "compiler_version": "newsroom.harness-graph-compiler/v2",
+            "condition_policy_version": (
+                "newsroom.harness-graph-condition-policy/v1"
+            ),
+            "graph_checksum": (
+                "sha256:b0c0a7a7e70c512199119fe227145531eb885fae331a97819e04ef3cef16741d"
+            ),
+            "stage_binding_checksum": (
+                "sha256:02bf966fef56dbab04d2fe1b9f2fea33b5dee4f4675af468bc333764534fac97"
+            ),
+            "stage_identity_schema": (
+                "newsroom.harness-task-plan-stage-identity/v2"
+            ),
+            "stage_identity_checksum": (
+                "sha256:0b92442703c5b2cd67e13f5af1e3d51e31e1d3d71d06dd8db2c6d2024f96bd2d"
+            ),
+            "stage_id": "dynamic_analysis_stage",
+            "plan_id": "graph-plan-1",
+            "plan_version": 1,
+            "plan_checksum": (
+                "sha256:3561ba56abd01e55b59cabca911c069e11fc126a520e4638e1089c789e969619"
+            ),
+            "task_id": "structure",
+            "task_definition_checksum": (
+                "sha256:7b9dcd518c41e18f4ede3fb5f7fcf03a8d287b870d79dd16fa7121219e846eef"
+            ),
+            "task_instance_id": (
+                "ti_32c3c023bfa2d3cfa265d2e055ae21cac781dfc93828b3b0b438c7950b8b2bc7"
+            ),
+            "attempt": 1,
+            "worker_ref": "research.structure-worker@1",
+            "idempotency_key": (
+                "idem_32c3c023bfa2d3cfa265d2e055ae21cac781dfc93828b3b0b438c7950b8b2bc7"
+            ),
+            "attempt_fence_ref": (
+                "fence_32c3c023bfa2d3cfa265d2e055ae21cac781dfc93828b3b0b438c7950b8b2bc7"
+            ),
+            "budget_snapshot": {
+                "max_turns": 1,
+                "max_tool_calls": 0,
+                "max_memory_ops": 0,
+                "max_output_units": 0,
+            },
+            "instance_checksum": (
+                "sha256:dd2238f34a23eff3b6303e3dc0b1012eb11eaea833cdcdb067e7da502145bf57"
+            ),
+        },
+    }
+    assert queue_projection.checksum_projection() == expected_queue_projection
     assert queue_projection.schema_version == TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2
-    assert queue_projection.projection_checksum == (
-        "sha256:d55982fcbee76961a5e08dced0df8d1b1bd20abb212f29f434822b1e7b229708"
+    assert canonical_payload_checksum(expected_queue_projection) == (
+        "sha256:fbc35a97956e7eccbf8cb519bea433d2e70d59ea72294d1c984b22e1cbbeddd7"
     )
+    assert queue_projection.projection_checksum == (
+        "sha256:fbc35a97956e7eccbf8cb519bea433d2e70d59ea72294d1c984b22e1cbbeddd7"
+    )
+    assert queue_projection.to_dict() == {
+        **expected_queue_projection,
+        "projection_checksum": (
+            "sha256:fbc35a97956e7eccbf8cb519bea433d2e70d59ea72294d1c984b22e1cbbeddd7"
+        ),
+    }
     assert queue_projection.task_instance == instance
     assert "workflow_id" not in queue_projection.to_dict()["task_instance"]
 
@@ -939,16 +1324,35 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
             ),
         )
     assert nested_schema_error.value.code == "unsupported_task_plan_schema"
-    assert projection.last_sequence == len(events) == 7
-    assert [event.event_type for event in events[-5:]] == [
+    assert projection.last_sequence == len(events) == 8
+    assert [event.event_type for event in events[-6:]] == [
         "TASK_READY",
+        "TASK_QUEUE_ADMITTED",
         "TASK_DISPATCHED",
         "TASK_STARTED",
         "TASK_RESULT_ACCEPTED",
         "TASK_COMPLETED",
     ]
-    assert all(event.schema_version == TASK_PLAN_EVENT_SCHEMA_V2 for event in events)
+    assert all(event.schema_version == TASK_PLAN_EVENT_SCHEMA_V3 for event in events)
     assert all(event.matches_contract_identity(plan) for event in events)
+    ready_event, admission_event = events[-6:-4]
+    assert ready_event.task_instance_id is None
+    assert ready_event.attempt is None
+    readiness = LogicalTaskReadiness.from_dict(
+        ready_event.payload["logical_readiness"]
+    )
+    assert readiness.logical_ready_order == (instance.task_id,)
+    queue_admission = TaskQueueAdmissionEvidence.from_dict(
+        admission_event.payload["queue_admission"]
+    )
+    assert queue_admission.task_instance == instance
+    assert queue_admission.admission_owner is TaskAdmissionOwner.QUEUE
+
+    retired_ready_event = ready_event.to_dict()
+    retired_ready_event["schema_version"] = TASK_PLAN_EVENT_SCHEMA_V2
+    with pytest.raises(HarnessValidationError) as retired_event_error:
+        TaskPlanEvent.from_dict(retired_ready_event)
+    assert retired_event_error.value.code == "unsupported_task_plan_event_schema"
     assert reopened.results_for(
         plan.run_id,
         plan.stage_id,
@@ -981,11 +1385,16 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     assert record["released"] == dict.fromkeys(instance.budget_snapshot.to_dict(), 0)
     assert record["reserved_revision"] == 1
     assert record["settled_revision"] == 2
-    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
-    # Replay also binds the complete accepted attempt, alongside its ledger receipt.
-    assert report.replay_checksum == (
-        "sha256:7ceff633d9fad993ca3d8ac7910e612099c0f5c5a106fcfdcc2a224ecce415c9"
+    assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V4
+    # Replay binds the complete accepted attempt and ledger receipt, including
+    # the canonical readiness/admission split, to one deterministic checksum.
+    wire_report = TaskPlanReplayReducer().replay(
+        (ValidatedTaskPlan.from_dict(plan.to_dict()),),
+        tuple(TaskPlanEvent.from_dict(event.to_dict()) for event in events),
+        results=(TaskResultRecord.from_dict(result.to_dict()),),
     )
+    assert report.replay_checksum == wire_report.replay_checksum
+    assert report.projection == wire_report.projection
     assert report.projection.projection_checksum == projection.projection_checksum
     assert report.projection.matches_plan_identity(plan)
     checkpoint = TaskPlanCheckpoint.from_replay(
@@ -995,8 +1404,8 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
         created_at="2026-08-02T00:00:01Z",
     )
     checkpoint_payload = checkpoint.to_dict()
-    assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
-    assert checkpoint.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+    assert checkpoint.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V4
+    assert checkpoint.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V4
     assert checkpoint.budget_snapshot == projection.consumed_budget
     assert checkpoint.checkpoint_checksum.startswith("sha256:")
     assert checkpoint.graph_ref == plan.graph_ref
@@ -1004,6 +1413,22 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     restored_checkpoint = TaskPlanCheckpoint.from_dict(checkpoint_payload)
     assert restored_checkpoint == checkpoint
     restored_checkpoint.verify_replay(report)
+
+    with pytest.raises(HarnessValidationError) as retired_reducer_error:
+        replace(report, reducer_version=TASK_PLAN_REPLAY_REDUCER_VERSION_V3)
+    assert (
+        retired_reducer_error.value.code
+        == "unsupported_task_plan_replay_reducer"
+    )
+
+    retired_checkpoint = dict(checkpoint_payload)
+    retired_checkpoint["schema_version"] = TASK_PLAN_CHECKPOINT_SCHEMA_V3
+    with pytest.raises(HarnessValidationError) as retired_checkpoint_error:
+        TaskPlanCheckpoint.from_dict(retired_checkpoint)
+    assert (
+        retired_checkpoint_error.value.code
+        == "unsupported_task_plan_checkpoint_schema"
+    )
 
     aliased_checkpoint = dict(checkpoint_payload)
     aliased_checkpoint["workflow_id"] = "legacy-workflow"
@@ -1137,19 +1562,26 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
     assert pending.reclaim_continuations == ()
     assert pending.awaiting_reclaim == ()
 
-    ready = service.recover((plan,), running_events[:3])
+    logical_ready = service.recover((plan,), running_events[:3])
+    assert logical_ready.missing_queue_projections == ()
+    assert logical_ready.confirmed_queue_readbacks == ()
+    assert logical_ready.reclaim_continuations == ()
+    assert logical_ready.awaiting_reclaim == ()
+    assert queue_reader.calls == []
+
+    admitted = service.recover((plan,), running_events[:4])
     assert queue_reader.calls[-1] == (
         "framework:queue:default",
         (instance.task_instance_id,),
     )
-    assert len(ready.missing_queue_projections) == 1
-    ready_task = ready.missing_queue_projections[0]
+    assert len(admitted.missing_queue_projections) == 1
+    ready_task = admitted.missing_queue_projections[0]
     ready_projection = TaskPlanQueueProjection.from_task(ready_task)
     assert ready_projection.task_instance == instance
     assert ready_projection.queue_name == "framework:queue:default"
-    assert ready.confirmed_queue_readbacks == ()
-    assert ready.reclaim_continuations == ()
-    assert ready.awaiting_reclaim == ()
+    assert admitted.confirmed_queue_readbacks == ()
+    assert admitted.reclaim_continuations == ()
+    assert admitted.awaiting_reclaim == ()
 
     ready_task.status = WorkerTaskStatus.QUEUED
     readback = TaskPlanQueueReadback.from_queue_task("1700000000000-0", ready_task)
@@ -1157,7 +1589,7 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
     queue_reader.readbacks = (restored_readback,)
     already_queued = service.recover(
         (plan,),
-        running_events[:3],
+        running_events[:4],
     )
     assert already_queued.missing_queue_projections == ()
     assert already_queued.confirmed_queue_readbacks == (restored_readback,)
@@ -1165,7 +1597,7 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
     assert already_queued.awaiting_reclaim == ()
 
     queue_reader.readbacks = ()
-    dispatched = service.recover((plan,), running_events[:4])
+    dispatched = service.recover((plan,), running_events[:5])
     assert dispatched.missing_queue_projections == ()
     assert dispatched.confirmed_queue_readbacks == ()
     assert dispatched.awaiting_reclaim == (instance,)
@@ -1175,7 +1607,7 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
     assert continuation.task_instance == instance
     assert continuation.queue_name == "framework:queue:default"
     assert continuation.continuation_checksum == (
-        "sha256:9d2c2854aaa4f191224eeb9df588ae363f300eff69dc25b7f1323b2a216f6b7e"
+        "sha256:c91945b7cf14a023979e0e46564136ffdced37c3b74b47453e9cdba6c106e322"
     )
     assert (
         TaskPlanQueueReclaimContinuation.from_dict(continuation.to_dict())
@@ -1228,13 +1660,13 @@ def test_graph_only_recovery_requires_exact_queue_readback_identity():
     store.append_candidate(candidate)
     store.accept_plan(plan)
     instance = _start(store, plan, plan.tasks[0].task_id)
-    ready_events = store.read_events(plan.run_id, plan.stage_id)[:3]
+    admitted_events = store.read_events(plan.run_id, plan.stage_id)[:4]
     queue_task = materialize_queue_task(instance)
     queue_task.status = WorkerTaskStatus.QUEUED
     readback = TaskPlanQueueReadback.from_queue_task("1700000000000-0", queue_task)
 
     with pytest.raises(HarnessValidationError) as missing_port_error:
-        TaskPlanRecoveryService().recover((plan,), ready_events)
+        TaskPlanRecoveryService().recover((plan,), admitted_events)
     assert (
         missing_port_error.value.code
         == "graph_task_plan_queue_read_port_unavailable"
@@ -1243,7 +1675,7 @@ def test_graph_only_recovery_requires_exact_queue_readback_identity():
     with pytest.raises(HarnessValidationError) as bare_id_error:
         TaskPlanRecoveryService(queue_reader=_TaskPlanQueueReader()).recover(
             (plan,),
-            ready_events,
+            admitted_events,
             queued_instance_ids=(instance.task_instance_id,),
         )
     assert bare_id_error.value.code == "graph_task_plan_queue_readback_required"
@@ -1269,7 +1701,7 @@ def test_graph_only_recovery_requires_exact_queue_readback_identity():
             queue_reader=_TaskPlanQueueReader((cross_graph_readback,))
         ).recover(
             (plan,),
-            ready_events,
+            admitted_events,
         )
     assert (
         cross_graph_error.value.code
@@ -1281,7 +1713,7 @@ def test_graph_only_recovery_requires_exact_queue_readback_identity():
             queue_reader=_TaskPlanQueueReader((readback, readback))
         ).recover(
             (plan,),
-            ready_events,
+            admitted_events,
         )
     assert duplicate_error.value.code == "task_plan_queue_readback_conflict"
 
@@ -1290,7 +1722,7 @@ def test_graph_only_recovery_requires_exact_queue_readback_identity():
             queue_reader=_TaskPlanQueueReader((readback,))
         ).recover(
             (plan,),
-            ready_events,
+            admitted_events,
             queue_name="framework:queue:other",
         )
     assert queue_error.value.code == "task_plan_queue_readback_identity_mismatch"
@@ -1302,7 +1734,7 @@ def test_graph_only_recovery_requires_exact_queue_readback_identity():
             queue_reader=_TaskPlanQueueReader((aliased,))
         ).recover(
             (plan,),
-            ready_events,
+            admitted_events,
         )
     assert alias_error.value.code == "invalid_task_plan_payload_fields"
 
@@ -1348,7 +1780,7 @@ def test_graph_only_queue_projection_survives_redis_transport_readback():
 
     assert readback.schema_version == TASK_PLAN_QUEUE_READBACK_SCHEMA_V2
     assert readback.readback_checksum == (
-        "sha256:9e10cf1a1ec1ca84e70aa5a6258ea1b4ce504ab6e660d1b2941e9aa2975be5aa"
+        "sha256:fb668702cb7491d2e21584df70bb39508326ec49a74c1d7b31bc8b28421a1b65"
     )
     assert readback.projection.task_instance == instance
     assert TaskPlanQueueReadback.from_dict(readback.to_dict()) == readback

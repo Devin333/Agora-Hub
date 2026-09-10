@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
     from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
+    from framework.harness.task_plan.capacity import CapacityScopeSnapshot, PoolReservation
 
 from framework.agent.artifacts.models import ArtifactRef, ArtifactWriteRequest
 from framework.events.canonical import (
@@ -28,8 +29,11 @@ from framework.events.projection import (
     graph_event_context,
 )
 from framework.shared.graph_identity import GraphRunIdentity
-from framework.events.ports import EventReaderPort, EventRuntimePort
-from framework.events.runtime.models import StreamReadRequest
+from framework.events.ports import (
+    TransactionalStateReaderPort,
+    TransactionalStateRuntimePort,
+)
+from framework.events.runtime.models import StreamReadRequest, TransactionalStateSnapshot
 from framework.events.runtime.publisher import EventPublishRequest
 from framework.events.schema.security import SecurityClassification
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -76,6 +80,12 @@ from framework.harness.task_plan.store import (
     _settle_result_budget,
     _terminal_result_event,
     _classify_atomic_event_batch_history,
+    _validate_capacity_admission_contract,
+    _reject_uncoordinated_capacity_transition,
+    _validate_wave_admission_projection_contract,
+    _validate_logical_readiness_projection_contract,
+    _validate_queue_admission_projection_contract,
+    _validate_wave_completion_projection_contract,
     _validate_atomic_event_batch,
     _validate_transition_projections,
     _validate_result_usage,
@@ -86,6 +96,7 @@ from framework.shared.time import utc_now
 TASK_PLAN_STORAGE_EXTENSION = "task_plan_storage"
 TASK_PLAN_STORAGE_SCHEMA = "newsroom.harness-task-plan-storage/v1"
 TASK_PLAN_EVENT_SOURCE = "framework.harness.task_plan"
+TASK_PLAN_CAPACITY_STATE_NAMESPACE = "newsroom.harness.task-plan.capacity/v1"
 _MAX_EVENT_APPEND_RETRIES = 8
 _EVENT_PAGE_SIZE = 500
 
@@ -229,8 +240,8 @@ class DurableTaskPlanStore:
 
     def __init__(
         self,
-        runtime: EventRuntimePort,
-        reader: EventReaderPort,
+        runtime: TransactionalStateRuntimePort,
+        reader: TransactionalStateReaderPort,
         *,
         artifact_store: TaskPlanArtifactStorePort,
         tenant_id: str | None = None,
@@ -243,10 +254,10 @@ class DurableTaskPlanStore:
         ),
         clock: Callable[[], Any] = utc_now,
     ) -> None:
-        if not isinstance(runtime, EventRuntimePort):
-            raise TypeError("runtime must implement EventRuntimePort")
-        if not isinstance(reader, EventReaderPort):
-            raise TypeError("reader must implement EventReaderPort")
+        if not isinstance(runtime, TransactionalStateRuntimePort):
+            raise TypeError("runtime must implement TransactionalStateRuntimePort")
+        if not isinstance(reader, TransactionalStateReaderPort):
+            raise TypeError("reader must implement TransactionalStateReaderPort")
         if not isinstance(artifact_store, TaskPlanArtifactStorePort):
             raise TypeError("artifact_store must implement TaskPlanArtifactStorePort")
         if not callable(clock):
@@ -935,6 +946,7 @@ class DurableTaskPlanStore:
                 status=TaskLifecycle.SUCCEEDED,
                 attempts=result.attempt,
                 active_instance_id=None,
+                admission_owner=None,
                 result=result_reference,
                 failure_reason_code=None,
             )
@@ -945,7 +957,8 @@ class DurableTaskPlanStore:
                 state,
                 status=TaskLifecycle.FAILED,
                 attempts=result.attempt,
-                active_instance_id=result.task_instance_id,
+                active_instance_id=None,
+                admission_owner=None,
                 failure_reason_code=result.error_code or "task_failed",
             )
             result_event_type = "TASK_RESULT_REJECTED"
@@ -1205,6 +1218,7 @@ class DurableTaskPlanStore:
         plan = self.plan(event.run_id, event.stage_id)
         if plan is not None:
             _require_event_matches_plan(event, plan)
+        _reject_uncoordinated_capacity_transition((event,), events)
         from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
         validate_submission_event_append(events, (event,))
@@ -1233,6 +1247,7 @@ class DurableTaskPlanStore:
         history = self.read_events(run_id, stage_id)
         if _classify_atomic_event_batch_history(batch, history):
             return tuple(event.event_checksum for event in batch)
+        _reject_uncoordinated_capacity_transition(batch, history)
 
         plan = self.plan(run_id, stage_id)
         if plan is not None:
@@ -1257,6 +1272,236 @@ class DurableTaskPlanStore:
         self._publish(batch, tuple(refs))
         return tuple(event.event_checksum for event in batch)
 
+    def install_capacity_snapshot(
+        self,
+        snapshot: "CapacityScopeSnapshot",
+    ) -> "CapacityScopeSnapshot":
+        """Install one trusted capacity baseline through the durable CAS row."""
+
+        from framework.harness.task_plan.capacity import CapacityScopeSnapshot
+
+        if not isinstance(snapshot, CapacityScopeSnapshot):
+            raise TypeError("snapshot must be CapacityScopeSnapshot")
+        if snapshot.revision != 1:
+            raise HarnessValidationError(
+                "initial capacity scope revision must be 1",
+                code="CAPACITY_RESERVATION_CONFLICT",
+            )
+        state = _capacity_state_snapshot(snapshot)
+        self._runtime.compare_and_swap_transactional_state(
+            state,
+            expected_revision=None,
+            expected_checksum=None,
+        )
+        return snapshot
+
+    def load_capacity_snapshot(self, owner_scope: str) -> "CapacityScopeSnapshot":
+        """Load one authoritative shared-capacity snapshot from the event store."""
+
+        scope = identifier(owner_scope, "capacity_scope")
+        state = self._reader.load_transactional_state(
+            TASK_PLAN_CAPACITY_STATE_NAMESPACE,
+            scope,
+        )
+        if state is None:
+            raise HarnessValidationError(
+                "required shared capacity scope is missing",
+                code="CAPACITY_POLICY_MISSING",
+                details={"owner_scope": scope},
+            )
+        return _capacity_snapshot_from_state(state)
+
+    def commit_wave_admission(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+        expected_capacity_revision: int,
+        capacity_scope: str,
+        capacity_before_checksum: str,
+        capacity_after: "CapacityScopeSnapshot",
+        pool_reservations: tuple["PoolReservation", ...],
+    ) -> tuple[str, ...]:
+        """Publish wave facts, projection snapshots and shared capacity atomically."""
+
+        batch = _validate_atomic_event_batch(events)
+        _validate_transition_projections(batch, projections)
+        before, _reservations = _validate_capacity_admission_contract(
+            batch,
+            expected_capacity_revision=expected_capacity_revision,
+            capacity_scope=capacity_scope,
+            capacity_before_checksum=capacity_before_checksum,
+            capacity_after=capacity_after,
+            pool_reservations=pool_reservations,
+        )
+        expected_checksum = checksum(
+            expected_projection_checksum,
+            "expected_projection_checksum",
+        )
+        first = batch[0]
+        history = self.read_events(first.run_id, first.stage_id)
+        replayed = _classify_atomic_event_batch_history(batch, history)
+        plan = self.plan(
+            first.run_id,
+            first.stage_id,
+            first.plan_version if replayed else None,
+        )
+        if plan is None:
+            raise HarnessValidationError(
+                "TaskPlan transition requires an accepted plan",
+                code="task_plan_projection_missing",
+            )
+        current: TaskPlanProjection | None = None
+        if not replayed:
+            current = self.load_projection(first.run_id, first.stage_id)
+            if current.projection_checksum != expected_checksum:
+                raise HarnessValidationError(
+                    "projection CAS precondition differs from current state",
+                    code="task_plan_projection_mismatch",
+                )
+            if self.load_capacity_snapshot(before.owner_scope) != before:
+                raise HarnessValidationError(
+                    "capacity CAS precondition differs from current shared scope",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                    details={"owner_scope": before.owner_scope},
+                )
+            _validate_wave_admission_projection_contract(
+                current,
+                plan,
+                batch,
+                projections,
+            )
+        for event, projection in zip(batch, projections, strict=True):
+            _require_event_matches_plan(event, plan)
+            if not projection.matches_plan_identity(plan):
+                raise HarnessValidationError(
+                    "projection does not match the accepted plan",
+                    code="task_plan_projection_mismatch",
+                )
+            if current is not None:
+                _require_projection_transition_identity(current, projection)
+        if replayed:
+            self._historical_projection_refs(batch, projections)
+            # Capacity evidence is embedded in the already checksummed wave.
+            # Do not compare it with a later shared-scope revision or reserve again.
+            return tuple(event.event_checksum for event in batch)
+
+        from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+        validate_submission_event_append(history, batch)
+        validate_parallel_admission_append(
+            history,
+            batch,
+            plan_lookup=lambda version: self.plan(first.run_id, first.stage_id, version),
+        )
+        refs = tuple(
+            {"projection": self._put_projection(projection)}
+            for projection in projections
+        )
+        self._publish_with_state_cas(
+            batch,
+            refs,
+            state_before=_capacity_state_snapshot(before),
+            state_after=_capacity_state_snapshot(capacity_after),
+        )
+        return tuple(event.event_checksum for event in batch)
+
+    def commit_wave_completion(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+        expected_capacity_revision: int,
+        capacity_scope: str,
+        capacity_before_checksum: str,
+        capacity_after: "CapacityScopeSnapshot",
+        settled_pool_reservations: tuple["PoolReservation", ...],
+    ) -> tuple[str, ...]:
+        """Persist confirmed capacity settlement with its wave completion."""
+
+        from framework.harness.task_plan.store import _validate_capacity_completion_contract
+
+        batch = _validate_atomic_event_batch(events)
+        _validate_transition_projections(batch, projections)
+        first = batch[0]
+        history = self.read_events(first.run_id, first.stage_id)
+        before, _settlements = _validate_capacity_completion_contract(
+            batch,
+            history,
+            expected_capacity_revision=expected_capacity_revision,
+            capacity_scope=capacity_scope,
+            capacity_before_checksum=capacity_before_checksum,
+            capacity_after=capacity_after,
+            settled_pool_reservations=settled_pool_reservations,
+        )
+        replayed = _classify_atomic_event_batch_history(batch, history)
+        plan = self.plan(
+            first.run_id,
+            first.stage_id,
+            first.plan_version if replayed else None,
+        )
+        if plan is None:
+            raise HarnessValidationError(
+                "TaskPlan transition requires an accepted plan",
+                code="task_plan_projection_missing",
+            )
+        current: TaskPlanProjection | None = None
+        if not replayed:
+            current = self.load_projection(first.run_id, first.stage_id)
+            if current.projection_checksum != checksum(
+                expected_projection_checksum,
+                "expected_projection_checksum",
+            ):
+                raise HarnessValidationError(
+                    "projection CAS precondition differs from current state",
+                    code="task_plan_projection_mismatch",
+                )
+            if self.load_capacity_snapshot(before.owner_scope) != before:
+                raise HarnessValidationError(
+                    "capacity settlement CAS differs from current shared scope",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                )
+        for event, projection in zip(batch, projections, strict=True):
+            _require_event_matches_plan(event, plan)
+            if not projection.matches_plan_identity(plan):
+                raise HarnessValidationError(
+                    "projection does not match the accepted plan",
+                    code="task_plan_projection_mismatch",
+                )
+            if current is not None:
+                _require_projection_transition_identity(current, projection)
+        if current is not None:
+            _validate_wave_completion_projection_contract(
+                current,
+                batch,
+                projections,
+            )
+        if replayed:
+            self._historical_projection_refs(batch, projections)
+            return tuple(event.event_checksum for event in batch)
+
+        from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
+
+        validate_submission_event_append(history, batch)
+        validate_parallel_admission_append(
+            history,
+            batch,
+            plan_lookup=lambda version: self.plan(first.run_id, first.stage_id, version),
+        )
+        refs = tuple(
+            {"projection": self._put_projection(projection)}
+            for projection in projections
+        )
+        self._publish_with_state_cas(
+            batch,
+            refs,
+            state_before=_capacity_state_snapshot(before),
+            state_after=_capacity_state_snapshot(capacity_after),
+        )
+        return tuple(event.event_checksum for event in batch)
+
     def commit_events(
         self,
         events: tuple[TaskPlanEvent, ...],
@@ -1276,6 +1521,8 @@ class DurableTaskPlanStore:
         history = self.read_events(first.run_id, first.stage_id)
         replayed = _classify_atomic_event_batch_history(batch, history)
         if not replayed:
+            _reject_uncoordinated_capacity_transition(batch, history)
+        if not replayed:
             current = self.load_projection(first.run_id, first.stage_id)
             if current.projection_checksum != expected_checksum:
                 raise HarnessValidationError(
@@ -1291,6 +1538,30 @@ class DurableTaskPlanStore:
             raise HarnessValidationError(
                 "TaskPlan transition requires an accepted plan",
                 code="task_plan_projection_missing",
+            )
+        if not replayed:
+            _validate_wave_admission_projection_contract(
+                current,
+                plan,
+                batch,
+                projections,
+            )
+            _validate_logical_readiness_projection_contract(
+                current,
+                plan,
+                batch,
+                projections,
+            )
+            _validate_queue_admission_projection_contract(
+                current,
+                plan,
+                batch,
+                projections,
+            )
+            _validate_wave_completion_projection_contract(
+                current,
+                batch,
+                projections,
             )
         for event, projection in zip(batch, projections, strict=True):
             _require_event_matches_plan(event, plan)
@@ -1861,6 +2132,137 @@ class DurableTaskPlanStore:
             code="task_plan_event_store_contention",
         )
 
+    def _historical_projection_refs(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+    ) -> None:
+        stored, _watermark = self._read_snapshot(events[0].run_id)
+        committed = {
+            domain.sequence: canonical
+            for canonical in stored
+            if (domain := self._stored_to_domain(canonical)).stage_id
+            == events[0].stage_id
+        }
+        for event, projection in zip(events, projections, strict=True):
+            canonical = committed.get(event.sequence)
+            if canonical is None:
+                raise HarnessValidationError(
+                    "committed wave event is missing from its canonical stream",
+                    code="task_plan_event_history_conflict",
+                )
+            reference = self._reference_from_event(canonical, "projection")
+            if reference is None:
+                raise HarnessValidationError(
+                    "committed projection artifact is missing",
+                    code="task_plan_artifact_missing",
+                )
+            persisted = self._read_reference(reference, TaskPlanProjection)
+            if persisted.projection_checksum != projection.projection_checksum:
+                raise HarnessValidationError(
+                    "committed projection differs from retry",
+                    code="task_plan_projection_mismatch",
+                )
+
+    def _publish_with_state_cas(
+        self,
+        events: Sequence[TaskPlanEvent],
+        refs: Sequence[Mapping[str, _DocumentReference]],
+        *,
+        state_before: TransactionalStateSnapshot,
+        state_after: TransactionalStateSnapshot,
+    ) -> tuple[StoredEvent, ...]:
+        """Publish one whole TaskPlan batch beside one capacity-scope CAS."""
+
+        if not events or len(events) != len(refs):
+            raise ValueError("events and refs must have the same non-zero length")
+        if (
+            state_before.namespace != TASK_PLAN_CAPACITY_STATE_NAMESPACE
+            or state_after.namespace != TASK_PLAN_CAPACITY_STATE_NAMESPACE
+            or (state_before.namespace, state_before.key)
+            != (state_after.namespace, state_after.key)
+            or state_after.revision != state_before.revision + 1
+        ):
+            raise HarnessValidationError(
+                "capacity state CAS snapshots are inconsistent",
+                code="CAPACITY_RESERVATION_CONFLICT",
+            )
+        run_id = events[0].run_id
+        stage_id = events[0].stage_id
+        for _ in range(_MAX_EVENT_APPEND_RETRIES):
+            stored, high_watermark = self._read_snapshot(run_id)
+            stage_history = [
+                (item, domain)
+                for item in stored
+                if (domain := self._stored_to_domain(item)).stage_id == stage_id
+            ]
+            missing: list[tuple[TaskPlanEvent, Mapping[str, _DocumentReference]]] = []
+            for event, event_refs in zip(events, refs, strict=True):
+                if event.sequence <= len(stage_history):
+                    canonical, existing = stage_history[event.sequence - 1]
+                    if existing.event_checksum != event.event_checksum:
+                        raise HarnessValidationError(
+                            "TaskPlan sequence already contains different content",
+                            code="task_plan_sequence_conflict",
+                        )
+                    self._validate_stored_refs(canonical, event_refs)
+                    continue
+                expected = len(stage_history) + len(missing) + 1
+                if event.sequence != expected:
+                    raise HarnessValidationError(
+                        "TaskPlan event sequence is not monotonic",
+                        code="task_plan_sequence_conflict",
+                        details={"expected": expected, "actual": event.sequence},
+                    )
+                missing.append((event, event_refs))
+            if not missing:
+                return tuple(
+                    stage_history[event.sequence - 1][0] for event in events
+                )
+            if len(missing) != len(events):
+                raise HarnessValidationError(
+                    "TaskPlan atomic event batch is only partially present",
+                    code="task_plan_event_history_conflict",
+                )
+            requests = tuple(
+                self._publish_request(event, event_refs)
+                for event, event_refs in missing
+            )
+            try:
+                committed, persisted_state = self._runtime.publish_batch_with_state_cas(
+                    requests,
+                    expected_last_sequence=high_watermark,
+                    state_namespace=state_before.namespace,
+                    state_key=state_before.key,
+                    expected_state_revision=state_before.revision,
+                    expected_state_checksum=state_before.checksum,
+                    next_state=state_after,
+                )
+            except (EventStreamVersionConflictError, EventIdentityCollisionError):
+                continue
+            if persisted_state != state_after:
+                raise HarnessValidationError(
+                    "capacity state commit returned different content",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                )
+            for stored_event, (event, event_refs) in zip(
+                committed,
+                missing,
+                strict=True,
+            ):
+                restored = self._stored_to_domain(stored_event)
+                if restored.event_checksum != event.event_checksum:
+                    raise HarnessValidationError(
+                        "canonical event store returned different TaskPlan content",
+                        code="task_plan_event_commit_mismatch",
+                    )
+                self._validate_stored_refs(stored_event, event_refs)
+            return tuple(committed)
+        raise HarnessValidationError(
+            "TaskPlan capacity admission exceeded bounded stream contention retries",
+            code="task_plan_event_store_contention",
+        )
+
     def _publish_request(
         self,
         event: TaskPlanEvent,
@@ -2075,6 +2477,59 @@ def _event_id(event: TaskPlanEvent, tenant_id: str | None) -> str:
     return f"task-plan-event:{digest}"
 
 
+def _capacity_state_snapshot(
+    snapshot: "CapacityScopeSnapshot",
+) -> TransactionalStateSnapshot:
+    from framework.harness.task_plan.capacity import CapacityScopeSnapshot
+
+    if not isinstance(snapshot, CapacityScopeSnapshot):
+        raise TypeError("snapshot must be CapacityScopeSnapshot")
+    if snapshot.revision < 1:
+        raise HarnessValidationError(
+            "durable capacity scope revision must be positive",
+            code="CAPACITY_RESERVATION_CONFLICT",
+        )
+    return TransactionalStateSnapshot.create(
+        namespace=TASK_PLAN_CAPACITY_STATE_NAMESPACE,
+        key=snapshot.owner_scope,
+        revision=snapshot.revision,
+        payload=snapshot.to_dict(),
+    )
+
+
+def _capacity_snapshot_from_state(
+    state: TransactionalStateSnapshot,
+) -> "CapacityScopeSnapshot":
+    from framework.harness.task_plan.capacity import CapacityScopeSnapshot
+
+    if not isinstance(state, TransactionalStateSnapshot):
+        raise TypeError("state must be TransactionalStateSnapshot")
+    if state.namespace != TASK_PLAN_CAPACITY_STATE_NAMESPACE:
+        raise HarnessValidationError(
+            "capacity state namespace is invalid",
+            code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+        )
+    payload = thaw_canonical_json(state.payload)
+    if not isinstance(payload, Mapping):
+        raise HarnessValidationError(
+            "capacity state payload is invalid",
+            code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+        )
+    try:
+        snapshot = CapacityScopeSnapshot.from_dict(payload)
+    except (TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "capacity state payload is invalid",
+            code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+        ) from exc
+    if snapshot.owner_scope != state.key or snapshot.revision != state.revision:
+        raise HarnessValidationError(
+            "capacity state envelope conflicts with its snapshot",
+            code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+        )
+    return snapshot
+
+
 def _graph_event_context_for_task_plan_event(
     event: TaskPlanEvent,
 ) -> GraphEventContext:
@@ -2142,6 +2597,7 @@ def _require_projection_matches_event(
 
 __all__ = [
     "DurableTaskPlanStore",
+    "TASK_PLAN_CAPACITY_STATE_NAMESPACE",
     "TASK_PLAN_EVENT_SOURCE",
     "TASK_PLAN_STORAGE_EXTENSION",
     "TASK_PLAN_STORAGE_SCHEMA",

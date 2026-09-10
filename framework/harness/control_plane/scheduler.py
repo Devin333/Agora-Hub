@@ -286,8 +286,33 @@ class HarnessScheduler:
     def mark_task_plan_dispatched(self, projection: Any, instance: Any) -> Any:
         return self._task_plan_scheduler.mark_dispatched(projection, instance)
 
-    def mark_task_plan_admitted(self, projection: Any, instance: Any) -> Any:
-        return self._task_plan_scheduler.mark_admitted(projection, instance)
+    def mark_task_plan_admitted(
+        self,
+        projection: Any,
+        instance: Any,
+        *,
+        admission_owner: Any,
+    ) -> Any:
+        return self._task_plan_scheduler.mark_admitted(
+            projection,
+            instance,
+            admission_owner=admission_owner,
+        )
+
+    def admit_task_plan_tasks(
+        self,
+        projection: Any,
+        instances: Sequence[Any],
+        *,
+        admission_owner: Any,
+    ) -> Any:
+        """Atomically admit one stable scheduler-selected task subsequence."""
+
+        return self._task_plan_scheduler.admit_ready_tasks(
+            projection,
+            instances,
+            admission_owner=admission_owner,
+        )
 
     def mark_task_plan_started(self, projection: Any, instance: Any) -> Any:
         return self._task_plan_scheduler.mark_started(projection, instance)
@@ -297,11 +322,13 @@ class HarnessScheduler:
         projection: Any,
         task_id: str,
         *,
+        plan: Any,
         task_instance_id: str | None = None,
     ) -> Any:
         return self._task_plan_scheduler.reclaim_stale(
             projection,
             task_id,
+            plan=plan,
             task_instance_id=task_instance_id,
         )
 

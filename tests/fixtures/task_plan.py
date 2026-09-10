@@ -29,7 +29,7 @@ _DEFAULT_SUPPORT_REFS = {
     "capability_registry_ref": "test.task-capability-registry@1",
     "gate_registry_ref": "test.task-gate-registry@1",
     "aggregator_ref": "test.task-plan-aggregator@1",
-    "event_schema": "newsroom.harness-task-plan-event/v2",
+    "event_schema": "newsroom.harness-task-plan-event/v3",
     "checkpoint_ref": "test.task-plan-checkpoint@1",
     "result_store_ref": "test.task-plan-result-store@1",
 }

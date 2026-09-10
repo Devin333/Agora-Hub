@@ -158,6 +158,78 @@ def test_active_resubmission_cannot_recover_or_halt_original_execution(store_fac
     assert len(calls) == 2
 
 
+def test_capacity_wait_remains_pending_until_explicit_recovery_without_parent_progress():
+    seed, _ = _runtime()
+    base_policy = seed._policy_registry.resolve(
+        "agent.loop.delegate@1", stage_id="delegate_stage"
+    )
+    policy = replace(base_policy, available_concurrency_reservations=0)
+    store = InMemoryTaskPlanStore()
+    calls = []
+    runtime, identity = _runtime(
+        store=store,
+        policy=policy,
+        worker_executor=_counting_worker(calls),
+    )
+    request = _request(identity)
+
+    waiting = runtime.dispatch(request)
+
+    assert waiting.status == "waiting"
+    assert waiting.reason_code == "TASK_GROUP_CAPACITY_WAITING"
+    assert waiting.observation.terminal_reason is None
+    assert waiting.observation.group_status == "admitted"
+    assert waiting.submission_receipt is not None
+    assert waiting.submission_receipt.wait_status == "pending"
+    assert calls == []
+    before = store.read_events(identity.run_id, "delegate_stage")
+    wait_events = [
+        event for event in before
+        if event.event_type == "TASK_GROUP_CAPACITY_WAITING"
+    ]
+    assert len(wait_events) == 1
+    deadline = wait_events[0].payload["waiting"]["absolute_deadline_ms"]
+    # This wait is caused by the concurrency-slot policy, not a shared pool.
+    # Durable evidence must preserve that distinction instead of inventing a
+    # capacity scope solely to satisfy replay.
+    assert wait_events[0].payload["waiting"]["capacity_snapshot"] is None
+    projection = store.load_projection(identity.run_id, "delegate_stage")
+    assert projection.logical_ready_order == ("contribution", "structure")
+    assert all(task.status.value == "ready" for task in projection.tasks)
+    assert all(task.attempts == 0 for task in projection.tasks)
+    assert all(task.active_instance_id is None for task in projection.tasks)
+    assert all(task.admission_owner is None for task in projection.tasks)
+    assert projection.consumed_budget["ledger"]["records"] == {}
+    assert not any(
+        event.event_type in {"TASK_PLAN_HALTED", "TASK_GROUP_JOINED"}
+        for event in before
+    )
+
+    duplicate = runtime.dispatch(request)
+    assert duplicate.reason_code == "task_plan_submission_resume_required"
+    assert store.read_events(identity.run_id, "delegate_stage") == before
+
+    recovered = runtime.recover_submission(request)
+    after = store.read_events(identity.run_id, "delegate_stage")
+    assert recovered.status == "waiting"
+    assert recovered.submission_receipt.wait_status == "pending"
+    assert len([
+        event for event in after
+        if event.event_type == "TASK_GROUP_CAPACITY_WAITING"
+    ]) == 1
+    assert next(
+        event.payload["waiting"]["absolute_deadline_ms"]
+        for event in after
+        if event.event_type == "TASK_GROUP_CAPACITY_WAITING"
+    ) == deadline
+    assert next(
+        event.payload["waiting"]["capacity_snapshot"]
+        for event in after
+        if event.event_type == "TASK_GROUP_CAPACITY_WAITING"
+    ) is None
+    assert calls == []
+
+
 def test_terminal_redelivery_returns_the_same_submission_receipt(store_factory):
     store = store_factory()
     runtime, identity = _runtime(store=store)

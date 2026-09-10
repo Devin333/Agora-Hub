@@ -7,7 +7,11 @@ from framework.harness.task_plan.capacity import CapacityPool, PoolReservation, 
 from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator, ParallelEventSink, SerialTaskExecutorAdapter
 from framework.harness.task_plan.policy import TaskPlanPolicy
-from tests.framework.harness.task_plan.capacity_fixtures import capacity_pool, bind_capacity_policy
+from tests.framework.harness.task_plan.capacity_fixtures import (
+    bind_capacity_policy,
+    capacity_pool,
+    capacity_scope_snapshot,
+)
 from tests.framework.harness.task_plan.test_parallel_orchestration import _accepted_parallel_plan, _request
 
 
@@ -67,16 +71,38 @@ def test_pinned_policy_resolves_complete_plan_and_rejects_caller_side_effect_dri
     policy = _policy(plan, pool)
     assert TaskCapacityPolicy.from_dict(policy.to_dict()) == policy
     demands = policy.resolve(plan, (pool,), now_ms=1)
-    request = replace(_request(plan), capacity_policy=policy, capacity_pools=(pool,), task_capacity_demands=demands)
+    request = replace(
+        _request(plan),
+        capacity_policy=policy,
+        capacity_pools=(pool,),
+        capacity_snapshot=capacity_scope_snapshot((pool,)),
+        task_capacity_demands=demands,
+    )
     with pytest.raises(HarnessValidationError, match="trusted capacity policy"):
         replace(request, task_capacity_demands={**demands, "a": TaskCapacityDemand("a", {"cpu": 1}, "MUTATING_SERIAL", "foreign-resource")})
     assert set(demands) == {"a", "b"}
 
 
 def test_pool_reservation_roundtrip_release_idempotence_and_stale_settlement():
-    pools = {"cpu": capacity_pool("cpu", 2, reservation_version=4), "io": capacity_pool("io", 1, reservation_version=7)}
+    owner_scope = "run/stage/plan"
+    pools = {
+        "cpu": capacity_pool(
+            "cpu", 2, reservation_version=4, owner_scope=owner_scope
+        ),
+        "io": capacity_pool(
+            "io", 1, reservation_version=7, owner_scope=owner_scope
+        ),
+    }
     demand = TaskCapacityDemand("a", {"cpu": 2, "io": 1})
-    packed = pack_first_fit(("a",), {"a": demand}, pools, max_tasks=1, owner_scope="run/stage/plan", reservation_keys={"a": "attempt-a"})
+    packed = pack_first_fit(
+        ("a",),
+        {"a": demand},
+        pools,
+        max_tasks=1,
+        owner_scope=owner_scope,
+        reservation_keys={"a": "attempt-a"},
+        capacity_snapshot=capacity_scope_snapshot(tuple(pools.values())),
+    )
     reservation = packed.reservations[0]
     assert reservation.pool_versions == {"cpu": 4, "io": 7}
     assert PoolReservation.from_dict(reservation.to_dict()) == reservation
@@ -95,7 +121,19 @@ def test_same_key_read_write_conflict_is_symmetric(reverse):
     demands = (TaskCapacityDemand("r", {"cpu": 1}, "READ_ONLY", "key"), TaskCapacityDemand("w", {"cpu": 1}, "MUTATING_SERIAL", "key"))
     if reverse:
         demands = tuple(reversed(demands))
-    packed = pack_first_fit(tuple(d.task_id for d in demands), {d.task_id: d for d in demands}, {"cpu": capacity_pool("cpu", 2)}, max_tasks=2, owner_scope="run/stage", reservation_keys={d.task_id: f"attempt-{d.task_id}" for d in demands})
+    owner_scope = "run/stage"
+    pools = {"cpu": capacity_pool("cpu", 2, owner_scope=owner_scope)}
+    packed = pack_first_fit(
+        tuple(d.task_id for d in demands),
+        {d.task_id: d for d in demands},
+        pools,
+        max_tasks=2,
+        owner_scope=owner_scope,
+        reservation_keys={
+            d.task_id: f"attempt-{d.task_id}" for d in demands
+        },
+        capacity_snapshot=capacity_scope_snapshot(tuple(pools.values())),
+    )
     assert packed.selected == (demands[0].task_id,)
     assert packed.reasons[demands[1].task_id] == "RESOURCE_CONFLICT"
 
@@ -118,7 +156,13 @@ def test_dispatch_rejects_missing_fence_or_expired_pool_before_worker_or_wave(fa
     plan = _accepted_parallel_plan(("task-1",))
     pool = capacity_pool("cpu", 1, **({"expires_at_ms": 1} if failure == "expired" else {}))
     demand = TaskCapacityDemand("task-1", {"cpu": 1}, "FENCED_MUTATION" if failure == "fence" else "READ_ONLY", "key")
-    request = replace(_request(plan), serial_fallback=True, capacity_pools=(pool,), task_capacity_demands={demand.task_id: demand})
+    request = replace(
+        _request(plan),
+        serial_fallback=True,
+        capacity_pools=(pool,),
+        capacity_snapshot=capacity_scope_snapshot((pool,)),
+        task_capacity_demands={demand.task_id: demand},
+    )
     request = bind_capacity_policy(request)
     events, calls = [], []
     coordinator = ParallelAgentCoordinator(max_workers=1, serial_executor=SerialTaskExecutorAdapter(), event_sink=ParallelEventSink(events.append, events.extend))

@@ -2,7 +2,20 @@
 
 ### Requirement: Ready tasks are calculated deterministically and dispatched within bounds
 
-The TaskPlan scheduler SHALL mark a task ready only when all required dependencies have durable successful results, all input references resolve, policy and binding checks remain valid, and budget reservation succeeds. When a plan version is accepted, the Harness group/wave coordinator MUST establish one immutable `DispatchGroup` for its complete logical execution scope before any physical dispatch. Ready tasks MUST be ordered deterministically and physical dispatch MUST honor stage `max_parallelism`, capability capacity, child supervisor capacity, and concurrency reservations. Every selected ready set MUST be submitted as a wave in that group; it MUST NOT silently execute a parallel candidate in a synchronous per-task loop.
+The TaskPlan scheduler SHALL mark a task logically ready only when all required dependencies have durable successful results, all input references resolve, and policy and binding checks remain valid. Logical readiness MUST NOT allocate an attempt or reserve execution budget or resource capacity. When a plan version is accepted, the Harness group/wave coordinator MUST establish one immutable `DispatchGroup` for its complete logical execution scope before any physical dispatch. Ready tasks MUST be ordered deterministically and physical dispatch MUST honor stage `max_parallelism`, capability capacity, child supervisor capacity, and concurrency reservations. Budget and all required capacity MUST be reserved atomically only for selected admitted tasks. Every selected ready set MUST be submitted as a wave in that group; it MUST NOT silently execute a parallel candidate in a synchronous per-task loop.
+
+#### Scenario: Capacity wait has no execution allocation
+
+- **WHEN** a logically ready task cannot acquire every required pool or a physical dispatch slot
+- **THEN** Harness MUST persist its readiness and stable wait reason without allocating an active attempt, reserving execution budget, or consuming retry or wave limits
+- **AND** later eligible tasks MUST still be considered in the full deterministic ready order
+- **AND** checkpoint, replay and recovery MUST NOT materialize that waiting task as an admitted child or an ordinary queue attempt
+
+#### Scenario: Readiness semantics change across schema versions
+
+- **WHEN** a reader encounters a task projection whose schema predates unallocated logical readiness
+- **THEN** it MUST NOT silently reinterpret an allocated legacy READY attempt as a new unallocated READY task
+- **AND** any migration MUST be explicit and offline, preserving attempt, budget and admission evidence
 
 #### Scenario: Independent tasks become ready together
 

@@ -11,8 +11,9 @@ from framework.harness.task_plan.canonical import required_text
 
 TASK_PLAN_RUNTIME_VERSION = "newsroom.harness-task-plan-runtime/v1"
 TASK_PLAN_EVENT_SCHEMA_V2 = "newsroom.harness-task-plan-event/v2"
+TASK_PLAN_EVENT_SCHEMA_V3 = "newsroom.harness-task-plan-event/v3"
 TASK_PLAN_EVENT_SCHEMAS = (
-    TASK_PLAN_EVENT_SCHEMA_V2,
+    TASK_PLAN_EVENT_SCHEMA_V3,
 )
 TASK_DEFINITION_SCHEMA = "newsroom.harness-task-definition/v1"
 RESOLVED_TASK_DEFINITION_SCHEMA = "newsroom.harness-resolved-task-definition/v1"
@@ -21,9 +22,9 @@ GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA = "newsroom.harness-task-plan/v2"
 GRAPH_ONLY_TASK_PLAN_PATCH_SCHEMA = "newsroom.harness-task-plan-patch/v2"
 TASK_PLAN_POLICY_SCHEMA = "newsroom.harness-task-plan-policy/v1"
 GRAPH_ONLY_TASK_INSTANCE_SCHEMA = "newsroom.harness-task-instance/v3"
-GRAPH_ONLY_TASK_PROJECTION_SCHEMA = "newsroom.harness-task-projection/v3"
+GRAPH_ONLY_TASK_PROJECTION_SCHEMA = "newsroom.harness-task-projection/v4"
 GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA = (
-    "newsroom.harness-task-plan-projection/v3"
+    "newsroom.harness-task-plan-projection/v4"
 )
 TASK_RESULT_REFERENCE_SCHEMA = "newsroom.harness-task-result-reference/v1"
 TASK_CAPABILITY_BINDING_SCHEMA = "newsroom.harness-task-capability-binding/v1"
@@ -244,6 +245,7 @@ __all__ = [
     "TASK_CAPABILITY_BINDING_SCHEMA",
     "TASK_DEFINITION_SCHEMA",
     "TASK_PLAN_EVENT_SCHEMA_V2",
+    "TASK_PLAN_EVENT_SCHEMA_V3",
     "TASK_PLAN_EVENT_SCHEMAS",
     "TASK_PLAN_POLICY_SCHEMA",
     "TASK_PLAN_RUNTIME_VERSION",

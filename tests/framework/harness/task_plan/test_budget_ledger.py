@@ -7,9 +7,15 @@ import pytest
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger, result_budget_usage
 from framework.harness.task_plan.canonical import canonical_payload_checksum
-from framework.harness.task_plan.models import TaskBudget, TaskLifecycle
+from framework.harness.task_plan.models import TaskAdmissionOwner, TaskBudget, TaskLifecycle
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler, task_instance_for_attempt
-from framework.harness.task_plan.store import TaskResultRecord
+from framework.harness.task_plan.store import (
+    InMemoryTaskPlanStore,
+    LogicalTaskReadiness,
+    TaskPlanEvent,
+    TaskQueueAdmissionEvidence,
+    TaskResultRecord,
+)
 from framework.harness.task_plan import TaskPlanCheckpoint, TaskPlanReplayReducer, TaskPlanValidator
 from tests.framework.harness.task_plan.test_dependency_blocking import _accepted_plan
 from tests.framework.harness.task_plan.test_task_plan_runtime import _candidate, _setup, _task, validator_context
@@ -148,8 +154,6 @@ def test_invalid_or_conflicting_usage_cannot_settle(usage):
 
 @pytest.mark.parametrize("parallelism", [1, 2])
 def test_ready_recovery_does_not_reserve_or_charge_the_same_attempt_twice(parallelism):
-    from framework.harness.task_plan.store import InMemoryTaskPlanStore
-
     graph, policy, registry = _setup()
     policy = replace(policy, per_task_budget=TaskBudget(1), aggregate_task_budget=TaskBudget(1), max_parallelism=parallelism)
     candidate = replace(_candidate(graph, (_task("a", "cap", "role"),)), requested_max_parallelism=parallelism)
@@ -160,21 +164,144 @@ def test_ready_recovery_does_not_reserve_or_charge_the_same_attempt_twice(parall
     projection = store.load_projection(plan.run_id, plan.stage_id)
     instance = task_instance_for_attempt(plan, "a", 1)
     scheduler = TaskPlanScheduler()
-    reserved = scheduler.reserve_ready_tasks(projection, TaskPlanReadyDecision((instance,)))
-    recovered = scheduler.next_ready_tasks(reserved, 1, plan=plan, available_input_refs=("document",))
-    assert recovered.task_instances == (instance,)
-    assert scheduler.reserve_ready_tasks(reserved, recovered) == reserved
+    decision = scheduler.next_ready_tasks(
+        projection,
+        1,
+        plan=plan,
+        available_input_refs=("document",),
+    )
+    assert decision.logical_ready_task_ids == ("a",)
+    ready = scheduler.reserve_ready_tasks(projection, decision)
+    ready_state = ready.tasks[0]
+    assert ready_state.status is TaskLifecycle.READY
+    assert ready_state.attempts == 0
+    assert ready_state.active_instance_id is None
+    assert ready_state.admission_owner is None
+    assert ready.consumed_budget == projection.consumed_budget
+
+    sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=decision.logical_ready_task_ids,
+    )
+    ready = replace(ready, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_READY",
+        plan,
+        task_id=instance.task_id,
+        input_checksum=instance.task_definition_checksum,
+        sequence=sequence,
+        payload={"logical_readiness": readiness.to_dict()},
+    ), ready)
+
+    before_admission = ready
+    admitted = scheduler.mark_admitted(
+        before_admission,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before_admission.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            admitted.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    sequence += 1
+    admitted = replace(admitted, last_sequence=sequence)
+    admitted_event = TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED",
+        plan,
+        task_id=instance.task_id,
+        task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt,
+        input_checksum=instance.task_definition_checksum,
+        sequence=sequence,
+        payload={"queue_admission": admission.to_dict()},
+    )
+    admission_checksum = store.commit_event(admitted_event, admitted)
+    snapshot = admitted.consumed_budget
+
+    assert store.commit_event(admitted_event, admitted) == admission_checksum
+    projection_after_admission = admitted
+    for event_type, transition in (
+        ("TASK_DISPATCHED", lambda state: scheduler.mark_dispatched(state, instance)),
+        ("TASK_STARTED", lambda state: scheduler.mark_started(state, instance)),
+    ):
+        sequence += 1
+        projection_after_admission = replace(
+            transition(projection_after_admission),
+            last_sequence=sequence,
+        )
+        store.commit_event(TaskPlanEvent.for_plan(
+            event_type,
+            plan,
+            task_id=instance.task_id,
+            task_instance_id=instance.task_instance_id,
+            attempt=instance.attempt,
+            input_checksum=instance.task_definition_checksum,
+            sequence=sequence,
+        ), projection_after_admission)
+
+    recovered = store.load_projection(plan.run_id, plan.stage_id)
+    recovered_state = recovered.tasks[0]
+    assert recovered_state.status is TaskLifecycle.RUNNING
+    assert recovered_state.attempts == 1
+    assert recovered_state.active_instance_id == instance.task_instance_id
+    assert recovered_state.admission_owner is TaskAdmissionOwner.QUEUE
+    assert recovered.consumed_budget == snapshot
+    event_types = [
+        event.event_type
+        for event in store.read_events(plan.run_id, plan.stage_id)
+    ]
+    assert event_types[-4:] == [
+        "TASK_READY",
+        "TASK_QUEUE_ADMITTED",
+        "TASK_DISPATCHED",
+        "TASK_STARTED",
+    ]
+    assert event_types.count("TASK_QUEUE_ADMITTED") == 1
 
 
 def test_ready_recovery_does_not_allocate_slots_already_reserved_by_other_tasks():
     plan, projection = _accepted_plan()
     scheduler = TaskPlanScheduler()
-    # b is not yet runnable; its existing admission still occupies a slot.
-    instances = tuple(task_instance_for_attempt(plan, task_id, 1) for task_id in ("a", "b"))
-    reserved = scheduler.reserve_ready_tasks(projection, TaskPlanReadyDecision(instances))
-    recovered = scheduler.next_ready_tasks(reserved, 2, plan=plan, available_input_refs=("document",))
-    assert recovered.task_instances == (instances[0],)
-    assert "d" not in {item.task_id for item in recovered.task_instances}
+    decision = scheduler.next_ready_tasks(
+        projection,
+        2,
+        plan=plan,
+        available_input_refs=("document",),
+    )
+    assert decision.logical_ready_task_ids == ("a", "d")
+    ready = scheduler.reserve_ready_tasks(projection, decision)
+    instance = task_instance_for_attempt(plan, "a", 1)
+    admitted = scheduler.mark_admitted(
+        ready,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+
+    recovered = scheduler.next_ready_tasks(
+        admitted,
+        2,
+        plan=plan,
+        available_input_refs=("document",),
+    )
+    recovered_projection = scheduler.reserve_ready_tasks(admitted, recovered)
+    states = {item.task_id: item for item in recovered_projection.tasks}
+    ledger = TaskPlanBudgetLedger.from_snapshot(recovered_projection.consumed_budget)
+
+    assert recovered.logical_ready_task_ids == ("d",)
+    assert states["a"].status is TaskLifecycle.ADMITTED
+    assert states["a"].admission_owner is TaskAdmissionOwner.QUEUE
+    assert states["d"].status is TaskLifecycle.READY
+    assert states["d"].attempts == 0
+    assert states["d"].active_instance_id is None
+    assert states["d"].admission_owner is None
+    assert tuple(ledger.records) == (instance.idempotency_key,)
 
 
 def test_settlement_cannot_use_a_different_accepted_allocation():

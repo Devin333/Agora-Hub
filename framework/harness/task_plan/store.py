@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
+    from framework.harness.task_plan.capacity import CapacityScopeSnapshot, PoolReservation
 
 from framework.events.schema.catalog import TASK_PLAN_EVENT_TYPES
 from framework.harness.graph.versioning import (
@@ -32,6 +34,8 @@ from framework.harness.task_plan.canonical import (
 from framework.harness.task_plan.models import (
     PlanCandidate,
     PlanPatch,
+    TaskAdmissionOwner,
+    TaskInstance,
     TaskLifecycle,
     TaskPlanProjection,
     TaskProjection,
@@ -51,13 +55,188 @@ from framework.harness.task_plan.schema import (
     GRAPH_ONLY_TASK_PROJECTION_SCHEMA,
     GRAPH_ONLY_TASK_PLAN_STAGE_IDENTITY_SCHEMA,
     TASK_PLAN_EVENT_SCHEMA_V2,
+    TASK_PLAN_EVENT_SCHEMA_V3,
     TASK_PLAN_EVENT_SCHEMAS,
 )
 
 
-# Graph v2 is the sole TaskPlan event contract.
-TASK_PLAN_EVENT_SCHEMA = TASK_PLAN_EVENT_SCHEMA_V2
+# Graph v3 is the sole live TaskPlan event contract.  V2 encoded allocated
+# READY attempts and must not be silently reinterpreted as logical readiness.
+TASK_PLAN_EVENT_SCHEMA = TASK_PLAN_EVENT_SCHEMA_V3
 TASK_PLAN_RESULT_SCHEMA_V3 = "newsroom.harness-task-plan-result/v3"
+LOGICAL_TASK_READINESS_SCHEMA = "newsroom.harness-task-readiness/v1"
+TASK_QUEUE_ADMISSION_SCHEMA = "newsroom.harness-task-queue-admission/v1"
+
+
+@dataclass(frozen=True, slots=True)
+class LogicalTaskReadiness:
+    """Versioned fact proving one unallocated logical READY transition."""
+
+    task_id: str
+    task_definition_checksum: str
+    logical_ready_order: tuple[str, ...]
+    schema_version: str = LOGICAL_TASK_READINESS_SCHEMA
+    readiness_checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "task_id", identifier(self.task_id, "task_id"))
+        object.__setattr__(
+            self,
+            "task_definition_checksum",
+            checksum(self.task_definition_checksum, "task_definition_checksum"),
+        )
+        values = self.logical_ready_order
+        if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+            raise HarnessValidationError(
+                "logical ready order must be an ordered array",
+                code="invalid_task_plan_collection",
+            )
+        ready_order = tuple(identifier(item, "logical_ready_order") for item in values)
+        if (
+            not ready_order
+            or len(ready_order) != len(set(ready_order))
+            or self.task_id not in ready_order
+        ):
+            raise HarnessValidationError(
+                "logical readiness must include its task in the complete ordered READY set",
+                code="task_plan_projection_ready_order_mismatch",
+            )
+        object.__setattr__(self, "logical_ready_order", ready_order)
+        if self.schema_version != LOGICAL_TASK_READINESS_SCHEMA:
+            raise HarnessValidationError(
+                "unsupported logical readiness schema",
+                code="unsupported_task_plan_event_schema",
+            )
+        object.__setattr__(
+            self,
+            "readiness_checksum",
+            canonical_payload_checksum(self.to_dict(include_checksum=False)),
+        )
+
+    def to_dict(self, *, include_checksum: bool = True) -> dict[str, Any]:
+        result = {
+            "schema_version": self.schema_version,
+            "task_id": self.task_id,
+            "task_definition_checksum": self.task_definition_checksum,
+            "logical_ready_order": list(self.logical_ready_order),
+        }
+        if include_checksum:
+            result["readiness_checksum"] = self.readiness_checksum
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "LogicalTaskReadiness":
+        payload = exact_keys(
+            value,
+            required=frozenset(
+                {
+                    "schema_version",
+                    "task_id",
+                    "task_definition_checksum",
+                    "logical_ready_order",
+                    "readiness_checksum",
+                }
+            ),
+            model=cls.__name__,
+        )
+        supplied = checksum(payload.pop("readiness_checksum"), "readiness_checksum")
+        readiness = cls(**payload)
+        if supplied != readiness.readiness_checksum:
+            raise HarnessValidationError(
+                "logical readiness checksum does not match content",
+                code="task_plan_checksum_mismatch",
+            )
+        return readiness
+
+
+@dataclass(frozen=True, slots=True)
+class TaskQueueAdmissionEvidence:
+    """Canonical QUEUE-owned attempt and budget admission evidence."""
+
+    task_instance: TaskInstance | Mapping[str, Any]
+    budget_before_checksum: str
+    budget_after_checksum: str
+    admission_owner: TaskAdmissionOwner | str = TaskAdmissionOwner.QUEUE
+    schema_version: str = TASK_QUEUE_ADMISSION_SCHEMA
+    admission_checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        instance = self.task_instance
+        if isinstance(instance, Mapping):
+            instance = TaskInstance.from_dict(instance)
+        if not isinstance(instance, TaskInstance):
+            raise TypeError("task_instance must be TaskInstance")
+        object.__setattr__(self, "task_instance", instance)
+        try:
+            owner = TaskAdmissionOwner(self.admission_owner)
+        except (TypeError, ValueError) as exc:
+            raise HarnessValidationError(
+                "queue admission owner is invalid",
+                code="task_plan_queue_admission_invalid",
+            ) from exc
+        if owner is not TaskAdmissionOwner.QUEUE:
+            raise HarnessValidationError(
+                "queue admission must use QUEUE ownership",
+                code="task_plan_queue_admission_invalid",
+            )
+        object.__setattr__(self, "admission_owner", owner)
+        object.__setattr__(
+            self,
+            "budget_before_checksum",
+            checksum(self.budget_before_checksum, "budget_before_checksum"),
+        )
+        object.__setattr__(
+            self,
+            "budget_after_checksum",
+            checksum(self.budget_after_checksum, "budget_after_checksum"),
+        )
+        if self.schema_version != TASK_QUEUE_ADMISSION_SCHEMA:
+            raise HarnessValidationError(
+                "unsupported queue admission schema",
+                code="task_plan_queue_admission_invalid",
+            )
+        object.__setattr__(
+            self,
+            "admission_checksum",
+            canonical_payload_checksum(self.to_dict(include_checksum=False)),
+        )
+
+    def to_dict(self, *, include_checksum: bool = True) -> dict[str, Any]:
+        result = {
+            "schema_version": self.schema_version,
+            "admission_owner": self.admission_owner.value,
+            "task_instance": self.task_instance.to_dict(),
+            "budget_before_checksum": self.budget_before_checksum,
+            "budget_after_checksum": self.budget_after_checksum,
+        }
+        if include_checksum:
+            result["admission_checksum"] = self.admission_checksum
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "TaskQueueAdmissionEvidence":
+        payload = exact_keys(
+            value,
+            required=frozenset(
+                {
+                    "schema_version",
+                    "admission_owner",
+                    "task_instance",
+                    "budget_before_checksum",
+                    "budget_after_checksum",
+                    "admission_checksum",
+                }
+            ),
+            model=cls.__name__,
+        )
+        supplied = checksum(payload.pop("admission_checksum"), "admission_checksum")
+        evidence = cls(**payload)
+        if supplied != evidence.admission_checksum:
+            raise HarnessValidationError(
+                "queue admission checksum does not match content",
+                code="task_plan_queue_admission_invalid",
+            )
+        return evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -552,7 +731,7 @@ class TaskPlanEvent:
         object.__setattr__(self, "graph_checksum", checksum(self.graph_checksum, "graph_checksum"))
         _normalize_task_plan_contract_identity(
             self,
-            graph_only_schema=TASK_PLAN_EVENT_SCHEMA_V2,
+            graph_only_schema=TASK_PLAN_EVENT_SCHEMA_V3,
             graph_only_identity_fields=_GRAPH_ONLY_TASK_PLAN_IDENTITY_FIELDS,
         )
         object.__setattr__(self, "plan_id", identifier(self.plan_id, "plan_id") if self.plan_id else None)
@@ -568,6 +747,52 @@ class TaskPlanEvent:
         object.__setattr__(self, "output_refs", stable_text_tuple(self.output_refs, "output_refs", item_kind="reference"))
         object.__setattr__(self, "reason_code", optional_text(self.reason_code, "reason_code"))
         object.__setattr__(self, "payload", frozen_mapping(self.payload, "event.payload"))
+        if self.event_type == "TASK_READY":
+            readiness_payload = self.payload.get("logical_readiness")
+            if not isinstance(readiness_payload, Mapping):
+                raise HarnessValidationError(
+                    "TASK_READY requires versioned logical readiness evidence",
+                    code="task_plan_logical_readiness_missing",
+                )
+            readiness = LogicalTaskReadiness.from_dict(readiness_payload)
+            if (
+                self.task_instance_id is not None
+                or self.attempt is not None
+                or self.task_id != readiness.task_id
+                or self.input_checksum != readiness.task_definition_checksum
+            ):
+                raise HarnessValidationError(
+                    "TASK_READY must describe an unallocated logical task",
+                    code="task_plan_logical_readiness_identity_mismatch",
+                )
+        elif self.event_type == "TASK_QUEUE_ADMITTED":
+            admission_payload = self.payload.get("queue_admission")
+            if not isinstance(admission_payload, Mapping):
+                raise HarnessValidationError(
+                    "TASK_QUEUE_ADMITTED requires versioned admission evidence",
+                    code="task_plan_queue_admission_invalid",
+                )
+            admission = TaskQueueAdmissionEvidence.from_dict(admission_payload)
+            instance = admission.task_instance
+            if (
+                self.task_id != instance.task_id
+                or self.task_instance_id != instance.task_instance_id
+                or self.attempt != instance.attempt
+                or self.input_checksum != instance.task_definition_checksum
+                or self.run_id != instance.run_id
+                or self.stage_id != instance.stage_id
+                or self.plan_id != instance.plan_id
+                or self.plan_version != instance.plan_version
+                or any(
+                    getattr(self, name) != getattr(instance, name)
+                    for name in _GRAPH_ONLY_TASK_PLAN_IDENTITY_FIELDS
+                    | {"graph_checksum"}
+                )
+            ):
+                raise HarnessValidationError(
+                    "TASK_QUEUE_ADMITTED differs from its allocated attempt",
+                    code="task_plan_queue_admission_invalid",
+                )
         sequence = non_negative_int(self.sequence, "sequence")
         if sequence == 0:
             raise HarnessValidationError(
@@ -699,7 +924,7 @@ class TaskPlanEvent:
 
     @property
     def is_graph_only(self) -> bool:
-        return self.schema_version == TASK_PLAN_EVENT_SCHEMA_V2
+        return self.schema_version == TASK_PLAN_EVENT_SCHEMA_V3
 
     def matches_contract_identity(
         self,
@@ -767,6 +992,32 @@ class TaskPlanStorePort(Protocol):
         *,
         expected_projection_checksum: str,
     ) -> tuple[str, ...]: ...
+    def install_capacity_snapshot(self, snapshot: "CapacityScopeSnapshot") -> "CapacityScopeSnapshot": ...
+    def load_capacity_snapshot(self, owner_scope: str) -> "CapacityScopeSnapshot": ...
+    def commit_wave_admission(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+        expected_capacity_revision: int,
+        capacity_scope: str,
+        capacity_before_checksum: str,
+        capacity_after: "CapacityScopeSnapshot",
+        pool_reservations: tuple["PoolReservation", ...],
+    ) -> tuple[str, ...]: ...
+    def commit_wave_completion(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+        expected_capacity_revision: int,
+        capacity_scope: str,
+        capacity_before_checksum: str,
+        capacity_after: "CapacityScopeSnapshot",
+        settled_pool_reservations: tuple["PoolReservation", ...],
+    ) -> tuple[str, ...]: ...
     def commit_event(self, event: TaskPlanEvent, projection: TaskPlanProjection) -> str: ...
     def plan(self, run_id: str, stage_id: str, version: int | None = None) -> ValidatedTaskPlan | None: ...
     def patches_for(self, run_id: str, stage_id: str) -> tuple[PlanPatch, ...]: ...
@@ -785,6 +1036,13 @@ class InMemoryTaskPlanStore:
         self._projections: dict[tuple[str, str], TaskPlanProjection] = {}
         self._events: dict[tuple[str, str], list[TaskPlanEvent]] = {}
         self._transition_projections: dict[tuple[str, str, str], TaskPlanProjection] = {}
+        self._capacity_snapshots: dict[str, object] = {}
+        self._capacity_admission_transitions: dict[
+            str, tuple[object, object, tuple[object, ...]]
+        ] = {}
+        self._capacity_settlement_transitions: dict[
+            str, tuple[object, object, tuple[object, ...]]
+        ] = {}
 
     def append_candidate(self, candidate: PlanCandidate, *, event_type: str = "PLAN_CANDIDATE_BUILT") -> str:
         if not isinstance(candidate, PlanCandidate):
@@ -1257,11 +1515,24 @@ class InMemoryTaskPlanStore:
                 if not result.output_roles:
                     raise HarnessValidationError("successful task result requires an output role", code="task_plan_result_invalid")
                 reference = TaskResultReference(result_ref=result.result_ref or "task-result:" + result.result_checksum, result_checksum=result.result_checksum, output_role=result.output_roles[0], output_schema_ref=result.output_schema_ref)
-                updated = task.transitioned(TaskLifecycle.SUCCEEDED, attempts=result.attempt, active_instance_id=None, result=reference, failure_reason_code=None)
+                updated = task.transitioned(
+                    TaskLifecycle.SUCCEEDED,
+                    attempts=result.attempt,
+                    active_instance_id=None,
+                    admission_owner=None,
+                    result=reference,
+                    failure_reason_code=None,
+                )
                 result_event_type = "TASK_RESULT_ACCEPTED"
                 terminal_event_type = "TASK_COMPLETED"
             else:
-                updated = task.transitioned(TaskLifecycle.FAILED, attempts=result.attempt, active_instance_id=result.task_instance_id, failure_reason_code=result.error_code or "task_failed")
+                updated = task.transitioned(
+                    TaskLifecycle.FAILED,
+                    attempts=result.attempt,
+                    active_instance_id=None,
+                    admission_owner=None,
+                    failure_reason_code=result.error_code or "task_failed",
+                )
                 result_event_type = "TASK_RESULT_REJECTED"
                 terminal_event_type = "TASK_FAILED"
             tasks = tuple(updated if item.task_id == result.task_id else item for item in projection.tasks)
@@ -1417,10 +1688,12 @@ class InMemoryTaskPlanStore:
             plan = self._current_plan(event.run_id, event.stage_id)
             if plan is not None:
                 _require_event_matches_plan(event, plan)
+            history = tuple(self._events.get((event.run_id, event.stage_id), ()))
+            _reject_uncoordinated_capacity_transition((event,), history)
             from framework.harness.task_plan.parallel_admission import validate_parallel_admission_append
 
-            validate_submission_event_append(self._events.get((event.run_id, event.stage_id), ()), (event,))
-            validate_parallel_admission_append(self._events.get((event.run_id, event.stage_id), ()), (event,),
+            validate_submission_event_append(history, (event,))
+            validate_parallel_admission_append(history, (event,),
                                                plan_lookup=lambda version: self.plan(event.run_id, event.stage_id, version))
             self._append_event(event)
             key = (event.run_id, event.stage_id)
@@ -1444,6 +1717,7 @@ class InMemoryTaskPlanStore:
             replayed = _classify_atomic_event_batch_history(batch, history)
             if replayed:
                 return tuple(event.event_checksum for event in batch)
+            _reject_uncoordinated_capacity_transition(batch, history)
 
             plan = self._current_plan(run_id, stage_id)
             if plan is not None:
@@ -1465,12 +1739,205 @@ class InMemoryTaskPlanStore:
                 )
             return tuple(event.event_checksum for event in batch)
 
+    def install_capacity_snapshot(
+        self,
+        snapshot: "CapacityScopeSnapshot",
+    ) -> "CapacityScopeSnapshot":
+        """Install one trusted shared-capacity baseline exactly once."""
+
+        from framework.harness.task_plan.capacity import CapacityScopeSnapshot
+
+        if not isinstance(snapshot, CapacityScopeSnapshot):
+            raise TypeError("snapshot must be CapacityScopeSnapshot")
+        if snapshot.revision != 1:
+            raise HarnessValidationError(
+                "initial capacity scope revision must be 1",
+                code="CAPACITY_RESERVATION_CONFLICT",
+            )
+        with self._lock:
+            existing = self._capacity_snapshots.get(snapshot.owner_scope)
+            if existing is None:
+                self._capacity_snapshots[snapshot.owner_scope] = snapshot
+                return snapshot
+            if existing != snapshot:
+                raise HarnessValidationError(
+                    "capacity scope is already installed with different content",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                    details={"owner_scope": snapshot.owner_scope},
+                )
+            return snapshot
+
+    def load_capacity_snapshot(self, owner_scope: str) -> "CapacityScopeSnapshot":
+        """Load the authoritative snapshot for one shared owner scope."""
+
+        from framework.harness.task_plan.capacity import CapacityScopeSnapshot
+
+        scope = identifier(owner_scope, "capacity_scope")
+        with self._lock:
+            snapshot = self._capacity_snapshots.get(scope)
+            if not isinstance(snapshot, CapacityScopeSnapshot):
+                raise HarnessValidationError(
+                    "required shared capacity scope is missing",
+                    code="CAPACITY_POLICY_MISSING",
+                    details={"owner_scope": scope},
+                )
+            return snapshot
+
+    def commit_wave_admission(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+        expected_capacity_revision: int,
+        capacity_scope: str,
+        capacity_before_checksum: str,
+        capacity_after: "CapacityScopeSnapshot",
+        pool_reservations: tuple["PoolReservation", ...],
+    ) -> tuple[str, ...]:
+        """Commit wave admission and shared-capacity mutation as one unit."""
+
+        batch = _validate_atomic_event_batch(events)
+        _validate_transition_projections(batch, projections)
+        before, reservations = _validate_capacity_admission_contract(
+            batch,
+            expected_capacity_revision=expected_capacity_revision,
+            capacity_scope=capacity_scope,
+            capacity_before_checksum=capacity_before_checksum,
+            capacity_after=capacity_after,
+            pool_reservations=pool_reservations,
+        )
+        transition_key = _capacity_admission_key(batch)
+        scope_key = (batch[0].run_id, batch[0].stage_id)
+        with self._lock:
+            history = tuple(self._events.get(scope_key, ()))
+            if _classify_atomic_event_batch_history(batch, history):
+                for event, projection in zip(batch, projections, strict=True):
+                    committed = self._transition_projections.get(
+                        (event.run_id, event.stage_id, event.event_checksum)
+                    )
+                    if committed is None or committed.projection_checksum != projection.projection_checksum:
+                        raise HarnessValidationError(
+                            "committed event projection differs from retry",
+                            code="task_plan_projection_mismatch",
+                        )
+                historical = self._capacity_admission_transitions.get(transition_key)
+                if historical != (before, capacity_after, reservations):
+                    raise HarnessValidationError(
+                        "committed wave capacity transition differs from retry",
+                        code="CAPACITY_RESERVATION_CONFLICT",
+                    )
+                return tuple(event.event_checksum for event in batch)
+
+            current_capacity = self._capacity_snapshots.get(before.owner_scope)
+            if current_capacity != before:
+                raise HarnessValidationError(
+                    "capacity CAS precondition differs from current shared scope",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                    details={"owner_scope": before.owner_scope},
+                )
+            event_checksums = self._commit_events(
+                batch,
+                projections,
+                expected_projection_checksum=expected_projection_checksum,
+                allow_capacity_transition=True,
+            )
+            self._capacity_snapshots[before.owner_scope] = capacity_after
+            self._capacity_admission_transitions[transition_key] = (
+                before,
+                capacity_after,
+                reservations,
+            )
+            return event_checksums
+
+    def commit_wave_completion(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+        expected_capacity_revision: int,
+        capacity_scope: str,
+        capacity_before_checksum: str,
+        capacity_after: "CapacityScopeSnapshot",
+        settled_pool_reservations: tuple["PoolReservation", ...],
+    ) -> tuple[str, ...]:
+        """Atomically release confirmed wave capacity beside completion facts."""
+
+        batch = _validate_atomic_event_batch(events)
+        _validate_transition_projections(batch, projections)
+        scope_key = (batch[0].run_id, batch[0].stage_id)
+        with self._lock:
+            history = tuple(self._events.get(scope_key, ()))
+            before, settlements = _validate_capacity_completion_contract(
+                batch,
+                history,
+                expected_capacity_revision=expected_capacity_revision,
+                capacity_scope=capacity_scope,
+                capacity_before_checksum=capacity_before_checksum,
+                capacity_after=capacity_after,
+                settled_pool_reservations=settled_pool_reservations,
+            )
+            transition_key = _capacity_admission_key(batch)
+            if _classify_atomic_event_batch_history(batch, history):
+                for event, projection in zip(batch, projections, strict=True):
+                    committed = self._transition_projections.get(
+                        (event.run_id, event.stage_id, event.event_checksum)
+                    )
+                    if committed is None or committed.projection_checksum != projection.projection_checksum:
+                        raise HarnessValidationError(
+                            "committed event projection differs from retry",
+                            code="task_plan_projection_mismatch",
+                        )
+                historical = self._capacity_settlement_transitions.get(transition_key)
+                if historical != (before, capacity_after, settlements):
+                    raise HarnessValidationError(
+                        "committed capacity settlement differs from retry",
+                        code="CAPACITY_RESERVATION_CONFLICT",
+                    )
+                return tuple(event.event_checksum for event in batch)
+            if self._capacity_snapshots.get(before.owner_scope) != before:
+                raise HarnessValidationError(
+                    "capacity settlement CAS differs from current shared scope",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                )
+            event_checksums = self._commit_events(
+                batch,
+                projections,
+                expected_projection_checksum=expected_projection_checksum,
+                allow_capacity_transition=True,
+            )
+            self._capacity_snapshots[before.owner_scope] = capacity_after
+            self._capacity_settlement_transitions[transition_key] = (
+                before,
+                capacity_after,
+                settlements,
+            )
+            return event_checksums
+
     def commit_events(
         self,
         events: tuple[TaskPlanEvent, ...],
         projections: tuple[TaskPlanProjection, ...],
         *,
         expected_projection_checksum: str,
+    ) -> tuple[str, ...]:
+        """Commit a projection transition that needs no shared-capacity CAS."""
+
+        return self._commit_events(
+            events,
+            projections,
+            expected_projection_checksum=expected_projection_checksum,
+            allow_capacity_transition=False,
+        )
+
+    def _commit_events(
+        self,
+        events: tuple[TaskPlanEvent, ...],
+        projections: tuple[TaskPlanProjection, ...],
+        *,
+        expected_projection_checksum: str,
+        allow_capacity_transition: bool,
     ) -> tuple[str, ...]:
         """Atomically append a transition batch and all of its projections."""
 
@@ -1501,6 +1968,8 @@ class InMemoryTaskPlanStore:
                             code="task_plan_projection_mismatch",
                         )
                 return tuple(event.event_checksum for event in batch)
+            if not allow_capacity_transition:
+                _reject_uncoordinated_capacity_transition(batch, history)
             if current.projection_checksum != expected_checksum:
                 raise HarnessValidationError(
                     "projection CAS precondition differs from current state",
@@ -1519,6 +1988,29 @@ class InMemoryTaskPlanStore:
                     "TaskPlan transition requires an accepted plan",
                     code="task_plan_projection_missing",
                 )
+            _validate_wave_admission_projection_contract(
+                current,
+                plan,
+                batch,
+                projections,
+            )
+            _validate_logical_readiness_projection_contract(
+                current,
+                plan,
+                batch,
+                projections,
+            )
+            _validate_queue_admission_projection_contract(
+                current,
+                plan,
+                batch,
+                projections,
+            )
+            _validate_wave_completion_projection_contract(
+                current,
+                batch,
+                projections,
+            )
             for event, projection in zip(batch, projections, strict=True):
                 _require_event_matches_plan(event, plan)
                 if not projection.matches_plan_identity(plan):
@@ -1636,6 +2128,833 @@ class InMemoryTaskPlanStore:
 
     def _append_event(self, event: TaskPlanEvent) -> None:
         self._events.setdefault((event.run_id, event.stage_id), []).append(event)
+
+
+def _capacity_admission_key(events: tuple[TaskPlanEvent, ...]) -> str:
+    return canonical_payload_checksum(
+        {"event_checksums": [event.event_checksum for event in events]}
+    )
+
+
+def _reject_uncoordinated_capacity_transition(
+    events: tuple[TaskPlanEvent, ...],
+    history: tuple[TaskPlanEvent, ...],
+) -> None:
+    """Keep fresh shared-capacity mutations behind their CAS entry points.
+
+    A wave with no pool allocation and a completion that leaves every pool
+    reservation outstanding do not mutate the shared scope.  They remain valid
+    ordinary projection transitions.  Any actual reserve or release must be
+    committed through ``commit_wave_admission`` or ``commit_wave_completion``.
+    """
+
+    from framework.harness.task_plan.capacity import CapacityScopeSnapshot
+    from framework.harness.task_plan.parallel import DispatchWave
+    from framework.harness.task_plan.parallel_lifecycle import ReservationState
+
+    for event in events:
+        if event.event_type == "TASK_WAVE_ADMITTED":
+            raw_wave = event.payload.get("wave")
+            if not isinstance(raw_wave, Mapping):
+                continue
+            wave = DispatchWave.from_dict(thaw_mapping(raw_wave))
+            before = wave.packing.capacity_before
+            after = wave.packing.capacity_after
+            if wave.packing.reservations or (
+                before is not None
+                and after is not None
+                and before != after
+            ):
+                raise HarnessValidationError(
+                    "shared-capacity wave admission requires its atomic CAS entry point",
+                    code="CAPACITY_RESERVATION_CONFLICT",
+                )
+            continue
+
+        if event.event_type != "TASK_WAVE_COMPLETED":
+            continue
+        payload = thaw_mapping(event.payload)
+        wave_id = payload.get("wave_id")
+        admissions = tuple(
+            candidate
+            for candidate in history
+            if candidate.event_type == "TASK_WAVE_ADMITTED"
+            and isinstance(candidate.payload.get("wave"), Mapping)
+            and candidate.payload["wave"].get("wave_id") == wave_id
+        )
+        if len(admissions) != 1:
+            # The canonical parallel-history validator reports the missing or
+            # ambiguous admission.  It cannot authorize a capacity mutation.
+            continue
+        admitted_wave = DispatchWave.from_dict(
+            thaw_mapping(admissions[0].payload["wave"])
+        )
+        capacity_task_ids = {
+            reservation.task_id
+            for reservation in admitted_wave.packing.reservations
+        }
+        if not capacity_task_ids:
+            continue
+        reservation_states = payload.get("reservation_states")
+        if (
+            not isinstance(reservation_states, Mapping)
+            or not capacity_task_ids.issubset(reservation_states)
+        ):
+            raise HarnessValidationError(
+                "capacity-backed completion is missing reservation state evidence",
+                code="CAPACITY_RESERVATION_CONFLICT",
+            )
+        try:
+            released_task_ids = {
+                task_id
+                for task_id, state in reservation_states.items()
+                if ReservationState(state)
+                in {ReservationState.CONSUMED, ReservationState.RELEASED}
+            }
+        except (TypeError, ValueError) as exc:
+            raise HarnessValidationError(
+                "capacity-backed completion has invalid reservation state evidence",
+                code="CAPACITY_RESERVATION_CONFLICT",
+            ) from exc
+        raw_before = payload.get("capacity_before")
+        raw_after = payload.get("capacity_after")
+        snapshots_change = False
+        if raw_before is not None or raw_after is not None:
+            if not isinstance(raw_before, Mapping) or not isinstance(raw_after, Mapping):
+                snapshots_change = True
+            else:
+                snapshots_change = (
+                    CapacityScopeSnapshot.from_dict(raw_before)
+                    != CapacityScopeSnapshot.from_dict(raw_after)
+                )
+        if capacity_task_ids.intersection(released_task_ids) or snapshots_change:
+            raise HarnessValidationError(
+                "shared-capacity wave completion requires its atomic CAS entry point",
+                code="CAPACITY_RESERVATION_CONFLICT",
+            )
+
+
+def _validate_wave_admission_projection_contract(
+    current: TaskPlanProjection,
+    plan: ValidatedTaskPlan,
+    events: tuple[TaskPlanEvent, ...],
+    projections: tuple[TaskPlanProjection, ...],
+) -> None:
+    """Bind a wave proposal to current READY order, attempts and budget."""
+
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+    from framework.harness.task_plan.parallel import DispatchWave
+    from framework.harness.task_plan.scheduler import (
+        TaskPlanScheduler,
+        task_instance_for_attempt,
+    )
+
+    admissions = tuple(
+        (index, event)
+        for index, event in enumerate(events)
+        if event.event_type == "TASK_WAVE_ADMITTED"
+    )
+    if not admissions:
+        return
+    if len(admissions) != 1 or admissions[0][0] != 0:
+        raise HarnessValidationError(
+            "wave admission must lead its atomic admission batch",
+            code="task_plan_parallel_event_invalid",
+        )
+    if any(
+        event.event_type != "TASK_ATTEMPT_SPAWN_INTENT"
+        for event in events[1:]
+    ):
+        raise HarnessValidationError(
+            "wave admission batch contains a non-spawn transition",
+            code="task_plan_parallel_event_invalid",
+        )
+    admission = admissions[0][1]
+    raw_wave = admission.payload.get("wave")
+    if not isinstance(raw_wave, Mapping):
+        raise HarnessValidationError(
+            "wave admission is missing its wave evidence",
+            code="TASK_WAVE_PACKING_EVIDENCE_INVALID",
+        )
+    wave = DispatchWave.from_dict(thaw_mapping(raw_wave))
+    packing = wave.packing
+    if (
+        packing.ready_order != current.logical_ready_order
+        or tuple(
+            task_id
+            for task_id in current.logical_ready_order
+            if task_id in set(wave.task_ids)
+        )
+        != wave.task_ids
+    ):
+        raise HarnessValidationError(
+            "wave admission does not preserve the current logical READY order",
+            code="task_plan_ready_order_mismatch",
+        )
+    states = {state.task_id: state for state in current.tasks}
+    if any(
+        task_id not in states or states[task_id].status is not TaskLifecycle.READY
+        for task_id in wave.task_ids
+    ):
+        raise HarnessValidationError(
+            "wave admission selected a task that is not logically READY",
+            code="task_plan_task_not_pending",
+        )
+    instances = tuple(
+        task_instance_for_attempt(
+            plan,
+            task_id,
+            states[task_id].attempts + 1,
+        )
+        for task_id in wave.task_ids
+    )
+    for instance, reservation in zip(
+        instances,
+        wave.reservations,
+        strict=True,
+    ):
+        if (
+            reservation.task_id != instance.task_id
+            or reservation.idempotency_key != instance.idempotency_key
+            or thaw_mapping(reservation.budget) != instance.budget_snapshot.to_dict()
+        ):
+            raise HarnessValidationError(
+                "wave reservation differs from its selected attempt",
+                code="task_plan_budget_identity_conflict",
+            )
+    budget_before = TaskPlanBudgetLedger.from_snapshot(
+        current.consumed_budget
+    ).to_dict()["ledger_checksum"]
+    if (
+        admission.payload.get("budget_before_checksum") != budget_before
+        or packing.budget_before_checksum != budget_before
+    ):
+        raise HarnessValidationError(
+            "wave admission uses a stale budget ledger",
+            code="task_plan_budget_checksum_mismatch",
+        )
+    projected = TaskPlanScheduler.admit_ready_tasks(
+        current,
+        instances,
+        admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+    )
+    budget_after = TaskPlanBudgetLedger.from_snapshot(
+        projected.consumed_budget
+    ).to_dict()["ledger_checksum"]
+    if (
+        admission.payload.get("budget_after_checksum") != budget_after
+        or packing.budget_after_checksum != budget_after
+    ):
+        raise HarnessValidationError(
+            "wave admission budget result differs from selected attempts",
+            code="task_plan_budget_checksum_mismatch",
+        )
+    expected_projection = replace(projected, last_sequence=admission.sequence)
+    for event, supplied in zip(events, projections, strict=True):
+        if event is not admission:
+            expected_projection = replace(
+                expected_projection,
+                last_sequence=event.sequence,
+            )
+        if supplied.projection_checksum != expected_projection.projection_checksum:
+            raise HarnessValidationError(
+                "wave event projection is not the authoritative admission transition",
+                code="task_plan_projection_mismatch",
+            )
+
+
+def _validate_queue_admission_projection_contract(
+    current: TaskPlanProjection,
+    plan: ValidatedTaskPlan,
+    events: tuple[TaskPlanEvent, ...],
+    projections: tuple[TaskPlanProjection, ...],
+) -> None:
+    """Rebuild an atomic static-queue transition from canonical evidence.
+
+    Queue publication is allowed to share one store transaction with the
+    logical READY fact and the subsequent DISPATCHED transition.  Rebuilding
+    every prefix here prevents a caller from using a valid queue admission as
+    cover for an unrelated projection mutation in the same batch.
+    """
+
+    queue_events = tuple(
+        event for event in events if event.event_type == "TASK_QUEUE_ADMITTED"
+    )
+    if not queue_events:
+        return
+    if len(queue_events) != 1:
+        raise HarnessValidationError(
+            "queue admission batch must contain exactly one admission",
+            code="task_plan_queue_admission_invalid",
+        )
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+    from framework.harness.task_plan.scheduler import (
+        TaskPlanReadyDecision,
+        TaskPlanScheduler,
+    )
+
+    allowed = {
+        "TASK_READY",
+        "TASK_QUEUE_ADMITTED",
+        "TASK_DISPATCHED",
+        "TASK_STARTED",
+    }
+    if any(event.event_type not in allowed for event in events):
+        raise HarnessValidationError(
+            "queue admission batch contains an unrelated transition",
+            code="task_plan_queue_admission_invalid",
+        )
+
+    projected = current
+    admitted_instance: TaskInstance | None = None
+    admission_seen = False
+    for event, supplied in zip(events, projections, strict=True):
+        if event.event_type == "TASK_READY":
+            if admission_seen:
+                raise HarnessValidationError(
+                    "logical READY must precede queue admission in one batch",
+                    code="task_plan_queue_admission_invalid",
+                )
+            raw_readiness = event.payload.get("logical_readiness")
+            if not isinstance(raw_readiness, Mapping):
+                raise HarnessValidationError(
+                    "queue admission batch is missing logical readiness evidence",
+                    code="task_plan_logical_readiness_missing",
+                )
+            readiness = LogicalTaskReadiness.from_dict(raw_readiness)
+            _validate_logical_readiness_order(readiness, plan)
+            projected = TaskPlanScheduler().reserve_ready_tasks(
+                projected,
+                TaskPlanReadyDecision(
+                    logical_ready_task_ids=readiness.logical_ready_order,
+                ),
+            )
+        elif event.event_type == "TASK_QUEUE_ADMITTED":
+            raw = event.payload.get("queue_admission")
+            if not isinstance(raw, Mapping):
+                raise HarnessValidationError(
+                    "queue admission is missing canonical evidence",
+                    code="task_plan_queue_admission_invalid",
+                )
+            evidence = TaskQueueAdmissionEvidence.from_dict(raw)
+            instance = evidence.task_instance
+            state = next(
+                (item for item in projected.tasks if item.task_id == instance.task_id),
+                None,
+            )
+            if (
+                admission_seen
+                or state is None
+                or state.status is not TaskLifecycle.READY
+                or not projected.logical_ready_order
+                or projected.logical_ready_order[0] != instance.task_id
+                or instance.attempt != state.attempts + 1
+                or not instance.matches_plan_identity(plan)
+            ):
+                raise HarnessValidationError(
+                    "queue admission does not select the next logical READY attempt",
+                    code="task_plan_queue_admission_invalid",
+                )
+            before = TaskPlanBudgetLedger.from_snapshot(
+                projected.consumed_budget
+            ).to_dict()["ledger_checksum"]
+            projected = TaskPlanScheduler.admit_ready_tasks(
+                projected,
+                (instance,),
+                admission_owner=TaskAdmissionOwner.QUEUE,
+            )
+            after = TaskPlanBudgetLedger.from_snapshot(
+                projected.consumed_budget
+            ).to_dict()["ledger_checksum"]
+            if (
+                evidence.budget_before_checksum != before
+                or evidence.budget_after_checksum != after
+            ):
+                raise HarnessValidationError(
+                    "queue admission budget differs from authoritative transition",
+                    code="task_plan_queue_admission_invalid",
+                )
+            admitted_instance = instance
+            admission_seen = True
+        else:
+            if (
+                not admission_seen
+                or admitted_instance is None
+                or event.task_id != admitted_instance.task_id
+                or event.task_instance_id != admitted_instance.task_instance_id
+                or event.attempt != admitted_instance.attempt
+                or event.input_checksum
+                != admitted_instance.task_definition_checksum
+            ):
+                raise HarnessValidationError(
+                    "queue dispatch transition differs from admitted attempt",
+                    code="task_plan_queue_admission_invalid",
+                )
+            if event.event_type == "TASK_DISPATCHED":
+                projected = TaskPlanScheduler.mark_dispatched(
+                    projected,
+                    admitted_instance,
+                )
+            elif event.event_type == "TASK_STARTED":
+                projected = TaskPlanScheduler.mark_started(
+                    projected,
+                    admitted_instance,
+                )
+
+        expected = replace(projected, last_sequence=event.sequence)
+        if supplied.projection_checksum != expected.projection_checksum:
+            raise HarnessValidationError(
+                "queue batch projection differs from authoritative transition",
+                code="task_plan_queue_admission_invalid",
+            )
+        projected = expected
+
+
+def _validate_logical_readiness_projection_contract(
+    current: TaskPlanProjection,
+    plan: ValidatedTaskPlan,
+    events: tuple[TaskPlanEvent, ...],
+    projections: tuple[TaskPlanProjection, ...],
+) -> None:
+    """Bind standalone logical READY facts to their complete ordered set."""
+
+    if any(event.event_type == "TASK_QUEUE_ADMITTED" for event in events):
+        # The queue validator rebuilds every prefix of this richer transition.
+        return
+    ready_events = tuple(event for event in events if event.event_type == "TASK_READY")
+    if not ready_events:
+        return
+    if len(ready_events) != len(events):
+        raise HarnessValidationError(
+            "logical READY batch contains an unrelated transition",
+            code="task_plan_logical_readiness_identity_mismatch",
+        )
+
+    from framework.harness.task_plan.scheduler import (
+        TaskPlanReadyDecision,
+        TaskPlanScheduler,
+    )
+
+    projected = current
+    for event, supplied in zip(events, projections, strict=True):
+        raw = event.payload.get("logical_readiness")
+        if not isinstance(raw, Mapping):
+            raise HarnessValidationError(
+                "logical TASK_READY event is missing readiness evidence",
+                code="task_plan_logical_readiness_missing",
+            )
+        readiness = LogicalTaskReadiness.from_dict(raw)
+        _validate_logical_readiness_order(readiness, plan)
+        projected = TaskPlanScheduler().reserve_ready_tasks(
+            projected,
+            TaskPlanReadyDecision(
+                logical_ready_task_ids=readiness.logical_ready_order,
+            ),
+        )
+        expected = replace(projected, last_sequence=event.sequence)
+        if supplied.projection_checksum != expected.projection_checksum:
+            raise HarnessValidationError(
+                "logical READY projection differs from authoritative ordering",
+                code="task_plan_projection_ready_order_mismatch",
+            )
+        projected = expected
+
+
+def _validate_wave_completion_projection_contract(
+    current: TaskPlanProjection,
+    events: tuple[TaskPlanEvent, ...],
+    projections: tuple[TaskPlanProjection, ...],
+) -> None:
+    """Keep completion facts from smuggling an unrelated projection change."""
+
+    completions = tuple(
+        event for event in events if event.event_type == "TASK_WAVE_COMPLETED"
+    )
+    if not completions:
+        return
+    if len(completions) != 1 or len(events) != 1:
+        raise HarnessValidationError(
+            "wave completion must be one isolated projection transition",
+            code="task_plan_parallel_event_invalid",
+        )
+    expected = replace(current, last_sequence=completions[0].sequence)
+    if projections[0].projection_checksum != expected.projection_checksum:
+        raise HarnessValidationError(
+            "wave completion projection differs from current authoritative state",
+            code="task_plan_projection_mismatch",
+        )
+
+
+def _validate_capacity_admission_contract(
+    events: tuple[TaskPlanEvent, ...],
+    *,
+    expected_capacity_revision: int,
+    capacity_scope: str,
+    capacity_before_checksum: str,
+    capacity_after: "CapacityScopeSnapshot",
+    pool_reservations: tuple["PoolReservation", ...],
+) -> tuple["CapacityScopeSnapshot", tuple["PoolReservation", ...]]:
+    """Validate policy evidence without granting a proposal authority."""
+
+    from framework.harness.task_plan.capacity import (
+        CapacityScopeSnapshot,
+        PoolReservation,
+    )
+    from framework.harness.task_plan.parallel import DispatchWave
+    from framework.harness.task_plan.parallel_lifecycle import ReservationState
+
+    if (
+        isinstance(expected_capacity_revision, bool)
+        or not isinstance(expected_capacity_revision, int)
+        or expected_capacity_revision < 1
+    ):
+        raise HarnessValidationError(
+            "expected capacity revision must be a positive integer",
+            code="CAPACITY_RESERVATION_CONFLICT",
+        )
+    scope = identifier(capacity_scope, "capacity_scope")
+    before_checksum = checksum(
+        capacity_before_checksum,
+        "capacity_before_checksum",
+    )
+    if not isinstance(capacity_after, CapacityScopeSnapshot):
+        raise TypeError("capacity_after must be CapacityScopeSnapshot")
+    if not isinstance(pool_reservations, tuple) or any(
+        not isinstance(item, PoolReservation) for item in pool_reservations
+    ):
+        raise TypeError("pool_reservations must be a tuple of PoolReservation values")
+    reservations = tuple(pool_reservations)
+    admissions = tuple(
+        event for event in events if event.event_type == "TASK_WAVE_ADMITTED"
+    )
+    if len(admissions) != 1:
+        raise HarnessValidationError(
+            "capacity transaction requires exactly one wave admission",
+            code="TASK_WAVE_PACKING_EVIDENCE_INVALID",
+        )
+    payload = thaw_mapping(admissions[0].payload)
+    raw_wave = payload.get("wave")
+    if not isinstance(raw_wave, Mapping):
+        raise HarnessValidationError(
+            "wave admission is missing packing evidence",
+            code="TASK_WAVE_PACKING_EVIDENCE_INVALID",
+        )
+    wave = DispatchWave.from_dict(raw_wave)
+    packing = wave.packing
+    before = packing.capacity_before
+    after = packing.capacity_after
+    if (
+        before is None
+        or after is None
+        or before.owner_scope != scope
+        or before.revision != expected_capacity_revision
+        or before.snapshot_checksum != before_checksum
+        or after != capacity_after
+        or capacity_after.owner_scope != scope
+        or capacity_after.revision != before.revision + 1
+        or packing.reservations != reservations
+        or tuple(item.task_id for item in reservations) != wave.task_ids
+        or payload.get("packing_checksum") != packing.packing_checksum
+        or payload.get("budget_before_checksum") != packing.budget_before_checksum
+        or payload.get("budget_after_checksum") != packing.budget_after_checksum
+    ):
+        raise HarnessValidationError(
+            "wave capacity proposal differs from its committed packing evidence",
+            code="TASK_WAVE_PACKING_EVIDENCE_INVALID",
+        )
+
+    before_pools = {pool.pool_id: pool for pool in before.pools}
+    after_pools = {pool.pool_id: pool for pool in after.pools}
+    if tuple(before_pools) != tuple(after_pools):
+        raise HarnessValidationError(
+            "capacity transition changes the pinned pool set",
+            code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+        )
+    allocated = {pool_id: 0 for pool_id in before_pools}
+    for reservation in reservations:
+        if (
+            reservation.owner_scope != scope
+            or reservation.state is not ReservationState.RESERVED
+        ):
+            raise HarnessValidationError(
+                "capacity reservation owner or state is invalid",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        for pool_id, quantity in reservation.allocations.items():
+            pool = before_pools.get(pool_id)
+            if (
+                pool is None
+                or reservation.policy_checksums.get(pool_id) != pool.policy_checksum
+                or reservation.pool_versions.get(pool_id) != pool.reservation_version
+                or reservation.pool_reservation_keys.get(pool_id) != pool.reservation_key
+                or reservation.expires_at_ms > pool.expires_at_ms
+            ):
+                raise HarnessValidationError(
+                    "capacity reservation differs from the pinned pool snapshot",
+                    code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+                )
+            allocated[pool_id] += quantity
+
+    for pool_id, before_pool in before_pools.items():
+        after_pool = after_pools[pool_id]
+        delta = allocated[pool_id]
+        if (
+            after_pool.capacity != before_pool.capacity
+            or after_pool.policy_version != before_pool.policy_version
+            or after_pool.policy_checksum != before_pool.policy_checksum
+            or after_pool.owner_scope != before_pool.owner_scope
+            or after_pool.reservation_key != before_pool.reservation_key
+            or after_pool.expires_at_ms != before_pool.expires_at_ms
+            or after_pool.reserved != before_pool.reserved + delta
+            or after_pool.reservation_version
+            != before_pool.reservation_version + int(delta > 0)
+        ):
+            raise HarnessValidationError(
+                "capacity after snapshot is not explained by pool reservations",
+                code="CAPACITY_RESERVATION_INVALID",
+                details={"pool_id": pool_id},
+            )
+    return before, reservations
+
+
+def _validate_capacity_completion_contract(
+    events: tuple[TaskPlanEvent, ...],
+    history: tuple[TaskPlanEvent, ...],
+    *,
+    expected_capacity_revision: int,
+    capacity_scope: str,
+    capacity_before_checksum: str,
+    capacity_after: "CapacityScopeSnapshot",
+    settled_pool_reservations: tuple["PoolReservation", ...],
+) -> tuple["CapacityScopeSnapshot", tuple["PoolReservation", ...]]:
+    """Verify that confirmed terminal attempts explain an exact pool release."""
+
+    from framework.harness.task_plan.attempt_history import (
+        TaskAttemptHistoryRecord,
+        TaskAttemptOutcome,
+    )
+    from framework.harness.task_plan.capacity import (
+        CapacityScopeSnapshot,
+        PoolReservation,
+    )
+    from framework.harness.task_plan.parallel import DispatchWave
+    from framework.harness.task_plan.parallel_lifecycle import ReservationState
+
+    if (
+        isinstance(expected_capacity_revision, bool)
+        or not isinstance(expected_capacity_revision, int)
+        or expected_capacity_revision < 1
+    ):
+        raise HarnessValidationError(
+            "expected capacity revision must be a positive integer",
+            code="CAPACITY_RESERVATION_CONFLICT",
+        )
+    scope = identifier(capacity_scope, "capacity_scope")
+    before_checksum = checksum(
+        capacity_before_checksum,
+        "capacity_before_checksum",
+    )
+    if not isinstance(capacity_after, CapacityScopeSnapshot):
+        raise TypeError("capacity_after must be CapacityScopeSnapshot")
+    if not isinstance(settled_pool_reservations, tuple) or not settled_pool_reservations:
+        raise HarnessValidationError(
+            "capacity completion requires at least one confirmed settlement",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    if any(not isinstance(item, PoolReservation) for item in settled_pool_reservations):
+        raise TypeError(
+            "settled_pool_reservations must contain PoolReservation values"
+        )
+    settlements = tuple(settled_pool_reservations)
+    if len({item.task_id for item in settlements}) != len(settlements):
+        raise HarnessValidationError(
+            "capacity completion contains duplicate task settlements",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    completions = tuple(
+        event for event in events if event.event_type == "TASK_WAVE_COMPLETED"
+    )
+    if len(completions) != 1 or len(events) != 1:
+        raise HarnessValidationError(
+            "capacity settlement requires one isolated wave completion event",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    completion = completions[0]
+    payload = thaw_mapping(completion.payload)
+    raw_before = payload.get("capacity_before")
+    raw_after = payload.get("capacity_after")
+    if not isinstance(raw_before, Mapping) or not isinstance(raw_after, Mapping):
+        raise HarnessValidationError(
+            "wave completion is missing capacity settlement snapshots",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    before = CapacityScopeSnapshot.from_dict(raw_before)
+    recorded_after = CapacityScopeSnapshot.from_dict(raw_after)
+    if (
+        before.owner_scope != scope
+        or before.revision != expected_capacity_revision
+        or before.snapshot_checksum != before_checksum
+        or recorded_after != capacity_after
+        or capacity_after.owner_scope != scope
+        or capacity_after.revision != before.revision + 1
+    ):
+        raise HarnessValidationError(
+            "wave completion capacity snapshots differ from CAS evidence",
+            code="CAPACITY_RESERVATION_CONFLICT",
+        )
+    wave_id = payload.get("wave_id")
+    admissions = tuple(
+        event
+        for event in history
+        if event.event_type == "TASK_WAVE_ADMITTED"
+        and isinstance(event.payload.get("wave"), Mapping)
+        and event.payload["wave"].get("wave_id") == wave_id
+    )
+    if len(admissions) != 1:
+        raise HarnessValidationError(
+            "wave completion has no unique canonical admission",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    admitted_wave = DispatchWave.from_dict(
+        thaw_mapping(admissions[0].payload["wave"])
+    )
+    admitted = {
+        reservation.task_id: reservation
+        for reservation in admitted_wave.packing.reservations
+    }
+    reservation_states = payload.get("reservation_states")
+    child_states = payload.get("child_states")
+    if not isinstance(reservation_states, Mapping) or not isinstance(child_states, Mapping):
+        raise HarnessValidationError(
+            "wave completion settlement maps are invalid",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    if set(reservation_states) != set(admitted_wave.task_ids):
+        raise HarnessValidationError(
+            "wave completion must report every admitted reservation state",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    try:
+        normalized_reservation_states = {
+            task_id: ReservationState(state)
+            for task_id, state in reservation_states.items()
+        }
+    except (TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "wave completion contains an unknown reservation state",
+            code="CAPACITY_RESERVATION_INVALID",
+        ) from exc
+    expected_settlement_task_ids = {
+        task_id
+        for task_id, state in normalized_reservation_states.items()
+        if state
+        in {
+            ReservationState.CONSUMED,
+            ReservationState.RELEASED,
+        }
+    }
+    supplied_settlement_task_ids = {item.task_id for item in settlements}
+    if supplied_settlement_task_ids != expected_settlement_task_ids:
+        raise HarnessValidationError(
+            "capacity settlements must exactly cover every released reservation",
+            code="CAPACITY_RESERVATION_INVALID",
+            details={
+                "expected_task_ids": sorted(expected_settlement_task_ids),
+                "actual_task_ids": sorted(supplied_settlement_task_ids),
+            },
+        )
+    history_records = []
+    for event in history:
+        raw_record = event.payload.get("history_record")
+        if event.event_type != "TASK_ATTEMPT_RECORDED" or not isinstance(raw_record, Mapping):
+            continue
+        history_records.append(TaskAttemptHistoryRecord.from_dict(raw_record))
+    terminal_outcomes = {
+        TaskAttemptOutcome.ACCEPTED,
+        TaskAttemptOutcome.REJECTED,
+        TaskAttemptOutcome.FAILED,
+        TaskAttemptOutcome.CANCELLED,
+        TaskAttemptOutcome.RECLAIMED,
+    }
+    released = {pool.pool_id: 0 for pool in before.pools}
+    for settlement in settlements:
+        original = admitted.get(settlement.task_id)
+        if (
+            original is None
+            or settlement.state
+            not in {ReservationState.CONSUMED, ReservationState.RELEASED}
+            or settlement.reservation_version != 2
+            or replace(
+                settlement,
+                state=ReservationState.RESERVED,
+                reservation_version=1,
+            )
+            != original
+            or reservation_states.get(settlement.task_id) != settlement.state.value
+            or child_states.get(settlement.task_id)
+            not in {TaskLifecycle.SUCCEEDED.value, TaskLifecycle.FAILED.value}
+        ):
+            raise HarnessValidationError(
+                "wave completion settlement differs from admitted reservation",
+                code="CAPACITY_RESERVATION_INVALID",
+                details={"task_id": settlement.task_id},
+            )
+        matching_records = [
+            record
+            for record in history_records
+            if record.task_id == settlement.task_id
+            and record.wave is not None
+            and record.wave.get("wave_id") == wave_id
+            and record.outcome in terminal_outcomes
+        ]
+        if not matching_records or (
+            admitted_wave.execution_mode == "SUPERVISED"
+            and not any(
+                record.terminal_receipt is not None
+                and record.terminal_receipt.get("termination_confirmed") is True
+                for record in matching_records
+            )
+        ):
+            raise HarnessValidationError(
+                "capacity release lacks confirmed terminal attempt evidence",
+                code="CAPACITY_RESERVATION_INVALID",
+                details={"task_id": settlement.task_id},
+            )
+        for pool_id, quantity in original.allocations.items():
+            if pool_id not in released:
+                raise HarnessValidationError(
+                    "settlement references a pool outside the current scope",
+                    code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+                )
+            released[pool_id] += quantity
+
+    before_pools = {pool.pool_id: pool for pool in before.pools}
+    after_pools = {pool.pool_id: pool for pool in capacity_after.pools}
+    if tuple(before_pools) != tuple(after_pools):
+        raise HarnessValidationError(
+            "capacity settlement changes the pinned pool set",
+            code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+        )
+    for pool_id, before_pool in before_pools.items():
+        after_pool = after_pools[pool_id]
+        quantity = released[pool_id]
+        if quantity > before_pool.reserved or (
+            after_pool.capacity != before_pool.capacity
+            or after_pool.policy_version != before_pool.policy_version
+            or after_pool.policy_checksum != before_pool.policy_checksum
+            or after_pool.owner_scope != before_pool.owner_scope
+            or after_pool.reservation_key != before_pool.reservation_key
+            or after_pool.expires_at_ms != before_pool.expires_at_ms
+            or after_pool.reserved != before_pool.reserved - quantity
+            or after_pool.reservation_version
+            != before_pool.reservation_version + int(quantity > 0)
+        ):
+            raise HarnessValidationError(
+                "capacity after snapshot over-releases or rewrites a pool",
+                code="CAPACITY_RESERVATION_INVALID",
+                details={"pool_id": pool_id},
+            )
+    return before, settlements
 
 
 def _validate_atomic_event_batch(
@@ -1991,7 +3310,7 @@ def _task_plan_event_identity_kwargs(
         "run_id": value.run_id,
         "stage_id": value.stage_id,
         "graph_checksum": value.graph_checksum,
-        "schema_version": TASK_PLAN_EVENT_SCHEMA_V2,
+        "schema_version": TASK_PLAN_EVENT_SCHEMA_V3,
     }
     graph_identity = {
         name: getattr(value, name)
@@ -2176,6 +3495,60 @@ def _require_event_matches_plan(
         if not isinstance(group, Mapping):
             raise HarnessValidationError("group admission snapshot is missing", code="TASK_GROUP_SCOPE_MISMATCH")
         validate_group_plan_binding(group, plan)
+    if event.event_type == "TASK_READY":
+        raw = event.payload.get("logical_readiness")
+        if not isinstance(raw, Mapping):
+            raise HarnessValidationError(
+                "logical TASK_READY event is missing readiness evidence",
+                code="task_plan_logical_readiness_missing",
+            )
+        _validate_logical_readiness_order(
+            LogicalTaskReadiness.from_dict(raw),
+            plan,
+        )
+
+
+def _validate_logical_readiness_order(
+    readiness: LogicalTaskReadiness,
+    plan: ValidatedTaskPlan,
+) -> None:
+    """Apply the single pinned scheduler ordering rule to wire evidence."""
+
+    from framework.harness.task_plan.scheduler import _task_depths
+
+    definitions = {item.task_id: item for item in plan.tasks}
+    readiness_definition = definitions.get(readiness.task_id)
+    if (
+        readiness_definition is None
+        or readiness_definition.task_definition_checksum
+        != readiness.task_definition_checksum
+    ):
+        raise HarnessValidationError(
+            "logical TASK_READY identity differs from the accepted definition",
+            code="task_plan_logical_readiness_identity_mismatch",
+        )
+    if any(task_id not in definitions for task_id in readiness.logical_ready_order):
+        raise HarnessValidationError(
+            "logical TASK_READY order references an unknown task",
+            code="task_plan_replay_unknown_task",
+        )
+    depths = _task_depths(definitions)
+    expected = tuple(
+        sorted(
+            readiness.logical_ready_order,
+            key=lambda task_id: (
+                definitions[task_id].priority,
+                depths[task_id],
+                task_id,
+                definitions[task_id].task_definition_checksum,
+            ),
+        )
+    )
+    if readiness.logical_ready_order != expected:
+        raise HarnessValidationError(
+            "logical TASK_READY order violates the pinned scheduler key",
+            code="task_plan_replay_ready_order_mismatch",
+        )
 
 
 def _require_submission_scope(
@@ -2238,8 +3611,13 @@ __all__ = [
     "InMemoryTaskPlanStore",
     "TASK_PLAN_EVENT_SCHEMA",
     "TASK_PLAN_EVENT_SCHEMA_V2",
+    "TASK_PLAN_EVENT_SCHEMA_V3",
     "TASK_PLAN_EVENT_SCHEMAS",
     "TASK_PLAN_EVENT_TYPES",
+    "LOGICAL_TASK_READINESS_SCHEMA",
+    "LogicalTaskReadiness",
+    "TASK_QUEUE_ADMISSION_SCHEMA",
+    "TaskQueueAdmissionEvidence",
     "TASK_PLAN_RESULT_SCHEMA_V3",
     "TaskPlanEvent",
     "TaskPlanStorePort",

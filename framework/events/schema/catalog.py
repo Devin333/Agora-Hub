@@ -56,8 +56,8 @@ _BUSINESS_CONTEXT_FIELDS = (
 # TaskPlan uses the same durable event stream as the rest of Harness.  The
 # payload schema is intentionally reference-based; worker prompts and private
 # result bodies stay in their dedicated stores.
-TASK_PLAN_EVENT_SCHEMA_V2 = "newsroom.harness-task-plan-event/v2"
-TASK_PLAN_EVENT_SCHEMA = TASK_PLAN_EVENT_SCHEMA_V2
+TASK_PLAN_EVENT_SCHEMA_V3 = "newsroom.harness-task-plan-event/v3"
+TASK_PLAN_EVENT_SCHEMA = TASK_PLAN_EVENT_SCHEMA_V3
 TASK_PLAN_PARALLEL_EVENT_TYPES = (
     "TASK_GROUP_ADMITTED", "TASK_WAVE_ADMITTED", "TASK_ATTEMPT_SPAWN_INTENT",
     "TASK_ATTEMPT_SPAWN_CONFIRMED", "TASK_ATTEMPT_SPAWN_UNKNOWN", "TASK_ATTEMPT_RECORDED",
@@ -67,7 +67,7 @@ TASK_PLAN_PARALLEL_EVENT_TYPES = (
     "TASK_GROUP_CANCELLED", "TASK_GROUP_INDETERMINATE", "TASK_GROUP_HALTED",
     "TASK_GROUP_SUPERSEDED", "TASK_GROUP_RECLAIMED", "TASK_GROUP_RECOVERY", "DEGRADED_SERIAL",
     "RECOVERY_STATUS_READ", "RECOVERY_RECONCILED", "RECOVERY_HALTED",
-    "PARENT_OBSERVATION_CONTINUATION",
+    "PARENT_OBSERVATION_CONTINUATION", "TASK_GROUP_CAPACITY_WAITING",
 )
 TASK_PLAN_EVENT_TYPES = (
     "PLAN_BUILD_INTENT",
@@ -77,6 +77,7 @@ TASK_PLAN_EVENT_TYPES = (
     "PLAN_VALIDATION_FAILED",
     "PLAN_ACCEPTED",
     "TASK_READY",
+    "TASK_QUEUE_ADMITTED",
     "TASK_DISPATCHED",
     "TASK_STARTED",
     "TASK_RETRY_SCHEDULED",
@@ -763,10 +764,10 @@ def default_event_schema_catalog(
         catalog.register(
             EventSchemaRegistration(
                 event_type=event_type,
-                data_schema=TASK_PLAN_EVENT_SCHEMA_V2,
+                data_schema=TASK_PLAN_EVENT_SCHEMA_V3,
                 json_schema=_task_plan_event_payload_schema(
                     event_type,
-                    data_schema=TASK_PLAN_EVENT_SCHEMA_V2,
+                    data_schema=TASK_PLAN_EVENT_SCHEMA_V3,
                 ),
                 sensitivity_policy=SensitivityPolicy(),
                 current=True,
@@ -1262,6 +1263,33 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "SUCCEEDED", "PARTIAL_FAILED", "FAILED", "CANCELLED", "INDETERMINATE",
         "RECLAIMED", "DEADLINE_EXCEEDED",
     ]}
+    capacity_pool = object_schema({
+        "schema_version": {"const": "agora.task-capacity-pool/v1"},
+        "pool_id": _TEXT,
+        "capacity": non_negative,
+        "reserved": non_negative,
+        "policy_version": _TEXT,
+        "policy_checksum": _CHECKSUM_TEXT,
+        "owner_scope": _TEXT,
+        "reservation_key": _TEXT,
+        "reservation_version": non_negative,
+        "expires_at_ms": _POSITIVE_INTEGER,
+        "snapshot_checksum": _CHECKSUM_TEXT,
+    })
+    capacity_scope = object_schema({
+        "schema_version": {"const": "agora.task-capacity-scope-snapshot/v1"},
+        "owner_scope": _TEXT,
+        "revision": _POSITIVE_INTEGER,
+        "expires_at_ms": _POSITIVE_INTEGER,
+        "pools": {
+            "type": "array",
+            "items": capacity_pool,
+            "minItems": 1,
+            "maxItems": 16,
+        },
+        "snapshot_checksum": _CHECKSUM_TEXT,
+    })
+    nullable_capacity_scope = {"anyOf": [capacity_scope, {"type": "null"}]}
     pool_reservation = object_schema({
         "schema_version": {"const": "agora.task-pool-reservation/v1"},
         "task_id": _TEXT, "allocations": capacity_allocations,
@@ -1272,6 +1300,32 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "expires_at_ms": {"type": "integer", "minimum": 1},
         "reservation_version": {"enum": [1, 2]},
         "state": reservation_state, "reservation_checksum": _CHECKSUM_TEXT,
+    })
+    packing = object_schema({
+        "schema_version": {"const": "agora.task-first-fit-packing/v1"},
+        "ready_order": {
+            "type": "array", "items": _TEXT, "maxItems": 128,
+            "uniqueItems": True,
+        },
+        "selected": {
+            "type": "array", "items": _TEXT, "maxItems": 128,
+            "uniqueItems": True,
+        },
+        "overflow": {
+            "type": "array", "items": _TEXT, "maxItems": 128,
+            "uniqueItems": True,
+        },
+        "reservations": {
+            "type": "array", "items": pool_reservation, "maxItems": 128,
+        },
+        "reasons": {
+            "type": "object", "additionalProperties": _TEXT, "maxProperties": 128,
+        },
+        "capacity_before": nullable_capacity_scope,
+        "capacity_after": nullable_capacity_scope,
+        "budget_before_checksum": nullable_checksum,
+        "budget_after_checksum": nullable_checksum,
+        "packing_checksum": _CHECKSUM_TEXT,
     })
     reservation = object_schema({
         "schema_version": {"const": "agora.harness-task-reservation/v1"},
@@ -1289,7 +1343,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "capacity_policy_checksums": ["capacity_allocations"],
     }
     group = object_schema({
-        "schema_version": {"const": "agora.harness-dispatch-group/v2"},
+        "schema_version": {"const": "agora.harness-dispatch-group/v3"},
         "group_id": _TEXT, "group_checksum": _CHECKSUM_TEXT,
         "run_id": _TEXT, "stage_id": _TEXT, "plan_id": _TEXT,
         "plan_checksum": _CHECKSUM_TEXT,
@@ -1304,14 +1358,18 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "plan_version": _POSITIVE_INTEGER, "task_ids": _ARRAY_OF_TEXT,
         "required_output_roles": _ARRAY_OF_TEXT, "join_policy": {"enum": ["wait_all", "fail_fast"]},
         "max_waves": _POSITIVE_INTEGER, "max_parallelism": _POSITIVE_INTEGER,
-        "budget_envelope": budget, "correlation_id": _TEXT, "state": group_state,
+        "budget_envelope": budget,
+        "admitted_at_ms": _POSITIVE_INTEGER,
+        "absolute_deadline_ms": _POSITIVE_INTEGER,
+        "correlation_id": _TEXT, "state": group_state,
     })
     wave = object_schema({
-        "schema_version": {"const": "agora.harness-dispatch-wave/v3"},
+        "schema_version": {"const": "agora.harness-dispatch-wave/v4"},
         "wave_id": _TEXT, "group_id": _TEXT, "ordinal": _POSITIVE_INTEGER,
         "task_ids": _ARRAY_OF_TEXT, "effective_parallelism": _POSITIVE_INTEGER,
         "execution_mode": {"enum": ["SUPERVISED", "SERIAL", "INLINE_TEST"]},
         "reservations": {"type": "array", "items": reservation, "maxItems": 128},
+        "packing": packing,
         "state": {"enum": ["PLANNED", "ADMITTED", "DISPATCHING", "RUNNING", "TERMINAL"]},
         "terminal_outcome": {"anyOf": [wave_terminal_outcome, {"type": "null"}]},
     })
@@ -1390,6 +1448,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         }),
         "budget_before_checksum": _CHECKSUM_TEXT,
         "budget_after_checksum": _CHECKSUM_TEXT,
+        "packing_checksum": _CHECKSUM_TEXT,
         "budget_reservation": {
             "type": "object", "additionalProperties": False,
             "required": [
@@ -1418,6 +1477,26 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         },
         "spawn_status": {"enum": ["SPAWN_CONFIRMED", "SPAWN_UNKNOWN"]},
         "terminal_outcome": wave_terminal_outcome,
+        "capacity_before": nullable_capacity_scope,
+        "capacity_after": nullable_capacity_scope,
+        "waiting": object_schema({
+            "schema_version": {"const": "agora.task-group-capacity-waiting/v1"},
+            "group_id": _TEXT,
+            "group_checksum": _CHECKSUM_TEXT,
+            "logical_ready_order": {
+                "type": "array", "items": _TEXT, "minItems": 1,
+                "maxItems": 128, "uniqueItems": True,
+            },
+            "reasons": {
+                "type": "object", "additionalProperties": _TEXT,
+                "minProperties": 1, "maxProperties": 128,
+            },
+            "capacity_snapshot": nullable_capacity_scope,
+            "budget_checksum": _CHECKSUM_TEXT,
+            "packing_checksum": _CHECKSUM_TEXT,
+            "absolute_deadline_ms": _POSITIVE_INTEGER,
+            "waiting_key": _TEXT,
+        }),
         "recovered_results": {"type": "array", "items": recovered_result, "maxItems": 128},
         "observation": observation,
         "continuation": continuation,
@@ -1440,13 +1519,17 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
     }]
     required_by_type = {
         "TASK_GROUP_ADMITTED": ["group", "requested_parallelism", "effective_parallelism", "idempotency_key"],
-        "TASK_WAVE_ADMITTED": ["group", "wave", "idempotency_key", "budget_before_checksum", "budget_after_checksum"],
+        "TASK_WAVE_ADMITTED": ["group", "wave", "idempotency_key", "budget_before_checksum", "budget_after_checksum", "packing_checksum"],
         "TASK_ATTEMPT_SPAWN_INTENT": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "idempotency_key", "budget_reservation"],
         "TASK_ATTEMPT_SPAWN_CONFIRMED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "spawn_status", "child_id", "idempotency_key"],
         "TASK_ATTEMPT_SPAWN_UNKNOWN": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "spawn_status", "idempotency_key"],
         "TASK_ATTEMPT_RECORDED": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "history_record", "idempotency_key"],
         "TASK_WAVE_DISPATCHED": ["group_id", "wave_id", "task_ids", "idempotency_key"],
-        "TASK_WAVE_COMPLETED": ["group_id", "wave_id", "task_ids", "terminal_outcome"],
+        "TASK_WAVE_COMPLETED": [
+            "group_id", "wave_id", "task_ids", "terminal_outcome",
+            "reservation_states", "child_states",
+        ],
+        "TASK_GROUP_CAPACITY_WAITING": ["group_id", "waiting", "reason_code", "idempotency_key"],
         "TASK_GROUP_JOIN_WAITING": ["group", "observation", "idempotency_key"],
         "TASK_GROUP_JOINED": ["group", "observation", "idempotency_key"],
         "PARENT_OBSERVATION_CONTINUATION": ["continuation", "idempotency_key"],
@@ -1463,6 +1546,11 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
     if event_type == "RECOVERY_RECONCILED":
         required.append("child_id")
     result = object_schema(fields, required=required)
+    if event_type == "TASK_WAVE_COMPLETED":
+        result["dependentRequired"] = {
+            "capacity_before": ["capacity_after"],
+            "capacity_after": ["capacity_before"],
+        }
     if event_type != "PARENT_OBSERVATION_CONTINUATION":
         result["anyOf"] = [{"required": ["group"]}, {"required": ["group_id"]}]
     if event_type in {"TASK_ATTEMPT_SPAWN_CONFIRMED", "TASK_ATTEMPT_SPAWN_UNKNOWN"}:
@@ -1536,6 +1624,129 @@ def _task_plan_event_payload_schema(
             "blocking_predecessor_ids": _ARRAY_OF_TEXT,
         },
     }
+    task_id_schema: dict[str, Any] = nullable_text
+    task_instance_id_schema: dict[str, Any] = nullable_text
+    attempt_schema: dict[str, Any] = nullable_positive_integer
+    input_checksum_schema: dict[str, Any] = nullable_checksum
+    if event_type in {"TASK_READY", "TASK_QUEUE_ADMITTED"}:
+        task_budget = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "max_turns",
+                "max_tool_calls",
+                "max_memory_ops",
+                "max_output_tokens",
+            ],
+            "properties": {
+                "max_turns": _POSITIVE_INTEGER,
+                "max_tool_calls": _NONNEGATIVE_INTEGER,
+                "max_memory_ops": _NONNEGATIVE_INTEGER,
+                "max_output_tokens": _NONNEGATIVE_INTEGER,
+                "token_limit": _NONNEGATIVE_INTEGER,
+                "time_limit_ms": _POSITIVE_INTEGER,
+                "cost_limit": _NONNEGATIVE_INTEGER,
+            },
+            "dependentRequired": {
+                "token_limit": ["time_limit_ms"],
+                "time_limit_ms": ["token_limit"],
+                "cost_limit": ["token_limit", "time_limit_ms"],
+            },
+        }
+        task_instance_fields = {
+            "schema_version": {"const": "newsroom.harness-task-instance/v3"},
+            "run_id": _TEXT,
+            "graph_id": _TEXT,
+            "graph_version": _TEXT,
+            "graph_ref": _TEXT,
+            "graph_schema_version": _TEXT,
+            "compiler_version": _TEXT,
+            "condition_policy_version": _TEXT,
+            "graph_checksum": _CHECKSUM_TEXT,
+            "stage_binding_checksum": _CHECKSUM_TEXT,
+            "stage_identity_schema": _TEXT,
+            "stage_identity_checksum": _CHECKSUM_TEXT,
+            "stage_id": _TEXT,
+            "plan_id": _TEXT,
+            "plan_version": _POSITIVE_INTEGER,
+            "plan_checksum": _CHECKSUM_TEXT,
+            "task_id": _TEXT,
+            "task_definition_checksum": _CHECKSUM_TEXT,
+            "task_instance_id": _TEXT,
+            "attempt": _POSITIVE_INTEGER,
+            "worker_ref": _TEXT,
+            "idempotency_key": _TEXT,
+            "fencing_token": _TEXT,
+            "budget_snapshot": task_budget,
+            "instance_checksum": _CHECKSUM_TEXT,
+        }
+        task_instance = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": list(task_instance_fields),
+            "properties": task_instance_fields,
+        }
+        if event_type == "TASK_READY":
+            readiness_fields = {
+                "schema_version": {
+                    "const": "newsroom.harness-task-readiness/v1"
+                },
+                "task_id": _TEXT,
+                "task_definition_checksum": _CHECKSUM_TEXT,
+                "logical_ready_order": {
+                    "type": "array",
+                    "items": _TEXT,
+                    "minItems": 1,
+                    "maxItems": 128,
+                    "uniqueItems": True,
+                },
+                "readiness_checksum": _CHECKSUM_TEXT,
+            }
+            safe_payload = {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["logical_readiness"],
+                "properties": {
+                    "logical_readiness": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": list(readiness_fields),
+                        "properties": readiness_fields,
+                    }
+                },
+            }
+            task_id_schema = _TEXT
+            task_instance_id_schema = {"type": "null"}
+            attempt_schema = {"type": "null"}
+            input_checksum_schema = _CHECKSUM_TEXT
+        else:
+            admission_fields = {
+                "schema_version": {
+                    "const": "newsroom.harness-task-queue-admission/v1"
+                },
+                "admission_owner": {"const": "QUEUE"},
+                "task_instance": task_instance,
+                "budget_before_checksum": _CHECKSUM_TEXT,
+                "budget_after_checksum": _CHECKSUM_TEXT,
+                "admission_checksum": _CHECKSUM_TEXT,
+            }
+            safe_payload = {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["queue_admission"],
+                "properties": {
+                    "queue_admission": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": list(admission_fields),
+                        "properties": admission_fields,
+                    }
+                },
+            }
+            task_id_schema = _TEXT
+            task_instance_id_schema = _TEXT
+            attempt_schema = _POSITIVE_INTEGER
+            input_checksum_schema = _CHECKSUM_TEXT
     if event_type in {"PLAN_BUILD_INTENT", "PLAN_BUILD_RECEIPT"}:
         fields = {
             "schema_version": {"const": "newsroom.harness-plan-build-attempt/v1"},
@@ -1625,13 +1836,13 @@ def _task_plan_event_payload_schema(
             "graph_checksum": _CHECKSUM_TEXT,
             "plan_id": nullable_text,
             "plan_version": nullable_positive_integer,
-            "task_id": nullable_text,
-            "task_instance_id": nullable_text,
-            "attempt": nullable_positive_integer,
+            "task_id": task_id_schema,
+            "task_instance_id": task_instance_id_schema,
+            "attempt": attempt_schema,
             "schema_version": {"const": data_schema},
             "actor_type": _TEXT,
             "causal_event_ref": nullable_text,
-            "input_checksum": nullable_checksum,
+            "input_checksum": input_checksum_schema,
             "output_refs": {
                 "type": "array",
                 "items": _TEXT,

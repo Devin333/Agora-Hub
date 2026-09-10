@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from threading import Barrier, Event, Thread
@@ -63,10 +64,14 @@ class _DelayedCandidateArtifactStore(_ArtifactStore):
 
     def write(self, artifact):
         written = super().write(artifact)
-        if (
-            artifact.artifact_type == "harness.task-plan.candidate"
-            and b'"candidate_id":"candidate-2"' in artifact.content_bytes()
-        ):
+        is_losing_candidate = False
+        if artifact.artifact_type == "harness.task-plan.candidate":
+            candidate_payload = json.loads(artifact.content_bytes())
+            is_losing_candidate = (
+                isinstance(candidate_payload, dict)
+                and candidate_payload.get("candidate_id") == "candidate-2"
+            )
+        if is_losing_candidate:
             self.loser_candidate_written.set()
             assert self.release_loser.wait(timeout=5)
         return written

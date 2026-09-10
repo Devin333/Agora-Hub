@@ -28,7 +28,11 @@ from framework.harness.task_plan.canonical import (
 )
 from framework.harness.task_plan.forbidden import ensure_candidate_only
 from framework.harness.task_plan.identity import TaskPlanStageIdentity
-from framework.harness.task_plan.task_lifecycle import TaskLifecycle, validate_task_transition
+from framework.harness.task_plan.task_lifecycle import (
+    TaskAdmissionOwner,
+    TaskLifecycle,
+    validate_task_transition,
+)
 from framework.harness.task_plan.schema import (
     DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
     GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA,
@@ -1595,6 +1599,7 @@ class TaskProjection:
     status: TaskLifecycle | str
     attempts: int = 0
     active_instance_id: str | None = None
+    admission_owner: TaskAdmissionOwner | str | None = None
     result: TaskResultReference | Mapping[str, Any] | None = None
     failure_reason_code: str | None = None
     schema_version: str = GRAPH_ONLY_TASK_PROJECTION_SCHEMA
@@ -1622,6 +1627,16 @@ class TaskProjection:
             "active_instance_id",
             identifier(self.active_instance_id, "active_instance_id") if self.active_instance_id is not None else None,
         )
+        admission_owner = self.admission_owner
+        if admission_owner is not None:
+            try:
+                admission_owner = TaskAdmissionOwner(admission_owner)
+            except (TypeError, ValueError) as exc:
+                raise HarnessValidationError(
+                    "unknown task admission owner",
+                    code="invalid_task_projection",
+                ) from exc
+        object.__setattr__(self, "admission_owner", admission_owner)
         result = self.result
         if result is not None:
             result = _model(result, TaskResultReference, "result")
@@ -1633,13 +1648,22 @@ class TaskProjection:
         )
         if self.active_instance_id is not None and self.attempts == 0:
             raise HarnessValidationError("active task requires an allocated attempt", code="invalid_task_projection")
-        if status in {TaskLifecycle.READY, TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING} and self.active_instance_id is None:
+        if status in {TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING} and self.active_instance_id is None:
             raise HarnessValidationError("executing task requires an active instance", code="invalid_task_projection")
-        if status in {
-            TaskLifecycle.PENDING, TaskLifecycle.SUCCEEDED, TaskLifecycle.BLOCKED_DEPENDENCY,
-            TaskLifecycle.CANCELLED, TaskLifecycle.INDETERMINATE, TaskLifecycle.QUARANTINED,
+        if status in {TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING} and admission_owner is None:
+            raise HarnessValidationError(
+                "admitted task requires a durable execution owner",
+                code="invalid_task_projection",
+            )
+        if status not in {
+            TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING,
         } and self.active_instance_id is not None:
             raise HarnessValidationError("task state cannot retain an active instance", code="invalid_task_projection")
+        if status not in {TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING} and admission_owner is not None:
+            raise HarnessValidationError(
+                "task state cannot retain an execution admission owner",
+                code="invalid_task_projection",
+            )
         if status in {TaskLifecycle.INDETERMINATE, TaskLifecycle.QUARANTINED} and self.attempts == 0:
             raise HarnessValidationError("attempt outcome requires an allocated attempt", code="invalid_task_projection")
         if status is TaskLifecycle.SUCCEEDED and result is None:
@@ -1657,16 +1681,28 @@ class TaskProjection:
         object.__setattr__(self, "projection_checksum", canonical_payload_checksum(self.checksum_projection()))
 
     def transitioned(self, status: TaskLifecycle | str, **changes: Any) -> Self:
-        if set(changes) - {"attempts", "active_instance_id", "result", "failure_reason_code"}:
+        if set(changes) - {
+            "attempts", "active_instance_id", "admission_owner", "result", "failure_reason_code",
+        }:
             raise HarnessValidationError("task transition cannot change definition identity", code="invalid_task_projection")
         validate_task_transition(self.status, status)
         updated = replace(self, status=status, **changes)
         if updated.attempts < self.attempts or updated.attempts > self.attempts + 1:
             raise HarnessValidationError("task transition has invalid attempt sequence", code="invalid_task_projection")
-        if updated.attempts != self.attempts and updated.status not in {TaskLifecycle.READY, TaskLifecycle.ADMITTED}:
+        if updated.attempts != self.attempts and updated.status is not TaskLifecycle.ADMITTED:
             raise HarnessValidationError("only admission may allocate an attempt", code="invalid_task_projection")
+        if self.status is TaskLifecycle.READY and updated.status is TaskLifecycle.ADMITTED and updated.attempts != self.attempts + 1:
+            raise HarnessValidationError(
+                "admission must allocate exactly the next attempt",
+                code="invalid_task_projection",
+            )
         if self.active_instance_id is not None and updated.active_instance_id not in {None, self.active_instance_id}:
             raise HarnessValidationError("task transition cannot substitute its active attempt", code="invalid_task_projection")
+        if self.admission_owner is not None and updated.admission_owner not in {None, self.admission_owner}:
+            raise HarnessValidationError(
+                "task transition cannot substitute its admission owner",
+                code="invalid_task_projection",
+            )
         if updated.status is self.status and self.status not in {TaskLifecycle.PENDING, TaskLifecycle.READY} and updated != self:
             raise HarnessValidationError("repeated task transition cannot rewrite evidence", code="invalid_task_projection")
         return updated
@@ -1679,6 +1715,7 @@ class TaskProjection:
             "status": self.status.value,
             "attempts": self.attempts,
             "active_instance_id": self.active_instance_id,
+            "admission_owner": self.admission_owner.value if self.admission_owner else None,
             "result": self.result.to_dict() if self.result else None,
             "failure_reason_code": self.failure_reason_code,
         }
@@ -1706,6 +1743,7 @@ class TaskProjection:
                     "status",
                     "attempts",
                     "active_instance_id",
+                    "admission_owner",
                     "result",
                     "failure_reason_code",
                     "projection_checksum",
@@ -1733,6 +1771,7 @@ class TaskPlanProjection:
     tasks: tuple[TaskProjection, ...]
     consumed_budget: Mapping[str, Any]
     last_sequence: int
+    logical_ready_order: tuple[str, ...] = ()
     graph_id: str | None = None
     graph_version: str | None = None
     graph_ref: str | None = None
@@ -1785,6 +1824,28 @@ class TaskPlanProjection:
                 },
             )
         object.__setattr__(self, "tasks", tuple(sorted(tasks, key=lambda item: item.task_id)))
+        ready_order = _ordered_identifier_sequence(
+            self.logical_ready_order,
+            "logical_ready_order",
+        )
+        if len(ready_order) != len(set(ready_order)):
+            raise HarnessValidationError(
+                "TaskPlanProjection logical ready order must be unique",
+                code="task_plan_projection_ready_order_mismatch",
+            )
+        ready_task_ids = {
+            task.task_id for task in tasks if task.status is TaskLifecycle.READY
+        }
+        if set(ready_order) != ready_task_ids:
+            raise HarnessValidationError(
+                "TaskPlanProjection logical ready order must cover every READY task exactly once",
+                code="task_plan_projection_ready_order_mismatch",
+                details={
+                    "ready_order": list(ready_order),
+                    "ready_task_ids": sorted(ready_task_ids),
+                },
+            )
+        object.__setattr__(self, "logical_ready_order", ready_order)
         object.__setattr__(self, "consumed_budget", frozen_mapping(self.consumed_budget, "consumed_budget"))
         if "ledger" in self.consumed_budget:
             from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
@@ -1826,6 +1887,7 @@ class TaskPlanProjection:
             "tasks": [task.to_dict() for task in self.tasks],
             "consumed_budget": thaw_mapping(self.consumed_budget),
             "last_sequence": self.last_sequence,
+            "logical_ready_order": list(self.logical_ready_order),
         })
         return payload
 
@@ -1877,6 +1939,7 @@ class TaskPlanProjection:
                     "tasks",
                     "consumed_budget",
                     "last_sequence",
+                    "logical_ready_order",
                     "projection_checksum",
                 }
             )
@@ -1887,9 +1950,31 @@ class TaskPlanProjection:
         raw_tasks = payload.pop("tasks")
         if isinstance(raw_tasks, (str, bytes)) or not isinstance(raw_tasks, Sequence):
             raise HarnessValidationError("TaskPlanProjection tasks must be an array", code="invalid_task_plan_payload")
-        projection = cls(tasks=tuple(TaskProjection.from_dict(item) for item in raw_tasks), **payload)
+        raw_ready_order = payload.pop("logical_ready_order")
+        ready_order = _ordered_identifier_sequence(
+            raw_ready_order,
+            "logical_ready_order",
+        )
+        projection = cls(
+            tasks=tuple(TaskProjection.from_dict(item) for item in raw_tasks),
+            logical_ready_order=ready_order,
+            **payload,
+        )
         _verify_checksum(supplied, projection.projection_checksum, "projection_checksum", cls.__name__)
         return projection
+
+
+def _ordered_identifier_sequence(value: Any, field_name: str) -> tuple[str, ...]:
+    if (
+        isinstance(value, (str, bytes, Mapping, set, frozenset))
+        or not isinstance(value, Sequence)
+    ):
+        raise HarnessValidationError(
+            f"{field_name} must be an ordered array",
+            code="invalid_task_plan_payload",
+            details={"field": field_name},
+        )
+    return tuple(identifier(item, field_name) for item in value)
 
 
 def _model(value: Any, model_type: type, field_name: str):
@@ -1938,6 +2023,7 @@ __all__ = [
     "TaskAcceptanceCriteria",
     "TaskBudget",
     "TaskInstance",
+    "TaskAdmissionOwner",
     "TaskLifecycle",
     "TaskOutputContract",
     "TaskPlanLimits",

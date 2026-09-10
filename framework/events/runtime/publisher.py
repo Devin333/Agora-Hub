@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from math import isfinite
+import re
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +30,7 @@ from framework.events.runtime.fallback import (
     RuntimeDiagnosticComponent,
     RuntimeDiagnosticOperation,
 )
-from framework.events.runtime.models import AppendResult
+from framework.events.runtime.models import AppendResult, TransactionalStateSnapshot
 from framework.events.schema.catalog import EventSchemaCatalog
 from framework.events.schema.security import (
     EventSecurityProjector,
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
 
 
 MAX_ATOMIC_PUBLISH_BATCH_SIZE = 64
+_CHECKSUM_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +290,9 @@ class EventRuntime:
 
         # Validate, project, and freeze every candidate before opening the
         # transaction so a schema failure cannot allocate a stream sequence.
-        candidates = tuple(self._candidate_from_request(request) for request in requests)
+        candidates = tuple(
+            self._candidate_from_request(request) for request in requests
+        )
         append_started = _safe_monotonic(self._monotonic)
         results: list[AppendResult] = []
         try:
@@ -365,6 +369,214 @@ class EventRuntime:
             labels={"backend": self._backend},
         )
         return tuple(result.event for result in results)
+
+    def publish_batch_with_state_cas(
+        self,
+        events: Sequence[EventPublishRequest],
+        *,
+        expected_last_sequence: int | None,
+        state_namespace: str,
+        state_key: str,
+        expected_state_revision: int | None,
+        expected_state_checksum: str | None,
+        next_state: TransactionalStateSnapshot,
+    ) -> tuple[tuple[StoredEvent, ...], TransactionalStateSnapshot]:
+        """Commit one canonical event batch and one monotonic state CAS."""
+
+        if not isinstance(events, Sequence) or isinstance(events, (str, bytes)):
+            raise TypeError("events must be a Sequence of EventPublishRequest")
+        batch_size = len(events)
+        if batch_size == 0:
+            raise ValueError("events must contain at least one publish request")
+        if batch_size > MAX_ATOMIC_PUBLISH_BATCH_SIZE:
+            raise ValueError(
+                "events exceeds MAX_ATOMIC_PUBLISH_BATCH_SIZE="
+                f"{MAX_ATOMIC_PUBLISH_BATCH_SIZE}"
+            )
+        requests = tuple(events)
+        for request in requests:
+            if not isinstance(request, EventPublishRequest):
+                raise TypeError("every batch item must be an EventPublishRequest")
+        expected_last_sequence = _expected_last_sequence(expected_last_sequence)
+        stream_scope = (requests[0].tenant_id, requests[0].stream_id)
+        if any(
+            (request.tenant_id, request.stream_id) != stream_scope
+            for request in requests[1:]
+        ):
+            raise EventContractError(
+                "atomic publish batch requires one tenant and stream scope"
+            )
+
+        namespace = _required_text(state_namespace, "state_namespace")
+        key = _required_text(state_key, "state_key")
+        if not isinstance(next_state, TransactionalStateSnapshot):
+            raise TypeError("next_state must be TransactionalStateSnapshot")
+        if (next_state.namespace, next_state.key) != (namespace, key):
+            raise ValueError("next_state namespace/key must match the CAS target")
+        expected_revision, expected_checksum = _state_cas_expectation(
+            expected_state_revision,
+            expected_state_checksum,
+        )
+
+        # Candidate/schema/security validation occurs before opening a database
+        # transaction.  The state row itself is nevertheless validated and
+        # compared only by the adapter through the transaction connection.
+        candidates = tuple(
+            self._candidate_from_request(request) for request in requests
+        )
+        append_started = _safe_monotonic(self._monotonic)
+        results: list[AppendResult] = []
+        persisted_state: TransactionalStateSnapshot | None = None
+        try:
+            with self._store.unit_of_work() as unit_of_work:
+                state_before = unit_of_work.load_transactional_state(namespace, key)
+                persisted_state = unit_of_work.cas_transactional_state(
+                    namespace=namespace,
+                    key=key,
+                    expected_revision=expected_revision,
+                    expected_checksum=expected_checksum,
+                    next_snapshot=next_state,
+                )
+                if persisted_state != next_state:
+                    raise EventContractError(
+                        "transactional state CAS returned a different snapshot"
+                    )
+                exact_state_redelivery = state_before == persisted_state == next_state
+                next_expected = expected_last_sequence
+                for candidate in candidates:
+                    result = _append_verified(
+                        unit_of_work,
+                        candidate,
+                        expected_last_sequence=next_expected,
+                    )
+                    if results and (
+                        result.event.stream_sequence
+                        != results[-1].event.stream_sequence + 1
+                    ):
+                        raise EventContractError(
+                            "atomic publish batch did not receive contiguous stream sequences"
+                        )
+                    if (
+                        not results
+                        and expected_last_sequence is not None
+                        and result.event.stream_sequence != expected_last_sequence + 1
+                    ):
+                        raise EventContractError(
+                            "atomic publish batch did not start after expected_last_sequence"
+                        )
+                    results.append(result)
+                    next_expected = result.event.stream_sequence
+
+                if exact_state_redelivery:
+                    if any(result.created for result in results):
+                        raise EventContractError(
+                            "state redelivery cannot commit previously unseen events"
+                        )
+                elif any(not result.created for result in results):
+                    raise EventContractError(
+                        "new state transition cannot reuse a previously committed event"
+                    )
+                unit_of_work.commit()
+        except Exception as error:
+            self._record_append_metrics(result="failed", started_at=append_started)
+            store_health_failure = _is_store_health_failure(error)
+            if store_health_failure:
+                self._telemetry.record_gauge(
+                    "event_store_health",
+                    0,
+                    labels={"backend": self._backend},
+                )
+            if isinstance(error, EventIdentityCollisionError):
+                self._telemetry.add_counter(
+                    "event_identity_collision_total",
+                    labels={"source": _source_metric_bucket(requests[0].source)},
+                )
+            if store_health_failure:
+                self._diagnostic_fallback.record(
+                    category=RuntimeDiagnosticCategory.EVENT_STORE_FAILURE,
+                    component=RuntimeDiagnosticComponent.EVENT_PUBLISHER,
+                    operation=RuntimeDiagnosticOperation.PUBLISH,
+                    error=error,
+                )
+            raise
+
+        for result in results:
+            self._telemetry.add_counter(
+                "event_append_total",
+                labels={
+                    "backend": self._backend,
+                    "result": "accepted" if result.created else "duplicate",
+                },
+            )
+        completed_at = _safe_monotonic(self._monotonic)
+        if append_started is not None and completed_at is not None:
+            self._telemetry.record_histogram(
+                "event_append_latency_seconds",
+                max(0.0, completed_at - append_started),
+                labels={"backend": self._backend},
+            )
+        self._telemetry.record_gauge(
+            "event_store_health",
+            1,
+            labels={"backend": self._backend},
+        )
+        if persisted_state is None:  # pragma: no cover - guarded by successful CAS
+            raise EventContractError("transactional state CAS returned no snapshot")
+        return tuple(result.event for result in results), persisted_state
+
+    def compare_and_swap_transactional_state(
+        self,
+        next_snapshot: TransactionalStateSnapshot,
+        *,
+        expected_revision: int | None,
+        expected_checksum: str | None,
+    ) -> TransactionalStateSnapshot:
+        """Commit one state CAS without exposing an adapter transaction handle."""
+
+        if not isinstance(next_snapshot, TransactionalStateSnapshot):
+            raise TypeError("next_snapshot must be TransactionalStateSnapshot")
+        expected_revision, expected_checksum = _state_cas_expectation(
+            expected_revision,
+            expected_checksum,
+        )
+        try:
+            with self._store.unit_of_work() as unit_of_work:
+                persisted = unit_of_work.cas_transactional_state(
+                    namespace=next_snapshot.namespace,
+                    key=next_snapshot.key,
+                    expected_revision=expected_revision,
+                    expected_checksum=expected_checksum,
+                    next_snapshot=next_snapshot,
+                )
+                if not isinstance(persisted, TransactionalStateSnapshot):
+                    raise EventContractError(
+                        "transactional state CAS returned an invalid snapshot"
+                    )
+                if persisted != next_snapshot:
+                    raise EventContractError(
+                        "transactional state CAS returned a different snapshot"
+                    )
+                unit_of_work.commit()
+        except Exception as error:
+            if _is_store_health_failure(error):
+                self._telemetry.record_gauge(
+                    "event_store_health",
+                    0,
+                    labels={"backend": self._backend},
+                )
+                self._diagnostic_fallback.record(
+                    category=RuntimeDiagnosticCategory.EVENT_STORE_FAILURE,
+                    component=RuntimeDiagnosticComponent.EVENT_PUBLISHER,
+                    operation=RuntimeDiagnosticOperation.PUBLISH,
+                    error=error,
+                )
+            raise
+        self._telemetry.record_gauge(
+            "event_store_health",
+            1,
+            labels={"backend": self._backend},
+        )
+        return persisted
 
     def _candidate_from_request(self, event: EventPublishRequest) -> EventCandidate:
         registration = self._schema_catalog.get(event.event_type, event.data_schema)
@@ -463,6 +675,31 @@ def _expected_last_sequence(value: int | None) -> int | None:
     if value < 0:
         raise ValueError("expected_last_sequence must not be negative")
     return value
+
+
+def _state_cas_expectation(
+    revision: int | None,
+    checksum: str | None,
+) -> tuple[int | None, str | None]:
+    if (revision is None) != (checksum is None):
+        raise ValueError(
+            "expected_state_revision and expected_state_checksum must both be "
+            "set or both be None"
+        )
+    if revision is None:
+        return None, None
+    if isinstance(revision, bool) or not isinstance(revision, int):
+        raise TypeError("expected_state_revision must be an integer or None")
+    if revision < 1:
+        raise ValueError("expected_state_revision must be positive")
+    if (
+        not isinstance(checksum, str)
+        or _CHECKSUM_PATTERN.fullmatch(checksum) is None
+    ):
+        raise ValueError(
+            "expected_state_checksum must be sha256:<64 lowercase hex> or None"
+        )
+    return revision, checksum
 
 
 def _required_text(value: Any, field_name: str) -> str:

@@ -8,11 +8,15 @@ from typing import Any, Mapping, Sequence
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.canonical import checksum, canonical_payload_checksum, exact_keys, frozen_mapping, identifier, thaw_mapping
 from framework.harness.task_plan.parallel_lifecycle import ReservationState, SideEffectClass
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.models import TaskInstance
 
 
 CAPACITY_POOL_SCHEMA = "agora.task-capacity-pool/v1"
 CAPACITY_DEMAND_SCHEMA = "agora.task-capacity-demand/v1"
 POOL_RESERVATION_SCHEMA = "agora.task-pool-reservation/v1"
+CAPACITY_SCOPE_SNAPSHOT_SCHEMA = "agora.task-capacity-scope-snapshot/v1"
+FIRST_FIT_PACKING_SCHEMA = "agora.task-first-fit-packing/v1"
 
 
 def capacity_now_ms() -> int:
@@ -91,6 +95,111 @@ class CapacityPool:
     @property
     def available(self) -> int:
         return self.capacity - self.reserved
+
+
+@dataclass(frozen=True, slots=True)
+class CapacityScopeSnapshot:
+    """Authoritative, revision-fenced view of one shared pool scope."""
+
+    owner_scope: str
+    pools: tuple[CapacityPool, ...]
+    revision: int
+    expires_at_ms: int
+    schema_version: str = CAPACITY_SCOPE_SNAPSHOT_SCHEMA
+    snapshot_checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "owner_scope", identifier(self.owner_scope, "owner_scope"))
+        pools = tuple(self.pools)
+        if (
+            not pools
+            or any(not isinstance(pool, CapacityPool) for pool in pools)
+            or tuple(pool.pool_id for pool in pools)
+            != tuple(sorted(pool.pool_id for pool in pools))
+            or len({pool.pool_id for pool in pools}) != len(pools)
+            or any(pool.owner_scope != self.owner_scope for pool in pools)
+        ):
+            raise HarnessValidationError(
+                "capacity scope must contain one stable ordered pool set",
+                code="CAPACITY_POLICY_INVALID",
+            )
+        object.__setattr__(self, "pools", pools)
+        _integer(self.revision, "capacity_scope_revision", minimum=1)
+        _integer(self.expires_at_ms, "capacity_scope_expires_at_ms", minimum=1)
+        if self.expires_at_ms != min(pool.expires_at_ms for pool in pools):
+            raise HarnessValidationError(
+                "capacity scope expiry must equal its earliest pool expiry",
+                code="CAPACITY_POLICY_INVALID",
+            )
+        if self.schema_version != CAPACITY_SCOPE_SNAPSHOT_SCHEMA:
+            raise HarnessValidationError(
+                "unsupported capacity scope snapshot schema",
+                code="CAPACITY_POLICY_INVALID",
+            )
+        object.__setattr__(
+            self,
+            "snapshot_checksum",
+            canonical_payload_checksum(self.to_dict(include_checksum=False)),
+        )
+
+    def require_current(self, *, now_ms: int) -> None:
+        _integer(now_ms, "now_ms")
+        if now_ms >= self.expires_at_ms:
+            raise HarnessValidationError(
+                "capacity scope snapshot has expired",
+                code="CAPACITY_POLICY_STALE",
+            )
+        for pool in self.pools:
+            pool.require_current(now_ms=now_ms)
+
+    def to_dict(self, *, include_checksum: bool = True) -> dict[str, Any]:
+        result = {
+            "schema_version": self.schema_version,
+            "owner_scope": self.owner_scope,
+            "revision": self.revision,
+            "expires_at_ms": self.expires_at_ms,
+            "pools": [pool.to_dict() for pool in self.pools],
+        }
+        if include_checksum:
+            result["snapshot_checksum"] = self.snapshot_checksum
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> CapacityScopeSnapshot:
+        payload = exact_keys(
+            value,
+            required=frozenset({
+                "schema_version", "owner_scope", "revision", "expires_at_ms",
+                "pools", "snapshot_checksum",
+            }),
+            model=cls.__name__,
+        )
+        supplied = checksum(payload.pop("snapshot_checksum"), "snapshot_checksum")
+        raw_pools = payload.get("pools")
+        if not isinstance(raw_pools, list):
+            raise HarnessValidationError(
+                "capacity scope pools must be an array",
+                code="CAPACITY_POLICY_INVALID",
+            )
+        payload["pools"] = tuple(CapacityPool.from_dict(item) for item in raw_pools)
+        result = cls(**payload)
+        if result.snapshot_checksum != supplied:
+            raise HarnessValidationError(
+                "capacity scope snapshot checksum mismatch",
+                code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+            )
+        return result
+
+    def with_reserved_pools(self, pools: Sequence[CapacityPool]) -> CapacityScopeSnapshot:
+        """Build the next proposed scope revision; persistence grants authority."""
+
+        proposed = tuple(pools)
+        return CapacityScopeSnapshot(
+            owner_scope=self.owner_scope,
+            pools=proposed,
+            revision=self.revision + 1,
+            expires_at_ms=min(pool.expires_at_ms for pool in proposed),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,26 +339,166 @@ class PoolReservation:
 
 @dataclass(frozen=True, slots=True)
 class FirstFitPacking:
+    ready_order: tuple[str, ...]
     selected: tuple[str, ...]
     overflow: tuple[str, ...]
     reservations: tuple[PoolReservation, ...]
     reasons: Mapping[str, str]
+    capacity_before: CapacityScopeSnapshot | None = None
+    capacity_after: CapacityScopeSnapshot | None = None
+    budget_before_checksum: str | None = None
+    budget_after_checksum: str | None = None
+    admitted_budget_snapshot: Mapping[str, Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
+    schema_version: str = FIRST_FIT_PACKING_SCHEMA
     packing_checksum: str = field(init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "selected", tuple(self.selected))
-        object.__setattr__(self, "overflow", tuple(self.overflow))
-        object.__setattr__(self, "reservations", tuple(self.reservations))
-        if len(set(self.selected + self.overflow)) != len(self.selected) + len(self.overflow) or tuple(item.task_id for item in self.reservations) != self.selected or set(self.reasons) != set(self.overflow):
+        ready_order = tuple(
+            identifier(item, "packing.ready_task_id")
+            for item in _strict_tuple(self.ready_order, "ready_order")
+        )
+        selected = tuple(
+            identifier(item, "packing.selected_task_id")
+            for item in _strict_tuple(self.selected, "selected")
+        )
+        overflow = tuple(
+            identifier(item, "packing.overflow_task_id")
+            for item in _strict_tuple(self.overflow, "overflow")
+        )
+        reservations = _strict_tuple(self.reservations, "reservations")
+        object.__setattr__(self, "ready_order", ready_order)
+        object.__setattr__(self, "selected", selected)
+        object.__setattr__(self, "overflow", overflow)
+        object.__setattr__(self, "reservations", reservations)
+        if not isinstance(self.reasons, Mapping):
+            raise HarnessValidationError(
+                "packing reasons must be an object",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        if (
+            len(set(self.ready_order)) != len(self.ready_order)
+            or set(self.selected).intersection(self.overflow)
+            or set(self.selected).union(self.overflow) != set(self.ready_order)
+            or tuple(item for item in self.ready_order if item in set(self.selected)) != self.selected
+            or tuple(item for item in self.ready_order if item in set(self.overflow)) != self.overflow
+            or any(not isinstance(item, PoolReservation) for item in self.reservations)
+            or len({item.task_id for item in self.reservations}) != len(self.reservations)
+            or any(item.task_id not in self.selected for item in self.reservations)
+            or set(self.reasons) != set(self.overflow)
+            or any(
+                not isinstance(reason, str) or not reason
+                for reason in self.reasons.values()
+            )
+        ):
             raise HarnessValidationError("packing reservations and overflow must partition tasks", code="CAPACITY_RESERVATION_INVALID")
         object.__setattr__(self, "reasons", frozen_mapping(dict(self.reasons), "packing.reasons"))
+        before = self.capacity_before
+        after = self.capacity_after
+        if (before is None) is not (after is None):
+            raise HarnessValidationError(
+                "packing capacity evidence must contain both scope snapshots",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        if before is not None and (
+            not isinstance(before, CapacityScopeSnapshot)
+            or not isinstance(after, CapacityScopeSnapshot)
+            or before.owner_scope != after.owner_scope
+            or after.revision not in {before.revision, before.revision + 1}
+            or tuple(item.pool_id for item in before.pools)
+            != tuple(item.pool_id for item in after.pools)
+            or (
+                after.revision == before.revision
+                and after.snapshot_checksum != before.snapshot_checksum
+            )
+            or (
+                self.reservations
+                and after.revision != before.revision + 1
+            )
+        ):
+            raise HarnessValidationError(
+                "packing capacity scope transition is invalid",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        object.__setattr__(self, "capacity_before", before)
+        object.__setattr__(self, "capacity_after", after)
+        if (self.budget_before_checksum is None) is not (self.budget_after_checksum is None):
+            raise HarnessValidationError(
+                "packing budget evidence must contain both ledger checksums",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        if self.budget_before_checksum is not None:
+            object.__setattr__(self, "budget_before_checksum", checksum(self.budget_before_checksum, "budget_before_checksum"))
+            object.__setattr__(self, "budget_after_checksum", checksum(self.budget_after_checksum, "budget_after_checksum"))
+        if not isinstance(self.admitted_budget_snapshot, Mapping):
+            raise HarnessValidationError(
+                "packing admitted budget snapshot must be an object",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        object.__setattr__(self, "admitted_budget_snapshot", frozen_mapping(
+            self.admitted_budget_snapshot,
+            "packing.admitted_budget_snapshot",
+        ))
+        if self.schema_version != FIRST_FIT_PACKING_SCHEMA:
+            raise HarnessValidationError(
+                "unsupported first-fit packing schema",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
         object.__setattr__(self, "packing_checksum", canonical_payload_checksum(self.to_dict(include_checksum=False)))
 
     def to_dict(self, *, include_checksum: bool = True) -> dict[str, Any]:
-        value = {"selected": list(self.selected), "overflow": list(self.overflow), "reservations": [item.to_dict() for item in self.reservations], "reasons": thaw_mapping(self.reasons)}
+        value = {
+            "schema_version": self.schema_version,
+            "ready_order": list(self.ready_order),
+            "selected": list(self.selected),
+            "overflow": list(self.overflow),
+            "reservations": [item.to_dict() for item in self.reservations],
+            "reasons": thaw_mapping(self.reasons),
+            "capacity_before": self.capacity_before.to_dict() if self.capacity_before else None,
+            "capacity_after": self.capacity_after.to_dict() if self.capacity_after else None,
+            "budget_before_checksum": self.budget_before_checksum,
+            "budget_after_checksum": self.budget_after_checksum,
+        }
         if include_checksum:
             value["packing_checksum"] = self.packing_checksum
         return value
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> FirstFitPacking:
+        payload = exact_keys(
+            value,
+            required=frozenset({
+                "schema_version", "ready_order", "selected", "overflow",
+                "reservations", "reasons", "capacity_before", "capacity_after",
+                "budget_before_checksum", "budget_after_checksum",
+                "packing_checksum",
+            }),
+            model=cls.__name__,
+        )
+        supplied = checksum(payload.pop("packing_checksum"), "packing_checksum")
+        for name in ("ready_order", "selected", "overflow", "reservations"):
+            payload[name] = _strict_tuple(payload[name], name)
+        payload["reservations"] = tuple(
+            PoolReservation.from_dict(item) for item in payload["reservations"]
+        )
+        payload["capacity_before"] = (
+            CapacityScopeSnapshot.from_dict(payload["capacity_before"])
+            if payload["capacity_before"] is not None else None
+        )
+        payload["capacity_after"] = (
+            CapacityScopeSnapshot.from_dict(payload["capacity_after"])
+            if payload["capacity_after"] is not None else None
+        )
+        result = cls(**payload)
+        if result.packing_checksum != supplied:
+            raise HarnessValidationError(
+                "first-fit packing checksum mismatch",
+                code="CAPACITY_RESERVATION_INVALID",
+            )
+        return result
 
 
 def pack_first_fit(
@@ -259,13 +508,48 @@ def pack_first_fit(
     *,
     max_tasks: int,
     occupied_resource_keys: frozenset[str] = frozenset(),
+    occupied_resource_demands: Sequence[TaskCapacityDemand] = (),
     owner_scope: str,
     reservation_keys: Mapping[str, str],
     now_ms: int | None = None,
+    task_instances: Mapping[str, TaskInstance] | None = None,
+    budget_snapshot: Mapping[str, Any] | None = None,
+    capacity_snapshot: CapacityScopeSnapshot | None = None,
 ) -> FirstFitPacking:
-    """Select tasks in supplied stable order; failed tasks never reserve partially."""
-    if isinstance(max_tasks, bool) or not isinstance(max_tasks, int) or max_tasks < 1:
-        raise HarnessValidationError("max_tasks must be positive", code="CAPACITY_POLICY_INVALID")
+    """Select tasks in supplied stable order across capacity and budget.
+
+    Every candidate is evaluated against immutable provisional copies.  A
+    failure in either dimension leaves both copies unchanged before the next
+    candidate is considered.
+    """
+    if isinstance(max_tasks, bool) or not isinstance(max_tasks, int) or max_tasks < 0:
+        raise HarnessValidationError("max_tasks must be non-negative", code="CAPACITY_POLICY_INVALID")
+    if (
+        isinstance(task_ids, (str, bytes, bytearray, Mapping, set, frozenset))
+        or not isinstance(task_ids, Sequence)
+    ):
+        raise HarnessValidationError(
+            "capacity packing task ids must be an ordered array",
+            code="CAPACITY_DEMAND_INVALID",
+        )
+    if not isinstance(demands, Mapping) or not isinstance(pools, Mapping):
+        raise HarnessValidationError(
+            "capacity packing demands and pools must be objects",
+            code="CAPACITY_POLICY_INVALID",
+        )
+    if (
+        isinstance(occupied_resource_demands, (str, bytes, bytearray, Mapping, set, frozenset))
+        or not isinstance(occupied_resource_demands, Sequence)
+        or any(
+            not isinstance(item, TaskCapacityDemand)
+            for item in occupied_resource_demands
+        )
+    ):
+        raise HarnessValidationError(
+            "occupied resource demands must be an ordered array",
+            code="CAPACITY_DEMAND_INVALID",
+        )
+    active_resource_demands = tuple(occupied_resource_demands)
     identifier(owner_scope, "owner_scope")
     observed_at = capacity_now_ms() if now_ms is None else _integer(now_ms, "now_ms")
     for pool_id, pool in pools.items():
@@ -274,8 +558,42 @@ def pack_first_fit(
         pool.require_current(now_ms=observed_at)
     if not isinstance(reservation_keys, Mapping):
         raise HarnessValidationError("task reservation keys are required", code="CAPACITY_RESERVATION_INVALID")
+    ordered_pools = tuple(sorted(pools.values(), key=lambda item: item.pool_id))
+    if capacity_snapshot is not None:
+        if (
+            not isinstance(capacity_snapshot, CapacityScopeSnapshot)
+            or capacity_snapshot.owner_scope != owner_scope
+            or capacity_snapshot.pools != ordered_pools
+        ):
+            raise HarnessValidationError(
+                "capacity scope snapshot differs from packing pools",
+                code="CAPACITY_POLICY_CHECKSUM_MISMATCH",
+            )
+        capacity_snapshot.require_current(now_ms=observed_at)
+    elif ordered_pools:
+        capacity_snapshot = CapacityScopeSnapshot(
+            owner_scope=owner_scope,
+            pools=ordered_pools,
+            revision=max(1, max(pool.reservation_version for pool in ordered_pools)),
+            expires_at_ms=min(pool.expires_at_ms for pool in ordered_pools),
+        )
     remaining = {pool_id: pool.available for pool_id, pool in pools.items()}
-    selected, overflow, reservations, reasons = [], [], [], {}
+    if (task_instances is None) is not (budget_snapshot is None):
+        raise HarnessValidationError(
+            "joint packing requires task instances and a budget snapshot together",
+            code="task_plan_budget_identity_conflict",
+        )
+    ledger = None
+    budget_before_checksum = budget_after_checksum = None
+    if budget_snapshot is not None:
+        ledger = TaskPlanBudgetLedger.from_snapshot(budget_snapshot)
+        budget_before_checksum = ledger.to_dict()["ledger_checksum"]
+        if not isinstance(task_instances, Mapping):
+            raise HarnessValidationError(
+                "joint packing task instances must be keyed by task id",
+                code="task_plan_budget_identity_conflict",
+            )
+    ready_order, selected, overflow, reservations, reasons = [], [], [], [], {}
     selected_demands: list[TaskCapacityDemand] = []
     seen = set()
     for raw_task_id in task_ids:
@@ -283,40 +601,118 @@ def pack_first_fit(
         if task_id in seen:
             raise HarnessValidationError("duplicate task in capacity packing", code="CAPACITY_DEMAND_INVALID")
         seen.add(task_id)
+        ready_order.append(task_id)
         demand = demands.get(task_id)
         reason = None
         if demand is None:
-            reason = "CAPACITY_POLICY_MISSING"
+            if pools:
+                raise HarnessValidationError(
+                    "task requires a capacity demand from the pinned policy",
+                    code="CAPACITY_POLICY_MISSING",
+                )
         elif not isinstance(demand, TaskCapacityDemand) or demand.task_id != task_id:
             raise HarnessValidationError("capacity demand identity mismatch", code="CAPACITY_DEMAND_INVALID")
         elif any(pool_id not in pools for pool_id in demand.quantities):
             raise HarnessValidationError("task requires an unavailable capacity policy", code="CAPACITY_POLICY_MISSING")
-        elif len(selected) >= max_tasks:
+        if len(selected) >= max_tasks:
             reason = "CAPACITY_NOT_AVAILABLE"
-        elif any(pool_id not in pools or remaining.get(pool_id, 0) < quantity for pool_id, quantity in demand.quantities.items()):
+        elif demand is not None and any(
+            pool_id not in pools or remaining.get(pool_id, 0) < quantity
+            for pool_id, quantity in demand.quantities.items()
+        ):
             reason = "CAPACITY_NOT_AVAILABLE"
-        elif demand.side_effect_class is not SideEffectClass.READ_ONLY and demand.resource_conflict_key in occupied_resource_keys:
+        elif (
+            demand is not None
+            and demand.resource_conflict_key is not None
+            and demand.resource_conflict_key in occupied_resource_keys
+        ):
             reason = "RESOURCE_CONFLICT"
-        elif any(resource_demands_conflict(demand, previous) for previous in selected_demands):
+        elif demand is not None and any(
+            resource_demands_conflict(demand, active)
+            for active in active_resource_demands
+        ):
+            reason = "RESOURCE_CONFLICT"
+        elif demand is not None and any(resource_demands_conflict(demand, previous) for previous in selected_demands):
             reason = "RESOURCE_CONFLICT"
         if reason:
             overflow.append(task_id)
             reasons[task_id] = reason
             continue
-        allocations = dict(demand.quantities)
+        allocations = {} if demand is None else dict(demand.quantities)
         reservation_key = identifier(reservation_keys.get(task_id), "reservation_key")
+        candidate_ledger = ledger
+        if ledger is not None:
+            instance = task_instances.get(task_id) if task_instances is not None else None
+            if not isinstance(instance, TaskInstance) or instance.task_id != task_id:
+                raise HarnessValidationError(
+                    "joint packing task instance identity mismatch",
+                    code="task_plan_budget_identity_conflict",
+                )
+            try:
+                candidate_ledger = ledger.reserve((instance,))
+            except HarnessValidationError as exc:
+                if exc.code != "task_plan_budget_exceeded":
+                    raise
+                overflow.append(task_id)
+                reasons[task_id] = "BUDGET_EXCEEDED"
+                continue
         for pool_id, quantity in allocations.items():
             remaining[pool_id] -= quantity
+        ledger = candidate_ledger
         selected.append(task_id)
-        selected_demands.append(demand)
-        reservations.append(PoolReservation(
-            task_id, allocations, {pool_id: pools[pool_id].policy_checksum for pool_id in allocations},
-            owner_scope, reservation_key,
-            {pool_id: pools[pool_id].reservation_version for pool_id in allocations},
-            {pool_id: pools[pool_id].reservation_key for pool_id in allocations},
-            min(pools[pool_id].expires_at_ms for pool_id in allocations),
-        ))
-    return FirstFitPacking(tuple(selected), tuple(overflow), tuple(reservations), reasons)
+        if demand is not None:
+            selected_demands.append(demand)
+        if allocations:
+            reservations.append(PoolReservation(
+                task_id, allocations, {pool_id: pools[pool_id].policy_checksum for pool_id in allocations},
+                owner_scope, reservation_key,
+                {pool_id: pools[pool_id].reservation_version for pool_id in allocations},
+                {pool_id: pools[pool_id].reservation_key for pool_id in allocations},
+                min(pools[pool_id].expires_at_ms for pool_id in allocations),
+            ))
+    after_pools = tuple(
+        replace(
+            pool,
+            reserved=pool.capacity - remaining[pool.pool_id],
+            reservation_version=(
+                pool.reservation_version + 1
+                if pool.capacity - remaining[pool.pool_id] != pool.reserved
+                else pool.reservation_version
+            ),
+        )
+        for pool in ordered_pools
+    )
+    capacity_after = capacity_snapshot
+    if capacity_snapshot is not None and reservations:
+        capacity_after = capacity_snapshot.with_reserved_pools(after_pools)
+    admitted_budget_snapshot: Mapping[str, Any] = {}
+    if ledger is not None:
+        budget_after_checksum = ledger.to_dict()["ledger_checksum"]
+        admitted_budget_snapshot = ledger.snapshot()
+    return FirstFitPacking(
+        tuple(ready_order),
+        tuple(selected),
+        tuple(overflow),
+        tuple(reservations),
+        reasons,
+        capacity_before=capacity_snapshot,
+        capacity_after=capacity_after,
+        budget_before_checksum=budget_before_checksum,
+        budget_after_checksum=budget_after_checksum,
+        admitted_budget_snapshot=admitted_budget_snapshot,
+    )
+
+
+def _strict_tuple(value: Any, name: str) -> tuple[Any, ...]:
+    if (
+        isinstance(value, (str, bytes, bytearray, Mapping, set, frozenset))
+        or not isinstance(value, Sequence)
+    ):
+        raise HarnessValidationError(
+            f"packing {name} must be an array",
+            code="CAPACITY_RESERVATION_INVALID",
+        )
+    return tuple(value)
 
 
 def resource_demands_conflict(left: TaskCapacityDemand, right: TaskCapacityDemand) -> bool:

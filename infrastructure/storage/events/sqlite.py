@@ -17,6 +17,7 @@ from framework.events.canonical import (
     StoredEvent,
     assert_same_event_identity,
     checksum_for,
+    thaw_canonical_json,
 )
 from framework.events.errors import (
     EventConsumerIdempotencyError,
@@ -26,6 +27,7 @@ from framework.events.errors import (
     EventRetirementCancellationError,
     EventStaleLeaseError,
     EventStoreCapacityError,
+    EventStoreContentionError,
     EventStoreCorruptionError,
     EventStoreError,
     EventStoreUnavailableError,
@@ -94,6 +96,7 @@ from framework.events.runtime.models import (
     SubscriptionStreamState,
     SubscriptionStreamStatePage,
     SubscriptionStreamStateQuery,
+    TransactionalStateSnapshot,
 )
 from framework.events.runtime.identity import dead_letter_id_for, delivery_id_for
 from framework.shared.json import json_loads, stable_json_dumps
@@ -136,6 +139,20 @@ CREATE TABLE IF NOT EXISTS event_stream_sequences (
     CHECK (trim(stream_id) <> ''),
     CHECK (last_sequence >= 0),
     CHECK (updated_at >= created_at)
+);
+
+CREATE TABLE IF NOT EXISTS event_transactional_states (
+    namespace TEXT NOT NULL,
+    state_key TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    checksum TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (namespace, state_key),
+    CHECK (trim(namespace) <> ''),
+    CHECK (trim(state_key) <> ''),
+    CHECK (revision >= 1),
+    CHECK (checksum GLOB 'sha256:[0-9a-f]*' AND length(checksum) = 71),
+    CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object')
 );
 
 CREATE TABLE IF NOT EXISTS durable_events (
@@ -1048,6 +1065,14 @@ class SQLiteEventStore:
                 stream_id=stream_id,
             )
         return value or None
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        with self._read() as connection:
+            return _load_transactional_state(connection, namespace, key)
 
     def register_subscription(
         self,
@@ -2791,6 +2816,7 @@ class SQLiteEventUnitOfWork:
         self._store = store
         self._connection: sqlite3.Connection | None = None
         self._finished = False
+        self._rollback_only = False
 
     def __enter__(self) -> SQLiteEventUnitOfWork:
         if self._connection is not None:
@@ -2803,6 +2829,7 @@ class SQLiteEventUnitOfWork:
             raise _map_sqlite_error(exc, operation="begin SQLite event transaction") from exc
         self._connection = connection
         self._finished = False
+        self._rollback_only = False
         return self
 
     def append_event(
@@ -2818,8 +2845,10 @@ class SQLiteEventUnitOfWork:
                 expected_last_sequence=expected_last_sequence,
             )
         except (EventStoreError, EventContractError, ValueError, TypeError):
+            self._rollback_only = True
             raise
         except sqlite3.Error as exc:
+            self._rollback_only = True
             raise _map_sqlite_error(exc, operation="append SQLite event") from exc
 
     def settle_delivery(
@@ -2832,14 +2861,78 @@ class SQLiteEventUnitOfWork:
                 settlement,
             )
         except (EventStoreError, EventContractError, EventStaleLeaseError, ValueError):
+            self._rollback_only = True
             raise
         except sqlite3.Error as exc:
+            self._rollback_only = True
             raise _map_sqlite_error(exc, operation="settle SQLite delivery") from exc
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        try:
+            return _load_transactional_state(
+                self._require_connection(),
+                namespace,
+                key,
+            )
+        except (EventStoreError, ValueError, TypeError):
+            self._rollback_only = True
+            raise
+        except sqlite3.Error as exc:
+            self._rollback_only = True
+            raise _map_sqlite_error(
+                exc,
+                operation="load SQLite transactional state",
+            ) from exc
+
+    def cas_transactional_state(
+        self,
+        *,
+        namespace: str,
+        key: str,
+        expected_revision: int | None,
+        expected_checksum: str | None,
+        next_snapshot: TransactionalStateSnapshot,
+    ) -> TransactionalStateSnapshot:
+        try:
+            return _cas_transactional_state(
+                self._require_connection(),
+                namespace=namespace,
+                key=key,
+                expected_revision=expected_revision,
+                expected_checksum=expected_checksum,
+                next_snapshot=next_snapshot,
+            )
+        except (EventStoreError, ValueError, TypeError):
+            self._rollback_only = True
+            raise
+        except sqlite3.Error as exc:
+            self._rollback_only = True
+            raise _map_sqlite_error(
+                exc,
+                operation="CAS SQLite transactional state",
+            ) from exc
 
     def commit(self) -> None:
         connection = self._require_connection()
         if self._finished:
             raise RuntimeError("SQLite event unit of work is already finished")
+        if self._rollback_only:
+            try:
+                connection.rollback()
+            except sqlite3.Error as exc:
+                self._finished = True
+                raise _map_sqlite_error(
+                    exc,
+                    operation="rollback failed SQLite event transaction",
+                ) from exc
+            self._finished = True
+            raise EventStoreError(
+                "event unit of work is rollback-only after a failed operation"
+            )
         try:
             connection.commit()
         except sqlite3.Error as exc:
@@ -2904,6 +2997,152 @@ def _expected_last_sequence(value: int | None) -> int | None:
     if value < 0:
         raise ValueError("expected_last_sequence must not be negative")
     return value
+
+
+def _load_transactional_state(
+    connection: sqlite3.Connection,
+    namespace: str,
+    key: str,
+) -> TransactionalStateSnapshot | None:
+    normalized_namespace = _required_text(namespace, "namespace")
+    normalized_key = _required_text(key, "key")
+    row = connection.execute(
+        "SELECT namespace, state_key, revision, checksum, payload_json "
+        "FROM event_transactional_states WHERE namespace = ? AND state_key = ?",
+        (normalized_namespace, normalized_key),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        return TransactionalStateSnapshot.from_dict(
+            {
+                "namespace": row["namespace"],
+                "key": row["state_key"],
+                "revision": row["revision"],
+                "checksum": row["checksum"],
+                "payload": _json_object(
+                    row["payload_json"],
+                    field_name="transactional_state.payload_json",
+                ),
+            }
+        )
+    except EventStoreCorruptionError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise EventStoreCorruptionError(
+            "stored transactional state cannot be decoded"
+        ) from exc
+
+
+def _cas_transactional_state(
+    connection: sqlite3.Connection,
+    *,
+    namespace: str,
+    key: str,
+    expected_revision: int | None,
+    expected_checksum: str | None,
+    next_snapshot: TransactionalStateSnapshot,
+) -> TransactionalStateSnapshot:
+    normalized_namespace = _required_text(namespace, "namespace")
+    normalized_key = _required_text(key, "key")
+    expected_revision, expected_checksum = _transactional_state_expectation(
+        expected_revision,
+        expected_checksum,
+    )
+    if not isinstance(next_snapshot, TransactionalStateSnapshot):
+        raise TypeError("next_snapshot must be TransactionalStateSnapshot")
+    if (next_snapshot.namespace, next_snapshot.key) != (
+        normalized_namespace,
+        normalized_key,
+    ):
+        raise ValueError("next_snapshot namespace/key must match the CAS target")
+
+    current = _load_transactional_state(
+        connection,
+        normalized_namespace,
+        normalized_key,
+    )
+    if current == next_snapshot:
+        return current
+    if current is None:
+        if expected_revision is not None or next_snapshot.revision != 1:
+            raise EventStoreContentionError(
+                "transactional state creation requires empty expected state "
+                "and revision 1"
+            )
+        connection.execute(
+            "INSERT INTO event_transactional_states "
+            "(namespace, state_key, revision, checksum, payload_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                next_snapshot.namespace,
+                next_snapshot.key,
+                next_snapshot.revision,
+                next_snapshot.checksum,
+                stable_json_dumps(thaw_canonical_json(next_snapshot.payload)),
+            ),
+        )
+        return next_snapshot
+
+    if expected_revision is None:
+        raise EventStoreContentionError(
+            "transactional state already exists; revision/checksum are required"
+        )
+    if (
+        current.revision != expected_revision
+        or current.checksum != expected_checksum
+    ):
+        raise EventStoreContentionError(
+            "transactional state revision/checksum conflict"
+        )
+    if next_snapshot.revision != current.revision + 1:
+        raise ValueError(
+            "next_snapshot revision must increment current revision by one"
+        )
+    updated = connection.execute(
+        "UPDATE event_transactional_states "
+        "SET revision = ?, checksum = ?, payload_json = ? "
+        "WHERE namespace = ? AND state_key = ? AND revision = ? AND checksum = ?",
+        (
+            next_snapshot.revision,
+            next_snapshot.checksum,
+            stable_json_dumps(thaw_canonical_json(next_snapshot.payload)),
+            normalized_namespace,
+            normalized_key,
+            current.revision,
+            current.checksum,
+        ),
+    )
+    if updated.rowcount != 1:
+        raise EventStoreContentionError(
+            "transactional state changed during compare-and-swap"
+        )
+    return next_snapshot
+
+
+def _transactional_state_expectation(
+    revision: int | None,
+    checksum: str | None,
+) -> tuple[int | None, str | None]:
+    if (revision is None) != (checksum is None):
+        raise ValueError(
+            "expected_revision and expected_checksum must both be set or both "
+            "be None"
+        )
+    if revision is None:
+        return None, None
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValueError("expected_revision must be a positive integer or None")
+    if (
+        not isinstance(checksum, str)
+        or not checksum.startswith("sha256:")
+        or len(checksum) != 71
+        or any(character not in "0123456789abcdef" for character in checksum[7:])
+    ):
+        raise ValueError(
+            "expected_checksum must be sha256:<64 lowercase hex> or None"
+        )
+    return revision, checksum
 
 
 def _effect_scope(consumer_effect_id: str | None) -> str:

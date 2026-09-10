@@ -67,6 +67,7 @@ from framework.events.runtime.models import (
     SubscriptionStreamState,
     SubscriptionStreamStatePage,
     SubscriptionStreamStateQuery,
+    TransactionalStateSnapshot,
 )
 from framework.events.runtime.idempotency import (
     AutomaticDeliveryOperation,
@@ -385,6 +386,7 @@ __all__ = [
     "SubscriptionStreamState",
     "SubscriptionStreamStatePage",
     "SubscriptionStreamStateQuery",
+    "TransactionalStateSnapshot",
     "effect_idempotency_key",
     "dead_letter_id_for",
     "delivery_id_for",

@@ -1,7 +1,4 @@
 from dataclasses import replace
-
-from framework.harness.task_plan.models import TaskLifecycle
-from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +6,9 @@ import pytest
 from framework.events.schema import default_event_schema_catalog
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.subagents.supervisor import ChildAgentNotFoundError, ChildAgentOperationConflict, ChildAgentSupervisor
+from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.models import TaskAdmissionOwner, TaskLifecycle
 from framework.harness.task_plan.parallel import (
     DispatchGroupState, ParallelAgentCoordinator, ParallelEventSink,
 )
@@ -59,10 +59,51 @@ def recover(fixture, *, coordinator=None, intents=None, sink=None, group=None):
     )
 
 
-def replay(fixture):
-    projection = TaskPlanScheduler().reserve_ready_tasks(
-        _projection_for_plan(fixture.plan, sequence=1), TaskPlanReadyDecision(fixture.request.task_instances),
+def _admitted_projection(fixture):
+    scheduler = TaskPlanScheduler()
+    ready_order = tuple(
+        instance.task_id for instance in fixture.request.task_instances
     )
+    ready = scheduler.reserve_ready_tasks(
+        _projection_for_plan(fixture.plan, sequence=1),
+        TaskPlanReadyDecision(
+            fixture.request.task_instances,
+            logical_ready_task_ids=ready_order,
+        ),
+    )
+    admission = next(
+        event
+        for event in fixture.events
+        if event["event_type"] == "TASK_WAVE_ADMITTED"
+    )
+    wave = admission["wave"]
+    packing = wave["packing"]
+    assert tuple(wave["task_ids"]) == ready_order
+    assert tuple(packing["ready_order"]) == ready_order
+    assert tuple(packing["selected"]) == ready_order
+    assert tuple(packing["overflow"]) == ()
+
+    ledger_before = TaskPlanBudgetLedger.from_snapshot(ready.consumed_budget)
+    projection = scheduler.admit_ready_tasks(
+        ready,
+        fixture.request.task_instances,
+        admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+    )
+    ledger_after = TaskPlanBudgetLedger.from_snapshot(projection.consumed_budget)
+    assert admission["budget_before_checksum"] == ledger_before.to_dict()[
+        "ledger_checksum"
+    ]
+    assert admission["budget_after_checksum"] == ledger_after.to_dict()[
+        "ledger_checksum"
+    ]
+    assert packing["budget_before_checksum"] == admission["budget_before_checksum"]
+    assert packing["budget_after_checksum"] == admission["budget_after_checksum"]
+    assert projection.consumed_budget == fixture.request.budget_snapshot
+    return projection
+
+
+def replay(fixture):
+    projection = _admitted_projection(fixture)
     groups, waves, reservations, diagnostics, operations = {}, {}, {}, [], {}
     for sequence, payload in enumerate(fixture.events, 1):
         if payload["event_type"] == "TASK_ATTEMPT_RECORDED":

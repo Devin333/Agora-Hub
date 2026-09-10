@@ -16,13 +16,19 @@ from framework.harness.task_plan.attempt_history import (
     TaskAttemptHistoryRecord,
     TaskAttemptOutcome,
 )
+from framework.harness.task_plan.attempt_history_index import validate_history_admission
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.canonical import (
     canonical_payload_checksum,
     thaw_mapping,
 )
-from framework.harness.task_plan.models import TaskLifecycle
+from framework.harness.task_plan.models import TaskAdmissionOwner, TaskLifecycle
 from framework.harness.task_plan.replay import _apply_parallel_recovery, _projection_for_plan
-from framework.harness.task_plan.scheduler import TaskPlanScheduler, TaskPlanReadyDecision
+from framework.harness.task_plan.scheduler import (
+    TaskPlanScheduler,
+    TaskPlanReadyDecision,
+    task_instance_for_attempt,
+)
 from framework.harness.task_plan.parallel import (
     DispatchGroupState,
     DispatchWave,
@@ -31,8 +37,10 @@ from framework.harness.task_plan.parallel import (
     TaskReservation,
     spawn_operation_key,
 )
+from framework.harness.task_plan.store import TaskPlanEvent, TaskQueueAdmissionEvidence
 from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _accepted_parallel_plan,
+    _packing,
     _request,
     _result,
 )
@@ -60,6 +68,7 @@ def _fixture():
                 instance.budget_snapshot.to_dict(),
             ),
         ),
+        packing=_packing(instance.task_id),
         state=DispatchWaveState.ADMITTED,
         execution_mode="SUPERVISED",
     )
@@ -70,6 +79,75 @@ def _fixture():
         instance.attempt,
     )
     return plan, instance, definition, group, wave, operation_key
+
+
+def _queue_admission_event(plan, instance, *, sequence: int = 1) -> TaskPlanEvent:
+    budget_before = TaskPlanBudgetLedger.for_plan(plan)
+    budget_after = budget_before.reserve((instance,))
+    evidence = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=budget_before.to_dict()["ledger_checksum"],
+        budget_after_checksum=budget_after.to_dict()["ledger_checksum"],
+    )
+    return TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED",
+        plan,
+        sequence=sequence,
+        task_id=instance.task_id,
+        task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt,
+        input_checksum=instance.task_definition_checksum,
+        payload={"queue_admission": evidence.to_dict()},
+    )
+
+
+def _wave_admission_event(plan, group, wave, *, sequence: int = 1) -> TaskPlanEvent:
+    return TaskPlanEvent.for_plan(
+        "TASK_WAVE_ADMITTED",
+        plan,
+        sequence=sequence,
+        payload={"group": group.to_dict(), "wave": wave.to_dict()},
+    )
+
+
+def _spawn_events(
+    plan,
+    group,
+    wave,
+    instance,
+    operation_key: str,
+    *,
+    child_id: str = "child-1",
+) -> tuple[TaskPlanEvent, TaskPlanEvent]:
+    identity = {
+        "group_id": group.group_id,
+        "wave_id": wave.wave_id,
+        "task_id": instance.task_id,
+        "task_instance_id": instance.task_instance_id,
+        "attempt": instance.attempt,
+        "operation_key": operation_key,
+    }
+    common = {
+        "task_id": instance.task_id,
+        "task_instance_id": instance.task_instance_id,
+        "attempt": instance.attempt,
+        "input_checksum": instance.task_definition_checksum,
+    }
+    intent = TaskPlanEvent.for_plan(
+        "TASK_ATTEMPT_SPAWN_INTENT",
+        plan,
+        sequence=2,
+        payload=identity,
+        **common,
+    )
+    confirmed = TaskPlanEvent.for_plan(
+        "TASK_ATTEMPT_SPAWN_CONFIRMED",
+        plan,
+        sequence=3,
+        payload={**identity, "child_id": child_id},
+        **common,
+    )
+    return intent, confirmed
 
 
 def _terminal_receipt(
@@ -185,6 +263,123 @@ def test_static_attempt_history_roundtrips_all_outcomes_without_fabricated_recei
         )
 
 
+def test_static_history_requires_one_exact_queue_admission() -> None:
+    plan, instance, _definition, group, wave, _operation_key = _fixture()
+    record = TaskAttemptHistoryRecord.for_result(plan, _result(plan, instance))
+    admission = _queue_admission_event(plan, instance)
+
+    validate_history_admission(record, (admission,))
+
+    for history in ((), (admission, admission)):
+        with pytest.raises(HarnessValidationError) as captured:
+            validate_history_admission(record, history)
+        assert captured.value.code == "task_plan_attempt_history_identity_mismatch"
+
+    second_instance = task_instance_for_attempt(plan, instance.task_id, 2)
+    second_record = TaskAttemptHistoryRecord.for_result(
+        plan,
+        _result(plan, second_instance),
+        instance=second_instance,
+    )
+    with pytest.raises(HarnessValidationError) as wrong_attempt:
+        validate_history_admission(second_record, (admission,))
+    assert wrong_attempt.value.code == "task_plan_attempt_history_identity_mismatch"
+
+    with pytest.raises(HarnessValidationError) as conflicting_owner:
+        validate_history_admission(
+            record,
+            (admission, _wave_admission_event(plan, group, wave, sequence=2)),
+        )
+    assert conflicting_owner.value.code == "task_plan_attempt_history_identity_mismatch"
+
+
+def test_parallel_history_requires_exact_wave_and_supervised_spawn_receipts() -> None:
+    plan, instance, _definition, group, wave, operation_key = _fixture()
+    result = _result(plan, instance)
+    receipt = _terminal_receipt(
+        group,
+        operation_key,
+        status=ChildAgentState.SUCCEEDED,
+        result=result,
+    )
+    record = TaskAttemptHistoryRecord.for_result(
+        plan,
+        result,
+        group=group,
+        wave=wave,
+        operation_key=operation_key,
+        child_id=receipt.child_id,
+        terminal_receipt=receipt,
+    )
+    wave_admission = _wave_admission_event(plan, group, wave)
+    intent, confirmed = _spawn_events(plan, group, wave, instance, operation_key)
+
+    # TaskPlanEvent freezes arrays to tuples; typed thaw/parse must retain the
+    # exact reservation instead of treating the admission as empty.
+    assert isinstance(wave_admission.payload["wave"]["reservations"], tuple)
+    validate_history_admission(record, (wave_admission, intent, confirmed))
+
+    for history in (
+        (intent, confirmed),
+        (wave_admission, wave_admission, intent, confirmed),
+        (wave_admission,),
+        (wave_admission, intent),
+    ):
+        with pytest.raises(HarnessValidationError) as captured:
+            validate_history_admission(record, history)
+        assert captured.value.code == "task_plan_attempt_history_identity_mismatch"
+
+    wrong_wave = replace(
+        wave,
+        reservations=(
+            replace(wave.reservations[0], idempotency_key="different-reservation"),
+        ),
+    )
+    with pytest.raises(HarnessValidationError) as wrong_reservation:
+        validate_history_admission(
+            record,
+            (
+                _wave_admission_event(plan, group, wrong_wave),
+                intent,
+                confirmed,
+            ),
+        )
+    assert wrong_reservation.value.code == "task_plan_attempt_history_identity_mismatch"
+
+    with pytest.raises(HarnessValidationError) as conflicting_owner:
+        validate_history_admission(
+            record,
+            (
+                _queue_admission_event(plan, instance),
+                wave_admission,
+                intent,
+                confirmed,
+            ),
+        )
+    assert conflicting_owner.value.code == "task_plan_attempt_history_identity_mismatch"
+
+
+@pytest.mark.parametrize("execution_mode", ("INLINE_TEST", "SERIAL"))
+def test_non_supervised_history_still_requires_exact_wave_without_spawn_intent(
+    execution_mode: str,
+) -> None:
+    plan, instance, _definition, group, wave, _operation_key = _fixture()
+    wave = replace(wave, execution_mode=execution_mode)
+    record = TaskAttemptHistoryRecord.for_result(
+        plan,
+        _result(plan, instance),
+        group=group,
+        wave=wave,
+    )
+    admission = _wave_admission_event(plan, group, wave)
+
+    validate_history_admission(record, (admission,))
+
+    with pytest.raises(HarnessValidationError) as missing:
+        validate_history_admission(record, ())
+    assert missing.value.code == "task_plan_attempt_history_identity_mismatch"
+
+
 def test_supervised_accepted_result_binds_full_admission_and_terminal_receipt() -> None:
     plan, instance, definition, group, wave, operation_key = _fixture()
     result = _result(plan, instance)
@@ -273,9 +468,17 @@ def test_recovery_event_requires_prior_non_quarantined_history_for_active_candid
     record = TaskAttemptHistoryRecord.for_result(plan, result, group=group, wave=wave,
                                                 operation_key=operation_key, child_id=receipt.child_id,
                                                 terminal_receipt=receipt)
-    projection = TaskPlanScheduler().reserve_ready_tasks(_projection_for_plan(plan, sequence=1),
-                                                        TaskPlanReadyDecision((instance,)))
-    projection = TaskPlanScheduler.mark_dispatched(projection, instance)
+    scheduler = TaskPlanScheduler()
+    projection = scheduler.reserve_ready_tasks(
+        _projection_for_plan(plan, sequence=1),
+        TaskPlanReadyDecision(logical_ready_task_ids=(instance.task_id,)),
+    )
+    projection = scheduler.mark_admitted(
+        projection,
+        instance,
+        admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+    )
+    projection = scheduler.mark_dispatched(projection, instance)
     payload = {"recovery_outcome": "receipts_reconciled", "recovered_results": [{
         "task_id": result.task_id, "task_instance_id": result.task_instance_id,
         "attempt": result.attempt, "status": result.status.value, "result_checksum": result.result_checksum,

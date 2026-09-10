@@ -5,10 +5,15 @@ from datetime import UTC, datetime
 from enum import Enum
 from math import isfinite
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Final, TypeVar
 
-from framework.events.canonical import StoredEvent
+from framework.events.canonical import (
+    StoredEvent,
+    checksum_for,
+    normalize_canonical_json,
+    thaw_canonical_json,
+)
 
 
 DEFAULT_PAGE_LIMIT: Final = 100
@@ -243,6 +248,119 @@ class ReplayStatus(str, Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+_TRANSACTIONAL_STATE_FIELDS: Final = frozenset(
+    {"namespace", "key", "revision", "checksum", "payload"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionalStateSnapshot:
+    """Backend-neutral, checksum-bound state committed beside canonical events."""
+
+    namespace: str
+    key: str
+    revision: int
+    checksum: str
+    payload: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        namespace = _required_text(self.namespace, "namespace")
+        key = _required_text(self.key, "key")
+        revision = _positive_int(self.revision, "revision")
+        payload = normalize_canonical_json(self.payload, path="$.payload")
+        if not isinstance(payload, Mapping):
+            raise ValueError("payload must be an object")
+        checksum = _checksum(self.checksum, "checksum", required=True)
+        if checksum is None:  # pragma: no cover - required=True is authoritative
+            raise ValueError("checksum is required")
+        expected_checksum = checksum_for(
+            {
+                "namespace": namespace,
+                "key": key,
+                "revision": revision,
+                "payload": thaw_canonical_json(payload),
+            }
+        )
+        if checksum != expected_checksum:
+            raise ValueError("checksum does not match transactional state projection")
+        object.__setattr__(self, "namespace", namespace)
+        object.__setattr__(self, "key", key)
+        object.__setattr__(self, "revision", revision)
+        object.__setattr__(self, "checksum", checksum)
+        object.__setattr__(self, "payload", payload)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        namespace: str,
+        key: str,
+        revision: int,
+        payload: Mapping[str, object],
+    ) -> TransactionalStateSnapshot:
+        normalized_namespace = _required_text(namespace, "namespace")
+        normalized_key = _required_text(key, "key")
+        normalized_revision = _positive_int(revision, "revision")
+        normalized_payload = normalize_canonical_json(payload, path="$.payload")
+        if not isinstance(normalized_payload, Mapping):
+            raise ValueError("payload must be an object")
+        return cls(
+            namespace=normalized_namespace,
+            key=normalized_key,
+            revision=normalized_revision,
+            checksum=checksum_for(
+                {
+                    "namespace": normalized_namespace,
+                    "key": normalized_key,
+                    "revision": normalized_revision,
+                    "payload": thaw_canonical_json(normalized_payload),
+                }
+            ),
+            payload=normalized_payload,
+        )
+
+    @classmethod
+    def from_dict(
+        cls,
+        value: Mapping[str, object],
+    ) -> TransactionalStateSnapshot:
+        if not isinstance(value, Mapping):
+            raise TypeError("transactional state snapshot must be an object")
+        if any(not isinstance(field_name, str) for field_name in value):
+            raise ValueError("transactional state snapshot fields must be strings")
+        fields = frozenset(value)
+        if fields != _TRANSACTIONAL_STATE_FIELDS:
+            missing = sorted(_TRANSACTIONAL_STATE_FIELDS - fields)
+            unknown = sorted(fields - _TRANSACTIONAL_STATE_FIELDS)
+            details: list[str] = []
+            if missing:
+                details.append(f"missing fields: {', '.join(missing)}")
+            if unknown:
+                details.append(f"unknown fields: {', '.join(unknown)}")
+            raise ValueError(
+                "invalid transactional state snapshot; " + "; ".join(details)
+            )
+        payload = value["payload"]
+        if not isinstance(payload, Mapping):
+            raise ValueError("payload must be an object")
+        return cls(
+            namespace=value["namespace"],  # type: ignore[arg-type]
+            key=value["key"],  # type: ignore[arg-type]
+            revision=value["revision"],  # type: ignore[arg-type]
+            checksum=value["checksum"],  # type: ignore[arg-type]
+            payload=payload,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "namespace": self.namespace,
+            "key": self.key,
+            "revision": self.revision,
+            "checksum": self.checksum,
+            "payload": thaw_canonical_json(self.payload),
+        }
 
 
 @dataclass(frozen=True, slots=True, order=True)

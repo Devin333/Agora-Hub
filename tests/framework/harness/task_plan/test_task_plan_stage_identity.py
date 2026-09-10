@@ -24,7 +24,7 @@ from framework.harness.task_plan import (
     GRAPH_ONLY_TASK_PLAN_STAGE_IDENTITY_SCHEMA,
     GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
     InMemoryTaskPlanStore,
-    TASK_PLAN_EVENT_SCHEMA_V2,
+    TASK_PLAN_EVENT_SCHEMA_V3,
     PlanBuildRequest,
     TaskPlanContractKind,
     TaskCapabilityRegistry,
@@ -152,7 +152,7 @@ def test_graph_only_contexts_share_the_frozen_stage_identity() -> None:
         assert not hasattr(context, "workflow_id")
 
 
-def test_graph_only_preplan_failure_records_v2_halt_without_workflow_alias() -> None:
+def test_graph_only_preplan_failure_records_v3_halt_without_workflow_alias() -> None:
     binding = _graph_only_binding()
     policy = build_research_analysis_task_plan_policy()
     store = InMemoryTaskPlanStore()
@@ -184,7 +184,7 @@ def test_graph_only_preplan_failure_records_v2_halt_without_workflow_alias() -> 
     assert events[1].payload["build_attempt"]["retryable"] is False
     assert events[0].payload["build_attempt"]["request_checksum"] == events[1].payload["build_attempt"]["request_checksum"]
     for event in events:
-        assert event.schema_version == TASK_PLAN_EVENT_SCHEMA_V2
+        assert event.schema_version == TASK_PLAN_EVENT_SCHEMA_V3
         assert event.is_graph_only is True
         assert not hasattr(event, "workflow_id")
         assert "workflow_id" not in event.to_dict()

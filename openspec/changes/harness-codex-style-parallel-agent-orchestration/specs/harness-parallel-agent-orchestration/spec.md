@@ -474,6 +474,27 @@ Task demand MUST identify every required capability pool, quantity, resource con
 - **THEN** A MUST remain READY with `CAPACITY_NOT_AVAILABLE`, without partial reservation, and B MAY enter the wave
 - **AND** selection and pool ledger evidence MUST be stable and included in the wave checksum
 
+#### Scenario: An unavailable candidate competes for the last budget allocation
+
+- **WHEN** an earlier READY task cannot acquire every required pool and a later READY task can acquire every pool and the remaining budget
+- **THEN** packing MUST consider the complete pinned scheduler order and admit the later task if all of its dimensions fit
+- **AND** the earlier task MUST retain no active attempt, admission owner, budget allocation or partial pool reservation
+- **AND** provisional failure for either capacity or budget MUST leave every provisional dimension unchanged before considering the next task
+
+#### Scenario: No READY candidate currently fits capacity
+
+- **WHEN** a bounded packing pass selects no task because currently available capacity is insufficient
+- **THEN** Harness MUST persist nonterminal capacity-wait evidence with the complete ordered READY set, per-task reasons, the checked capacity revision and the original absolute group deadline
+- **AND** it MUST NOT create an empty wave, allocate an attempt, consume retry or wave budget, enter JOINING, or fabricate a terminal parent observation
+- **AND** repeated checks of the same committed inputs and capacity revision MUST reuse the same waiting fact, and reopening MUST NOT extend the original deadline
+
+#### Scenario: Two plans compete for one authoritative pool scope
+
+- **WHEN** admissions from different plans contend for capacity belonging to the same declared authoritative scope
+- **THEN** reservation validation and canonical admission MUST share a transaction boundary that prevents both admissions from consuming the same remaining capacity
+- **AND** a per-plan projection compare-and-swap alone MUST NOT be treated as proof of shared-pool reservation safety
+- **AND** failed admission MUST preserve the previously committed logical READY projection without leaving any authoritative partial attempt, budget or pool reservation
+
 #### Scenario: Independent mutations have different resource keys
 
 - **WHEN** two mutation tasks have different keys, valid reservations and any required independent fences, without a global serial policy

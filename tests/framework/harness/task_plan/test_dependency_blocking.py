@@ -13,11 +13,16 @@ from framework.harness.task_plan.dependency import (
     terminal_task_failure,
 )
 from framework.harness.task_plan.models import (
+    TaskAdmissionOwner,
     TaskLifecycle,
     TaskPlanProjection,
 )
 from framework.harness.task_plan.store import InMemoryTaskPlanStore
-from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler, task_instance_for_attempt
+from framework.harness.task_plan.scheduler import (
+    TaskPlanReadyDecision,
+    TaskPlanScheduler,
+    task_instance_for_attempt,
+)
 from tests.framework.harness.task_plan.test_task_plan_runtime import (
     _candidate,
     _setup,
@@ -60,12 +65,25 @@ def _accepted_plan(*, retryable_a: bool = False):
 
 
 def _with_task(projection: TaskPlanProjection, task_id: str, **changes):
+    tasks = tuple(
+        replace(task, **changes) if task.task_id == task_id else task
+        for task in projection.tasks
+    )
+    ready_task_ids = {task.task_id for task in tasks if task.status is TaskLifecycle.READY}
+    logical_ready_order = tuple(
+        ready_task_id
+        for ready_task_id in projection.logical_ready_order
+        if ready_task_id in ready_task_ids
+    ) + tuple(
+        task.task_id
+        for task in tasks
+        if task.task_id in ready_task_ids
+        and task.task_id not in projection.logical_ready_order
+    )
     return replace(
         projection,
-        tasks=tuple(
-            replace(task, **changes) if task.task_id == task_id else task
-            for task in projection.tasks
-        ),
+        tasks=tasks,
+        logical_ready_order=logical_ready_order,
     )
 
 
@@ -75,7 +93,8 @@ def _terminal_failure(projection: TaskPlanProjection, task_id: str = "a"):
         task_id,
         status=TaskLifecycle.FAILED,
         attempts=1,
-        active_instance_id=f"instance-{task_id}",
+        active_instance_id=None,
+        admission_owner=None,
         failure_reason_code="fatal",
     )
 
@@ -96,7 +115,8 @@ def test_retryable_failure_below_pinned_limit_does_not_block_descendants():
         "a",
         status=TaskLifecycle.FAILED,
         attempts=1,
-        active_instance_id="instance-a",
+        active_instance_id=None,
+        admission_owner=None,
         failure_reason_code="transport",
     )
 
@@ -139,46 +159,107 @@ def test_blocking_closure_uses_recorded_block_as_the_next_causal_predecessor():
     assert dependency_blocked_task_ids(plan, blocked_c) == ()
 
 
-def test_ready_dependency_block_releases_its_unconsumed_reservation_exactly_once():
+def test_logically_ready_dependency_block_does_not_release_unallocated_budget():
     plan, projection = _accepted_plan()
     failed = _terminal_failure(projection)
-    instance = task_instance_for_attempt(plan, "b", 1)
-    reserved = TaskPlanScheduler().reserve_ready_tasks(
-        failed, TaskPlanReadyDecision((instance,)),
+    ready = _with_task(
+        failed,
+        "b",
+        status=TaskLifecycle.READY,
+        attempts=0,
+        active_instance_id=None,
+        admission_owner=None,
     )
+    budget_before = ready.consumed_budget
 
-    blocked = block_dependency_task(plan, reserved, "b")
+    blocked = block_dependency_task(plan, ready, "b")
     state = next(item for item in blocked.tasks if item.task_id == "b")
     assert state.status is TaskLifecycle.BLOCKED_DEPENDENCY
     assert state.active_instance_id is None
+    assert state.admission_owner is None
     assert state.result is None
     assert state.failure_reason_code == TASK_BLOCKED_UPSTREAM_FAILURE
-    assert blocked.consumed_budget["reserved_max_turns"] == 0
-    assert blocked.consumed_budget["released_max_turns"] == 1
-    record = blocked.consumed_budget["ledger"]["records"][instance.idempotency_key]
-    assert record["status"] == "RELEASED"
-    assert record["instance"]["task_instance_id"] == instance.task_instance_id
+    assert blocked.logical_ready_order == ()
+    assert blocked.consumed_budget == budget_before
     assert block_dependency_task(plan, blocked, "b") is blocked
 
 
 @pytest.mark.parametrize(
-    ("status", "attempts"),
-    ((TaskLifecycle.PENDING, 1), (TaskLifecycle.READY, 2), (TaskLifecycle.DISPATCHED, 1), (TaskLifecycle.RUNNING, 1)),
+    "status",
+    (TaskLifecycle.ADMITTED, TaskLifecycle.DISPATCHED, TaskLifecycle.RUNNING),
 )
-def test_dependency_block_rejects_tasks_that_have_entered_or_reentered_attempt_lifecycle(status, attempts):
+def test_dependency_block_rejects_tasks_with_an_active_admitted_attempt(status):
+    plan, projection = _accepted_plan()
+    failed = _terminal_failure(projection)
+    scheduler = TaskPlanScheduler()
+    ready = scheduler.reserve_ready_tasks(
+        failed,
+        TaskPlanReadyDecision(logical_ready_task_ids=("b",)),
+    )
+    instance = task_instance_for_attempt(plan, "b", 1)
+    target = scheduler.admit_ready_tasks(
+        ready,
+        (instance,),
+        admission_owner=TaskAdmissionOwner.GROUP_WAVE,
+    )
+    if status is TaskLifecycle.DISPATCHED:
+        target = scheduler.mark_dispatched(target, instance)
+    elif status is TaskLifecycle.RUNNING:
+        target = scheduler.mark_started(target, instance)
+    budget_before = target.consumed_budget
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        block_dependency_task(plan, target, "b")
+    assert exc_info.value.code == "task_plan_dependency_block_not_unadmitted"
+    assert target.consumed_budget == budget_before
+    active = next(item for item in target.tasks if item.task_id == "b")
+    assert active.status is status
+    assert active.active_instance_id == instance.task_instance_id
+    assert active.admission_owner is TaskAdmissionOwner.GROUP_WAVE
+
+
+@pytest.mark.parametrize("status", (TaskLifecycle.PENDING, TaskLifecycle.READY))
+def test_historical_attempt_count_does_not_turn_unallocated_task_into_active_attempt(status):
     plan, projection = _accepted_plan()
     failed = _terminal_failure(projection)
     target = _with_task(
         failed,
         "b",
         status=status,
-        attempts=attempts,
-        active_instance_id="instance-b" if status is not TaskLifecycle.PENDING else None,
+        attempts=2,
+        active_instance_id=None,
+        admission_owner=None,
     )
+    if status is TaskLifecycle.READY:
+        target = _with_task(
+            _with_task(
+                target,
+                "d",
+                status=TaskLifecycle.READY,
+                attempts=1,
+                active_instance_id=None,
+                admission_owner=None,
+            ),
+            "b",
+            status=TaskLifecycle.READY,
+            attempts=2,
+            active_instance_id=None,
+            admission_owner=None,
+        )
+    budget_before = target.consumed_budget
+    ready_order_before = target.logical_ready_order
+    assert "b" in dependency_blocked_task_ids(plan, target)
 
-    with pytest.raises(HarnessValidationError) as exc_info:
-        block_dependency_task(plan, target, "b")
-    assert exc_info.value.code == "task_plan_dependency_block_not_unadmitted"
+    blocked = block_dependency_task(plan, target, "b")
+    state = next(item for item in blocked.tasks if item.task_id == "b")
+    assert state.status is TaskLifecycle.BLOCKED_DEPENDENCY
+    assert state.attempts == 2
+    assert state.active_instance_id is None
+    assert state.admission_owner is None
+    assert blocked.consumed_budget == budget_before
+    assert blocked.logical_ready_order == tuple(
+        task_id for task_id in ready_order_before if task_id != "b"
+    )
 
 
 def test_blocked_projection_has_a_new_verifiable_checksum_without_mutating_source():

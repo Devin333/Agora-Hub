@@ -88,6 +88,7 @@ from framework.events.runtime.models import (
     SubscriptionStreamState,
     SubscriptionStreamStatePage,
     SubscriptionStreamStateQuery,
+    TransactionalStateSnapshot,
 )
 from framework.events.runtime.identity import dead_letter_id_for, delivery_id_for
 from infrastructure.storage.postgres.dsn import normalize_dsn
@@ -131,8 +132,30 @@ _EVENT_COLUMNS = """
 """
 
 
+POSTGRES_TRANSACTIONAL_STATE_DDL = """
+CREATE TABLE IF NOT EXISTS event_transactional_states (
+    namespace TEXT NOT NULL,
+    state_key TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    checksum TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    PRIMARY KEY (namespace, state_key),
+    CONSTRAINT ck_event_transactional_states_namespace
+        CHECK (btrim(namespace) <> ''),
+    CONSTRAINT ck_event_transactional_states_key
+        CHECK (btrim(state_key) <> ''),
+    CONSTRAINT ck_event_transactional_states_revision
+        CHECK (revision >= 1),
+    CONSTRAINT ck_event_transactional_states_checksum
+        CHECK (checksum ~ '^sha256:[0-9a-f]{64}$'),
+    CONSTRAINT ck_event_transactional_states_payload
+        CHECK (jsonb_typeof(payload) = 'object')
+);
+"""
+
+
 class PostgresDurableEventStore:
-    """Canonical PostgreSQL event store backed by migration 006.
+    """Canonical PostgreSQL event store backed by event storage migrations.
 
     The adapter deliberately accepts only an already validated, security-
     projected :class:`EventCandidate`.  Schema validation and security
@@ -321,6 +344,23 @@ class PostgresDurableEventStore:
         if row is None or int(row[0]) == 0:
             return None
         return int(row[0])
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        normalized_namespace = _required_text(namespace, "namespace")
+        normalized_key = _required_text(key, "key")
+        row = self._fetch_one(
+            """
+            SELECT namespace, state_key, revision, checksum, payload
+            FROM event_transactional_states
+            WHERE namespace = %s AND state_key = %s
+            """,
+            (normalized_namespace, normalized_key),
+        )
+        return _transactional_state_from_row(row) if row is not None else None
 
     def register_subscription(
         self,
@@ -3598,6 +3638,146 @@ class PostgresDurableEventStore:
                 created += 1
         return created
 
+    def _load_transactional_state_in_transaction(
+        self,
+        connection: Any,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        normalized_namespace = _required_text(namespace, "namespace")
+        normalized_key = _required_text(key, "key")
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (
+                    _transactional_state_lock_name(
+                        normalized_namespace,
+                        normalized_key,
+                    ),
+                ),
+            )
+            cursor.execute(
+                """
+                SELECT namespace, state_key, revision, checksum, payload
+                FROM event_transactional_states
+                WHERE namespace = %s AND state_key = %s
+                FOR UPDATE
+                """,
+                (normalized_namespace, normalized_key),
+            )
+            row = cursor.fetchone()
+        return _transactional_state_from_row(row) if row is not None else None
+
+    def _cas_transactional_state_in_transaction(
+        self,
+        connection: Any,
+        *,
+        namespace: str,
+        key: str,
+        expected_revision: int | None,
+        expected_checksum: str | None,
+        next_snapshot: TransactionalStateSnapshot,
+    ) -> TransactionalStateSnapshot:
+        normalized_namespace = _required_text(namespace, "namespace")
+        normalized_key = _required_text(key, "key")
+        expected_revision, expected_checksum = _transactional_state_expectation(
+            expected_revision,
+            expected_checksum,
+        )
+        if not isinstance(next_snapshot, TransactionalStateSnapshot):
+            raise TypeError("next_snapshot must be TransactionalStateSnapshot")
+        if (next_snapshot.namespace, next_snapshot.key) != (
+            normalized_namespace,
+            normalized_key,
+        ):
+            raise ValueError("next_snapshot namespace/key must match the CAS target")
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (
+                    _transactional_state_lock_name(
+                        normalized_namespace,
+                        normalized_key,
+                    ),
+                ),
+            )
+            cursor.execute(
+                """
+                SELECT namespace, state_key, revision, checksum, payload
+                FROM event_transactional_states
+                WHERE namespace = %s AND state_key = %s
+                FOR UPDATE
+                """,
+                (normalized_namespace, normalized_key),
+            )
+            row = cursor.fetchone()
+            current = _transactional_state_from_row(row) if row is not None else None
+            if current == next_snapshot:
+                return current
+            if current is None:
+                if expected_revision is not None or next_snapshot.revision != 1:
+                    raise EventStoreContentionError(
+                        "transactional state creation requires empty expected "
+                        "state and revision 1"
+                    )
+                cursor.execute(
+                    """
+                    INSERT INTO event_transactional_states (
+                        namespace, state_key, revision, checksum, payload
+                    )
+                    VALUES (%s, %s, %s, %s, %s::jsonb)
+                    """,
+                    (
+                        next_snapshot.namespace,
+                        next_snapshot.key,
+                        next_snapshot.revision,
+                        next_snapshot.checksum,
+                        _json(thaw_canonical_json(next_snapshot.payload)),
+                    ),
+                )
+                return next_snapshot
+
+            if expected_revision is None:
+                raise EventStoreContentionError(
+                    "transactional state already exists; revision/checksum are required"
+                )
+            if (
+                current.revision != expected_revision
+                or current.checksum != expected_checksum
+            ):
+                raise EventStoreContentionError(
+                    "transactional state revision/checksum conflict"
+                )
+            if next_snapshot.revision != current.revision + 1:
+                raise ValueError(
+                    "next_snapshot revision must increment current revision by one"
+                )
+            cursor.execute(
+                """
+                UPDATE event_transactional_states
+                SET revision = %s, checksum = %s, payload = %s::jsonb
+                WHERE namespace = %s
+                  AND state_key = %s
+                  AND revision = %s
+                  AND checksum = %s
+                """,
+                (
+                    next_snapshot.revision,
+                    next_snapshot.checksum,
+                    _json(thaw_canonical_json(next_snapshot.payload)),
+                    normalized_namespace,
+                    normalized_key,
+                    current.revision,
+                    current.checksum,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise EventStoreContentionError(
+                    "transactional state changed during compare-and-swap"
+                )
+        return next_snapshot
+
     def _fetch_one(self, sql: str, params: tuple[Any, ...]) -> tuple[Any, ...] | None:
         try:
             with self._connection() as connection:
@@ -3697,6 +3877,47 @@ class PostgresEventUnitOfWork:
                 connection,
                 settlement,
                 lock_scope=lock_scope,
+            )
+        except BaseException as exc:
+            self._rollback_only = True
+            _reraise_store_exception(exc)
+
+    def load_transactional_state(
+        self,
+        namespace: str,
+        key: str,
+    ) -> TransactionalStateSnapshot | None:
+        connection = self._active_connection()
+        self._require_committable()
+        try:
+            return self._store._load_transactional_state_in_transaction(
+                connection,
+                namespace,
+                key,
+            )
+        except BaseException as exc:
+            self._rollback_only = True
+            _reraise_store_exception(exc)
+
+    def cas_transactional_state(
+        self,
+        *,
+        namespace: str,
+        key: str,
+        expected_revision: int | None,
+        expected_checksum: str | None,
+        next_snapshot: TransactionalStateSnapshot,
+    ) -> TransactionalStateSnapshot:
+        connection = self._active_connection()
+        self._require_committable()
+        try:
+            return self._store._cas_transactional_state_in_transaction(
+                connection,
+                namespace=namespace,
+                key=key,
+                expected_revision=expected_revision,
+                expected_checksum=expected_checksum,
+                next_snapshot=next_snapshot,
             )
         except BaseException as exc:
             self._rollback_only = True
@@ -5421,6 +5642,59 @@ def _decode_cursor(value: str, length: int) -> tuple[Any, ...]:
     return tuple(parsed)
 
 
+def _transactional_state_from_row(
+    row: Sequence[Any],
+) -> TransactionalStateSnapshot:
+    try:
+        payload = row[4]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, Mapping):
+            raise ValueError("payload must be an object")
+        return TransactionalStateSnapshot.from_dict(
+            {
+                "namespace": row[0],
+                "key": row[1],
+                "revision": row[2],
+                "checksum": row[3],
+                "payload": payload,
+            }
+        )
+    except (IndexError, KeyError, TypeError, ValueError) as exc:
+        raise EventStoreCorruptionError(
+            "stored transactional state cannot be decoded"
+        ) from exc
+
+
+def _transactional_state_expectation(
+    revision: int | None,
+    checksum: str | None,
+) -> tuple[int | None, str | None]:
+    if (revision is None) != (checksum is None):
+        raise ValueError(
+            "expected_revision and expected_checksum must both be set or both "
+            "be None"
+        )
+    if revision is None:
+        return None, None
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ValueError("expected_revision must be a positive integer or None")
+    if (
+        not isinstance(checksum, str)
+        or not checksum.startswith("sha256:")
+        or len(checksum) != 71
+        or any(character not in "0123456789abcdef" for character in checksum[7:])
+    ):
+        raise ValueError(
+            "expected_checksum must be sha256:<64 lowercase hex> or None"
+        )
+    return revision, checksum
+
+
+def _transactional_state_lock_name(namespace: str, key: str) -> str:
+    return f"event-transactional-state:{len(namespace)}:{namespace}:{key}"
+
+
 def _reraise_store_exception(exc: BaseException) -> NoReturn:
     if not isinstance(exc, psycopg.Error):
         raise exc
@@ -5444,4 +5718,8 @@ def _reraise_store_exception(exc: BaseException) -> NoReturn:
     raise EventStoreError("PostgreSQL durable event operation failed") from exc
 
 
-__all__ = ["PostgresDurableEventStore", "PostgresEventUnitOfWork"]
+__all__ = [
+    "POSTGRES_TRANSACTIONAL_STATE_DDL",
+    "PostgresDurableEventStore",
+    "PostgresEventUnitOfWork",
+]

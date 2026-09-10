@@ -5,8 +5,15 @@ from dataclasses import replace
 import pytest
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.models import TaskAdmissionOwner
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler, task_instance_for_attempt
-from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskPlanEvent
+from framework.harness.task_plan.store import (
+    InMemoryTaskPlanStore,
+    LogicalTaskReadiness,
+    TaskPlanEvent,
+    TaskQueueAdmissionEvidence,
+)
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
     _ArtifactStore,
     _EventStore,
@@ -32,26 +39,68 @@ def _transition_batch(store, plan):
     instance = task_instance_for_attempt(plan, plan.tasks[0].task_id, 1)
     scheduler = TaskPlanScheduler()
     ready = replace(
-        scheduler.reserve_ready_tasks(initial, TaskPlanReadyDecision((instance,))),
+        scheduler.reserve_ready_tasks(
+            initial,
+            TaskPlanReadyDecision(logical_ready_task_ids=(instance.task_id,)),
+        ),
         last_sequence=initial.last_sequence + 1,
     )
-    dispatched = replace(
-        scheduler.mark_dispatched(ready, instance),
+    admitted = replace(
+        scheduler.mark_admitted(
+            ready,
+            instance,
+            admission_owner=TaskAdmissionOwner.QUEUE,
+        ),
         last_sequence=initial.last_sequence + 2,
     )
-    events = tuple(
+    dispatched = replace(
+        scheduler.mark_dispatched(admitted, instance),
+        last_sequence=initial.last_sequence + 3,
+    )
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=(instance.task_id,),
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            ready.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            admitted.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    events = (
         TaskPlanEvent.for_plan(
-            event_type,
+            "TASK_READY",
+            plan,
+            task_id=instance.task_id,
+            input_checksum=instance.task_definition_checksum,
+            payload={"logical_readiness": readiness.to_dict()},
+            sequence=initial.last_sequence + 1,
+        ),
+        TaskPlanEvent.for_plan(
+            "TASK_QUEUE_ADMITTED",
             plan,
             task_id=instance.task_id,
             task_instance_id=instance.task_instance_id,
             attempt=instance.attempt,
             input_checksum=instance.task_definition_checksum,
-            sequence=initial.last_sequence + offset,
-        )
-        for offset, event_type in enumerate(("TASK_READY", "TASK_DISPATCHED"), start=1)
+            payload={"queue_admission": admission.to_dict()},
+            sequence=initial.last_sequence + 2,
+        ),
+        TaskPlanEvent.for_plan(
+            "TASK_DISPATCHED",
+            plan,
+            task_id=instance.task_id,
+            task_instance_id=instance.task_instance_id,
+            attempt=instance.attempt,
+            input_checksum=instance.task_definition_checksum,
+            sequence=initial.last_sequence + 3,
+        ),
     )
-    return initial, instance, events, (ready, dispatched)
+    return initial, instance, events, (ready, admitted, dispatched)
 
 
 @pytest.mark.parametrize("store_name", ("memory", "durable"))
@@ -100,7 +149,11 @@ def test_commit_events_rejects_different_projection_and_partial_history(store_na
     initial, _instance, batch, projections = _transition_batch(store, plan)
     store.commit_events(batch, projections, expected_projection_checksum=initial.projection_checksum)
 
-    conflicting = (projections[0], replace(projections[0], last_sequence=projections[1].last_sequence))
+    conflicting = (
+        projections[0],
+        replace(projections[0], last_sequence=projections[1].last_sequence),
+        projections[2],
+    )
     with pytest.raises(HarnessValidationError):
         store.commit_events(batch, conflicting, expected_projection_checksum=initial.projection_checksum)
 
@@ -121,7 +174,14 @@ def test_durable_commit_events_keeps_projection_unreachable_when_batch_publish_f
         durable.commit_events(batch, projections, expected_projection_checksum=initial.projection_checksum)
 
     assert durable.load_projection(plan.run_id, plan.stage_id) == initial
-    assert all(event.event_type not in {"TASK_READY", "TASK_DISPATCHED"} for event in events._events)
+    assert all(
+        event.event_type not in {
+            "TASK_READY",
+            "TASK_QUEUE_ADMITTED",
+            "TASK_DISPATCHED",
+        }
+        for event in events._events
+    )
 
 
 def test_memory_commit_events_rolls_back_event_projection_and_idempotency_index():
@@ -148,7 +208,7 @@ def test_memory_commit_events_rolls_back_event_projection_and_idempotency_index(
     assert memory._transition_projections == {}
 
 
-@pytest.mark.parametrize("missing_index", (0, 1))
+@pytest.mark.parametrize("missing_index", (0, 1, 2))
 def test_durable_batch_retry_never_recreates_missing_historical_projection(missing_index):
     candidate, plan = _graph_only_candidate_and_plan()
     artifacts = _ArtifactStore()
@@ -166,7 +226,7 @@ def test_durable_batch_retry_never_recreates_missing_historical_projection(missi
     assert artifacts._content == before
 
 
-@pytest.mark.parametrize("failed_index", (0, 1))
+@pytest.mark.parametrize("failed_index", (0, 1, 2))
 def test_durable_projection_write_failure_preserves_entire_prior_state(monkeypatch, failed_index):
     plan, _memory, durable, events = _stores()
     initial, _instance, batch, projections = _transition_batch(durable, plan)

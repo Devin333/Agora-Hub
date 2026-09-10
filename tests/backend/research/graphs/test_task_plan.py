@@ -23,6 +23,13 @@ from backend.research.graphs import (
     validate_research_analysis_candidate,
 )
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.models import TaskAdmissionOwner
+from framework.harness.task_plan.store import (
+    LogicalTaskReadiness,
+    TASK_PLAN_EVENT_SCHEMA_V3,
+    TaskQueueAdmissionEvidence,
+)
 from framework.harness.task_plan import (
     GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA,
     GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
@@ -37,7 +44,6 @@ from framework.harness.task_plan import (
     TaskLifecycle,
     TaskPlanPatchValidator,
     TaskPlanStageRequest,
-    TASK_PLAN_EVENT_SCHEMA_V2,
     TASK_PLAN_RESULT_SCHEMA_V3,
     TaskPlanEvent,
     TaskPlanReadyDecision,
@@ -291,7 +297,7 @@ def test_graph_only_candidate_validates_to_graph_only_plan() -> None:
         "PLAN_ACCEPTED",
     ]
     assert all(
-        event.schema_version == TASK_PLAN_EVENT_SCHEMA_V2 for event in events
+        event.schema_version == TASK_PLAN_EVENT_SCHEMA_V3 for event in events
     )
     assert all(event.graph_id == request.stage_identity.graph_id for event in events)
     assert all(
@@ -405,12 +411,56 @@ def test_graph_only_task_result_contract_is_strict_and_lifecycle_bound() -> None
     store.append_candidate(candidate)
     store.accept_plan(plan)
     scheduler = TaskPlanScheduler()
+    projection = store.load_projection(plan.run_id, plan.stage_id)
+    decision = TaskPlanReadyDecision(logical_ready_task_ids=(instance.task_id,))
     projection = scheduler.reserve_ready_tasks(
-        store.load_projection(plan.run_id, plan.stage_id),
-        TaskPlanReadyDecision((instance,)),
+        projection,
+        decision,
     )
+    sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+    readiness = LogicalTaskReadiness(
+        task_id=instance.task_id,
+        task_definition_checksum=instance.task_definition_checksum,
+        logical_ready_order=decision.logical_ready_task_ids,
+    )
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_READY",
+        plan,
+        task_id=instance.task_id,
+        input_checksum=instance.task_definition_checksum,
+        sequence=sequence,
+        payload={"logical_readiness": readiness.to_dict()},
+    ), projection)
+
+    before_admission = projection
+    projection = scheduler.mark_admitted(
+        before_admission,
+        instance,
+        admission_owner=TaskAdmissionOwner.QUEUE,
+    )
+    admission = TaskQueueAdmissionEvidence(
+        task_instance=instance,
+        budget_before_checksum=TaskPlanBudgetLedger.from_snapshot(
+            before_admission.consumed_budget
+        ).to_dict()["ledger_checksum"],
+        budget_after_checksum=TaskPlanBudgetLedger.from_snapshot(
+            projection.consumed_budget
+        ).to_dict()["ledger_checksum"],
+    )
+    sequence += 1
+    projection = replace(projection, last_sequence=sequence)
+    store.commit_event(TaskPlanEvent.for_plan(
+        "TASK_QUEUE_ADMITTED",
+        plan,
+        task_id=instance.task_id,
+        task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt,
+        input_checksum=instance.task_definition_checksum,
+        sequence=sequence,
+        payload={"queue_admission": admission.to_dict()},
+    ), projection)
     for event_type, transition in (
-        ("TASK_READY", lambda value: value),
         (
             "TASK_DISPATCHED",
             lambda value: scheduler.mark_dispatched(value, instance),
@@ -421,7 +471,7 @@ def test_graph_only_task_result_contract_is_strict_and_lifecycle_bound() -> None
         ),
     ):
         projection = transition(projection)
-        sequence = len(store.read_events(plan.run_id, plan.stage_id)) + 1
+        sequence += 1
         projection = replace(projection, last_sequence=sequence)
         store.commit_event(
             TaskPlanEvent.for_plan(
@@ -438,14 +488,15 @@ def test_graph_only_task_result_contract_is_strict_and_lifecycle_bound() -> None
 
     assert store.append_result(result) == result.result_checksum
     events = store.read_events(plan.run_id, plan.stage_id)
-    assert [event.event_type for event in events[-5:]] == [
+    assert [event.event_type for event in events[-6:]] == [
         "TASK_READY",
+        "TASK_QUEUE_ADMITTED",
         "TASK_DISPATCHED",
         "TASK_STARTED",
         "TASK_RESULT_ACCEPTED",
         "TASK_COMPLETED",
     ]
-    assert all(event.schema_version == TASK_PLAN_EVENT_SCHEMA_V2 for event in events)
+    assert all(event.schema_version == TASK_PLAN_EVENT_SCHEMA_V3 for event in events)
     assert store.results_for(
         plan.run_id,
         plan.stage_id,

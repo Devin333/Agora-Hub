@@ -108,7 +108,7 @@ RESEARCH_DYNAMIC_TASK_PLAN_SUPPORT_REFS = MappingProxyType(
         "aggregator_ref": RESEARCH_DYNAMIC_AGGREGATOR_REF,
         "checkpoint_ref": "harness.graph-checkpoint@1",
         "result_store_ref": RESEARCH_DYNAMIC_RESULT_STORE_REF,
-        "event_schema": "newsroom.harness-task-plan-event/v2",
+        "event_schema": "newsroom.harness-task-plan-event/v3",
     }
 )
 

@@ -33,7 +33,7 @@ from framework.harness.task_plan.models import (
 )
 from framework.harness.task_plan.replay import (
     TASK_PLAN_REPLAY_REDUCER_VERSION,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V3,
+    TASK_PLAN_REPLAY_REDUCER_VERSION_V4,
     TaskPlanReplayReport,
     _freeze_parallel_projection_mapping,
     _latest_observation_checksum,
@@ -46,11 +46,9 @@ from framework.shared.time import format_datetime, parse_datetime
 
 TASK_PLAN_CHECKPOINT_SCHEMA_V2 = "newsroom.harness-task-plan-checkpoint/v2"
 TASK_PLAN_CHECKPOINT_SCHEMA_V3 = "newsroom.harness-task-plan-checkpoint/v3"
-TASK_PLAN_CHECKPOINT_SCHEMA = TASK_PLAN_CHECKPOINT_SCHEMA_V3
-TASK_PLAN_CHECKPOINT_SCHEMAS = (
-    TASK_PLAN_CHECKPOINT_SCHEMA_V2,
-    TASK_PLAN_CHECKPOINT_SCHEMA_V3,
-)
+TASK_PLAN_CHECKPOINT_SCHEMA_V4 = "newsroom.harness-task-plan-checkpoint/v4"
+TASK_PLAN_CHECKPOINT_SCHEMA = TASK_PLAN_CHECKPOINT_SCHEMA_V4
+TASK_PLAN_CHECKPOINT_SCHEMAS = (TASK_PLAN_CHECKPOINT_SCHEMA_V4,)
 _GRAPH_CHECKPOINT_IDENTITY_FIELDS = (
     "graph_id",
     "graph_version",
@@ -85,7 +83,8 @@ class TaskPlanCheckpoint:
     policy_ref: str
     projection: TaskPlanProjection | Mapping[str, Any]
     active_task_instances: tuple[TaskInstance | Mapping[str, Any], ...]
-    ready_order: tuple[str, ...]
+    logical_ready_order: tuple[str, ...]
+    active_attempt_order: tuple[str, ...]
     accepted_output_refs: tuple[str, ...]
     pending_terminal_results: tuple[TaskResultRecord | Mapping[str, Any], ...]
     budget_snapshot: Mapping[str, Any]
@@ -210,15 +209,28 @@ class TaskPlanCheckpoint:
                 )
         object.__setattr__(self, "active_task_instances", instances)
 
-        ready_order = tuple(identifier(item, "ready_order") for item in self.ready_order)
-        if len(ready_order) != len(set(ready_order)) or set(ready_order) != {
-            item.task_id for item in instances
-        }:
+        logical_ready_order = tuple(
+            identifier(item, "logical_ready_order") for item in self.logical_ready_order
+        )
+        if logical_ready_order != projection.logical_ready_order:
             raise HarnessValidationError(
-                "TaskPlan checkpoint ready order does not match active attempts",
+                "TaskPlan checkpoint logical READY order does not match projection",
                 code="task_plan_checkpoint_ready_order_mismatch",
             )
-        object.__setattr__(self, "ready_order", ready_order)
+        object.__setattr__(self, "logical_ready_order", logical_ready_order)
+        active_attempt_order = tuple(
+            identifier(item, "active_attempt_order") for item in self.active_attempt_order
+        )
+        if (
+            len(active_attempt_order) != len(set(active_attempt_order))
+            or active_attempt_order != tuple(item.task_instance_id for item in instances)
+            or set(active_attempt_order) != set(active_states)
+        ):
+            raise HarnessValidationError(
+                "TaskPlan checkpoint active attempt order does not match active attempts",
+                code="task_plan_checkpoint_attempt_order_mismatch",
+            )
+        object.__setattr__(self, "active_attempt_order", active_attempt_order)
 
         accepted_refs = tuple(
             sorted(reference(item, "accepted_output_refs") for item in self.accepted_output_refs)
@@ -369,28 +381,21 @@ class TaskPlanCheckpoint:
             or parallel_diagnostics
             or parallel_spawn_operations
         )
-        if self.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V2:
-            if has_parallel_facts or parallel_event_sequence or attempt_history:
-                raise HarnessValidationError(
-                    "attempt and parallel checkpoint facts require schema v3",
-                    code="task_plan_checkpoint_parallel_schema_required",
-                )
-        else:
-            if has_parallel_facts and parallel_event_sequence < 1:
-                raise HarnessValidationError(
-                    "parallel checkpoint facts require an event sequence",
-                    code="task_plan_checkpoint_parallel_sequence_missing",
-                )
-            if not has_parallel_facts and parallel_event_sequence:
-                raise HarnessValidationError(
-                    "parallel checkpoint sequence requires checkpoint facts",
-                    code="task_plan_checkpoint_parallel_sequence_unexpected",
-                )
-            if parallel_event_sequence > self.last_sequence:
-                raise HarnessValidationError(
-                    "parallel checkpoint sequence exceeds checkpoint history",
-                    code="task_plan_checkpoint_parallel_sequence_mismatch",
-                )
+        if has_parallel_facts and parallel_event_sequence < 1:
+            raise HarnessValidationError(
+                "parallel checkpoint facts require an event sequence",
+                code="task_plan_checkpoint_parallel_sequence_missing",
+            )
+        if not has_parallel_facts and parallel_event_sequence:
+            raise HarnessValidationError(
+                "parallel checkpoint sequence requires checkpoint facts",
+                code="task_plan_checkpoint_parallel_sequence_unexpected",
+            )
+        if parallel_event_sequence > self.last_sequence:
+            raise HarnessValidationError(
+                "parallel checkpoint sequence exceeds checkpoint history",
+                code="task_plan_checkpoint_parallel_sequence_mismatch",
+            )
         object.__setattr__(self, "parallel_groups", parallel_groups)
         object.__setattr__(self, "parallel_waves", parallel_waves)
         object.__setattr__(self, "parallel_reservations", parallel_reservations)
@@ -461,7 +466,7 @@ class TaskPlanCheckpoint:
                     "TaskPlan checkpoint spawn operation identity is invalid",
                     code="task_plan_checkpoint_spawn_identity_mismatch",
                 )
-        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V3
+        expected_reducer_version = TASK_PLAN_REPLAY_REDUCER_VERSION_V4
         if self.reducer_version != expected_reducer_version:
             raise HarnessValidationError(
                 "unsupported TaskPlan checkpoint reducer",
@@ -522,7 +527,8 @@ class TaskPlanCheckpoint:
             policy_ref=plan.policy_ref,
             projection=projection,
             active_task_instances=report.active_task_instances,
-            ready_order=report.ready_order,
+            logical_ready_order=report.logical_ready_order,
+            active_attempt_order=report.active_attempt_order,
             accepted_output_refs=report.accepted_output_refs,
             pending_terminal_results=report.pending_terminal_results,
             budget_snapshot=projection.consumed_budget,
@@ -545,7 +551,7 @@ class TaskPlanCheckpoint:
             continuation=getattr(report, "continuation", None),
             observation_checksum=getattr(report, "observation_checksum", None),
             history_index_checksum=getattr(report, "history_index_checksum", None),
-            schema_version=TASK_PLAN_CHECKPOINT_SCHEMA_V3,
+            schema_version=TASK_PLAN_CHECKPOINT_SCHEMA_V4,
             reducer_version=report.reducer_version,
             **graph_identity,
         )
@@ -599,6 +605,14 @@ class TaskPlanCheckpoint:
             ),
             "observation_checksum": (self.observation_checksum, report.observation_checksum),
             "history_index_checksum": (self.history_index_checksum, report.history_index_checksum),
+            "logical_ready_order": (
+                self.logical_ready_order,
+                report.logical_ready_order,
+            ),
+            "active_attempt_order": (
+                self.active_attempt_order,
+                report.active_attempt_order,
+            ),
         }
         mismatches = sorted(name for name, values in checks.items() if values[0] != values[1])
         if report.reducer_version != self.reducer_version:
@@ -632,7 +646,8 @@ class TaskPlanCheckpoint:
             "policy_ref": self.policy_ref,
             "projection": self.projection.to_dict(),
             "active_task_instances": [item.to_dict() for item in self.active_task_instances],
-            "ready_order": list(self.ready_order),
+            "logical_ready_order": list(self.logical_ready_order),
+            "active_attempt_order": list(self.active_attempt_order),
             "accepted_output_refs": list(self.accepted_output_refs),
             "pending_terminal_results": [item.to_dict() for item in self.pending_terminal_results],
             "budget_snapshot": thaw_mapping(self.budget_snapshot),
@@ -645,7 +660,7 @@ class TaskPlanCheckpoint:
             "aggregate_ref": self.aggregate_ref,
             "aggregate_checksum": self.aggregate_checksum,
         })
-        if self.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3:
+        if self.schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V4:
             payload.update(
                 {
                     "parallel_groups": thaw_mapping(self.parallel_groups),
@@ -694,7 +709,8 @@ class TaskPlanCheckpoint:
                 "policy_ref",
                 "projection",
                 "active_task_instances",
-                "ready_order",
+                "logical_ready_order",
+                "active_attempt_order",
                 "accepted_output_refs",
                 "pending_terminal_results",
                 "budget_snapshot",
@@ -723,7 +739,7 @@ class TaskPlanCheckpoint:
         optional_parallel = frozenset({
             "budget_ledger", "continuation", "observation_checksum", "history_index_checksum",
         })
-        if schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3:
+        if schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V4:
             if value.get("attempt_history") and "history_index_checksum" not in value:
                 raise HarnessValidationError(
                     "parallel checkpoint is missing its history index checksum",
@@ -749,10 +765,8 @@ class TaskPlanCheckpoint:
         identity = frozenset(_GRAPH_CHECKPOINT_IDENTITY_FIELDS)
         payload = exact_keys(
             value,
-            required=(common | identity | parallel)
-            if schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3
-            else common | identity,
-            optional=optional_parallel if schema_version == TASK_PLAN_CHECKPOINT_SCHEMA_V3 else frozenset(),
+            required=common | identity | parallel,
+            optional=optional_parallel,
             model=cls.__name__,
         )
         supplied = checksum(payload.pop("checkpoint_checksum"), "checkpoint_checksum")
@@ -957,6 +971,7 @@ __all__ = [
     "TASK_PLAN_CHECKPOINT_SCHEMA",
     "TASK_PLAN_CHECKPOINT_SCHEMA_V2",
     "TASK_PLAN_CHECKPOINT_SCHEMA_V3",
+    "TASK_PLAN_CHECKPOINT_SCHEMA_V4",
     "TASK_PLAN_CHECKPOINT_SCHEMAS",
     "TaskPlanCheckpoint",
     "TaskPlanCheckpointStorePort",

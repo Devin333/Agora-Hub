@@ -7,7 +7,10 @@ import pytest
 from framework.events.canonical import thaw_canonical_json
 from framework.events.errors import EventSchemaError
 from framework.events.schema import default_event_schema_catalog
-from framework.events.schema.catalog import TASK_PLAN_EVENT_TYPES as CATALOG_EVENT_TYPES
+from framework.events.schema.catalog import (
+    TASK_PLAN_EVENT_SCHEMA_V3,
+    TASK_PLAN_EVENT_TYPES as CATALOG_EVENT_TYPES,
+)
 from framework.harness.task_plan.store import TASK_PLAN_EVENT_TYPES
 from tests.framework.harness.agent_loop.test_orchestration_runtime import _request, _runtime
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
@@ -33,7 +36,7 @@ def catalog():
 def test_every_task_plan_event_has_a_canonical_schema(catalog):
     assert set(TASK_PLAN_EVENT_TYPES) == set(CATALOG_EVENT_TYPES)
     for event_type in TASK_PLAN_EVENT_TYPES:
-        assert catalog.current_schema(event_type) == "newsroom.harness-task-plan-event/v2"
+        assert catalog.current_schema(event_type) == TASK_PLAN_EVENT_SCHEMA_V3
 
 
 def test_real_submission_and_parallel_lifecycle_payloads_validate(catalog, canonical_events):
