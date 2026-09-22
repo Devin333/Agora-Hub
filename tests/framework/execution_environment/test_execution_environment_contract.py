@@ -409,3 +409,70 @@ def test_docker_wait_process_failure_returns_indeterminate_receipt(monkeypatch: 
     assert outcome.receipt.status is ExecutionStatus.INDETERMINATE
     assert outcome.receipt.termination_confirmed is False
     assert outcome.receipt.reason_code == "termination_unconfirmed"
+
+
+def test_docker_command_uses_valid_mount_and_env_argv_contract(tmp_path: Path) -> None:
+    from infrastructure.execution_environment.docker import DockerExecutionEnvironment
+
+    provider = object.__new__(DockerExecutionEnvironment)
+    provider._docker = "docker"
+    request = _request(
+        _profile(allowed_argv_prefixes=(("cp",),)),
+        read_roots=(str(tmp_path),),
+        environment={"QUALIFICATION_VALUE": "admitted"},
+        argv=("cp", "input", "output"),
+    )
+    mounts, path_map, working_directory = provider._canonical_mounts(request)
+    command = provider._build_run_command(
+        request,
+        mounts=mounts,
+        path_map=path_map,
+        working_directory=working_directory,
+    )
+
+    mount_values = [value for index, value in enumerate(command) if command[index - 1] == "--mount"]
+    assert mount_values
+    assert all(",rw" not in value for value in mount_values)
+    assert "QUALIFICATION_VALUE=admitted" in command
+    assert command[-3:] == ["cp", "input", "output"]
+
+
+def test_docker_collects_logs_without_unsupported_stream_selector_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from infrastructure.execution_environment import docker as docker_module
+    from infrastructure.execution_environment.docker import DockerExecutionEnvironment
+    import subprocess
+
+    provider = object.__new__(DockerExecutionEnvironment)
+    provider._docker = "docker"
+    provider._probe_timeout_seconds = 1.0
+    provider._available = True
+    request = _request()
+    monkeypatch.setattr(provider, "_canonical_mounts", lambda _request: ([], {}, None))
+    monkeypatch.setattr(provider, "_build_run_command", lambda *_args, **_kwargs: ["docker", "run"])
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        if command[1] == "run":
+            return subprocess.CompletedProcess(command, 0, stdout=b"container", stderr=b"")
+        if command[1] == "logs":
+            return subprocess.CompletedProcess(command, 0, stdout=b"output", stderr=b"")
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+    class _Wait:
+        returncode = 0
+
+        def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+            return b"0", b""
+
+    monkeypatch.setattr(provider, "_run", run)
+    monkeypatch.setattr(docker_module.subprocess, "Popen", lambda *_args, **_kwargs: _Wait())
+
+    outcome = provider.execute(request)
+
+    assert outcome.receipt.status is ExecutionStatus.SUCCEEDED
+    assert outcome.output == b"output"
+    logs_command = next(command for command in commands if command[1] == "logs")
+    assert logs_command == ["docker", "logs", provider._container_name(request.execution_id)]

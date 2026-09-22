@@ -202,8 +202,10 @@ class DockerExecutionEnvironment:
                 termination_confirmed = False
                 diagnostics = f"container wait could not be confirmed: {type(exc).__name__}"
             try:
+                # ``docker logs`` returns both streams by default.  It does
+                # not provide ``--stdout``/``--stderr`` selector flags.
                 logs = self._run(
-                    [self._docker, "logs", "--stdout", "--stderr", container_name],
+                    [self._docker, "logs", container_name],
                     timeout=self._probe_timeout_seconds,
                 )
                 if logs.returncode != 0:
@@ -386,15 +388,15 @@ class DockerExecutionEnvironment:
             process_limit = min(process_limit, limits.max_processes)
         command.extend(["--pids-limit", str(process_limit)])
         for source, target, writable in mounts:
-            command.extend(
-                [
-                    "--mount",
-                    f"type=bind,source={source},target={target},{'rw' if writable else 'readonly'}",
-                ]
-            )
+            mount = f"type=bind,source={source},target={target}"
+            if not writable:
+                mount += ",readonly"
+            command.extend(["--mount", mount])
         command.extend(["--entrypoint", "/usr/bin/env", request.image, "-i"])
         command.extend(f"{name}={value}" for name, value in request.environment.items())
-        command.append("--")
+        # BusyBox ``env`` does not accept GNU's optional ``--`` separator.
+        # The executable is already constrained by ProcessPolicy, so the
+        # separator adds no admission protection here.
         command.extend(_translate_argument(token, path_map) for token in request.argv)
         return command
 
