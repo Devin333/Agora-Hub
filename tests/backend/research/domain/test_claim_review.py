@@ -90,11 +90,18 @@ def test_not_applicable_requirement_requires_rationale_and_has_no_refs() -> None
             "appendix", "appendix", RequirementStatus.NOT_APPLICABLE,
             applicable=False, rationale="not relevant", evidence_refs=("evidence-1",),
         )
+    with pytest.raises(ValueError, match="missing requirement"):
+        EvidenceRequirement(
+            "metric", "metric", RequirementStatus.MISSING,
+            evidence_refs=("evidence-1",),
+        )
 
 
 def test_contract_to_dict_roundtrip_rehydrates_and_verifies_checksum() -> None:
     claim = make_claim()
     assert ClaimRevision.from_dict(claim.to_dict()) == claim
+    binding = make_binding(claim)
+    assert ReviewBinding.from_dict(binding.to_dict()) == binding
 
     tampered = claim.to_dict()
     tampered["text_checksum"] = "sha256:tampered"
