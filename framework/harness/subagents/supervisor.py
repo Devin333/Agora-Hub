@@ -485,6 +485,11 @@ class ChildAgentEventSink(Protocol):
 
 
 @runtime_checkable
+class ChildAgentEventReader(Protocol):
+    def read_events(self) -> Sequence[Mapping[str, Any]]: ...
+
+
+@runtime_checkable
 class ChildAgentWorker(Protocol):
     def run(self, handle: ChildAgentHandle) -> Mapping[str, Any] | Any: ...
 
@@ -536,6 +541,7 @@ class ChildAgentSupervisor:
         *,
         worker_factory: Callable[[ChildAgentHandle], Any] | Callable[[ChildAgentHandle, Mapping[str, Any]], Any] | None = None,
         event_sink: ChildAgentEventSink | Callable[[Mapping[str, Any]], Any] | None = None,
+        event_reader: ChildAgentEventReader | None = None,
         runtime_event_sink: Any | None = None,
         result_resolver: Callable[[str], Mapping[str, Any] | None] | None = None,
         budget_admitter: Callable[[GraphExecutionIdentity, Mapping[str, Any]], bool] | None = None,
@@ -554,6 +560,13 @@ class ChildAgentSupervisor:
         self._worker_factory = worker_factory
         self._events = events or InMemoryChildAgentEventLog()
         self._event_sink = event_sink or self._events
+        self._event_reader = (
+            event_reader
+            if event_reader is not None
+            else self._event_sink
+            if isinstance(self._event_sink, ChildAgentEventReader)
+            else None
+        )
         self._runtime_event_sink = runtime_event_sink
         self._result_resolver = result_resolver
         self._budget_admitter = budget_admitter
@@ -569,6 +582,7 @@ class ChildAgentSupervisor:
         self._budget_by_operation: dict[str, tuple[str, dict[str, int | float]]] = {}
         self._workers: dict[str, Any] = {}
         self._futures: dict[str, Future[Any]] = {}
+        self._recovered_active_children: set[str] = set()
         self._reserved_spawn_operations: set[str] = set()
         self._executor = ThreadPoolExecutor(max_workers=max_children, thread_name_prefix="newsroom-child")
         self._lock = threading.RLock()
@@ -638,15 +652,7 @@ class ChildAgentSupervisor:
             for request in normalized:
                 previous = self._operations.get(request.operation_id)
                 if previous is not None:
-                    parent = _identity(
-                        request.parent_graph_identity,
-                        "parent_graph_identity",
-                    )
-                    if previous.handle.parent_graph_identity != parent:
-                        raise ChildAgentOperationConflict(
-                            "operation identity was reused for another parent",
-                            code="operation_identity_conflict",
-                        )
+                    self._validate_replayed_spawn(request, previous.handle)
                     continue
                 new_operations.add(request.operation_id)
             occupied = sum(
@@ -686,8 +692,7 @@ class ChildAgentSupervisor:
         with self._lock:
             previous = self._operations.get(request.operation_id)
             if previous is not None:
-                if previous.handle.parent_graph_identity != _identity(request.parent_graph_identity, "parent_graph_identity"):
-                    raise ChildAgentOperationConflict("operation identity was reused for another parent", code="operation_identity_conflict")
+                self._validate_replayed_spawn(request, previous.handle)
                 return previous.handle
             reserved = request.operation_id in self._reserved_spawn_operations
             if reserved:
@@ -935,7 +940,12 @@ class ChildAgentSupervisor:
 
     def recover(self, events: Sequence[Mapping[str, Any]] | None = None) -> tuple[ChildAgentHandle, ...]:
         """Rebuild handles from lifecycle facts without starting workers."""
-        source = tuple(events) if events is not None else tuple(self._events.events)
+        if events is not None:
+            source = tuple(events)
+        elif self._event_reader is not None:
+            source = tuple(self._event_reader.read_events())
+        else:
+            source = tuple(self._events.events)
         with self._lock:
             # Recovery is a replacement of the committed view, not an
             # incremental merge.  Clear derived indexes first so a reused
@@ -944,6 +954,7 @@ class ChildAgentSupervisor:
             self._operations.clear()
             self._workers.clear()
             self._futures.clear()
+            self._recovered_active_children.clear()
             # Reconstruct the in-memory reservation view from the durable
             # lifecycle facts as well as the handles. This prevents a parent
             # restart from admitting a second child against already consumed
@@ -1158,6 +1169,12 @@ class ChildAgentSupervisor:
                 self._handles[child_id] = handle
                 self._operations[handle.operation_id] = operation
                 self._restore_budget_for_recovered_operation(handle, operation)
+                if handle.state not in TERMINAL_CHILD_STATES:
+                    # A committed spawn/status fact does not prove that the
+                    # provider process died with this Python process.  Until a
+                    # provider reattaches with termination authority, cancel
+                    # and lease reclaim must remain indeterminate.
+                    self._recovered_active_children.add(child_id)
                 recovered.append(handle)
             return tuple(recovered)
 
@@ -1334,6 +1351,7 @@ class ChildAgentSupervisor:
         )
         self._replace(handle)
         self._operations[handle.operation_id] = op
+        self._recovered_active_children.discard(handle.child_id)
         self._finalize_budget_for_operation(
             handle.operation_id,
             consume=termination_confirmed and state in {
@@ -1362,7 +1380,7 @@ class ChildAgentSupervisor:
 
     def _cancel_worker(self, worker: Any, handle: ChildAgentHandle) -> bool:
         if worker is None:
-            return True
+            return handle.child_id not in self._recovered_active_children
         cancel = getattr(worker, "cancel", None)
         if not callable(cancel):
             return False
@@ -1384,6 +1402,39 @@ class ChildAgentSupervisor:
         if thread.is_alive():
             return False
         return bool(outcome and outcome[0])
+
+    def _validate_replayed_spawn(
+        self,
+        request: ChildAgentSpawnRequest,
+        handle: ChildAgentHandle,
+    ) -> None:
+        parent = _identity(request.parent_graph_identity, "parent_graph_identity")
+        child = (
+            _identity(request.child_graph_identity, "child_graph_identity")
+            if request.child_graph_identity is not None
+            else None
+        )
+        lease_seconds = (handle.lease.expires_at - handle.lease.issued_at).total_seconds()
+        mismatch = (
+            handle.parent_graph_identity != parent
+            or (request.child_id is not None and request.child_id != handle.child_id)
+            or (child is not None and child != handle.child_graph_identity)
+            or request.stage_id != handle.stage_id
+            or request.task_id != handle.task_id
+            or request.task_instance_id != handle.task_instance_id
+            or request.attempt != handle.attempt
+            or tuple(sorted(request.allowed_tools)) != handle.allowed_tools
+            or tuple(sorted(request.allowed_memory_namespaces))
+            != handle.allowed_memory_namespaces
+            or dict(request.budget) != dict(handle.budget)
+            or request.transcript_ref != handle.transcript_ref
+            or float(request.lease_seconds) != lease_seconds
+        )
+        if mismatch:
+            raise ChildAgentOperationConflict(
+                "operation identity was reused with a different child admission",
+                code="operation_identity_conflict",
+            )
 
     def _replace(self, handle: ChildAgentHandle) -> None:
         self._handles[handle.child_id] = handle
@@ -1668,6 +1719,7 @@ def _event_sort_key(event: Mapping[str, Any]) -> datetime:
 __all__ = [
     "ChildAgentAdmissionError",
     "ChildAgentEventSink",
+    "ChildAgentEventReader",
     "ChildAgentHandle",
     "ChildAgentHeartbeat",
     "ChildAgentLease",

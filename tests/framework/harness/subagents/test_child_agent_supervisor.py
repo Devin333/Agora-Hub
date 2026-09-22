@@ -13,8 +13,11 @@ from framework.harness.subagents.supervisor import (
     ChildAgentSupervisor,
     ChildAgentSupervisorError,
 )
+from framework.harness.subagents.supervisor_store import DurableChildAgentEventLog
+from framework.events import EventRuntime, EventSchemaCatalog
 from framework.events.runtime.projection import RuntimeEventProjection
 from framework.shared.graph_identity import GraphExecutionIdentity
+from infrastructure.storage.events.sqlite import SQLiteEventStore
 
 
 def _identity() -> GraphExecutionIdentity:
@@ -379,3 +382,213 @@ def test_event_sink_failure_does_not_admit_child() -> None:
         supervisor.spawn(_request())
     with pytest.raises(Exception, match="not found"):
         supervisor.status("child-does-not-exist")
+
+
+def _sqlite_lifecycle(tmp_path):
+    database = tmp_path / "child-lifecycle.sqlite3"
+    SQLiteEventStore(database)
+    return database
+
+
+def test_sqlite_restart_reuses_committed_result_without_worker_reinvocation(tmp_path) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    calls = 0
+
+    def worker(_handle: object) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return {"candidate": "committed"}
+
+    first_store = SQLiteEventStore(database, initialize=False)
+    first_runtime = EventRuntime(
+        store=first_store,
+        schema_catalog=EventSchemaCatalog(),
+        backend="sqlite",
+    )
+    first_log = DurableChildAgentEventLog(
+        state_runtime=first_runtime,
+        state_reader=first_store,
+        state_key="run-1",
+    )
+    first = ChildAgentSupervisor(
+        event_sink=first_log,
+        event_reader=first_log,
+        worker_factory=worker,
+    )
+    handle = first.spawn(_request())
+    committed = first.wait(handle.child_id, operation_id=handle.operation_id, timeout_seconds=1)
+    first.shutdown()
+
+    reopened_store = SQLiteEventStore(database, initialize=False)
+    reopened_runtime = EventRuntime(
+        store=reopened_store,
+        schema_catalog=EventSchemaCatalog(),
+        backend="sqlite",
+    )
+    reopened_log = DurableChildAgentEventLog(
+        state_runtime=reopened_runtime,
+        state_reader=reopened_store,
+        state_key="run-1",
+    )
+    restored_calls = 0
+
+    def should_not_run(_handle: object) -> dict[str, str]:
+        nonlocal restored_calls
+        restored_calls += 1
+        return {"candidate": "duplicate"}
+
+    restored = ChildAgentSupervisor(
+        event_sink=reopened_log,
+        event_reader=reopened_log,
+        worker_factory=should_not_run,
+    )
+    recovered = restored.recover()
+    result = restored.wait(
+        recovered[0].child_id,
+        operation_id=recovered[0].operation_id,
+    )
+
+    assert database.exists()
+    assert calls == 1
+    assert restored_calls == 0
+    assert committed.receipt is not None
+    assert result.receipt == committed.receipt
+    assert result.result == {"candidate": "committed"}
+    restored.shutdown()
+
+
+def test_sqlite_restart_preserves_cancellation_uncertainty_and_blocks_replacement(tmp_path) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    store = SQLiteEventStore(database, initialize=False)
+    runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
+    log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    started = threading.Event()
+    release = threading.Event()
+
+    class UncertainWorker:
+        def run(self, _handle: object) -> dict[str, str]:
+            started.set()
+            release.wait(timeout=2)
+            return {"candidate": "late"}
+
+        def cancel(self, _handle: object) -> bool:
+            return False
+
+    first = ChildAgentSupervisor(
+        event_sink=log,
+        event_reader=log,
+        worker_factory=lambda _: UncertainWorker(),
+        max_children=1,
+        cancel_timeout_seconds=0.1,
+    )
+    handle = first.spawn(_request())
+    assert started.wait(timeout=1)
+    cancelled = first.cancel(handle.child_id, operation_id=handle.operation_id)
+    first.shutdown(wait=False)
+
+    reopened_store = SQLiteEventStore(database, initialize=False)
+    reopened_runtime = EventRuntime(
+        store=reopened_store,
+        schema_catalog=EventSchemaCatalog(),
+        backend="sqlite",
+    )
+    reopened_log = DurableChildAgentEventLog(
+        state_runtime=reopened_runtime,
+        state_reader=reopened_store,
+        state_key="run-1",
+    )
+    restored = ChildAgentSupervisor(
+        event_sink=reopened_log,
+        event_reader=reopened_log,
+        max_children=1,
+    )
+    recovered = restored.recover()
+
+    assert cancelled.receipt is not None
+    assert cancelled.receipt.status is ChildAgentState.LOST
+    assert cancelled.receipt.termination_confirmed is False
+    assert recovered[0].state is ChildAgentState.LOST
+    with pytest.raises(Exception, match="capacity"):
+        restored.spawn(_request(operation_id="replacement"))
+    with pytest.raises(Exception, match="termination"):
+        restored.close(handle.child_id, operation_id=handle.operation_id)
+    release.set()
+    restored.shutdown(wait=False)
+
+
+def test_sqlite_replay_of_spawn_intent_does_not_invoke_external_worker_again(tmp_path) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    store = SQLiteEventStore(database, initialize=False)
+    runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
+    log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    side_effects: list[str] = []
+
+    class ExternalWorker:
+        def run(self, handle: object) -> dict[str, str]:
+            side_effects.append("external-write")
+            return {"candidate": "ok"}
+
+    first = ChildAgentSupervisor(
+        event_sink=log,
+        event_reader=log,
+        worker_factory=lambda _: ExternalWorker(),
+    )
+    handle = first.spawn(_request())
+    first.wait(handle.child_id, operation_id=handle.operation_id, timeout_seconds=1)
+    first.shutdown()
+
+    reopened_store = SQLiteEventStore(database, initialize=False)
+    reopened_runtime = EventRuntime(
+        store=reopened_store,
+        schema_catalog=EventSchemaCatalog(),
+        backend="sqlite",
+    )
+    reopened_log = DurableChildAgentEventLog(
+        state_runtime=reopened_runtime,
+        state_reader=reopened_store,
+        state_key="run-1",
+    )
+    restored = ChildAgentSupervisor(
+        event_sink=reopened_log,
+        event_reader=reopened_log,
+        worker_factory=lambda _: (_ for _ in ()).throw(AssertionError("duplicate worker invocation")),
+    )
+    restored.recover()
+    replayed = restored.spawn(_request())
+
+    assert replayed.child_id == handle.child_id
+    assert side_effects == ["external-write"]
+    restored.shutdown()
+
+
+def test_sqlite_replay_rejects_operation_identity_with_changed_admission(tmp_path) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    store = SQLiteEventStore(database, initialize=False)
+    runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
+    log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    first = ChildAgentSupervisor(event_sink=log, event_reader=log, worker_factory=lambda _: {"candidate": "ok"})
+    handle = first.spawn(_request())
+    first.wait(handle.child_id, operation_id=handle.operation_id, timeout_seconds=1)
+    first.shutdown()
+
+    reopened_store = SQLiteEventStore(database, initialize=False)
+    reopened_runtime = EventRuntime(
+        store=reopened_store,
+        schema_catalog=EventSchemaCatalog(),
+        backend="sqlite",
+    )
+    reopened_log = DurableChildAgentEventLog(
+        state_runtime=reopened_runtime,
+        state_reader=reopened_store,
+        state_key="run-1",
+    )
+    restored = ChildAgentSupervisor(
+        event_sink=reopened_log,
+        event_reader=reopened_log,
+        worker_factory=lambda _: (_ for _ in ()).throw(AssertionError("duplicate worker invocation")),
+    )
+    restored.recover()
+
+    with pytest.raises(Exception, match="identity"):
+        restored.spawn(_request(operation_id=handle.operation_id, task_id="changed-task"))
+    restored.shutdown()

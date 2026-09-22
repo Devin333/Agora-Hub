@@ -45,6 +45,7 @@ from framework.harness.subagents.runtime import (
 )
 from framework.harness.subagents.supervisor import (
     ChildAgentAdmissionError,
+    ChildAgentEventReader,
     ChildAgentEventSink,
     ChildAgentHandle,
     ChildAgentHeartbeat,
@@ -60,6 +61,10 @@ from framework.harness.subagents.supervisor import (
     ChildAgentWorker,
     InMemoryChildAgentEventLog,
     TERMINAL_CHILD_STATES,
+)
+from framework.harness.subagents.supervisor_store import (
+    CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+    DurableChildAgentEventLog,
 )
 from framework.harness.subagents.transcript import (
     DEFAULT_MAX_BUNDLE_BYTES,
@@ -127,6 +132,7 @@ __all__ = [
     "SubAgentResult",
     "SubAgentRuntime",
     "ChildAgentAdmissionError",
+    "ChildAgentEventReader",
     "ChildAgentEventSink",
     "ChildAgentHandle",
     "ChildAgentHeartbeat",
@@ -141,6 +147,8 @@ __all__ = [
     "ChildAgentTerminalReceipt",
     "ChildAgentWorker",
     "InMemoryChildAgentEventLog",
+    "CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE",
+    "DurableChildAgentEventLog",
     "TERMINAL_CHILD_STATES",
     "SubAgentSpec",
     "SubAgentStatus",
