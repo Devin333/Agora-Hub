@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from backend.research.services.citation_verifier import CitationVerifier
+from backend.research.services.claim_review_resolver import ClaimReviewResolver
 from backend.research.services.claim_extractor import ClaimExtractor
 from backend.research.services.evidence_builder import ResearchEvidenceBuilder
 from backend.research.services.profile_builder import ResearchProfileBuilder
@@ -16,6 +17,7 @@ from backend.research.services.tenant_visibility import (
 
 __all__ = [
     "CitationVerifier",
+    "ClaimReviewResolver",
     "ClaimExtractor",
     "ReaderIssueDetector",
     "ReaderRepairGate",

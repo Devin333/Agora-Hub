@@ -30,6 +30,23 @@ from backend.research.domain.common import (
     SourceScopedValue,
     stable_research_id,
 )
+from backend.research.domain.claim_review import (
+    AssertionKind,
+    CheckExecutionStatus,
+    CheckObservation,
+    CheckResult,
+    ClaimConclusionStatus,
+    ClaimRevision,
+    DisputeCase,
+    DisputeLifecycle,
+    EvidenceRequirement,
+    RequirementStatus,
+    ResolutionRecord,
+    ReviewBinding,
+    ReviewConclusion,
+    ReviewObservation,
+    ReviewerType,
+)
 from backend.research.domain.code_repository import (
     CodeRepositoryObservation,
     CodeRepositoryProfile,
@@ -100,6 +117,21 @@ from backend.research.domain.run_disposition import (
 )
 
 __all__ = [
+    "AssertionKind",
+    "CheckExecutionStatus",
+    "CheckObservation",
+    "CheckResult",
+    "ClaimConclusionStatus",
+    "ClaimRevision",
+    "DisputeCase",
+    "DisputeLifecycle",
+    "EvidenceRequirement",
+    "RequirementStatus",
+    "ResolutionRecord",
+    "ReviewBinding",
+    "ReviewConclusion",
+    "ReviewObservation",
+    "ReviewerType",
     "CandidateReview",
     "CandidateStatus",
     "CatalogRelationStatus",
