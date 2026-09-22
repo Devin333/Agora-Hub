@@ -6,8 +6,8 @@
 
 ## 2. Research 领域合同与持久记录
 
-- [ ] 2.1 实现 ClaimRevision、ReviewBinding、类型条件化 EvidenceRequirement 和目标覆盖合同，验证修订、断言种类与不适用要求，覆盖 AC-04、AC-07、AC-19。
-- [ ] 2.2 实现 CheckObservation、ReviewObservation、DisputeCase、ResolutionRecord 及独立状态/关闭原因，验证工具失败、缺材料、反证和争议不混用，覆盖 AC-01、AC-10 至 AC-12。
+- [x] 2.1 实现 ClaimRevision、ReviewBinding、类型条件化 EvidenceRequirement 和目标覆盖合同，验证修订、断言种类与不适用要求，覆盖 AC-04、AC-07、AC-19。
+- [x] 2.2 实现 CheckObservation、ReviewObservation、DisputeCase、ResolutionRecord 及独立状态/关闭原因，验证工具失败、缺材料、反证和争议不混用，覆盖 AC-01、AC-10 至 AC-12。
 - [ ] 2.3 实现 Research ports 与真实持久化迁移、唯一约束、revision/CAS 和原子事件或可对账 outbox；历史数据不回填语义通过，覆盖 AC-16、AC-22、AC-25。
 - [ ] 2.4 实现观察追加/替代、幂等同键异内容拒绝、作用域及权限检查，验证并发关闭和迟到记录，覆盖 AC-13、AC-16、AC-22、AC-24。
 
