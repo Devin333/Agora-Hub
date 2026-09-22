@@ -7,10 +7,16 @@ from framework.governance.budget import (
     BudgetLimits,
     BudgetPolicy,
     BudgetHistoryError,
+    BudgetStateError,
     BudgetScopeRef,
     BudgetScopeType,
 )
-from framework.llm.budget import GlobalBudgetPolicy, GlobalBudgetTracker
+from framework.llm.budget import (
+    GlobalBudgetPolicy,
+    GlobalBudgetExceededError,
+    GlobalBudgetTracker,
+    budget_policy_for_child_allocation,
+)
 from framework.llm.models import TokenUsage
 from framework.shared.graph_identity import GraphExecutionIdentity
 
@@ -70,6 +76,137 @@ def test_child_facade_cannot_export_or_restore_authoritative_snapshot() -> None:
         child.canonical_snapshot()
     with pytest.raises(ValueError, match="root tracker"):
         child.restore(root.canonical_snapshot())
+
+
+def test_child_tracker_registers_its_restricted_policy_on_the_parent_ledger() -> None:
+    root = GlobalBudgetTracker(
+        GlobalBudgetPolicy(max_llm_calls=4, max_total_tokens=100),
+        run_id="run-restricted-child",
+    )
+    child_policy = BudgetPolicy(
+        policy_revision="task-reservation:sha256:child-a",
+        limits=BudgetLimits(
+            llm_calls=1,
+            total_tokens=10,
+            output_tokens=4,
+            estimated_cost_usd="0.000005",
+        ),
+    )
+    child = root.child_tracker("child-a", budget_policy=child_policy)
+
+    assert child.budget_policy == child_policy
+    assert child.is_scope_descendant_of(root) is True
+    assert root.is_scope_descendant_of(child) is False
+    assert child.requires_trusted_pricing() is True
+
+    with pytest.raises(GlobalBudgetExceededError) as captured:
+        child.reserve_direct_operation(
+            operation_id="child-a:first",
+            idempotency_key="child-a:first:reservation",
+            input_tokens=1,
+            output_tokens=1,
+        )
+    assert getattr(captured.value, "error_type", None) == "global_budget_exceeded"
+    assert getattr(captured.value, "check").violations == (
+        "trusted_pricing_unavailable",
+    )
+    assert root.usage.llm_calls == 0
+
+
+def test_authoritative_scope_usage_rejects_outstanding_and_indeterminate() -> None:
+    root = GlobalBudgetTracker(
+        GlobalBudgetPolicy(max_llm_calls=4, max_total_tokens=100),
+        run_id="run-authoritative-child",
+    )
+    child = root.child_tracker("child-authoritative")
+    operation = child.reserve_operation(
+        operation_id="child-authoritative:first",
+        idempotency_key="child-authoritative:first:reservation",
+        input_tokens=3,
+        output_tokens=2,
+    )
+
+    outstanding = child.authoritative_scope_usage()
+    assert outstanding.committed.llm_calls == 0
+    assert outstanding.reserved.llm_calls == 1
+    assert outstanding.outstanding_reservation_ids == (
+        operation.reservation.reservation_id,
+    )
+    assert outstanding.indeterminate_reservation_ids == ()
+    assert outstanding.is_settled is False
+    with pytest.raises(BudgetStateError, match="outstanding"):
+        outstanding.require_settled()
+
+    child.mark_operation_indeterminate(operation, reason="provider_outcome_unknown")
+    indeterminate = child.authoritative_scope_usage()
+    assert indeterminate.outstanding_reservation_ids == ()
+    assert indeterminate.indeterminate_reservation_ids == (
+        operation.reservation.reservation_id,
+    )
+    with pytest.raises(BudgetStateError, match="indeterminate"):
+        indeterminate.require_settled()
+
+
+def test_authoritative_scope_usage_reports_conservative_cost_micro_units() -> None:
+    root = GlobalBudgetTracker(GlobalBudgetPolicy(max_llm_calls=2), run_id="run-cost")
+    child = root.child_tracker("child-cost")
+    operation = child.reserve_operation(
+        operation_id="child-cost:first",
+        idempotency_key="child-cost:first:reservation",
+        input_tokens=1,
+        output_tokens=1,
+        estimated_cost_usd="0.0000001",
+    )
+    child.settle_operation(
+        operation,
+        TokenUsage(input_tokens=1, output_tokens=1),
+        estimated_cost_usd="0.0000001",
+    )
+
+    usage = child.authoritative_scope_usage().require_settled()
+    assert usage.committed.llm_calls == 1
+    assert usage.committed.input_tokens == 1
+    assert usage.committed.output_tokens == 1
+    assert usage.committed_total_tokens == 2
+    assert usage.committed_cost_microusd == 1
+
+
+def test_child_allocation_policy_preserves_absent_and_zero_cost() -> None:
+    base = {
+        "max_turns": 2,
+        "max_tool_calls": 1,
+        "max_memory_ops": 0,
+        "max_output_tokens": 4,
+        "token_limit": 10,
+        "time_limit_ms": 1_000,
+    }
+
+    absent = budget_policy_for_child_allocation(
+        base,
+        policy_revision="task-reservation:absent-cost",
+    )
+    zero = budget_policy_for_child_allocation(
+        {**base, "cost_limit": 0},
+        policy_revision="task-reservation:zero-cost",
+    )
+
+    assert absent.limits.llm_calls == 2
+    assert absent.limits.total_tokens == 10
+    assert absent.limits.output_tokens == 4
+    assert absent.limits.estimated_cost_usd is None
+    assert zero.limits.estimated_cost_usd == 0
+
+    legacy = budget_policy_for_child_allocation(
+        {
+            "max_turns": 2,
+            "max_tool_calls": 1,
+            "max_memory_ops": 0,
+            "max_output_tokens": 4,
+        },
+        policy_revision="task-reservation:legacy",
+    )
+    assert legacy.limits.total_tokens is None
+    assert legacy.limits.estimated_cost_usd is None
 
 
 def test_execution_bound_tracker_rejects_cross_activity_rebinding() -> None:

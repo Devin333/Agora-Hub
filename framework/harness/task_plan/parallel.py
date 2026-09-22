@@ -66,6 +66,10 @@ from framework.harness.task_plan.capacity import (
 from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.control_plane.budget_reservation import BudgetReservation
+from framework.harness.subagents.execution_control import (
+    ChildExecutionControl,
+    bind_child_execution_control,
+)
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.store import TaskResultRecord
 from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord, TaskAttemptOutcome
@@ -1066,19 +1070,63 @@ class _WaveRunOutcome:
 class _SupervisorTaskWorker:
     """Adapter that keeps task-result semantics outside supervisor policy."""
 
-    def __init__(self, invoke: Callable[[TaskInstance], TaskResultRecord], item: TaskInstance) -> None:
+    def __init__(
+        self,
+        invoke: Callable[[TaskInstance], TaskResultRecord],
+        item: TaskInstance,
+        *,
+        spawn_request: ChildAgentSpawnRequest | None = None,
+        group_absolute_deadline_ms: int | None = None,
+    ) -> None:
         self._invoke = invoke
         self._item = item
+        self._spawn_request = spawn_request
+        self._reservation = (
+            BudgetReservation.from_dict(spawn_request.budget)
+            if spawn_request is not None
+            else None
+        )
+        self._group_absolute_deadline_ms = group_absolute_deadline_ms
         self._cancel_requested = Event()
         self._started = Event()
+        self._live_control: ChildExecutionControl | None = None
         self.result: TaskResultRecord | None = None
         self._lock = Lock()
 
-    def run(self, _handle: ChildAgentHandle) -> Mapping[str, Any]:
+    def run(self, handle: ChildAgentHandle) -> Mapping[str, Any]:
         if self._cancel_requested.is_set():
             raise RuntimeError("parallel task cancellation requested before execution")
-        self._started.set()
-        result = self._invoke(self._item)
+        if (
+            self._spawn_request is None
+            or self._reservation is None
+            or self._group_absolute_deadline_ms is None
+        ):
+            # Recovered placeholders carry no newly issued live authority.
+            raise HarnessValidationError(
+                "recovered child worker has no live execution control",
+                code="CHILD_EXECUTION_CONTROL_REQUIRED",
+            )
+        control = ChildExecutionControl.create(
+            handle=handle,
+            spawn_request=self._spawn_request,
+            task_instance=self._item,
+            reservation=self._reservation,
+            group_absolute_deadline_ms=self._group_absolute_deadline_ms,
+        )
+        with self._lock:
+            self._live_control = control
+        try:
+            if self._cancel_requested.is_set():
+                control.request_cancel()
+            control.raise_if_active()
+            self._started.set()
+            with bind_child_execution_control(control):
+                control.raise_if_active()
+                result = self._invoke(self._item)
+        finally:
+            with self._lock:
+                if self._live_control is control:
+                    self._live_control = None
         if not isinstance(result, TaskResultRecord):
             raise HarnessValidationError("parallel worker returned invalid result", code="RESULT_SCHEMA_INVALID")
         if result.task_id != self._item.task_id:
@@ -1096,6 +1144,13 @@ class _SupervisorTaskWorker:
 
     def cancel(self, _handle: ChildAgentHandle) -> bool:
         self._cancel_requested.set()
+        # The lexical control carries the same cooperative cancellation event
+        # into child descendants.  The return value still only speaks to
+        # whether this adapter had entered its callback.
+        with self._lock:
+            control = self._live_control
+        if control is not None:
+            control.request_cancel()
         # A not-yet-started task is safely cancelled.  Once the real worker
         # entered its body the supervisor must retain an indeterminate receipt
         # instead of pretending an external side effect stopped.
@@ -3144,7 +3199,16 @@ class ParallelAgentCoordinator:
         definitions = {item.task_id: item for item in request.plan.tasks}
         children: list[tuple[TaskInstance, _SupervisorTaskWorker, ChildAgentHandle]] = []
         pending_children = [
-            (item, _SupervisorTaskWorker(invoke, item), spawn_request)
+            (
+                item,
+                _SupervisorTaskWorker(
+                    invoke,
+                    item,
+                    spawn_request=spawn_request,
+                    group_absolute_deadline_ms=request.group_absolute_deadline_ms,
+                ),
+                spawn_request,
+            )
             for item, spawn_request in zip(batch, spawn_requests, strict=True)
         ]
         # Spawn the entire wave before waiting. This is the point at which the

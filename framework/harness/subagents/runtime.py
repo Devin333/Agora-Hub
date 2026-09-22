@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from framework.harness.ref_results import HarnessResultRefAuthority
+    from framework.harness.subagents.execution import (
+        AdmittedChildExecution,
+        HarnessChildExecutionService,
+        TrustedChildExecutionOutcome,
+    )
 
 from framework.harness.context.models import ContextEnvelope
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -216,6 +222,231 @@ class SubAgentRuntime:
         self._emit_runtime_event(invocation, "worker_status", "succeeded", "worker_completed")
         return final_result
 
+    def invoke_trusted(
+        self,
+        invocation: SubAgentInvocation,
+        *,
+        admission: "AdmittedChildExecution",
+        execution_service: "HarnessChildExecutionService",
+    ) -> SubAgentResult:
+        """Execute the production child path through its concrete authority owner."""
+
+        from framework.harness.subagents.execution import (
+            AdmittedChildExecution,
+            HarnessChildExecutionService,
+        )
+
+        if not isinstance(invocation, SubAgentInvocation):
+            raise TypeError("invocation must be SubAgentInvocation")
+        if not isinstance(admission, AdmittedChildExecution):
+            raise TypeError("admission must be AdmittedChildExecution")
+        if not isinstance(execution_service, HarnessChildExecutionService):
+            raise TypeError("execution_service must be HarnessChildExecutionService")
+        recovered = self._recover(subagent_attempt_identity(invocation))
+        if recovered is not None:
+            evidence = execution_service.recover_evidence(admission, invocation)
+            self.verify_recovered_evidence(recovered, evidence)
+            self._emit_runtime_event(
+                invocation,
+                "worker_status",
+                "recovered",
+                "subagent_transcript_reused",
+            )
+            return recovered
+
+        self._emit_runtime_event(
+            invocation,
+            "worker_status",
+            "running",
+            "trusted_worker_invocation_started",
+        )
+        context_result = self.gates.context_boundary.evaluate(invocation.context_envelope)
+        input_result = self.gates.input_schema.evaluate(
+            invocation.subagent_spec,
+            {"input_refs": list(invocation.input_refs), **invocation.metadata},
+        )
+        if not all_subagent_gates_passed((context_result, input_result)):
+            result = self._halted_result(
+                invocation,
+                (context_result, input_result),
+                errors=("subagent_plan_gates_failed",),
+            )
+            self._emit_runtime_event(invocation, "worker_status", "failed", "subagent_plan_gates_failed")
+            return result
+
+        try:
+            outcome = execution_service.execute(admission, invocation)
+            base_result, gate_results = self._trusted_result(
+                invocation,
+                outcome,
+                context_result=context_result,
+                input_result=input_result,
+            )
+        except (HarnessValidationError, TypeError, ValueError, OverflowError) as exc:
+            if (
+                isinstance(exc, HarnessValidationError)
+                and exc.code == "subagent_tool_evidence_recovery_required"
+            ):
+                # A durable scope already exists or its close is uncertain.
+                # Committing a terminal transcript here would hide the
+                # unresolved execution and could authorize an unsafe replay.
+                raise
+            retained_event = None
+            retained_result = None
+            try:
+                from framework.harness.subagents.execution import ChildExecutionEvidenceRetainedError
+
+                if isinstance(exc, ChildExecutionEvidenceRetainedError):
+                    retained_event = exc.transcript_event(invocation)
+                    retained_result = SubAgentResult(
+                        invocation_id=invocation.invocation_id,
+                        child_run_id=invocation.child_run_id,
+                        subagent_id=invocation.subagent_spec.subagent_id,
+                        status=SubAgentStatus.HALTED,
+                        tool_call_refs=(exc.evidence_index.ref,),
+                    )
+            except ImportError:
+                pass
+            result = self._halted_result(
+                invocation,
+                (context_result, input_result),
+                errors=("subagent_trusted_execution_failed",),
+                worker_result=retained_result,
+                trusted_event=retained_event,
+            )
+            self._emit_runtime_event(invocation, "worker_status", "failed", "subagent_trusted_execution_failed")
+            return result
+
+        if not all_subagent_gates_passed(gate_results):
+            result = self._halted_result(
+                invocation,
+                gate_results,
+                errors=("subagent_verify_gates_failed",),
+                worker_result=base_result,
+                trusted_event=outcome.transcript_event(),
+            )
+            self._emit_runtime_event(invocation, "worker_status", "failed", "subagent_verify_gates_failed")
+            return result
+
+        receipt = self._write_bundle(
+            invocation,
+            base_result,
+            gate_results,
+            trusted_event=outcome.transcript_event(),
+        )
+        final_result = _with_receipt(base_result, receipt)
+        transcript_result = self.gates.transcript.evaluate(
+            final_result,
+            store=self._store_for(subagent_attempt_identity(invocation)),
+            identity=subagent_attempt_identity(invocation),
+        )
+        if not transcript_result.passed:
+            result = self._halted_result(
+                invocation,
+                (*gate_results, transcript_result),
+                errors=("subagent_transcript_verify_failed",),
+                worker_result=base_result,
+                trusted_event=outcome.transcript_event(),
+            )
+            self._emit_runtime_event(invocation, "worker_status", "failed", "subagent_transcript_verify_failed")
+            return result
+        self._emit_runtime_event(invocation, "worker_status", "succeeded", "worker_completed")
+        return final_result
+
+    def _trusted_result(
+        self,
+        invocation: SubAgentInvocation,
+        outcome: "TrustedChildExecutionOutcome",
+        *,
+        context_result: SubAgentGateResult,
+        input_result: SubAgentGateResult,
+    ) -> tuple[SubAgentResult, tuple[SubAgentGateResult, ...]]:
+        from framework.harness.subagents.execution import TrustedChildExecutionOutcome
+
+        if not isinstance(outcome, TrustedChildExecutionOutcome) or outcome.invocation != invocation:
+            raise HarnessValidationError(
+                "trusted child execution outcome differs from its invocation",
+                code="subagent_trusted_execution_invalid",
+            )
+        runner = outcome.runner_result
+        output = sanitize_subagent_payload(dict(runner.output))
+        memory_candidates = _sanitize_memory_write_candidates(runner.memory_candidates)
+        evidence = outcome.evidence_index
+        metadata = {
+            "trusted_execution": outcome.transcript_event(),
+            # TaskPlan settlement consumes this field.  It must come from the
+            # execution owner's canonical measurement, never Runner output.
+            "worker_metrics": outcome.usage.budget_usage(),
+            "runner_metrics": runner.metrics.to_dict(),
+            "used_tools": outcome.requested_tools,
+            "used_memory_namespaces": outcome.memory_namespaces,
+        }
+        base_result = SubAgentResult(
+            invocation_id=invocation.invocation_id,
+            child_run_id=invocation.child_run_id,
+            subagent_id=invocation.subagent_spec.subagent_id,
+            status=(
+                SubAgentStatus.SUCCEEDED
+                if runner.success
+                else SubAgentStatus.FAILED
+            ),
+            output=output,
+            artifact_refs=(),
+            memory_write_candidates=memory_candidates,
+            tool_call_refs=(evidence.ref,),
+            warnings=tuple(str(item) for item in runner.warnings[:128]),
+            errors=() if runner.success else ("subagent_worker_failed",),
+            metadata=metadata,
+        )
+        usage = {
+            "turns": outcome.usage.turns,
+            "tool_calls": outcome.usage.tool_calls,
+            "memory_ops": outcome.usage.memory_ops,
+        }
+        gate_results = (
+            context_result,
+            input_result,
+            self.gates.tool_allowlist.evaluate(
+                invocation.subagent_spec,
+                outcome.requested_tools,
+            ),
+            self.gates.memory_namespace.evaluate(
+                invocation.subagent_spec,
+                outcome.memory_namespaces,
+            ),
+            self.gates.output_schema.evaluate(invocation.subagent_spec, base_result),
+            self.gates.budget.evaluate(invocation, usage),
+        )
+        return base_result, gate_results
+
+    @staticmethod
+    def verify_recovered_evidence(
+        result: SubAgentResult,
+        evidence: Any,
+    ) -> None:
+        trusted = result.metadata.get("trusted_execution")
+        if trusted is None:
+            trusted = result.metadata.get("trusted_execution_retained")
+        if not isinstance(trusted, Mapping):
+            raise HarnessValidationError(
+                "recovered child has no trusted execution evidence",
+                code="subagent_trusted_execution_invalid",
+            )
+        recorded = trusted.get("tool_evidence")
+        if not isinstance(recorded, Mapping) or (
+            recorded.get("ref"),
+            recorded.get("content_checksum"),
+            recorded.get("revision"),
+        ) != (
+            getattr(evidence, "ref", None),
+            getattr(evidence, "content_checksum", None),
+            getattr(evidence, "revision", None),
+        ):
+            raise HarnessValidationError(
+                "recovered tool evidence differs from the transcript",
+                code="subagent_trusted_execution_invalid",
+            )
+
     def _emit_runtime_event(
         self,
         invocation: SubAgentInvocation,
@@ -257,6 +488,58 @@ class SubAgentRuntime:
         store.verify(receipt)
         output = store.read_output(receipt.output_ref)
         transcript = store.read(receipt.transcript_ref)
+        trusted_events = [
+            item
+            for item in transcript.events
+            if item.get("schema_version")
+            == "newsroom.trusted-child-execution/v1"
+        ]
+        retained_events = [
+            item
+            for item in transcript.events
+            if item.get("schema_version")
+            == "newsroom.trusted-child-execution-retained/v1"
+        ]
+        if (
+            len(trusted_events) > 1
+            or len(retained_events) > 1
+            or (trusted_events and retained_events)
+        ):
+            raise HarnessValidationError(
+                "subagent transcript contains conflicting trusted execution events",
+                code="subagent_trusted_execution_invalid",
+            )
+        trusted_metadata: dict[str, Any] = {}
+        if trusted_events:
+            from framework.harness.subagents.execution import (
+                TrustedChildUsage,
+                validate_trusted_execution_event,
+            )
+
+            trusted = validate_trusted_execution_event(
+                trusted_events[0],
+                identity=identity,
+                tool_call_refs=transcript.tool_call_refs,
+            )
+            trusted_metadata["trusted_execution"] = trusted
+            usage = TrustedChildUsage.from_dict(
+                trusted["usage"]
+            )
+            trusted_metadata["worker_metrics"] = usage.budget_usage()
+            trusted_metadata["used_tools"] = tuple(trusted["used_tools"])
+            trusted_metadata["used_memory_namespaces"] = tuple(
+                trusted["used_memory_namespaces"]
+            )
+        elif retained_events:
+            from framework.harness.subagents.execution import validate_retained_execution_event
+
+            trusted_metadata["trusted_execution_retained"] = (
+                validate_retained_execution_event(
+                    retained_events[0],
+                    identity=identity,
+                    tool_call_refs=transcript.tool_call_refs,
+                )
+            )
         record_subagent_transcript_observation(
             self._observation_sink,
             SubAgentTranscriptObservation.from_identity(
@@ -280,6 +563,7 @@ class SubAgentRuntime:
             metadata={
                 "recovered": True,
                 "gate_results": [dict(item) for item in transcript.gate_results],
+                **trusted_metadata,
             },
         )
 
@@ -290,6 +574,7 @@ class SubAgentRuntime:
         *,
         errors: tuple[str, ...],
         worker_result: SubAgentResult | None = None,
+        trusted_event: dict[str, Any] | None = None,
     ) -> SubAgentResult:
         result = worker_result or SubAgentResult(
             invocation_id=invocation.invocation_id,
@@ -309,9 +594,18 @@ class SubAgentRuntime:
             tool_call_refs=result.tool_call_refs,
             warnings=result.warnings,
             errors=errors,
-            metadata={"gate_results": [item.to_dict() for item in gate_results]},
+            metadata={
+                **result.metadata,
+                "gate_results": [item.to_dict() for item in gate_results],
+            },
         )
-        receipt = self._write_bundle(invocation, halted, gate_results, errors=errors)
+        receipt = self._write_bundle(
+            invocation,
+            halted,
+            gate_results,
+            errors=errors,
+            trusted_event=trusted_event,
+        )
         return _with_receipt(halted, receipt)
 
     def _write_bundle(
@@ -321,6 +615,7 @@ class SubAgentRuntime:
         gate_results: tuple[SubAgentGateResult, ...],
         *,
         errors: tuple[str, ...] = (),
+        trusted_event: dict[str, Any] | None = None,
     ):
         identity = subagent_attempt_identity(invocation)
         schemas = subagent_evidence_schemas(identity)
@@ -356,9 +651,14 @@ class SubAgentRuntime:
             redaction_report={"raw_parent_messages_included": False, "sibling_history_included": False},
             warnings=result.warnings,
             errors=errors or result.errors,
-            events=(
-                {"event_type": "subagent_invocation_planned"},
-                {"event_type": "subagent_completed" if result.status is SubAgentStatus.SUCCEEDED else "subagent_halted"},
+            events=tuple(
+                item
+                for item in (
+                    {"event_type": "subagent_invocation_planned"},
+                    trusted_event,
+                    {"event_type": "subagent_completed" if result.status is SubAgentStatus.SUCCEEDED else "subagent_halted"},
+                )
+                if item is not None
             ),
             observed_at=invocation.observed_at,
             schema_version=schemas.transcript,

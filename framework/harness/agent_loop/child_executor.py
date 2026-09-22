@@ -11,6 +11,11 @@ from framework.harness.ref_results import HarnessResultRefAuthority
 from framework.harness.subagents.gates import FakeSubAgentGateSuite
 from framework.harness.subagents.models import SubAgentInvocation, SubAgentResult
 from framework.harness.subagents.runtime import SubAgentRuntime
+from framework.harness.subagents.execution import (
+    AdmittedChildExecution,
+    HarnessChildExecutionService,
+)
+from framework.harness.subagents.agent_runner import ChildAgentRunnerAdapter
 from framework.harness.task_plan.capability import (
     ResolvedCapabilityBinding, ResolvedSubAgentTaskAdapter, task_plan_context_identities,
 )
@@ -18,6 +23,8 @@ from framework.harness.task_plan.durable_store import DurableTaskPlanStore
 from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
 from framework.harness.task_plan.policy import TaskPlanPolicy
 from framework.harness.task_plan.models import TaskInstance
+from framework.harness.task_plan.parallel import DispatchGroup, DispatchWave
+from framework.harness.control_plane.budget_reservation import BudgetReservation
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.verification import (
     TaskPlanGateRegistry, TaskPlanResultVerifier, subagent_attempt_evidence,
@@ -38,6 +45,7 @@ class HarnessSubAgentTaskExecutor:
         self, *, store: DurableTaskPlanStore, runtime: SubAgentRuntime,
         ref_admission_service: HarnessRefAdmissionService,
         task_policy: TaskPlanPolicy,
+        execution_service: HarnessChildExecutionService | None = None,
     ) -> None:
         if not isinstance(store, DurableTaskPlanStore):
             raise TypeError("store must be DurableTaskPlanStore")
@@ -48,6 +56,14 @@ class HarnessSubAgentTaskExecutor:
         self._store = store
         self._runtime = runtime
         self._ref_admission_service = ref_admission_service
+        if execution_service is not None and not isinstance(execution_service, HarnessChildExecutionService):
+            raise TypeError("execution_service must be HarnessChildExecutionService")
+        if execution_service is not None and (
+            execution_service.store is not store
+            or execution_service.ref_admission_service is not ref_admission_service
+        ):
+            raise ValueError("trusted child execution must share canonical store and admission owners")
+        self._execution_service = execution_service
         authority = self._require_authority()
         self._dependency_resolver = AcceptedDependencyResultResolver(store=store, authority=authority, policy=task_policy)
         self._adapter = ResolvedSubAgentTaskAdapter(
@@ -120,6 +136,10 @@ class HarnessSubAgentTaskExecutor:
         spec = binding.subagent_spec
         if binding.registration.worker_binding.worker_type is not HarnessWorkerType.SUBAGENT or spec is None:
             raise ValueError("generic child capability must bind a SUBAGENT worker")
+        if self._execution_service is not None:
+            if not isinstance(binding.registration.worker_binding.implementation, ChildAgentRunnerAdapter):
+                raise ValueError("production generic child requires ChildAgentRunnerAdapter")
+            return
         if self.runtime.workers.get(spec.subagent_id) is not binding.registration.worker_binding.implementation:
             raise ValueError("child runtime worker differs from its pinned capability binding")
 
@@ -188,6 +208,13 @@ class HarnessSubAgentTaskExecutor:
         execution_identity: GraphExecutionIdentity,
     ) -> HarnessWorkerResult:
         invocation = self._invocation(binding, instance, execution_identity)
+        if self._execution_service is not None:
+            child = self.runtime.invoke_trusted(
+                invocation,
+                admission=self._admission(binding, instance, execution_identity),
+                execution_service=self._execution_service,
+            )
+            return self._result(child)
         return self._result(self.runtime.invoke(invocation))
 
     def recover(
@@ -196,14 +223,98 @@ class HarnessSubAgentTaskExecutor:
     ) -> HarnessWorkerResult | None:
         invocation = self._invocation(binding, instance, execution_identity)
         child = self.runtime.recover(invocation)
+        if child is not None and self._execution_service is not None:
+            index = self._execution_service.recover_evidence(
+                self._admission(binding, instance, execution_identity),
+                invocation,
+            )
+            self.runtime.verify_recovered_evidence(child, index)
         return self._result(child) if child is not None else None
+
+    def _admission(
+        self,
+        binding: ResolvedCapabilityBinding,
+        instance: TaskInstance,
+        execution_identity: GraphExecutionIdentity,
+    ) -> AdmittedChildExecution:
+        plan = self.store.plan(instance.run_id, instance.stage_id, instance.plan_version)
+        if plan is None:
+            raise HarnessValidationError("accepted child plan is unavailable", code="task_plan_result_identity_mismatch")
+        history = self.store.read_events(plan.run_id, plan.stage_id)
+        admissions = [
+            event for event in history
+            if event.event_type == "TASK_WAVE_ADMITTED"
+            and (event.plan_id, event.plan_version) == (plan.plan_id, plan.version)
+            and event.payload.get("group", {}).get("parent_graph_identity") == execution_identity.to_dict()
+            and any(
+                item.get("idempotency_key") == instance.idempotency_key
+                for item in event.payload.get("wave", {}).get("reservations", ())
+            )
+        ]
+        intents = [
+            event for event in history
+            if event.event_type == "TASK_ATTEMPT_SPAWN_INTENT"
+            and (event.plan_id, event.plan_version, event.task_id, event.task_instance_id, event.attempt)
+            == (plan.plan_id, plan.version, instance.task_id, instance.task_instance_id, instance.attempt)
+            and tuple(
+                getattr(event, name)
+                for name in (
+                    "run_id",
+                    "graph_id",
+                    "graph_version",
+                    "graph_ref",
+                    "graph_checksum",
+                )
+            )
+            == (
+                execution_identity.run_id,
+                execution_identity.graph_id,
+                execution_identity.graph_version,
+                execution_identity.graph_ref,
+                execution_identity.graph_checksum,
+            )
+        ]
+        if len(admissions) != 1 or len(intents) != 1:
+            raise HarnessValidationError(
+                "child execution requires one durable wave admission and spawn intent",
+                code="task_plan_child_execution_admission_mismatch",
+            )
+        try:
+            event, intent = admissions[0], intents[0]
+            group = DispatchGroup.from_dict(event.payload["group"])
+            wave = DispatchWave.from_dict(event.payload["wave"])
+            reservation = next(item for item in wave.reservations if item.task_id == instance.task_id)
+            budget = BudgetReservation.from_dict(intent.payload["budget_reservation"])
+        except (KeyError, StopIteration, TypeError, ValueError, HarnessValidationError) as exc:
+            raise HarnessValidationError(
+                "child execution admission payload is invalid",
+                code="task_plan_child_execution_admission_mismatch",
+            ) from exc
+        return AdmittedChildExecution(
+            plan=plan,
+            instance=instance,
+            binding=binding,
+            execution_identity=execution_identity,
+            group=group,
+            wave=wave,
+            reservation=reservation,
+            spawn_intent=intents[0],
+            budget_reservation=budget,
+        )
 
     @staticmethod
     def _result(child: SubAgentResult) -> HarnessWorkerResult:
         succeeded = child.status.value == "succeeded"
+        used_tools = child.metadata.get("used_tools", ())
+        used_memory = child.metadata.get("used_memory_namespaces", ())
         return HarnessWorkerResult(
             status="succeeded" if succeeded else "failed", output=child.output,
-            artifacts=child.artifact_refs, diagnostics={"subagent_id": child.subagent_id},
+            artifacts=child.artifact_refs,
+            diagnostics={
+                "subagent_id": child.subagent_id,
+                "used_tools": list(used_tools),
+                "used_memory_namespaces": list(used_memory),
+            },
             metrics=child.metadata.get("worker_metrics", {}),
             evidence=(subagent_attempt_evidence(child.transcript_receipt),) if child.transcript_receipt is not None else (),
             error=None if succeeded else "delegated SubAgent failed verification",

@@ -28,6 +28,7 @@ from framework.llm.budget import (
     LLMBudgetOperation,
     LLMBudgetExceededError,
     LLMBudgetGuard,
+    current_llm_budget_invocation,
 )
 from framework.llm.clients.openai_compatible import (
     LLMProviderContextOverflow,
@@ -486,6 +487,10 @@ class LLMRouter:
                 )
 
             prepared_request = prepared.normalized_request
+            prepared_request = self._invocation_bounded_provider_request(
+                prepared_request,
+                tracker=budget_tracker,
+            )
             try:
                 logical_budget_attempt = self._reserve_global_budget_logical(
                     deployment=deployment,
@@ -689,7 +694,7 @@ class LLMRouter:
             try:
                 response = deployment.client.complete(prepared_request)
             except LLMProviderError as exc:
-                if exc.status_code is None:
+                if exc.status_code is None and not exc.retryable:
                     global_failure_check = self._mark_global_budget_indeterminate(
                         budget_attempt,
                         reason="provider_dispatch_indeterminate",
@@ -699,6 +704,7 @@ class LLMRouter:
                         budget_attempt,
                         deployment=deployment,
                         reason=exc.error_type,
+                        observed_usage=TokenUsage() if exc.retryable else None,
                     )
                 error_payload = _provider_error_payload(deployment_id, exc)
                 if global_failure_check is not None:
@@ -1364,6 +1370,10 @@ class LLMRouter:
                 )
 
             prepared_request = prepared.normalized_request
+            prepared_request = self._invocation_bounded_provider_request(
+                prepared_request,
+                tracker=budget_tracker,
+            )
             try:
                 logical_budget_attempt = self._reserve_global_budget_logical(
                     deployment=deployment,
@@ -1650,7 +1660,7 @@ class LLMRouter:
                     resolution_trace=resolution_trace,
                 ) from None
             except LLMProviderError as exc:
-                if exc.status_code is None:
+                if exc.status_code is None and not exc.retryable:
                     global_failure_check = self._mark_global_budget_indeterminate(
                         budget_attempt,
                         reason="provider_dispatch_indeterminate",
@@ -1660,6 +1670,7 @@ class LLMRouter:
                         budget_attempt,
                         deployment=deployment,
                         reason=exc.error_type,
+                        observed_usage=TokenUsage() if exc.retryable else None,
                     )
                 self._record_structured_output_rejection(
                     route_events,
@@ -3636,17 +3647,35 @@ class LLMRouter:
         attempt_index: int,
         tracker: GlobalBudgetTracker | None,
     ) -> _RouterBudgetAttempt:
+        invocation = current_llm_budget_invocation()
+        if invocation is not None and invocation.execution_guard is not None:
+            invocation.execution_guard()
         if tracker is None or logical_operation_id is None:
             return _RouterBudgetAttempt(tracker=tracker)
+        tracker.require_trusted_pricing(deployment.pricing)
         operation_id = (
             f"{logical_operation_id}:attempt:{attempt_index}:"
             f"{deployment.deployment_id}"
         )
+        reserved_output_tokens = prepared.effective_budget.reserved_output_tokens
+        reserved_input_tokens = prepared.token_count.total_input_tokens
+        available_total_tokens = tracker.available_total_tokens()
+        available_output_tokens = tracker.available_output_tokens()
+        if available_output_tokens is not None:
+            reserved_output_tokens = min(
+                reserved_output_tokens,
+                available_output_tokens,
+            )
+        if available_total_tokens is not None:
+            reserved_input_tokens = min(
+                reserved_input_tokens,
+                max(0, available_total_tokens - reserved_output_tokens),
+            )
         operation = tracker.reserve_prepared_operation(
             operation_id=operation_id,
             idempotency_key=f"{operation_id}:reservation",
-            input_tokens=prepared.token_count.total_input_tokens,
-            output_tokens=prepared.effective_budget.reserved_output_tokens,
+            input_tokens=reserved_input_tokens,
+            output_tokens=reserved_output_tokens,
             pricing=deployment.pricing,
         )
         if isinstance(operation, GlobalBudgetCheck):
@@ -3657,6 +3686,24 @@ class LLMRouter:
             operation=operation,
             preflight_check=tracker.check_for_operation(operation),
         )
+
+    @staticmethod
+    def _invocation_bounded_provider_request(
+        request: LLMRequest,
+        *,
+        tracker: GlobalBudgetTracker | None,
+    ) -> LLMRequest:
+        """Prevent a provider client from hiding retries outside Router accounting."""
+
+        invocation = current_llm_budget_invocation()
+        if (
+            tracker is None
+            or invocation is None
+            or invocation.tracker is not tracker
+            or request.max_transport_attempts == 1
+        ):
+            return request
+        return request.clone(max_transport_attempts=1)
 
     def _reserve_global_budget_logical(
         self,
@@ -3743,11 +3790,15 @@ class LLMRouter:
         tracker = attempt.tracker
         if tracker is None or attempt.operation is None:
             return None
+        if observed_usage is None:
+            return tracker.mark_operation_indeterminate(
+                attempt.operation,
+                reason=reason,
+            )
         return tracker.settle_operation(
             attempt.operation,
-            observed_usage or TokenUsage(),
+            observed_usage,
             deployment.pricing,
-            estimated_cost_usd=(0 if observed_usage is None else None),
             request_dispatched=True,
             outcome="failed",
             reason_code=reason,
@@ -3786,6 +3837,24 @@ class LLMRouter:
         request: LLMRequest,
     ) -> GlobalBudgetTracker | None:
         tracker = self._global_budget_tracker
+        invocation = current_llm_budget_invocation()
+        if (
+            invocation is not None
+            and invocation.execution_identity != request.execution_identity
+        ):
+            raise ValueError(
+                "invocation budget Graph identity does not match the LLM request"
+            )
+        if invocation is not None and invocation.tracker is not None:
+            if tracker is None:
+                raise ValueError(
+                    "invocation budget requires a budget-managed LLM router"
+                )
+            if not invocation.tracker.is_scope_descendant_of(tracker):
+                raise ValueError(
+                    "invocation budget tracker is outside the router ledger lineage"
+                )
+            return invocation.tracker
         if tracker is None or request.execution_identity is None:
             return tracker
         if tracker.scope.run_id != request.execution_identity.run_id:
@@ -4279,4 +4348,3 @@ def _last_global_budget_check(errors: Iterable[dict[str, Any]]):
         if check is not None:
             return check
     return None
-

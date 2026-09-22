@@ -11,6 +11,7 @@ from typing import Any
 
 from framework.shared.attempts import (
     AdmissionResult,
+    AttemptIdentity,
     AttemptCancelledError,
     AttemptCapacityExhaustedError,
     AttemptContext,
@@ -74,6 +75,10 @@ from framework.tool.models import (
 )
 from framework.tool.registry.registry import ToolRegistry
 from framework.tool.schema.validation import normalize_tool_arguments
+from framework.tool.runtime.evidence import (
+    ToolEvidencePersistenceError,
+    ToolExecutionEvidencePort,
+)
 
 
 _RUNTIME_SECRETS_ARGUMENT = "_secrets"
@@ -130,13 +135,17 @@ class _ToolAttemptEventMirror:
             "parent_attempt_id": context.parent_attempt_id,
         }
         self._executor._emit("attempt_started", self._call, payload)
+
+    def physical_admitted(self, identity: AttemptIdentity) -> None:
+        """Emit physical-start telemetry only after required intent is durable."""
+
         if not self._tool_started_emitted:
             self._tool_started_emitted = True
             self._executor._emit("tool_started", self._call, {
-                "attempt_id": context.attempt_id,
-                "local_attempt_no": context.local_attempt_no,
-                "operation_id": context.operation_id,
-                "idempotency_key": context.idempotency_key,
+                "attempt_id": identity.attempt_id,
+                "local_attempt_no": identity.local_attempt_no,
+                "operation_id": identity.operation_id,
+                "idempotency_key": identity.idempotency_key,
             })
 
     def terminal(self, *, outcome: Any) -> None:
@@ -194,6 +203,7 @@ class ToolExecutor:
         runtime_event_sink: Any | None = None,
         runtime_event_projection: Any | None = None,
         require_explicit_execution_profile: bool = False,
+        execution_evidence: ToolExecutionEvidencePort | None = None,
     ) -> None:
         self._registry = registry
         self._artifact_manager = artifact_manager
@@ -226,6 +236,15 @@ class ToolExecutor:
         if not isinstance(require_explicit_execution_profile, bool):
             raise TypeError("require_explicit_execution_profile must be boolean")
         self._require_explicit_execution_profile = require_explicit_execution_profile
+        if execution_evidence is not None and (
+            not isinstance(execution_evidence, ToolExecutionEvidencePort)
+            or getattr(execution_evidence, "is_durable", False) is not True
+        ):
+            raise TypeError(
+                "execution_evidence must implement the durable "
+                "ToolExecutionEvidencePort"
+            )
+        self._execution_evidence = execution_evidence
         self._events: list[ToolEvent] = []
         self._metrics = ToolMetrics()
         self._records: list[ToolExecutionRecord] = []
@@ -244,6 +263,10 @@ class ToolExecutor:
     def defers_result_persistence(self) -> bool:
         return self._defer_result_persistence
 
+    @property
+    def execution_evidence(self) -> ToolExecutionEvidencePort | None:
+        return self._execution_evidence
+
     def execute(self, call: ToolCall, policy: ToolPolicy | None = None) -> ToolObservation:
         call = self._bind_graph_identity(call)
         parent_context = self._trace_context or current_trace_context()
@@ -259,6 +282,69 @@ class ToolExecutor:
             execution_context = W3CSpanContext.root()
         with trace_context_scope(execution_context):
             return self._execute_scoped(call, policy)
+
+    def record_pre_execution_rejection(
+        self,
+        observation: ToolObservation,
+    ) -> ToolObservation:
+        """Persist a caller-owned rejection which made no physical invocation."""
+
+        if not isinstance(observation, ToolObservation):
+            raise TypeError("observation must be ToolObservation")
+        if observation.status not in {
+            ToolStatus.BLOCKED,
+            ToolStatus.DENIED,
+            ToolStatus.APPROVAL_REQUIRED,
+        }:
+            raise ValueError("pre-execution rejection must use a rejected status")
+        call = self._bind_graph_identity(observation.call)
+        definition = None
+        if self._execution_evidence is not None:
+            _required_evidence_write(
+                "register_call",
+                self._execution_evidence.register_call,
+                call,
+            )
+            try:
+                definition = self._registry.get(call.tool_name).definition
+            except ToolDefinitionError:
+                definition = None
+            if definition is not None:
+                _required_evidence_write(
+                    "bind_tool",
+                    self._execution_evidence.bind_tool,
+                    call,
+                    definition,
+                )
+        rejected = ToolObservation(
+            call=call,
+            result=_with_call(observation.result, call),
+            elapsed_ms=observation.elapsed_ms,
+        )
+        if self._execution_evidence is not None:
+            evidence_ref = _required_evidence_write(
+                "commit_observation",
+                self._execution_evidence.commit_observation,
+                rejected,
+                definition,
+            )
+            if not _is_canonical_evidence_ref(evidence_ref):
+                raise ToolEvidencePersistenceError(
+                    "tool evidence writer returned an invalid receipt reference"
+                )
+            rejected = ToolObservation(
+                call=call,
+                result=_copy_tool_result(
+                    rejected.result,
+                    metadata={
+                        **rejected.result.metadata,
+                        "tool_evidence_ref": evidence_ref,
+                    },
+                ),
+                elapsed_ms=rejected.elapsed_ms,
+            )
+        self._record_observation(rejected)
+        return rejected
 
     def _bind_graph_identity(self, call: ToolCall) -> ToolCall:
         if not isinstance(call, ToolCall):
@@ -290,6 +376,13 @@ class ToolExecutor:
         resolved_definition: Any | None = None
         execution_receipt_metadata: dict[str, Any] = {}
 
+        if self._execution_evidence is not None:
+            _required_evidence_write(
+                "register_call",
+                self._execution_evidence.register_call,
+                call,
+            )
+
         def record_attempt(attempt: int, context: AttemptContext) -> None:
             nonlocal attempts_used, last_attempt_context
             attempts_used = max(attempts_used, int(attempt))
@@ -299,6 +392,13 @@ class ToolExecutor:
             nonlocal attempts_used, last_attempt_context, resolved_definition
             registered = self._registry.get(call.tool_name)
             resolved_definition = registered.definition
+            if self._execution_evidence is not None:
+                _required_evidence_write(
+                    "bind_tool",
+                    self._execution_evidence.bind_tool,
+                    call,
+                    resolved_definition,
+                )
             policy_trace.risk_level = _risk_level(registered.definition)
             policy_trace.requires_approval = _requires_approval(registered.definition, policy)
             policy_trace.add("tool.resolve", "compatibility", True, f"tool resolved: {call.tool_name}")
@@ -424,6 +524,8 @@ class ToolExecutor:
                 idempotency_key=_tool_idempotency_key(call),
                 operation_id=_tool_idempotency_key(call),
                 attempt_event_sink=_ToolAttemptEventMirror(self, call),
+                execution_evidence=self._execution_evidence,
+                call=call if self._execution_evidence is not None else None,
             )
             policy_trace.add(
                 "tool.retry",
@@ -503,6 +605,8 @@ class ToolExecutor:
         )
         try:
             result, elapsed_ms = timed_tool_call(invoke)
+        except ToolEvidencePersistenceError:
+            raise
         except ToolPermissionError as exc:
             policy_trace.add("tool.permission.error", "safety", False, str(exc))
             result = ToolResult(
@@ -633,6 +737,28 @@ class ToolExecutor:
                 **result_fields,
             )
         observation = ToolObservation(call=call, result=result, elapsed_ms=elapsed_ms)
+        if self._execution_evidence is not None:
+            evidence_ref = _required_evidence_write(
+                "commit_observation",
+                self._execution_evidence.commit_observation,
+                observation,
+                resolved_definition,
+            )
+            if not _is_canonical_evidence_ref(evidence_ref):
+                raise ToolEvidencePersistenceError(
+                    "tool evidence writer returned an invalid receipt reference"
+                )
+            observation = ToolObservation(
+                call=observation.call,
+                result=_copy_tool_result(
+                    observation.result,
+                    metadata={
+                        **observation.result.metadata,
+                        "tool_evidence_ref": evidence_ref,
+                    },
+                ),
+                elapsed_ms=observation.elapsed_ms,
+            )
         self._record_observation(observation)
         self._records.append(
             _execution_record(
@@ -1630,6 +1756,8 @@ def _invoke_with_retry(
     idempotency_key: str | None = None,
     operation_id: str | None = None,
     attempt_event_sink: AttemptLifecycleSink | None = None,
+    execution_evidence: ToolExecutionEvidencePort | None = None,
+    call: ToolCall | None = None,
 ) -> tuple[Any, int, AttemptContext]:
     parent_context = current_attempt_context()
     logical_idempotency_key = idempotency_key or f"tool:{tool_name}"
@@ -1652,6 +1780,9 @@ def _invoke_with_retry(
         cancellation_grace_seconds=admission_policy.cancellation_grace_seconds
     )
 
+    if (execution_evidence is None) is not (call is None):
+        raise ValueError("execution_evidence and call must be provided together")
+
     def finalize_tool_attempt(
         outcome: AttemptOutcome[Any],
     ) -> AttemptOutcome[Any]:
@@ -1659,30 +1790,59 @@ def _invoke_with_retry(
         error = outcome.error
         if outcome.state is AttemptState.TIMED_OUT:
             if retry_safe:
-                return outcome
-            return replace(
-                outcome,
-                indeterminate=True,
-                reason_code=outcome.reason_code or "tool_timeout_indeterminate",
-            )
-        if outcome.state is not AttemptState.FAILED or error is None:
-            return outcome
-        if isinstance(error, AttemptCancelledError):
-            return replace(
+                finalized = outcome
+            else:
+                finalized = replace(
+                    outcome,
+                    indeterminate=True,
+                    reason_code=outcome.reason_code or "tool_timeout_indeterminate",
+                )
+        elif outcome.state is not AttemptState.FAILED or error is None:
+            finalized = outcome
+        elif isinstance(error, AttemptCancelledError):
+            finalized = replace(
                 outcome,
                 state=AttemptState.TIMED_OUT,
                 timed_out=True,
                 indeterminate=not retry_safe,
                 reason_code=error.code,
             )
-        if retry_safe or _failure_is_known_to_have_no_effect(definition, error):
-            return outcome
-        return replace(
-            outcome,
-            state=AttemptState.INDETERMINATE,
-            indeterminate=True,
-            reason_code="tool_effect_indeterminate",
-        )
+        elif retry_safe or _failure_is_known_to_have_no_effect(definition, error):
+            finalized = outcome
+        else:
+            finalized = replace(
+                outcome,
+                state=AttemptState.INDETERMINATE,
+                indeterminate=True,
+                reason_code="tool_effect_indeterminate",
+            )
+        if execution_evidence is not None and call is not None:
+            _required_evidence_write(
+                "record_attempt_terminal",
+                execution_evidence.record_attempt_terminal,
+                call,
+                finalized,
+            )
+        return finalized
+
+    def prepare_tool_attempt(identity: AttemptIdentity) -> None:
+        if execution_evidence is not None and call is not None:
+            _required_evidence_write(
+                "admit_attempt",
+                execution_evidence.admit_attempt,
+                call,
+                identity,
+            )
+        physical_admitted = getattr(attempt_event_sink, "physical_admitted", None)
+        if callable(physical_admitted):
+            try:
+                physical_admitted(identity)
+            except BaseException:  # noqa: BLE001 - local telemetry is optional
+                pass
+
+    has_physical_admission_hook = callable(
+        getattr(attempt_event_sink, "physical_admitted", None)
+    )
 
     while local_budget.remaining > 0:
         supervised = supervisor.run(
@@ -1696,6 +1856,11 @@ def _invoke_with_retry(
             execution_limits=execution_limits,
             parent_context=parent_context,
             finalize=finalize_tool_attempt,
+            prepare=(
+                prepare_tool_attempt
+                if execution_evidence is not None or has_physical_admission_hook
+                else None
+            ),
             event_sink=attempt_event_sink,
         )
 
@@ -1713,6 +1878,10 @@ def _invoke_with_retry(
             return supervised.value, attempt, context
         if supervised.state is AttemptState.FAILED:
             error = supervised.error
+            if getattr(error, "code", None) == "attempt_preparation_failed":
+                raise ToolEvidencePersistenceError(
+                    "tool physical intent could not be committed before execution"
+                ) from error
             if isinstance(error, AttemptCancelledError):
                 raise _tool_timeout_error(
                     tool_name=tool_name,
@@ -1838,6 +2007,30 @@ def _tool_idempotency_key(call: ToolCall) -> str:
         )
     configured = call.metadata.get("idempotency_key")
     return str(configured or f"tool:{call.call_id}")
+
+
+def _required_evidence_write(
+    operation: str,
+    writer: Any,
+    *args: Any,
+) -> Any:
+    try:
+        return writer(*args)
+    except ToolEvidencePersistenceError:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - fail closed at persistence boundary
+        raise ToolEvidencePersistenceError(
+            f"required tool evidence write failed: {operation}"
+        ) from exc
+
+
+def _is_canonical_evidence_ref(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and len(value) <= 2048
+    )
 
 
 def _trace_scoped_executor(

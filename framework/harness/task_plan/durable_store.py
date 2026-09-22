@@ -20,6 +20,7 @@ from framework.events.canonical import (
 from framework.events.errors import (
     EventContractError,
     EventIdentityCollisionError,
+    EventStoreContentionError,
     EventStreamVersionConflictError,
 )
 from framework.events.projection import (
@@ -28,7 +29,7 @@ from framework.events.projection import (
     GraphEventExecutionVersion,
     graph_event_context,
 )
-from framework.shared.graph_identity import GraphRunIdentity
+from framework.shared.graph_identity import GraphExecutionIdentity, GraphRunIdentity
 from framework.events.ports import (
     TransactionalStateReaderPort,
     TransactionalStateRuntimePort,
@@ -36,9 +37,13 @@ from framework.events.ports import (
 from framework.events.runtime.models import StreamReadRequest, TransactionalStateSnapshot
 from framework.events.runtime.publisher import EventPublishRequest
 from framework.events.schema.security import SecurityClassification
+from framework.harness.control_plane.activity_execution import (
+    HarnessGraphActivityTaskContext,
+)
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.canonical import (
     canonical_json,
+    canonical_payload_checksum,
     checksum,
     identifier,
 )
@@ -97,6 +102,9 @@ TASK_PLAN_STORAGE_EXTENSION = "task_plan_storage"
 TASK_PLAN_STORAGE_SCHEMA = "newsroom.harness-task-plan-storage/v1"
 TASK_PLAN_EVENT_SOURCE = "framework.harness.task_plan"
 TASK_PLAN_CAPACITY_STATE_NAMESPACE = "newsroom.harness.task-plan.capacity/v1"
+TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE = (
+    "newsroom.harness.task-plan.parent-execution-context/v1"
+)
 _MAX_EVENT_APPEND_RETRIES = 8
 _EVENT_PAGE_SIZE = 500
 
@@ -1310,6 +1318,108 @@ class DurableTaskPlanStore:
                 details={"owner_scope": scope},
             )
         return _capacity_snapshot_from_state(state)
+
+    def register_parent_execution_context(
+        self,
+        context: HarnessGraphActivityTaskContext,
+        *,
+        execution_identity: GraphExecutionIdentity,
+        stage_id: str,
+        stage_binding_checksum: str,
+    ) -> HarnessGraphActivityTaskContext:
+        """Persist the immutable physical parent context used by child execution."""
+
+        identity, normalized_stage, binding_checksum = (
+            _require_parent_execution_context_binding(
+                context,
+                execution_identity=execution_identity,
+                stage_id=stage_id,
+                stage_binding_checksum=stage_binding_checksum,
+            )
+        )
+        expected = _parent_execution_context_state_snapshot(
+            context,
+            execution_identity=identity,
+            stage_id=normalized_stage,
+            stage_binding_checksum=binding_checksum,
+        )
+        current = self._reader.load_transactional_state(
+            TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE,
+            expected.key,
+        )
+        if current is not None:
+            return _require_registered_parent_execution_context(
+                current,
+                expected=expected,
+                execution_identity=identity,
+                stage_id=normalized_stage,
+                stage_binding_checksum=binding_checksum,
+            )
+        try:
+            persisted = self._runtime.compare_and_swap_transactional_state(
+                expected,
+                expected_revision=None,
+                expected_checksum=None,
+            )
+        except EventStoreContentionError as exc:
+            persisted = self._reader.load_transactional_state(
+                TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE,
+                expected.key,
+            )
+            if persisted is None:
+                raise HarnessValidationError(
+                    "parent execution context registration lost its durable CAS",
+                    code="task_plan_parent_execution_context_conflict",
+                ) from exc
+        return _require_registered_parent_execution_context(
+            persisted,
+            expected=expected,
+            execution_identity=identity,
+            stage_id=normalized_stage,
+            stage_binding_checksum=binding_checksum,
+        )
+
+    def load_parent_execution_context(
+        self,
+        execution_identity: GraphExecutionIdentity,
+        *,
+        stage_id: str,
+        stage_binding_checksum: str,
+    ) -> HarnessGraphActivityTaskContext:
+        """Read the exact checkpoint-bound context for one parent Graph activity."""
+
+        if not isinstance(execution_identity, GraphExecutionIdentity):
+            raise TypeError("execution_identity must be GraphExecutionIdentity")
+        normalized_stage = identifier(stage_id, "stage_id")
+        binding_checksum = checksum(
+            stage_binding_checksum,
+            "stage_binding_checksum",
+        )
+        key = _parent_execution_context_state_key(
+            execution_identity,
+            stage_id=normalized_stage,
+            stage_binding_checksum=binding_checksum,
+        )
+        state = self._reader.load_transactional_state(
+            TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE,
+            key,
+        )
+        if state is None:
+            raise HarnessValidationError(
+                "parent execution context is missing",
+                code="task_plan_parent_execution_context_missing",
+                details={
+                    "run_id": execution_identity.run_id,
+                    "stage_id": normalized_stage,
+                    "activity_id": execution_identity.activity_id,
+                },
+            )
+        return _parent_execution_context_from_state(
+            state,
+            execution_identity=execution_identity,
+            stage_id=normalized_stage,
+            stage_binding_checksum=binding_checksum,
+        )
 
     def commit_wave_admission(
         self,
@@ -2530,6 +2640,193 @@ def _capacity_snapshot_from_state(
     return snapshot
 
 
+def _parent_execution_context_identity(
+    context: HarnessGraphActivityTaskContext,
+) -> GraphExecutionIdentity:
+    if not isinstance(context, HarnessGraphActivityTaskContext):
+        raise TypeError("context must be HarnessGraphActivityTaskContext")
+    activity = context.activity
+    graph = activity.graph_ref
+    return GraphExecutionIdentity(
+        run_id=activity.run_id,
+        graph_id=graph.graph_id,
+        graph_version=graph.identity_version,
+        graph_ref=graph.identity_ref.exact_ref,
+        graph_checksum=graph.checksum,
+        node_id=activity.node_id,
+        node_instance_id=activity.node_instance_id,
+        activity_id=activity.activity_id,
+        attempt=activity.attempt,
+    )
+
+
+def _require_parent_execution_context_binding(
+    context: HarnessGraphActivityTaskContext,
+    *,
+    execution_identity: GraphExecutionIdentity,
+    stage_id: str,
+    stage_binding_checksum: str,
+) -> tuple[GraphExecutionIdentity, str, str]:
+    if not isinstance(context, HarnessGraphActivityTaskContext):
+        raise TypeError("context must be HarnessGraphActivityTaskContext")
+    if not isinstance(execution_identity, GraphExecutionIdentity):
+        raise TypeError("execution_identity must be GraphExecutionIdentity")
+    normalized_stage = identifier(stage_id, "stage_id")
+    binding_checksum = checksum(stage_binding_checksum, "stage_binding_checksum")
+    if (
+        _parent_execution_context_identity(context) != execution_identity
+        or not _context_stage_matches(
+            context.activity.step_ref.contract_id,
+            normalized_stage,
+        )
+    ):
+        raise HarnessValidationError(
+            "parent execution context is outside its admitted Graph stage",
+            code="task_plan_parent_execution_context_mismatch",
+        )
+    return execution_identity, normalized_stage, binding_checksum
+
+
+def _context_stage_matches(contract_id: str, stage_id: str) -> bool:
+    """Accept compiler-qualified step ids while retaining exact stage binding."""
+
+    return contract_id == stage_id or contract_id.endswith(":" + stage_id)
+
+
+def _parent_execution_context_state_key(
+    execution_identity: GraphExecutionIdentity,
+    *,
+    stage_id: str,
+    stage_binding_checksum: str,
+) -> str:
+    return canonical_payload_checksum(
+        {
+            "schema_version": TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE,
+            "execution_identity": execution_identity.to_dict(),
+            "stage_id": stage_id,
+            "stage_binding_checksum": stage_binding_checksum,
+        }
+    )
+
+
+def _parent_execution_context_state_snapshot(
+    context: HarnessGraphActivityTaskContext,
+    *,
+    execution_identity: GraphExecutionIdentity,
+    stage_id: str,
+    stage_binding_checksum: str,
+) -> TransactionalStateSnapshot:
+    return TransactionalStateSnapshot.create(
+        namespace=TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE,
+        key=_parent_execution_context_state_key(
+            execution_identity,
+            stage_id=stage_id,
+            stage_binding_checksum=stage_binding_checksum,
+        ),
+        revision=1,
+        payload={
+            "schema_version": TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE,
+            "execution_identity": execution_identity.to_dict(),
+            "stage_id": stage_id,
+            "stage_binding_checksum": stage_binding_checksum,
+            "context": context.to_dict(),
+        },
+    )
+
+
+def _parent_execution_context_from_state(
+    state: TransactionalStateSnapshot,
+    *,
+    execution_identity: GraphExecutionIdentity,
+    stage_id: str,
+    stage_binding_checksum: str,
+) -> HarnessGraphActivityTaskContext:
+    if not isinstance(state, TransactionalStateSnapshot):
+        raise TypeError("state must be TransactionalStateSnapshot")
+    expected_key = _parent_execution_context_state_key(
+        execution_identity,
+        stage_id=stage_id,
+        stage_binding_checksum=stage_binding_checksum,
+    )
+    if (
+        state.namespace != TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE
+        or state.key != expected_key
+        or state.revision != 1
+    ):
+        raise HarnessValidationError(
+            "parent execution context state envelope is invalid",
+            code="task_plan_parent_execution_context_corrupt",
+        )
+    payload = thaw_canonical_json(state.payload)
+    expected_fields = {
+        "schema_version",
+        "execution_identity",
+        "stage_id",
+        "stage_binding_checksum",
+        "context",
+    }
+    if not isinstance(payload, Mapping) or set(payload) != expected_fields:
+        raise HarnessValidationError(
+            "parent execution context state payload is invalid",
+            code="task_plan_parent_execution_context_corrupt",
+        )
+    try:
+        stored_identity = GraphExecutionIdentity.from_dict(
+            payload["execution_identity"]
+        )
+        context = HarnessGraphActivityTaskContext.from_dict(payload["context"])
+    except (HarnessValidationError, TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "parent execution context state payload is invalid",
+            code="task_plan_parent_execution_context_corrupt",
+        ) from exc
+    if (
+        payload["schema_version"] != TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE
+        or stored_identity != execution_identity
+        or payload["stage_id"] != stage_id
+        or payload["stage_binding_checksum"] != stage_binding_checksum
+    ):
+        raise HarnessValidationError(
+            "parent execution context state identity is invalid",
+            code="task_plan_parent_execution_context_corrupt",
+        )
+    try:
+        _require_parent_execution_context_binding(
+            context,
+            execution_identity=execution_identity,
+            stage_id=stage_id,
+            stage_binding_checksum=stage_binding_checksum,
+        )
+    except (HarnessValidationError, TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "parent execution context state binding is invalid",
+            code="task_plan_parent_execution_context_corrupt",
+        ) from exc
+    return context
+
+
+def _require_registered_parent_execution_context(
+    state: TransactionalStateSnapshot,
+    *,
+    expected: TransactionalStateSnapshot,
+    execution_identity: GraphExecutionIdentity,
+    stage_id: str,
+    stage_binding_checksum: str,
+) -> HarnessGraphActivityTaskContext:
+    context = _parent_execution_context_from_state(
+        state,
+        execution_identity=execution_identity,
+        stage_id=stage_id,
+        stage_binding_checksum=stage_binding_checksum,
+    )
+    if state != expected:
+        raise HarnessValidationError(
+            "parent execution context is already registered with different content",
+            code="task_plan_parent_execution_context_conflict",
+        )
+    return context
+
+
 def _graph_event_context_for_task_plan_event(
     event: TaskPlanEvent,
 ) -> GraphEventContext:
@@ -2598,6 +2895,7 @@ def _require_projection_matches_event(
 __all__ = [
     "DurableTaskPlanStore",
     "TASK_PLAN_CAPACITY_STATE_NAMESPACE",
+    "TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE",
     "TASK_PLAN_EVENT_SOURCE",
     "TASK_PLAN_STORAGE_EXTENSION",
     "TASK_PLAN_STORAGE_SCHEMA",

@@ -492,11 +492,7 @@ class ResolvedSubAgentTaskAdapter:
             allowed_tools=resolved_task.allowed_tools,
             allowed_memory_namespaces=resolved_task.allowed_memory_namespaces,
             context_policy=source_spec.context_policy,
-            budget={
-                "max_turns": resolved_task.normalized_budget.max_turns,
-                "max_tool_calls": resolved_task.normalized_budget.max_tool_calls,
-                "max_memory_ops": resolved_task.normalized_budget.max_memory_ops,
-            },
+            budget=resolved_task.normalized_budget.to_dict(),
             metadata={**source_spec.metadata, "task_binding_checksum": binding.binding_checksum},
         )
         child_run_id = (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from framework.llm.budget import (
+    AuthoritativeBudgetScopeUsage,
     CostEstimator,
     GlobalBudgetCheck,
     GlobalBudgetExceededError,
@@ -9,10 +10,14 @@ from framework.llm.budget import (
     GlobalBudgetTracker,
     GlobalBudgetUsage,
     LLMBudgetCheck,
+    LLMBudgetInvocation,
     LLMBudgetExceededError,
     LLMBudgetGuard,
     LLMBudgetPolicy,
     ModelPricing,
+    bind_llm_budget_invocation,
+    budget_policy_for_child_allocation,
+    current_llm_budget_invocation,
 )
 from framework.llm.cache import (
     CACHE_ENTRY_SCHEMA_VERSION,
@@ -171,6 +176,7 @@ from framework.llm.structured_output import (
 )
 
 __all__ = [
+    "AuthoritativeBudgetScopeUsage",
     "CACHE_ENTRY_SCHEMA_VERSION",
     "CacheCanonicalizationError",
     "CacheContext",
@@ -206,6 +212,7 @@ __all__ = [
     "LLMBudgetCheck",
     "LLMBudgetExceededError",
     "LLMBudgetGuard",
+    "LLMBudgetInvocation",
     "LLMBudgetPolicy",
     "LLMCacheKey",
     "LLMCacheKeyFactory",
@@ -305,6 +312,9 @@ __all__ = [
     "build_openai_compatible_client_from_config",
     "build_default_request_preparer",
     "build_openai_chat_payload",
+    "bind_llm_budget_invocation",
+    "budget_policy_for_child_allocation",
+    "current_llm_budget_invocation",
     "estimate_request_tokens",
     "load_openai_compatible_deployment",
     "redact_sensitive_values",

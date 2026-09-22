@@ -185,7 +185,14 @@ def _fixture(
     worker_status: str = "succeeded",
     worker_artifacts: tuple[str, ...] = (),
     artifact_reference_verifier=None,
+    task_budget: TaskBudget | None = None,
 ):
+    accepted_task_budget = task_budget or TaskBudget(
+        max_turns=2,
+        max_tool_calls=1,
+        max_memory_ops=1,
+        max_output_tokens=128,
+    )
     spec = SubAgentSpec(
         subagent_id="lineage-subagent",
         role="analysis.lineage",
@@ -251,18 +258,8 @@ def _fixture(
         max_plan_build_calls=1,
         max_plan_build_turns=1,
         max_plan_build_tool_calls=0,
-        per_task_budget=TaskBudget(
-            max_turns=2,
-            max_tool_calls=1,
-            max_memory_ops=1,
-            max_output_tokens=128,
-        ),
-        aggregate_task_budget=TaskBudget(
-            max_turns=2,
-            max_tool_calls=1,
-            max_memory_ops=1,
-            max_output_tokens=128,
-        ),
+        per_task_budget=accepted_task_budget,
+        aggregate_task_budget=accepted_task_budget,
     )
     stage_binding = build_task_plan_stage_binding(
         graph_id="lineage-graph",
@@ -783,9 +780,21 @@ def test_graph_only_subagent_invocation_uses_accepted_plan_identity_and_recovery
     assert not {"workflow_id", "workflow_ref", "step_id"}.intersection(
         context_payload
     )
-    assert canonical_payload_checksum(payload) == (
-        "sha256:774ccef53c1139765aadee455308724d65f115144e0894ecabffae52c3fcd9f3"
+    repeated_invocation = fixture["adapter"].build_invocation(
+        plan=plan,
+        resolved_task=plan.tasks[0],
+        binding=binding,
+        instance=instance,
+        context_pack=context_pack,
+        budget_snapshot=fixture["budget"],
+        execution_identity=_execution_identity(plan, instance),
     )
+    invocation_checksum = canonical_payload_checksum(payload)
+    assert repeated_invocation.attempt_identity == invocation.attempt_identity
+    assert canonical_payload_checksum(repeated_invocation.to_dict()) == invocation_checksum
+    modified_payload = invocation.to_dict()
+    modified_payload["subagent_spec"]["budget"]["max_output_tokens"] += 1
+    assert canonical_payload_checksum(modified_payload) != invocation_checksum
 
     for invalid_context in (
         context_pack.to_dict(),
@@ -860,6 +869,103 @@ def test_graph_only_subagent_invocation_uses_accepted_plan_identity_and_recovery
     with pytest.raises(HarnessValidationError) as invocation_error:
         replace(invocation, schema_version="newsroom.subagent-invocation/v2")
     assert invocation_error.value.code == "subagent_invocation_schema_unsupported"
+
+
+def test_subagent_invocation_projects_the_complete_accepted_task_budget(
+    tmp_path: Path,
+) -> None:
+    accepted_budget = TaskBudget(
+        max_turns=3,
+        max_tool_calls=2,
+        max_memory_ops=1,
+        max_output_tokens=256,
+        token_limit=1024,
+        time_limit_ms=5000,
+        cost_limit=700,
+    )
+    fixture = _fixture(tmp_path, task_budget=accepted_budget)
+
+    invocation = fixture["adapter"].build_invocation(
+        plan=fixture["plan"],
+        resolved_task=fixture["resolved"],
+        binding=fixture["binding"],
+        instance=fixture["instance"],
+        context_pack=fixture["context_pack"],
+        budget_snapshot=fixture["budget"],
+        execution_identity=fixture["execution_identity"],
+    )
+
+    assert invocation.subagent_spec.budget == accepted_budget.to_dict()
+    assert invocation.subagent_spec.budget == fixture["instance"].budget_snapshot.to_dict()
+
+
+def test_subagent_invocation_preserves_explicit_zero_budget_dimensions(
+    tmp_path: Path,
+) -> None:
+    accepted_budget = TaskBudget(
+        max_turns=1,
+        max_tool_calls=0,
+        max_memory_ops=0,
+        max_output_tokens=0,
+        token_limit=0,
+        time_limit_ms=1,
+        cost_limit=0,
+    )
+    fixture = _fixture(tmp_path, task_budget=accepted_budget)
+
+    invocation = fixture["adapter"].build_invocation(
+        plan=fixture["plan"],
+        resolved_task=fixture["resolved"],
+        binding=fixture["binding"],
+        instance=fixture["instance"],
+        context_pack=fixture["context_pack"],
+        budget_snapshot=fixture["budget"],
+        execution_identity=fixture["execution_identity"],
+    )
+
+    assert invocation.subagent_spec.budget == {
+        "max_turns": 1,
+        "max_tool_calls": 0,
+        "max_memory_ops": 0,
+        "max_output_tokens": 0,
+        "token_limit": 0,
+        "time_limit_ms": 1,
+        "cost_limit": 0,
+    }
+
+
+def test_subagent_invocation_omits_absent_legacy_optional_budget_dimensions(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(
+        tmp_path,
+        task_budget=TaskBudget(
+            max_turns=2,
+            max_tool_calls=1,
+            max_memory_ops=1,
+            max_output_tokens=128,
+        ),
+    )
+
+    invocation = fixture["adapter"].build_invocation(
+        plan=fixture["plan"],
+        resolved_task=fixture["resolved"],
+        binding=fixture["binding"],
+        instance=fixture["instance"],
+        context_pack=fixture["context_pack"],
+        budget_snapshot=fixture["budget"],
+        execution_identity=fixture["execution_identity"],
+    )
+
+    assert invocation.subagent_spec.budget == {
+        "max_turns": 2,
+        "max_tool_calls": 1,
+        "max_memory_ops": 1,
+        "max_output_tokens": 128,
+    }
+    assert not {"token_limit", "time_limit_ms", "cost_limit"}.intersection(
+        invocation.subagent_spec.budget
+    )
 
 
 def test_success_and_failure_events_carry_complete_typed_lineage(tmp_path: Path) -> None:

@@ -13,7 +13,11 @@ from framework.tool.runtime.errors import (
 
 if TYPE_CHECKING:
     from framework.tool.runtime.batch_executor import ToolBatchExecutor
-    from framework.tool.runtime.executor import ToolExecutor
+    from framework.tool.runtime.evidence import (
+        ToolEvidencePersistenceError,
+        ToolExecutionEvidencePort,
+        ToolRunnerTurnEvidence,
+    )
     from framework.tool.runtime.http_adapter import (
         HTTPClientProtocol,
         TraceAwareHTTPToolTransport,
@@ -29,6 +33,9 @@ _LAZY_EXPORTS = {
     "MCPToolAdapter": "framework.tool.runtime.mcp_adapter",
     "ToolBatchExecutor": "framework.tool.runtime.batch_executor",
     "ToolExecutor": "framework.tool.runtime.executor",
+    "ToolEvidencePersistenceError": "framework.tool.runtime.evidence",
+    "ToolExecutionEvidencePort": "framework.tool.runtime.evidence",
+    "ToolRunnerTurnEvidence": "framework.tool.runtime.evidence",
     "ToolRetryController": "framework.tool.runtime.retry",
     "ToolSandbox": "framework.tool.runtime.sandbox",
     "ToolTimeoutRunner": "framework.tool.runtime.timeout",
@@ -56,10 +63,13 @@ __all__ = [
     "ToolBatchExecutor",
     "ToolDefinitionError",
     "ToolExecutor",
+    "ToolEvidencePersistenceError",
+    "ToolExecutionEvidencePort",
     "ToolIndeterminateError",
     "ToolPermissionError",
     "ToolRetryController",
     "ToolRuntimeError",
+    "ToolRunnerTurnEvidence",
     "ToolSandbox",
     "ToolSecretError",
     "ToolTimeoutError",

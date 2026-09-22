@@ -14,6 +14,7 @@ from framework.llm.models import LLMClient
 from framework.memory import MemoryPolicy, MemoryRuntime
 from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.tool import ToolExecutor
+from framework.tool.runtime.evidence import ToolExecutionEvidencePort
 from framework.tool import ToolRegistry, register_memory_tools
 from framework.agent.messages import (
     AgentIterationCheckpoint,
@@ -127,6 +128,7 @@ class AgentRunner:
         global_budget_tracker: GlobalBudgetTracker | None = None,
         standalone: bool = False,
         memory_recall: ExecutionMemoryRecallPort | None = None,
+        tool_execution_evidence: ToolExecutionEvidencePort | None = None,
     ) -> AgentLoopResult:
         if not isinstance(standalone, bool):
             raise TypeError("standalone must be boolean")
@@ -168,6 +170,14 @@ class AgentRunner:
         if standalone and memory_recall is not None:
             raise ValueError(
                 "standalone AgentRunner cannot use execution-bound memory recall"
+            )
+        if tool_execution_evidence is not None and (
+            standalone
+            or not isinstance(tool_execution_evidence, ToolExecutionEvidencePort)
+            or getattr(tool_execution_evidence, "is_durable", False) is not True
+        ):
+            raise ValueError(
+                "tool_execution_evidence requires a durable Graph-bound capability"
             )
         if memory_recall is not None:
             memory_recall.validate_execution(graph_identity)
@@ -242,6 +252,7 @@ class AgentRunner:
                 execution_environment=self._execution_environment,
                 runtime_event_sink=self._runtime_event_sink,
                 require_explicit_execution_profile=self._require_explicit_execution_profile,
+                execution_evidence=tool_execution_evidence,
             ),
             prompt_builder=PromptBuilder(),
             action_parser=AgentActionParser(),
@@ -255,6 +266,7 @@ class AgentRunner:
             memory_recall=memory_recall,
             memory_policy=self._memory_policy,
             runtime_event_sink=self._runtime_event_sink,
+            tool_execution_evidence=tool_execution_evidence,
         )
         result = loop.run(
             agent,

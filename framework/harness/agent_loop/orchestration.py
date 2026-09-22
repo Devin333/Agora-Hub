@@ -19,6 +19,10 @@ from framework.agent.models.orchestration import (
     ParentTaskSummary,
     ParentWaveSummary,
 )
+from framework.harness.control_plane.activity_execution import (
+    HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY,
+    HarnessGraphActivityTaskContext,
+)
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.ref_admission import HarnessRefAdmissionService
@@ -194,9 +198,28 @@ class HarnessAgentOrchestrationRuntime:
         policy = self._policy_registry.resolve(
             self._stage_binding.policy_ref, stage_id=self._stage_binding.stage_id,
         )
-        return self._ref_admission_service.admit_graph_inputs(
+        snapshot = self._ref_admission_service.admit_graph_inputs(
             task, stage_binding=self._stage_binding, task_policy=policy,
         )
+        if not isinstance(self._store, DurableTaskPlanStore):
+            raise HarnessValidationError(
+                "parent execution context requires durable TaskPlan storage",
+                code="task_plan_parent_execution_context_store_unavailable",
+            )
+        raw_context = task.get(HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY)
+        if not isinstance(raw_context, Mapping):
+            raise HarnessValidationError(
+                "parent execution context is missing after input admission",
+                code="task_plan_parent_execution_context_missing",
+            )
+        context = HarnessGraphActivityTaskContext.from_dict(raw_context)
+        self._store.register_parent_execution_context(
+            context,
+            execution_identity=snapshot.execution_identity,
+            stage_id=snapshot.stage_id,
+            stage_binding_checksum=snapshot.stage_binding_checksum,
+        )
+        return snapshot
 
     def parent_memory_recall(self, snapshot: RefAuthoritySnapshot) -> ExecutionMemoryRecallPort:
         if self._ref_admission_service is None:

@@ -987,6 +987,10 @@ def _tool_observation_summary(call: ToolCallTrace) -> dict[str, Any]:
         "elapsed_ms": call.elapsed_ms,
         "error_type": call.error_type,
         "error_message": call.error_message,
+        "result": {
+            "error_message": call.error_message,
+            "error_type": call.error_type,
+        },
         "artifact_refs": [dict(ref) for ref in call.artifact_refs],
         "safe_for_llm": call.safe_for_llm,
     }

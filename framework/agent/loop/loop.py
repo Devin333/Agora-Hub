@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import replace
 import json
 from typing import Any
@@ -63,6 +64,8 @@ from framework.llm.budget import (
     GlobalBudgetExceededError,
     GlobalBudgetTracker,
     LLMBudgetOperation,
+    bind_llm_budget_invocation,
+    current_llm_budget_invocation,
 )
 from framework.llm.context import estimate_request_tokens
 from framework.llm.models import (
@@ -94,6 +97,11 @@ from framework.tool import (
     ToolResult,
     ToolStatus,
 )
+from framework.tool.runtime.evidence import (
+    ToolEvidencePersistenceError,
+    ToolExecutionEvidencePort,
+    ToolRunnerTurnEvidence,
+)
 
 
 class AgentLoop:
@@ -119,9 +127,20 @@ class AgentLoop:
         skill_selection_policy: SkillSelectionPolicy | None = None,
         agent_skill_runtime: AgentSkillRuntime | None = None,
         runtime_event_sink: Any | None = None,
+        tool_execution_evidence: ToolExecutionEvidencePort | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._tool_executor = tool_executor
+        if tool_executor.execution_evidence is not tool_execution_evidence:
+            raise ValueError(
+                "AgentLoop and ToolExecutor must use the same tool evidence capability"
+            )
+        if tool_execution_evidence is not None and (
+            not isinstance(tool_execution_evidence, ToolExecutionEvidencePort)
+            or getattr(tool_execution_evidence, "is_durable", False) is not True
+        ):
+            raise ValueError("AgentLoop tool evidence must be durable")
+        self._tool_execution_evidence = tool_execution_evidence
         self._prompt_builder = prompt_builder or PromptBuilder()
         self._action_parser = action_parser or AgentActionParser()
         self._output_judge = output_judge or OutputJudge()
@@ -631,6 +650,12 @@ class AgentLoop:
                 continue
 
             raw_output = action.output or {}
+            if (
+                _action_type_value(action.action_type) == "final"
+                and action.content is not None
+                and agent.output_key not in raw_output
+            ):
+                raw_output = {agent.output_key: action.content, **raw_output}
             budget_verdict = self._output_budget_verdict(agent=agent, output=raw_output)
             if budget_verdict is not None:
                 last_verdict = budget_verdict
@@ -666,7 +691,15 @@ class AgentLoop:
                 output=raw_output,
                 inputs=inputs,
             )
-            action = AgentAction(action_type=action.action_type, content=action.content, output=normalized_output)
+            action = AgentAction(
+                action_type=(
+                    "final_output"
+                    if _action_type_value(action.action_type) == "final"
+                    else action.action_type
+                ),
+                content=action.content,
+                output=normalized_output,
+            )
             budget_verdict = self._output_budget_verdict(agent=agent, output=normalized_output)
             if budget_verdict is not None:
                 last_verdict = budget_verdict
@@ -761,10 +794,27 @@ class AgentLoop:
             tool_name=action.tool_name or "",
             arguments=action.tool_args,
             requested_by_agent_id=agent.agent_id,
+            metadata={
+                **_runner_turn_metadata(
+                    self._tool_execution_evidence,
+                    llm_call_artifacts,
+                    iteration=iteration,
+                    call_ordinal=0,
+                ),
+                **(
+                    {"model_tool_call_id": str(action.metadata["tool_call_id"])}
+                    if action.metadata.get("tool_call_id")
+                    else {}
+                ),
+            },
         )
         budget_blocked = metrics.tool_calls >= _max_tool_calls_per_agent(tool_policy)
         if budget_blocked:
             observation = _blocked_tool_budget_observation(tool_call, tool_policy)
+            if self._tool_execution_evidence is not None:
+                observation = self._tool_executor.record_pre_execution_rejection(
+                    observation
+                )
             events.tool_budget_blocked(
                 iteration=iteration,
                 tool_name=tool_call.tool_name,
@@ -1544,46 +1594,83 @@ class AgentLoop:
         metrics: AgentLoopMetrics,
         events: AgentLoopEventRecorder,
     ) -> LLMResponse:
-        if not agent.loop_policy.llm_streaming_enabled:
-            return _bind_llm_response_identity(
-                LLMResponse.from_any(self._llm_client.complete(request)),
-                request.execution_identity,
+        active_invocation = current_llm_budget_invocation()
+        if (
+            active_invocation is not None
+            and active_invocation.execution_identity != request.execution_identity
+        ):
+            raise ValueError(
+                "invocation execution guard does not match the LLM request identity"
             )
-        stream = getattr(self._llm_client, "stream", None)
-        if not callable(stream):
-            return _bind_llm_response_identity(
-                LLMResponse.from_any(self._llm_client.complete(request)),
-                request.execution_identity,
+        tracker = self._global_budget_tracker
+        if tracker is not None and request.execution_identity is not None:
+            tracker = tracker.for_execution_identity(request.execution_identity)
+        if active_invocation is not None and active_invocation.tracker is not None:
+            active_tracker = active_invocation.tracker
+            if tracker is None or not active_tracker.is_scope_descendant_of(tracker):
+                raise ValueError(
+                    "invocation budget tracker is outside the AgentLoop ledger lineage"
+                )
+            tracker = active_tracker
+        budget_invocation = (
+            bind_llm_budget_invocation(
+                tracker,
+                execution_identity=request.execution_identity,
+                execution_guard=(
+                    active_invocation.execution_guard
+                    if active_invocation is not None
+                    else None
+                ),
             )
+            if active_invocation is not None and tracker is not None
+            else nullcontext()
+        )
+        with budget_invocation:
+            if (
+                active_invocation is not None
+                and active_invocation.execution_guard is not None
+            ):
+                active_invocation.execution_guard()
+            if not agent.loop_policy.llm_streaming_enabled:
+                return _bind_llm_response_identity(
+                    LLMResponse.from_any(self._llm_client.complete(request)),
+                    request.execution_identity,
+                )
+            stream = getattr(self._llm_client, "stream", None)
+            if not callable(stream):
+                return _bind_llm_response_identity(
+                    LLMResponse.from_any(self._llm_client.complete(request)),
+                    request.execution_identity,
+                )
 
-        accumulator = LLMStreamAccumulator(
-            expected_execution_identity=request.execution_identity,
-            require_expected_identity=request.execution_identity is not None,
-        )
-        stream_event_count = 0
-        raw_stream = stream(request)
-        stream_events = raw_stream if isinstance(raw_stream, Iterable) else []
-        for stream_event_count, stream_event in enumerate(stream_events, start=1):
-            normalized_event = LLMStreamEvent.from_any(stream_event)
-            accumulator.add_event(normalized_event)
-            metrics.llm_stream_event_count += 1
-            events.llm_stream_event(
-                iteration=iteration,
-                stream_event=normalized_event.to_dict(),
-                sequence=stream_event_count,
+            accumulator = LLMStreamAccumulator(
+                expected_execution_identity=request.execution_identity,
+                require_expected_identity=request.execution_identity is not None,
             )
-        response = accumulator.to_response()
-        metadata = dict(response.metadata)
-        metadata["llm_streamed"] = True
-        metadata["llm_stream_event_count"] = stream_event_count
-        return LLMResponse(
-            content=response.content,
-            usage=response.usage,
-            metadata=metadata,
-            execution_identity=request.execution_identity,
-            structured_output=response.structured_output,
-            tool_calls=list(response.tool_calls),
-        )
+            stream_event_count = 0
+            raw_stream = stream(request)
+            stream_events = raw_stream if isinstance(raw_stream, Iterable) else []
+            for stream_event_count, stream_event in enumerate(stream_events, start=1):
+                normalized_event = LLMStreamEvent.from_any(stream_event)
+                accumulator.add_event(normalized_event)
+                metrics.llm_stream_event_count += 1
+                events.llm_stream_event(
+                    iteration=iteration,
+                    stream_event=normalized_event.to_dict(),
+                    sequence=stream_event_count,
+                )
+            response = accumulator.to_response()
+            metadata = dict(response.metadata)
+            metadata["llm_streamed"] = True
+            metadata["llm_stream_event_count"] = stream_event_count
+            return LLMResponse(
+                content=response.content,
+                usage=response.usage,
+                metadata=metadata,
+                execution_identity=request.execution_identity,
+                structured_output=response.structured_output,
+                tool_calls=list(response.tool_calls),
+            )
 
     def _reserve_global_budget_before_llm_call(
         self,
@@ -2227,6 +2314,39 @@ def _llm_call_artifact(
             "streamed": metadata.get("llm_streamed"),
         },
     )
+
+
+def _runner_turn_metadata(
+    evidence: ToolExecutionEvidencePort | None,
+    artifacts: list[LLMCallArtifact],
+    *,
+    iteration: int,
+    call_ordinal: int,
+) -> dict[str, Any]:
+    if evidence is None:
+        return {}
+    matches = [item for item in artifacts if item.iteration == iteration]
+    if len(matches) != 1:
+        raise ToolEvidencePersistenceError(
+            "tool call has no unique runner turn candidate evidence"
+        )
+    try:
+        committed = evidence.commit_runner_turn(matches[0].to_dict())
+    except ToolEvidencePersistenceError:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - fail closed before registration
+        raise ToolEvidencePersistenceError(
+            "required runner turn evidence write failed"
+        ) from exc
+    if not isinstance(committed, ToolRunnerTurnEvidence):
+        raise ToolEvidencePersistenceError(
+            "runner turn writer returned invalid durable evidence"
+        )
+    return {
+        "runner_turn_ref": committed.ref,
+        "runner_turn_checksum": committed.checksum,
+        "call_ordinal": call_ordinal,
+    }
 
 
 def _bind_llm_response_identity(

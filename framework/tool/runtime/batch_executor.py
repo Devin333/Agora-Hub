@@ -11,6 +11,7 @@ from framework.events import (
     W3CSpanContext,
     current_trace_context,
 )
+from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool.models import (
     ToolCall,
     ToolDefinitionError,
@@ -22,6 +23,7 @@ from framework.tool.models import (
 )
 from framework.tool.registry.registry import ToolRegistry
 from framework.tool.runtime.executor import ToolExecutor
+from framework.tool.runtime.evidence import ToolExecutionEvidencePort
 
 
 _READ_ONLY_SIDE_EFFECTS = {"", "none", "read_only"}
@@ -54,6 +56,10 @@ class ToolBatchExecutor:
         max_workers: int = 4,
         trace_context: TraceContext | W3CSpanContext | None = None,
         compensating_actions: dict[str, Callable[[ToolObservation], None]] | None = None,
+        graph_identity: GraphExecutionIdentity | None = None,
+        runtime_event_sink: Any | None = None,
+        execution_evidence: ToolExecutionEvidencePort | None = None,
+        require_explicit_execution_profile: bool = False,
     ) -> None:
         self._registry = registry
         self._artifact_manager = artifact_manager
@@ -62,10 +68,31 @@ class ToolBatchExecutor:
         self._execution_environment = execution_environment
         self._max_workers = max(1, max_workers)
         self._trace_context = trace_context
+        if graph_identity is not None and not isinstance(
+            graph_identity, GraphExecutionIdentity
+        ):
+            raise TypeError("graph_identity must be GraphExecutionIdentity")
+        if execution_evidence is not None and (
+            not isinstance(execution_evidence, ToolExecutionEvidencePort)
+            or getattr(execution_evidence, "is_durable", False) is not True
+        ):
+            raise TypeError(
+                "execution_evidence must implement the durable "
+                "ToolExecutionEvidencePort"
+            )
+        self._graph_identity = graph_identity
+        self._runtime_event_sink = runtime_event_sink
+        self._execution_evidence = execution_evidence
+        self._require_explicit_execution_profile = require_explicit_execution_profile
         # Fix #5: registry of rollback callables keyed by tool name
         self._compensating_actions: dict[str, Callable[[ToolObservation], None]] = (
             compensating_actions or {}
         )
+        if self._execution_evidence is not None and self._compensating_actions:
+            raise ValueError(
+                "controlled tool batches require a dedicated evidence capability "
+                "for compensating effects"
+            )
 
     def execute_batch(
         self,
@@ -95,9 +122,11 @@ class ToolBatchExecutor:
         max_calls = _max_tool_calls_per_iteration(policy)
         if len(calls) > max_calls:
             return [
-                _blocked_budget_observation(
-                    call,
-                    f"tool batch exceeds max_tool_calls_per_iteration of {max_calls}",
+                self._executor().record_pre_execution_rejection(
+                    _blocked_budget_observation(
+                        call,
+                        f"tool batch exceeds max_tool_calls_per_iteration of {max_calls}",
+                    )
                 )
                 for call in calls
             ]
@@ -122,16 +151,23 @@ class ToolBatchExecutor:
         # Fix #1: apply aggregation policy
         if mode == BatchCompletionMode.ANY_SUCCESS:
             if not any(obs.status == ToolStatus.SUCCEEDED for obs in results):
-                return [_failed_aggregation_observation(c, "any_success: no tool succeeded") for c in calls]
+                return [
+                    _failed_aggregation_observation(
+                        observation,
+                        "any_success: no tool succeeded",
+                    )
+                    for observation in results
+                ]
         elif mode == BatchCompletionMode.QUORUM:
             required = max(1, int(quorum or 1))
             succeeded = sum(1 for obs in results if obs.status == ToolStatus.SUCCEEDED)
             if succeeded < required:
                 return [
                     _failed_aggregation_observation(
-                        c, f"quorum: only {succeeded}/{required} tools succeeded"
+                        observation,
+                        f"quorum: only {succeeded}/{required} tools succeeded",
                     )
-                    for c in calls
+                    for observation in results
                 ]
         return results
 
@@ -203,11 +239,18 @@ class ToolBatchExecutor:
     ) -> list[ToolObservation]:
         """Fix #5: serial execution; compensate completed tools on first failure."""
         completed: list[ToolObservation] = []
-        for call in calls:
+        for index, call in enumerate(calls):
             obs = self._execute_one(call, policy)
             completed.append(obs)
             if obs.status != ToolStatus.SUCCEEDED:
                 self._compensate(completed[:-1])  # rollback all but the failed one
+                if self._execution_evidence is not None:
+                    completed.extend(
+                        self._executor().record_pre_execution_rejection(
+                            _blocked_strict_observation(pending)
+                        )
+                        for pending in calls[index + 1 :]
+                    )
                 break
         return completed
 
@@ -222,15 +265,21 @@ class ToolBatchExecutor:
                     pass  # compensation is best-effort; log in production
 
     def _execute_one(self, call: ToolCall, policy: ToolPolicy) -> ToolObservation:
-        executor = ToolExecutor(
+        return self._executor().execute(call, policy)
+
+    def _executor(self) -> ToolExecutor:
+        return ToolExecutor(
             self._registry,
             artifact_manager=self._artifact_manager,
             run_id=self._run_id,
             secret_provider=self._secret_provider,
             execution_environment=self._execution_environment,
             trace_context=self._trace_context or current_trace_context(),
+            graph_identity=self._graph_identity,
+            runtime_event_sink=self._runtime_event_sink,
+            execution_evidence=self._execution_evidence,
+            require_explicit_execution_profile=self._require_explicit_execution_profile,
         )
-        return executor.execute(call, policy)
 
 
 def _max_tool_calls_per_iteration(policy: ToolPolicy) -> int:
@@ -251,16 +300,45 @@ def _blocked_budget_observation(call: ToolCall, message: str) -> ToolObservation
     )
 
 
-def _failed_aggregation_observation(call: ToolCall, message: str) -> ToolObservation:
-    """Fix #1: synthetic failure observation for unmet aggregation policy."""
+def _blocked_strict_observation(call: ToolCall) -> ToolObservation:
     return ToolObservation(
         call=call,
+        result=ToolResult(
+            status=ToolStatus.BLOCKED,
+            error_type="ToolBatchNotInvoked",
+            error_message="strict tool batch stopped before this request was invoked",
+            call_id=call.call_id,
+            tool_name=call.tool_name,
+            metadata={"execution_disposition": "not_invoked"},
+        ),
+        elapsed_ms=0.0,
+    )
+
+
+def _failed_aggregation_observation(
+    observation: ToolObservation,
+    message: str,
+) -> ToolObservation:
+    """Fix #1: synthetic failure observation for unmet aggregation policy."""
+    source_ref = observation.result.metadata.get("tool_evidence_ref")
+    return ToolObservation(
+        call=observation.call,
         result=ToolResult(
             status=ToolStatus.FAILED,
             error_type="BatchAggregationError",
             error_message=message,
-            call_id=call.call_id,
-            tool_name=call.tool_name,
+            call_id=observation.call.call_id,
+            tool_name=observation.call.tool_name,
+            graph_identity=observation.call.graph_identity,
+            metadata={
+                "source_tool_status": observation.status.value,
+                **(
+                    {"source_tool_evidence_ref": source_ref}
+                    if isinstance(source_ref, str) and source_ref
+                    else {}
+                ),
+            },
         ),
-        elapsed_ms=0.0,
+        elapsed_ms=observation.elapsed_ms,
+        raw_result=observation.result,
     )
