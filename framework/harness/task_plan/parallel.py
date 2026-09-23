@@ -1442,10 +1442,14 @@ class ParallelAgentCoordinator:
         event_sink: Callable[[Mapping[str, Any]], Any] | None = None,
         check_capacity: bool = True,
     ) -> DispatchGroup:
+        from framework.harness.runtime_contract import validate_parallel_dispatch_contract
+
+        validate_parallel_dispatch_contract(request)
         # Validate the complete execution budget before any group admission
         # event can be emitted or persisted, including serial fallback.
         _require_live_execution_budget(request.plan)
         group = self._group_definition(request)
+        validate_parallel_dispatch_contract(request, group)
         with self._lock:
             session = self._sessions.get(group.group_id)
             if session is not None:

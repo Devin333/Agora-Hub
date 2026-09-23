@@ -62,6 +62,7 @@ class ExecutionStatus(StrEnum):
 # names stable for provider implementations while exposing a coarser denial
 # vocabulary to operators and callers.
 CAPABILITY_DENIAL_CODE_VERSION = "newsroom.execution-capability-denials/v1"
+EXECUTION_PROFILE_SCHEMA = "newsroom.execution-profile/v1"
 _CAPABILITY_DENIAL_CODES = MappingProxyType({
     "provider_unavailable": "execution_provider_unavailable",
     "filesystem_roots": "execution_filesystem_isolation_unsupported",
@@ -251,8 +252,11 @@ class ExecutionProfile:
     require_process_tree_control: bool = False
     require_resource_limits: bool = False
     require_termination_confirmation: bool = False
+    schema_version: str = EXECUTION_PROFILE_SCHEMA
 
     def __post_init__(self) -> None:
+        if self.schema_version != EXECUTION_PROFILE_SCHEMA:
+            raise ValueError(f"unsupported execution profile schema: {self.schema_version}")
         mode = ExecutionMode(self.mode)
         provider_id = _optional_identifier(self.provider_id, "provider_id")
         network_policy = (
@@ -390,6 +394,7 @@ class ExecutionProfile:
         if not isinstance(value, Mapping):
             raise TypeError("execution_profile must be an object")
         expected = {
+            "schema_version",
             "mode",
             "provider_id",
             "network_policy",
@@ -403,10 +408,16 @@ class ExecutionProfile:
         unknown = sorted(set(value) - expected)
         if unknown:
             raise ValueError(f"execution_profile contains unknown fields: {unknown}")
+        if value.get("schema_version") != EXECUTION_PROFILE_SCHEMA:
+            raise ValueError(
+                "execution_profile schema_version must be "
+                f"{EXECUTION_PROFILE_SCHEMA!r}"
+            )
         return cls(**dict(value))
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
             "mode": self.mode.value,
             "provider_id": self.provider_id,
             "network_policy": self.network_policy.to_dict(),
@@ -929,6 +940,7 @@ def _optional_checksum(value: Any, field_name: str) -> str | None:
 
 __all__ = [
     "CAPABILITY_DENIAL_CODE_VERSION",
+    "EXECUTION_PROFILE_SCHEMA",
     "ExecutionCapabilityProfile",
     "ExecutionMode",
     "ExecutionOutcome",

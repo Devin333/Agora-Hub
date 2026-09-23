@@ -877,6 +877,9 @@ class DurableTaskPlanStore:
                 "task result plan is unavailable",
                 code="task_plan_stale_result",
             )
+        from framework.harness.runtime_contract import validate_task_result_contract
+
+        validate_task_result_contract(plan, projection, result)
         if not result.matches_plan_identity(plan):
             raise HarnessValidationError(
                 "task result identity does not match accepted plan",

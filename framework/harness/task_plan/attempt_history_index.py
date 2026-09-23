@@ -383,6 +383,12 @@ def result_history_from_events(
     results: Iterable[TaskResultRecord],
 ) -> tuple[TaskAttemptHistoryRecord, ...]:
     """Preserve causal order, including superseded plans and late audit facts."""
+    plans = tuple(plans)
+    events = tuple(events)
+    results = tuple(results)
+    from framework.harness.runtime_contract import validate_history_read_contract
+
+    validate_history_read_contract(plans, events, results)
     plans_by_version = {plan.version: plan for plan in plans}
     result_by_checksum = {item.result_checksum: item for item in results}
     prefix: list[TaskPlanEvent] = []

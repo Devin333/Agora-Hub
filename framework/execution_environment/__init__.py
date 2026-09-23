@@ -9,6 +9,7 @@ from framework.execution_environment.errors import (
 from framework.execution_environment.fake import FakeExecutionEnvironment
 from framework.execution_environment.models import (
     CAPABILITY_DENIAL_CODE_VERSION,
+    EXECUTION_PROFILE_SCHEMA,
     ExecutionCapabilityProfile,
     ExecutionMode,
     ExecutionOutcome,
@@ -38,6 +39,7 @@ from framework.execution_environment.errors import (
 
 __all__ = [
     "CAPABILITY_DENIAL_CODE_VERSION",
+    "EXECUTION_PROFILE_SCHEMA",
     "ExecutionCapabilityProfile",
     "ExecutionEnvironmentError",
     "ExecutionEnvironmentPort",

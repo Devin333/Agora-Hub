@@ -35,6 +35,14 @@ from framework.harness.artifacts import (
     FakeArtifactPort,
     RunBoundArtifactPort,
 )
+from framework.harness.runtime_contract import (
+    HARNESS_RUNTIME_CONTRACT_VERSION,
+    RuntimeContractBinding,
+    runtime_contract_binding,
+    validate_history_read_contract,
+    validate_parallel_dispatch_contract,
+    validate_task_result_contract,
+)
 from framework.harness.context import (
     CONTEXT_ENVELOPE_SCHEMA_V2,
     CONTEXT_GRAPH_TASK_PLAN_STAGE_IDENTITY_SCHEMA_V2,
@@ -1276,6 +1284,12 @@ __all__ = [
     "RefDescriptor",
     "RefResolutionPort",
     "RefScope",
+    "HARNESS_RUNTIME_CONTRACT_VERSION",
+    "RuntimeContractBinding",
+    "runtime_contract_binding",
+    "validate_history_read_contract",
+    "validate_parallel_dispatch_contract",
+    "validate_task_result_contract",
 ]
 
 __all__ += _TASK_PLAN_EXPORTS
