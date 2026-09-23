@@ -100,13 +100,13 @@
       "kind": "subagent_runtime",
       "path": "interfaces/composition/research.py",
       "symbol": "dynamic_task_plan_runner_factory",
-      "classification": "blocked",
-      "state": "follow-up-required",
+      "classification": "migrate",
+      "state": "migrated",
       "owner": "harness-child-supervisor",
-      "rationale": "Dynamic Research still constructs the legacy SubAgentRuntime; migration belongs to child supervisor integration.",
-      "non_harness_managed_proof": "No production child launch is qualified through this path in the current change.",
-      "review_by": "2026-09-25",
-      "check": "tests/interfaces/composition/test_research_composition.py"
+      "rationale": "Dynamic Research obtains the shared durable lifecycle supervisor and parallel coordinator from LazyResearchChildRuntime before constructing the candidate-only SubAgentRuntime adapter.",
+      "non_harness_managed_proof": "Production child spawn, status, wait, cancel, and close calls are restricted to ParallelAgentCoordinator using the Harness-owned supervisor; SubAgentRuntime only invokes an admitted worker and persists its transcript.",
+      "review_by": "2026-12-24",
+      "check": "tests/architecture/test_harness_execution_and_child_caller_boundaries.py"
     },
     {
       "id": "research-canonical-events",

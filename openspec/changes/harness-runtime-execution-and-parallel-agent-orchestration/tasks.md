@@ -8,10 +8,10 @@
 ## 2. Execution Environment And Child Supervision
 
 - [ ] 2.1 Complete provider capability admission for filesystem roots, environment allowlists, network policy, argv, process limits, timeout, cancellation, and termination confirmation.
-- [ ] 2.2 Add process restart, tool timeout, child loss, cancellation uncertainty, and external side-effect deduplication integration scenarios.
+- [x] 2.2 Add process restart, tool timeout, child loss, cancellation uncertainty, and external side-effect deduplication integration scenarios.
 - [x] 2.3 Complete Harness-owned child `spawn/status/wait/cancel/close`, heartbeat, lease, stale reclaim, idempotent operation, and confirmed termination behavior through real composition.
 - [x] 2.4 Recover committed child results without re-invocation and fail closed for ambiguous ownership or non-idempotent side effects.
-- [ ] 2.5 Run architecture and production-caller scans proving every sandboxed tool and child lifecycle path enters Harness-owned ports.
+- [x] 2.5 Run architecture and production-caller scans proving every sandboxed tool and child lifecycle path enters Harness-owned ports. See `evidence/caller-boundary-scan-20260923.md`; the legacy Nougat entry remains explicitly blocked and fail-closed rather than executable outside the port.
 - [ ] 2.6 Produce deployment capability evidence for every enabled provider, including unsupported capability rejection and rollback behavior.
 
 ## 3. Durable Runtime Events And Replay
