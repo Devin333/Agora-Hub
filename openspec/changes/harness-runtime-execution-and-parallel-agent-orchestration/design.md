@@ -63,11 +63,11 @@ Alternative: silently fall back to serial execution whenever capacity or a depen
 
 ## Migration Plan
 
-1. Freeze the predecessor task/evidence snapshots and copy their still-open requirements into the merged task list.
-2. Keep the current static Research and single-child paths unchanged while implementing and testing the merged capability behind composition policy.
-3. Validate the merged specs and run focused framework, Research, architecture, compile, smoke, and source checks.
-4. Run deployment capability and rollback qualification for every enabled provider; keep the feature disabled when evidence is missing.
-5. Validate the merged change, then remove the two predecessor directories in the same scoped commit. Git history and the merged evidence traceability matrix preserve provenance.
+1. Consolidate and validate the merged change, then remove the two predecessor directories as requested. This document migration is complete in `1f4a8ae2`; it does not qualify implementation or release.
+2. Freeze the predecessor task/evidence snapshots and retain every still-open requirement and dependency in the merged traceability record. See `evidence/merged-traceability-20260923.md` and source snapshot `b13414cc2b64216c53fb4cb7f2ae76fb703a23ad`.
+3. Keep the current static Research and single-child paths while implementing and testing the merged capability behind composition policy.
+4. Validate the merged specs and run focused framework, Research, architecture, compile, full test, smoke, and source checks.
+5. Run deployment capability and rollback qualification for every enabled provider; keep the feature disabled when evidence is missing. Preserve the predecessor provenance and current acceptance evidence in Git history.
 
 Rollback disables new admissions or selects the explicitly approved serial adapter. It does not rewrite active group policy, delete receipts, bypass quality gates, or replay uncertain side effects.
 

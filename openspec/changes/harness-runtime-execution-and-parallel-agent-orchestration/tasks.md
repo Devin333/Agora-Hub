@@ -1,6 +1,6 @@
 ## 1. Contract Consolidation
 
-- [ ] 1.1 Freeze the predecessor evidence, current HEAD, worktree status, caller inventory, and exact dependency versions in a merged traceability record.
+- [x] 1.1 Freeze the predecessor evidence, current HEAD, worktree status, caller inventory, and exact dependency versions in a merged traceability record. See `evidence/merged-traceability-20260923.md` for every unchecked predecessor task and retained dependency blocker.
 - [ ] 1.2 Reconcile execution profile, child handle, group/wave/task/attempt, receipt, budget, event, artifact, and continuation schemas into one versioned contract without duplicate authorities.
 - [ ] 1.3 Add strict validators for identity, checksum, tenant/scope, capability, policy, reference, schema, and transition invariants.
 - [ ] 1.4 Record explicit `FEATURE_DISABLED`, `DEPENDENCY_UNAVAILABLE`, `DEGRADED_SERIAL`, and `ENABLED_PARALLEL` composition states and static defaults.
@@ -51,9 +51,9 @@
 ## 7. Verification And Release
 
 - [ ] 7.1 Run focused Harness, AgentLoop, tool, supervisor, Research, architecture, and source-boundary tests and fix root causes.
-- [ ] 7.2 Run `python -m scripts.dev compile`, `python -m scripts.dev test`, `python -m scripts.dev smoke`, and strict OpenSpec validation for the merged change and repository.
+- [ ] 7.2 Run `python -m scripts.dev compile`, `python -m scripts.dev test`, `python -m scripts.dev smoke`, and strict OpenSpec validation for the merged change and repository. Verify retained prerequisites from `model-aware-llm-context-preflight` 7.1-7.6, `durable-event-runtime` 9.5, and `harness-workflow-graph-runtime` 1.1 before release qualification; keep their evidence with their existing owners.
 - [ ] 7.3 Capture run/stage/group/wave/capability admission, wait, run, join, budget, retry, recovery, cancellation, and degraded telemetry evidence.
 - [ ] 7.4 Exercise generic AgentLoop only in controlled allowlisted runs after coordinator and continuation gates pass.
 - [ ] 7.5 Exercise allowlisted dynamic Research only after golden parity, quality gates, and dependency provenance pass.
 - [ ] 7.6 Rehearse disablement and explicit serial rollback with active groups pinned to original policy; preserve receipts/history and verify inspection/replay.
-- [ ] 7.7 Record implementation, recovery, deployment, rollback, and residual-risk evidence, then remove the two superseded predecessor change directories in a path-scoped commit.
+- [ ] 7.7 Record implementation, recovery, deployment, rollback, and residual-risk evidence. The two predecessor directories were already removed in migration commit `1f4a8ae2`; retain their Git provenance without treating that migration as release qualification.

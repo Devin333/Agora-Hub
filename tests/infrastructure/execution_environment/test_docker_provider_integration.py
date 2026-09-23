@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from pathlib import Path
 import subprocess
+import time
+from uuid import uuid4
 
 import pytest
 
@@ -28,15 +32,18 @@ pytestmark = pytest.mark.skipif(
 
 def _image_ref() -> str:
     configured = os.environ.get("NEWSROOM_DOCKER_TEST_IMAGE", "redis:7-alpine")
-    result = subprocess.run(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", configured],
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=10,
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", configured],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        pytest.fail(f"Docker qualification image could not be inspected: {exc}")
     if result.returncode != 0 or not result.stdout.strip().startswith("sha256:"):
-        pytest.skip(f"Docker qualification image is unavailable: {configured}")
+        pytest.fail(f"Docker qualification image is unavailable: {configured}")
     return result.stdout.strip()
 
 
@@ -76,12 +83,13 @@ def _request(
     environment: dict[str, str] | None = None,
     timeout_seconds: float = 5.0,
 ) -> ExecutionRequest:
+    unique_execution_id = f"{execution_id}-{uuid4().hex}"
     return ExecutionRequest(
-        execution_id=execution_id,
+        execution_id=unique_execution_id,
         tool_id="qualification.docker@1.0.0",
         graph_identity=_identity(),
-        operation_id=f"operation-{execution_id}",
-        attempt_id=f"attempt-{execution_id}",
+        operation_id=f"operation-{unique_execution_id}",
+        attempt_id=f"attempt-{unique_execution_id}",
         profile=profile,
         image=_image_ref(),
         argv=argv,
@@ -174,13 +182,97 @@ def test_real_docker_network_deny_blocks_external_connection(
     outcome = docker_registry.execute(
         _request(
             execution_id="network-deny",
-            profile=_profile("wget"),
-            argv=("wget", "-T", "1", "-O", "-", "http://1.1.1.1"),
+            profile=_profile("sh"),
+            argv=(
+                "sh",
+                "-c",
+                "printf 'NETWORK_PROBE_STARTED\\n'; "
+                "exec wget -T 1 -O - http://1.1.1.1",
+            ),
             read_roots=(str(tmp_path),),
         )
     )
+    output = (outcome.output or b"").lower()
     assert outcome.receipt.status is ExecutionStatus.FAILED
     assert outcome.receipt.termination_confirmed is True
+    assert outcome.receipt.exit_code not in (None, 126, 127)
+    assert b"network_probe_started" in output
+    assert b"network unreachable" in output
+
+
+def test_real_docker_removes_image_anonymous_volume_with_container(
+    docker_registry: ExecutionEnvironmentRegistry,
+    tmp_path: Path,
+) -> None:
+    request = _request(
+        execution_id="anonymous-volume-cleanup",
+        profile=_profile("sleep"),
+        argv=("sleep", "30"),
+        read_roots=(str(tmp_path),),
+        timeout_seconds=3.0,
+    )
+    container_name = DockerExecutionEnvironment._container_name(request.execution_id)
+    volume_name: str | None = None
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(docker_registry.execute, request)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not future.done():
+                inspect = subprocess.run(
+                    [
+                        "docker",
+                        "container",
+                        "inspect",
+                        "--format",
+                        "{{json .Mounts}}",
+                        container_name,
+                    ],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                    timeout=10,
+                )
+                if inspect.returncode == 0:
+                    mounts = json.loads(inspect.stdout)
+                    volume_name = next(
+                        (
+                            mount["Name"]
+                            for mount in mounts
+                            if mount.get("Type") == "volume"
+                            and mount.get("Destination") == "/data"
+                        ),
+                        None,
+                    )
+                    if volume_name is not None:
+                        break
+                time.sleep(0.05)
+            outcome = future.result(timeout=15)
+
+        assert volume_name is not None, "Redis /data anonymous volume was not observed"
+        assert outcome.receipt.status is ExecutionStatus.TIMED_OUT
+        assert outcome.receipt.termination_confirmed is True
+        volume_inspect = subprocess.run(
+            ["docker", "volume", "inspect", volume_name],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        assert volume_inspect.returncode != 0
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", "-v", container_name],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        if volume_name is not None:
+            subprocess.run(
+                ["docker", "volume", "rm", "-f", volume_name],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
 
 
 def test_real_docker_timeout_confirms_termination_and_removes_container(

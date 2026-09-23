@@ -870,10 +870,17 @@ class ChildAgentSupervisor:
         with self._lock:
             handle = self._require(child_id)
             existing = self._operations.get(operation_id)
+            if (
+                existing is None
+                or existing.child_id != child_id
+                or operation_id != handle.operation_id
+            ):
+                raise ChildAgentOperationConflict(
+                    "operation does not belong to child",
+                    code="operation_identity_conflict",
+                )
             if existing is not None and existing.receipt is not None:
                 return existing
-            if operation_id != handle.operation_id and existing is None:
-                raise ChildAgentOperationConflict("unknown cancellation operation", code="operation_identity_conflict")
             if handle.state is ChildAgentState.CANCELLED:
                 return self._operations[operation_id]
             if handle.state in {ChildAgentState.SUCCEEDED, ChildAgentState.FAILED, ChildAgentState.LOST, ChildAgentState.CLOSED}:

@@ -8,6 +8,7 @@ import pytest
 
 from framework.harness.subagents.supervisor import (
     ChildAgentHeartbeat,
+    ChildAgentOperationConflict,
     ChildAgentSpawnRequest,
     ChildAgentState,
     ChildAgentSupervisor,
@@ -157,6 +158,135 @@ def test_ambiguous_cancellation_is_lost_and_not_retried() -> None:
     assert result.receipt.status is ChildAgentState.LOST
     with pytest.raises(Exception, match="capacity"):
         supervisor.spawn(_request(operation_id="op-3"))
+
+
+@pytest.mark.parametrize(
+    "foreign_operation_state, requested_operation_id",
+    [
+        ("active", "op-b"),
+        ("completed", "op-b"),
+        ("active", "op-unknown"),
+    ],
+)
+def test_cancel_rejects_unbound_operation_before_any_side_effect(
+    foreign_operation_state: str,
+    requested_operation_id: str,
+) -> None:
+    class RecordingWorker:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.cancel_calls: list[str] = []
+
+        def run(self, _handle: object) -> dict[str, str]:
+            self.started.set()
+            self.release.wait(timeout=2)
+            return {"candidate": "ok"}
+
+        def cancel(self, handle: object) -> bool:
+            self.cancel_calls.append(handle.child_id)
+            self.release.set()
+            return True
+
+    worker_a = RecordingWorker()
+    worker_b = RecordingWorker()
+    supervisor = ChildAgentSupervisor(max_children=2)
+    try:
+        child_a = supervisor.spawn(
+            _request(child_id="child-a", operation_id="op-a"),
+            worker=worker_a,
+        )
+        child_b = supervisor.spawn(
+            _request(child_id="child-b", operation_id="op-b"),
+            worker=worker_b,
+        )
+        assert worker_a.started.wait(timeout=1)
+        assert worker_b.started.wait(timeout=1)
+        assert child_a.parent_graph_identity == child_b.parent_graph_identity
+
+        if foreign_operation_state == "completed":
+            supervisor.complete(
+                child_b.child_id,
+                operation_id=child_b.operation_id,
+                output={"candidate": "completed"},
+            )
+
+        states_before = {
+            child_a.child_id: supervisor.status(child_a.child_id).state,
+            child_b.child_id: supervisor.status(child_b.child_id).state,
+        }
+        cancel_events_before = sum(
+            event["event_type"] == "child_cancel_requested"
+            for event in supervisor.events.events
+        )
+
+        with pytest.raises(ChildAgentOperationConflict) as raised:
+            supervisor.cancel(
+                child_a.child_id,
+                operation_id=requested_operation_id,
+            )
+
+        assert raised.value.code == "operation_identity_conflict"
+        assert {
+            child_a.child_id: supervisor.status(child_a.child_id).state,
+            child_b.child_id: supervisor.status(child_b.child_id).state,
+        } == states_before
+        assert worker_a.cancel_calls == []
+        assert worker_b.cancel_calls == []
+        assert sum(
+            event["event_type"] == "child_cancel_requested"
+            for event in supervisor.events.events
+        ) == cancel_events_before
+    finally:
+        worker_a.release.set()
+        worker_b.release.set()
+        supervisor.shutdown()
+
+
+def test_cancel_with_bound_operation_is_idempotent_and_does_not_affect_sibling() -> None:
+    class RecordingWorker:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.cancel_calls: list[str] = []
+
+        def run(self, _handle: object) -> dict[str, str]:
+            self.started.set()
+            self.release.wait(timeout=2)
+            return {"candidate": "ok"}
+
+        def cancel(self, handle: object) -> bool:
+            self.cancel_calls.append(handle.child_id)
+            self.release.set()
+            return True
+
+    worker_a = RecordingWorker()
+    worker_b = RecordingWorker()
+    supervisor = ChildAgentSupervisor(max_children=2)
+    try:
+        child_a = supervisor.spawn(
+            _request(child_id="child-a", operation_id="op-a"),
+            worker=worker_a,
+        )
+        child_b = supervisor.spawn(
+            _request(child_id="child-b", operation_id="op-b"),
+            worker=worker_b,
+        )
+        assert worker_a.started.wait(timeout=1)
+        assert worker_b.started.wait(timeout=1)
+
+        first = supervisor.cancel(child_a.child_id, operation_id=child_a.operation_id)
+        second = supervisor.cancel(child_a.child_id, operation_id=child_a.operation_id)
+
+        assert second == first
+        assert first.handle.state is ChildAgentState.CANCELLED
+        assert worker_a.cancel_calls == [child_a.child_id]
+        assert worker_b.cancel_calls == []
+        assert supervisor.status(child_b.child_id).state is ChildAgentState.RUNNING
+    finally:
+        worker_a.release.set()
+        worker_b.release.set()
+        supervisor.shutdown()
 
 
 def test_complete_is_idempotent_and_runtime_events_are_projected() -> None:

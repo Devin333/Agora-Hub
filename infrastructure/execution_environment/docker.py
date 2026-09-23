@@ -229,8 +229,13 @@ class DockerExecutionEnvironment:
         finally:
             if termination_confirmed:
                 try:
-                    self._run([self._docker, "rm", "-f", container_name], timeout=self._probe_timeout_seconds)
+                    cleanup = self._run(
+                        [self._docker, "rm", "-f", "-v", container_name],
+                        timeout=self._probe_timeout_seconds,
+                    )
                 except ExecutionEnvironmentUnavailableError:
+                    cleanup = None
+                if cleanup is None or cleanup.returncode != 0:
                     termination_confirmed = False
                     status = ExecutionStatus.INDETERMINATE
                     reason_code = "termination_unconfirmed"

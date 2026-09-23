@@ -28,6 +28,17 @@ from tests.framework.harness.agent_loop.test_orchestration_runtime import _runti
 from tests.framework.harness.task_plan.test_durable_task_plan_store import _store, _EventStore, _ArtifactStore
 
 
+def _wait_for_spawned_wave(supervisor, session):
+    """Join workers admitted before the simulated coordinator crash."""
+    for task_id in sorted(session.active_children):
+        handle, _worker = session.active_children[task_id]
+        operation = supervisor.wait(
+            handle.child_id,
+            operation_id=handle.operation_id,
+        )
+        assert operation.receipt is not None
+
+
 @pytest.fixture
 def crashed_wave():
     plan = _accepted_parallel_plan(("task-1", "task-2"))
@@ -50,6 +61,11 @@ def crashed_wave():
     with pytest.raises(RuntimeError, match="crash before receipt"):
         coordinator.dispatch(request, invoke)
     session = next(iter(coordinator._sessions.values()))
+    # The receipt append fails after spawn_batch has submitted the whole wave.
+    # Join those already-admitted workers before tests snapshot calls so later
+    # mutations can only come from recovery dispatching work again.
+    _wait_for_spawned_wave(supervisor, session)
+    assert sorted(calls) == ["task-1", "task-2"]
     intents = tuple(item for item in events if item["event_type"] == "TASK_ATTEMPT_SPAWN_INTENT")
     try:
         yield SimpleNamespace(plan=plan, request=_admitted_request(request), events=events, calls=calls,
@@ -327,6 +343,8 @@ def test_indeterminate_event_write_failure_retries_same_coordinator_without_dupl
         )
         wave = session.waves[0]
         admitted_request = _admitted_request(request)
+        _wait_for_spawned_wave(supervisor, session)
+        assert sorted(calls) == ["task-1", "task-2"]
         calls_before_recovery = tuple(calls)
         reads = []
 

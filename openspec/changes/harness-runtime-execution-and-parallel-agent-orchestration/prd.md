@@ -84,6 +84,8 @@ Child 只能获得已接受的 document/evidence refs、role objective、policy-
 
 ## 7. 验收门
 
+合并迁移的逐项对应关系与冻结基线见 `evidence/merged-traceability-20260923.md`。旧 runtime change 的 context preflight 验收以及 `durable-event-runtime` 9.5、`harness-workflow-graph-runtime` 1.1 依赖仍由原 change 跟踪，当前均未验收；删除旧目录不会解除这些发布前置条件。
+
 | Gate | 验收内容 |
 | --- | --- |
 | G1 Contract | schema、identity、dedup、ref authority、budget、event、replay 和 strict validation 通过 |
@@ -103,4 +105,4 @@ Child 只能获得已接受的 document/evidence refs、role objective、policy-
 - 新 change 的 proposal、design、specs、tasks、PRD、实现证据和 strict validation 全部通过。
 - `python -m scripts.dev compile`、`python -m scripts.dev test`、`python -m scripts.dev smoke` 和范围匹配测试通过；失败必须修复根因。
 - 部署 provider capability、rollback、golden parity、replay 和 production caller evidence 已记录。
-- 旧 `harness-runtime-execution-safety` 与 `harness-codex-style-parallel-agent-orchestration` 目录只在上述证据完成后删除；Git history 保留其来源。
+- 旧 `harness-runtime-execution-safety` 与 `harness-codex-style-parallel-agent-orchestration` 目录已在合并规格校验后按用户要求删除，迁移提交为 `1f4a8ae2`；Git history 保留其来源。目录迁移不代表实现或发布验收完成，剩余工作由本 change 继续跟踪。
