@@ -66,6 +66,7 @@ from framework.harness.subagents.supervisor_store import (
     CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
     DurableChildAgentEventLog,
 )
+from framework.harness.subagents.owned_runtime import HarnessOwnedChildAgentRuntime
 from framework.harness.subagents.transcript import (
     DEFAULT_MAX_BUNDLE_BYTES,
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -98,6 +99,7 @@ from framework.harness.subagents.transcript_metadata import (
 )
 
 __all__ = [
+    "HarnessOwnedChildAgentRuntime",
     "FORBIDDEN_SUBAGENT_CONTEXT_KEYS",
     "FORBIDDEN_SUBAGENT_RESULT_KEYS",
     "FakeSubAgentContextBuilder",

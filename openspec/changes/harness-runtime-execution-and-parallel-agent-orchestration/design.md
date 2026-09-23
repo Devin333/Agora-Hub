@@ -55,6 +55,16 @@ Alternative: silently fall back to serial execution whenever capacity or a depen
 
 ## Risks / Trade-offs
 
+### Durable child lifecycle implementation boundary
+
+The Research dynamic capacity resource keeps a stable scope within the configured canonical backend. One Harness-owned runtime acquires its resource lease and restores occupancy before admission; all dynamic runs in that composition share its supervisor and coordinator. The resource is started lazily so the default static Research composition does not compete for dynamic ownership. Composition registers each trusted run/tenant binding before dispatch, and resource shutdown precedes storage shutdown.
+
+Ownership is a property of the protected supervisor admission resource. The owner generation and lease are checked through the same canonical transactional state boundary as lifecycle writes. A takeover fences the previous controller but cannot terminate its workers by implication: recovered active or indeterminate occupancy remains reserved. TaskPlan capacity and the physical child occupancy retain their existing distinct responsibilities and bindings; transcript/artifact stores continue to own result recovery and verification.
+
+Recovery is a startup operation. Malformed spawn history must block the whole admission scope when occupancy cannot be established; it cannot be silently skipped. Storage bounds must preserve enough terminal capacity for accepted children, and history cannot be truncated or a scope renamed to clear reservations. Independent process qualification uses durable barriers around admission, external-effect completion, transcript, terminal receipt, and TaskPlan commit windows; object reopening alone is insufficient evidence.
+
+A lifecycle append error may follow a successful storage commit. The supervisor therefore retains any uncertain budget reservation and fences new admission and subsequent mutations until durable recovery. A terminal-acknowledgement loss cannot be rewritten as a worker failure or a second result. Provider recovery tests must include a detached container that is observed running after its controller is killed; local thread termination cannot prove external process termination.
+
 - [External provider qualification] Local tests cannot prove Docker/process isolation or target rollback behavior -> record typed capability-blocked evidence and keep admission closed until a real provider receipt exists.
 - [Large integration surface] Merging two mature changes can hide missing predecessor evidence -> migrate every unchecked predecessor task into a numbered merged task and require a traceability matrix.
 - [Recovery ambiguity] A crash after spawn can leave side effects uncertain -> persist spawn intent and query supervisor status; use `INDETERMINATE` and quarantine rather than automatic retry when termination is unconfirmed.

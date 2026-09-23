@@ -395,13 +395,16 @@ def test_worker_returning_no_output_is_failed() -> None:
     assert result.receipt.reason_code == "worker_output_missing"
 
 
-def test_worker_start_failure_is_durable_terminal_failure() -> None:
+def test_worker_start_failure_is_durable_terminal_failure(monkeypatch) -> None:
     events: list[dict[str, object]] = []
     supervisor = ChildAgentSupervisor(
         event_sink=events.append,
         worker_factory=lambda _: (lambda _handle: {"candidate": "ok"}),
     )
-    supervisor.shutdown()
+    def fail_submit(*args, **kwargs):
+        raise RuntimeError("executor submission failed")
+
+    monkeypatch.setattr(supervisor._executor, "submit", fail_submit)
     with pytest.raises(RuntimeError):
         supervisor.spawn(_request())
     assert any(item["event_type"] == "child_terminal" for item in events)
@@ -510,8 +513,9 @@ def test_event_sink_failure_does_not_admit_child() -> None:
     supervisor = ChildAgentSupervisor(event_sink=fail)
     with pytest.raises(RuntimeError, match="durable sink unavailable"):
         supervisor.spawn(_request())
-    with pytest.raises(Exception, match="not found"):
+    with pytest.raises(ChildAgentSupervisorError) as raised:
         supervisor.status("child-does-not-exist")
+    assert raised.value.code == "child_event_store_recovery_required"
 
 
 def _sqlite_lifecycle(tmp_path):
@@ -540,6 +544,8 @@ def test_sqlite_restart_reuses_committed_result_without_worker_reinvocation(tmp_
         state_reader=first_store,
         state_key="run-1",
     )
+    first_log.acquire_owner("first")
+    first_log.register_run_scope("run-1", "tenant-1")
     first = ChildAgentSupervisor(
         event_sink=first_log,
         event_reader=first_log,
@@ -548,6 +554,7 @@ def test_sqlite_restart_reuses_committed_result_without_worker_reinvocation(tmp_
     handle = first.spawn(_request())
     committed = first.wait(handle.child_id, operation_id=handle.operation_id, timeout_seconds=1)
     first.shutdown()
+    first_log.release_owner()
 
     reopened_store = SQLiteEventStore(database, initialize=False)
     reopened_runtime = EventRuntime(
@@ -567,6 +574,7 @@ def test_sqlite_restart_reuses_committed_result_without_worker_reinvocation(tmp_
         restored_calls += 1
         return {"candidate": "duplicate"}
 
+    reopened_log.acquire_owner("restored")
     restored = ChildAgentSupervisor(
         event_sink=reopened_log,
         event_reader=reopened_log,
@@ -592,6 +600,8 @@ def test_sqlite_restart_preserves_cancellation_uncertainty_and_blocks_replacemen
     store = SQLiteEventStore(database, initialize=False)
     runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
     log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    log.acquire_owner("first")
+    log.register_run_scope("run-1", "tenant-1")
     started = threading.Event()
     release = threading.Event()
 
@@ -615,6 +625,7 @@ def test_sqlite_restart_preserves_cancellation_uncertainty_and_blocks_replacemen
     assert started.wait(timeout=1)
     cancelled = first.cancel(handle.child_id, operation_id=handle.operation_id)
     first.shutdown(wait=False)
+    log.release_owner()
 
     reopened_store = SQLiteEventStore(database, initialize=False)
     reopened_runtime = EventRuntime(
@@ -627,6 +638,7 @@ def test_sqlite_restart_preserves_cancellation_uncertainty_and_blocks_replacemen
         state_reader=reopened_store,
         state_key="run-1",
     )
+    reopened_log.acquire_owner("restored")
     restored = ChildAgentSupervisor(
         event_sink=reopened_log,
         event_reader=reopened_log,
@@ -651,6 +663,8 @@ def test_sqlite_replay_of_spawn_intent_does_not_invoke_external_worker_again(tmp
     store = SQLiteEventStore(database, initialize=False)
     runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
     log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    log.acquire_owner("first")
+    log.register_run_scope("run-1", "tenant-1")
     side_effects: list[str] = []
 
     class ExternalWorker:
@@ -666,6 +680,7 @@ def test_sqlite_replay_of_spawn_intent_does_not_invoke_external_worker_again(tmp
     handle = first.spawn(_request())
     first.wait(handle.child_id, operation_id=handle.operation_id, timeout_seconds=1)
     first.shutdown()
+    log.release_owner()
 
     reopened_store = SQLiteEventStore(database, initialize=False)
     reopened_runtime = EventRuntime(
@@ -678,6 +693,7 @@ def test_sqlite_replay_of_spawn_intent_does_not_invoke_external_worker_again(tmp
         state_reader=reopened_store,
         state_key="run-1",
     )
+    reopened_log.acquire_owner("restored")
     restored = ChildAgentSupervisor(
         event_sink=reopened_log,
         event_reader=reopened_log,
@@ -696,10 +712,13 @@ def test_sqlite_replay_rejects_operation_identity_with_changed_admission(tmp_pat
     store = SQLiteEventStore(database, initialize=False)
     runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
     log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    log.acquire_owner("first")
+    log.register_run_scope("run-1", "tenant-1")
     first = ChildAgentSupervisor(event_sink=log, event_reader=log, worker_factory=lambda _: {"candidate": "ok"})
     handle = first.spawn(_request())
     first.wait(handle.child_id, operation_id=handle.operation_id, timeout_seconds=1)
     first.shutdown()
+    log.release_owner()
 
     reopened_store = SQLiteEventStore(database, initialize=False)
     reopened_runtime = EventRuntime(
@@ -712,6 +731,7 @@ def test_sqlite_replay_rejects_operation_identity_with_changed_admission(tmp_pat
         state_reader=reopened_store,
         state_key="run-1",
     )
+    reopened_log.acquire_owner("restored")
     restored = ChildAgentSupervisor(
         event_sink=reopened_log,
         event_reader=reopened_log,

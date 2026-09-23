@@ -21,6 +21,43 @@ Child `spawn`, `status`, `wait`, `cancel`, `close`, heartbeat, lease, reclaim, a
 - **WHEN** a parent process restarts after a child result and terminal receipt were durably committed
 - **THEN** recovery SHALL reuse the committed result without invoking the child again
 
+### Requirement: Shared child admission has durable resource ownership
+The shared child capacity resource SHALL retain one stable admission scope across process restarts and runs. Its owner identity, resource-issued generation, and bounded lease SHALL be checked atomically with durable lifecycle mutations through the existing canonical persistence boundary. Task attempts, Graph sequence numbers, and unrelated side-effect leases SHALL NOT substitute for resource ownership. A control-plane takeover SHALL NOT imply that old workers have terminated or release their unconfirmed occupancy.
+
+#### Scenario: Another process owns the admission scope
+- **WHEN** a second process requests dynamic child execution while the first process holds a valid resource lease
+- **THEN** the second process SHALL reject dynamic admission without invoking a worker, and constructing the default static Research composition SHALL NOT acquire that dynamic lease
+
+#### Scenario: Resource ownership changes after a process stops responding
+- **WHEN** a new owner legally takes over an expired resource lease
+- **THEN** writes and new admissions from the previous owner SHALL be rejected, and every previously admitted child without confirmed termination SHALL remain accounted for before any new admission
+
+### Requirement: Child recovery validates the complete admission scope
+Production child recovery SHALL finish before opening admission and SHALL NOT clear live worker handles or futures. Lifecycle identity SHALL bind each child to a trusted registered run and tenant as well as its parent, task, attempt, and operation. Unparseable admission history, unknown occupancy, identity drift, or unavailable persistence SHALL block admission; missing or corrupt history SHALL NOT be treated as proof of an empty resource.
+
+#### Scenario: A malformed spawn record prevents occupancy reconstruction
+- **WHEN** restart recovery cannot determine the identity or occupancy of a persisted spawn
+- **THEN** the shared admission scope SHALL fail closed with a diagnostic and SHALL NOT start replacement work
+
+#### Scenario: A run is registered under another tenant
+- **WHEN** a caller attempts to register an existing run identity with a different tenant
+- **THEN** the runtime SHALL reject the registration before child admission and SHALL preserve the original binding
+
+#### Scenario: A lifecycle commit acknowledgement is lost
+- **WHEN** a spawn or terminal mutation may have committed but its acknowledgement is unavailable
+- **THEN** the supervisor SHALL reject new admission and further lifecycle mutation until durable recovery reconstructs occupancy and the committed result, and SHALL NOT overwrite a committed terminal result from its stale memory view
+
+#### Scenario: An external container survives the controller process
+- **WHEN** a controller process is killed after its admitted Docker child has performed an external side effect and the container is still running
+- **THEN** restart recovery SHALL retain the unconfirmed child occupancy, reject replacement execution, and SHALL NOT treat controller death as provider termination or repeat the side effect
+
+### Requirement: Durable lifecycle bounds preserve terminal evidence
+Lifecycle storage SHALL enforce bounded records and admission limits while reserving the storage needed to terminate already-admitted children. Exhaustion SHALL prevent new admissions before worker invocation. The runtime SHALL NOT truncate accepted history, change its stable scope, or discard outstanding occupancy to regain capacity. Persistence failures SHALL remain explicit and SHALL NOT be converted into successful termination receipts.
+
+#### Scenario: Lifecycle history reaches its admission bound
+- **WHEN** the remaining durable capacity is insufficient for a new child and its required terminal evidence
+- **THEN** admission SHALL be rejected and already-admitted children SHALL retain their reserved terminal capacity
+
 ### Requirement: Runtime events are canonical and replayable
 Turn, tool, approval, context, worker, and child lifecycle facts SHALL be appended to the canonical durable event stream with stable event identity, sequence, redaction, reason code, Graph/activity/attempt references, and bounded payload references. Projection rebuild and offline replay SHALL perform no live tool, worker, or scheduler call.
 

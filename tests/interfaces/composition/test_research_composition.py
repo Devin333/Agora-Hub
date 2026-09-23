@@ -79,6 +79,7 @@ from infrastructure.research.github_repository import (
 from infrastructure.research.local_chunk_store import LocalChunkPayloadStore
 from infrastructure.research.source_provider import ArxivResearchSourceProvider
 from infrastructure.storage.harness import SQLiteHarnessSideEffectStore
+from infrastructure.storage.events.sqlite import SQLiteEventStore
 from infrastructure.storage.artifacts import (
     LocalJsonArtifactCatalog,
     SQLiteGraphResultStore,
@@ -93,6 +94,7 @@ from interfaces.composition.research import (
     reset_default_research_runtime,
 )
 from interfaces.composition.research_settings import ResearchRuntimeSettings
+from interfaces.composition.research_child_runtime import LazyResearchChildRuntime
 from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
     RESEARCH_MINERU_PROFILE_ID,
@@ -480,6 +482,19 @@ def test_valid_settings_compose_full_durable_production_graph(
             runtime.event_port_factory("research-object-graph"),
             DurableHarnessTransitionPort,
         )
+        child_runtime = next(
+            resource
+            for resource in composition.resources
+            if isinstance(resource, LazyResearchChildRuntime)
+        )
+        assert child_runtime is composition.resources[-1]
+        assert child_runtime.started is False
+        event_store_index = next(
+            index
+            for index, resource in enumerate(composition.resources)
+            if isinstance(resource, SQLiteEventStore)
+        )
+        assert event_store_index < composition.resources.index(child_runtime)
 
         candidate_workspace = _ResearchRunWorkspace(
                 request=AnalyzePaperRequest(
@@ -498,6 +513,19 @@ def test_valid_settings_compose_full_durable_production_graph(
         dynamic_stage = runtime.dynamic_task_plan_runner_factory(
             workspace=candidate_workspace,
             dependencies=object(),
+        )
+        repeated_dynamic_stage = runtime.dynamic_task_plan_runner_factory(
+            workspace=candidate_workspace,
+            dependencies=object(),
+        )
+        assert child_runtime.started is True
+        assert (
+            repeated_dynamic_stage._child_agent_supervisor
+            is dynamic_stage._child_agent_supervisor
+        )
+        assert (
+            repeated_dynamic_stage._parallel_coordinator
+            is dynamic_stage._parallel_coordinator
         )
         assert isinstance(
             dynamic_stage._parallel_coordinator,

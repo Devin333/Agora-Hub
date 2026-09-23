@@ -107,6 +107,7 @@ from framework.harness import (
     DurableTaskPlanStore,
     transcript_entry_from_event,
 )
+from framework.harness.subagents import ChildAgentSupervisorError
 from framework.harness.graph import HarnessWorkerType
 from framework.harness.graph.compiler import HarnessGraphCompiler
 from framework.harness.graph.bindings import HarnessWorkerBinding
@@ -211,6 +212,10 @@ from interfaces.composition.research_settings import (
 )
 from interfaces.composition.research_graph_artifacts import (
     compose_research_graph_artifact_runtime,
+)
+from interfaces.composition.research_child_runtime import (
+    LazyResearchChildRuntime,
+    ResearchChildRuntimeUnavailableError,
 )
 from interfaces.services.research_service import (
     ResearchApplicationService,
@@ -1553,6 +1558,15 @@ def _build_configured_composition(
                 artifact_root=settings.artifact.root,
             ),
         )
+        owned_resources.extend(
+            resource
+            for resource in (
+                durable_events.event_store,
+                durable_events.replay_checkpoint_store,
+                durable_events.activity_store,
+            )
+            if resource is not None
+        )
         graph_event_projection = DurableGraphEventProjectionAdapter(
             reader=durable_events.event_store,
             schema_catalog=durable_events.schema_catalog,
@@ -1601,19 +1615,29 @@ def _build_configured_composition(
                 12 * 1024 * 1024,
             ),
         )
-        # Process-scoped lifecycle authority. Individual dynamic stage workers
-        # receive this same controller, so capacity is shared across runs and
-        # released with the composed runtime.
-        dynamic_child_agent_supervisor = ChildAgentSupervisor(
+        dynamic_child_runtime = LazyResearchChildRuntime(
+            state_runtime=durable_events.event_runtime,
+            state_reader=durable_events.event_store,
             max_children=build_research_analysis_task_plan_policy().max_parallelism,
-        )
-        owned_resources.append(dynamic_child_agent_supervisor)
-        dynamic_parallel_coordinator = ParallelAgentCoordinator(
-            max_workers=dynamic_child_agent_supervisor.capacity,
-            child_supervisor=dynamic_child_agent_supervisor,
         )
 
         def dynamic_task_plan_runner_factory(*, workspace: Any, dependencies: Any):
+            actor_metadata = {
+                "tenant_id": workspace.request.tenant_id,
+                "user_id": workspace.request.user_id,
+                "memory_namespace": workspace.request.memory_namespace,
+            }
+            result_tenant_id = research_event_tenant_id(actor_metadata)
+            try:
+                child_runtime_binding = dynamic_child_runtime.start_for_run(
+                    run_id=workspace.request.run_id,
+                    tenant_id=result_tenant_id,
+                )
+            except (ResearchChildRuntimeUnavailableError, ChildAgentSupervisorError):
+                raise ResearchRuntimeUnavailableError(
+                    (ResearchCapability.EVENT_LOG,),
+                    retryable=False,
+                ) from None
             graph = HarnessGraphCompiler().compile(
                 build_dynamic_paper_analysis_graph_definition()
             ).graph
@@ -1641,12 +1665,6 @@ def _build_configured_composition(
                     worker,
                 )
             capability_registry = build_research_analysis_capability_registry(bindings)
-            actor_metadata = {
-                "tenant_id": workspace.request.tenant_id,
-                "user_id": workspace.request.user_id,
-                "memory_namespace": workspace.request.memory_namespace,
-            }
-            result_tenant_id = research_event_tenant_id(actor_metadata)
             result_ref_authority = HarnessResultRefAuthority(
                 dynamic_ref_admission_service.store,
                 transcript_store=subagent_transcript_store,
@@ -1872,21 +1890,11 @@ def _build_configured_composition(
                 worker_result_recovery=recover,
                 result_verifier=result_verifier,
                 policy=policy,
-                parallel_coordinator=dynamic_parallel_coordinator,
-                child_agent_supervisor=dynamic_child_agent_supervisor,
+                parallel_coordinator=child_runtime_binding.parallel_coordinator,
+                child_agent_supervisor=child_runtime_binding.supervisor,
                 checkpoint_store=dynamic_checkpoint_store,
                 ref_admission_service=dynamic_ref_admission_service,
             )
-        owned_resources.extend(
-            resource
-            for resource in (
-                durable_events.event_store,
-                durable_events.replay_checkpoint_store,
-                durable_events.activity_store,
-            )
-            if resource is not None
-        )
-
         def event_port_factory(_run_id: str) -> HarnessTransitionPort:
             return durable_events.create_harness_transition_port(
                 tenant_id=_RESEARCH_EVENT_TENANT_ID,
@@ -2088,6 +2096,9 @@ def _build_configured_composition(
         ask_use_case = AskPaperUseCase()
         rag_ask_provider = _PaperRagUseCaseProvider(ask_use_case)
         owned_resources.append(rag_ask_provider)
+        # Registered last so reverse-order close releases the lifecycle owner
+        # and stops child workers before the canonical durable backend closes.
+        owned_resources.append(dynamic_child_runtime)
         service = ResearchApplicationService(
             analyze_use_case=AnalyzePaperUseCase(runtime),
             ask_use_case=ask_use_case,
