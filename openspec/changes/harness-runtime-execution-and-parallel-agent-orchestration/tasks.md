@@ -3,7 +3,7 @@
 - [x] 1.1 Freeze the predecessor evidence, current HEAD, worktree status, caller inventory, and exact dependency versions in a merged traceability record. See `evidence/merged-traceability-20260923.md` for every unchecked predecessor task and retained dependency blocker.
 - [ ] 1.2 Reconcile execution profile, child handle, group/wave/task/attempt, receipt, budget, event, artifact, and continuation schemas into one versioned contract without duplicate authorities.
 - [ ] 1.3 Add strict validators for identity, checksum, tenant/scope, capability, policy, reference, schema, and transition invariants.
-- [ ] 1.4 Record explicit `FEATURE_DISABLED`, `DEPENDENCY_UNAVAILABLE`, `DEGRADED_SERIAL`, and `ENABLED_PARALLEL` composition states and static defaults.
+- [x] 1.4 Record explicit `FEATURE_DISABLED`, `DEPENDENCY_UNAVAILABLE`, `DEGRADED_SERIAL`, and `ENABLED_PARALLEL` composition states and static defaults.
 
 ## 2. Execution Environment And Child Supervision
 

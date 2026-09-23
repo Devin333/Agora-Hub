@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Callable, Mapping
 
 from framework.memory.recall_port import ExecutionMemoryRecallPort
@@ -185,6 +186,21 @@ class HarnessAgentOrchestrationRuntime:
             and self._ref_admission_service is not None
             and getattr(self._ref_admission_service.store, "is_durable", False) is True
         )
+
+    @property
+    def composition_state(self) -> AgentOrchestrationCompositionState:
+        """Return the rollout state implied by the bound coordinator transport."""
+
+        coordinator = self._stage_runner.parallel_coordinator
+        # A serial adapter may be retained as an explicit fallback while the
+        # production child supervisor remains bound.  In that configuration
+        # the live transport is still parallel; serial degradation applies
+        # only when the supervisor is absent and the adapter owns dispatch.
+        if coordinator.child_supervisor is not None:
+            return AgentOrchestrationCompositionState.ENABLED_PARALLEL
+        if coordinator.serial_executor is not None:
+            return AgentOrchestrationCompositionState.DEGRADED_SERIAL
+        return AgentOrchestrationCompositionState.DEPENDENCY_UNAVAILABLE
 
     def admit_parent_inputs(
         self, task: Mapping[str, Any], *, agent: AgentSpec,
@@ -724,6 +740,21 @@ class HarnessAgentOrchestrationPort:
         return result
 
 
+class AgentOrchestrationCompositionState(StrEnum):
+    """Immutable rollout state selected by the Harness composition root."""
+
+    FEATURE_DISABLED = "FEATURE_DISABLED"
+    DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
+    DEGRADED_SERIAL = "DEGRADED_SERIAL"
+    ENABLED_PARALLEL = "ENABLED_PARALLEL"
+
+
+# The AgentLoop-facing name is retained as a discoverable alias for callers
+# that describe the state in terms of the Graph composition rather than the
+# orchestration port.
+AgentLoopCompositionState = AgentOrchestrationCompositionState
+
+
 @dataclass(frozen=True, slots=True)
 class AgentOrchestrationBinding:
     """Production composition state for the optional AgentLoop capability."""
@@ -731,6 +762,7 @@ class AgentOrchestrationBinding:
     feature_enabled: bool
     port: AgentOrchestrationPort | None
     availability_reason: str | None = None
+    composition_state: AgentOrchestrationCompositionState | str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.feature_enabled, bool):
@@ -744,10 +776,50 @@ class AgentOrchestrationBinding:
             raise ValueError("availability_reason must be a canonical string or None")
         if self.port is not None and self.availability_reason is not None:
             raise ValueError("available orchestration binding cannot carry an availability reason")
+        state = self.composition_state
+        if state is None:
+            state = (
+                AgentOrchestrationCompositionState.FEATURE_DISABLED
+                if not self.feature_enabled
+                else (
+                    AgentOrchestrationCompositionState.ENABLED_PARALLEL
+                    if self.port is not None
+                    else AgentOrchestrationCompositionState.DEPENDENCY_UNAVAILABLE
+                )
+            )
+        elif not isinstance(state, AgentOrchestrationCompositionState):
+            try:
+                state = AgentOrchestrationCompositionState(state)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "composition_state must be a supported AgentLoop composition state"
+                ) from exc
+        object.__setattr__(self, "composition_state", state)
+
+        if state is AgentOrchestrationCompositionState.FEATURE_DISABLED:
+            if self.feature_enabled or self.port is not None:
+                raise ValueError("FEATURE_DISABLED requires a disabled feature and no port")
+        elif state is AgentOrchestrationCompositionState.DEPENDENCY_UNAVAILABLE:
+            if not self.feature_enabled or self.port is not None:
+                raise ValueError(
+                    "DEPENDENCY_UNAVAILABLE requires an enabled feature without a port"
+                )
+        elif not self.feature_enabled or self.port is None:
+            raise ValueError(
+                f"{state} requires an enabled feature with an orchestration port"
+            )
 
     @property
     def available(self) -> bool:
-        return self.feature_enabled and self.port is not None
+        return (
+            self.composition_state
+            in {
+                AgentOrchestrationCompositionState.DEGRADED_SERIAL,
+                AgentOrchestrationCompositionState.ENABLED_PARALLEL,
+            }
+            and self.feature_enabled
+            and self.port is not None
+        )
 
     @classmethod
     def from_dispatch(
@@ -755,20 +827,49 @@ class AgentOrchestrationBinding:
         *,
         feature_enabled: bool,
         dispatch: AgentOrchestrationDispatch | None,
+        composition_state: AgentOrchestrationCompositionState | str | None = None,
     ) -> "AgentOrchestrationBinding":
         if not isinstance(feature_enabled, bool):
             raise TypeError("feature_enabled must be boolean")
+        state = composition_state
+        if state is None:
+            state = (
+                AgentOrchestrationCompositionState.FEATURE_DISABLED
+                if not feature_enabled
+                else (
+                    AgentOrchestrationCompositionState.ENABLED_PARALLEL
+                    if dispatch is not None
+                    else AgentOrchestrationCompositionState.DEPENDENCY_UNAVAILABLE
+                )
+            )
+        else:
+            try:
+                state = AgentOrchestrationCompositionState(state)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "composition_state must be a supported AgentLoop composition state"
+                ) from exc
+
+        if state is AgentOrchestrationCompositionState.FEATURE_DISABLED:
+            return cls(
+                feature_enabled=False,
+                port=None,
+                availability_reason="feature_disabled",
+                composition_state=state,
+            )
         if dispatch is None:
             return cls(
                 feature_enabled=feature_enabled,
                 port=None,
-                availability_reason=(
-                    "agent_orchestration_unavailable" if feature_enabled else "feature_disabled"
-                ),
+                availability_reason="agent_orchestration_unavailable",
+                composition_state=state,
             )
+        if not feature_enabled:
+            raise ValueError("enabled composition state requires feature_enabled=True")
         return cls(
             feature_enabled=feature_enabled,
             port=HarnessAgentOrchestrationPort(dispatch=dispatch),
+            composition_state=state,
         )
 
 
@@ -1021,6 +1122,8 @@ __all__ = [
     "PARENT_OBSERVATION_SCHEMA",
     "AgentOrchestrationPort",
     "AgentOrchestrationDispatch",
+    "AgentOrchestrationCompositionState",
+    "AgentLoopCompositionState",
     "AgentOrchestrationBinding",
     "AgentOrchestrationRequest",
     "AgentOrchestrationResult",

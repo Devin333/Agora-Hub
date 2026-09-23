@@ -37,6 +37,7 @@ from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
 from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
 from interfaces.composition.agent_loop_graph import (
     AgentLoopOrchestrationFeature,
+    AgentOrchestrationCompositionState,
     build_agent_loop_harness_orchestration_runtime,
     build_agent_loop_orchestration_binding,
 )
@@ -213,6 +214,7 @@ def test_composition_binding_wraps_real_harness_dispatcher() -> None:
     )
 
     assert binding.available is True
+    assert binding.composition_state is AgentOrchestrationCompositionState.ENABLED_PARALLEL
     assert binding.port is not None
     assert binding.port.dispatch(_request()) == _result()
     assert requests == [_request()]
@@ -234,6 +236,46 @@ def test_composition_binding_reports_stable_unavailability(
     assert binding.available is False
     assert binding.port is None
     assert binding.availability_reason == reason
+    assert binding.composition_state is (
+        AgentOrchestrationCompositionState.DEPENDENCY_UNAVAILABLE
+        if feature_enabled
+        else AgentOrchestrationCompositionState.FEATURE_DISABLED
+    )
+
+
+def test_composition_binding_can_select_explicit_serial_rollout() -> None:
+    binding = build_agent_loop_orchestration_binding(
+        feature_enabled=True,
+        dispatch=lambda _request: _result(),
+        composition_state=AgentOrchestrationCompositionState.DEGRADED_SERIAL,
+    )
+
+    assert binding.available is True
+    assert binding.composition_state is AgentOrchestrationCompositionState.DEGRADED_SERIAL
+    assert binding.feature_enabled is True
+    assert binding.availability_reason is None
+
+
+def test_composition_state_is_not_derived_from_worker_result() -> None:
+    binding = build_agent_loop_orchestration_binding(
+        feature_enabled=True,
+        dispatch=lambda _request: _result(),
+    )
+
+    assert binding.composition_state is AgentOrchestrationCompositionState.ENABLED_PARALLEL
+    assert binding.port is not None
+
+
+def test_disabled_composition_suppresses_dispatch_even_when_callback_is_supplied() -> None:
+    binding = build_agent_loop_orchestration_binding(
+        feature_enabled=False,
+        dispatch=lambda _request: _result(),
+    )
+
+    assert binding.available is False
+    assert binding.port is None
+    assert binding.composition_state is AgentOrchestrationCompositionState.FEATURE_DISABLED
+    assert binding.availability_reason == "feature_disabled"
 
 
 def test_composition_adapter_rejects_join_result_outside_candidate() -> None:
@@ -299,6 +341,14 @@ def test_production_factory_binds_one_authorized_executor_for_execution_and_reco
         verifier.artifact_reference_verifier
         is executor.result_ref_authority.artifact_descriptors
     )
+
+
+def test_runtime_state_prefers_bound_parallel_supervisor_over_serial_fallback(tmp_path) -> None:
+    kwargs = _factory_kwargs(tmp_path)
+    runtime = build_agent_loop_harness_orchestration_runtime(**kwargs)
+    runtime._stage_runner.parallel_coordinator.serial_executor = SerialTaskExecutorAdapter()
+
+    assert runtime.composition_state is AgentOrchestrationCompositionState.ENABLED_PARALLEL
 
 
 def _break_production_child_binding(kwargs, root, case: str) -> str:

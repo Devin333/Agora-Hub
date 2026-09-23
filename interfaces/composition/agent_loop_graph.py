@@ -8,6 +8,7 @@ from framework.agent.loop.runner import AgentRunner
 from framework.harness.artifacts import RunBoundArtifactPort
 from framework.harness.agent_loop import (
     AgentOrchestrationBinding,
+    AgentOrchestrationCompositionState,
     AgentOrchestrationDispatch,
     AgentOrchestrationTaskProfile,
     AgentLoopGraphActivityBindingBundle,
@@ -429,6 +430,12 @@ class AgentLoopGraphRuntimeComposition:
         return self._orchestration_binding
 
     @property
+    def composition_state(self) -> AgentOrchestrationCompositionState:
+        """Return the immutable rollout state selected during composition."""
+
+        return self._orchestration_binding.composition_state
+
+    @property
     def orchestration_feature(self) -> AgentLoopOrchestrationFeature:
         """Return the immutable feature decision selected at composition time."""
 
@@ -538,6 +545,7 @@ def build_agent_loop_orchestration_binding(
     feature_enabled: bool,
     runtime: HarnessAgentOrchestrationRuntime | None = None,
     dispatch: AgentOrchestrationDispatch | None = None,
+    composition_state: AgentOrchestrationCompositionState | str | None = None,
 ) -> AgentOrchestrationBinding:
     """Resolve the only generic AgentLoop-to-Harness delegation boundary.
 
@@ -549,19 +557,43 @@ def build_agent_loop_orchestration_binding(
     if runtime is not None:
         if not isinstance(runtime, HarnessAgentOrchestrationRuntime):
             raise TypeError("runtime must be HarnessAgentOrchestrationRuntime")
+        state = composition_state
+        if state is None:
+            state = runtime.composition_state
+        try:
+            state = AgentOrchestrationCompositionState(state)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "composition_state must be a supported AgentLoop composition state"
+            ) from exc
+        if not feature_enabled or state is AgentOrchestrationCompositionState.FEATURE_DISABLED:
+            return AgentOrchestrationBinding(
+                feature_enabled=False,
+                port=None,
+                availability_reason="feature_disabled",
+                composition_state=AgentOrchestrationCompositionState.FEATURE_DISABLED,
+            )
+        if state is AgentOrchestrationCompositionState.DEPENDENCY_UNAVAILABLE:
+            raise ValueError("DEPENDENCY_UNAVAILABLE cannot bind a real orchestration runtime")
+        if state is not runtime.composition_state:
+            raise ValueError(
+                "composition_state does not match the bound orchestration coordinator"
+            )
         return AgentOrchestrationBinding(
-            feature_enabled=feature_enabled,
-            port=runtime if feature_enabled else None,
-            availability_reason=None if feature_enabled else "feature_disabled",
+            feature_enabled=True,
+            port=runtime,
+            composition_state=state,
         )
     return AgentOrchestrationBinding.from_dispatch(
         feature_enabled=feature_enabled,
         dispatch=dispatch,
+        composition_state=composition_state,
     )
 
 
 __all__ = [
     "AgentLoopOrchestrationFeature",
+    "AgentOrchestrationCompositionState",
     "AgentLoopGraphRuntimeComposition",
     "build_agent_loop_harness_orchestration_runtime",
     "build_agent_loop_orchestration_binding",
