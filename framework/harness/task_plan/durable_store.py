@@ -877,9 +877,6 @@ class DurableTaskPlanStore:
                 "task result plan is unavailable",
                 code="task_plan_stale_result",
             )
-        from framework.harness.runtime_contract import validate_task_result_contract
-
-        validate_task_result_contract(plan, projection, result)
         if not result.matches_plan_identity(plan):
             raise HarnessValidationError(
                 "task result identity does not match accepted plan",
@@ -931,6 +928,9 @@ class DurableTaskPlanStore:
                 "task already has a committed terminal result",
                 code="task_plan_duplicate_result_conflict",
             )
+        from framework.harness.runtime_contract import validate_task_result_contract
+
+        validate_task_result_contract(plan, projection, result)
         history_record_for_result(plan, result, events)
         _require_subagent_result_evidence(result, definition)
         _validate_result_usage(result, definition)

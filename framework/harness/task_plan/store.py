@@ -1469,9 +1469,6 @@ class InMemoryTaskPlanStore:
             plan = self._plans.get((result.run_id, result.stage_id, result.plan_version))
             if plan is None:
                 raise HarnessValidationError("task result plan is unavailable", code="task_plan_stale_result")
-            from framework.harness.runtime_contract import validate_task_result_contract
-
-            validate_task_result_contract(plan, projection, result)
             if not result.matches_plan_identity(plan):
                 raise HarnessValidationError(
                     "task result identity does not match accepted plan",
@@ -1501,6 +1498,9 @@ class InMemoryTaskPlanStore:
                 raise HarnessValidationError("task result belongs to a different attempt", code="task_plan_wrong_attempt")
             if task.status in {TaskLifecycle.SUCCEEDED, TaskLifecycle.SKIPPED}:
                 raise HarnessValidationError("task already has a committed terminal result", code="task_plan_duplicate_result_conflict")
+            from framework.harness.runtime_contract import validate_task_result_contract
+
+            validate_task_result_contract(plan, projection, result)
             history_record_for_result(plan, result, self.read_events(result.run_id, result.stage_id))
             _require_subagent_result_evidence(result, definition)
             _validate_result_usage(result, definition)
