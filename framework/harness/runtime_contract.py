@@ -7,7 +7,7 @@ does not own a second registry or persistence store.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -118,36 +118,189 @@ def validate_parallel_dispatch_contract(request: Any, group: Any | None = None) 
     """Validate immutable admission bindings before capacity or worker work."""
 
     binding = runtime_contract_binding()
-    from framework.harness.task_plan.parallel import PARALLEL_DISPATCH_REQUEST_SCHEMA
+    from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+    from framework.harness.task_plan.models import TaskInstance, ValidatedTaskPlan
+    from framework.harness.task_plan.parallel import (
+        PARALLEL_DISPATCH_REQUEST_SCHEMA,
+        DispatchGroup,
+        ParallelDispatchRequest,
+        _admission_policy_checksum,
+    )
     from framework.harness.task_plan.parallel_admission import validate_group_plan_binding
+    from framework.harness.task_plan.scheduler import task_instance_for_attempt
     from framework.harness.task_plan.schema import (
         DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
         TaskPlanContractKind,
     )
-    from framework.harness.task_plan.models import ValidatedTaskPlan
 
-    if getattr(request, "schema_version", None) != PARALLEL_DISPATCH_REQUEST_SCHEMA:
+    if (
+        type(request) is not ParallelDispatchRequest
+        or request.schema_version != PARALLEL_DISPATCH_REQUEST_SCHEMA
+    ):
         raise HarnessValidationError(
-            "unsupported parallel dispatch request schema",
+            "parallel dispatch requires the canonical request type and schema",
             code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
         )
-    plan = getattr(request, "plan", None)
-    if not isinstance(plan, ValidatedTaskPlan):
+    plan = request.plan
+    if type(plan) is not ValidatedTaskPlan:
         raise HarnessValidationError("dispatch plan is not validated", code="RUNTIME_CONTRACT_IDENTITY_MISMATCH")
     DEFAULT_TASK_PLAN_SCHEMA_REGISTRY.require_executable(
         TaskPlanContractKind.VALIDATED_PLAN, plan.schema_version
     )
-    instances = tuple(getattr(request, "task_instances", ()))
-    if tuple(item.plan_checksum for item in instances) != (plan.plan_checksum,) * len(instances):
+    try:
+        ValidatedTaskPlan.from_dict(plan.to_dict())
+    except (HarnessValidationError, TypeError, ValueError, AttributeError, KeyError) as exc:
         raise HarnessValidationError(
-            "dispatch task instance checksum differs from accepted plan",
+            "dispatch plan checksum differs from canonical content",
             code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+        ) from exc
+
+    definitions = {item.task_id: item for item in plan.tasks}
+    instances = tuple(request.task_instances)
+    if any(type(item) is not TaskInstance for item in instances):
+        raise HarnessValidationError(
+            "dispatch request contains a non-canonical task instance",
+            code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
         )
+    if len({item.task_id for item in instances}) != len(instances):
+        raise HarnessValidationError(
+            "dispatch request contains duplicate task references",
+            code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+        )
+    for instance in instances:
+        if instance.schema_version != binding.owners["task_instance"]:
+            raise HarnessValidationError(
+                "unsupported task instance schema",
+                code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+            )
+        if instance.plan_checksum != plan.plan_checksum:
+            raise HarnessValidationError(
+                "dispatch task instance checksum differs from accepted plan",
+                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+            )
+        if not instance.matches_plan_identity(plan):
+            raise HarnessValidationError(
+                "dispatch task instance scope differs from accepted plan",
+                code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+            )
+        definition = definitions.get(instance.task_id)
+        if definition is None:
+            raise HarnessValidationError(
+                "dispatch task instance references an unknown task",
+                code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+            )
+        if instance.worker_ref != definition.worker_ref:
+            raise HarnessValidationError(
+                "dispatch task instance uses an unapproved worker capability",
+                code="RUNTIME_CONTRACT_CAPABILITY_MISMATCH",
+            )
+        if instance.task_definition_checksum != definition.task_definition_checksum:
+            raise HarnessValidationError(
+                "dispatch task definition checksum differs from accepted plan",
+                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+            )
+        expected = task_instance_for_attempt(plan, instance.task_id, instance.attempt)
+        if (
+            instance.task_instance_id != expected.task_instance_id
+            or instance.idempotency_key != expected.idempotency_key
+            or instance.fencing_token != expected.fencing_token
+        ):
+            raise HarnessValidationError(
+                "dispatch task instance has a forged attempt identity",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
+        try:
+            canonical = TaskInstance.from_dict(instance.to_dict())
+        except (HarnessValidationError, TypeError, ValueError, AttributeError, KeyError) as exc:
+            raise HarnessValidationError(
+                "dispatch task instance checksum differs from canonical content",
+                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+            ) from exc
+        if canonical != expected:
+            raise HarnessValidationError(
+                "dispatch task instance differs from the accepted task binding",
+                code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+            )
+
+    try:
+        ledger = TaskPlanBudgetLedger.from_snapshot(request.budget_snapshot)
+    except (HarnessValidationError, TypeError, ValueError, AttributeError, KeyError) as exc:
+        raise HarnessValidationError(
+            "dispatch budget snapshot is invalid",
+            code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+        ) from exc
+    if (
+        (ledger.run_id, ledger.stage_id, ledger.policy_ref)
+        != (plan.run_id, plan.stage_id, plan.policy_ref)
+    ):
+        raise HarnessValidationError(
+            "dispatch budget belongs to a different run, stage, or policy",
+            code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+        )
+    if dict(ledger.parent_allocation) != plan.limits.aggregate_task_budget.to_dict():
+        raise HarnessValidationError(
+            "dispatch budget policy differs from the accepted plan",
+            code="RUNTIME_CONTRACT_POLICY_MISMATCH",
+        )
+
+    # Re-run the canonical request owner's validation so post-construction
+    # mutation of capacity, policy, reference, or identity fields cannot cross
+    # the admission boundary.  The reconstructed value is deliberately not a
+    # second schema owner.
+    try:
+        canonical_request = replace(request)
+    except (HarnessValidationError, TypeError, ValueError, AttributeError, KeyError) as exc:
+        raise HarnessValidationError(
+            "parallel dispatch request no longer satisfies its owner contract",
+            code="RUNTIME_CONTRACT_POLICY_MISMATCH",
+        ) from exc
+    if canonical_request != request:
+        raise HarnessValidationError(
+            "parallel dispatch request differs from its canonical owner model",
+            code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+        )
+
     if group is not None:
-        snapshot = group.to_dict() if hasattr(group, "to_dict") else group
-        if not isinstance(snapshot, Mapping):
-            raise HarnessValidationError("dispatch group snapshot is invalid", code="RUNTIME_CONTRACT_SCHEMA_MISMATCH")
+        if type(group) is not DispatchGroup:
+            raise HarnessValidationError(
+                "dispatch group must use the canonical owner type",
+                code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+            )
+        snapshot = group.to_dict()
+        try:
+            canonical_group = DispatchGroup.from_dict(snapshot)
+        except (HarnessValidationError, TypeError, ValueError, AttributeError, KeyError) as exc:
+            raise HarnessValidationError(
+                "dispatch group identity or checksum is not canonical",
+                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+            ) from exc
+        if canonical_group != group:
+            raise HarnessValidationError(
+                "dispatch group differs from its canonical owner model",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
         validate_group_plan_binding(snapshot, plan)
+        if group.admission_policy_checksum != _admission_policy_checksum(request):
+            raise HarnessValidationError(
+                "dispatch group policy differs from the admitted request",
+                code="RUNTIME_CONTRACT_POLICY_MISMATCH",
+            )
+        if (
+            group.admitted_at_ms != request.group_admitted_at_ms
+            or group.absolute_deadline_ms != request.group_absolute_deadline_ms
+            or group.correlation_id != (request.correlation_id or f"group-{plan.plan_id}")
+            or group.join_policy.value != request.join_policy.value
+            or group.max_waves != request.max_waves
+        ):
+            raise HarnessValidationError(
+                "dispatch group transition metadata differs from the admitted request",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
+        if group.state.value != "ADMITTED":
+            raise HarnessValidationError(
+                "dispatch group has not completed the admission transition",
+                code="RUNTIME_CONTRACT_TRANSITION_INVALID",
+            )
 
 
 def validate_task_result_contract(
