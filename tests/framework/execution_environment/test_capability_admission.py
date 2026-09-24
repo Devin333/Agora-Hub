@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from framework.execution_environment import (
@@ -195,3 +197,49 @@ def test_resource_capability_checks_requested_dimensions_independently() -> None
 
 def test_unknown_capability_uses_versioned_generic_code() -> None:
     assert capability_denial_code("future_capability") == "execution_capability_unsupported"
+
+
+def test_timeout_admission_requires_timeout_and_cancellation_capabilities() -> None:
+    request = replace(_request(), timeout_seconds=10.0)
+    capabilities = ExecutionCapabilityProfile(
+        provider_id="test-provider",
+        available=True,
+        isolates_environment=True,
+        enforces_argv_policy=True,
+        controls_process_tree=True,
+        confirms_termination=True,
+    )
+
+    diagnostics = capabilities.admission_diagnostics(request)
+
+    assert diagnostics["missing"] == [
+        "network_allowlist",
+        "memory_limits",
+        "timeout",
+        "cancellation",
+        "secret_handle_injection",
+    ]
+    assert diagnostics["denials"][2:4] == [
+        {"capability": "timeout", "denial_code": "execution_timeout_unsupported"},
+        {"capability": "cancellation", "denial_code": "execution_cancellation_unsupported"},
+    ]
+    assert diagnostics["denial_code"] == "execution_capability_admission_denied"
+    assert capabilities.to_dict()["enforces_timeout"] is False
+    assert capabilities.to_dict()["supports_cancellation"] is False
+
+
+def test_timeout_admission_does_not_require_capabilities_without_timeout() -> None:
+    request = _request()
+    capabilities = ExecutionCapabilityProfile(
+        provider_id="test-provider",
+        available=True,
+        enforces_network_allowlist=True,
+        isolates_environment=True,
+        enforces_argv_policy=True,
+        controls_process_tree=True,
+        enforces_memory_limits=True,
+        confirms_termination=True,
+        supports_secret_handles=True,
+    )
+
+    assert capabilities.missing_for(request) == ()

@@ -184,3 +184,5 @@ def test_process_composition_publishes_profile_catalog_and_docker_denial_contrac
     assert docker["supports_secret_handles"] is False
     assert docker["enforces_cpu_limits"] is False
     assert docker["enforces_child_process_allowlist"] is False
+    assert docker["enforces_timeout"] is True
+    assert docker["supports_cancellation"] is True

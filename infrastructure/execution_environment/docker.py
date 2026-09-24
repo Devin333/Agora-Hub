@@ -66,9 +66,11 @@ class DockerExecutionEnvironment:
             enforces_memory_limits=True,
             enforces_cpu_limits=False,
             enforces_process_limits=True,
+            enforces_timeout=True,
+            supports_cancellation=True,
             confirms_termination=True,
             supports_secret_handles=False,
-            version="docker-v1",
+            version="docker-v2",
         )
 
     def execute(self, request: ExecutionRequest) -> ExecutionOutcome:

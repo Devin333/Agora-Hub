@@ -76,6 +76,8 @@ _CAPABILITY_DENIAL_CODES = MappingProxyType({
     "memory_limits": "execution_resource_limits_unsupported",
     "cpu_limits": "execution_resource_limits_unsupported",
     "process_limits": "execution_resource_limits_unsupported",
+    "timeout": "execution_timeout_unsupported",
+    "cancellation": "execution_cancellation_unsupported",
     "termination_confirmation": "execution_termination_confirmation_unsupported",
     "secret_handle_injection": "execution_secret_handles_unsupported",
 })
@@ -577,6 +579,8 @@ class ExecutionCapabilityProfile:
     enforces_process_limits: bool = False
     confirms_termination: bool = False
     supports_secret_handles: bool = False
+    enforces_timeout: bool = False
+    supports_cancellation: bool = False
     version: str = "1"
 
     def __post_init__(self) -> None:
@@ -595,6 +599,8 @@ class ExecutionCapabilityProfile:
             "enforces_memory_limits",
             "enforces_cpu_limits",
             "enforces_process_limits",
+            "enforces_timeout",
+            "supports_cancellation",
             "confirms_termination",
             "supports_secret_handles",
         ):
@@ -649,6 +655,15 @@ class ExecutionCapabilityProfile:
                 missing.append("resource_limits")
         if profile.require_termination_confirmation and not self.confirms_termination:
             missing.append("termination_confirmation")
+        # A timeout is only safe when the provider can both enforce the
+        # deadline and interrupt the running process.  The request's default
+        # cancellation grace remains a request policy; it does not itself
+        # make cancellation a required capability for unbounded executions.
+        if request.timeout_seconds is not None:
+            if not self.enforces_timeout:
+                missing.append("timeout")
+            if not self.supports_cancellation:
+                missing.append("cancellation")
         if request.secret_handles and not self.supports_secret_handles:
             missing.append("secret_handle_injection")
         return tuple(missing)
@@ -706,6 +721,8 @@ class ExecutionCapabilityProfile:
             "enforces_memory_limits": self.enforces_memory_limits,
             "enforces_cpu_limits": self.enforces_cpu_limits,
             "enforces_process_limits": self.enforces_process_limits,
+            "enforces_timeout": self.enforces_timeout,
+            "supports_cancellation": self.supports_cancellation,
             "confirms_termination": self.confirms_termination,
             "supports_secret_handles": self.supports_secret_handles,
             "version": self.version,
