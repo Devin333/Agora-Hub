@@ -6,6 +6,7 @@ from hashlib import sha256
 from framework.execution_environment import (
     ExecutionCapabilityProfile,
     ExecutionEnvironmentRegistry,
+    ExecutionRequest,
     ExecutionMode,
     ExecutionOutcome,
     ExecutionProfile,
@@ -44,10 +45,15 @@ def test_sandboxed_definition_never_falls_back_to_in_process_executor() -> None:
         input_schema={},
         metadata={
             "execution_profile": profile.to_dict(),
-            "execution": {"image": "python:3.12", "argv": ["python", "-c", "print(1)"]},
+            "execution": {
+                "image": "python:3.12",
+                "argv": ["python", "-c", "print(1)"],
+                "cancellation_grace_seconds": 0,
+            },
         },
     )
     called: list[bool] = []
+    captured_requests: list[ExecutionRequest] = []
     registry = ToolRegistry()
     registry.register(definition, lambda _: called.append(True))
     capabilities = ExecutionCapabilityProfile(
@@ -61,6 +67,7 @@ def test_sandboxed_definition_never_falls_back_to_in_process_executor() -> None:
     )
 
     def run(request):
+        captured_requests.append(request)
         now = datetime.now(UTC)
         output = '{"sandbox": true}'
         receipt = ExecutionReceipt(
@@ -94,6 +101,7 @@ def test_sandboxed_definition_never_falls_back_to_in_process_executor() -> None:
     assert observation.status is ToolStatus.SUCCEEDED
     assert observation.result.output == {"sandbox": True}
     assert called == []
+    assert captured_requests[0].cancellation_grace_seconds == 0.0
 
 
 def test_sandboxed_definition_without_environment_fails_closed() -> None:
@@ -121,6 +129,51 @@ def test_sandboxed_definition_without_environment_fails_closed() -> None:
     assert observation.result.metadata["reason_code"] == "execution_environment_unavailable"
     assert observation.result.metadata["execution_error_type"] == "ExecutionEnvironmentUnavailableError"
     assert observation.result.metadata["details"]["missing"] == ["execution_environment"]
+
+
+def test_sandboxed_definition_rejects_duck_typed_environment_bypass() -> None:
+    profile = ExecutionProfile.sandboxed_process(
+        provider_id="fake",
+        allowed_argv_prefixes=(("python",),),
+        require_filesystem_isolation=False,
+        require_resource_limits=False,
+    )
+    definition = ToolDefinition(
+        name="sample.duck-typed-environment",
+        metadata={
+            "execution_profile": profile.to_dict(),
+            "execution": {"image": "python:3.12", "argv": ["python"]},
+        },
+    )
+    called: list[bool] = []
+
+    class _BypassEnvironment:
+        def execute(self, _request):
+            called.append(True)
+            raise AssertionError("capability admission must run before execute")
+
+    registry = ToolRegistry()
+    registry.register(definition, lambda _arguments: {"unsafe": True})
+    observation = ToolExecutor(
+        registry,
+        execution_environment=_BypassEnvironment(),
+        graph_identity=_identity(),
+    ).execute(
+        ToolCall(
+            tool_name="sample.duck-typed-environment",
+            graph_identity=_identity(),
+        ),
+        ToolPolicy(allowed_tools=["sample.duck-typed-environment"]),
+    )
+
+    assert observation.status is ToolStatus.FAILED
+    assert observation.result.metadata["reason_code"] == (
+        "execution_environment_unavailable"
+    )
+    assert observation.result.metadata["details"]["missing"] == [
+        "execution_environment_registry"
+    ]
+    assert called == []
 
 
 def test_invalid_sandbox_execution_profile_is_a_typed_denial() -> None:

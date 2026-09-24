@@ -822,6 +822,17 @@ class ToolExecutor:
                     "missing": ["execution_environment"],
                 },
             )
+        # Physical profiles must route through the Harness-owned registry so
+        # provider capability admission cannot be bypassed by a duck-typed
+        # object that exposes only ``execute``.
+        if not isinstance(registry, ExecutionEnvironmentRegistry):
+            raise ExecutionEnvironmentUnavailableError(
+                "sandboxed tool execution requires an ExecutionEnvironmentRegistry",
+                details={
+                    "tool_id": registered.definition.tool_id,
+                    "missing": ["execution_environment_registry"],
+                },
+            )
         if not hasattr(registry, "execute"):
             raise ExecutionEnvironmentUnavailableError(
                 "execution environment does not expose execute",
@@ -918,6 +929,18 @@ class ToolExecutor:
             else f"{operation_id}:attempt-1"
         )
         execution_id = f"exec:{operation_id}:{attempt_id}"
+        timeout_seconds = execution_spec.get("timeout_seconds")
+        if timeout_seconds is None:
+            timeout_seconds = registered.definition.timeout_seconds
+        cancellation_grace_seconds = execution_spec.get(
+            "cancellation_grace_seconds"
+        )
+        if cancellation_grace_seconds is None:
+            cancellation_grace_seconds = (
+                registered.definition.cancellation_grace_seconds
+            )
+        if cancellation_grace_seconds is None:
+            cancellation_grace_seconds = 5.0
         try:
             request = ExecutionRequest(
                 execution_id=execution_id,
@@ -936,13 +959,8 @@ class ToolExecutor:
                 resource_limits=ResourceLimits(
                     **dict(execution_spec.get("resource_limits", {}))
                 ),
-                timeout_seconds=execution_spec.get("timeout_seconds")
-                or registered.definition.timeout_seconds,
-                cancellation_grace_seconds=float(
-                    execution_spec.get("cancellation_grace_seconds")
-                    or registered.definition.cancellation_grace_seconds
-                    or 5.0
-                ),
+                timeout_seconds=timeout_seconds,
+                cancellation_grace_seconds=float(cancellation_grace_seconds),
                 approval_evidence_ref=execution_spec.get("approval_evidence_ref"),
                 budget_ref=execution_spec.get("budget_ref"),
             )
