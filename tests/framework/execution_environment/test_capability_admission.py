@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -193,6 +194,83 @@ def test_resource_capability_checks_requested_dimensions_independently() -> None
         "execution_resource_limits_unsupported",
         "execution_secret_handles_unsupported",
     }
+
+
+def test_declared_filesystem_roots_require_provider_enforcement(tmp_path: Path) -> None:
+    request = replace(_request(), read_roots=(str(tmp_path),))
+    capabilities = ExecutionCapabilityProfile(
+        provider_id="test-provider",
+        available=True,
+        enforces_network_allowlist=True,
+        isolates_environment=True,
+        enforces_argv_policy=True,
+        controls_process_tree=True,
+        enforces_memory_limits=True,
+        confirms_termination=True,
+        supports_secret_handles=True,
+    )
+
+    diagnostics = capabilities.admission_diagnostics(request)
+
+    assert diagnostics["missing"] == ["filesystem_roots"]
+    assert diagnostics["denial_code"] == "execution_filesystem_isolation_unsupported"
+
+
+def test_explicit_environment_requires_provider_isolation() -> None:
+    request = replace(_request(), environment={"QUALIFICATION_VALUE": "admitted"})
+    capabilities = ExecutionCapabilityProfile(
+        provider_id="test-provider",
+        available=True,
+        enforces_network_allowlist=True,
+        enforces_argv_policy=True,
+        controls_process_tree=True,
+        enforces_memory_limits=True,
+        confirms_termination=True,
+        supports_secret_handles=True,
+    )
+
+    diagnostics = capabilities.admission_diagnostics(request)
+
+    assert diagnostics["missing"] == ["environment_isolation"]
+    assert diagnostics["denial_code"] == "execution_environment_isolation_unsupported"
+
+
+def test_process_policy_and_explicit_process_limit_require_enforcement() -> None:
+    profile = ExecutionProfile.sandboxed_process(
+        provider_id="test-provider",
+        allowed_argv_prefixes=(("python",),),
+        allowed_child_argv_prefixes=(("python",),),
+        max_processes=2,
+        require_child_process_allowlist=True,
+        require_filesystem_isolation=False,
+        require_resource_limits=False,
+    )
+    request = ExecutionRequest(
+        execution_id="execution-1",
+        tool_id="tool.example@1.0.0",
+        graph_identity=_identity(),
+        operation_id="operation-1",
+        attempt_id="attempt-1",
+        profile=profile,
+        image="python:3.12",
+        argv=("python", "-c", "print(1)"),
+        resource_limits=ResourceLimits(max_processes=1),
+    )
+    capabilities = ExecutionCapabilityProfile(
+        provider_id="test-provider",
+        available=True,
+        enforces_network_deny=True,
+        isolates_environment=True,
+        enforces_argv_policy=True,
+        controls_process_tree=True,
+        enforces_child_process_allowlist=True,
+        confirms_termination=True,
+    )
+
+    diagnostics = capabilities.admission_diagnostics(request)
+
+    assert diagnostics["missing"] == ["process_limits"]
+    assert diagnostics["denial_code"] == "execution_resource_limits_unsupported"
 
 
 def test_unknown_capability_uses_versioned_generic_code() -> None:

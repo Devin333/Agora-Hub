@@ -80,6 +80,16 @@ def test_request_rejects_protected_environment_overrides(name: str) -> None:
         _request(environment={name: "attacker-controlled"})
 
 
+def test_request_rejects_case_insensitive_duplicate_environment_names() -> None:
+    with pytest.raises(ValueError, match="duplicate variable names"):
+        _request(environment={"QUALIFICATION_VALUE": "one", "qualification_value": "two"})
+
+
+def test_request_rejects_non_string_environment_names() -> None:
+    with pytest.raises(TypeError, match="variable names must be strings"):
+        _request(environment={1: "attacker-controlled"})
+
+
 def test_registry_fails_closed_when_provider_cannot_enforce_network_allowlist() -> None:
     profile = _profile(
         network_policy={"mode": "allowlist", "allowlist": [{"host": "api.example", "port": 443}]}

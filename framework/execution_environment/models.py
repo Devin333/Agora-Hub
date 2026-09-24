@@ -616,13 +616,24 @@ class ExecutionCapabilityProfile:
         profile = request.profile
         if not self.available:
             missing.append("provider_unavailable")
-        if profile.require_filesystem_isolation and not self.enforces_filesystem_roots:
+        # Declared roots are a request-level physical boundary even when a
+        # profile does not require a root.  A provider that cannot enforce
+        # them must not silently execute with a wider filesystem view.
+        if (
+            (request.read_roots or request.write_roots)
+            and not self.enforces_filesystem_roots
+        ):
             missing.append("filesystem_roots")
         if profile.network_policy.mode is NetworkPolicyMode.DENY and not self.enforces_network_deny:
             missing.append("network_deny")
         if profile.network_policy.mode is NetworkPolicyMode.ALLOWLIST and not self.enforces_network_allowlist:
             missing.append("network_allowlist")
-        if profile.require_environment_isolation and not self.isolates_environment:
+        # Explicit environment entries are also a physical boundary: without
+        # isolation a provider could merge or replace them with host values.
+        if (
+            (profile.require_environment_isolation or request.environment)
+            and not self.isolates_environment
+        ):
             missing.append("environment_isolation")
         if not self.enforces_argv_policy:
             missing.append("argv_policy")
@@ -638,14 +649,20 @@ class ExecutionCapabilityProfile:
             or profile.process_policy.require_child_process_allowlist
         ) and not self.enforces_child_process_allowlist:
             missing.append("child_process_allowlist")
+        limits = request.resource_limits
+        if limits.max_memory_bytes is not None and not self.enforces_memory_limits:
+            missing.append("memory_limits")
+        if limits.max_cpu_seconds is not None and not self.enforces_cpu_limits:
+            missing.append("cpu_limits")
+        if (
+            (
+                profile.process_policy.max_processes > 1
+                or limits.max_processes is not None
+            )
+            and not self.enforces_process_limits
+        ):
+            missing.append("process_limits")
         if profile.require_resource_limits:
-            limits = request.resource_limits
-            if limits.max_memory_bytes is not None and not self.enforces_memory_limits:
-                missing.append("memory_limits")
-            if limits.max_cpu_seconds is not None and not self.enforces_cpu_limits:
-                missing.append("cpu_limits")
-            if limits.max_processes is not None and not self.enforces_process_limits:
-                missing.append("process_limits")
             if (
                 limits.max_memory_bytes is None
                 and limits.max_cpu_seconds is None
@@ -910,10 +927,17 @@ def _environment(value: Mapping[str, str]) -> Mapping[str, str]:
     if not isinstance(value, Mapping):
         raise TypeError("environment must be an object")
     normalized: dict[str, str] = {}
+    canonical_names: set[str] = set()
     for raw_name, raw_value in value.items():
-        name = str(raw_name).strip()
+        if not isinstance(raw_name, str):
+            raise TypeError("environment variable names must be strings")
+        name = raw_name.strip()
         if _ENVIRONMENT_NAME.fullmatch(name) is None:
             raise ValueError("environment contains an invalid variable name")
+        canonical_name = name.casefold()
+        if canonical_name in canonical_names:
+            raise ValueError("environment contains duplicate variable names")
+        canonical_names.add(canonical_name)
         if _SECRET_LIKE_ENVIRONMENT_NAME.search(name):
             raise ValueError("secret-like environment variables must use named secret handles")
         if _PROTECTED_ENVIRONMENT_NAME.fullmatch(name):
