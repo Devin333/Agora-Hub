@@ -147,8 +147,14 @@ class DiagnosticApplicationService:
                         "unavailable_providers": diagnostics.get(
                             "unavailable_providers", []
                         ),
+                        "deployment_capability_evidence_issues": diagnostics.get(
+                            "deployment_capability_evidence_issues", []
+                        ),
                     },
-                    remediation="Provision each role-required execution provider.",
+                    remediation=(
+                        "Provision each role-required execution provider and resolve "
+                        "deployment qualification evidence."
+                    ),
                 )
             return DiagnoseCheck(
                 check_id="runtime_composition",
@@ -163,8 +169,14 @@ class DiagnosticApplicationService:
                     ),
                     "required_providers": diagnostics.get("required_providers", []),
                     "providers": diagnostics.get("providers", []),
+                    "deployment_capability_evidence_issues": diagnostics.get(
+                        "deployment_capability_evidence_issues", []
+                    ),
                 },
-                remediation="Provision each role-required execution provider.",
+                remediation=(
+                    "Provision each role-required execution provider and resolve "
+                    "deployment qualification evidence."
+                ),
             )
         return DiagnoseCheck(
             check_id="runtime_composition",

@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
 import re
+from types import MappingProxyType
 from typing import Any
 
 from framework.execution_environment.errors import (
@@ -21,16 +22,46 @@ from framework.execution_environment.errors import (
 )
 from framework.execution_environment.models import (
     CAPABILITY_DENIAL_CODE_VERSION,
+    DeploymentCapabilityEvidence,
+    EXECUTION_CAPABILITY_FIELDS,
     ExecutionMode,
     ExecutionProfile,
     capability_denial_code,
 )
 from framework.execution_environment.registry import ExecutionEnvironmentRegistry
 from framework.shared.json import stable_json_dumps
+from framework.shared.time import utc_now
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,255}\Z")
 _CHECKSUM = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_DEPLOYMENT_EVIDENCE_DENIAL_CODES = MappingProxyType({
+    "deployment_capability_evidence_missing": (
+        "execution_deployment_capability_evidence_missing"
+    ),
+    "deployment_capability_evidence_mismatch": (
+        "execution_deployment_capability_evidence_mismatch"
+    ),
+    "deployment_capability_evidence_expired": (
+        "execution_deployment_capability_evidence_expired"
+    ),
+    "deployment_capability_evidence_not_yet_valid": (
+        "execution_deployment_capability_evidence_not_yet_valid"
+    ),
+    "deployment_capability_evidence_incomplete": (
+        "execution_deployment_capability_evidence_incomplete"
+    ),
+    "deployment_capability_evidence_unbound": (
+        "execution_deployment_capability_evidence_unbound"
+    ),
+    "deployment_capability_evidence_unsupported": (
+        "execution_deployment_capability_evidence_unsupported"
+    ),
+    "deployment_capability_evidence_inconsistent": (
+        "execution_deployment_capability_evidence_inconsistent"
+    ),
+})
+
 
 def _identifier(value: Any, field_name: str) -> str:
     normalized = str(value or "").strip()
@@ -54,6 +85,9 @@ class RuntimeCompositionManifest:
     policy_fingerprint: str = "sha256:" + "0" * 64
     provider_fingerprint: str = "sha256:" + "0" * 64
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    deployment_capability_evidence: tuple[
+        DeploymentCapabilityEvidence | Mapping[str, Any], ...
+    ] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "composition_id", _identifier(self.composition_id, "composition_id"))
@@ -64,6 +98,22 @@ class RuntimeCompositionManifest:
                 raise ValueError(f"{name} must be a sha256 checksum")
             object.__setattr__(self, name, value)
         object.__setattr__(self, "metadata", dict(self.metadata))
+        evidence: list[DeploymentCapabilityEvidence] = []
+        for item in self.deployment_capability_evidence:
+            normalized = (
+                item
+                if isinstance(item, DeploymentCapabilityEvidence)
+                else DeploymentCapabilityEvidence.from_dict(item)
+            )
+            evidence.append(normalized)
+        provider_ids = [item.provider_id for item in evidence]
+        if len(set(provider_ids)) != len(provider_ids):
+            raise ValueError(
+                "deployment capability evidence must contain one receipt per provider"
+            )
+        object.__setattr__(self, "deployment_capability_evidence", tuple(sorted(
+            evidence, key=lambda item: item.provider_id
+        )))
 
     @property
     def fingerprint(self) -> str:
@@ -92,6 +142,7 @@ class RuntimeCompositionManifest:
         expected = {
             "composition_id", "version", "policy_fingerprint", "provider_fingerprint",
             "metadata",
+            "deployment_capability_evidence",
         }
         unknown = sorted(set(value) - expected)
         if unknown:
@@ -105,6 +156,9 @@ class RuntimeCompositionManifest:
             "policy_fingerprint": self.policy_fingerprint,
             "provider_fingerprint": self.provider_fingerprint,
             "metadata": dict(self.metadata),
+            "deployment_capability_evidence": [
+                item.to_dict() for item in self.deployment_capability_evidence
+            ],
         }
 
 
@@ -173,10 +227,10 @@ class RuntimeExecutionComposition:
             raise TypeError("execution_registry must be ExecutionEnvironmentRegistry")
         if not isinstance(require_explicit_execution_profile, bool):
             raise TypeError("require_explicit_execution_profile must be boolean")
-        required_providers = tuple(
+        required_providers = tuple(sorted(
             _identifier(value, "required_provider_id")
             for value in required_provider_ids
-        )
+        ))
         if len(set(required_providers)) != len(required_providers):
             raise ValueError("required execution providers must be unique")
         if expected_manifest_fingerprint is not None:
@@ -260,8 +314,9 @@ class RuntimeExecutionComposition:
             for profile_id in self.profile_registry.profile_ids
         }
         unavailable_providers = self.unavailable_provider_ids
+        evidence_issues = self.deployment_capability_evidence_issues()
         return {
-            "status": "blocked" if unavailable_providers else "ready",
+            "status": "blocked" if unavailable_providers or evidence_issues else "ready",
             "composition_id": self.manifest.composition_id,
             "manifest_fingerprint": self.manifest.fingerprint,
             "policy_fingerprint": self.manifest.policy_fingerprint,
@@ -271,6 +326,11 @@ class RuntimeExecutionComposition:
             "providers": list(self.execution_registry.provider_ids()),
             "required_providers": list(self.required_provider_ids),
             "unavailable_providers": list(unavailable_providers),
+            "deployment_capability_evidence": [
+                item.to_operator_projection()
+                for item in self.manifest.deployment_capability_evidence
+            ],
+            "deployment_capability_evidence_issues": evidence_issues,
             "provider_capabilities": provider_capabilities,
         }
 
@@ -288,6 +348,74 @@ class RuntimeExecutionComposition:
             or not self.execution_registry.resolve_capabilities(provider_id).available
         )
 
+    def deployment_capability_evidence_issues(self) -> list[dict[str, Any]]:
+        """Return stable, redacted qualification denials for required providers."""
+
+        evidence_by_provider = {
+            item.provider_id: item
+            for item in self.manifest.deployment_capability_evidence
+        }
+        registered = set(self.execution_registry.provider_ids())
+        now = utc_now()
+        issues: list[dict[str, Any]] = []
+        for evidence in self.manifest.deployment_capability_evidence:
+            if evidence.provider_id not in registered:
+                issues.append(
+                    {
+                        "provider_id": evidence.provider_id,
+                        "capability": "deployment_capability_evidence_unbound",
+                        "denial_code": _DEPLOYMENT_EVIDENCE_DENIAL_CODES[
+                            "deployment_capability_evidence_unbound"
+                        ],
+                    }
+                )
+        for provider_id in self.required_provider_ids:
+            if provider_id not in registered:
+                continue
+            capabilities = self.execution_registry.resolve_capabilities(provider_id)
+            if not capabilities.available:
+                continue
+            evidence = evidence_by_provider.get(provider_id)
+            reason = None
+            if evidence is None:
+                reason = "deployment_capability_evidence_missing"
+            elif not all(
+                (
+                    evidence.deployment_ref,
+                    evidence.deployment_identity,
+                    evidence.image_ref,
+                    evidence.image_digest,
+                    evidence.rollback_evidence_ref,
+                )
+            ):
+                reason = "deployment_capability_evidence_incomplete"
+            elif evidence.provider_capability_checksum != capabilities.checksum:
+                reason = "deployment_capability_evidence_mismatch"
+            else:
+                advertised_capabilities = {
+                    capability_name
+                    for field_name, capability_name in EXECUTION_CAPABILITY_FIELDS
+                    if getattr(capabilities, field_name)
+                }
+                if set(evidence.tested_capabilities) - advertised_capabilities:
+                    reason = "deployment_capability_evidence_inconsistent"
+                elif set(evidence.unsupported_capabilities) & advertised_capabilities:
+                    reason = "deployment_capability_evidence_unsupported"
+            if reason is None:
+                if now < evidence.qualified_at:
+                    reason = "deployment_capability_evidence_not_yet_valid"
+                elif now >= evidence.expires_at:
+                    reason = "deployment_capability_evidence_expired"
+            if reason is not None:
+                issues.append(
+                    {
+                        "provider_id": provider_id,
+                        "capability": reason,
+                        "denial_code": _DEPLOYMENT_EVIDENCE_DENIAL_CODES[reason],
+                    }
+                )
+        return issues
+
     def require_ready(self) -> None:
         """Fail closed unless every role-required provider is available.
 
@@ -298,24 +426,25 @@ class RuntimeExecutionComposition:
 
         self.verify_integrity()
         unavailable = self.unavailable_provider_ids
-        if unavailable:
+        evidence_issues = self.deployment_capability_evidence_issues()
+        if unavailable or evidence_issues:
+            denials = [
+                {
+                    "provider_id": provider_id,
+                    "capability": "provider_unavailable",
+                    "denial_code": capability_denial_code("provider_unavailable"),
+                }
+                for provider_id in unavailable
+            ] + evidence_issues
+            missing = [item["capability"] for item in denials]
             raise ExecutionEnvironmentUnavailableError(
                 "required runtime execution providers are unavailable",
                 details={
-                    "provider_ids": list(unavailable),
-                    "missing": ["provider_unavailable"],
+                    "provider_ids": sorted({item["provider_id"] for item in denials}),
+                    "missing": missing,
                     "denial_code_version": CAPABILITY_DENIAL_CODE_VERSION,
-                    "denial_code": capability_denial_code("provider_unavailable"),
-                    "denials": [
-                        {
-                            "provider_id": provider_id,
-                            "capability": "provider_unavailable",
-                            "denial_code": capability_denial_code(
-                                "provider_unavailable"
-                            ),
-                        }
-                        for provider_id in unavailable
-                    ],
+                    "denial_code": denials[0]["denial_code"],
+                    "denials": denials,
                 },
             )
 

@@ -18,7 +18,7 @@ from typing import Any
 
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.json import stable_json_dumps
-from framework.shared.time import format_datetime
+from framework.shared.time import format_datetime, parse_datetime
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,255}\Z")
@@ -63,6 +63,29 @@ class ExecutionStatus(StrEnum):
 # vocabulary to operators and callers.
 CAPABILITY_DENIAL_CODE_VERSION = "newsroom.execution-capability-denials/v1"
 EXECUTION_PROFILE_SCHEMA = "newsroom.execution-profile/v1"
+DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA = (
+    "newsroom.execution-deployment-capability-evidence/v1"
+)
+EXECUTION_CAPABILITY_FIELDS = (
+    ("enforces_filesystem_roots", "filesystem_roots"),
+    ("enforces_network_deny", "network_deny"),
+    ("enforces_network_allowlist", "network_allowlist"),
+    ("isolates_environment", "environment_isolation"),
+    ("enforces_argv_policy", "argv_policy"),
+    ("controls_process_tree", "process_tree_control"),
+    ("enforces_child_process_allowlist", "child_process_allowlist"),
+    ("enforces_resource_limits", "resource_limits"),
+    ("enforces_memory_limits", "memory_limits"),
+    ("enforces_cpu_limits", "cpu_limits"),
+    ("enforces_process_limits", "process_limits"),
+    ("enforces_timeout", "timeout"),
+    ("supports_cancellation", "cancellation"),
+    ("confirms_termination", "termination_confirmation"),
+    ("supports_secret_handles", "secret_handle_injection"),
+)
+_EXECUTION_CAPABILITY_NAMES = frozenset(
+    capability_name for _, capability_name in EXECUTION_CAPABILITY_FIELDS
+)
 _CAPABILITY_DENIAL_CODES = MappingProxyType({
     "provider_unavailable": "execution_provider_unavailable",
     "filesystem_roots": "execution_filesystem_isolation_unsupported",
@@ -747,6 +770,175 @@ class ExecutionCapabilityProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentCapabilityEvidence:
+    """Qualification receipt binding advertised capabilities to one deployment.
+
+    The evidence is intentionally provider-neutral.  A composition may use it
+    to decide whether a required provider is releasable, while the provider
+    remains responsible for producing the receipt from its real deployment and
+    rollback rehearsal.
+    """
+
+    provider_id: str
+    deployment_ref: str
+    deployment_identity: str
+    image_ref: str
+    image_digest: str
+    provider_capability_checksum: str
+    evidence_kind: str
+    evidence_source: str
+    tested_capabilities: tuple[str, ...]
+    unsupported_capabilities: tuple[str, ...]
+    qualified_at: datetime
+    expires_at: datetime
+    rollback_evidence_ref: str
+    schema_version: str = DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA
+
+    def __post_init__(self) -> None:
+        if self.schema_version != DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA:
+            raise ValueError(
+                "unsupported deployment capability evidence schema: "
+                f"{self.schema_version}"
+            )
+        for field_name in (
+            "provider_id",
+            "deployment_ref",
+            "deployment_identity",
+            "image_ref",
+            "evidence_kind",
+            "evidence_source",
+            "rollback_evidence_ref",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _evidence_identifier(getattr(self, field_name), field_name),
+            )
+        if not isinstance(self.image_digest, str):
+            raise TypeError("image_digest must be a string")
+        digest = self.image_digest.strip().lower()
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+            raise ValueError("image_digest must be a sha256 checksum")
+        object.__setattr__(self, "image_digest", digest)
+        if not isinstance(self.provider_capability_checksum, str):
+            raise TypeError("provider_capability_checksum must be a string")
+        capability_checksum = self.provider_capability_checksum.strip().lower()
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", capability_checksum) is None:
+            raise ValueError(
+                "provider_capability_checksum must be a sha256 checksum"
+            )
+        object.__setattr__(self, "provider_capability_checksum", capability_checksum)
+        object.__setattr__(
+            self,
+            "tested_capabilities",
+            _capability_names(self.tested_capabilities, "tested_capabilities"),
+        )
+        object.__setattr__(
+            self,
+            "unsupported_capabilities",
+            _capability_names(
+                self.unsupported_capabilities,
+                "unsupported_capabilities",
+            ),
+        )
+        overlap = set(self.tested_capabilities) & set(self.unsupported_capabilities)
+        if overlap:
+            raise ValueError(
+                "tested_capabilities and unsupported_capabilities overlap"
+            )
+        qualified_at = _utc_time(self.qualified_at, "qualified_at")
+        expires_at = _utc_time(self.expires_at, "expires_at")
+        if expires_at <= qualified_at:
+            raise ValueError("expires_at must be after qualified_at")
+        object.__setattr__(self, "qualified_at", qualified_at)
+        object.__setattr__(self, "expires_at", expires_at)
+
+    @property
+    def checksum(self) -> str:
+        return _checksum(self.to_dict())
+
+    def is_valid_at(self, reference: datetime) -> bool:
+        """Return whether the bounded qualification window includes ``reference``."""
+
+        actual = _utc_time(reference, "reference")
+        return self.qualified_at <= actual < self.expires_at
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DeploymentCapabilityEvidence":
+        if not isinstance(value, Mapping):
+            raise TypeError("deployment capability evidence must be an object")
+        expected = {
+            "schema_version",
+            "provider_id",
+            "deployment_ref",
+            "deployment_identity",
+            "image_ref",
+            "image_digest",
+            "provider_capability_checksum",
+            "evidence_kind",
+            "evidence_source",
+            "tested_capabilities",
+            "unsupported_capabilities",
+            "qualified_at",
+            "expires_at",
+            "rollback_evidence_ref",
+        }
+        unknown = sorted(set(value) - expected)
+        if unknown:
+            raise ValueError(
+                "deployment capability evidence contains unknown fields: "
+                f"{unknown}"
+            )
+        if value.get("schema_version") != DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA:
+            raise ValueError(
+                "deployment capability evidence schema_version must be "
+                f"{DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA!r}"
+            )
+        payload = dict(value)
+        payload["qualified_at"] = parse_datetime(payload.get("qualified_at"))
+        payload["expires_at"] = parse_datetime(payload.get("expires_at"))
+        return cls(**payload)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "provider_id": self.provider_id,
+            "deployment_ref": self.deployment_ref,
+            "deployment_identity": self.deployment_identity,
+            "image_ref": self.image_ref,
+            "image_digest": self.image_digest,
+            "provider_capability_checksum": self.provider_capability_checksum,
+            "evidence_kind": self.evidence_kind,
+            "evidence_source": self.evidence_source,
+            "tested_capabilities": list(self.tested_capabilities),
+            "unsupported_capabilities": list(self.unsupported_capabilities),
+            "qualified_at": format_datetime(self.qualified_at),
+            "expires_at": format_datetime(self.expires_at),
+            "rollback_evidence_ref": self.rollback_evidence_ref,
+        }
+
+    def to_operator_projection(self) -> dict[str, Any]:
+        """Expose qualification status without deployment-specific references."""
+
+        return {
+            "provider_id": self.provider_id,
+            "evidence_checksum": self.checksum,
+            "provider_capability_checksum": self.provider_capability_checksum,
+            "evidence_kind": self.evidence_kind,
+            "deployment_ref_checksum": _checksum(self.deployment_ref),
+            "deployment_identity_checksum": _checksum(self.deployment_identity),
+            "image_ref_checksum": _checksum(self.image_ref),
+            "image_digest_checksum": _checksum(self.image_digest),
+            "evidence_source_checksum": _checksum(self.evidence_source),
+            "rollback_evidence_ref_checksum": _checksum(self.rollback_evidence_ref),
+            "tested_capabilities": list(self.tested_capabilities),
+            "unsupported_capabilities": list(self.unsupported_capabilities),
+            "qualified_at": format_datetime(self.qualified_at),
+            "expires_at": format_datetime(self.expires_at),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionReceipt:
     execution_id: str
     tool_id: str
@@ -979,10 +1171,38 @@ def _optional_checksum(value: Any, field_name: str) -> str | None:
     return normalized
 
 
+def _capability_names(values: Sequence[str], field_name: str) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise TypeError(f"{field_name} must be a sequence")
+    normalized = tuple(
+        _evidence_identifier(value, f"{field_name} entry") for value in values
+    )
+    if len(normalized) > 128:
+        raise ValueError(f"{field_name} exceeds its bounded item limit")
+    unknown = sorted(set(normalized) - _EXECUTION_CAPABILITY_NAMES)
+    if unknown:
+        raise ValueError(f"{field_name} contains unknown capabilities: {unknown}")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{field_name} contains duplicate capabilities")
+    return tuple(sorted(normalized))
+
+
+def _evidence_identifier(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    normalized = value.strip().lower() if field_name.endswith("capabilities entry") else value.strip()
+    if not normalized or _IDENTIFIER.fullmatch(normalized) is None:
+        raise ValueError(f"{field_name} is invalid")
+    return normalized
+
+
 __all__ = [
     "CAPABILITY_DENIAL_CODE_VERSION",
+    "DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA",
+    "EXECUTION_CAPABILITY_FIELDS",
     "EXECUTION_PROFILE_SCHEMA",
     "ExecutionCapabilityProfile",
+    "DeploymentCapabilityEvidence",
     "ExecutionMode",
     "ExecutionOutcome",
     "ExecutionProfile",

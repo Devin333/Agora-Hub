@@ -28,6 +28,33 @@ class _UnavailableProvider:
         raise AssertionError("unavailable provider must not execute")
 
 
+class _AvailableProvider:
+    @property
+    def capabilities(self) -> ExecutionCapabilityProfile:
+        return ExecutionCapabilityProfile(provider_id="docker", available=True)
+
+    def execute(self, request):
+        raise AssertionError("diagnostic tests must not execute a provider")
+
+
+def _missing_evidence_composition() -> RuntimeExecutionComposition:
+    profiles = ExecutionProfileRegistry()
+    profiles.register("trusted", ExecutionProfile.trusted_in_process())
+    providers = ExecutionEnvironmentRegistry()
+    providers.register(_AvailableProvider())
+    manifest = RuntimeCompositionManifest.from_registries(
+        composition_id="diagnostic-missing-evidence",
+        profile_registry=profiles,
+        execution_registry=providers,
+    )
+    return RuntimeExecutionComposition(
+        manifest=manifest,
+        profile_registry=profiles,
+        execution_registry=providers,
+        required_provider_ids=("docker",),
+    )
+
+
 def _unavailable_composition() -> RuntimeExecutionComposition:
     profiles = ExecutionProfileRegistry()
     profiles.register(
@@ -78,6 +105,26 @@ def test_diagnostic_service_runs_injected_checks() -> None:
 
     assert result.status == "error"
     assert [check.check_id for check in result.checks] == ["redis", "qdrant"]
+
+
+def test_diagnostic_service_reports_missing_deployment_evidence_as_error() -> None:
+    service = DiagnosticApplicationService(
+        runtime_execution_composition=_missing_evidence_composition(),
+        checks=[],
+    )
+
+    check = service._check_runtime_composition()
+
+    assert check.status == "error"
+    assert check.details["unavailable_providers"] == []
+    assert check.details["deployment_capability_evidence_issues"] == [
+        {
+            "provider_id": "docker",
+            "capability": "deployment_capability_evidence_missing",
+            "denial_code": "execution_deployment_capability_evidence_missing",
+        }
+    ]
+    assert "deployment qualification evidence" in (check.remediation or "")
 
 
 def test_diagnostic_service_reports_required_provider_unavailable_as_error() -> None:
