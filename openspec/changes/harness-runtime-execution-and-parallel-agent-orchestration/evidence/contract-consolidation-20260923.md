@@ -19,3 +19,21 @@ Focused evidence:
 - `.venv\\Scripts\\python.exe -m pytest tests/framework/harness/task_plan/test_attempt_history_contract.py tests/framework/harness/task_plan/test_parallel_orchestration.py -q` -> 67 passed.
 - `.venv\\Scripts\\python.exe -m compileall -q framework tests/framework/harness/test_runtime_contract.py` -> passed.
 - `git diff --check` -> passed.
+
+Follow-up verification: 2026-09-24
+
+The result-store validation ordering was corrected so existing domain rejection
+codes remain observable before the consolidated cross-object contract check.
+The focused regression matrix after that fix passed 117 tests.
+
+Final repository gate:
+
+- `.venv\\Scripts\\python.exe -m scripts.dev smoke` -> 3704 passed, 23 deselected, 31 warnings in 3789.15s; Harness, Research, API/service, architecture, and source validation passed.
+- AgentLoop smoke completed with a result manifest and no network failures.
+- `python -m interfaces.cli.news sources validate` -> `is_valid=true`, `error_count=0`, `warning_count=0`.
+- `openspec validate harness-runtime-execution-and-parallel-agent-orchestration --strict` -> passed.
+- `git diff --check` -> passed.
+
+The smoke run produced no tracked changes. Pre-existing untracked files under
+`outputs/` were intentionally left untouched and are excluded from this evidence
+and from commits.
