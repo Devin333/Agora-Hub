@@ -365,6 +365,9 @@ class ChildAgentHandle:
         if not isinstance(lease, Mapping):
             raise ValueError("child handle contract lease must be an object")
         lease_required = {"lease_id", "issued_at", "expires_at", "heartbeat_seq"}
+        lease_unknown = sorted(set(lease).difference(lease_required), key=str)
+        if lease_unknown:
+            raise ValueError(f"child handle contract lease has unknown fields: {lease_unknown}")
         lease_missing = sorted(lease_required.difference(lease))
         if lease_missing:
             raise ValueError(f"child handle contract lease is missing fields: {lease_missing}")
@@ -1944,6 +1947,8 @@ def _event_handle_contract(event: Mapping[str, Any]) -> ChildAgentHandle | None:
     if _checksum(dict(payload)) != supplied_checksum:
         raise ValueError("child event handle checksum does not match payload")
     handle = ChildAgentHandle.from_dict(payload)
+    if handle.to_dict() != dict(payload):
+        raise ValueError("child event canonical handle payload is not canonical")
     # A contract is canonical for the event, so duplicated lifecycle fields
     # must agree with it exactly. This catches identity/policy drift even when
     # an attacker recomputes the payload checksum.

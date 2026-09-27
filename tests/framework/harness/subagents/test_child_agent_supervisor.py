@@ -14,6 +14,7 @@ from framework.harness.subagents.supervisor import (
     ChildAgentState,
     ChildAgentSupervisor,
     ChildAgentSupervisorError,
+    _checksum,
 )
 from framework.harness.subagents.supervisor_store import DurableChildAgentEventLog
 from framework.events import EventRuntime, EventSchemaCatalog
@@ -87,6 +88,44 @@ def test_recovery_rejects_tampered_child_handle_contract() -> None:
     payload["task_id"] = "tampered-task"
     contract["canonical_payload"] = payload
     events[0]["handle_contract"] = contract
+
+    with pytest.raises(ChildAgentSupervisorError) as raised:
+        ChildAgentSupervisor().recover(events)
+
+    assert raised.value.code == "child_recovery_corrupt"
+
+
+def test_recovery_rejects_unknown_lease_fields_even_with_valid_checksum() -> None:
+    source = ChildAgentSupervisor()
+    source.spawn(_request())
+    events = [dict(event) for event in source.events.events]
+    contract = dict(events[0]["handle_contract"])
+    payload = dict(contract["canonical_payload"])
+    payload["lease"] = {**payload["lease"], "unexpected": "value"}
+    checksum = _checksum(payload)
+    contract["canonical_payload"] = payload
+    contract["handle_checksum"] = checksum
+    events[0]["handle_contract"] = contract
+    events[0]["handle_checksum"] = checksum
+
+    with pytest.raises(ChildAgentSupervisorError) as raised:
+        ChildAgentSupervisor().recover(events)
+
+    assert raised.value.code == "child_recovery_corrupt"
+
+
+def test_recovery_rejects_noncanonical_resigned_child_handle_payload() -> None:
+    source = ChildAgentSupervisor()
+    source.spawn(_request(allowed_tools=("tool.read", "tool.write")))
+    events = [dict(event) for event in source.events.events]
+    contract = dict(events[0]["handle_contract"])
+    payload = dict(contract["canonical_payload"])
+    payload["allowed_tools"] = list(reversed(payload["allowed_tools"]))
+    checksum = _checksum(payload)
+    contract["canonical_payload"] = payload
+    contract["handle_checksum"] = checksum
+    events[0]["handle_contract"] = contract
+    events[0]["handle_checksum"] = checksum
 
     with pytest.raises(ChildAgentSupervisorError) as raised:
         ChildAgentSupervisor().recover(events)
