@@ -804,6 +804,12 @@ def _runtime_event_payload_schema() -> dict[str, Any]:
         r"stream_event|text_delta|content|raw)$)"
         r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}$"
     )
+    redacted_key = (
+        r"^(?i:(?:.*(?:secret|token|password|credential|private[_-]?key|"
+        r"api[_-]?key|authorization|cookie|prompt|raw_payload|file_content).*|"
+        r"arguments?|payload|output|observation|task|feedback|verdict|"
+        r"stream_event|text_delta|content|raw))$"
+    )
     safe_value = {
         "anyOf": [
             {"type": ["string", "number", "boolean", "null"], "maxLength": 4096},
@@ -814,7 +820,10 @@ def _runtime_event_payload_schema() -> dict[str, Any]:
     safe_object = {
         "type": "object",
         "maxProperties": 64,
-        "patternProperties": {safe_key: {"$ref": "#/$defs/safeValue"}},
+        "patternProperties": {
+            safe_key: {"$ref": "#/$defs/safeValue"},
+            redacted_key: {"const": "[redacted]"},
+        },
         "additionalProperties": False,
     }
     graph_identity = {

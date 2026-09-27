@@ -170,6 +170,29 @@ def test_projector_rejects_exact_secret_keys_without_substring_false_positive() 
     assert secret not in str(caught.value)
 
 
+def test_projector_accepts_only_canonical_redaction_for_secret_keys() -> None:
+    projector = EventSecurityProjector()
+
+    projected = projector.project(
+        payload={"nested": {"api-key": "[redacted]", "safe": "ok"}},
+        payload_ref=None,
+        extensions={},
+        policy=SensitivityPolicy(),
+    )
+    assert projected.payload == {
+        "nested": {"api-key": "[redacted]", "safe": "ok"}
+    }
+
+    for forged_redaction in ("[REDACTED]", " [redacted]", "[redacted]\n"):
+        with pytest.raises(EventSecurityError, match="forbidden secret field"):
+            projector.project(
+                payload={"nested": {"api-key": forged_redaction}},
+                payload_ref=None,
+                extensions={},
+                policy=SensitivityPolicy(),
+            )
+
+
 def test_sensitive_field_is_rejected_or_explicitly_redacted_by_schema_policy() -> None:
     projector = EventSecurityProjector()
     with pytest.raises(EventSecurityError):

@@ -4,9 +4,10 @@ import dis
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from framework.events.canonical import BusinessContext, ProducerIdentity
+from framework.events.canonical import BusinessContext, ProducerIdentity, thaw_canonical_json
 from framework.events.runtime.projection import (
     RuntimeEventEnvelope,
+    RuntimeEventEmitter,
     RuntimeEventIdentity,
     runtime_event_publish_request,
 )
@@ -23,6 +24,34 @@ TENANT_ID = "tenant-runtime-replay"
 OTHER_TENANT_ID = "tenant-other"
 STREAM_ID = "runtime:run-1"
 NOW = datetime(2026, 9, 27, 1, 2, 3, tzinfo=UTC)
+
+
+def test_redacted_runtime_metadata_is_accepted_by_durable_event_runtime(tmp_path) -> None:
+    storage = durable_event_storage_from_env(artifact_root=tmp_path, env={})
+    emitted: list[RuntimeEventEnvelope] = []
+    event = RuntimeEventEmitter(
+        emitted.append,
+        identity=RuntimeEventIdentity(),
+        stream_id=STREAM_ID,
+    ).emit(
+        "tool_call_requested",
+        event_id="runtime-redacted",
+        occurred_at=NOW,
+        metadata={
+            "arguments": {"file_content": "top-secret"},
+            "diagnostic": {"api_key": "nested-secret", "safe": "ok"},
+        },
+    )
+
+    stored = storage.event_runtime.publish(
+        replace(runtime_event_publish_request(event), tenant_id=TENANT_ID)
+    )
+
+    payload = thaw_canonical_json(stored.payload)
+    assert payload["metadata"] == {
+        "arguments": "[redacted]",
+        "diagnostic": {"api_key": "[redacted]", "safe": "ok"},
+    }
 
 
 def test_sqlite_runtime_replay_resumes_after_reopen_and_matches_full_rebuild(

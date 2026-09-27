@@ -588,6 +588,9 @@ class EventSecurityProjector:
                 key = str(raw_key)
                 child_pointer = f"{pointer}/{_escape_pointer(key)}"
                 if _normalize_key(key) in self._forbidden_secret_keys:
+                    if item == "[redacted]":
+                        projected[key] = item
+                        continue
                     raise EventSecurityError("forbidden secret field", path=child_pointer)
                 projected[key] = self._project_value(
                     item,

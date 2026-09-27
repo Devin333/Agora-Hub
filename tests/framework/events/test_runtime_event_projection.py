@@ -182,13 +182,29 @@ def test_runtime_emitter_is_stable_and_redacts_protected_payload() -> None:
     event = emitter.emit(
         "tool_call_requested",
         occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
-        metadata={"arguments": {"file_content": "secret", "safe": "ok"}},
+        metadata={
+            "arguments": {"file_content": "secret", "safe": "ok"},
+            "diagnostic": {"api_key": "nested-secret", "safe": "ok"},
+        },
     )
     assert event.metadata["arguments"] == "[redacted]"
+    assert event.metadata["diagnostic"] == {
+        "api_key": "[redacted]",
+        "safe": "ok",
+    }
+    request = runtime_event_publish_request(event)
+    default_event_schema_catalog().validate(
+        request.event_type,
+        request.data_schema,
+        request.payload,
+    )
     assert event.event_id == emitter.emit(
         "tool_call_requested",
         occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
-        metadata={"arguments": {"file_content": "secret", "safe": "ok"}},
+        metadata={
+            "arguments": {"file_content": "secret", "safe": "ok"},
+            "diagnostic": {"api_key": "nested-secret", "safe": "ok"},
+        },
     ).event_id
 
 
@@ -200,6 +216,11 @@ def test_runtime_schema_rejects_raw_payload_and_unknown_envelope_fields() -> Non
         catalog.validate("tool_requested", RUNTIME_EVENT_DATA_SCHEMA, payload)
     payload = _event("schema-event-2").to_dict()
     payload["raw_payload"] = "should-not-be-inline"
+    with pytest.raises(Exception):
+        catalog.validate("tool_requested", RUNTIME_EVENT_DATA_SCHEMA, payload)
+
+    payload = _event("schema-event-3").to_dict()
+    payload["metadata"] = {"diagnostic": {"api_key": "still-secret"}}
     with pytest.raises(Exception):
         catalog.validate("tool_requested", RUNTIME_EVENT_DATA_SCHEMA, payload)
 
