@@ -16,6 +16,9 @@ from framework.events.runtime.replay_engine import (
     ReplayCheckpointStorePort,
     ReplayReducerRegistry,
 )
+from framework.events.runtime.projection_reducer import (
+    register_runtime_projection_reducer,
+)
 from framework.events.schema import (
     EventSchemaCatalog,
     EventSecurityProjector,
@@ -92,8 +95,8 @@ class DurableEventStorage:
     def create_replay_engine(
         self,
         *,
-        reducers: ReplayReducerRegistry,
-        history_verifier: HistoryVerifier,
+        reducers: ReplayReducerRegistry | None = None,
+        history_verifier: HistoryVerifier | None = None,
         runtime_version: str = DEFAULT_REPLAY_RUNTIME_VERSION,
         schema_catalog_version: str = DEFAULT_SCHEMA_CATALOG_VERSION,
         clock: Callable[[], datetime] = utc_now,
@@ -101,6 +104,9 @@ class DurableEventStorage:
     ) -> DeterministicReplayEngine:
         """Compose replay over the same authoritative event/checkpoint backend."""
 
+        if reducers is None:
+            reducers = ReplayReducerRegistry()
+            register_runtime_projection_reducer(reducers)
         return DeterministicReplayEngine(
             self.event_store,
             self.schema_catalog,

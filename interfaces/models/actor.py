@@ -51,7 +51,6 @@ PERMISSION_ALIASES: dict[str, set[str]] = {
     RESEARCH_CATALOG_EXPORT_PERMISSION: {READ_REPORTS_PERMISSION},
     RESEARCH_DIAGNOSTICS_READ_PERMISSION: {READ_REPORTS_PERMISSION, "admin:diagnose"},
     RESEARCH_ARTIFACT_READ_PERMISSION: {READ_REPORTS_PERMISSION},
-    RESEARCH_EVENT_REPLAY_PERMISSION: {OPERATE_EVENTS_PERMISSION, READ_EVENTS_PERMISSION},
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -224,6 +223,10 @@ class ActorContext(BaseModel):
         expanded = set(permissions)
         for permission in permissions:
             expanded.update(_equivalent_permissions(permission))
+        # Research replay is a one-way grant of both event operations. A read
+        # grant alone must never imply write access through a shared alias.
+        if RESEARCH_EVENT_REPLAY_PERMISSION in permissions:
+            expanded.update({READ_EVENTS_PERMISSION, OPERATE_EVENTS_PERMISSION})
         return expanded
 
 

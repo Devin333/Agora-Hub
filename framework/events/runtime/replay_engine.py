@@ -113,6 +113,7 @@ _ALLOWED_REDUCER_BUILTINS = frozenset(
         "str",
         "sum",
         "tuple",
+        "ValueError",
     }
 )
 _ALLOWED_REPLAY_EVENT_ATTRIBUTES = frozenset(
@@ -838,8 +839,118 @@ class DeterministicReplayEngine:
             )
             raise
         base_versions = self._versions(registration)
-        if pending.status in {ReplayStatus.SUCCEEDED, ReplayStatus.FAILED}:
+        if pending.status is ReplayStatus.FAILED:
             raise ReplayCoreError("terminal replay reports cannot be executed again")
+        if pending.status is ReplayStatus.SUCCEEDED:
+            if pending.to_sequence != pending.high_watermark:
+                raise ReplayCoreError("terminal replay report watermark is incomplete")
+            output_ref = pending.checkpoint_ref
+            output_checkpoint = self._store_call(
+                lambda: self._checkpoints.get_checkpoint(
+                    output_ref or "",
+                    tenant_id=pending.tenant_id,
+                ),
+                failure_operation=RuntimeDiagnosticOperation.REPLAY_CHECKPOINT_READ_FAILED,
+                report=pending,
+            )
+            if output_checkpoint is None:
+                raise ReplaySourceReadError(
+                    reason_class="missing_durable_checkpoint",
+                    sequence=pending.to_sequence,
+                    report=pending,
+                    checkpoint=None,
+                )
+            output_checkpoint = self._validated_store_checkpoint(
+                lambda: self._validate_loaded_output_checkpoint(
+                    pending,
+                    output_checkpoint,
+                    expected_parent_id=input_checkpoint_ref,
+                )
+            )
+            try:
+                output_checkpoint.verify_integrity()
+            except EventIntegrityError:
+                raise ReplaySourceReadError(
+                    reason_class="corrupt_checkpoint",
+                    sequence=pending.to_sequence,
+                    report=pending,
+                    checkpoint=None,
+                ) from None
+            if output_checkpoint.last_sequence != pending.high_watermark:
+                raise ReplayCoreError("terminal replay checkpoint watermark is incomplete")
+            try:
+                self._validate_checkpoint(
+                    effective_request,
+                    pending,
+                    output_checkpoint,
+                    registration=registration,
+                )
+            except _ReplayIssue as issue:
+                raise issue.error_type(
+                    reason_class=issue.reason_class,
+                    sequence=issue.sequence,
+                    report=pending,
+                    checkpoint=output_checkpoint,
+                ) from None
+            if checkpoint is not None:
+                try:
+                    checkpoint.verify_integrity()
+                except EventIntegrityError:
+                    raise ReplaySourceReadError(
+                        reason_class="corrupt_checkpoint",
+                        sequence=pending.to_sequence,
+                        report=pending,
+                        checkpoint=None,
+                    ) from None
+                try:
+                    self._validate_checkpoint(
+                        effective_request,
+                        pending,
+                        checkpoint,
+                        registration=registration,
+                    )
+                except _ReplayIssue as issue:
+                    raise issue.error_type(
+                        reason_class=issue.reason_class,
+                        sequence=issue.sequence,
+                        report=pending,
+                        checkpoint=output_checkpoint,
+                    ) from None
+                if checkpoint.checkpoint_id != input_checkpoint_ref:
+                    raise ReplayCheckpointError(
+                        reason_class="checkpoint_reference_mismatch",
+                        sequence=None,
+                        report=pending,
+                        checkpoint=output_checkpoint,
+                    )
+            expected_after_sequence = checkpoint.last_sequence if checkpoint is not None else 0
+            if after_sequence not in (None, expected_after_sequence):
+                raise ReplayCheckpointError(
+                    reason_class="after_sequence_mismatch",
+                    sequence=after_sequence,
+                    report=pending,
+                    checkpoint=output_checkpoint,
+                )
+            expected_checksum = _replay_result_checksum(
+                output_checkpoint,
+                registration=registration,
+            )
+            if pending.result_checksum != expected_checksum:
+                raise ReplaySourceReadError(
+                    reason_class="replay_result_checksum_mismatch",
+                    sequence=pending.to_sequence,
+                    report=pending,
+                    checkpoint=output_checkpoint,
+                )
+            return ReplayExecutionResult(
+                report=pending,
+                checkpoint=output_checkpoint,
+                state=(
+                    output_checkpoint.state
+                    if registration is not None
+                    else None
+                ),
+            )
         if pending.status is ReplayStatus.RUNNING and not _versions_extend(
             base_versions,
             pending.versions,
@@ -2311,6 +2422,26 @@ def _initial_history_checksum(stream_id: str, tenant_id: str | None) -> str:
             "tenant_id": tenant_id,
         }
     )
+
+
+def _replay_result_checksum(
+    checkpoint: ReplayCheckpoint,
+    *,
+    registration: ReplayReducerRegistration | None,
+) -> str:
+    if registration is not None:
+        return checksum_for(thaw_canonical_json(checkpoint.state))
+    if checkpoint.verification_state is not None:
+        verification = HistoryVerificationState.from_checkpoint(
+            checkpoint.verification_state
+        )
+        return checksum_for(
+            {
+                "source_history_checksum": checkpoint.history_checksum,
+                "command_history_checksum": verification.history_checksum,
+            }
+        )
+    return checkpoint.history_checksum
 
 
 def _with_output_checkpoint_ref(request: ReplayStartRequest) -> ReplayStartRequest:

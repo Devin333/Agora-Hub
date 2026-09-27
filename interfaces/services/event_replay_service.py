@@ -15,6 +15,11 @@ from framework.events.runtime.models import (
     ReplayStartRequest,
     ReplayStatus,
 )
+from framework.events.runtime.projection_reducer import (
+    RUNTIME_PROJECTION_REDUCER_ID,
+    RUNTIME_PROJECTION_REDUCER_VERSION,
+    validate_runtime_projection_checkpoint_state,
+)
 from framework.shared.time import utc_now
 from interfaces.services.event_delivery_operations_service import (
     EventOperationCapabilityUnavailableError,
@@ -51,6 +56,15 @@ class EventReplayRuntimePort(Protocol):
         checkpoint: ReplayCheckpoint | None = None,
         after_sequence: int | None = None,
     ) -> ReplayExecutionResult: ...
+
+
+class ReplayCheckpointReaderPort(Protocol):
+    def get_checkpoint(
+        self,
+        checkpoint_id: str,
+        *,
+        tenant_id: str | None = None,
+    ) -> ReplayCheckpoint | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +112,7 @@ class EventReplayService:
         self,
         *,
         engine: EventReplayRuntimePort | None = None,
+        checkpoint_reader: ReplayCheckpointReaderPort | None = None,
         report_store: ReplayReportStorePort,
         authorizer: EventAuthorizerPort,
         clock: Callable[[], datetime] = utc_now,
@@ -109,6 +124,7 @@ class EventReplayService:
         if not callable(clock):
             raise TypeError("clock must be callable")
         self._engine = engine
+        self._checkpoint_reader = checkpoint_reader
         self._reports = report_store
         self._authorizer = authorizer
         self._clock = clock
@@ -127,6 +143,15 @@ class EventReplayService:
         checkpoint: ReplayCheckpoint | None = None,
         after_sequence: int | None = None,
     ) -> ReplayExecutionResult:
+        checkpoint = self._resolve_checkpoint(
+            mode=ReplayMode.REBUILD_STATE,
+            source_stream_id=source_stream_id,
+            reducer_id=reducer_id,
+            reducer_version=reducer_version,
+            authorization=authorization,
+            checkpoint_ref=checkpoint_ref,
+            checkpoint=checkpoint,
+        )
         checkpoint_target = _checkpoint_target(
             mode=ReplayMode.REBUILD_STATE,
             source_stream_id=source_stream_id,
@@ -157,6 +182,68 @@ class EventReplayService:
         )
         return _validated_execution_result(result, request)
 
+    def _resolve_checkpoint(
+        self,
+        *,
+        mode: ReplayMode,
+        source_stream_id: str,
+        reducer_id: str | None,
+        reducer_version: str | None,
+        authorization: EventAuthorizationContext,
+        checkpoint_ref: str | None,
+        checkpoint: ReplayCheckpoint | None,
+    ) -> ReplayCheckpoint | None:
+        if checkpoint is not None:
+            _validate_runtime_checkpoint_state(
+                checkpoint,
+                reducer_id=reducer_id,
+                reducer_version=reducer_version,
+            )
+            return checkpoint
+        if checkpoint_ref is None:
+            return None
+        normalized_ref = _required_text(checkpoint_ref, "checkpoint_ref")
+        authorize_event_operation(
+            self._authorizer,
+            authorization,
+            EventPermission.REPLAY_START,
+            target={
+                "mode": mode.value,
+                "source_stream_id": source_stream_id,
+                "checkpoint_ref": normalized_ref,
+                "reducer_id": reducer_id,
+                "reducer_version": reducer_version,
+                "operation": "checkpoint_lookup",
+            },
+        )
+        if self._checkpoint_reader is None:
+            raise EventOperationCapabilityUnavailableError(
+                "durable replay checkpoint lookup is unavailable"
+            )
+        loaded = self._checkpoint_reader.get_checkpoint(
+            normalized_ref,
+            tenant_id=authorization.tenant_id,
+        )
+        if loaded is None:
+            raise ValueError("replay checkpoint is unavailable in tenant scope")
+        if not isinstance(loaded, ReplayCheckpoint):
+            raise EventContractError("checkpoint reader returned an invalid checkpoint")
+        loaded.verify_integrity()
+        if (
+            loaded.mode is not mode
+            or loaded.source_stream_id != source_stream_id
+            or loaded.tenant_id != authorization.tenant_id
+            or loaded.reducer_id != reducer_id
+            or loaded.reducer_version != reducer_version
+        ):
+            raise ValueError("replay checkpoint does not match the requested scope")
+        _validate_runtime_checkpoint_state(
+            loaded,
+            reducer_id=reducer_id,
+            reducer_version=reducer_version,
+        )
+        return loaded
+
     def verify_history(
         self,
         *,
@@ -169,6 +256,15 @@ class EventReplayService:
         checkpoint: ReplayCheckpoint | None = None,
         after_sequence: int | None = None,
     ) -> ReplayExecutionResult:
+        checkpoint = self._resolve_checkpoint(
+            mode=ReplayMode.VERIFY_HISTORY,
+            source_stream_id=source_stream_id,
+            reducer_id=None,
+            reducer_version=None,
+            authorization=authorization,
+            checkpoint_ref=checkpoint_ref,
+            checkpoint=checkpoint,
+        )
         checkpoint_target = _checkpoint_target(
             mode=ReplayMode.VERIFY_HISTORY,
             source_stream_id=source_stream_id,
@@ -390,6 +486,26 @@ def _checkpoint_target(
     }
 
 
+def _validate_runtime_checkpoint_state(
+    checkpoint: ReplayCheckpoint,
+    *,
+    reducer_id: str | None,
+    reducer_version: str | None,
+) -> None:
+    if not isinstance(checkpoint, ReplayCheckpoint):
+        return
+    if (
+        reducer_id != RUNTIME_PROJECTION_REDUCER_ID
+        or reducer_version != RUNTIME_PROJECTION_REDUCER_VERSION
+    ):
+        return
+    validate_runtime_projection_checkpoint_state(
+        checkpoint.state,
+        stream_id=checkpoint.source_stream_id,
+        last_sequence=checkpoint.last_sequence,
+    )
+
+
 def _validated_execution_result(
     result: ReplayExecutionResult,
     request: ReplayStartRequest,
@@ -433,6 +549,7 @@ def _clock_value(clock: Callable[[], datetime]) -> datetime:
 __all__ = [
     "EventReplayRuntimePort",
     "EventReplayService",
+    "ReplayCheckpointReaderPort",
     "ReplayReportListResult",
     "ReplayReportLookupResult",
 ]

@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from framework.events.errors import EventContractError, EventStoreUnavailableError
+from framework.events.errors import (
+    EventContractError,
+    EventIntegrityError,
+    EventStoreUnavailableError,
+)
 from framework.events.runtime.models import (
     DeadLetterPage,
     DeadLetterRecord,
@@ -21,6 +25,7 @@ from framework.events.runtime.models import (
     ReplayReport,
     ReplayReportPage,
     ReplayStatus,
+    ReplayVersion,
     RedeliveryItem,
     RedeliveryReport,
     RetirementCancellationReport,
@@ -30,6 +35,11 @@ from framework.events.runtime.models import (
 from framework.events.runtime.replay_engine import (
     ReplayCheckpoint,
     ReplayExecutionResult,
+)
+from framework.events.runtime.projection_reducer import (
+    RUNTIME_PROJECTION_REDUCER_ID,
+    RUNTIME_PROJECTION_REDUCER_VERSION,
+    RUNTIME_PROJECTION_STATE_SCHEMA,
 )
 from interfaces.services.event_delivery_operations_service import (
     EventDeliveryOperationsService,
@@ -103,6 +113,16 @@ class _ReportStore:
         if self.unavailable:
             raise EventStoreUnavailableError("report store unavailable")
         return ReplayReportPage(reports=())
+
+
+class _CheckpointReader:
+    def __init__(self, checkpoint=None) -> None:
+        self.checkpoint = checkpoint
+        self.calls = []
+
+    def get_checkpoint(self, checkpoint_id, *, tenant_id=None):
+        self.calls.append((checkpoint_id, tenant_id))
+        return self.checkpoint
 
 
 class _DeliveryRuntime:
@@ -402,6 +422,182 @@ def test_replay_rejects_checkpoint_ref_or_scope_mismatch_before_runtime() -> Non
         )
 
     assert engine.rebuild_calls == []
+
+
+def test_replay_checkpoint_lookup_requires_authorization_before_reader_access() -> None:
+    reader = _CheckpointReader(_input_checkpoint())
+    service = EventReplayService(
+        engine=_ReplayEngine(),
+        checkpoint_reader=reader,
+        report_store=_ReportStore(),
+        authorizer=_Authorizer(authorized=False),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(EventAuthorizationError):
+        service.rebuild_state(
+            replay_id="replay-denied",
+            source_stream_id="run:run-1",
+            operator_reason="must not disclose checkpoint",
+            reducer_id="run-state",
+            reducer_version="1",
+            checkpoint_ref="checkpoint-input-1",
+            from_sequence=2,
+            authorization=_authorization(),
+        )
+
+    assert reader.calls == []
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_kind", "match"),
+    [
+        ("missing", "unavailable in tenant scope"),
+        ("cross_tenant", "requested scope"),
+        ("wrong_version", "requested scope"),
+    ],
+)
+def test_replay_checkpoint_lookup_fails_closed_for_invalid_scope_or_version(
+    checkpoint_kind,
+    match,
+) -> None:
+    checkpoint = None
+    if checkpoint_kind == "cross_tenant":
+        checkpoint = replace(_input_checkpoint(), tenant_id="tenant-b")
+    elif checkpoint_kind == "wrong_version":
+        checkpoint = replace(
+            _input_checkpoint(),
+            reducer_version="2",
+            versions=(
+                ReplayVersion("replay_runtime", "runtime-1"),
+                ReplayVersion("schema_catalog", "schema-1"),
+                ReplayVersion("reducer:run-state", "2"),
+            ),
+        )
+    reader = _CheckpointReader(checkpoint)
+    engine = _ReplayEngine()
+    service = EventReplayService(
+        engine=engine,
+        checkpoint_reader=reader,
+        report_store=_ReportStore(),
+        authorizer=_Authorizer(),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(ValueError, match=match):
+        service.rebuild_state(
+            replay_id="replay-invalid-checkpoint",
+            source_stream_id="run:run-1",
+            operator_reason="reject incompatible checkpoint",
+            reducer_id="run-state",
+            reducer_version="1",
+            checkpoint_ref="checkpoint-input-1",
+            from_sequence=2,
+            authorization=_authorization(),
+        )
+
+    assert reader.calls == [("checkpoint-input-1", "tenant-a")]
+    assert engine.rebuild_calls == []
+
+
+def test_replay_checkpoint_lookup_rejects_corrupt_checksum() -> None:
+    checkpoint = _input_checkpoint()
+    object.__setattr__(checkpoint, "checkpoint_checksum", "sha256:" + "0" * 64)
+    reader = _CheckpointReader(checkpoint)
+    engine = _ReplayEngine()
+    service = EventReplayService(
+        engine=engine,
+        checkpoint_reader=reader,
+        report_store=_ReportStore(),
+        authorizer=_Authorizer(),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(EventIntegrityError):
+        service.rebuild_state(
+            replay_id="replay-corrupt-checkpoint",
+            source_stream_id="run:run-1",
+            operator_reason="reject corrupt checkpoint",
+            reducer_id="run-state",
+            reducer_version="1",
+            checkpoint_ref=checkpoint.checkpoint_id,
+            from_sequence=2,
+            authorization=_authorization(),
+        )
+
+    assert engine.rebuild_calls == []
+
+
+def test_runtime_replay_rejects_resigned_inconsistent_state_before_noop_resume() -> None:
+    checkpoint = ReplayCheckpoint(
+        checkpoint_id="runtime-checkpoint-invalid-state",
+        mode=ReplayMode.REBUILD_STATE,
+        source_stream_id="run:run-1",
+        last_sequence=2,
+        source_high_watermark=2,
+        runtime_version="runtime-1",
+        schema_catalog_version="schema-1",
+        history_checksum="sha256:" + "b" * 64,
+        last_event_id="event-2",
+        state={
+            "state_schema": RUNTIME_PROJECTION_STATE_SCHEMA,
+            "cursors": {
+                "run:run-1": {
+                    "stream_id": "run:run-1",
+                    "sequence": 1,
+                    "checksum": "sha256:" + "a" * 64,
+                }
+            },
+            "statuses": {},
+        },
+        reducer_id=RUNTIME_PROJECTION_REDUCER_ID,
+        reducer_version=RUNTIME_PROJECTION_REDUCER_VERSION,
+        tenant_id="tenant-a",
+    )
+    engine = _ReplayEngine()
+    service = EventReplayService(
+        engine=engine,
+        checkpoint_reader=_CheckpointReader(checkpoint),
+        report_store=_ReportStore(),
+        authorizer=_Authorizer(),
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(ValueError, match="cursor"):
+        service.rebuild_state(
+            replay_id="runtime-noop-resume",
+            source_stream_id="run:run-1",
+            operator_reason="reject invalid signed state",
+            reducer_id=RUNTIME_PROJECTION_REDUCER_ID,
+            reducer_version=RUNTIME_PROJECTION_REDUCER_VERSION,
+            checkpoint_ref=checkpoint.checkpoint_id,
+            from_sequence=3,
+            authorization=_authorization(),
+        )
+
+    assert checkpoint.last_sequence == checkpoint.source_high_watermark
+    assert engine.rebuild_calls == []
+
+    direct_engine = _ReplayEngine()
+    direct_service = EventReplayService(
+        engine=direct_engine,
+        report_store=_ReportStore(),
+        authorizer=_Authorizer(),
+        clock=lambda: NOW,
+    )
+    with pytest.raises(ValueError, match="cursor"):
+        direct_service.rebuild_state(
+            replay_id="runtime-direct-noop-resume",
+            source_stream_id="run:run-1",
+            operator_reason="reject direct invalid signed state",
+            reducer_id=RUNTIME_PROJECTION_REDUCER_ID,
+            reducer_version=RUNTIME_PROJECTION_REDUCER_VERSION,
+            checkpoint_ref=checkpoint.checkpoint_id,
+            checkpoint=checkpoint,
+            from_sequence=3,
+            authorization=_authorization(),
+        )
+    assert direct_engine.rebuild_calls == []
 
 
 def test_delivery_mutations_receive_principal_tenant_reason_and_evidence() -> None:

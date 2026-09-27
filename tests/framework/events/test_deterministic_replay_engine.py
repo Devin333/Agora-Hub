@@ -292,11 +292,14 @@ class _FakeCheckpointStore:
     def __init__(self) -> None:
         self.records: dict[str, ReplayCheckpoint] = {}
         self.read_overrides: dict[str, ReplayCheckpoint] = {}
+        self.allow_unscoped_override = False
+        self.save_calls = 0
         self.fail_reads = False
         self.fail_writes = False
         self.secret = "checkpoint-store-secret-token"
 
     def save_checkpoint(self, checkpoint: ReplayCheckpoint) -> ReplayCheckpoint:
+        self.save_calls += 1
         if self.fail_writes:
             raise RuntimeError(self.secret)
         existing = self.records.get(checkpoint.checkpoint_id)
@@ -321,7 +324,11 @@ class _FakeCheckpointStore:
             raise RuntimeError(self.secret)
         if checkpoint_id in self.read_overrides:
             checkpoint = self.read_overrides[checkpoint_id]
-            return checkpoint if checkpoint.tenant_id == tenant_id else None
+            return (
+                checkpoint
+                if self.allow_unscoped_override or checkpoint.tenant_id == tenant_id
+                else None
+            )
         checkpoint = self.records.get(checkpoint_id)
         if checkpoint is None or checkpoint.tenant_id != tenant_id:
             return None
@@ -537,6 +544,260 @@ def test_rebuild_state_pins_versions_upcasts_and_never_mutates_source() -> None:
     assert statuses[0] is ReplayStatus.PENDING
     assert ReplayStatus.RUNNING in statuses
     assert statuses[-1] is ReplayStatus.SUCCEEDED
+
+
+def test_exact_terminal_retry_reuses_success_without_source_read_or_write() -> None:
+    store = _FakeReplayStore([_event(1), _event(2)])
+    request = _request("rebuild-exact-retry", ReplayMode.REBUILD_STATE)
+    first = _engine(store, page_size=2).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    )
+    read_count = len(store.read_requests)
+    update_count = store.update_calls
+    checkpoint_save_count = store.checkpoints.save_calls
+    history_count = len(store.report_history)
+
+    retried = _engine(store, page_size=2).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    )
+
+    assert retried.report == first.report
+    assert retried.checkpoint == first.checkpoint
+    assert retried.state == first.state
+    assert len(store.read_requests) == read_count
+    assert store.update_calls == update_count
+    assert store.checkpoints.save_calls == checkpoint_save_count
+    assert len(store.report_history) == history_count
+
+    with pytest.raises(ReplayCheckpointError, match="after_sequence_mismatch"):
+        _engine(store, page_size=2).rebuild_state(
+            request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+            after_sequence=1,
+        )
+    assert len(store.read_requests) == read_count
+
+
+@pytest.mark.parametrize(
+    "drift_request",
+    [
+        _request("rebuild-terminal-drift", ReplayMode.REBUILD_STATE, from_sequence=1),
+        replace(
+            _request("rebuild-terminal-reason", ReplayMode.REBUILD_STATE),
+            operator_reason="different reason",
+        ),
+    ],
+)
+def test_terminal_retry_rejects_request_identity_drift(
+    drift_request: ReplayStartRequest,
+) -> None:
+    store = _FakeReplayStore([_event(1), _event(2)])
+    original = _request(
+        drift_request.replay_id,
+        ReplayMode.REBUILD_STATE,
+    )
+    _engine(store).rebuild_state(
+        original,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    )
+    with pytest.raises(ReplayCoreError):
+        _engine(store).rebuild_state(
+            drift_request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+        )
+
+
+def test_terminal_retry_rejects_corrupt_output_checkpoint() -> None:
+    store = _FakeReplayStore([_event(1), _event(2)])
+    request = _request("rebuild-corrupt-terminal", ReplayMode.REBUILD_STATE)
+    first = _engine(store).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    )
+    corrupt = first.checkpoint
+    object.__setattr__(corrupt, "checkpoint_checksum", "sha256:" + "0" * 64)
+    store.checkpoints.records[corrupt.checkpoint_id] = corrupt
+
+    with pytest.raises(ReplaySourceReadError, match="corrupt_checkpoint"):
+        _engine(store).rebuild_state(
+            request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "reason_class"),
+    [
+        ("source_stream_id", "run:other-stream", "checkpoint_stream_mismatch"),
+        ("tenant_id", "tenant-other", "checkpoint_tenant_mismatch"),
+    ],
+)
+def test_terminal_retry_rejects_output_checkpoint_scope_drift(
+    field: str,
+    replacement: str,
+    reason_class: str,
+) -> None:
+    store = _FakeReplayStore([_event(1), _event(2)])
+    request = _request("rebuild-terminal-scope-drift", ReplayMode.REBUILD_STATE)
+    first = _engine(store).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    )
+    tampered = replace(first.checkpoint, **{field: replacement})
+    store.checkpoints.records[tampered.checkpoint_id] = tampered
+    if field == "tenant_id":
+        store.checkpoints.read_overrides[tampered.checkpoint_id] = tampered
+        store.checkpoints.allow_unscoped_override = True
+
+    with pytest.raises(ReplayCheckpointError) as caught:
+        _engine(store).rebuild_state(
+            request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+        )
+    assert caught.value.reason_class == reason_class
+
+
+def test_terminal_retry_rejects_output_checkpoint_version_and_result_drift() -> None:
+    store = _FakeReplayStore([_event(1), _event(2)])
+    request = _request("rebuild-terminal-version-drift", ReplayMode.REBUILD_STATE)
+    first = _engine(store).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    )
+    versions = tuple(
+        ReplayVersion(item.component, "other-runtime")
+        if item.component == "replay_runtime"
+        else item
+        for item in first.checkpoint.versions
+    )
+    version_drift = replace(
+        first.checkpoint,
+        runtime_version="other-runtime",
+        versions=versions,
+    )
+    store.checkpoints.records[version_drift.checkpoint_id] = version_drift
+    with pytest.raises(ReplayCheckpointError) as caught:
+        _engine(store).rebuild_state(
+            request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+        )
+    assert caught.value.reason_class == "checkpoint_runtime_version_mismatch"
+
+    result_drift = replace(first.checkpoint, state={"total": 999, "seen": [1, 2]})
+    store.checkpoints.records[result_drift.checkpoint_id] = result_drift
+    with pytest.raises(ReplaySourceReadError) as caught:
+        _engine(store).rebuild_state(
+            request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+        )
+    assert caught.value.reason_class == "replay_result_checksum_mismatch"
+
+
+def test_terminal_retry_rejects_output_parent_checkpoint_drift() -> None:
+    store = _FakeReplayStore([_event(1), _event(2)])
+    parent = _engine(store, page_size=2).rebuild_state(
+        _request("rebuild-terminal-parent", ReplayMode.REBUILD_STATE),
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    ).checkpoint
+    store.events.append(_event(3))
+    request = _request(
+        "rebuild-terminal-child",
+        ReplayMode.REBUILD_STATE,
+        checkpoint_ref=parent.checkpoint_id,
+        from_sequence=3,
+    )
+    first = _engine(store).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+        checkpoint=parent,
+        after_sequence=parent.last_sequence,
+    )
+    tampered = replace(first.checkpoint, parent_checkpoint_id="other-parent")
+    store.checkpoints.records[tampered.checkpoint_id] = tampered
+
+    with pytest.raises(ReplaySourceReadError) as caught:
+        _engine(store).rebuild_state(
+            request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+            checkpoint=parent,
+            after_sequence=parent.last_sequence,
+        )
+    assert caught.value.reason_class == "replay_checkpoint_identity_mismatch"
+
+
+def test_exact_terminal_retry_with_parent_checkpoint_uses_parent_after_sequence() -> None:
+    store = _FakeReplayStore([_event(1), _event(2)])
+    parent = _engine(store, page_size=2).rebuild_state(
+        _request("rebuild-continuation-parent", ReplayMode.REBUILD_STATE),
+        reducer_id="counter",
+        reducer_version="2.1.0",
+    ).checkpoint
+    store.events.append(_event(3))
+    request = _request(
+        "rebuild-continuation-child",
+        ReplayMode.REBUILD_STATE,
+        checkpoint_ref=parent.checkpoint_id,
+        from_sequence=3,
+    )
+
+    first = _engine(store, page_size=2).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+        checkpoint=parent,
+        after_sequence=parent.last_sequence,
+    )
+    read_count = len(store.read_requests)
+    update_count = store.update_calls
+    checkpoint_save_count = store.checkpoints.save_calls
+    history_count = len(store.report_history)
+
+    retried = _engine(store, page_size=2).rebuild_state(
+        request,
+        reducer_id="counter",
+        reducer_version="2.1.0",
+        checkpoint=parent,
+        after_sequence=parent.last_sequence,
+    )
+
+    assert retried.report == first.report
+    assert retried.checkpoint == first.checkpoint
+    assert retried.state == first.state == {"total": 6, "seen": (1, 2, 3)}
+    assert retried.report.high_watermark == 3
+    assert retried.checkpoint.parent_checkpoint_id == parent.checkpoint_id
+    assert len(store.read_requests) == read_count
+    assert store.update_calls == update_count
+    assert store.checkpoints.save_calls == checkpoint_save_count
+    assert len(store.report_history) == history_count
+
+    with pytest.raises(ReplayCheckpointError, match="after_sequence_mismatch"):
+        _engine(store, page_size=2).rebuild_state(
+            request,
+            reducer_id="counter",
+            reducer_version="2.1.0",
+            checkpoint=parent,
+            after_sequence=first.checkpoint.last_sequence,
+        )
+    assert len(store.read_requests) == read_count
+    assert store.update_calls == update_count
+    assert store.checkpoints.save_calls == checkpoint_save_count
 
 
 def test_verify_history_compares_deterministic_commands_and_rejects_reducer_arguments() -> None:

@@ -537,16 +537,36 @@ class RuntimeEventProjection:
                 raise RuntimeProjectionError("rebuild requires an explicit event iterable for this store")
             events = self._store.all_events()
         with self._lock:
-            self._seen.clear()
-            self._sequence_seen.clear()
-            self._status.clear()
-            self._cursor.clear()
-        ordered = sorted(
-            (item if isinstance(item, RuntimeEventEnvelope) else RuntimeEventEnvelope.from_dict(item) for item in events),
-            key=lambda item: (item.stream_id or item.run_id or "runtime", item.sequence or 0, item.occurred_at, item.event_id),
-        )
-        for event in ordered:
-            self.apply(event)
+            # Keep live applies behind the entire candidate fold. Once the
+            # candidate is published, blocked deliveries continue against it
+            # instead of being overwritten by the final swap.
+            candidate = object.__new__(RuntimeEventProjection)
+            candidate._store = self._store
+            candidate._seen = {}
+            candidate._sequence_seen = {}
+            candidate._status = {}
+            candidate._cursor = {}
+            candidate._lock = threading.RLock()
+            ordered = sorted(
+                (
+                    item
+                    if isinstance(item, RuntimeEventEnvelope)
+                    else RuntimeEventEnvelope.from_dict(item)
+                    for item in events
+                ),
+                key=lambda item: (
+                    item.stream_id or item.run_id or "runtime",
+                    item.sequence or 0,
+                    item.occurred_at,
+                    item.event_id,
+                ),
+            )
+            for event in ordered:
+                candidate.apply(event)
+            self._seen = candidate._seen
+            self._sequence_seen = candidate._sequence_seen
+            self._status = candidate._status
+            self._cursor = candidate._cursor
 
     def status(
         self,
@@ -781,7 +801,7 @@ def runtime_event_publish_request(
         payload = {
             key: value
             for key, value in event.to_dict().items()
-            if key not in {"event_id", "event_type", "occurred_at", "stream_id"}
+            if key not in {"event_id", "event_type", "occurred_at", "stream_id", "source"}
         }
     return EventPublishRequest(
         event_id=event.event_id,

@@ -855,7 +855,7 @@ def _runtime_event_payload_schema() -> dict[str, Any]:
             "safeObject": safe_object,
         },
         "additionalProperties": False,
-        "required": ["schema_version", "identity", "refs", "checksums", "metadata", "source"],
+        "required": ["schema_version", "identity", "refs", "checksums", "metadata"],
         "properties": {
             "schema_version": {"const": RUNTIME_EVENT_DATA_SCHEMA},
             "event_id": {"type": "string", "minLength": 1, "maxLength": 512},

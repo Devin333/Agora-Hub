@@ -22,6 +22,11 @@ from framework.events.runtime.models import (
     RetirementCancellationReport,
     SubscriptionKey,
 )
+from framework.events.runtime.projection_reducer import (
+    RUNTIME_PROJECTION_REDUCER_ID,
+    RUNTIME_PROJECTION_REDUCER_VERSION,
+)
+from framework.events.runtime.replay_engine import ReplayCheckpoint
 from interfaces.services.event_delivery_operations_service import (
     ConsumerDeliveryStatusResult,
     EventDeliveryOperationsService,
@@ -150,6 +155,32 @@ class EventOperatorApplicationService:
             serializer=_replay_report,
             unavailable_reason_class=result.unavailable_reason_class,
         )
+
+    def rebuild_runtime_projection(
+        self,
+        *,
+        replay_id: str,
+        source_stream_id: str,
+        operator_reason: str,
+        from_sequence: int | None = None,
+        checkpoint_ref: str | None = None,
+    ) -> dict[str, Any]:
+        result = self._replay.rebuild_state(
+            replay_id=replay_id,
+            source_stream_id=source_stream_id,
+            operator_reason=operator_reason,
+            reducer_id=RUNTIME_PROJECTION_REDUCER_ID,
+            reducer_version=RUNTIME_PROJECTION_REDUCER_VERSION,
+            authorization=self._authorization,
+            from_sequence=from_sequence,
+            checkpoint_ref=checkpoint_ref,
+        )
+        return {
+            "availability": EventServiceAvailability.AVAILABLE.value,
+            "tenant_id": self._authorization.tenant_id,
+            "replay_report": _replay_report(result.report),
+            "checkpoint": _replay_checkpoint(result.checkpoint),
+        }
 
     def list_dead_letters(
         self,
@@ -377,6 +408,23 @@ def _replay_report(report: ReplayReport) -> dict[str, Any]:
         "finished_at": _utc_z(report.finished_at),
         "operator_id": report.operator_id,
         "operator_reason": report.operator_reason,
+    }
+
+
+def _replay_checkpoint(checkpoint: ReplayCheckpoint) -> dict[str, Any]:
+    return {
+        "checkpoint_id": _public_reference(checkpoint.checkpoint_id),
+        "checkpoint_checksum": checkpoint.checkpoint_checksum,
+        "mode": checkpoint.mode.value,
+        "source_stream_id": checkpoint.source_stream_id,
+        "last_sequence": checkpoint.last_sequence,
+        "source_high_watermark": checkpoint.source_high_watermark,
+        "last_event_id": checkpoint.last_event_id,
+        "reducer_id": checkpoint.reducer_id,
+        "reducer_version": checkpoint.reducer_version,
+        "parent_checkpoint_id": _public_reference(checkpoint.parent_checkpoint_id),
+        "tenant_id": checkpoint.tenant_id,
+        "history_checksum": checkpoint.history_checksum,
     }
 
 

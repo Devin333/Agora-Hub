@@ -103,6 +103,33 @@ def _register_operator_commands(
     _add_json_argument(replay_show_parser)
     replay_show_parser.set_defaults(handler=event_replay_report_show)
 
+    runtime_projection_parser = events_subparsers.add_parser(
+        "runtime-projection",
+        help="Rebuild the tenant-scoped runtime event projection",
+    )
+    runtime_projection_subparsers = runtime_projection_parser.add_subparsers(
+        dest="runtime_projection_command",
+        required=True,
+    )
+    runtime_projection_rebuild_parser = runtime_projection_subparsers.add_parser(
+        "rebuild",
+        help="Run a finite deterministic runtime projection rebuild",
+    )
+    runtime_projection_rebuild_parser.add_argument("--replay-id", required=True)
+    runtime_projection_rebuild_parser.add_argument(
+        "--source-stream-id",
+        required=True,
+    )
+    runtime_projection_rebuild_parser.add_argument(
+        "--from-sequence",
+        type=_positive_int,
+    )
+    runtime_projection_rebuild_parser.add_argument("--checkpoint-ref")
+    _add_mutation_arguments(runtime_projection_rebuild_parser)
+    runtime_projection_rebuild_parser.set_defaults(
+        handler=event_runtime_projection_rebuild
+    )
+
     dead_letters_parser = events_subparsers.add_parser(
         "dead-letters",
         help="Inspect and operate tenant-scoped dead letters",
@@ -238,6 +265,27 @@ def event_replay_report_show(args: argparse.Namespace) -> int:
     return _run_operator_command(
         args,
         lambda service: service.get_replay_report(args.replay_id),
+    )
+
+
+def event_runtime_projection_rebuild(args: argparse.Namespace) -> int:
+    if not args.yes:
+        return _confirmation_required()
+    if (args.from_sequence is None) != (args.checkpoint_ref is None):
+        print(
+            "--from-sequence and --checkpoint-ref must be supplied together",
+            file=sys.stderr,
+        )
+        return 1
+    return _run_operator_command(
+        args,
+        lambda service: service.rebuild_runtime_projection(
+            replay_id=args.replay_id,
+            source_stream_id=args.source_stream_id,
+            operator_reason=args.reason,
+            from_sequence=args.from_sequence,
+            checkpoint_ref=args.checkpoint_ref,
+        ),
     )
 
 
@@ -465,5 +513,6 @@ __all__ = [
     "event_quarantine_show",
     "event_replay_report_show",
     "event_replay_reports_list",
+    "event_runtime_projection_rebuild",
     "register",
 ]

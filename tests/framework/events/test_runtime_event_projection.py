@@ -16,6 +16,7 @@ from framework.events.runtime.projection import (
     RuntimeEventProjection,
     RuntimeEventType,
     RuntimeOperatorStatusService,
+    runtime_event_publish_request,
 )
 from framework.events.schema import RUNTIME_EVENT_DATA_SCHEMA, default_event_schema_catalog
 from framework.shared.graph_identity import GraphExecutionIdentity
@@ -201,3 +202,19 @@ def test_runtime_schema_rejects_raw_payload_and_unknown_envelope_fields() -> Non
     payload["raw_payload"] = "should-not-be-inline"
     with pytest.raises(Exception):
         catalog.validate("tool_requested", RUNTIME_EVENT_DATA_SCHEMA, payload)
+
+
+def test_runtime_publish_request_keeps_source_in_canonical_envelope() -> None:
+    catalog = default_event_schema_catalog()
+    event = replace(_event("publish-event"), metadata={"safe": "ok"})
+    request = runtime_event_publish_request(event)
+
+    assert request.source == event.source
+    assert "source" not in request.payload
+    catalog.validate(request.event_type, request.data_schema, request.payload)
+    # Previously stored v1 payloads may contain source; replay still accepts them.
+    catalog.validate(
+        request.event_type,
+        request.data_schema,
+        {**request.payload, "source": event.source},
+    )

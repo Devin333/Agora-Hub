@@ -122,6 +122,95 @@ def test_event_operator_list_commands_forward_filters_and_cursor(
     )
 
 
+def test_runtime_projection_rebuild_forwards_resume_scope(
+    monkeypatch,
+    capsys,
+) -> None:
+    payload = {
+        "availability": "available",
+        "tenant_id": "tenant-a",
+        "replay_report": {"replay_id": "runtime-replay", "status": "succeeded"},
+        "checkpoint": {"checkpoint_id": "checkpoint-runtime", "last_sequence": 4},
+    }
+    service = _FakeOperatorService(payload)
+    monkeypatch.setattr(
+        event_commands,
+        "event_operator_service_from_env",
+        lambda: service,
+    )
+
+    exit_code = news_cli.main(
+        [
+            "events",
+            "runtime-projection",
+            "rebuild",
+            "--replay-id",
+            "runtime-replay",
+            "--source-stream-id",
+            "runtime:run-1",
+            "--from-sequence",
+            "3",
+            "--checkpoint-ref",
+            "checkpoint-prefix",
+            "--reason",
+            "resume verified runtime projection",
+            "--yes",
+            "--json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert service.calls == [
+        (
+            "rebuild_runtime_projection",
+            (),
+            {
+                "replay_id": "runtime-replay",
+                "source_stream_id": "runtime:run-1",
+                "operator_reason": "resume verified runtime projection",
+                "from_sequence": 3,
+                "checkpoint_ref": "checkpoint-prefix",
+            },
+        )
+    ]
+    assert captured.err == ""
+    assert json.loads(captured.out) == payload
+
+
+def test_runtime_projection_rebuild_requires_complete_resume_pair(
+    monkeypatch,
+    capsys,
+) -> None:
+    service = _FakeOperatorService({})
+    monkeypatch.setattr(
+        event_commands,
+        "event_operator_service_from_env",
+        lambda: service,
+    )
+
+    exit_code = news_cli.main(
+        [
+            "events",
+            "runtime-projection",
+            "rebuild",
+            "--replay-id",
+            "runtime-replay",
+            "--source-stream-id",
+            "runtime:run-1",
+            "--checkpoint-ref",
+            "checkpoint-prefix",
+            "--reason",
+            "incomplete resume",
+            "--yes",
+        ]
+    )
+
+    assert exit_code == 1
+    assert service.calls == []
+    assert "must be supplied together" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("argv", "method", "record_id"),
     [
@@ -490,6 +579,9 @@ class _FakeOperatorService:
 
     def get_replay_report(self, replay_id):
         return self._call("get_replay_report", (replay_id,), {})
+
+    def rebuild_runtime_projection(self, **kwargs):
+        return self._call("rebuild_runtime_projection", (), kwargs)
 
     def list_dead_letters(self, **kwargs):
         return self._call("list_dead_letters", (), kwargs)

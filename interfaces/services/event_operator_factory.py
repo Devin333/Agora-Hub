@@ -67,6 +67,8 @@ class DurableEventOperatorStorage(Protocol):
     event_store: EventStorePort
     schema_catalog: EventSchemaCatalog
 
+    def create_replay_engine(self): ...
+
 
 class EventOperatorEventAuthorizer:
     """Bind event permissions to one verified actor and deployment tenant."""
@@ -242,6 +244,11 @@ def build_event_operator_service(
         raise ValueError("event storage event_store is required")
     _validate_delivery_runtime_store(delivery_runtime, store=store)
 
+    replay_engine = None
+    create_replay_engine = getattr(event_storage, "create_replay_engine", None)
+    if callable(create_replay_engine):
+        replay_engine = create_replay_engine()
+
     digest = _actor_scope_digest(actor, tenant_id=normalized_tenant_id)
     authorization = EventAuthorizationContext(
         principal_id=actor.actor_id,
@@ -273,6 +280,8 @@ def build_event_operator_service(
             clock=clock,
         ),
         replay=EventReplayService(
+            engine=replay_engine,
+            checkpoint_reader=getattr(event_storage, "replay_checkpoint_store", None),
             report_store=store,
             authorizer=authorizer,
             clock=clock,
