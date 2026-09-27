@@ -163,7 +163,18 @@ class ExecutionEnvironmentRegistry:
         if provider is None:
             raise ExecutionEnvironmentUnavailableError(
                 "requested execution environment provider is not registered",
-                details={"provider_id": normalized, "missing": ["provider"]},
+                details={
+                    "provider_id": normalized,
+                    "missing": ["provider"],
+                    "denial_code_version": CAPABILITY_DENIAL_CODE_VERSION,
+                    "denial_code": capability_denial_code("provider_unavailable"),
+                    "denials": [
+                        {
+                            "capability": "provider_unavailable",
+                            "denial_code": capability_denial_code("provider_unavailable"),
+                        }
+                    ],
+                },
             )
         return provider.capabilities
 

@@ -25,6 +25,7 @@ from framework.execution_environment.models import (
     ExecutionRequest,
     ExecutionReceipt,
     ExecutionStatus,
+    capability_denial_code,
 )
 
 
@@ -74,16 +75,32 @@ class DockerExecutionEnvironment:
         )
 
     def execute(self, request: ExecutionRequest) -> ExecutionOutcome:
-        missing = self.capabilities.missing_for(request)
-        if missing:
+        capabilities = self.capabilities
+        diagnostics = capabilities.admission_diagnostics(request)
+        if diagnostics["missing"]:
             raise ExecutionEnvironmentUnavailableError(
                 "requested Docker execution capabilities are unavailable",
-                details={"provider_id": "docker", "missing": list(missing)},
+                details=diagnostics,
             )
         if request.profile.network_policy.mode.value != "deny":
+            # Keep this defensive check even though the advertised Docker
+            # profile currently reports ``enforces_network_allowlist=False``.
+            # If that profile ever changes, Docker still emits the same
+            # stable typed denial instead of silently running with --network
+            # none for an allowlist request.
+            diagnostics = dict(diagnostics)
+            diagnostics["status"] = "rejected"
+            diagnostics["missing"] = ["network_allowlist"]
+            diagnostics["denials"] = [
+                {
+                    "capability": "network_allowlist",
+                    "denial_code": capability_denial_code("network_allowlist"),
+                }
+            ]
+            diagnostics["denial_code"] = capability_denial_code("network_allowlist")
             raise ExecutionEnvironmentUnavailableError(
                 "Docker provider only supports network deny",
-                details={"provider_id": "docker", "missing": ["network_allowlist"]},
+                details=diagnostics,
             )
 
         mounts, path_map, working_directory = self._canonical_mounts(request)

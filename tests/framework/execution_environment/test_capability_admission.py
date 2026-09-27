@@ -148,6 +148,56 @@ def test_registry_reports_unregistered_provider_as_structured_denial() -> None:
     ]
 
 
+def test_registry_capability_lookup_reports_typed_unregistered_provider_denial() -> None:
+    registry = ExecutionEnvironmentRegistry()
+
+    with pytest.raises(ExecutionEnvironmentUnavailableError) as raised:
+        registry.resolve_capabilities("missing-provider")
+
+    assert raised.value.reason_code == "execution_environment_unavailable"
+    assert raised.value.details == {
+        "provider_id": "missing-provider",
+        "missing": ["provider"],
+        "denial_code_version": CAPABILITY_DENIAL_CODE_VERSION,
+        "denial_code": "execution_provider_unavailable",
+        "denials": [
+            {
+                "capability": "provider_unavailable",
+                "denial_code": "execution_provider_unavailable",
+            }
+        ],
+    }
+
+
+def test_docker_direct_execute_uses_typed_capability_denial_without_request_material(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from infrastructure.execution_environment.docker import DockerExecutionEnvironment
+
+    provider = object.__new__(DockerExecutionEnvironment)
+    provider._available = False
+    request = _request()
+    monkeypatch.setattr(
+        provider,
+        "_canonical_mounts",
+        lambda _request: pytest.fail("rejected capability request must not execute"),
+    )
+
+    with pytest.raises(ExecutionEnvironmentUnavailableError) as raised:
+        provider.execute(request)
+
+    details = raised.value.details
+    assert details["provider_id"] == "docker"
+    assert details["provider_capability_version"] == "docker-v2"
+    assert details["provider_capability_checksum"] == provider.capabilities.checksum
+    assert details["denial_code_version"] == CAPABILITY_DENIAL_CODE_VERSION
+    assert details["denial_code"] == "execution_provider_unavailable"
+    assert details["missing"]
+    assert details["denials"]
+    assert "api.example" not in str(details)
+    assert "vault/key" not in str(details)
+
+
 def test_unavailable_provider_keeps_provider_code_primary() -> None:
     request = _request()
     capabilities = ExecutionCapabilityProfile(
