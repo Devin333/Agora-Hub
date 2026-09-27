@@ -407,6 +407,32 @@ class InMemoryRuntimeEventStore:
             return tuple(event for stream in self._events.values() for event in stream)
 
 
+def _validate_runtime_cursor(store: RuntimeEventStorePort, cursor: RuntimeEventCursor) -> None:
+    """Verify that a resume cursor still identifies its canonical event.
+
+    The store port intentionally exposes only paged reads, so look up the
+    single event immediately at the cursor position.  This keeps validation
+    independent of a particular store implementation while rejecting gaps,
+    sequence rewrites, stream mismatches, and checksum tampering.
+    """
+    if cursor.sequence == 0:
+        return
+    page = store.read(
+        stream_id=cursor.stream_id,
+        after_sequence=cursor.sequence - 1,
+        limit=1,
+    )
+    if not page.events:
+        raise RuntimeCursorConflict("cursor no longer matches canonical history")
+    event = page.events[0]
+    if (
+        event.stream_id != cursor.stream_id
+        or event.sequence != cursor.sequence
+        or _checksum(event.to_dict()) != cursor.checksum
+    ):
+        raise RuntimeCursorConflict("cursor no longer matches canonical history")
+
+
 class RuntimeEventProjection:
     """Idempotent read model built exclusively from canonical events."""
 
@@ -558,10 +584,7 @@ class RuntimeEventProjection:
             if cursor.stream_id != stream_id:
                 raise RuntimeCursorConflict("cursor stream does not match query stream")
             # Validate that the cursor still refers to the canonical event.
-            if isinstance(self._store, InMemoryRuntimeEventStore) and cursor.sequence:
-                events = self._store.all_events(stream_id=stream_id)
-                if cursor.sequence > len(events) or _checksum(events[cursor.sequence - 1].to_dict()) != cursor.checksum:
-                    raise RuntimeCursorConflict("cursor no longer matches canonical history")
+            _validate_runtime_cursor(self._store, cursor)
             after_sequence = cursor.sequence
         return self._store.read(stream_id=stream_id, after_sequence=after_sequence, limit=limit)
 

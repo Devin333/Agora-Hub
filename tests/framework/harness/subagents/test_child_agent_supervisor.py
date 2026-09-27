@@ -7,6 +7,7 @@ import time
 import pytest
 
 from framework.harness.subagents.supervisor import (
+    ChildAgentHandle,
     ChildAgentHeartbeat,
     ChildAgentOperationConflict,
     ChildAgentSpawnRequest,
@@ -62,6 +63,51 @@ def test_spawn_wait_and_close_are_idempotent() -> None:
     closed = supervisor.close(handle.child_id, operation_id="op-1")
     assert closed.handle.state is ChildAgentState.CLOSED
     assert supervisor.close(handle.child_id, operation_id="op-1") == closed
+
+
+def test_child_handle_contract_roundtrips_with_checksum() -> None:
+    supervisor = ChildAgentSupervisor()
+    handle = supervisor.spawn(_request())
+    contract = handle.handle_contract()
+
+    restored = ChildAgentHandle.from_dict(contract["canonical_payload"])
+
+    assert contract["schema_version"] == "newsroom.child-agent-handle/v1"
+    assert contract["handle_checksum"].startswith("sha256:")
+    assert restored == handle
+    assert restored.handle_contract() == contract
+
+
+def test_recovery_rejects_tampered_child_handle_contract() -> None:
+    source = ChildAgentSupervisor()
+    source.spawn(_request())
+    events = [dict(event) for event in source.events.events]
+    contract = dict(events[0]["handle_contract"])
+    payload = dict(contract["canonical_payload"])
+    payload["task_id"] = "tampered-task"
+    contract["canonical_payload"] = payload
+    events[0]["handle_contract"] = contract
+
+    with pytest.raises(ChildAgentSupervisorError) as raised:
+        ChildAgentSupervisor().recover(events)
+
+    assert raised.value.code == "child_recovery_corrupt"
+
+
+def test_spawn_and_recovery_validate_child_handle_contract() -> None:
+    events: list[dict[str, object]] = []
+    source = ChildAgentSupervisor(event_sink=events.append)
+    handle = source.spawn(_request())
+    spawn_event = events[0]
+    assert spawn_event["handle_schema_version"] == "newsroom.child-agent-handle/v1"
+    assert spawn_event["handle_checksum"] == spawn_event["handle_contract"]["handle_checksum"]
+    assert spawn_event["handle_contract"]["canonical_payload"]["child_id"] == handle.child_id
+
+    restored = ChildAgentSupervisor(events=type(source.events)(events)).recover()
+    assert restored[0].child_id == handle.child_id
+    assert restored[0].operation_id == handle.operation_id
+    assert restored[0].parent_graph_identity == handle.parent_graph_identity
+    assert restored[0].child_graph_identity == handle.child_graph_identity
 
 
 def test_child_control_output_is_rejected() -> None:

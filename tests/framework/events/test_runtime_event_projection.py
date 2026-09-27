@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from framework.events.runtime.projection import (
     InMemoryRuntimeEventStore,
     RuntimeCursorConflict,
+    RuntimeEventCursor,
     RuntimeEventEnvelope,
     RuntimeEventIdentity,
     RuntimeEventIdentityConflict,
@@ -47,6 +49,27 @@ def _event(event_id: str, *, sequence: int | None = None, status: str = "running
     )
 
 
+class _DelegatingRuntimeEventStore:
+    """RuntimeEventStorePort wrapper used to exercise the generic path."""
+
+    def __init__(self, inner: InMemoryRuntimeEventStore) -> None:
+        self.inner = inner
+
+    def append(self, event: RuntimeEventEnvelope) -> RuntimeEventEnvelope:
+        return self.inner.append(event)
+
+    def read(self, *, stream_id: str, after_sequence: int = 0, limit: int = 100):
+        return self.inner.read(stream_id=stream_id, after_sequence=after_sequence, limit=limit)
+
+
+class _SequenceMismatchRuntimeEventStore(_DelegatingRuntimeEventStore):
+    def read(self, *, stream_id: str, after_sequence: int = 0, limit: int = 100):
+        page = super().read(stream_id=stream_id, after_sequence=after_sequence, limit=limit)
+        if not page.events:
+            return page
+        return replace(page, events=(replace(page.events[0], sequence=(page.events[0].sequence or 0) + 1),))
+
+
 def test_projection_redacts_and_deduplicates_events() -> None:
     projection = RuntimeEventProjection()
     accepted = projection.append(_event("event-1"))
@@ -75,6 +98,43 @@ def test_projection_rebuild_does_not_run_effects_and_cursor_is_checked() -> None
     tampered = type(page.cursor)(page.cursor.stream_id, page.cursor.sequence, "sha256:" + "f" * 64)
     with pytest.raises(RuntimeCursorConflict):
         projection.timeline(stream_id="run-1", after=tampered)
+
+
+def test_projection_cursor_validation_uses_runtime_store_port_wrapper() -> None:
+    store = _DelegatingRuntimeEventStore(InMemoryRuntimeEventStore())
+    projection = RuntimeEventProjection(store=store)
+    projection.append(_event("event-1"))
+    page = projection.timeline(stream_id="run-1")
+    assert page.cursor is not None
+    tampered = RuntimeEventCursor(page.cursor.stream_id, page.cursor.sequence, "sha256:" + "f" * 64)
+    with pytest.raises(RuntimeCursorConflict):
+        projection.timeline(stream_id="run-1", after=tampered)
+
+
+def test_projection_cursor_validation_rejects_missing_and_mismatched_canonical_events() -> None:
+    inner = InMemoryRuntimeEventStore()
+    projection = RuntimeEventProjection(store=_DelegatingRuntimeEventStore(inner))
+    projection.append(_event("event-1"))
+    event = inner.read(stream_id="run-1").events[0]
+    assert event.sequence == 1
+
+    missing = RuntimeEventCursor("run-1", 2, "sha256:" + "a" * 64)
+    with pytest.raises(RuntimeCursorConflict):
+        projection.timeline(stream_id="run-1", after=missing)
+
+    mismatch = RuntimeEventProjection(store=_SequenceMismatchRuntimeEventStore(inner))
+    mismatch_cursor = RuntimeEventCursor("run-1", 1, "sha256:" + "a" * 64)
+    with pytest.raises(RuntimeCursorConflict):
+        mismatch.timeline(stream_id="run-1", after=mismatch_cursor)
+
+
+def test_projection_cursor_sequence_zero_is_initial_position_for_wrapped_store() -> None:
+    projection = RuntimeEventProjection(store=_DelegatingRuntimeEventStore(InMemoryRuntimeEventStore()))
+    page = projection.timeline(
+        stream_id="run-1",
+        after=RuntimeEventCursor("run-1", 0, "sha256:" + "0" * 64),
+    )
+    assert page.events == ()
 
 
 def test_projection_attached_to_existing_store_replays_committed_history() -> None:

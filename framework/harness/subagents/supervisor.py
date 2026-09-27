@@ -18,7 +18,7 @@ import threading
 import hashlib
 import inspect
 import re
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 from uuid import uuid4
 
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -106,6 +106,7 @@ _POSITIVE_BUDGET_KEYS = frozenset(
 )
 _BUDGET_DIMENSIONS = ("turns", "tokens", "tool_calls", "memory_ops", "cpu_seconds", "output_tokens", "time_ms", "cost_microusd")
 _WORKER_NOT_SUPPLIED = object()
+CHILD_AGENT_HANDLE_SCHEMA_VERSION = "newsroom.child-agent-handle/v1"
 
 
 def _required_text(value: Any, field_name: str) -> str:
@@ -251,6 +252,9 @@ class ChildAgentLease:
 class ChildAgentHandle:
     """Immutable identity and admitted capabilities for one child runtime."""
 
+    CONTRACT_SCHEMA_VERSION: ClassVar[str] = CHILD_AGENT_HANDLE_SCHEMA_VERSION
+    SCHEMA_VERSION: ClassVar[str] = CHILD_AGENT_HANDLE_SCHEMA_VERSION
+
     child_id: str
     parent_graph_identity: GraphExecutionIdentity | Mapping[str, Any]
     child_graph_identity: GraphExecutionIdentity | Mapping[str, Any] | None
@@ -327,6 +331,88 @@ class ChildAgentHandle:
     def is_terminal(self) -> bool:
         return self.state in TERMINAL_CHILD_STATES
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ChildAgentHandle":
+        """Restore a handle from its canonical contract payload."""
+        if not isinstance(value, Mapping):
+            raise ValueError("child handle contract payload must be an object")
+        required = {
+            "child_id",
+            "parent_graph_identity",
+            "child_graph_identity",
+            "stage_id",
+            "task_id",
+            "task_instance_id",
+            "attempt",
+            "allowed_tools",
+            "allowed_memory_namespaces",
+            "budget",
+            "transcript_ref",
+            "operation_id",
+            "state",
+            "lease",
+            "created_at",
+            "updated_at",
+            "terminal_receipt_ref",
+        }
+        unknown = sorted(set(value).difference(required))
+        if unknown:
+            raise ValueError(f"child handle contract payload has unknown fields: {unknown}")
+        missing = sorted(required.difference(value))
+        if missing:
+            raise ValueError(f"child handle contract payload is missing fields: {missing}")
+        lease = value["lease"]
+        if not isinstance(lease, Mapping):
+            raise ValueError("child handle contract lease must be an object")
+        lease_required = {"lease_id", "issued_at", "expires_at", "heartbeat_seq"}
+        lease_missing = sorted(lease_required.difference(lease))
+        if lease_missing:
+            raise ValueError(f"child handle contract lease is missing fields: {lease_missing}")
+        allowed_tools = value["allowed_tools"]
+        allowed_namespaces = value["allowed_memory_namespaces"]
+        if (
+            isinstance(allowed_tools, (str, bytes, bytearray))
+            or not isinstance(allowed_tools, Sequence)
+            or isinstance(allowed_namespaces, (str, bytes, bytearray))
+            or not isinstance(allowed_namespaces, Sequence)
+        ):
+            raise ValueError("child handle contract capabilities must be arrays")
+        budget = value["budget"]
+        if not isinstance(budget, Mapping):
+            raise ValueError("child handle contract budget must be an object")
+        created_at = value["created_at"]
+        updated_at = value["updated_at"]
+        if not isinstance(created_at, str) or not isinstance(updated_at, str):
+            raise ValueError("child handle contract timestamps must be strings")
+        issued_at = lease["issued_at"]
+        expires_at = lease["expires_at"]
+        if not isinstance(issued_at, str) or not isinstance(expires_at, str):
+            raise ValueError("child handle contract lease timestamps must be strings")
+        return cls(
+            child_id=value["child_id"],
+            parent_graph_identity=value["parent_graph_identity"],
+            child_graph_identity=value["child_graph_identity"],
+            stage_id=value["stage_id"],
+            task_id=value["task_id"],
+            task_instance_id=value["task_instance_id"],
+            attempt=value["attempt"],
+            allowed_tools=tuple(allowed_tools),
+            allowed_memory_namespaces=tuple(allowed_namespaces),
+            budget=budget,
+            transcript_ref=value["transcript_ref"],
+            operation_id=value["operation_id"],
+            state=value["state"],
+            lease=ChildAgentLease(
+                lease_id=lease["lease_id"],
+                issued_at=datetime.fromisoformat(issued_at),
+                expires_at=datetime.fromisoformat(expires_at),
+                heartbeat_seq=lease["heartbeat_seq"],
+            ),
+            created_at=datetime.fromisoformat(created_at),
+            updated_at=datetime.fromisoformat(updated_at),
+            terminal_receipt_ref=value["terminal_receipt_ref"],
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "child_id": self.child_id,
@@ -352,6 +438,27 @@ class ChildAgentHandle:
             "updated_at": self.updated_at.isoformat(),
             "terminal_receipt_ref": self.terminal_receipt_ref,
         }
+
+    def contract_payload(self) -> dict[str, Any]:
+        """Return the canonical payload covered by the handle checksum."""
+        return self.to_dict()
+
+    @property
+    def handle_checksum(self) -> str:
+        return _checksum(self.contract_payload())
+
+    def to_contract(self) -> dict[str, Any]:
+        """Return the versioned, checksummed handle contract."""
+        payload = self.contract_payload()
+        return {
+            "schema_version": self.CONTRACT_SCHEMA_VERSION,
+            "canonical_payload": payload,
+            "handle_checksum": self.handle_checksum,
+        }
+
+    def handle_contract(self) -> dict[str, Any]:
+        """Backward-compatible alias for :meth:`to_contract`."""
+        return self.to_contract()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1040,7 +1147,42 @@ class ChildAgentSupervisor:
                     raise ChildAgentSupervisorError("child has conflicting spawn records", code="child_recovery_corrupt")
                 recovery_corrupt = False
                 latest_state = handle.state
+                admission_handle = handle
+                admission_has_contract = bool(
+                    {"handle_contract", "handle_schema_version", "handle_checksum"}
+                    .intersection(spawned)
+                )
                 for event in facts:
+                    try:
+                        event_handle = _event_handle_contract(event)
+                        if admission_has_contract and event_handle is None:
+                            raise ValueError(
+                                "versioned child history event is missing handle contract"
+                            )
+                        if event_handle is not None:
+                            for field_name in (
+                                "child_id",
+                                "operation_id",
+                                "parent_graph_identity",
+                                "child_graph_identity",
+                                "stage_id",
+                                "task_id",
+                                "task_instance_id",
+                                "attempt",
+                                "allowed_tools",
+                                "allowed_memory_namespaces",
+                                "budget",
+                                "transcript_ref",
+                            ):
+                                if getattr(event_handle, field_name) != getattr(admission_handle, field_name):
+                                    raise ValueError(
+                                        f"child event handle contract {field_name} drifted"
+                                    )
+                            if event_handle.created_at != admission_handle.created_at:
+                                raise ValueError("child event handle contract created_at drifted")
+                    except (TypeError, ValueError, KeyError, AttributeError):
+                        recovery_corrupt = True
+                        continue
                     try:
                         event_metadata = event.get("metadata")
                         if not isinstance(event_metadata, Mapping):
@@ -1689,6 +1831,10 @@ class ChildAgentSupervisor:
             "budget": dict(handle.budget),
             "transcript_ref": handle.transcript_ref,
         }
+        handle_contract = handle.handle_contract()
+        event["handle_schema_version"] = handle_contract["schema_version"]
+        event["handle_checksum"] = handle_contract["handle_checksum"]
+        event["handle_contract"] = handle_contract
         terminal_receipt = metadata.get("terminal_receipt")
         if isinstance(terminal_receipt, Mapping):
             event["terminal_receipt"] = dict(terminal_receipt)
@@ -1771,7 +1917,65 @@ def _find_forbidden_keys(value: Any, forbidden: frozenset[str], *, path: str = "
     return found
 
 
+def _event_handle_contract(event: Mapping[str, Any]) -> ChildAgentHandle | None:
+    """Validate and restore a versioned handle contract when one is present."""
+    marker_keys = {"handle_contract", "handle_schema_version", "handle_checksum"}
+    if not marker_keys.intersection(event):
+        return None
+    raw_contract = event.get("handle_contract")
+    if not isinstance(raw_contract, Mapping):
+        raise ValueError("child event handle contract must be an object")
+    expected_keys = {"schema_version", "canonical_payload", "handle_checksum"}
+    if set(raw_contract) != expected_keys:
+        raise ValueError("child event handle contract fields are invalid")
+    schema_version = raw_contract.get("schema_version")
+    if schema_version != CHILD_AGENT_HANDLE_SCHEMA_VERSION:
+        raise ValueError("unsupported child handle contract schema")
+    if event.get("handle_schema_version") != schema_version:
+        raise ValueError("child event handle schema drift")
+    supplied_checksum = raw_contract.get("handle_checksum")
+    if event.get("handle_checksum") != supplied_checksum:
+        raise ValueError("child event handle checksum drift")
+    if not isinstance(supplied_checksum, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", supplied_checksum) is None:
+        raise ValueError("child event handle checksum is invalid")
+    payload = raw_contract.get("canonical_payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("child event canonical handle payload must be an object")
+    if _checksum(dict(payload)) != supplied_checksum:
+        raise ValueError("child event handle checksum does not match payload")
+    handle = ChildAgentHandle.from_dict(payload)
+    # A contract is canonical for the event, so duplicated lifecycle fields
+    # must agree with it exactly. This catches identity/policy drift even when
+    # an attacker recomputes the payload checksum.
+    expected = {
+        "child_id": handle.child_id,
+        "operation_id": handle.operation_id,
+        "state": handle.state.value,
+        "parent_graph_identity": handle.parent_graph_identity.to_dict(),
+        "child_graph_identity": handle.child_graph_identity.to_dict() if handle.child_graph_identity else None,
+        "stage_id": handle.stage_id,
+        "task_id": handle.task_id,
+        "task_instance_id": handle.task_instance_id,
+        "attempt": handle.attempt,
+        "lease_id": handle.lease.lease_id,
+        "lease_issued_at": handle.lease.issued_at.isoformat(),
+        "lease_expires_at": handle.lease.expires_at.isoformat(),
+        "heartbeat_seq": handle.lease.heartbeat_seq,
+        "allowed_tools": list(handle.allowed_tools),
+        "allowed_memory_namespaces": list(handle.allowed_memory_namespaces),
+        "budget": dict(handle.budget),
+        "transcript_ref": handle.transcript_ref,
+    }
+    for field_name, expected_value in expected.items():
+        if event.get(field_name) != expected_value:
+            raise ValueError(f"child event field {field_name} disagrees with handle contract")
+    return handle
+
+
 def _handle_from_event(event: Mapping[str, Any]) -> ChildAgentHandle:
+    contracted = _event_handle_contract(event)
+    if contracted is not None:
+        return contracted
     lease = event.get("lease") or {
         "lease_id": event["lease_id"],
         "issued_at": event.get("lease_issued_at") or event["occurred_at"],
@@ -1830,6 +2034,7 @@ def _event_sort_key(event: Mapping[str, Any]) -> datetime:
 
 
 __all__ = [
+    "CHILD_AGENT_HANDLE_SCHEMA_VERSION",
     "ChildAgentAdmissionError",
     "ChildAgentEventSink",
     "ChildAgentEventReader",
