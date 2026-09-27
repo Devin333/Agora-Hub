@@ -155,6 +155,20 @@ def _bounded_refs(values: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(dict.fromkeys(refs))
 
 
+def _bounded_checksums(values: Mapping[str, str] | None) -> dict[str, str]:
+    if values is None:
+        return {}
+    checksums = {}
+    for key, value in dict(values).items():
+        checksum = _text(value, "checksum", max_length=80).lower()
+        if _CHECKSUM.fullmatch(checksum) is None:
+            raise ValueError("checksums must use sha256 format")
+        checksums[str(key)] = checksum
+    if len(checksums) > MAX_RUNTIME_REFS:
+        raise ValueError("checksums exceed bounded limit")
+    return dict(sorted(checksums.items()))
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeEventIdentity:
     graph_identity: GraphExecutionIdentity | Mapping[str, Any] | None = None
@@ -231,14 +245,7 @@ class RuntimeEventEnvelope:
         object.__setattr__(self, "stream_id", _optional_text(self.stream_id, "stream_id"))
         object.__setattr__(self, "source", _text(self.source, "source"))
         refs = _bounded_refs(self.refs)
-        checksums = {}
-        for key, value in dict(self.checksums).items():
-            checksum = _text(value, "checksum", max_length=80).lower()
-            if _CHECKSUM.fullmatch(checksum) is None:
-                raise ValueError("checksums must use sha256 format")
-            checksums[str(key)] = checksum
-        if len(checksums) > MAX_RUNTIME_REFS:
-            raise ValueError("checksums exceed bounded limit")
+        checksums = _bounded_checksums(self.checksums)
         metadata = redact_runtime_value(dict(self.metadata))
         if len(stable_json_dumps(metadata).encode("utf-8")) > MAX_RUNTIME_METADATA_BYTES:
             raise ValueError("runtime metadata exceeds bounded size")
@@ -697,6 +704,10 @@ class RuntimeEventEmitter:
             if identity is not None
             else self._identity
         )
+        # Normalize one-shot inputs before deriving identity so the exact same
+        # values reach both the event-id hash and the canonical envelope.
+        resolved_refs = _bounded_refs(refs)
+        resolved_checksums = _bounded_checksums(checksums)
         safe_metadata = redact_runtime_value(dict(metadata or {}))
         resolved_stream = stream_id or self._stream_id or resolved_identity.run_id
         if event_id is None:
@@ -708,7 +719,8 @@ class RuntimeEventEmitter:
                         "identity": resolved_identity.to_dict(),
                         "status": status,
                         "reason_code": reason_code,
-                        "refs": list(refs or ()),
+                        "refs": list(resolved_refs),
+                        "checksums": resolved_checksums,
                         "metadata": safe_metadata,
                     }
                 ).encode("utf-8")
@@ -721,8 +733,8 @@ class RuntimeEventEmitter:
             status=status,
             reason_code=reason_code,
             stream_id=resolved_stream,
-            refs=tuple(refs or ()),
-            checksums=dict(checksums or {}),
+            refs=resolved_refs,
+            checksums=resolved_checksums,
             metadata=safe_metadata,
             source=source or self._source,
         )

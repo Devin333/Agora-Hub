@@ -299,13 +299,21 @@ class ContextCompactionRuntime:
                         reason_code="canonical_event_commit_failed",
                     )
         if execution.result_snapshot is None:
-            self._emit_rejected(
+            if self._emit_rejected(
                 request,
                 planning,
                 execution,
                 refs,
                 reason_code=execution.reason_code,
-            )
+            ) is None:
+                return self._durable_failure(
+                    source=source,
+                    initial=initial,
+                    planning=planning,
+                    execution=execution,
+                    refs=refs,
+                    reason_code="canonical_event_commit_failed",
+                )
             return ContextCompactionRuntimeResult(
                 status=_runtime_status_for_execution(execution.status),
                 source_snapshot=source,
@@ -355,14 +363,25 @@ class ContextCompactionRuntime:
         )
         refs = replace(refs, compression_record=self._store.save_compression_record(record))
         if not aggregate.dispatch_authorized:
-            self._emit_rejected(
+            if self._emit_rejected(
                 request,
                 planning,
                 execution,
                 refs,
                 reason_code=aggregate.reason_code,
                 aggregate=aggregate,
-            )
+            ) is None:
+                return self._durable_failure(
+                    source=source,
+                    initial=initial,
+                    planning=planning,
+                    execution=execution,
+                    result_snapshot=result_snapshot,
+                    final_admission=final_admission,
+                    aggregate=aggregate,
+                    refs=refs,
+                    reason_code="canonical_event_commit_failed",
+                )
             return ContextCompactionRuntimeResult(
                 status=ContextCompactionRuntimeStatus.POST_COMPACTION_VERIFY_FAILED,
                 source_snapshot=source,
@@ -585,13 +604,21 @@ class ContextCompactionRuntime:
                     stream_id=request.source_snapshot.run_id,
                 ).emit(
                     canonical_type,
-                    event_id=stored.event_id,
+                    # The Harness event and the runtime projection occupy the
+                    # same canonical identity namespace in durable compositions.
+                    # Keep an explicit stable correlation while preventing an
+                    # identity collision on the second append.
+                    event_id=f"context-runtime:{stored.event_id}",
                     status=str(payload.get("status") or "committed"),
                     reason_code=str(payload.get("reason_code") or "context_event"),
                     refs=tuple(str(value) for key, value in payload.items() if key.endswith("_ref") and isinstance(value, str)),
                     metadata=dict(payload),
                 )
             except Exception:
+                # The legacy event is already durable, but the canonical
+                # projection is part of this runtime's required commit. A
+                # failed projection must therefore surface as a typed durable
+                # failure through the caller's existing event contract.
                 return None
         self._last_event_id = stored.event_id
         return stored

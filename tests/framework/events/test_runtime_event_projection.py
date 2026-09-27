@@ -208,6 +208,53 @@ def test_runtime_emitter_is_stable_and_redacts_protected_payload() -> None:
     ).event_id
 
 
+def test_runtime_emitter_normalizes_iterable_inputs_before_identity_and_envelope() -> None:
+    projection = RuntimeEventProjection()
+    emitter = RuntimeEventEmitter(
+        projection,
+        identity=RuntimeEventIdentity(graph_identity=_identity()),
+        stream_id="run-1",
+    )
+    checksum = "sha256:" + "a" * 64
+    event = emitter.emit(
+        "tool_call_requested",
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        refs=(ref for ref in ("artifact://one", "artifact://two")),
+        checksums={"artifact://one": checksum},
+        metadata={"safe": "ok"},
+    )
+
+    assert event.refs == ("artifact://one", "artifact://two")
+    assert event.checksums == {"artifact://one": checksum}
+    replay = emitter.emit(
+        "tool_call_requested",
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        refs=(ref for ref in ("artifact://one", "artifact://two")),
+        checksums={"artifact://one": checksum},
+        metadata={"safe": "ok"},
+    )
+    assert replay.event_id == event.event_id
+
+
+def test_runtime_emitter_checksum_changes_change_automatic_identity() -> None:
+    emitter = RuntimeEventEmitter(
+        lambda _event: None,
+        identity=RuntimeEventIdentity(graph_identity=_identity()),
+        stream_id="run-1",
+    )
+    first = emitter.emit(
+        "tool_call_requested",
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        checksums={"artifact": "sha256:" + "a" * 64},
+    )
+    second = emitter.emit(
+        "tool_call_requested",
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+        checksums={"artifact": "sha256:" + "b" * 64},
+    )
+    assert first.event_id != second.event_id
+
+
 def test_runtime_schema_rejects_raw_payload_and_unknown_envelope_fields() -> None:
     catalog = default_event_schema_catalog()
     payload = _event("schema-event").to_dict()

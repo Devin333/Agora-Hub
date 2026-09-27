@@ -133,7 +133,7 @@ class _PhysicalRuntime:
         )
 
 
-def _runtime(physical, *, event_port=None):
+def _runtime(physical, *, event_port=None, runtime_event_sink=None):
     artifacts = FakeArtifactPort()
     events = event_port or InMemoryHarnessEventPort()
     return (
@@ -142,6 +142,7 @@ def _runtime(physical, *, event_port=None):
             admission_verifier=physical,
             artifact_port=artifacts,
             event_port=events,
+            runtime_event_sink=runtime_event_sink,
         ),
         artifacts,
         events,
@@ -233,6 +234,18 @@ class _FailRejectedEventPort(InMemoryHarnessEventPort):
         return super().record(event)
 
 
+class _RuntimeEventSink:
+    def __init__(self, *, fail_event_type: str | None = None) -> None:
+        self.fail_event_type = fail_event_type
+        self.events = []
+
+    def publish(self, event):
+        self.events.append(event)
+        if event.event_type.value == self.fail_event_type:
+            raise RuntimeError("simulated canonical runtime event failure")
+        return event
+
+
 def test_verified_event_append_is_activation_commit_boundary() -> None:
     policy = _policy()
     source = _source(policy)
@@ -303,6 +316,71 @@ def test_planning_rejection_event_failure_is_a_durable_commit_failure() -> None:
     assert [event.event_type for event in events.events] == [
         HarnessEventType.CONTEXT_COMPACTION_PLANNED
     ]
+
+
+def test_configured_runtime_event_sink_failure_aborts_rejected_result() -> None:
+    policy = _policy()
+    source = _source(policy)
+    sink = _RuntimeEventSink(fail_event_type="context_compaction_rejected")
+    runtime, _, legacy_events = _runtime(
+        _PhysicalRuntime(max_input_tokens=25, reject_result=True),
+        runtime_event_sink=sink,
+    )
+
+    result = runtime.run(
+        ContextCompactionRuntimeRequest(
+            source_snapshot=source,
+            policy=policy,
+            deployment_id="deployment-runtime",
+        )
+    )
+
+    assert result.status is ContextCompactionRuntimeStatus.DURABLE_COMMIT_FAILED
+    assert result.reason_code == "canonical_event_commit_failed"
+    assert legacy_events.events[-1].event_type is HarnessEventType.CONTEXT_COMPACTION_REJECTED
+    assert sink.events[-1].event_type.value == "context_compaction_rejected"
+
+
+def test_configured_runtime_event_sink_uses_distinct_canonical_identity() -> None:
+    policy = _policy(max_input_tokens=30)
+    source = _source(policy, reconstructable=False)
+    sink = _RuntimeEventSink()
+    runtime, _, legacy_events = _runtime(
+        _PhysicalRuntime(max_input_tokens=30),
+        runtime_event_sink=sink,
+    )
+
+    result = runtime.run(
+        ContextCompactionRuntimeRequest(
+            source_snapshot=source,
+            policy=policy,
+            deployment_id="deployment-runtime",
+        )
+    )
+
+    assert result.status is ContextCompactionRuntimeStatus.NO_COMPACTION_REQUIRED
+    assert len(legacy_events.events) == len(sink.events) == 1
+    assert sink.events[0].event_id == f"context-runtime:{legacy_events.events[0].event_id}"
+
+
+def test_runtime_without_canonical_sink_preserves_existing_result_contract() -> None:
+    policy = _policy(max_input_tokens=30)
+    source = _source(policy, reconstructable=False)
+    runtime, _, legacy_events = _runtime(
+        _PhysicalRuntime(max_input_tokens=30),
+        runtime_event_sink=None,
+    )
+
+    result = runtime.run(
+        ContextCompactionRuntimeRequest(
+            source_snapshot=source,
+            policy=policy,
+            deployment_id="deployment-runtime",
+        )
+    )
+
+    assert result.status is ContextCompactionRuntimeStatus.NO_COMPACTION_REQUIRED
+    assert result.activation_event_id == legacy_events.events[-1].event_id
 
 
 @pytest.mark.parametrize("fingerprint", ["", " ", "sha256:other"])
