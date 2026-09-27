@@ -339,19 +339,159 @@ def validate_task_result_contract(
 def validate_history_read_contract(plans: Any, events: Any, results: Any) -> None:
     """Fail closed when a history read mixes unsupported owner contracts."""
 
-    runtime_contract_binding()
+    binding = runtime_contract_binding()
     from framework.harness.task_plan.models import ValidatedTaskPlan
-    from framework.harness.task_plan.store import TASK_PLAN_EVENT_SCHEMAS, TASK_PLAN_RESULT_SCHEMA_V3
+    from framework.harness.task_plan.store import (
+        TASK_PLAN_EVENT_SCHEMAS,
+        TASK_PLAN_RESULT_SCHEMA_V3,
+        TaskPlanEvent,
+        TaskResultRecord,
+    )
 
+    canonical_plans: list[ValidatedTaskPlan] = []
     for plan in plans:
-        if not isinstance(plan, ValidatedTaskPlan):
-            raise HarnessValidationError("history contains an invalid plan", code="RUNTIME_CONTRACT_SCHEMA_MISMATCH")
+        if (
+            type(plan) is not ValidatedTaskPlan
+            or plan.schema_version != binding.owners["validated_task_plan"]
+        ):
+            raise HarnessValidationError(
+                "history contains an invalid plan",
+                code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+            )
+        try:
+            canonical = ValidatedTaskPlan.from_dict(plan.to_dict())
+        except (
+            HarnessValidationError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            KeyError,
+        ) as exc:
+            raise HarnessValidationError(
+                "history plan checksum differs from canonical content",
+                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+            ) from exc
+        if canonical != plan:
+            raise HarnessValidationError(
+                "history plan differs from its canonical owner model",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
+        canonical_plans.append(plan)
+
+    plans_by_identity = {
+        (plan.plan_id, plan.version): plan for plan in canonical_plans
+    }
+    max_plan_version = max(
+        (plan.version for plan in canonical_plans),
+        default=0,
+    )
+    if len(plans_by_identity) != len(canonical_plans):
+        raise HarnessValidationError(
+            "history contains duplicate plan identities",
+            code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+        )
+
     for event in events:
-        if getattr(event, "schema_version", None) not in TASK_PLAN_EVENT_SCHEMAS:
-            raise HarnessValidationError("history contains an unsupported event", code="RUNTIME_CONTRACT_SCHEMA_MISMATCH")
+        if (
+            type(event) is not TaskPlanEvent
+            or event.schema_version not in TASK_PLAN_EVENT_SCHEMAS
+        ):
+            raise HarnessValidationError(
+                "history contains an unsupported event",
+                code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+            )
+        try:
+            canonical = TaskPlanEvent.from_dict(event.to_dict())
+        except (
+            HarnessValidationError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            KeyError,
+        ) as exc:
+            raise HarnessValidationError(
+                "history event checksum differs from canonical content",
+                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+            ) from exc
+        if canonical != event:
+            raise HarnessValidationError(
+                "history event differs from its canonical owner model",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
+        if event.plan_id is None:
+            if event.plan_version is not None or not any(
+                event.matches_contract_identity(plan) for plan in canonical_plans
+            ):
+                raise HarnessValidationError(
+                    "history event scope differs from the supplied plans",
+                    code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+                )
+            continue
+        if event.plan_version is None:
+            raise HarnessValidationError(
+                "history event plan identity is incomplete",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
+        plan = plans_by_identity.get((event.plan_id, event.plan_version))
+        if plan is None:
+            if event.plan_version > max_plan_version:
+                if not any(
+                    event.matches_contract_identity(candidate)
+                    for candidate in canonical_plans
+                ):
+                    raise HarnessValidationError(
+                        "history event scope differs from the supplied plans",
+                        code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+                    )
+                continue
+            raise HarnessValidationError(
+                "history event references an unknown plan",
+                code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+            )
+        if not event.matches_contract_identity(plan):
+            raise HarnessValidationError(
+                "history event scope differs from its plan",
+                code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+            )
+
     for result in results:
-        if getattr(result, "schema_version", None) != TASK_PLAN_RESULT_SCHEMA_V3:
-            raise HarnessValidationError("history contains an unsupported result", code="RUNTIME_CONTRACT_SCHEMA_MISMATCH")
+        if (
+            type(result) is not TaskResultRecord
+            or result.schema_version != TASK_PLAN_RESULT_SCHEMA_V3
+        ):
+            raise HarnessValidationError(
+                "history contains an unsupported result",
+                code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+            )
+        try:
+            canonical = TaskResultRecord.from_dict(result.to_dict())
+        except (
+            HarnessValidationError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            KeyError,
+        ) as exc:
+            raise HarnessValidationError(
+                "history result checksum differs from canonical content",
+                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+            ) from exc
+        if canonical != result:
+            raise HarnessValidationError(
+                "history result differs from its canonical owner model",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
+        plan = plans_by_identity.get((result.plan_id, result.plan_version))
+        if plan is None:
+            raise HarnessValidationError(
+                "history result references an unknown plan",
+                code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+            )
+        if not result.matches_plan_identity(plan):
+            raise HarnessValidationError(
+                "history result scope differs from its plan",
+                code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+            )
 
 
 __all__ = [
