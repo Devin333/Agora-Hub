@@ -33,6 +33,7 @@ class RuntimeContractBinding:
         from framework.harness.artifacts.terminal_manifest import GRAPH_TERMINAL_MANIFEST_SCHEMA
         from framework.harness.control_plane.budget_reservation import BUDGET_RESERVATION_SCHEMA
         from framework.harness.subagents.models import SUBAGENT_INVOCATION_SCHEMA_V3
+        from framework.harness.subagents.supervisor import CHILD_AGENT_HANDLE_SCHEMA_VERSION
         from framework.harness.subagents.transcript import (
             SUBAGENT_BUNDLE_SCHEMA_V3,
             SUBAGENT_RECEIPT_SCHEMA_V3,
@@ -70,6 +71,7 @@ class RuntimeContractBinding:
             "task_reservation": TASK_RESERVATION_SCHEMA,
             "attempt_history": TASK_ATTEMPT_HISTORY_SCHEMA,
             "subagent_invocation": SUBAGENT_INVOCATION_SCHEMA_V3,
+            "child_agent_handle": CHILD_AGENT_HANDLE_SCHEMA_VERSION,
             "subagent_transcript": SUBAGENT_TRANSCRIPT_SCHEMA_V3,
             "subagent_receipt": SUBAGENT_RECEIPT_SCHEMA_V3,
             "subagent_bundle": SUBAGENT_BUNDLE_SCHEMA_V3,

@@ -7,6 +7,7 @@ import pytest
 
 from framework.execution_environment import EXECUTION_PROFILE_SCHEMA, ExecutionProfile
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.subagents.supervisor import ChildAgentHandle
 from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.runtime_contract import (
     HARNESS_RUNTIME_CONTRACT_VERSION,
@@ -28,6 +29,7 @@ def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
     assert binding.schema_version == HARNESS_RUNTIME_CONTRACT_VERSION
     assert binding.owners["execution_profile"] == EXECUTION_PROFILE_SCHEMA
     assert binding.owners["validated_task_plan"] == _accepted_parallel_plan().schema_version
+    assert binding.owners["child_agent_handle"] == ChildAgentHandle.CONTRACT_SCHEMA_VERSION
     with pytest.raises(TypeError):
         binding.owners["execution_profile"] = "newsroom.invalid/v1"  # type: ignore[index]
 
