@@ -37,6 +37,7 @@ class LazyResearchChildRuntime:
         state_reader: Any,
         max_children: int,
         state_key: str = RESEARCH_DYNAMIC_CHILD_RESOURCE_SCOPE,
+        runtime_event_sink: Any | None = None,
     ) -> None:
         if isinstance(max_children, bool) or not isinstance(max_children, int):
             raise TypeError("max_children must be an integer")
@@ -44,11 +45,18 @@ class LazyResearchChildRuntime:
             raise ValueError("max_children must be positive")
         if not isinstance(state_key, str) or not state_key.strip():
             raise ValueError("state_key is required")
+        if runtime_event_sink is not None and not callable(runtime_event_sink) and not any(
+            hasattr(runtime_event_sink, name) for name in ("append", "publish")
+        ):
+            raise TypeError(
+                "runtime_event_sink must be callable or expose append/publish"
+            )
         normalized_state_key = state_key.strip()
         self._state_runtime = state_runtime
         self._state_reader = state_reader
         self._max_children = max_children
         self._state_key = normalized_state_key
+        self._runtime_event_sink = runtime_event_sink
         self._lock = RLock()
         self._owned_runtime: HarnessOwnedChildAgentRuntime | None = None
         self._binding: ResearchChildRuntimeBinding | None = None
@@ -111,6 +119,7 @@ class LazyResearchChildRuntime:
         owned_runtime = HarnessOwnedChildAgentRuntime(
             event_log=event_log,
             max_children=self._max_children,
+            runtime_event_sink=self._runtime_event_sink,
         )
         try:
             owned_runtime.start()

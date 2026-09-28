@@ -83,6 +83,7 @@ from framework.llm.clients.config import (
 )
 from framework.events.canonical import checksum_for
 from framework.events.application import DurableGraphEventProjectionAdapter
+from framework.events.runtime.projection import CanonicalRuntimeEventPublisher
 from framework.harness import (
     ContextAssembler,
     ContextEnvelope,
@@ -1615,10 +1616,14 @@ def _build_configured_composition(
                 12 * 1024 * 1024,
             ),
         )
+        runtime_event_publisher = CanonicalRuntimeEventPublisher(
+            durable_events.event_runtime
+        )
         dynamic_child_runtime = LazyResearchChildRuntime(
             state_runtime=durable_events.event_runtime,
             state_reader=durable_events.event_store,
             max_children=build_research_analysis_task_plan_policy().max_parallelism,
+            runtime_event_sink=runtime_event_publisher,
         )
 
         def dynamic_task_plan_runner_factory(*, workspace: Any, dependencies: Any):
@@ -1678,6 +1683,7 @@ def _build_configured_composition(
                 },
                 transcript_store=subagent_transcript_store,
                 result_ref_authority=result_ref_authority,
+                runtime_event_sink=runtime_event_publisher,
             )
             subagent_adapter = ResolvedSubAgentTaskAdapter(
                 subagent_runtime,

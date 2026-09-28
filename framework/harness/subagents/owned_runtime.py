@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from threading import Event, RLock, Thread
+from typing import Any
 from uuid import uuid4
 
 from framework.harness.subagents.supervisor import (
@@ -32,6 +33,7 @@ class HarnessOwnedChildAgentRuntime:
         owner_id: str | None = None,
         clock: Callable[[], datetime] | None = None,
         renewal_interval_seconds: float | None | object = _DEFAULT_RENEWAL,
+        runtime_event_sink: Any | None = None,
     ) -> None:
         if (
             isinstance(max_children, bool)
@@ -56,11 +58,18 @@ class HarnessOwnedChildAgentRuntime:
             raise ValueError(
                 "renewal interval must be positive and shorter than the owner lease"
             )
+        if runtime_event_sink is not None and not callable(runtime_event_sink) and not any(
+            hasattr(runtime_event_sink, name) for name in ("append", "publish")
+        ):
+            raise TypeError(
+                "runtime_event_sink must be callable or expose append/publish"
+            )
         self._event_log = event_log
         self._max_children = max_children
         self._owner_id = owner_id or f"child-runtime-{uuid4().hex}"
         self._clock = clock
         self._renewal_interval = interval
+        self._runtime_event_sink = runtime_event_sink
         self._lock = RLock()
         self._stop = Event()
         self._renewer: Thread | None = None
@@ -94,6 +103,7 @@ class HarnessOwnedChildAgentRuntime:
                 owner_guard=self._assert_owner,
                 max_children=self._max_children,
                 clock=self._clock,
+                runtime_event_sink=self._runtime_event_sink,
             )
             try:
                 supervisor.recover()
