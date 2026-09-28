@@ -82,6 +82,10 @@ from framework.harness.task_plan import task_plan_subagent_attempt_identity
 from framework.harness.task_plan import TASK_PLAN_REPLAY_REDUCER_VERSION_V4
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
 from framework.harness.task_plan.models import TaskAdmissionOwner
+from framework.harness.task_plan.parallel import (
+    ParallelAgentCoordinator,
+    SerialTaskExecutorAdapter,
+)
 from framework.harness.task_plan.store import (
     LogicalTaskReadiness,
     TaskQueueAdmissionEvidence,
@@ -186,6 +190,7 @@ def _fixture(
     worker_artifacts: tuple[str, ...] = (),
     artifact_reference_verifier=None,
     task_budget: TaskBudget | None = None,
+    max_task_attempts: int = 1,
 ):
     accepted_task_budget = task_budget or TaskBudget(
         max_turns=2,
@@ -254,7 +259,7 @@ def _fixture(
         max_depth=2,
         max_parallelism=1,
         max_replans=0,
-        max_task_attempts=1,
+        max_task_attempts=max_task_attempts,
         max_plan_build_calls=1,
         max_plan_build_turns=1,
         max_plan_build_tool_calls=0,
@@ -281,7 +286,7 @@ def _fixture(
         requested_tools=("research.read",),
         requested_memory_namespaces=("research.public",),
         budget_request=policy.per_task_budget,
-        retry_policy=TaskRetryPolicy(max_attempts=1),
+        retry_policy=TaskRetryPolicy(max_attempts=max_task_attempts),
     )
     stage_identity = TaskPlanStageIdentity(
         "lineage-run",
@@ -620,64 +625,74 @@ def _committed_replay_authority(
     *,
     plan,
     record: TaskResultRecord,
+    additional_records: tuple[TaskResultRecord, ...] = (),
 ) -> HarnessResultRefAuthority:
-    if record.transcript_ref is None:
-        raise AssertionError("replay authority fixture requires transcript evidence")
-    identity = fixture["transcript_store"].read(record.transcript_ref).identity
-    execution_identity = RefAuthoritySnapshot.execution_for_attempt(identity)
-    tenant_scope = checksum_for(RESULT_AUTHORITY_TENANT)
-    descriptor = RefDescriptor(
-        ref="document",
-        run_id=identity.parent_run_id,
-        stage_id=identity.stage_id,
-        tenant_id=tenant_scope,
-        owner_id="lineage-root-owner",
-        access_mode="READ_ONLY",
-        artifact_type="graph_input",
-        source_checksum=checksum_for("lineage-input"),
-        ref_kind="input",
-        scope="SHARED_READ_ONLY",
-    )
-    admission = RefAuthoritySnapshot(
-        execution_identity=execution_identity,
-        stage_id=identity.stage_id,
-        stage_binding_checksum=identity.stage_binding_checksum,
-        task_policy_checksum=plan.policy_checksum,
-        source_checksum=checksum_for("lineage-inputs"),
-        policy=RefAccessPolicy(
-            policy_id="lineage-inputs",
-            version="1",
+    snapshots, _ = _ref_snapshot_store(root)
+    identities = []
+    records = (record, *additional_records)
+    if len(records) > 1 and any(item.output_refs for item in records):
+        raise AssertionError("multi-attempt authority fixture does not support artifacts")
+    for accepted_record in records:
+        if accepted_record.transcript_ref is None:
+            raise AssertionError("replay authority fixture requires transcript evidence")
+        identity = fixture["transcript_store"].read(
+            accepted_record.transcript_ref
+        ).identity
+        identities.append(identity)
+        execution_identity = RefAuthoritySnapshot.execution_for_attempt(identity)
+        tenant_scope = checksum_for(RESULT_AUTHORITY_TENANT)
+        descriptor = RefDescriptor(
+            ref="document",
             run_id=identity.parent_run_id,
             stage_id=identity.stage_id,
             tenant_id=tenant_scope,
             owner_id="lineage-root-owner",
-            allowed_refs=(descriptor.ref,),
-            allowed_artifact_types=(descriptor.artifact_type,),
-            allowed_ref_kinds=(descriptor.ref_kind,),
-            pinned_checksums={descriptor.ref: descriptor.source_checksum},
-        ),
-        descriptors=(descriptor,),
-    )
-    snapshots, _ = _ref_snapshot_store(root)
-    snapshots.commit(admission)
-    HarnessRefAdmissionService(snapshots).admit_child_inputs(
-        admission,
-        attempt_identity=identity,
-        input_refs=(descriptor.ref,),
-    )
+            access_mode="READ_ONLY",
+            artifact_type="graph_input",
+            source_checksum=checksum_for("lineage-input"),
+            ref_kind="input",
+            scope="SHARED_READ_ONLY",
+        )
+        admission = RefAuthoritySnapshot(
+            execution_identity=execution_identity,
+            stage_id=identity.stage_id,
+            stage_binding_checksum=identity.stage_binding_checksum,
+            task_policy_checksum=plan.policy_checksum,
+            source_checksum=checksum_for("lineage-inputs"),
+            policy=RefAccessPolicy(
+                policy_id="lineage-inputs",
+                version="1",
+                run_id=identity.parent_run_id,
+                stage_id=identity.stage_id,
+                tenant_id=tenant_scope,
+                owner_id="lineage-root-owner",
+                allowed_refs=(descriptor.ref,),
+                allowed_artifact_types=(descriptor.artifact_type,),
+                allowed_ref_kinds=(descriptor.ref_kind,),
+                pinned_checksums={descriptor.ref: descriptor.source_checksum},
+            ),
+            descriptors=(descriptor,),
+        )
+        snapshots.commit(admission)
+        HarnessRefAdmissionService(snapshots).admit_child_inputs(
+            admission,
+            attempt_identity=identity,
+            input_refs=(descriptor.ref,),
+        )
     artifact_descriptors = fixture.get("artifact_reference_verifier")
     if artifact_descriptors is not None and hasattr(
         artifact_descriptors,
         "bind_attempt",
     ):
-        artifact_descriptors.bind_attempt(identity)
+        artifact_descriptors.bind_attempt(identities[0])
     authority = HarnessResultRefAuthority(
         snapshots,
         transcript_store=fixture["transcript_store"],
         artifact_descriptors=artifact_descriptors if record.output_refs else None,
         tenant_id=RESULT_AUTHORITY_TENANT,
     )
-    authority.result_grant(identity, allow_registration=True)
+    for identity in identities:
+        authority.result_grant(identity, allow_registration=True)
     assert authority.is_durable is True
     return authority
 
@@ -1192,6 +1207,236 @@ def test_graph_only_verifier_binds_v3_transcript_to_v3_result(
     assert record.subagent_output_ref == receipt.output_ref
     assert record.transcript_ref.startswith("subagent-transcript://v3/")
     assert "workflow_id" not in record.to_dict()
+
+
+def test_attempt_scoped_grant_rejects_other_legal_attempt_bundle_before_gate_or_result(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path, max_task_attempts=2)
+    candidate, plan, first_instance = _graph_only_candidate_plan_for_fixture(fixture)
+    second_instance = task_instance_for_attempt(
+        plan,
+        first_instance.task_id,
+        2,
+    )
+    assert plan.limits.max_task_attempts == 2
+    assert plan.tasks[0].task.retry_policy.max_attempts == 2
+    first_identity, first_receipt, first_result = _write_graph_only_attempt(
+        fixture,
+        plan,
+        first_instance,
+    )
+    second_identity, second_receipt, second_result = _write_graph_only_attempt(
+        fixture,
+        plan,
+        second_instance,
+    )
+
+    def unscoped_record(instance, result):
+        return fixture["verifier"].verify(
+            result,
+            task=plan.tasks[0],
+            request=TaskPlanResultVerificationRequest(
+                plan=plan,
+                task=plan.tasks[0],
+                instance=instance,
+                worker_result=result,
+                execution_identity=_execution_identity(plan, instance),
+            ),
+        )
+
+    first_record = unscoped_record(first_instance, first_result)
+    second_record = unscoped_record(second_instance, second_result)
+    authority = _committed_replay_authority(
+        fixture,
+        tmp_path / "attempt-grants",
+        plan=plan,
+        record=first_record,
+        additional_records=(second_record,),
+    )
+    assert authority.for_attempt(first_identity).verify(first_receipt) == first_receipt
+    assert authority.for_attempt(second_identity).verify(second_receipt) == second_receipt
+
+    gate_inputs = []
+    gates = TaskPlanGateRegistry()
+
+    def accept_gate(request):
+        gate_inputs.append(request.input_checksum)
+        return True
+
+    gates.register("LineageGate@1", accept_gate, deterministic=True)
+    verifier = TaskPlanResultVerifier(
+        gates,
+        transcript_store=fixture["transcript_store"],
+        result_ref_authority=authority,
+    )
+    store = InMemoryTaskPlanStore()
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    _start_attempt(store, plan, first_instance)
+
+    accepted = verifier.verify(
+        first_result,
+        task=plan.tasks[0],
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=plan.tasks[0],
+            instance=first_instance,
+            worker_result=first_result,
+            execution_identity=_execution_identity(plan, first_instance),
+        ),
+    )
+    store.append_result(accepted)
+    baseline_events = store.read_events(plan.run_id, plan.stage_id)
+    baseline_results = store.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    )
+    baseline_projection = store.load_projection(plan.run_id, plan.stage_id)
+    assert len(gate_inputs) == 1
+    assert baseline_results == (accepted,)
+
+    with pytest.raises(HarnessValidationError) as captured:
+        verifier.verify(
+            second_result,
+            task=plan.tasks[0],
+            request=TaskPlanResultVerificationRequest(
+                plan=plan,
+                task=plan.tasks[0],
+                instance=first_instance,
+                worker_result=second_result,
+                execution_identity=_execution_identity(plan, first_instance),
+            ),
+        )
+
+    assert captured.value.code == "REF_SNAPSHOT_BINDING_MISMATCH"
+    assert len(gate_inputs) == 1
+    assert store.read_events(plan.run_id, plan.stage_id) == baseline_events
+    assert store.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    ) == baseline_results
+    assert store.load_projection(plan.run_id, plan.stage_id) == baseline_projection
+    assert authority.for_attempt(first_identity).verify(first_receipt) == first_receipt
+    assert authority.for_attempt(second_identity).verify(second_receipt) == second_receipt
+
+
+def test_stage_rejects_result_when_durable_group_has_no_target_wave(
+    tmp_path: Path,
+) -> None:
+    task_budget = TaskBudget(
+        max_turns=2,
+        max_tool_calls=1,
+        max_memory_ops=1,
+        max_output_tokens=128,
+        token_limit=4096,
+        time_limit_ms=900_000,
+    )
+    fixture = _fixture(tmp_path, task_budget=task_budget)
+    store = InMemoryTaskPlanStore()
+    store.append_candidate(fixture["candidate"])
+    store.accept_plan(fixture["plan"])
+    gate_inputs = []
+    gates = TaskPlanGateRegistry()
+
+    def accept_gate(request):
+        gate_inputs.append(request.input_checksum)
+        return True
+
+    gates.register("LineageGate@1", accept_gate, deterministic=True)
+    verifier = TaskPlanResultVerifier(
+        gates,
+        transcript_store=fixture["transcript_store"],
+    )
+    worker_calls = []
+
+    def execute(_binding, instance, execution_identity):
+        worker_calls.append((instance, execution_identity))
+        return HarnessWorkerResult(
+            status="succeeded",
+            output={"result": "candidate awaiting admission verification"},
+        )
+
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+    runner = TaskPlanStageRunner(
+        candidate_builder=FakePlanCandidateBuilder(fixture["candidate"]),
+        capability_registry=fixture["registry"],
+        store=store,
+        result_verifier=verifier,
+        worker_executor=execute,
+        parallel_coordinator=coordinator,
+    )
+    assert runner._verification_admission(
+        fixture["plan"],
+        fixture["instance"],
+    ) == {}
+
+    dispatch_request = runner._parallel_request(
+        fixture["request"],
+        fixture["plan"],
+        task_instances=(),
+    )
+    coordinator.create_group(
+        dispatch_request,
+        event_sink=runner._parallel_event_sink(
+            fixture["request"],
+            fixture["plan"],
+        ),
+        check_capacity=False,
+    )
+    baseline_events = store.read_events(
+        fixture["plan"].run_id,
+        fixture["plan"].stage_id,
+    )
+    assert [event.event_type for event in baseline_events].count(
+        "TASK_GROUP_ADMITTED"
+    ) == 1
+    assert not any(
+        event.event_type == "TASK_WAVE_ADMITTED" for event in baseline_events
+    )
+    baseline_projection = store.load_projection(
+        fixture["plan"].run_id,
+        fixture["plan"].stage_id,
+    )
+    baseline_results = store.results_for(
+        fixture["plan"].run_id,
+        fixture["plan"].stage_id,
+        fixture["plan"].plan_id,
+        fixture["plan"].version,
+    )
+
+    with pytest.raises(HarnessValidationError) as captured:
+        runner._invoke(
+            fixture["instance"],
+            fixture["plan"],
+            fixture["policy"],
+            execution_identity=fixture["execution_identity"],
+        )
+
+    assert captured.value.code == "task_plan_result_admission_mismatch"
+    assert worker_calls == [(fixture["instance"], fixture["execution_identity"])]
+    assert gate_inputs == []
+    assert store.read_events(
+        fixture["plan"].run_id,
+        fixture["plan"].stage_id,
+    ) == baseline_events
+    assert store.results_for(
+        fixture["plan"].run_id,
+        fixture["plan"].stage_id,
+        fixture["plan"].plan_id,
+        fixture["plan"].version,
+    ) == baseline_results == ()
+    assert store.load_projection(
+        fixture["plan"].run_id,
+        fixture["plan"].stage_id,
+    ) == baseline_projection
 
 
 def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(

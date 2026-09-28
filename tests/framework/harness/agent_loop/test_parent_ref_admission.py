@@ -9,7 +9,7 @@ import pytest
 
 from framework.agent.artifacts.stores.filesystem import FilesystemArtifactStore
 from framework.agent.loop.runner import AgentRunner
-from framework.agent.models import AgentLoopPolicy, AgentSpec
+from framework.agent.models import AgentLoopMetrics, AgentLoopPolicy, AgentSpec
 from framework.events.runtime.publisher import EventRuntime
 from framework.events.canonical import checksum_for
 from framework.events.schema import default_event_schema_catalog
@@ -27,7 +27,11 @@ from framework.harness.ref_snapshot import RefAuthoritySnapshot, RefSnapshotPhas
 from framework.harness.subagents.models import SubAgentSpec
 from framework.harness.subagents.runtime import SubAgentRuntime, subagent_attempt_identity
 from framework.harness.subagents.agent_runner import ChildAgentRunnerAdapter
-from framework.harness.subagents.execution import HarnessChildExecutionService
+from framework.harness.subagents.execution import (
+    HarnessChildExecutionService,
+    TrustedChildUsage,
+    validate_trusted_execution_event,
+)
 from framework.harness.subagents.execution_providers import (
     AdmissionChildToolEvidenceLimitsProvider,
     CanonicalChildBudgetTrackerProvider,
@@ -35,7 +39,10 @@ from framework.harness.subagents.execution_providers import (
 )
 from framework.harness.subagents.owned_runtime import HarnessOwnedChildAgentRuntime
 from framework.harness.subagents.supervisor_store import DurableChildAgentEventLog
-from framework.harness.subagents.transcript import SubAgentAttemptIdentity
+from framework.harness.subagents.transcript import (
+    SubAgentAttemptIdentity,
+    SubAgentTranscriptReceipt,
+)
 from framework.harness.task_plan.capability import TaskCapabilityRegistration, TaskCapabilityRegistry
 from framework.harness.side_effects import (
     CountingHarnessSideEffectHandler, HarnessSideEffectDisposition,
@@ -82,7 +89,16 @@ class _RecordingAdmission(HarnessRefAdmissionService):
 class _RecordingChildRunnerAdapter(ChildAgentRunnerAdapter):
     """Use the real child AgentRunner while preserving fixture observations."""
 
-    def __init__(self, *, worker, authority, role, worker_id, root):
+    def __init__(
+        self,
+        *,
+        worker,
+        authority,
+        role,
+        worker_id,
+        root,
+        underreport_runner_metrics=False,
+    ):
         super().__init__(
             registered_agent=AgentSpec(
                 agent_id=worker_id,
@@ -111,6 +127,8 @@ class _RecordingChildRunnerAdapter(ChildAgentRunnerAdapter):
         )
         self._fixture_worker = worker
         self._fixture_authority = authority
+        self._underreport_runner_metrics = underreport_runner_metrics
+        self.observed_results = []
 
     def invoke(self, invocation, *, parent_task_context, ref_admission_service,
                global_budget_tracker, tool_execution_evidence, input_reader=None):
@@ -131,7 +149,7 @@ class _RecordingChildRunnerAdapter(ChildAgentRunnerAdapter):
             task,
             execution_identity=RefAuthoritySnapshot.execution_for_attempt(identity),
         )
-        return super().invoke(
+        result = super().invoke(
             invocation,
             parent_task_context=parent_task_context,
             ref_admission_service=ref_admission_service,
@@ -139,9 +157,21 @@ class _RecordingChildRunnerAdapter(ChildAgentRunnerAdapter):
             tool_execution_evidence=tool_execution_evidence,
             input_reader=input_reader,
         )
+        if self._underreport_runner_metrics:
+            result = replace(result, metrics=AgentLoopMetrics())
+        self.observed_results.append(result)
+        return result
 
 
-def _setup(root, *, include_document=True, include_memory=False, dependency_ref=None, share_dependency=True):
+def _setup(
+    root,
+    *,
+    include_document=True,
+    include_memory=False,
+    dependency_ref=None,
+    share_dependency=True,
+    underreport_runner_metrics=False,
+):
     template, template_identity = _runtime()
     template_policy = template._policy_registry.policies[0]
     policy = replace(
@@ -245,6 +275,7 @@ def _setup(root, *, include_document=True, include_memory=False, dependency_ref=
             role=role,
             worker_id=worker_id,
             root=root / "child-conversations" / role,
+            underreport_runner_metrics=underreport_runner_metrics,
         )
         workers[worker_id] = worker_implementation
         registrations.append(TaskCapabilityRegistration(
@@ -432,6 +463,84 @@ def test_real_graph_admits_before_llm_and_keeps_parent_physical_identity(tmp_pat
         assert recovered.evidence[0].evidence_type == "subagent_attempt"
     assert len(setup.child_calls) == 2
     assert setup.events.get_stream_high_watermark(f"run:{snapshot.run_id}", tenant_id="control") == before
+
+
+def test_trusted_child_usage_survives_runner_underreport_through_task_result(
+    tmp_path,
+):
+    setup = _setup(tmp_path, underreport_runner_metrics=True)
+
+    outcome = setup.graph_runtime.run(setup.spec)
+
+    assert outcome.succeeded, outcome
+    assert len(setup.child_calls) == 2
+    assert all(
+        runner.observed_results
+        and runner.observed_results[0].metrics == AgentLoopMetrics()
+        for runner in setup.workers.values()
+    )
+    snapshot = setup.admission.snapshot
+    plan = setup.task_store.plan(snapshot.run_id, snapshot.stage_id)
+    records = {
+        record.task_id: record
+        for record in setup.task_store.results_for(
+            plan.run_id,
+            plan.stage_id,
+            plan.plan_id,
+            plan.version,
+        )
+    }
+    assert set(records) == {task.task_id for task in plan.tasks}
+
+    for task in plan.tasks:
+        instance = task_instance_for_attempt(plan, task.task_id, 1)
+        binding = setup.capabilities.resolve(
+            task.task.worker_capability,
+            setup.policy,
+        )
+        recovered = setup.executor.recover(
+            binding,
+            instance,
+            snapshot.execution_identity,
+        )
+        receipt = SubAgentTranscriptReceipt.from_dict(
+            recovered.evidence[0].payload
+        )
+        transcript = setup.transcripts.read(receipt.transcript_ref)
+        trusted_events = tuple(
+            event
+            for event in transcript.events
+            if event.get("schema_version")
+            == "newsroom.trusted-child-execution/v1"
+        )
+        assert len(trusted_events) == 1
+        trusted = validate_trusted_execution_event(
+            trusted_events[0],
+            identity=transcript.identity,
+            tool_call_refs=transcript.tool_call_refs,
+        )
+        usage = TrustedChildUsage.from_dict(trusted["usage"])
+        canonical_budget_usage = usage.budget_usage()
+
+        assert usage.llm_calls == 1
+        assert canonical_budget_usage["tokens"] > 0
+        assert canonical_budget_usage["output_tokens"] > 0
+        assert canonical_budget_usage == recovered.metrics
+        assert canonical_budget_usage == dict(records[task.task_id].usage)
+        assert recovered.diagnostics["used_tools"] == list(trusted["used_tools"])
+        assert recovered.diagnostics["used_memory_namespaces"] == list(
+            trusted["used_memory_namespaces"]
+        )
+        assert transcript.tool_call_refs == (
+            trusted["tool_evidence"]["ref"],
+        )
+        assert trusted["tool_evidence"]["disposition"] == "NO_TOOL_REQUESTS"
+        assert trusted["used_tools"] == ()
+        # Input memory refs and execution namespace accounting are distinct.
+        assert transcript.memory_context_refs == ()
+        assert trusted["used_memory_namespaces"] == ("memory.read",)
+
+    assert len(setup.child_calls) == 2
 
 
 def _reopen_runtime(setup, root):
