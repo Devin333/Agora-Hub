@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -188,7 +189,7 @@ def test_docker_direct_execute_uses_typed_capability_denial_without_request_mate
 
     details = raised.value.details
     assert details["provider_id"] == "docker"
-    assert details["provider_capability_version"] == "docker-v2"
+    assert details["provider_capability_version"] == "docker-v3"
     assert details["provider_capability_checksum"] == provider.capabilities.checksum
     assert details["denial_code_version"] == CAPABILITY_DENIAL_CODE_VERSION
     assert details["denial_code"] == "execution_provider_unavailable"
@@ -371,3 +372,40 @@ def test_timeout_admission_does_not_require_capabilities_without_timeout() -> No
     )
 
     assert capabilities.missing_for(request) == ()
+
+
+def test_active_cancellation_requires_capability_before_provider_invocation() -> None:
+    request = replace(
+        _request(),
+        timeout_seconds=None,
+        secret_handles=(),
+        resource_limits=ResourceLimits(max_memory_bytes=1 << 20),
+    )
+    capabilities = ExecutionCapabilityProfile(
+        provider_id="test-provider",
+        available=True,
+        enforces_network_allowlist=True,
+        isolates_environment=True,
+        enforces_argv_policy=True,
+        controls_process_tree=True,
+        enforces_memory_limits=True,
+        confirms_termination=True,
+    )
+    invoked: list[ExecutionRequest] = []
+
+    def must_not_execute(supplied: ExecutionRequest):
+        invoked.append(supplied)
+        pytest.fail("provider must not execute")
+
+    registry = ExecutionEnvironmentRegistry()
+    registry.register(
+        FakeExecutionEnvironment(capabilities, must_not_execute)
+    )
+
+    with pytest.raises(ExecutionEnvironmentUnavailableError) as raised:
+        registry.execute(request, cancellation=Event())
+
+    assert invoked == []
+    assert raised.value.details["missing"] == ["cancellation"]
+    assert raised.value.details["denial_code"] == "execution_cancellation_unsupported"
+    assert "api.example" not in str(raised.value.details)

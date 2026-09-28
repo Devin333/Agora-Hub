@@ -14,7 +14,10 @@ from framework.execution_environment.models import (
     ExecutionRequest,
     capability_denial_code,
 )
-from framework.execution_environment.ports import ExecutionEnvironmentPort
+from framework.execution_environment.ports import (
+    ExecutionCancellationSignal,
+    ExecutionEnvironmentPort,
+)
 
 
 class ExecutionEnvironmentRegistry:
@@ -31,7 +34,14 @@ class ExecutionEnvironmentRegistry:
             raise ValueError(f"execution environment provider is already registered: {provider_id}")
         self._providers[provider_id] = provider
 
-    def resolve(self, request: ExecutionRequest) -> ExecutionEnvironmentPort:
+    def resolve(
+        self,
+        request: ExecutionRequest,
+        *,
+        require_cancellation: bool = False,
+    ) -> ExecutionEnvironmentPort:
+        if not isinstance(require_cancellation, bool):
+            raise TypeError("require_cancellation must be boolean")
         provider_id = request.profile.provider_id
         if provider_id is None:
             raise ExecutionEnvironmentUnavailableError(
@@ -65,7 +75,10 @@ class ExecutionEnvironmentRegistry:
                     ],
                 },
             )
-        diagnostics = provider.capabilities.admission_diagnostics(request)
+        diagnostics = provider.capabilities.admission_diagnostics(
+            request,
+            require_cancellation=require_cancellation,
+        )
         if diagnostics["missing"]:
             raise ExecutionEnvironmentUnavailableError(
                 "requested execution environment capabilities are unavailable",
@@ -73,9 +86,22 @@ class ExecutionEnvironmentRegistry:
             )
         return provider
 
-    def execute(self, request: ExecutionRequest) -> ExecutionOutcome:
-        provider = self.resolve(request)
-        outcome = provider.execute(request)
+    def execute(
+        self,
+        request: ExecutionRequest,
+        *,
+        cancellation: ExecutionCancellationSignal | None = None,
+    ) -> ExecutionOutcome:
+        if cancellation is not None and not isinstance(
+            cancellation,
+            ExecutionCancellationSignal,
+        ):
+            raise TypeError("cancellation must implement ExecutionCancellationSignal")
+        provider = self.resolve(
+            request,
+            require_cancellation=cancellation is not None,
+        )
+        outcome = provider.execute(request, cancellation=cancellation)
         if not isinstance(outcome, ExecutionOutcome):
             raise TypeError("execution environment provider returned an invalid outcome")
         if not outcome.receipt.matches_request(request):

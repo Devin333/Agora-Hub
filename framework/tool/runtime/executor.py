@@ -976,7 +976,15 @@ class ToolExecutor:
 
         def execute(_: dict[str, Any]) -> Any:
             try:
-                outcome = registry.execute(request)
+                execution_context = current_attempt_context()
+                outcome = registry.execute(
+                    request,
+                    cancellation=(
+                        execution_context.cancel_event
+                        if execution_context is not None
+                        else None
+                    ),
+                )
             except ExecutionEnvironmentError:
                 raise
             if not isinstance(outcome, ExecutionOutcome):

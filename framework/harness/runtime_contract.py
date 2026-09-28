@@ -29,13 +29,38 @@ class RuntimeContractBinding:
         # Imports stay local so owner modules can use this validator without a
         # module-import cycle.  Values are copied from the existing owner
         # constants and cannot be supplied by callers.
+        from framework.events.canonical import ENVELOPE_SCHEMA_V2
+        from framework.events.runtime.projection import RUNTIME_EVENT_SCHEMA_V1
+        from framework.events.schema.catalog import (
+            BUDGET_EVENT_DATA_SCHEMA,
+            RUNTIME_EVENT_DATA_SCHEMA,
+        )
         from framework.execution_environment.models import EXECUTION_PROFILE_SCHEMA
-        from framework.harness.artifacts.terminal_manifest import GRAPH_TERMINAL_MANIFEST_SCHEMA
+        from framework.governance.budget.models import (
+            BUDGET_EVENT_SCHEMA_VERSION,
+            BUDGET_SCHEMA_VERSION,
+        )
+        from framework.harness.artifacts.terminal_manifest import (
+            GRAPH_TERMINAL_MANIFEST_SCHEMA,
+            GRAPH_TERMINAL_MANIFEST_V2_SCHEMA,
+        )
         from framework.harness.control_plane.budget_reservation import BUDGET_RESERVATION_SCHEMA
+        from framework.harness.runtime.tool_result_adapter import (
+            HARNESS_BOUND_TOOL_RECEIPT_SCHEMA,
+            TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA,
+        )
+        from framework.harness.side_effects.models import (
+            SIDE_EFFECT_DECISION_SCHEMA_VERSION,
+            SIDE_EFFECT_INTENT_SCHEMA_VERSION,
+            SIDE_EFFECT_OUTCOME_SCHEMA_VERSION,
+        )
         from framework.harness.subagents.models import SUBAGENT_INVOCATION_SCHEMA_V3
         from framework.harness.subagents.supervisor import CHILD_AGENT_HANDLE_SCHEMA_VERSION
         from framework.harness.subagents.transcript import (
+            SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
             SUBAGENT_BUNDLE_SCHEMA_V3,
+            SUBAGENT_CONTEXT_SCHEMA_V3,
+            SUBAGENT_OUTPUT_SCHEMA_V3,
             SUBAGENT_RECEIPT_SCHEMA_V3,
             SUBAGENT_TRANSCRIPT_SCHEMA_V3,
         )
@@ -46,6 +71,7 @@ class RuntimeContractBinding:
             DISPATCH_WAVE_SCHEMA,
             PARALLEL_DISPATCH_REQUEST_SCHEMA,
             PARALLEL_DISPATCH_RESULT_SCHEMA,
+            PARENT_OBSERVATION_SCHEMA,
             TASK_RESERVATION_SCHEMA,
         )
         from framework.harness.task_plan.schema import (
@@ -55,15 +81,25 @@ class RuntimeContractBinding:
             GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
             TASK_PLAN_RUNTIME_VERSION,
         )
-        from framework.harness.task_plan.store import TASK_PLAN_EVENT_SCHEMA
+        from framework.harness.task_plan.store import (
+            TASK_PLAN_EVENT_SCHEMA,
+            TASK_PLAN_RESULT_SCHEMA_V3,
+        )
+        from framework.tool.models.result_envelope import (
+            TOOL_RESULT_ENVELOPE_SCHEMA,
+            TOOL_SIDE_EFFECT_RECEIPT_SCHEMA,
+        )
 
         owners = {
             "execution_profile": EXECUTION_PROFILE_SCHEMA,
+            "event_envelope": ENVELOPE_SCHEMA_V2,
+            "runtime_event_data": RUNTIME_EVENT_SCHEMA_V1,
             "task_plan_runtime": TASK_PLAN_RUNTIME_VERSION,
             "validated_task_plan": GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
             "task_instance": GRAPH_ONLY_TASK_INSTANCE_SCHEMA,
             "task_plan_projection": GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA,
             "task_plan_event": TASK_PLAN_EVENT_SCHEMA,
+            "task_result": TASK_PLAN_RESULT_SCHEMA_V3,
             "dispatch_request": PARALLEL_DISPATCH_REQUEST_SCHEMA,
             "dispatch_result": PARALLEL_DISPATCH_RESULT_SCHEMA,
             "dispatch_group": DISPATCH_GROUP_SCHEMA,
@@ -71,14 +107,39 @@ class RuntimeContractBinding:
             "task_reservation": TASK_RESERVATION_SCHEMA,
             "attempt_history": TASK_ATTEMPT_HISTORY_SCHEMA,
             "subagent_invocation": SUBAGENT_INVOCATION_SCHEMA_V3,
+            "subagent_attempt_identity": SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
             "child_agent_handle": CHILD_AGENT_HANDLE_SCHEMA_VERSION,
+            "subagent_context": SUBAGENT_CONTEXT_SCHEMA_V3,
+            "subagent_output": SUBAGENT_OUTPUT_SCHEMA_V3,
             "subagent_transcript": SUBAGENT_TRANSCRIPT_SCHEMA_V3,
             "subagent_receipt": SUBAGENT_RECEIPT_SCHEMA_V3,
             "subagent_bundle": SUBAGENT_BUNDLE_SCHEMA_V3,
+            "budget_policy": BUDGET_SCHEMA_VERSION,
+            "budget_snapshot": BUDGET_SCHEMA_VERSION,
+            "budget_event": BUDGET_EVENT_SCHEMA_VERSION,
             "budget_reservation": BUDGET_RESERVATION_SCHEMA,
-            "artifact_manifest": GRAPH_TERMINAL_MANIFEST_SCHEMA,
+            "graph_terminal": GRAPH_TERMINAL_MANIFEST_SCHEMA,
+            "artifact_manifest": GRAPH_TERMINAL_MANIFEST_V2_SCHEMA,
+            "side_effect_intent": SIDE_EFFECT_INTENT_SCHEMA_VERSION,
+            "side_effect_decision": SIDE_EFFECT_DECISION_SCHEMA_VERSION,
+            "side_effect_outcome": SIDE_EFFECT_OUTCOME_SCHEMA_VERSION,
+            "tool_result_envelope": TOOL_RESULT_ENVELOPE_SCHEMA,
+            "tool_side_effect_receipt": TOOL_SIDE_EFFECT_RECEIPT_SCHEMA,
+            "harness_bound_tool_receipt": HARNESS_BOUND_TOOL_RECEIPT_SCHEMA,
+            "tool_side_effect_evidence": TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA,
+            "parent_observation": PARENT_OBSERVATION_SCHEMA,
             "parent_continuation": PARENT_CONTINUATION_SCHEMA,
         }
+        registered_owner_versions = {
+            "runtime_event_data": RUNTIME_EVENT_DATA_SCHEMA,
+            "budget_event": BUDGET_EVENT_DATA_SCHEMA,
+        }
+        for owner_key, registered_version in registered_owner_versions.items():
+            if registered_version != owners[owner_key]:
+                raise HarnessValidationError(
+                    f"runtime contract owner registry drift for {owner_key}",
+                    code="RUNTIME_CONTRACT_OWNER_DRIFT",
+                )
         # Exercise the existing TaskPlan registry as part of the binding.  A
         # stale owner constant must fail closed rather than silently becoming a
         # second source of truth here.
@@ -312,13 +373,13 @@ def validate_task_result_contract(
 ) -> None:
     """Validate result identity and transition before a result is persisted."""
 
-    runtime_contract_binding()
+    binding = runtime_contract_binding()
     from framework.harness.task_plan.models import TaskLifecycle, TaskPlanProjection, ValidatedTaskPlan
-    from framework.harness.task_plan.store import TASK_PLAN_RESULT_SCHEMA_V3, TaskResultRecord
+    from framework.harness.task_plan.store import TaskResultRecord
 
     if not isinstance(plan, ValidatedTaskPlan) or not isinstance(projection, TaskPlanProjection):
         raise HarnessValidationError("result acceptance requires validated plan and projection", code="RUNTIME_CONTRACT_IDENTITY_MISMATCH")
-    if not isinstance(result, TaskResultRecord) or result.schema_version != TASK_PLAN_RESULT_SCHEMA_V3:
+    if not isinstance(result, TaskResultRecord) or result.schema_version != binding.owners["task_result"]:
         raise HarnessValidationError("unsupported task result schema", code="RUNTIME_CONTRACT_SCHEMA_MISMATCH")
     if not result.matches_plan_identity(plan) or not projection.matches_plan_identity(plan):
         raise HarnessValidationError("result scope differs from accepted plan", code="RUNTIME_CONTRACT_SCOPE_MISMATCH")
@@ -345,7 +406,6 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
     from framework.harness.task_plan.models import ValidatedTaskPlan
     from framework.harness.task_plan.store import (
         TASK_PLAN_EVENT_SCHEMAS,
-        TASK_PLAN_RESULT_SCHEMA_V3,
         TaskPlanEvent,
         TaskResultRecord,
     )
@@ -459,7 +519,7 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
     for result in results:
         if (
             type(result) is not TaskResultRecord
-            or result.schema_version != TASK_PLAN_RESULT_SCHEMA_V3
+            or result.schema_version != binding.owners["task_result"]
         ):
             raise HarnessValidationError(
                 "history contains an unsupported result",

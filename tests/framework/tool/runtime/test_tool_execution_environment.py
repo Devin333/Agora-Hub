@@ -63,6 +63,7 @@ def test_sandboxed_definition_never_falls_back_to_in_process_executor() -> None:
         isolates_environment=True,
         enforces_argv_policy=True,
         controls_process_tree=True,
+        supports_cancellation=True,
         confirms_termination=True,
     )
 
@@ -89,7 +90,8 @@ def test_sandboxed_definition_never_falls_back_to_in_process_executor() -> None:
         return ExecutionOutcome(receipt=receipt, output=output)
 
     environment = ExecutionEnvironmentRegistry()
-    environment.register(FakeExecutionEnvironment(capabilities, run))
+    provider = FakeExecutionEnvironment(capabilities, run)
+    environment.register(provider)
     observation = ToolExecutor(
         registry,
         execution_environment=environment,
@@ -102,6 +104,8 @@ def test_sandboxed_definition_never_falls_back_to_in_process_executor() -> None:
     assert observation.result.output == {"sandbox": True}
     assert called == []
     assert captured_requests[0].cancellation_grace_seconds == 0.0
+    assert len(provider.cancellation_signals) == 1
+    assert provider.cancellation_signals[0] is not None
 
 
 def test_sandboxed_definition_without_environment_fails_closed() -> None:

@@ -7,7 +7,7 @@
 
 ## 2. Execution Environment And Child Supervision
 
-- [ ] 2.1 Complete provider capability admission for filesystem roots, environment allowlists, network policy, argv, process limits, timeout, cancellation, and termination confirmation.
+- [x] 2.1 Complete provider capability admission for filesystem roots, environment allowlists, network policy, argv, process limits, timeout, cancellation, and termination confirmation. See `evidence/provider-capability-admission-20260928.md` for the local Docker capability matrix and real-container tests.
 - [x] 2.2 Add process restart, tool timeout, child loss, cancellation uncertainty, and external side-effect deduplication integration scenarios.
 - [x] 2.3 Complete Harness-owned child `spawn/status/wait/cancel/close`, heartbeat, lease, stale reclaim, idempotent operation, and confirmed termination behavior through real composition.
 - [x] 2.4 Recover committed child results without re-invocation and fail closed for ambiguous ownership or non-idempotent side effects.

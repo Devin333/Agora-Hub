@@ -634,7 +634,14 @@ class ExecutionCapabilityProfile:
     def checksum(self) -> str:
         return _checksum(self.to_dict())
 
-    def missing_for(self, request: ExecutionRequest) -> tuple[str, ...]:
+    def missing_for(
+        self,
+        request: ExecutionRequest,
+        *,
+        require_cancellation: bool = False,
+    ) -> tuple[str, ...]:
+        if not isinstance(require_cancellation, bool):
+            raise TypeError("require_cancellation must be boolean")
         missing: list[str] = []
         profile = request.profile
         if not self.available:
@@ -702,13 +709,20 @@ class ExecutionCapabilityProfile:
         if request.timeout_seconds is not None:
             if not self.enforces_timeout:
                 missing.append("timeout")
-            if not self.supports_cancellation:
-                missing.append("cancellation")
+        if (
+            request.timeout_seconds is not None or require_cancellation
+        ) and not self.supports_cancellation:
+            missing.append("cancellation")
         if request.secret_handles and not self.supports_secret_handles:
             missing.append("secret_handle_injection")
         return tuple(missing)
 
-    def admission_diagnostics(self, request: ExecutionRequest) -> dict[str, Any]:
+    def admission_diagnostics(
+        self,
+        request: ExecutionRequest,
+        *,
+        require_cancellation: bool = False,
+    ) -> dict[str, Any]:
         """Describe capability admission without exposing request contents.
 
         The returned shape is deliberately stable and suitable for operator
@@ -716,7 +730,10 @@ class ExecutionCapabilityProfile:
         ``denials`` provides versioned, coarser denial codes for callers.
         """
 
-        missing = self.missing_for(request)
+        missing = self.missing_for(
+            request,
+            require_cancellation=require_cancellation,
+        )
         denials = [
             {
                 "capability": capability,

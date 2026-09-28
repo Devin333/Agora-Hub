@@ -12,7 +12,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
-from typing import Any
+import time
 
 from framework.execution_environment.errors import (
     ExecutionEnvironmentUnavailableError,
@@ -20,17 +20,18 @@ from framework.execution_environment.errors import (
 )
 from framework.execution_environment.models import (
     ExecutionCapabilityProfile,
-    ExecutionMode,
     ExecutionOutcome,
     ExecutionRequest,
     ExecutionReceipt,
     ExecutionStatus,
     capability_denial_code,
 )
+from framework.execution_environment.ports import ExecutionCancellationSignal
 
 
 _MAX_OUTPUT_BYTES = 128 * 1024 * 1024
 _CONTAINER_ROOT = "/newsroom"
+_WAIT_POLL_SECONDS = 0.05
 
 
 class DockerExecutionEnvironment:
@@ -71,17 +72,27 @@ class DockerExecutionEnvironment:
             supports_cancellation=True,
             confirms_termination=True,
             supports_secret_handles=False,
-            version="docker-v2",
+            version="docker-v3",
         )
 
-    def execute(self, request: ExecutionRequest) -> ExecutionOutcome:
+    def execute(
+        self,
+        request: ExecutionRequest,
+        *,
+        cancellation: ExecutionCancellationSignal | None = None,
+    ) -> ExecutionOutcome:
         capabilities = self.capabilities
-        diagnostics = capabilities.admission_diagnostics(request)
+        diagnostics = capabilities.admission_diagnostics(
+            request,
+            require_cancellation=cancellation is not None,
+        )
         if diagnostics["missing"]:
             raise ExecutionEnvironmentUnavailableError(
                 "requested Docker execution capabilities are unavailable",
                 details=diagnostics,
             )
+        if cancellation is not None and cancellation.is_set():
+            return self._cancelled_before_start_outcome(request)
         if request.profile.network_policy.mode.value != "deny":
             # Keep this defensive check even though the advertised Docker
             # profile currently reports ``enforces_network_allowlist=False``.
@@ -149,31 +160,77 @@ class DockerExecutionEnvironment:
         reason_code = "process_exit"
         termination_confirmed = True
         exit_code: int | None = None
-        diagnostics: str | None = None
+        diagnostic: str | None = None
         output: bytes | None = None
+        deadline = (
+            None
+            if request.timeout_seconds is None
+            else time.monotonic() + request.timeout_seconds
+        )
         try:
-            try:
-                wait_stdout, wait_stderr = wait_process.communicate(
-                    timeout=request.timeout_seconds,
+            while True:
+                cancellation_requested = bool(
+                    cancellation is not None and cancellation.is_set()
                 )
+                timeout_expired = bool(
+                    deadline is not None and time.monotonic() >= deadline
+                )
+                if cancellation_requested or timeout_expired:
+                    status = (
+                        ExecutionStatus.CANCELLED
+                        if cancellation_requested
+                        else ExecutionStatus.TIMED_OUT
+                    )
+                    reason_code = "cancelled" if cancellation_requested else "timeout"
+                    break
+                poll_seconds = _WAIT_POLL_SECONDS
+                if deadline is not None:
+                    poll_seconds = min(
+                        poll_seconds,
+                        max(0.001, deadline - time.monotonic()),
+                    )
+                try:
+                    wait_stdout, _wait_stderr = wait_process.communicate(
+                        timeout=poll_seconds,
+                    )
+                except subprocess.TimeoutExpired:
+                    continue
                 if wait_process.returncode != 0:
                     raise ExecutionEnvironmentUnavailableError(
                         "Docker wait did not return a container exit status",
                         details={"provider_id": "docker", "reason": "wait_failed"},
                     )
-                try:
-                    exit_code = int(wait_stdout.decode("ascii", errors="strict").strip())
-                except (UnicodeDecodeError, ValueError):
-                    raise ExecutionEnvironmentUnavailableError(
-                        "Docker returned an invalid container exit status",
-                        details={"provider_id": "docker", "reason": "invalid_exit_status"},
-                    ) from None
+                exit_code = _parse_exit_code(wait_stdout)
                 if exit_code:
                     status = ExecutionStatus.FAILED
                     reason_code = "process_exit_nonzero"
-            except subprocess.TimeoutExpired:
-                status = ExecutionStatus.TIMED_OUT
-                reason_code = "timeout"
+                break
+
+            if status in {ExecutionStatus.CANCELLED, ExecutionStatus.TIMED_OUT}:
+                # The process may have exited between the last poll and the
+                # control signal. Observe that completion before issuing a
+                # stop so a late cancellation is not reported as causal.
+                try:
+                    wait_stdout, _wait_stderr = wait_process.communicate(timeout=0)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    if wait_process.returncode != 0:
+                        raise ExecutionEnvironmentUnavailableError(
+                            "Docker wait did not return a container exit status",
+                            details={"provider_id": "docker", "reason": "wait_failed"},
+                        )
+                    exit_code = _parse_exit_code(wait_stdout)
+                    status = (
+                        ExecutionStatus.FAILED
+                        if exit_code
+                        else ExecutionStatus.SUCCEEDED
+                    )
+                    reason_code = (
+                        "process_exit_nonzero" if exit_code else "process_exit"
+                    )
+
+            if status in {ExecutionStatus.CANCELLED, ExecutionStatus.TIMED_OUT}:
                 try:
                     stop_result = self._run(
                         [
@@ -188,16 +245,16 @@ class DockerExecutionEnvironment:
                 except ExecutionEnvironmentUnavailableError:
                     stop_result = None
                 try:
-                    wait_process.communicate(timeout=request.cancellation_grace_seconds + 2.0)
+                    wait_stdout, _wait_stderr = wait_process.communicate(
+                        timeout=request.cancellation_grace_seconds + 2.0,
+                    )
+                    if wait_process.returncode == 0:
+                        exit_code = _try_parse_exit_code(wait_stdout)
                 except subprocess.TimeoutExpired:
                     # The Docker CLI itself may remain blocked after a daemon
-                    # failure.  Kill only this waiter; the container remains
-                    # for reconciliation when termination cannot be proven.
-                    try:
-                        wait_process.kill()
-                        wait_process.communicate()
-                    except OSError:
-                        pass
+                    # failure. The common finally block reaps only this local
+                    # waiter; container termination is proved independently.
+                    pass
                 except OSError:
                     pass
                 try:
@@ -212,40 +269,48 @@ class DockerExecutionEnvironment:
                 if not termination_confirmed:
                     status = ExecutionStatus.INDETERMINATE
                     reason_code = "termination_unconfirmed"
-            except (ExecutionEnvironmentUnavailableError, OSError, ValueError) as exc:
-                # A daemon/wait protocol failure leaves process termination
-                # unknown. Preserve a typed receipt for reconciliation rather
-                # than raising before the audit record can be emitted.
-                status = ExecutionStatus.INDETERMINATE
-                reason_code = "termination_unconfirmed"
-                termination_confirmed = False
-                diagnostics = f"container wait could not be confirmed: {type(exc).__name__}"
-            try:
-                # ``docker logs`` returns both streams by default.  It does
-                # not provide ``--stdout``/``--stderr`` selector flags.
-                logs = self._run(
-                    [self._docker, "logs", container_name],
-                    timeout=self._probe_timeout_seconds,
-                )
-                if logs.returncode != 0:
-                    raise ExecutionEnvironmentUnavailableError(
-                        "Docker could not collect container output",
-                        details={"provider_id": "docker", "reason": "logs_failed"},
+                    diagnostic = "container termination could not be confirmed"
+                else:
+                    diagnostic = (
+                        "cancelled execution output quarantined"
+                        if status is ExecutionStatus.CANCELLED
+                        else "timed out execution output quarantined"
                     )
-                output = logs.stdout + logs.stderr
-                if len(output) > _MAX_OUTPUT_BYTES:
-                    output = output[:_MAX_OUTPUT_BYTES]
-                    diagnostics = "container output exceeded the bounded receipt limit"
-            except ExecutionEnvironmentUnavailableError:
-                # A daemon failure after a timeout must still produce an
-                # auditable receipt; never replace it with an uncaught CLI
-                # exception that hides termination uncertainty.
-                output = None
-                termination_confirmed = False
-                status = ExecutionStatus.INDETERMINATE
-                reason_code = "termination_unconfirmed"
-                diagnostics = "container output could not be collected"
+            if status in {ExecutionStatus.SUCCEEDED, ExecutionStatus.FAILED}:
+                try:
+                    # ``docker logs`` returns both streams by default.  It does
+                    # not provide ``--stdout``/``--stderr`` selector flags.
+                    logs = self._run(
+                        [self._docker, "logs", container_name],
+                        timeout=self._probe_timeout_seconds,
+                    )
+                    if logs.returncode != 0:
+                        raise ExecutionEnvironmentUnavailableError(
+                            "Docker could not collect container output",
+                            details={"provider_id": "docker", "reason": "logs_failed"},
+                        )
+                    output = logs.stdout + logs.stderr
+                    if len(output) > _MAX_OUTPUT_BYTES:
+                        output = output[:_MAX_OUTPUT_BYTES]
+                        diagnostic = "container output exceeded the bounded receipt limit"
+                except ExecutionEnvironmentUnavailableError:
+                    output = None
+                    termination_confirmed = False
+                    status = ExecutionStatus.INDETERMINATE
+                    reason_code = "termination_unconfirmed"
+                    diagnostic = "container output could not be collected"
+        except (ExecutionEnvironmentUnavailableError, OSError, ValueError) as exc:
+            # A daemon/wait protocol failure leaves process termination
+            # unknown. Preserve a typed receipt for reconciliation rather
+            # than raising before the audit record can be emitted.
+            status = ExecutionStatus.INDETERMINATE
+            reason_code = "termination_unconfirmed"
+            termination_confirmed = False
+            diagnostic = (
+                f"container wait could not be confirmed: {type(exc).__name__}"
+            )
         finally:
+            _reap_wait_process(wait_process)
             if termination_confirmed:
                 try:
                     cleanup = self._run(
@@ -258,7 +323,8 @@ class DockerExecutionEnvironment:
                     termination_confirmed = False
                     status = ExecutionStatus.INDETERMINATE
                     reason_code = "termination_unconfirmed"
-                    diagnostics = "container cleanup could not be confirmed"
+                    diagnostic = "container cleanup could not be confirmed"
+                    output = None
 
         finished_at = datetime.now(UTC)
         receipt = ExecutionReceipt(
@@ -278,7 +344,7 @@ class DockerExecutionEnvironment:
             output_checksum=_sha256(output) if output is not None else None,
             output_bytes=len(output) if output is not None else None,
         )
-        return ExecutionOutcome(receipt=receipt, output=output, diagnostic=diagnostics)
+        return ExecutionOutcome(receipt=receipt, output=output, diagnostic=diagnostic)
 
     def _probe_docker(self) -> bool:
         try:
@@ -313,6 +379,30 @@ class DockerExecutionEnvironment:
             reason_code="termination_unconfirmed",
         )
         return ExecutionOutcome(receipt=receipt, diagnostic=diagnostic)
+
+    def _cancelled_before_start_outcome(
+        self,
+        request: ExecutionRequest,
+    ) -> ExecutionOutcome:
+        cancelled_at = datetime.now(UTC)
+        receipt = ExecutionReceipt(
+            execution_id=request.execution_id,
+            tool_id=request.tool_id,
+            graph_identity=request.graph_identity,
+            operation_id=request.operation_id,
+            attempt_id=request.attempt_id,
+            provider_id="docker",
+            provider_capability_checksum=self.capabilities.checksum,
+            status=ExecutionStatus.CANCELLED,
+            started_at=cancelled_at,
+            finished_at=cancelled_at,
+            termination_confirmed=True,
+            reason_code="cancelled_before_start",
+        )
+        return ExecutionOutcome(
+            receipt=receipt,
+            diagnostic="execution cancelled before container launch",
+        )
 
     def _run(self, command: Sequence[str], *, timeout: float) -> subprocess.CompletedProcess[bytes]:
         try:
@@ -489,6 +579,43 @@ def _translate_argument(value: str, path_map: Mapping[str, str]) -> str:
             suffix = normalized[len(source) :].replace("\\", "/")
             return target + suffix
     return value
+
+
+def _parse_exit_code(value: bytes) -> int:
+    try:
+        return int(value.decode("ascii", errors="strict").strip())
+    except (UnicodeDecodeError, ValueError):
+        raise ExecutionEnvironmentUnavailableError(
+            "Docker returned an invalid container exit status",
+            details={"provider_id": "docker", "reason": "invalid_exit_status"},
+        ) from None
+
+
+def _try_parse_exit_code(value: bytes) -> int | None:
+    try:
+        return int(value.decode("ascii", errors="strict").strip())
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+def _reap_wait_process(wait_process: subprocess.Popen[bytes]) -> None:
+    """Reap the local Docker CLI without inferring container termination."""
+
+    if wait_process.returncode is None:
+        try:
+            wait_process.kill()
+        except OSError:
+            pass
+    try:
+        wait_process.communicate(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        try:
+            wait_process.kill()
+            wait_process.communicate(timeout=1.0)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    except OSError:
+        pass
 
 
 def _sha256(value: bytes) -> str:

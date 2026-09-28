@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from re import fullmatch
 from typing import Any
 
+from framework.events.runtime.projection import RUNTIME_EVENT_SCHEMA_V1
 from framework.events.runtime.replay_engine import (
     ReplayReducerRegistration,
     ReplayReducerRegistry,
@@ -15,7 +16,7 @@ from framework.events.runtime.replay_engine import (
 RUNTIME_PROJECTION_REDUCER_ID = "runtime-event-projection"
 RUNTIME_PROJECTION_REDUCER_VERSION = "1"
 RUNTIME_PROJECTION_STATE_SCHEMA = "newsroom.runtime-projection-state/v1"
-RUNTIME_EVENT_DATA_SCHEMA = "newsroom.runtime-event/v1"
+RUNTIME_EVENT_DATA_SCHEMA = RUNTIME_EVENT_SCHEMA_V1
 
 
 def runtime_projection_reducer(state: dict[str, Any], event: Any) -> dict[str, Any]:
@@ -46,6 +47,9 @@ def runtime_projection_reducer(state: dict[str, Any], event: Any) -> dict[str, A
         "checksum": event.record_checksum,
     }
 
+    # Replay reducers must accept exactly (state, event) and cannot read
+    # module globals. Keep the audited literal aligned with the exported owner
+    # alias above; RuntimeContractBinding rejects catalog drift at startup.
     if event.data_schema != "newsroom.runtime-event/v1":
         return {"state_schema": state["state_schema"], "cursors": cursors, "statuses": statuses}
 

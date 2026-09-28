@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from framework.events.runtime.projection import RUNTIME_EVENT_SCHEMA_V1
 from framework.events.runtime.projection_reducer import (
+    RUNTIME_EVENT_DATA_SCHEMA,
     RUNTIME_PROJECTION_REDUCER_ID,
     RUNTIME_PROJECTION_REDUCER_VERSION,
     register_runtime_projection_reducer,
@@ -16,7 +18,7 @@ def _event(
     *,
     event_id: str,
     sequence: int,
-    schema: str = "newsroom.runtime-event/v1",
+    schema: str = RUNTIME_EVENT_SCHEMA_V1,
     payload: dict | None = None,
 ) -> ReplayEvent:
     return ReplayEvent(
@@ -46,6 +48,15 @@ def _registration():
     registry = ReplayReducerRegistry()
     register_runtime_projection_reducer(registry)
     return registry.get(RUNTIME_PROJECTION_REDUCER_ID, RUNTIME_PROJECTION_REDUCER_VERSION)
+
+
+def test_runtime_reducer_uses_runtime_event_owner_schema() -> None:
+    assert RUNTIME_EVENT_DATA_SCHEMA == RUNTIME_EVENT_SCHEMA_V1
+    state = runtime_projection_reducer(
+        _registration().initial_state,
+        _event(event_id="event-1", sequence=1),
+    )
+    assert len(state["statuses"]) == 1
 
 
 def test_runtime_reducer_uses_canonical_sequence_and_bounds_checkpoint_state() -> None:

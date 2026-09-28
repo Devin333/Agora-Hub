@@ -50,6 +50,8 @@ def _adapter(tmp_path: Path, captured: list[object]) -> ResearchParserExecutionA
         enforces_argv_policy=True,
         controls_process_tree=True,
         enforces_process_limits=True,
+        enforces_timeout=True,
+        supports_cancellation=True,
         confirms_termination=True,
     )
 

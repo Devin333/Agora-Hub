@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from threading import Event
 import time
 from uuid import uuid4
 
@@ -65,11 +66,17 @@ def _profile(
     argv_prefix: str,
     *,
     network_policy: NetworkPolicy | None = None,
+    max_processes: int = 1,
+    allowed_child_argv_prefixes: tuple[tuple[str, ...], ...] = (),
+    require_child_process_allowlist: bool = False,
 ) -> ExecutionProfile:
     return ExecutionProfile.sandboxed_process(
         provider_id="docker",
         allowed_argv_prefixes=((argv_prefix,),),
         network_policy=network_policy,
+        max_processes=max_processes,
+        allowed_child_argv_prefixes=allowed_child_argv_prefixes,
+        require_child_process_allowlist=require_child_process_allowlist,
     )
 
 
@@ -81,6 +88,7 @@ def _request(
     read_roots: tuple[str, ...] = (),
     write_roots: tuple[str, ...] = (),
     environment: dict[str, str] | None = None,
+    resource_limits: ResourceLimits | None = None,
     timeout_seconds: float = 5.0,
 ) -> ExecutionRequest:
     unique_execution_id = f"{execution_id}-{uuid4().hex}"
@@ -96,9 +104,13 @@ def _request(
         read_roots=read_roots,
         write_roots=write_roots,
         environment=environment or {},
-        resource_limits=ResourceLimits(
-            max_memory_bytes=64 * 1024 * 1024,
-            max_processes=1,
+        resource_limits=(
+            resource_limits
+            if resource_limits is not None
+            else ResourceLimits(
+                max_memory_bytes=64 * 1024 * 1024,
+                max_processes=1,
+            )
         ),
         timeout_seconds=timeout_seconds,
         cancellation_grace_seconds=1.0,
@@ -290,6 +302,127 @@ def test_real_docker_timeout_confirms_termination_and_removes_container(
 
     assert outcome.receipt.status is ExecutionStatus.TIMED_OUT
     assert outcome.receipt.termination_confirmed is True
+    container_name = DockerExecutionEnvironment._container_name(request.execution_id)
+    inspect = subprocess.run(
+        ["docker", "container", "inspect", container_name],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    assert inspect.returncode != 0
+
+
+def test_real_docker_enforces_resource_limits_and_active_cancellation(
+    docker_registry: ExecutionEnvironmentRegistry,
+    tmp_path: Path,
+) -> None:
+    request = _request(
+        execution_id="active-cancellation",
+        profile=_profile("sleep"),
+        argv=("sleep", "30"),
+        read_roots=(str(tmp_path),),
+        timeout_seconds=10.0,
+    )
+    cancellation = Event()
+    container_name = DockerExecutionEnvironment._container_name(request.execution_id)
+    host_config: dict[str, object] | None = None
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                docker_registry.execute,
+                request,
+                cancellation=cancellation,
+            )
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not future.done():
+                inspect = subprocess.run(
+                    [
+                        "docker",
+                        "container",
+                        "inspect",
+                        "--format",
+                        "{{json .HostConfig}}",
+                        container_name,
+                    ],
+                    capture_output=True,
+                    check=False,
+                    text=True,
+                    timeout=10,
+                )
+                if inspect.returncode == 0:
+                    host_config = json.loads(inspect.stdout)
+                    break
+                time.sleep(0.05)
+            assert host_config is not None, "admitted Docker container was not observed"
+            cancellation.set()
+            outcome = future.result(timeout=15)
+
+        assert host_config["Memory"] == 64 * 1024 * 1024
+        assert host_config["PidsLimit"] == 1
+        assert outcome.receipt.status is ExecutionStatus.CANCELLED
+        assert outcome.receipt.reason_code == "cancelled"
+        assert outcome.receipt.termination_confirmed is True
+        assert outcome.output is None
+        assert outcome.receipt.output_checksum is None
+        assert outcome.receipt.output_bytes is None
+        inspect = subprocess.run(
+            ["docker", "container", "inspect", container_name],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        assert inspect.returncode != 0
+    finally:
+        cancellation.set()
+        subprocess.run(
+            ["docker", "rm", "-f", "-v", container_name],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "resource_limits", "missing"),
+    [
+        (
+            _profile("true"),
+            ResourceLimits(max_cpu_seconds=1.0, max_processes=1),
+            "cpu_limits",
+        ),
+        (
+            _profile(
+                "true",
+                max_processes=2,
+                allowed_child_argv_prefixes=(("true",),),
+                require_child_process_allowlist=True,
+            ),
+            ResourceLimits(max_memory_bytes=64 * 1024 * 1024, max_processes=2),
+            "child_process_allowlist",
+        ),
+    ],
+)
+def test_real_docker_rejects_unsupported_resource_policy_before_launch(
+    docker_registry: ExecutionEnvironmentRegistry,
+    tmp_path: Path,
+    profile: ExecutionProfile,
+    resource_limits: ResourceLimits,
+    missing: str,
+) -> None:
+    request = _request(
+        execution_id=f"unsupported-{missing}",
+        profile=profile,
+        argv=("true",),
+        read_roots=(str(tmp_path),),
+        resource_limits=resource_limits,
+    )
+
+    with pytest.raises(ExecutionEnvironmentUnavailableError) as raised:
+        docker_registry.execute(request)
+
+    assert raised.value.details["missing"] == [missing]
+    assert str(tmp_path) not in str(raised.value.details)
     container_name = DockerExecutionEnvironment._container_name(request.execution_id)
     inspect = subprocess.run(
         ["docker", "container", "inspect", container_name],

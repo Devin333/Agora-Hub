@@ -27,7 +27,10 @@ from framework.execution_environment.models import (
     ResourceLimits,
     capability_denial_code,
 )
-from framework.execution_environment.ports import ExecutionEnvironmentPort
+from framework.execution_environment.ports import (
+    ExecutionCancellationSignal,
+    ExecutionEnvironmentPort,
+)
 from framework.execution_environment.registry import ExecutionEnvironmentRegistry
 from framework.execution_environment.composition import (
     ExecutionProfileRegistry,
@@ -48,6 +51,7 @@ __all__ = [
     "ExecutionCapabilityProfile",
     "DeploymentCapabilityEvidence",
     "ExecutionEnvironmentError",
+    "ExecutionCancellationSignal",
     "ExecutionEnvironmentPort",
     "ExecutionEnvironmentRegistry",
     "ExecutionEnvironmentUnavailableError",

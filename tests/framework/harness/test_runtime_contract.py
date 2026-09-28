@@ -5,9 +5,30 @@ from types import SimpleNamespace
 
 import pytest
 
+from framework.events import ENVELOPE_SCHEMA_V2
+from framework.events.runtime import RUNTIME_EVENT_SCHEMA_V1
+from framework.governance.budget import BUDGET_EVENT_SCHEMA_VERSION, BUDGET_SCHEMA_VERSION
 from framework.execution_environment import EXECUTION_PROFILE_SCHEMA, ExecutionProfile
+from framework.harness.artifacts import (
+    GRAPH_TERMINAL_MANIFEST_SCHEMA,
+    GRAPH_TERMINAL_MANIFEST_V2_SCHEMA,
+)
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.runtime.tool_result_adapter import (
+    HARNESS_BOUND_TOOL_RECEIPT_SCHEMA,
+    TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA,
+)
+from framework.harness.side_effects import (
+    SIDE_EFFECT_DECISION_SCHEMA_VERSION,
+    SIDE_EFFECT_INTENT_SCHEMA_VERSION,
+    SIDE_EFFECT_OUTCOME_SCHEMA_VERSION,
+)
 from framework.harness.subagents.supervisor import ChildAgentHandle
+from framework.harness.subagents.transcript import (
+    SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
+    SUBAGENT_CONTEXT_SCHEMA_V3,
+    SUBAGENT_OUTPUT_SCHEMA_V3,
+)
 from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.runtime_contract import (
     HARNESS_RUNTIME_CONTRACT_VERSION,
@@ -15,9 +36,13 @@ from framework.harness.runtime_contract import (
     validate_history_read_contract,
     validate_parallel_dispatch_contract,
 )
-from framework.harness.task_plan.parallel import ParallelAgentCoordinator
+from framework.harness.task_plan.parallel import PARENT_OBSERVATION_SCHEMA, ParallelAgentCoordinator
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
-from framework.harness.task_plan.store import TaskPlanEvent, TaskResultRecord
+from framework.harness.task_plan.store import TASK_PLAN_RESULT_SCHEMA_V3, TaskPlanEvent, TaskResultRecord
+from framework.tool.models.result_envelope import (
+    TOOL_RESULT_ENVELOPE_SCHEMA,
+    TOOL_SIDE_EFFECT_RECEIPT_SCHEMA,
+)
 from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _accepted_parallel_plan,
     _request,
@@ -30,8 +55,49 @@ def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
     assert binding.owners["execution_profile"] == EXECUTION_PROFILE_SCHEMA
     assert binding.owners["validated_task_plan"] == _accepted_parallel_plan().schema_version
     assert binding.owners["child_agent_handle"] == ChildAgentHandle.CONTRACT_SCHEMA_VERSION
+    assert binding.owners["event_envelope"] == ENVELOPE_SCHEMA_V2
+    assert binding.owners["runtime_event_data"] == RUNTIME_EVENT_SCHEMA_V1
+    assert binding.owners["budget_policy"] == BUDGET_SCHEMA_VERSION
+    assert binding.owners["budget_snapshot"] == BUDGET_SCHEMA_VERSION
+    assert binding.owners["budget_event"] == BUDGET_EVENT_SCHEMA_VERSION
+    assert binding.owners["subagent_attempt_identity"] == SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3
+    assert binding.owners["subagent_context"] == SUBAGENT_CONTEXT_SCHEMA_V3
+    assert binding.owners["subagent_output"] == SUBAGENT_OUTPUT_SCHEMA_V3
+    assert binding.owners["task_result"] == TASK_PLAN_RESULT_SCHEMA_V3
+    assert binding.owners["parent_observation"] == PARENT_OBSERVATION_SCHEMA
+    assert binding.owners["graph_terminal"] == GRAPH_TERMINAL_MANIFEST_SCHEMA
+    assert binding.owners["artifact_manifest"] == GRAPH_TERMINAL_MANIFEST_V2_SCHEMA
+    assert binding.owners["side_effect_intent"] == SIDE_EFFECT_INTENT_SCHEMA_VERSION
+    assert binding.owners["side_effect_decision"] == SIDE_EFFECT_DECISION_SCHEMA_VERSION
+    assert binding.owners["side_effect_outcome"] == SIDE_EFFECT_OUTCOME_SCHEMA_VERSION
+    assert binding.owners["tool_result_envelope"] == TOOL_RESULT_ENVELOPE_SCHEMA
+    assert binding.owners["tool_side_effect_receipt"] == TOOL_SIDE_EFFECT_RECEIPT_SCHEMA
+    assert binding.owners["harness_bound_tool_receipt"] == HARNESS_BOUND_TOOL_RECEIPT_SCHEMA
+    assert binding.owners["tool_side_effect_evidence"] == TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA
     with pytest.raises(TypeError):
         binding.owners["execution_profile"] = "newsroom.invalid/v1"  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("field_name", "owner_key"),
+    [
+        ("RUNTIME_EVENT_DATA_SCHEMA", "runtime_event_data"),
+        ("BUDGET_EVENT_DATA_SCHEMA", "budget_event"),
+    ],
+)
+def test_runtime_binding_rejects_canonical_event_registry_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    owner_key: str,
+) -> None:
+    from framework.events.schema import catalog
+
+    monkeypatch.setattr(catalog, field_name, f"newsroom.invalid-{owner_key}/v1")
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        runtime_contract_binding()
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_OWNER_DRIFT"
 
 
 def test_execution_profile_requires_the_versioned_contract() -> None:
@@ -161,6 +227,17 @@ def test_dispatch_contract_rejects_group_before_admission_transition() -> None:
 def test_history_contract_rejects_unknown_event_schema_before_replay() -> None:
     with pytest.raises(HarnessValidationError, match="unsupported event"):
         validate_history_read_contract((), (type("Event", (), {"schema_version": "newsroom.invalid/v1"})(),), ())
+
+
+def test_history_contract_rejects_unknown_task_result_schema_before_replay() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    result = _history_result(plan)
+    object.__setattr__(result, "schema_version", "newsroom.invalid/v1")
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_history_read_contract((plan,), (), (result,))
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_SCHEMA_MISMATCH"
 
 
 def _history_result(plan):

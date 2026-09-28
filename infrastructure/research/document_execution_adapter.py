@@ -19,6 +19,7 @@ from framework.execution_environment.models import (
     ResourceLimits,
 )
 from framework.execution_environment.registry import ExecutionEnvironmentRegistry
+from framework.shared.attempts import current_attempt_context
 from framework.shared.graph_identity import GraphExecutionIdentity
 
 
@@ -96,7 +97,15 @@ class ResearchParserExecutionAdapter:
             cancellation_grace_seconds=self._cancellation_grace_seconds,
         )
         try:
-            outcome = self._execution_environment.execute(request)
+            attempt_context = current_attempt_context()
+            outcome = self._execution_environment.execute(
+                request,
+                cancellation=(
+                    attempt_context.cancel_event
+                    if attempt_context is not None
+                    else None
+                ),
+            )
         except ExecutionEnvironmentError:
             raise
         if not isinstance(outcome, ExecutionOutcome):
