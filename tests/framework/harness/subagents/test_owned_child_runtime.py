@@ -318,8 +318,15 @@ def test_full_history_reserves_cancel_terminal_and_close(tmp_path):
         assert raised.value.code == "child_event_store_capacity_exhausted"
         result = supervisor.cancel(handle.child_id, operation_id=handle.operation_id)
         assert result.receipt.termination_confirmed
+        assert result.receipt.status is ChildAgentState.CANCELLED
         supervisor.close(handle.child_id, operation_id=handle.operation_id)
-        assert len(log.read_events()) == 5
+        assert [event["event_type"] for event in log.read_events()] == [
+            "child_spawned",
+            "child_heartbeat",
+            "child_cancel_requested",
+            "child_terminal",
+            "child_closed",
+        ]
     finally:
         runtime.close()
 

@@ -717,6 +717,224 @@ def test_durable_child_log_rejects_rechecksummed_receipt_for_another_operation(t
     supervisor.shutdown()
 
 
+def test_durable_child_log_rejects_rechecksummed_terminal_parent_drift_before_cas(
+    tmp_path,
+) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    store = SQLiteEventStore(database, initialize=False)
+    runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
+    log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    log.acquire_owner("owner")
+    log.register_run_scope("run-1", "tenant-1")
+    fixed_now = datetime(2026, 9, 29, 9, 0, tzinfo=UTC)
+    worker_calls: list[str] = []
+    accepted = ChildAgentSupervisor(
+        event_sink=log,
+        event_reader=log,
+        clock=lambda: fixed_now,
+        max_children=1,
+        worker_factory=lambda _: worker_calls.append("accepted"),
+    )
+    forged_events: list[dict[str, object]] = []
+    forger = ChildAgentSupervisor(
+        event_sink=forged_events.append,
+        clock=lambda: fixed_now,
+        max_children=1,
+        worker_factory=lambda _: worker_calls.append("forger"),
+    )
+    try:
+        request = _request(
+            child_id="bound-child",
+            operation_id="bound-operation",
+            lease_seconds=60,
+        )
+        accepted_handle = accepted.spawn(request, worker=None)
+        events_before = log.read_events()
+        snapshot_before = store.load_transactional_state(
+            CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+            "run-1",
+        )
+        capacity_before = accepted.available_capacity
+
+        foreign_parent = replace(
+            accepted_handle.parent_graph_identity,
+            node_id="foreign-node",
+            node_instance_id="foreign-node-1",
+            activity_id="foreign-activity",
+        )
+        foreign_handle = forger.spawn(
+            _request(
+                child_id=accepted_handle.child_id,
+                operation_id=accepted_handle.operation_id,
+                parent_graph_identity=foreign_parent,
+                child_graph_identity=accepted_handle.child_graph_identity,
+                lease_seconds=60,
+            ),
+            worker=None,
+        )
+        forger.complete(
+            foreign_handle.child_id,
+            operation_id=foreign_handle.operation_id,
+            output={"candidate": "forged"},
+        )
+        forged_terminal = next(
+            event
+            for event in forged_events
+            if event["event_type"] == "child_terminal"
+        )
+
+        with pytest.raises(ChildAgentOperationConflict) as exc_info:
+            log.record(forged_terminal)
+
+        assert exc_info.value.code == "child_lifecycle_conflict"
+        assert log.read_events() == events_before
+        assert store.load_transactional_state(
+            CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+            "run-1",
+        ) == snapshot_before
+        assert accepted.available_capacity == capacity_before
+        assert worker_calls == []
+    finally:
+        accepted.shutdown()
+        forger.shutdown()
+
+
+def test_durable_child_log_rejects_cancelled_terminal_without_cancel_request(
+    tmp_path,
+) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    store = SQLiteEventStore(database, initialize=False)
+    runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
+    log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    log.acquire_owner("owner")
+    log.register_run_scope("run-1", "tenant-1")
+    fixed_now = datetime(2026, 9, 29, 9, 15, tzinfo=UTC)
+    accepted = ChildAgentSupervisor(
+        event_sink=log,
+        event_reader=log,
+        clock=lambda: fixed_now,
+        max_children=1,
+    )
+    source_events: list[dict[str, object]] = []
+    source = ChildAgentSupervisor(
+        event_sink=source_events.append,
+        clock=lambda: fixed_now,
+        max_children=1,
+    )
+    try:
+        request = _request(
+            child_id="cancel-child",
+            operation_id="cancel-operation",
+            lease_seconds=60,
+        )
+        accepted.spawn(request, worker=None)
+        source_handle = source.spawn(request, worker=None)
+        cancelled = source.cancel(
+            source_handle.child_id,
+            operation_id=source_handle.operation_id,
+        )
+        assert cancelled.receipt is not None
+        assert cancelled.receipt.status is ChildAgentState.CANCELLED
+        terminal = next(
+            event
+            for event in source_events
+            if event["event_type"] == "child_terminal"
+        )
+        events_before = log.read_events()
+        snapshot_before = store.load_transactional_state(
+            CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+            "run-1",
+        )
+        capacity_before = accepted.available_capacity
+
+        with pytest.raises(ChildAgentOperationConflict) as exc_info:
+            log.record(terminal)
+
+        assert exc_info.value.code == "child_lifecycle_conflict"
+        assert log.read_events() == events_before
+        assert store.load_transactional_state(
+            CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+            "run-1",
+        ) == snapshot_before
+        assert accepted.available_capacity == capacity_before
+    finally:
+        accepted.shutdown()
+        source.shutdown()
+
+
+def test_durable_child_log_reopens_markerless_v2_history(tmp_path) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    source_events: list[dict[str, object]] = []
+    fixed_now = datetime(2026, 9, 29, 9, 30, tzinfo=UTC)
+    source = ChildAgentSupervisor(
+        event_sink=source_events.append,
+        clock=lambda: fixed_now,
+    )
+    try:
+        handle = source.spawn(
+            _request(
+                child_id="legacy-child",
+                operation_id="legacy-operation",
+                lease_seconds=60,
+            ),
+            worker=None,
+        )
+        expected = source.complete(
+            handle.child_id,
+            operation_id=handle.operation_id,
+            output={"candidate": "legacy"},
+        )
+    finally:
+        source.shutdown()
+    markerless_events = [
+        {
+            key: value
+            for key, value in event.items()
+            if key not in {"handle_contract", "handle_schema_version", "handle_checksum"}
+        }
+        for event in source_events
+    ]
+
+    store = SQLiteEventStore(database, initialize=False)
+    runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
+    log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    log.acquire_owner("first")
+    log.register_run_scope("run-1", "tenant-1")
+    for event in markerless_events:
+        log.record(event)
+    log.release_owner()
+
+    reopened_store = SQLiteEventStore(database, initialize=False)
+    reopened_runtime = EventRuntime(
+        store=reopened_store,
+        schema_catalog=EventSchemaCatalog(),
+        backend="sqlite",
+    )
+    reopened_log = DurableChildAgentEventLog(
+        state_runtime=reopened_runtime,
+        state_reader=reopened_store,
+        state_key="run-1",
+    )
+    reopened_log.acquire_owner("restored")
+    restored = ChildAgentSupervisor(
+        event_sink=reopened_log,
+        event_reader=reopened_log,
+        clock=lambda: fixed_now,
+    )
+    try:
+        recovered = restored.recover()
+        result = restored.wait(
+            recovered[0].child_id,
+            operation_id=recovered[0].operation_id,
+        )
+
+        assert len(reopened_log.read_events()) == len(markerless_events)
+        assert result.receipt == expected.receipt
+        assert result.result == {"candidate": "legacy"}
+    finally:
+        restored.shutdown()
+
+
 def test_sqlite_restart_preserves_cancellation_uncertainty_and_blocks_replacement(tmp_path) -> None:
     database = _sqlite_lifecycle(tmp_path)
     store = SQLiteEventStore(database, initialize=False)

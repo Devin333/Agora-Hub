@@ -1233,32 +1233,11 @@ class ChildAgentSupervisor:
                 )
                 for event in facts:
                     try:
-                        event_handle = _event_handle_contract(event)
-                        if admission_has_contract and event_handle is None:
-                            raise ValueError(
-                                "versioned child history event is missing handle contract"
-                            )
-                        if event_handle is not None:
-                            for field_name in (
-                                "child_id",
-                                "operation_id",
-                                "parent_graph_identity",
-                                "child_graph_identity",
-                                "stage_id",
-                                "task_id",
-                                "task_instance_id",
-                                "attempt",
-                                "allowed_tools",
-                                "allowed_memory_namespaces",
-                                "budget",
-                                "transcript_ref",
-                            ):
-                                if getattr(event_handle, field_name) != getattr(admission_handle, field_name):
-                                    raise ValueError(
-                                        f"child event handle contract {field_name} drifted"
-                                    )
-                            if event_handle.created_at != admission_handle.created_at:
-                                raise ValueError("child event handle contract created_at drifted")
+                        _validate_event_admission_binding(
+                            event,
+                            admission_handle,
+                            admission_has_contract=admission_has_contract,
+                        )
                     except (TypeError, ValueError, KeyError, AttributeError):
                         recovery_corrupt = True
                         continue
@@ -1287,34 +1266,6 @@ class ChildAgentSupervisor:
                         if event.get("event_id") != expected_event_id:
                             recovery_corrupt = True
                         occurred_at = _event_time(event)
-                    except (TypeError, ValueError):
-                        recovery_corrupt = True
-                        continue
-                    try:
-                        for field_name, expected_value in (
-                            ("stage_id", handle.stage_id),
-                            ("task_id", handle.task_id),
-                            ("task_instance_id", handle.task_instance_id),
-                            ("attempt", handle.attempt),
-                            ("budget", dict(handle.budget)),
-                            ("allowed_tools", list(handle.allowed_tools)),
-                            ("allowed_memory_namespaces", list(handle.allowed_memory_namespaces)),
-                            ("transcript_ref", handle.transcript_ref),
-                        ):
-                            if event.get(field_name) != expected_value:
-                                recovery_corrupt = True
-                        if (
-                            event.get("operation_id") != handle.operation_id
-                            or _identity(event.get("parent_graph_identity"), "parent_graph_identity")
-                            != handle.parent_graph_identity
-                            or (
-                                event.get("child_graph_identity") is not None
-                                and _identity(event.get("child_graph_identity"), "child_graph_identity")
-                                != handle.child_graph_identity
-                            )
-                        ):
-                            recovery_corrupt = True
-                            continue
                     except (TypeError, ValueError):
                         recovery_corrupt = True
                         continue
@@ -2051,6 +2002,74 @@ def _event_handle_contract(event: Mapping[str, Any]) -> ChildAgentHandle | None:
         if event.get(field_name) != expected_value:
             raise ValueError(f"child event field {field_name} disagrees with handle contract")
     return handle
+
+
+_CHILD_ADMISSION_FIELDS = (
+    "child_id",
+    "operation_id",
+    "parent_graph_identity",
+    "child_graph_identity",
+    "stage_id",
+    "task_id",
+    "task_instance_id",
+    "attempt",
+    "allowed_tools",
+    "allowed_memory_namespaces",
+    "budget",
+    "transcript_ref",
+)
+
+
+def _validate_event_admission_binding(
+    event: Mapping[str, Any],
+    admission_handle: ChildAgentHandle,
+    *,
+    admission_has_contract: bool,
+) -> None:
+    """Bind one lifecycle event to the original admitted child handle."""
+
+    event_handle = _event_handle_contract(event)
+    if admission_has_contract and event_handle is None:
+        raise ValueError("versioned child history event is missing handle contract")
+    if event_handle is not None:
+        for field_name in _CHILD_ADMISSION_FIELDS:
+            if getattr(event_handle, field_name) != getattr(admission_handle, field_name):
+                raise ValueError(
+                    f"child event handle contract {field_name} drifted"
+                )
+        if event_handle.created_at != admission_handle.created_at:
+            raise ValueError("child event handle contract created_at drifted")
+
+    expected_outer = (
+        ("child_id", admission_handle.child_id),
+        ("operation_id", admission_handle.operation_id),
+        ("stage_id", admission_handle.stage_id),
+        ("task_id", admission_handle.task_id),
+        ("task_instance_id", admission_handle.task_instance_id),
+        ("attempt", admission_handle.attempt),
+        ("budget", dict(admission_handle.budget)),
+        ("allowed_tools", list(admission_handle.allowed_tools)),
+        (
+            "allowed_memory_namespaces",
+            list(admission_handle.allowed_memory_namespaces),
+        ),
+        ("transcript_ref", admission_handle.transcript_ref),
+    )
+    for field_name, expected_value in expected_outer:
+        if event.get(field_name) != expected_value:
+            raise ValueError(f"child event field {field_name} drifted from admission")
+    if (
+        _identity(event.get("parent_graph_identity"), "parent_graph_identity")
+        != admission_handle.parent_graph_identity
+    ):
+        raise ValueError("child event parent Graph identity drifted from admission")
+    child_identity = event.get("child_graph_identity")
+    if (
+        child_identity is not None
+        and _identity(child_identity, "child_graph_identity")
+        != admission_handle.child_graph_identity
+    ):
+        raise ValueError("child event child Graph identity drifted from admission")
 
 
 def _handle_from_event(event: Mapping[str, Any]) -> ChildAgentHandle:

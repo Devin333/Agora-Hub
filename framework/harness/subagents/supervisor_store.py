@@ -19,9 +19,12 @@ from framework.events import (
     thaw_canonical_json,
 )
 from framework.harness.subagents.supervisor import (
+    ChildAgentState,
     ChildAgentTerminalReceipt,
     ChildAgentOperationConflict,
     ChildAgentSupervisorError,
+    _handle_from_event,
+    _validate_event_admission_binding,
 )
 from framework.shared.json import stable_json_dumps
 
@@ -675,8 +678,17 @@ def _lifecycle_reservations(events: list[dict[str, Any]]) -> dict[str, int]:
         if kind == "child_spawned":
             if operation_id in progress:
                 raise ValueError("child operation has multiple admissions")
+            admission_handle = _handle_from_event(event)
             progress[operation_id] = {
                 "child_id": child_id,
+                "admission_handle": admission_handle,
+                "admission_has_contract": bool(
+                    {
+                        "handle_contract",
+                        "handle_schema_version",
+                        "handle_checksum",
+                    }.intersection(event)
+                ),
                 "remaining": _RESERVED_EVENTS_PER_CHILD,
                 "cancel_requested": False,
                 "terminal": False,
@@ -686,6 +698,11 @@ def _lifecycle_reservations(events: list[dict[str, Any]]) -> dict[str, int]:
         current = progress.get(operation_id)
         if current is None or current["child_id"] != child_id:
             raise ValueError("child lifecycle event lacks its own admission")
+        _validate_event_admission_binding(
+            event,
+            current["admission_handle"],
+            admission_has_contract=current["admission_has_contract"],
+        )
         if current["closed"] or (current["terminal"] and kind != "child_closed"):
             raise ValueError("child lifecycle event follows a terminal transition")
         if kind == "child_cancel_requested":
@@ -694,6 +711,13 @@ def _lifecycle_reservations(events: list[dict[str, Any]]) -> dict[str, int]:
             current["cancel_requested"] = True
             current["remaining"] -= 1
         elif kind == "child_terminal":
+            if (
+                ChildAgentState(event.get("state")) is ChildAgentState.CANCELLED
+                and not current["cancel_requested"]
+            ):
+                raise ValueError(
+                    "cancelled child terminal lacks a durable cancellation request"
+                )
             current["terminal"] = True
             current["remaining"] = 1
         elif kind == "child_closed":
