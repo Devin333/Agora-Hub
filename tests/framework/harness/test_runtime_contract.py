@@ -5,7 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from framework.events import ENVELOPE_SCHEMA_V2
+from framework.events import (
+    ENVELOPE_SCHEMA_V2,
+    EventRuntime,
+    EventSchemaCatalog,
+    TransactionalStateSnapshot,
+    thaw_canonical_json,
+)
 from framework.events.runtime import RUNTIME_EVENT_SCHEMA_V1
 from framework.governance.budget import BUDGET_EVENT_SCHEMA_VERSION, BUDGET_SCHEMA_VERSION
 from framework.execution_environment import EXECUTION_PROFILE_SCHEMA, ExecutionProfile
@@ -23,7 +29,15 @@ from framework.harness.side_effects import (
     SIDE_EFFECT_INTENT_SCHEMA_VERSION,
     SIDE_EFFECT_OUTCOME_SCHEMA_VERSION,
 )
-from framework.harness.subagents.supervisor import ChildAgentHandle
+from framework.harness.subagents.supervisor import (
+    ChildAgentHandle,
+    ChildAgentSupervisorError,
+)
+from framework.harness.subagents.supervisor_store import (
+    CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+    CHILD_AGENT_LIFECYCLE_STATE_SCHEMA,
+    DurableChildAgentEventLog,
+)
 from framework.harness.subagents.transcript import (
     SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
     SUBAGENT_CONTEXT_SCHEMA_V3,
@@ -43,6 +57,7 @@ from framework.tool.models.result_envelope import (
     TOOL_RESULT_ENVELOPE_SCHEMA,
     TOOL_SIDE_EFFECT_RECEIPT_SCHEMA,
 )
+from infrastructure.storage.events.sqlite import SQLiteEventStore
 from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _accepted_parallel_plan,
     _request,
@@ -55,6 +70,8 @@ def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
     assert binding.owners["execution_profile"] == EXECUTION_PROFILE_SCHEMA
     assert binding.owners["validated_task_plan"] == _accepted_parallel_plan().schema_version
     assert binding.owners["child_agent_handle"] == ChildAgentHandle.CONTRACT_SCHEMA_VERSION
+    assert binding.owners["child_lifecycle_state"] == CHILD_AGENT_LIFECYCLE_STATE_SCHEMA
+    assert "child_agent_terminal_receipt" not in binding.owners
     assert binding.owners["event_envelope"] == ENVELOPE_SCHEMA_V2
     assert binding.owners["runtime_event_data"] == RUNTIME_EVENT_SCHEMA_V1
     assert binding.owners["budget_policy"] == BUDGET_SCHEMA_VERSION
@@ -76,6 +93,46 @@ def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
     assert binding.owners["tool_side_effect_evidence"] == TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA
     with pytest.raises(TypeError):
         binding.owners["execution_profile"] = "newsroom.invalid/v1"  # type: ignore[index]
+
+
+def test_child_lifecycle_reader_rejects_snapshot_from_another_schema(tmp_path) -> None:
+    database = tmp_path / "runtime-contract-child-lifecycle.sqlite3"
+    store = SQLiteEventStore(database)
+    runtime = EventRuntime(
+        store=store,
+        schema_catalog=EventSchemaCatalog(),
+        backend="sqlite",
+    )
+    state_key = "binding-test"
+    log = DurableChildAgentEventLog(
+        state_runtime=runtime,
+        state_reader=store,
+        state_key=state_key,
+    )
+    log.acquire_owner("owner-1")
+    snapshot = store.load_transactional_state(
+        CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+        state_key,
+    )
+    assert snapshot is not None
+    payload = thaw_canonical_json(snapshot.payload)
+    payload["schema_version"] = "newsroom.harness-child-lifecycle-state/v999"
+    corrupt = TransactionalStateSnapshot.create(
+        namespace=snapshot.namespace,
+        key=snapshot.key,
+        revision=snapshot.revision + 1,
+        payload=payload,
+    )
+    runtime.compare_and_swap_transactional_state(
+        corrupt,
+        expected_revision=snapshot.revision,
+        expected_checksum=snapshot.checksum,
+    )
+
+    with pytest.raises(ChildAgentSupervisorError) as exc_info:
+        log.read_events()
+
+    assert exc_info.value.code == "child_event_store_corrupt"
 
 
 @pytest.mark.parametrize(

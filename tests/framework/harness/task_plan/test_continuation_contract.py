@@ -8,6 +8,7 @@ from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.continuation import (
     PARENT_CONTINUATION_EVENT,
     ParentContinuation,
+    continuation_from_event,
     validate_parent_continuation_append,
 )
 
@@ -27,13 +28,35 @@ def _continuation(**changes: object) -> ParentContinuation:
 
 
 def _event(value: ParentContinuation) -> dict[str, object]:
-    return {"event_type": PARENT_CONTINUATION_EVENT, "payload": {"continuation": value.to_dict()}}
+    return {
+        "event_type": PARENT_CONTINUATION_EVENT,
+        "run_id": value.run_id,
+        "stage_id": value.stage_id,
+        "payload": {"continuation": value.to_dict()},
+    }
 
 
 def test_continuation_checksum_roundtrip_and_identity() -> None:
     value = _continuation()
     assert ParentContinuation.from_dict(value.to_dict()) == value
     assert value.identity_key() == ("run-1", "stage-1", "observation-1", 1)
+
+
+@pytest.mark.parametrize(
+    ("event_field", "event_value"),
+    (("run_id", "run-2"), ("stage_id", "stage-2")),
+)
+def test_continuation_event_scope_must_match_checksum_valid_payload(
+    event_field: str,
+    event_value: str,
+) -> None:
+    event = _event(_continuation())
+    event[event_field] = event_value
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        continuation_from_event(event)
+
+    assert exc_info.value.code == "parent_continuation_scope_mismatch"
 
 
 def test_identical_redelivery_is_idempotent() -> None:

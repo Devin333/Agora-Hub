@@ -26,7 +26,7 @@ from framework.shared.json import stable_json_dumps
 
 
 CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE = "newsroom.harness-child-lifecycle/v1"
-_STATE_SCHEMA = "newsroom.harness-child-lifecycle-state/v2"
+CHILD_AGENT_LIFECYCLE_STATE_SCHEMA = "newsroom.harness-child-lifecycle-state/v2"
 _MAX_CAS_RETRIES = 16
 _RESERVED_EVENTS_PER_CHILD = 3
 
@@ -463,7 +463,7 @@ class DurableChildAgentEventLog:
                 "terminal_reservations": {},
             }
         payload = thaw_canonical_json(snapshot.payload)
-        if payload.get("schema_version") != _STATE_SCHEMA:
+        if payload.get("schema_version") != CHILD_AGENT_LIFECYCLE_STATE_SCHEMA:
             raise ChildAgentSupervisorError(
                 "child lifecycle durable state schema is unsupported",
                 code="child_event_store_corrupt",
@@ -617,7 +617,7 @@ class DurableChildAgentEventLog:
         events = list(state["events"])
         owner = state["owner"]
         return {
-            "schema_version": _STATE_SCHEMA,
+            "schema_version": CHILD_AGENT_LIFECYCLE_STATE_SCHEMA,
             "owner": None if owner is None else owner.to_dict(),
             "generation": state["generation"],
             "run_scopes": dict(state["run_scopes"]),
@@ -728,6 +728,7 @@ def _history_checksum(events: object) -> str:
 
 
 __all__ = [
+    "CHILD_AGENT_LIFECYCLE_STATE_SCHEMA",
     "CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE",
     "ChildLifecycleOwnerToken",
     "DurableChildAgentEventLog",

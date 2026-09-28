@@ -56,6 +56,9 @@ class RuntimeContractBinding:
         )
         from framework.harness.subagents.models import SUBAGENT_INVOCATION_SCHEMA_V3
         from framework.harness.subagents.supervisor import CHILD_AGENT_HANDLE_SCHEMA_VERSION
+        from framework.harness.subagents.supervisor_store import (
+            CHILD_AGENT_LIFECYCLE_STATE_SCHEMA,
+        )
         from framework.harness.subagents.transcript import (
             SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
             SUBAGENT_BUNDLE_SCHEMA_V3,
@@ -109,6 +112,7 @@ class RuntimeContractBinding:
             "subagent_invocation": SUBAGENT_INVOCATION_SCHEMA_V3,
             "subagent_attempt_identity": SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
             "child_agent_handle": CHILD_AGENT_HANDLE_SCHEMA_VERSION,
+            "child_lifecycle_state": CHILD_AGENT_LIFECYCLE_STATE_SCHEMA,
             "subagent_context": SUBAGENT_CONTEXT_SCHEMA_V3,
             "subagent_output": SUBAGENT_OUTPUT_SCHEMA_V3,
             "subagent_transcript": SUBAGENT_TRANSCRIPT_SCHEMA_V3,

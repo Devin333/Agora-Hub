@@ -15,6 +15,10 @@ from framework.harness.task_plan.capacity import (
     TaskCapacityDemand,
     pack_first_fit,
 )
+from framework.harness.task_plan.continuation import (
+    PARENT_CONTINUATION_EVENT,
+    ParentContinuation,
+)
 from framework.harness.task_plan.attempt_history import (
     TaskAttemptHistoryRecord,
     TaskAttemptOutcome,
@@ -255,6 +259,105 @@ def test_direct_append_cannot_bypass_single_active_wave(admitted):
     with pytest.raises(HarnessValidationError, match="active wave"):
         store.append_event(admission)
     assert store.load_projection(plan.run_id, plan.stage_id) == current
+
+
+@pytest.mark.parametrize(
+    "scope_change",
+    ({"run_id": "another-run"}, {"stage_id": "another-stage"}),
+)
+def test_continuation_scope_drift_is_rejected_before_cas_side_effects(
+    admitted,
+    scope_change,
+):
+    store, plan, group = admitted
+    current = store.load_projection(plan.run_id, plan.stage_id)
+    history = store.read_events(plan.run_id, plan.stage_id)
+    continuation = ParentContinuation(
+        run_id=scope_change.get("run_id", plan.run_id),
+        stage_id=scope_change.get("stage_id", plan.stage_id),
+        parent_turn_id="parent-turn-1",
+        observation_id="observation-1",
+        observation_version=1,
+        group_id=group.group_id,
+        observation_checksum="sha256:" + "a" * 64,
+        status="PENDING",
+        group_state=group.state.value,
+    )
+    event = _parallel_event(
+        plan,
+        PARENT_CONTINUATION_EVENT,
+        current.last_sequence + 1,
+        {"continuation": continuation.to_dict()},
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        store.commit_event(event, replace(current, last_sequence=event.sequence))
+
+    assert exc_info.value.code == "parent_continuation_scope_mismatch"
+    assert store.read_events(plan.run_id, plan.stage_id) == history
+    assert store.load_projection(plan.run_id, plan.stage_id) == current
+    replay = TaskPlanReplayReducer().replay(
+        (plan,),
+        history,
+        require_terminal_events=False,
+    )
+    assert replay.continuation is None
+
+
+@pytest.mark.parametrize(
+    "scope_change",
+    ({"run_id": "another-run"}, {"stage_id": "another-stage"}),
+)
+def test_sqlite_continuation_scope_drift_is_rejected_before_durable_cas(
+    tmp_path,
+    scope_change,
+):
+    store, events, artifacts, plan, group, _initial, admission, admitted = (
+        _durable_admission_setup(tmp_path, backend="sqlite")
+    )
+    store.commit_event(admission, admitted)
+    history = store.read_events(plan.run_id, plan.stage_id)
+    current = store.load_projection(plan.run_id, plan.stage_id)
+    high_watermark = events.get_stream_high_watermark(f"run:{plan.run_id}")
+    immutable_artifacts = dict(artifacts._content)
+    before_report = TaskPlanReplayReducer().replay(
+        (plan,),
+        history,
+        require_terminal_events=False,
+    )
+    continuation = ParentContinuation(
+        run_id=scope_change.get("run_id", plan.run_id),
+        stage_id=scope_change.get("stage_id", plan.stage_id),
+        parent_turn_id="parent-turn-1",
+        observation_id="observation-1",
+        observation_version=1,
+        group_id=group.group_id,
+        observation_checksum="sha256:" + "a" * 64,
+        status="PENDING",
+        group_state=group.state.value,
+    )
+    event = _parallel_event(
+        plan,
+        PARENT_CONTINUATION_EVENT,
+        current.last_sequence + 1,
+        {"continuation": continuation.to_dict()},
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        store.commit_event(event, replace(current, last_sequence=event.sequence))
+
+    assert exc_info.value.code == "parent_continuation_scope_mismatch"
+    assert events.get_stream_high_watermark(f"run:{plan.run_id}") == high_watermark
+    assert store.read_events(plan.run_id, plan.stage_id) == history
+    assert store.load_projection(plan.run_id, plan.stage_id) == current
+    assert artifacts._content == immutable_artifacts
+    after_report = TaskPlanReplayReducer().replay(
+        (plan,),
+        history,
+        require_terminal_events=False,
+    )
+    assert before_report.continuation is None
+    assert after_report.continuation == before_report.continuation
 
 
 @pytest.mark.parametrize("writer", ("commit", "append", "batch"))

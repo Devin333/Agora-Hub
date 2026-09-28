@@ -132,9 +132,13 @@ class ParentContinuation:
 def continuation_from_event(event: Any) -> ParentContinuation:
     """Decode a continuation event from TaskPlanEvent or a plain event mapping."""
     event_type = getattr(event, "event_type", None)
+    event_run_id = getattr(event, "run_id", None)
+    event_stage_id = getattr(event, "stage_id", None)
     payload = getattr(event, "payload", None)
     if isinstance(event, Mapping):
         event_type = event.get("event_type")
+        event_run_id = event.get("run_id")
+        event_stage_id = event.get("stage_id")
         payload = event.get("payload", event)
     if event_type != PARENT_CONTINUATION_EVENT or not isinstance(payload, Mapping):
         raise HarnessValidationError(
@@ -147,7 +151,22 @@ def continuation_from_event(event: Any) -> ParentContinuation:
             "parent continuation event payload is invalid",
             code="parent_continuation_event_invalid",
         )
-    return ParentContinuation.from_dict(raw)
+    continuation = ParentContinuation.from_dict(raw)
+    if (
+        event_run_id != continuation.run_id
+        or event_stage_id != continuation.stage_id
+    ):
+        raise HarnessValidationError(
+            "parent continuation does not match its event scope",
+            code="parent_continuation_scope_mismatch",
+            details={
+                "event_run_id": event_run_id,
+                "event_stage_id": event_stage_id,
+                "continuation_run_id": continuation.run_id,
+                "continuation_stage_id": continuation.stage_id,
+            },
+        )
+    return continuation
 
 
 def validate_continuation_projection(

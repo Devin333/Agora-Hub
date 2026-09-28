@@ -60,10 +60,19 @@ def _admitted_history():
     return store, plan, group, tuple(store.read_events(plan.run_id, plan.stage_id))
 
 
-def _continuation_event(plan, group, sequence: int, *, version: int = 1, group_id: str | None = None):
+def _continuation_event(
+    plan,
+    group,
+    sequence: int,
+    *,
+    version: int = 1,
+    group_id: str | None = None,
+    run_id: str | None = None,
+    stage_id: str | None = None,
+):
     continuation = ParentContinuation(
-        run_id=plan.run_id,
-        stage_id=plan.stage_id,
+        run_id=run_id or plan.run_id,
+        stage_id=stage_id or plan.stage_id,
         parent_turn_id="parent-turn-1",
         observation_id="observation-1",
         observation_version=version,
@@ -129,6 +138,31 @@ def test_replay_rejects_pending_continuation_for_unknown_group() -> None:
         TaskPlanReplayReducer().replay(
             (plan,),
             (*history, unknown),
+            require_terminal_events=False,
+        )
+
+    assert exc_info.value.code == "parent_continuation_scope_mismatch"
+
+
+@pytest.mark.parametrize(
+    "scope_change",
+    ({"run_id": "another-run"}, {"stage_id": "another-stage"}),
+)
+def test_replay_rejects_checksum_valid_continuation_outside_event_scope(
+    scope_change: dict[str, str],
+) -> None:
+    _store, plan, group, history = _admitted_history()
+    forged = _continuation_event(
+        plan,
+        group,
+        len(history) + 1,
+        **scope_change,
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        TaskPlanReplayReducer().replay(
+            (plan,),
+            (*history, forged),
             require_terminal_events=False,
         )
 
