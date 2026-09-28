@@ -19,6 +19,7 @@ from framework.events import (
     thaw_canonical_json,
 )
 from framework.harness.subagents.supervisor import (
+    ChildAgentTerminalReceipt,
     ChildAgentOperationConflict,
     ChildAgentSupervisorError,
 )
@@ -716,6 +717,31 @@ def _event(value: Mapping[str, Any]) -> dict[str, Any]:
     event_id = item.get("event_id")
     if not isinstance(event_id, str) or not event_id.strip():
         raise ValueError("child lifecycle event_id is required")
+    if item.get("event_type") == "child_terminal":
+        metadata = item.get("metadata")
+        if metadata is not None and not isinstance(metadata, Mapping):
+            raise ValueError("child terminal metadata must be an object")
+        metadata_receipt = (
+            metadata.get("terminal_receipt")
+            if isinstance(metadata, Mapping)
+            else None
+        )
+        event_receipt = item.get("terminal_receipt")
+        if event_receipt is None:
+            event_receipt = metadata_receipt
+        elif metadata_receipt is not None and event_receipt != metadata_receipt:
+            raise ValueError("child terminal receipt copies conflict")
+        if not isinstance(event_receipt, Mapping):
+            raise ValueError("child terminal event requires a receipt")
+        receipt = ChildAgentTerminalReceipt.from_dict(event_receipt)
+        if (
+            receipt.child_id != item.get("child_id")
+            or receipt.operation_id != item.get("operation_id")
+            or receipt.parent_graph_identity.to_dict()
+            != item.get("parent_graph_identity")
+            or receipt.status.value != item.get("state")
+        ):
+            raise ValueError("child terminal receipt identity conflicts with lifecycle event")
     stable_json_dumps(item)
     return dict(item)
 

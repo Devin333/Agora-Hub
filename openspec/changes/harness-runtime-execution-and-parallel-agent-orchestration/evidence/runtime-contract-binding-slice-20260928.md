@@ -92,3 +92,13 @@ continuation remain sourced from their existing owners.
   required pre-commit smoke over the combined worktree.
 
 Integrating pre-commit smoke on the combined worktree passed: 3744 passed, 23 deselected; AgentLoop offline run and source validation succeeded. This does not close the unmet cross-boundary acceptance requirements above.
+
+## Subsequent receipt owner reconciliation
+
+The receipt findings and 1.2/1.3 qualification status above describe this
+historical slice, not a permanent constraint. The later
+`runtime-receipt-owner-reconciliation-20260928.md` records
+`ExecutionReceipt` v1, its exact owner reader and provider registry acceptance,
+plus the consolidated child terminal receipt reader. Consult that later record
+and current `tasks.md` for the latest task status; task 1.3's complete runtime
+invariant matrix remains a separate acceptance decision.

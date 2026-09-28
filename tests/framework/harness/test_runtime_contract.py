@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,14 @@ from framework.events import (
 )
 from framework.events.runtime import RUNTIME_EVENT_SCHEMA_V1
 from framework.governance.budget import BUDGET_EVENT_SCHEMA_VERSION, BUDGET_SCHEMA_VERSION
-from framework.execution_environment import EXECUTION_PROFILE_SCHEMA, ExecutionProfile
+from framework.execution_environment import (
+    EXECUTION_PROFILE_SCHEMA,
+    EXECUTION_RECEIPT_SCHEMA,
+    ExecutionProfile,
+    ExecutionReceipt,
+    ExecutionRequest,
+    ExecutionStatus,
+)
 from framework.harness.artifacts import (
     GRAPH_TERMINAL_MANIFEST_SCHEMA,
     GRAPH_TERMINAL_MANIFEST_V2_SCHEMA,
@@ -31,7 +39,11 @@ from framework.harness.side_effects import (
 )
 from framework.harness.subagents.supervisor import (
     ChildAgentHandle,
+    ChildAgentSpawnRequest,
+    ChildAgentState,
+    ChildAgentSupervisor,
     ChildAgentSupervisorError,
+    ChildAgentTerminalReceipt,
 )
 from framework.harness.subagents.supervisor_store import (
     CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
@@ -53,6 +65,7 @@ from framework.harness.runtime_contract import (
 from framework.harness.task_plan.parallel import PARENT_OBSERVATION_SCHEMA, ParallelAgentCoordinator
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.store import TASK_PLAN_RESULT_SCHEMA_V3, TaskPlanEvent, TaskResultRecord
+from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool.models.result_envelope import (
     TOOL_RESULT_ENVELOPE_SCHEMA,
     TOOL_SIDE_EFFECT_RECEIPT_SCHEMA,
@@ -67,11 +80,14 @@ from tests.framework.harness.task_plan.test_parallel_orchestration import (
 def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
     binding = runtime_contract_binding()
     assert binding.schema_version == HARNESS_RUNTIME_CONTRACT_VERSION
+    assert binding.schema_version == "newsroom.harness-runtime-contract/v2"
     assert binding.owners["execution_profile"] == EXECUTION_PROFILE_SCHEMA
     assert binding.owners["validated_task_plan"] == _accepted_parallel_plan().schema_version
     assert binding.owners["child_agent_handle"] == ChildAgentHandle.CONTRACT_SCHEMA_VERSION
     assert binding.owners["child_lifecycle_state"] == CHILD_AGENT_LIFECYCLE_STATE_SCHEMA
     assert "child_agent_terminal_receipt" not in binding.owners
+    assert binding.projection_owners["child_agent_terminal_receipt"] == "child_lifecycle_state"
+    assert binding.owners["execution_receipt"] == EXECUTION_RECEIPT_SCHEMA
     assert binding.owners["event_envelope"] == ENVELOPE_SCHEMA_V2
     assert binding.owners["runtime_event_data"] == RUNTIME_EVENT_SCHEMA_V1
     assert binding.owners["budget_policy"] == BUDGET_SCHEMA_VERSION
@@ -93,6 +109,8 @@ def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
     assert binding.owners["tool_side_effect_evidence"] == TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA
     with pytest.raises(TypeError):
         binding.owners["execution_profile"] = "newsroom.invalid/v1"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        binding.projection_owners["child_agent_terminal_receipt"] = "invalid"  # type: ignore[index]
 
 
 def test_child_lifecycle_reader_rejects_snapshot_from_another_schema(tmp_path) -> None:
@@ -164,6 +182,129 @@ def test_execution_profile_requires_the_versioned_contract() -> None:
         ExecutionProfile.from_dict({key: value for key, value in profile.to_dict().items() if key != "schema_version"})
     with pytest.raises(ValueError, match="schema_version"):
         ExecutionProfile.from_dict({**profile.to_dict(), "schema_version": "newsroom.execution-profile/v2"})
+
+
+def _receipt_identity() -> GraphExecutionIdentity:
+    return GraphExecutionIdentity(
+        run_id="receipt-run",
+        graph_id="receipt-graph",
+        graph_version="1.0.0",
+        graph_ref="receipt-graph@1.0.0",
+        graph_checksum="sha256:" + "a" * 64,
+        node_id="receipt-node",
+        node_instance_id="receipt-node-1",
+        activity_id="receipt-activity",
+        attempt=1,
+    )
+
+
+def _execution_receipt() -> ExecutionReceipt:
+    profile = ExecutionProfile.sandboxed_process(
+        provider_id="receipt-provider",
+        allowed_argv_prefixes=(("python",),),
+        require_filesystem_isolation=False,
+        require_resource_limits=False,
+    )
+    request = ExecutionRequest(
+        execution_id="receipt-execution",
+        tool_id="tool.receipt@1.0.0",
+        graph_identity=_receipt_identity(),
+        operation_id="receipt-operation",
+        attempt_id="receipt-attempt",
+        profile=profile,
+        image="python:3.12",
+        argv=("python", "-c", "print(1)"),
+    )
+    completed_at = datetime(2026, 9, 29, 8, 0, tzinfo=UTC)
+    receipt = ExecutionReceipt(
+        execution_id=request.execution_id,
+        tool_id=request.tool_id,
+        graph_identity=request.graph_identity,
+        operation_id=request.operation_id,
+        attempt_id=request.attempt_id,
+        provider_id="receipt-provider",
+        provider_capability_checksum="sha256:" + "b" * 64,
+        status=ExecutionStatus.SUCCEEDED,
+        started_at=completed_at,
+        finished_at=completed_at,
+        termination_confirmed=True,
+        reason_code="process_exit",
+        exit_code=0,
+    )
+    return receipt
+
+
+def _child_terminal_receipt() -> ChildAgentTerminalReceipt:
+    supervisor = ChildAgentSupervisor()
+    handle = supervisor.spawn(
+        ChildAgentSpawnRequest(
+            parent_graph_identity=_receipt_identity(),
+            stage_id="receipt-stage",
+            task_id="receipt-task",
+            task_instance_id="receipt-task-1",
+            attempt=1,
+            allowed_tools=("tool.read",),
+            allowed_memory_namespaces=("research",),
+            budget={"turns": 1},
+            operation_id="receipt-child-operation",
+        )
+    )
+    receipt = ChildAgentTerminalReceipt(
+        child_id=handle.child_id,
+        operation_id=handle.operation_id,
+        parent_graph_identity=handle.parent_graph_identity,
+        status=ChildAgentState.SUCCEEDED,
+        reason_code="worker_completed",
+        result_ref="result://receipt-child",
+        result_checksum="sha256:" + "c" * 64,
+        termination_confirmed=True,
+        completed_at=datetime(2026, 9, 29, 8, 1, tzinfo=UTC),
+    )
+    return receipt
+
+
+def test_execution_receipt_reader_accepts_canonical_receipt() -> None:
+    receipt = _execution_receipt()
+
+    assert ExecutionReceipt.from_dict(receipt.to_dict()) == receipt
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown", "schema", "checksum"])
+def test_execution_receipt_reader_rejects_noncanonical_payload(mutation: str) -> None:
+    receipt = _execution_receipt()
+    payload = receipt.to_dict()
+    if mutation == "missing":
+        payload.pop("operation_id")
+    elif mutation == "unknown":
+        payload["unexpected"] = True
+    elif mutation == "schema":
+        payload["schema_version"] = "newsroom.execution-receipt/v999"
+    else:
+        payload["receipt_checksum"] = "sha256:" + "f" * 64
+
+    with pytest.raises(ValueError):
+        ExecutionReceipt.from_dict(payload)
+
+
+def test_child_terminal_receipt_reader_accepts_nested_projection() -> None:
+    receipt = _child_terminal_receipt()
+
+    assert ChildAgentTerminalReceipt.from_dict(receipt.to_dict()) == receipt
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown", "checksum"])
+def test_child_terminal_receipt_reader_rejects_noncanonical_payload(mutation: str) -> None:
+    receipt = _child_terminal_receipt()
+    payload = receipt.to_dict()
+    if mutation == "missing":
+        payload.pop("operation_id")
+    elif mutation == "unknown":
+        payload["unexpected"] = True
+    else:
+        payload["receipt_checksum"] = "sha256:" + "f" * 64
+
+    with pytest.raises(ValueError):
+        ChildAgentTerminalReceipt.from_dict(payload)
 
 
 def test_dispatch_contract_rejects_tampered_plan_checksum_before_admission() -> None:

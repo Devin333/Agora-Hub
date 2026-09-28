@@ -153,6 +153,49 @@ def test_registry_rejects_receipt_identity_mismatch() -> None:
         registry.execute(request)
 
 
+def test_registry_rejects_noncanonical_receipt_before_accepting_provider_output() -> None:
+    request = _request()
+    capabilities = ExecutionCapabilityProfile(
+        provider_id="test-provider",
+        available=True,
+        enforces_network_deny=True,
+        isolates_environment=True,
+        enforces_argv_policy=True,
+        controls_process_tree=True,
+        confirms_termination=True,
+    )
+
+    def malformed(_: ExecutionRequest) -> object:
+        from framework.execution_environment.models import ExecutionOutcome
+
+        now = datetime.now(UTC)
+        receipt = ExecutionReceipt(
+            execution_id=request.execution_id,
+            tool_id=request.tool_id,
+            graph_identity=request.graph_identity,
+            operation_id=request.operation_id,
+            attempt_id=request.attempt_id,
+            provider_id=capabilities.provider_id,
+            provider_capability_checksum=capabilities.checksum,
+            status=ExecutionStatus.SUCCEEDED,
+            started_at=now,
+            finished_at=now,
+            termination_confirmed=True,
+            reason_code="process_exit",
+        )
+        # A provider may return a forged in-memory object despite the frozen
+        # model; the registry must read the owner schema before acceptance.
+        object.__setattr__(receipt, "schema_version", "newsroom.execution-receipt/v2")
+        return ExecutionOutcome(receipt=receipt)
+
+    registry = ExecutionEnvironmentRegistry()
+    registry.register(FakeExecutionEnvironment(capabilities, malformed))
+    with pytest.raises(ExecutionIdentityMismatchError) as exc_info:
+        registry.execute(request)
+    assert exc_info.value.reason_code == "execution_identity_mismatch"
+    assert "canonical provider receipt" in str(exc_info.value)
+
+
 def test_registry_rejects_receipt_capability_checksum_mismatch() -> None:
     request = _request()
     capabilities = ExecutionCapabilityProfile(

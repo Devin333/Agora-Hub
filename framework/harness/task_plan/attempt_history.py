@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -373,46 +372,13 @@ def _child_terminal_receipt(
     if isinstance(value, ChildAgentTerminalReceipt):
         receipt = value
     elif isinstance(value, Mapping):
-        payload = exact_keys(
-            value,
-            required=frozenset(
-                {
-                    "child_id",
-                    "operation_id",
-                    "parent_graph_identity",
-                    "status",
-                    "reason_code",
-                    "result_ref",
-                    "result_checksum",
-                    "termination_confirmed",
-                    "completed_at",
-                    "receipt_checksum",
-                }
-            ),
-            model="ChildAgentTerminalReceipt",
-        )
-        supplied = checksum(payload.pop("receipt_checksum"), "receipt_checksum")
-        completed_at = payload.get("completed_at")
-        if isinstance(completed_at, str):
-            try:
-                payload["completed_at"] = datetime.fromisoformat(completed_at)
-            except ValueError as exc:
-                raise HarnessValidationError(
-                    "child terminal receipt timestamp is invalid",
-                    code="task_plan_attempt_history_receipt_invalid",
-                ) from exc
         try:
-            receipt = ChildAgentTerminalReceipt(**payload)
+            receipt = ChildAgentTerminalReceipt.from_dict(value)
         except (TypeError, ValueError) as exc:
             raise HarnessValidationError(
                 "child terminal receipt is invalid",
                 code="task_plan_attempt_history_receipt_invalid",
             ) from exc
-        if supplied != receipt.receipt_checksum:
-            raise HarnessValidationError(
-                "child terminal receipt checksum is invalid",
-                code="task_plan_attempt_history_receipt_invalid",
-            )
     else:
         raise TypeError("terminal_receipt must be a ChildAgentTerminalReceipt")
     return receipt, frozen_mapping(receipt.to_dict(), "terminal_receipt")

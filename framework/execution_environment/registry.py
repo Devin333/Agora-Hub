@@ -11,6 +11,7 @@ from framework.execution_environment.errors import (
 from framework.execution_environment.models import (
     CAPABILITY_DENIAL_CODE_VERSION,
     ExecutionOutcome,
+    ExecutionReceipt,
     ExecutionRequest,
     capability_denial_code,
 )
@@ -104,6 +105,20 @@ class ExecutionEnvironmentRegistry:
         outcome = provider.execute(request, cancellation=cancellation)
         if not isinstance(outcome, ExecutionOutcome):
             raise TypeError("execution environment provider returned an invalid outcome")
+        # The provider-owned reader verifies the exact schema and checksum
+        # before any result can cross the registry boundary.
+        try:
+            canonical_receipt = ExecutionReceipt.from_dict(outcome.receipt.to_dict())
+        except (TypeError, ValueError, KeyError, AttributeError) as exc:
+            raise ExecutionIdentityMismatchError(
+                "execution receipt is not a canonical provider receipt",
+                details={"execution_id": request.execution_id},
+            ) from exc
+        if canonical_receipt != outcome.receipt:
+            raise ExecutionIdentityMismatchError(
+                "execution receipt differs from its canonical projection",
+                details={"execution_id": request.execution_id},
+            )
         if not outcome.receipt.matches_request(request):
             raise ExecutionIdentityMismatchError(
                 details={

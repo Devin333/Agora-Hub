@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import threading
 import time
@@ -14,9 +15,13 @@ from framework.harness.subagents.supervisor import (
     ChildAgentState,
     ChildAgentSupervisor,
     ChildAgentSupervisorError,
+    ChildAgentTerminalReceipt,
     _checksum,
 )
-from framework.harness.subagents.supervisor_store import DurableChildAgentEventLog
+from framework.harness.subagents.supervisor_store import (
+    CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+    DurableChildAgentEventLog,
+)
 from framework.events import EventRuntime, EventSchemaCatalog
 from framework.events.runtime.projection import RuntimeEventProjection
 from framework.shared.graph_identity import GraphExecutionIdentity
@@ -678,6 +683,38 @@ def test_sqlite_restart_reuses_committed_result_without_worker_reinvocation(tmp_
     assert result.receipt == committed.receipt
     assert result.result == {"candidate": "committed"}
     restored.shutdown()
+
+
+def test_durable_child_log_rejects_rechecksummed_receipt_for_another_operation(tmp_path) -> None:
+    database = _sqlite_lifecycle(tmp_path)
+    store = SQLiteEventStore(database, initialize=False)
+    runtime = EventRuntime(store=store, schema_catalog=EventSchemaCatalog(), backend="sqlite")
+    log = DurableChildAgentEventLog(state_runtime=runtime, state_reader=store, state_key="run-1")
+    log.acquire_owner("owner")
+    log.register_run_scope("run-1", "tenant-1")
+    supervisor = ChildAgentSupervisor(
+        event_sink=log,
+        event_reader=log,
+        worker_factory=lambda _: {"candidate": "verified"},
+    )
+    handle = supervisor.spawn(_request())
+    supervisor.wait(handle.child_id, operation_id=handle.operation_id, timeout_seconds=1)
+    events_before = log.read_events()
+    snapshot_before = store.load_transactional_state(CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE, "run-1")
+    terminal = next(event for event in events_before if event["event_type"] == "child_terminal")
+    receipt = ChildAgentTerminalReceipt.from_dict(terminal["terminal_receipt"])
+    forged_receipt = replace(receipt, operation_id="another-operation").to_dict()
+    forged = dict(terminal)
+    forged["event_id"] = "forged-terminal-receipt"
+    forged["terminal_receipt"] = forged_receipt
+    forged["metadata"] = {**terminal["metadata"], "terminal_receipt": forged_receipt}
+
+    with pytest.raises(ValueError, match="receipt identity conflicts"):
+        log.record(forged)
+
+    assert log.read_events() == events_before
+    assert store.load_transactional_state(CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE, "run-1") == snapshot_before
+    supervisor.shutdown()
 
 
 def test_sqlite_restart_preserves_cancellation_uncertainty_and_blocks_replacement(tmp_path) -> None:

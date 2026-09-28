@@ -56,3 +56,13 @@ qualification and rollout remain separately open at 2.6 and 7.1-7.7.
 - `python -m scripts.dev compile`: passed.
 - `openspec validate harness-runtime-execution-and-parallel-agent-orchestration --strict`: passed.
 - `git diff --check`: passed.
+
+## Subsequent schema owner status
+
+The statement above that `ExecutionReceipt` has no independent schema/reader
+was true of this slice. The later
+`runtime-receipt-owner-reconciliation-20260928.md` records the provider-owned
+v1 receipt schema and reader, and the canonical nested lifecycle receipt
+reader. The dependencies described under "Remaining qualification" concern
+full runtime boundary behavior in tasks 1.3/3.1/4.3/5.1/5.2/5.3; they do not
+by themselves prevent independent task 1.2 version/owner reconciliation.

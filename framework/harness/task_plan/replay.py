@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -2052,35 +2051,13 @@ def _recovery_terminal_receipt(
 
     if not isinstance(value, Mapping):
         _parallel_error("recovery operation is missing its terminal receipt", event)
-    payload = thaw_mapping(value)
-    required = {
-        "child_id",
-        "operation_id",
-        "parent_graph_identity",
-        "status",
-        "reason_code",
-        "result_ref",
-        "result_checksum",
-        "termination_confirmed",
-        "completed_at",
-        "receipt_checksum",
-    }
-    if set(payload) != required:
-        _parallel_error("recovery operation terminal receipt has invalid fields", event)
     try:
-        supplied_checksum = checksum(payload.pop("receipt_checksum"), "receipt_checksum")
-        completed_at = payload.get("completed_at")
-        if isinstance(completed_at, str):
-            payload["completed_at"] = datetime.fromisoformat(completed_at)
-        receipt = ChildAgentTerminalReceipt(**payload)
+        return ChildAgentTerminalReceipt.from_dict(thaw_mapping(value))
     except (TypeError, ValueError, HarnessValidationError) as exc:
         raise HarnessValidationError(
             "recovery operation terminal receipt is invalid",
             code="task_plan_replay_parallel_mismatch",
         ) from exc
-    if supplied_checksum != receipt.receipt_checksum:
-        _parallel_error("recovery operation terminal receipt checksum is invalid", event)
-    return receipt
 
 
 def _validate_recovery_operation_attempt_history(

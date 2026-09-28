@@ -520,6 +520,8 @@ class ChildAgentHeartbeat:
 
 @dataclass(frozen=True, slots=True)
 class ChildAgentTerminalReceipt:
+    """Terminal fact embedded in the lifecycle-state v2 owner payload."""
+
     child_id: str
     operation_id: str
     parent_graph_identity: GraphExecutionIdentity | Mapping[str, Any]
@@ -579,6 +581,33 @@ class ChildAgentTerminalReceipt:
     def to_dict(self) -> dict[str, Any]:
         return {**self.checksum_projection(), "receipt_checksum": self.receipt_checksum}
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ChildAgentTerminalReceipt":
+        """Read the nested receipt shape owned by lifecycle-state v2."""
+
+        if not isinstance(value, Mapping):
+            raise TypeError("child terminal receipt must be an object")
+        expected = {
+            "child_id", "operation_id", "parent_graph_identity", "status",
+            "reason_code", "result_ref", "result_checksum",
+            "termination_confirmed", "completed_at", "receipt_checksum",
+        }
+        unknown = sorted(set(value) - expected)
+        if unknown:
+            raise ValueError(f"child terminal receipt has unknown fields: {unknown}")
+        missing = sorted(expected - set(value))
+        if missing:
+            raise ValueError(f"child terminal receipt is missing fields: {missing}")
+        payload = dict(value)
+        supplied_checksum = payload.pop("receipt_checksum")
+        completed_at = payload.get("completed_at")
+        if not isinstance(completed_at, str):
+            raise ValueError("child terminal receipt completed_at must be a string")
+        payload["completed_at"] = datetime.fromisoformat(completed_at)
+        receipt = cls(**payload)
+        if supplied_checksum != receipt.receipt_checksum:
+            raise ValueError("terminal receipt checksum does not match canonical projection")
+        return receipt
 
 @dataclass(frozen=True, slots=True)
 class ChildAgentOperationResult:
@@ -2060,15 +2089,7 @@ def _handle_from_event(event: Mapping[str, Any]) -> ChildAgentHandle:
 
 
 def _terminal_receipt_from_dict(value: Mapping[str, Any]) -> ChildAgentTerminalReceipt:
-    payload = dict(value)
-    supplied_checksum = payload.pop("receipt_checksum", None)
-    completed_at = payload.get("completed_at")
-    if isinstance(completed_at, str):
-        payload["completed_at"] = datetime.fromisoformat(completed_at)
-    receipt = ChildAgentTerminalReceipt(**payload)
-    if supplied_checksum != receipt.receipt_checksum:
-        raise ValueError("terminal receipt checksum does not match canonical projection")
-    return receipt
+    return ChildAgentTerminalReceipt.from_dict(value)
 
 
 def _event_time(event: Mapping[str, Any]) -> datetime:

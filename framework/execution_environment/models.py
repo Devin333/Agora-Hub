@@ -63,6 +63,7 @@ class ExecutionStatus(StrEnum):
 # vocabulary to operators and callers.
 CAPABILITY_DENIAL_CODE_VERSION = "newsroom.execution-capability-denials/v1"
 EXECUTION_PROFILE_SCHEMA = "newsroom.execution-profile/v1"
+EXECUTION_RECEIPT_SCHEMA = "newsroom.execution-receipt/v1"
 DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA = (
     "newsroom.execution-deployment-capability-evidence/v1"
 )
@@ -972,8 +973,13 @@ class ExecutionReceipt:
     exit_code: int | None = None
     output_checksum: str | None = None
     output_bytes: int | None = None
+    schema_version: str = EXECUTION_RECEIPT_SCHEMA
 
     def __post_init__(self) -> None:
+        if self.schema_version != EXECUTION_RECEIPT_SCHEMA:
+            raise ValueError(
+                f"unsupported execution receipt schema: {self.schema_version}"
+            )
         for field_name in (
             "execution_id",
             "tool_id",
@@ -1033,6 +1039,40 @@ class ExecutionReceipt:
             and self.provider_id == request.profile.provider_id
         )
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ExecutionReceipt":
+        if not isinstance(value, Mapping):
+            raise TypeError("execution_receipt must be an object")
+        expected = {
+            "schema_version", "execution_id", "tool_id", "graph_identity",
+            "operation_id", "attempt_id", "provider_id",
+            "provider_capability_checksum", "status", "started_at",
+            "finished_at", "termination_confirmed", "reason_code",
+            "exit_code", "output_checksum", "output_bytes", "receipt_checksum",
+        }
+        unknown = sorted(set(value) - expected)
+        if unknown:
+            raise ValueError(f"execution_receipt contains unknown fields: {unknown}")
+        missing = sorted(expected - set(value))
+        if missing:
+            raise ValueError(f"execution_receipt is missing fields: {missing}")
+        if value.get("schema_version") != EXECUTION_RECEIPT_SCHEMA:
+            raise ValueError(
+                "execution_receipt schema_version must be "
+                f"{EXECUTION_RECEIPT_SCHEMA!r}"
+            )
+        payload = dict(value)
+        supplied_checksum = payload.pop("receipt_checksum")
+        for field_name in ("started_at", "finished_at"):
+            raw = payload.get(field_name)
+            if not isinstance(raw, str):
+                raise ValueError(f"execution_receipt {field_name} must be a string")
+            payload[field_name] = parse_datetime(raw)
+        receipt = cls(**payload)
+        if supplied_checksum != receipt.receipt_checksum:
+            raise ValueError("execution receipt checksum does not match canonical projection")
+        return receipt
+
     @property
     def receipt_checksum(self) -> str:
         """Checksum of the complete operator-visible receipt projection."""
@@ -1040,6 +1080,7 @@ class ExecutionReceipt:
 
     def checksum_projection(self) -> dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
             "execution_id": self.execution_id,
             "tool_id": self.tool_id,
             "graph_identity": self.graph_identity.to_dict(),
@@ -1062,6 +1103,11 @@ class ExecutionReceipt:
             **self.checksum_projection(),
             "receipt_checksum": self.receipt_checksum,
         }
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the versioned provider receipt operator projection."""
+
+        return self.to_operator_projection()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1218,6 +1264,7 @@ __all__ = [
     "DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA",
     "EXECUTION_CAPABILITY_FIELDS",
     "EXECUTION_PROFILE_SCHEMA",
+    "EXECUTION_RECEIPT_SCHEMA",
     "ExecutionCapabilityProfile",
     "DeploymentCapabilityEvidence",
     "ExecutionMode",

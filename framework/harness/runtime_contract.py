@@ -14,7 +14,7 @@ from typing import Any, Mapping
 from framework.harness.control_plane.errors import HarnessValidationError
 
 
-HARNESS_RUNTIME_CONTRACT_VERSION = "newsroom.harness-runtime-contract/v1"
+HARNESS_RUNTIME_CONTRACT_VERSION = "newsroom.harness-runtime-contract/v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +23,7 @@ class RuntimeContractBinding:
 
     schema_version: str
     owners: Mapping[str, str]
+    projection_owners: Mapping[str, str]
 
     @classmethod
     def current(cls) -> "RuntimeContractBinding":
@@ -35,7 +36,10 @@ class RuntimeContractBinding:
             BUDGET_EVENT_DATA_SCHEMA,
             RUNTIME_EVENT_DATA_SCHEMA,
         )
-        from framework.execution_environment.models import EXECUTION_PROFILE_SCHEMA
+        from framework.execution_environment.models import (
+            EXECUTION_PROFILE_SCHEMA,
+            EXECUTION_RECEIPT_SCHEMA,
+        )
         from framework.governance.budget.models import (
             BUDGET_EVENT_SCHEMA_VERSION,
             BUDGET_SCHEMA_VERSION,
@@ -95,6 +99,7 @@ class RuntimeContractBinding:
 
         owners = {
             "execution_profile": EXECUTION_PROFILE_SCHEMA,
+            "execution_receipt": EXECUTION_RECEIPT_SCHEMA,
             "event_envelope": ENVELOPE_SCHEMA_V2,
             "runtime_event_data": RUNTIME_EVENT_SCHEMA_V1,
             "task_plan_runtime": TASK_PLAN_RUNTIME_VERSION,
@@ -144,6 +149,18 @@ class RuntimeContractBinding:
                     f"runtime contract owner registry drift for {owner_key}",
                     code="RUNTIME_CONTRACT_OWNER_DRIFT",
                 )
+        projection_owners = {
+            # A terminal receipt is a nested projection of lifecycle-state v2;
+            # it has no independent writer, schema registry, or persistence
+            # owner.
+            "child_agent_terminal_receipt": "child_lifecycle_state",
+        }
+        for projection_key, owner_key in projection_owners.items():
+            if owners.get(owner_key) != CHILD_AGENT_LIFECYCLE_STATE_SCHEMA:
+                raise HarnessValidationError(
+                    f"runtime contract projection owner drift for {projection_key}",
+                    code="RUNTIME_CONTRACT_OWNER_DRIFT",
+                )
         # Exercise the existing TaskPlan registry as part of the binding.  A
         # stale owner constant must fail closed rather than silently becoming a
         # second source of truth here.
@@ -171,10 +188,15 @@ class RuntimeContractBinding:
         return cls(
             schema_version=HARNESS_RUNTIME_CONTRACT_VERSION,
             owners=MappingProxyType(owners),
+            projection_owners=MappingProxyType(projection_owners),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"schema_version": self.schema_version, "owners": dict(self.owners)}
+        return {
+            "schema_version": self.schema_version,
+            "owners": dict(self.owners),
+            "projection_owners": dict(self.projection_owners),
+        }
 
 
 def runtime_contract_binding() -> RuntimeContractBinding:
