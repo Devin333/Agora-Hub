@@ -392,6 +392,46 @@ def validate_parallel_dispatch_contract(request: Any, group: Any | None = None) 
             )
 
 
+def _validate_task_result_owner_contract(
+    result: Any,
+    binding: RuntimeContractBinding,
+) -> None:
+    from framework.harness.task_plan.store import TaskResultRecord
+
+    if (
+        type(result) is not TaskResultRecord
+        or result.schema_version != binding.owners["task_result"]
+    ):
+        raise HarnessValidationError(
+            "task result does not use the canonical owner type and schema",
+            code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+        )
+    try:
+        canonical = TaskResultRecord.from_dict(result.to_dict())
+    except (
+        HarnessValidationError,
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+    ) as exc:
+        raise HarnessValidationError(
+            "task result checksum differs from canonical content",
+            code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+        ) from exc
+    if canonical != result:
+        raise HarnessValidationError(
+            "task result differs from its canonical owner model",
+            code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+        )
+
+
+def validate_task_result_owner_contract(result: Any) -> None:
+    """Validate the canonical TaskResultRecord owner before any store lookup."""
+
+    _validate_task_result_owner_contract(result, runtime_contract_binding())
+
+
 def validate_task_result_contract(
     plan: Any,
     projection: Any,
@@ -399,14 +439,11 @@ def validate_task_result_contract(
 ) -> None:
     """Validate result identity and transition before a result is persisted."""
 
-    binding = runtime_contract_binding()
     from framework.harness.task_plan.models import TaskLifecycle, TaskPlanProjection, ValidatedTaskPlan
-    from framework.harness.task_plan.store import TaskResultRecord
 
     if not isinstance(plan, ValidatedTaskPlan) or not isinstance(projection, TaskPlanProjection):
         raise HarnessValidationError("result acceptance requires validated plan and projection", code="RUNTIME_CONTRACT_IDENTITY_MISMATCH")
-    if not isinstance(result, TaskResultRecord) or result.schema_version != binding.owners["task_result"]:
-        raise HarnessValidationError("unsupported task result schema", code="RUNTIME_CONTRACT_SCHEMA_MISMATCH")
+    validate_task_result_owner_contract(result)
     if not result.matches_plan_identity(plan) or not projection.matches_plan_identity(plan):
         raise HarnessValidationError("result scope differs from accepted plan", code="RUNTIME_CONTRACT_SCOPE_MISMATCH")
     task = next((item for item in projection.tasks if item.task_id == result.task_id), None)
@@ -433,7 +470,6 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
     from framework.harness.task_plan.store import (
         TASK_PLAN_EVENT_SCHEMAS,
         TaskPlanEvent,
-        TaskResultRecord,
     )
 
     canonical_plans: list[ValidatedTaskPlan] = []
@@ -543,32 +579,7 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
             )
 
     for result in results:
-        if (
-            type(result) is not TaskResultRecord
-            or result.schema_version != binding.owners["task_result"]
-        ):
-            raise HarnessValidationError(
-                "history contains an unsupported result",
-                code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
-            )
-        try:
-            canonical = TaskResultRecord.from_dict(result.to_dict())
-        except (
-            HarnessValidationError,
-            TypeError,
-            ValueError,
-            AttributeError,
-            KeyError,
-        ) as exc:
-            raise HarnessValidationError(
-                "history result checksum differs from canonical content",
-                code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
-            ) from exc
-        if canonical != result:
-            raise HarnessValidationError(
-                "history result differs from its canonical owner model",
-                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
-            )
+        _validate_task_result_owner_contract(result, binding)
         plan = plans_by_identity.get((result.plan_id, result.plan_version))
         if plan is None:
             raise HarnessValidationError(
@@ -589,4 +600,5 @@ __all__ = [
     "validate_history_read_contract",
     "validate_parallel_dispatch_contract",
     "validate_task_result_contract",
+    "validate_task_result_owner_contract",
 ]

@@ -100,6 +100,7 @@ from framework.harness.graph.model import HarnessContractKind, HarnessContractRe
 from framework.harness.graph.activity import HarnessWorkerType
 from framework.workers.models.status import TaskStatus as WorkerTaskStatus
 from framework.workers.models.task import Task as WorkerTask
+from infrastructure.storage.events.sqlite import SQLiteEventStore
 from infrastructure.storage.workers.redis_queue import RedisStreamTaskQueue
 from infrastructure.storage.workers.task_plan_queue import (
     RedisTaskPlanQueueReadAdapter,
@@ -1513,6 +1514,129 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
         and not hasattr(stored.business_context, "step_id")
         for stored in event_store._events
     )
+
+
+def test_sqlite_result_owner_rejects_tampering_before_any_durable_write(
+    tmp_path,
+) -> None:
+    database = tmp_path / "task-result-owner.sqlite3"
+    artifacts = _ArtifactStore()
+    event_store = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    store = _store(event_store, artifacts, runtime=_runtime(event_store))
+    candidate, plan = _graph_only_candidate_and_plan()
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    instance = _start(store, plan, plan.tasks[0].task_id)
+    result = _result(plan, instance, status=TaskLifecycle.SUCCEEDED)
+
+    before_events = store.read_events(plan.run_id, plan.stage_id)
+    before_projection = store.load_projection(plan.run_id, plan.stage_id)
+    before_results = store.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    )
+    before_artifacts = dict(artifacts._content)
+    stream_id = f"run:{plan.run_id}"
+    before_watermark = event_store.get_stream_high_watermark(stream_id)
+
+    wrong_binding = replace(result, worker_ref="forged-worker@1")
+    with pytest.raises(HarnessValidationError) as binding_error:
+        store.append_result(wrong_binding)
+    assert binding_error.value.code == "task_plan_wrong_binding"
+    assert store.read_events(plan.run_id, plan.stage_id) == before_events
+    assert store.load_projection(plan.run_id, plan.stage_id) == before_projection
+    assert artifacts._content == before_artifacts
+    assert event_store.get_stream_high_watermark(stream_id) == before_watermark
+
+    forged = replace(result)
+    object.__setattr__(forged, "result_checksum", "sha256:" + "f" * 64)
+    with pytest.raises(HarnessValidationError) as forged_error:
+        store.append_result(forged)
+    assert forged_error.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+    assert store.read_events(plan.run_id, plan.stage_id) == before_events
+    assert store.load_projection(plan.run_id, plan.stage_id) == before_projection
+    assert store.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    ) == before_results
+    assert artifacts._content == before_artifacts
+    assert event_store.get_stream_high_watermark(stream_id) == before_watermark
+
+    reopened_events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    reopened = _store(
+        reopened_events,
+        artifacts,
+        runtime=_runtime(reopened_events),
+    )
+    assert reopened.plan(plan.run_id, plan.stage_id) == plan
+    assert reopened.load_projection(plan.run_id, plan.stage_id) == before_projection
+    assert reopened.read_events(plan.run_id, plan.stage_id) == before_events
+    assert reopened.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    ) == before_results
+
+    assert reopened.append_result(result) == result.result_checksum
+    reopened_again_events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    reopened_again = _store(
+        reopened_again_events,
+        artifacts,
+        runtime=_runtime(reopened_again_events),
+    )
+    assert reopened_again.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    ) == (result,)
+    committed_events = reopened_again.read_events(plan.run_id, plan.stage_id)
+    committed_projection = reopened_again.load_projection(plan.run_id, plan.stage_id)
+    committed_artifacts = dict(artifacts._content)
+    committed_watermark = reopened_again_events.get_stream_high_watermark(stream_id)
+
+    assert reopened_again.append_result(result) == result.result_checksum
+    assert reopened_again.read_events(plan.run_id, plan.stage_id) == committed_events
+    assert reopened_again.load_projection(plan.run_id, plan.stage_id) == committed_projection
+    assert artifacts._content == committed_artifacts
+    assert reopened_again_events.get_stream_high_watermark(stream_id) == committed_watermark
+
+    conflicting_duplicate = replace(
+        result,
+        result_ref="result://conflicting-duplicate",
+    )
+    with pytest.raises(HarnessValidationError) as conflict_error:
+        reopened_again.append_result(conflicting_duplicate)
+    assert conflict_error.value.code == "task_plan_duplicate_result_conflict"
+    assert reopened_again.read_events(plan.run_id, plan.stage_id) == committed_events
+    assert reopened_again.load_projection(plan.run_id, plan.stage_id) == committed_projection
+    assert artifacts._content == committed_artifacts
+    assert reopened_again_events.get_stream_high_watermark(stream_id) == committed_watermark
+
+    forged_duplicate = replace(result)
+    object.__setattr__(
+        forged_duplicate,
+        "result_ref",
+        "result://forged-duplicate",
+    )
+    with pytest.raises(HarnessValidationError) as duplicate_error:
+        reopened_again.append_result(forged_duplicate)
+    assert duplicate_error.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+    assert reopened_again.read_events(plan.run_id, plan.stage_id) == committed_events
+    assert reopened_again.load_projection(plan.run_id, plan.stage_id) == committed_projection
+    assert reopened_again.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    ) == (result,)
+    assert artifacts._content == committed_artifacts
+    assert reopened_again_events.get_stream_high_watermark(stream_id) == committed_watermark
 
 
 def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():

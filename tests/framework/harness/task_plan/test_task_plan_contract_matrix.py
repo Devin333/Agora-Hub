@@ -719,7 +719,70 @@ def test_scheduler_queue_projection_and_result_identity_are_deterministic():
         output_schema_ref="schema://analysis.helper@1",
         usage={"turns": 1},
     )
+
+    before_events = store.read_events(plan.run_id, plan.stage_id)
+    before_projection = store.load_projection(plan.run_id, plan.stage_id)
+    wrong_binding_first = replace(accepted, worker_ref="forged-worker@1")
+    with pytest.raises(HarnessValidationError) as wrong_binding_first_error:
+        store.append_result(wrong_binding_first)
+    assert wrong_binding_first_error.value.code == "task_plan_wrong_binding"
+    assert store.read_events(plan.run_id, plan.stage_id) == before_events
+    assert store.load_projection(plan.run_id, plan.stage_id) == before_projection
+
+    forged_first = replace(accepted)
+    object.__setattr__(
+        forged_first,
+        "result_checksum",
+        "sha256:" + "f" * 64,
+    )
+    with pytest.raises(HarnessValidationError) as forged_first_error:
+        store.append_result(forged_first)
+    assert forged_first_error.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+    assert store.read_events(plan.run_id, plan.stage_id) == before_events
+    assert store.load_projection(plan.run_id, plan.stage_id) == before_projection
+    assert store.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    ) == ()
+
     assert store.append_result(accepted) == store.append_result(accepted)
+
+    committed_events = store.read_events(plan.run_id, plan.stage_id)
+    committed_projection = store.load_projection(plan.run_id, plan.stage_id)
+    committed_results = store.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    )
+    conflicting_duplicate = replace(
+        accepted,
+        result_ref="result://conflicting-duplicate",
+    )
+    with pytest.raises(HarnessValidationError) as conflicting_duplicate_error:
+        store.append_result(conflicting_duplicate)
+    assert (
+        conflicting_duplicate_error.value.code
+        == "task_plan_duplicate_result_conflict"
+    )
+    assert store.read_events(plan.run_id, plan.stage_id) == committed_events
+    assert store.load_projection(plan.run_id, plan.stage_id) == committed_projection
+
+    forged_duplicate = replace(accepted)
+    object.__setattr__(forged_duplicate, "result_ref", "result://forged-duplicate")
+    with pytest.raises(HarnessValidationError) as forged_duplicate_error:
+        store.append_result(forged_duplicate)
+    assert forged_duplicate_error.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+    assert store.read_events(plan.run_id, plan.stage_id) == committed_events
+    assert store.load_projection(plan.run_id, plan.stage_id) == committed_projection
+    assert store.results_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    ) == committed_results
 
     wrong_attempt = replace(accepted, attempt=accepted.attempt + 1)
     with pytest.raises(HarnessValidationError) as error:

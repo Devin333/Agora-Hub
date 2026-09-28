@@ -61,6 +61,7 @@ from framework.harness.runtime_contract import (
     runtime_contract_binding,
     validate_history_read_contract,
     validate_parallel_dispatch_contract,
+    validate_task_result_owner_contract,
 )
 from framework.harness.task_plan.parallel import PARENT_OBSERVATION_SCHEMA, ParallelAgentCoordinator
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
@@ -467,6 +468,32 @@ def test_history_contract_accepts_canonical_plan_event_and_result() -> None:
     )
 
     validate_history_read_contract((plan,), (event,), (_history_result(plan),))
+
+
+def test_task_result_owner_contract_accepts_canonical_result() -> None:
+    validate_task_result_owner_contract(_history_result(_accepted_parallel_plan(("task-1",))))
+
+
+def test_task_result_owner_contract_rejects_tampered_checksum() -> None:
+    result = _history_result(_accepted_parallel_plan(("task-1",)))
+    object.__setattr__(result, "result_checksum", "sha256:" + "f" * 64)
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_task_result_owner_contract(result)
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+
+
+def test_task_result_owner_contract_rejects_duck_typed_result() -> None:
+    result = _history_result(_accepted_parallel_plan(("task-1",)))
+    forged = SimpleNamespace(**{
+        field: getattr(result, field) for field in result.__dataclass_fields__
+    })
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_task_result_owner_contract(forged)
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_SCHEMA_MISMATCH"
 
 
 def test_history_contract_accepts_planless_event_with_matching_scope() -> None:

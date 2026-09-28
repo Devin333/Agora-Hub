@@ -1456,6 +1456,12 @@ class InMemoryTaskPlanStore:
         if not isinstance(result, TaskResultRecord):
             raise TypeError("result must be TaskResultRecord")
         _require_live_graph_only(result, "result")
+        from framework.harness.runtime_contract import (
+            validate_task_result_contract,
+            validate_task_result_owner_contract,
+        )
+
+        validate_task_result_owner_contract(result)
         key = (result.run_id, result.stage_id, result.task_instance_id, result.attempt, result.plan_version)
         with self._lock:
             existing = self._results.get(key)
@@ -1498,8 +1504,6 @@ class InMemoryTaskPlanStore:
                 raise HarnessValidationError("task result belongs to a different attempt", code="task_plan_wrong_attempt")
             if task.status in {TaskLifecycle.SUCCEEDED, TaskLifecycle.SKIPPED}:
                 raise HarnessValidationError("task already has a committed terminal result", code="task_plan_duplicate_result_conflict")
-            from framework.harness.runtime_contract import validate_task_result_contract
-
             validate_task_result_contract(plan, projection, result)
             history_record_for_result(plan, result, self.read_events(result.run_id, result.stage_id))
             _require_subagent_result_evidence(result, definition)
