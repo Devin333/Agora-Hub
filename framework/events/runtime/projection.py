@@ -376,11 +376,21 @@ class InMemoryRuntimeEventStore:
         with self._lock:
             existing = self._by_id.get(event.event_id)
             if existing is not None:
-                comparable = replace(
-                    event,
-                    stream_id=existing.stream_id,
-                    sequence=existing.sequence,
-                )
+                comparable = event
+                if comparable.stream_id is None or comparable.sequence is None:
+                    comparable = replace(
+                        comparable,
+                        stream_id=(
+                            existing.stream_id
+                            if comparable.stream_id is None
+                            else comparable.stream_id
+                        ),
+                        sequence=(
+                            existing.sequence
+                            if comparable.sequence is None
+                            else comparable.sequence
+                        ),
+                    )
                 if existing != comparable:
                     raise RuntimeEventIdentityConflict("event identity already has different content")
                 return existing

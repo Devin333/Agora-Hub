@@ -17,8 +17,8 @@
 ## 3. Durable Runtime Events And Replay
 
 - [ ] 3.1 Route turn, tool, approval, context, worker, and child lifecycle facts through the canonical durable event owner with redaction, bounded references, reason codes, and identity checks.
-- [ ] 3.2 Implement idempotent projection checkpoint/cursor resume and offline rebuild with zero live dependency calls.
-- [ ] 3.3 Add event identity conflict, redaction, cursor, projection rebuild, replay checksum, and no-routing-authority tests.
+- [x] 3.2 Implement idempotent projection checkpoint/cursor resume and offline rebuild with zero live dependency calls. See `evidence/runtime-projection-checkpoint-replay-20260928.md`.
+- [x] 3.3 Add event identity conflict, redaction, cursor, projection rebuild, replay checksum, and no-routing-authority tests. See `evidence/runtime-projection-checkpoint-replay-20260928.md`.
 
 ## 4. Parallel Group And Wave Coordinator
 

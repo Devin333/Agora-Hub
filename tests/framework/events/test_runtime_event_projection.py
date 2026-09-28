@@ -153,6 +153,25 @@ def test_identity_collision_is_rejected() -> None:
         store.append(_event("event-1", status="failed"))
 
 
+@pytest.mark.parametrize(
+    ("conflicting_field", "conflicting_value"),
+    (("stream_id", "another-stream"), ("sequence", 2)),
+)
+def test_identity_collision_rejects_explicit_stream_and_sequence_conflicts(
+    conflicting_field: str,
+    conflicting_value: str | int,
+) -> None:
+    store = InMemoryRuntimeEventStore()
+    store.append(_event("event-1"))
+    conflicting = replace(
+        _event("event-1"),
+        **{conflicting_field: conflicting_value},
+    )
+
+    with pytest.raises(RuntimeEventIdentityConflict):
+        store.append(conflicting)
+
+
 def test_identity_fields_must_match_graph_identity() -> None:
     with pytest.raises(RuntimeEventIdentityConflict):
         RuntimeEventIdentity(graph_identity=_identity(), activity_id="different")

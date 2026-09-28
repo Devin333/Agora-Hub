@@ -19,11 +19,12 @@ def _event(
     event_id: str,
     sequence: int,
     schema: str = RUNTIME_EVENT_SCHEMA_V1,
+    event_type: str = "turn_started",
     payload: dict | None = None,
 ) -> ReplayEvent:
     return ReplayEvent(
         event_id=event_id,
-        event_type="turn_started",
+        event_type=event_type,
         source_data_schema=schema,
         data_schema=schema,
         stream_id="run-1",
@@ -57,6 +58,45 @@ def test_runtime_reducer_uses_runtime_event_owner_schema() -> None:
         _event(event_id="event-1", sequence=1),
     )
     assert len(state["statuses"]) == 1
+
+
+def test_runtime_reducer_does_not_promote_worker_routing_candidates() -> None:
+    state = runtime_projection_reducer(
+        _registration().initial_state,
+        _event(
+            event_id="worker-status",
+            sequence=1,
+            event_type="worker_status",
+            payload={
+                "identity": {
+                    "graph_identity": None,
+                    "activity_id": "activity-1",
+                    "attempt_id": "attempt-1",
+                    "node_id": None,
+                    "node_instance_id": None,
+                },
+                "status": "running",
+                "refs": [],
+                "routing_decision": {"target": "unapproved-node"},
+                "next_action": "dispatch_tool",
+                "tool_dispatch": {"tool": "unapproved-tool", "args": {"x": 1}},
+            },
+        ),
+    )
+
+    assert set(state) == {"state_schema", "cursors", "statuses"}
+    status = next(iter(state["statuses"].values()))
+    assert set(status) == {
+        "identity",
+        "status",
+        "reason_code",
+        "last_event_id",
+        "sequence",
+        "updated_at",
+        "refs",
+    }
+    assert status["status"] == "running"
+    assert status["last_event_id"] == "worker-status"
 
 
 def test_runtime_reducer_uses_canonical_sequence_and_bounds_checkpoint_state() -> None:
