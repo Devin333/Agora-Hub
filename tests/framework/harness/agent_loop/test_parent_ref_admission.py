@@ -9,10 +9,11 @@ import pytest
 
 from framework.agent.artifacts.stores.filesystem import FilesystemArtifactStore
 from framework.agent.loop.runner import AgentRunner
-from framework.agent.models import AgentLoopPolicy
+from framework.agent.models import AgentLoopPolicy, AgentSpec
 from framework.events.runtime.publisher import EventRuntime
 from framework.events.canonical import checksum_for
 from framework.events.schema import default_event_schema_catalog
+from framework.execution_environment.registry import ExecutionEnvironmentRegistry
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.graph.activity import HarnessWorkerType
@@ -24,7 +25,16 @@ from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_results import HarnessResultRefAuthority
 from framework.harness.ref_snapshot import RefAuthoritySnapshot, RefSnapshotPhase
 from framework.harness.subagents.models import SubAgentSpec
-from framework.harness.subagents.runtime import SubAgentRuntime
+from framework.harness.subagents.runtime import SubAgentRuntime, subagent_attempt_identity
+from framework.harness.subagents.agent_runner import ChildAgentRunnerAdapter
+from framework.harness.subagents.execution import HarnessChildExecutionService
+from framework.harness.subagents.execution_providers import (
+    AdmissionChildToolEvidenceLimitsProvider,
+    CanonicalChildBudgetTrackerProvider,
+    CanonicalChildExecutionUsageMeter,
+)
+from framework.harness.subagents.owned_runtime import HarnessOwnedChildAgentRuntime
+from framework.harness.subagents.supervisor_store import DurableChildAgentEventLog
 from framework.harness.subagents.transcript import SubAgentAttemptIdentity
 from framework.harness.task_plan.capability import TaskCapabilityRegistration, TaskCapabilityRegistry
 from framework.harness.side_effects import (
@@ -39,6 +49,7 @@ from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.verification import TaskPlanGateRegistry, TaskPlanResultVerifier, TaskPlanResultVerificationRequest
 from framework.harness.workers.result import HarnessWorkerResult
 from framework.llm import FakeLLMClient
+from framework.llm.budget import GlobalBudgetPolicy, GlobalBudgetTracker
 from framework.memory.models import MemoryRecord
 from framework.memory.namespace import MemoryNamespacePublisher
 from framework.memory.policy import MemoryPolicy
@@ -68,12 +79,87 @@ class _RecordingAdmission(HarnessRefAdmissionService):
         return self.snapshot
 
 
+class _RecordingChildRunnerAdapter(ChildAgentRunnerAdapter):
+    """Use the real child AgentRunner while preserving fixture observations."""
+
+    def __init__(self, *, worker, authority, role, worker_id, root):
+        super().__init__(
+            registered_agent=AgentSpec(
+                agent_id=worker_id,
+                name=role,
+                role=role,
+                goal=f"Analyze {role}",
+                instructions=f"Analyze {role}",
+                output_key="summary",
+                output_schema={
+                    "required": ["summary"],
+                    "properties": {"summary": {"type": "string"}},
+                },
+                allowed_tools=["tool.read"],
+                memory_enabled=False,
+                max_iterations=1,
+            ),
+            llm_client=FakeLLMClient(
+                ['{"action_type":"final_output","output":{"summary":"completed"}}']
+            ),
+            tool_registry=ToolRegistry(),
+            conversation_store=LocalJsonConversationStore(root),
+            execution_environment=ExecutionEnvironmentRegistry(),
+            require_explicit_execution_profile=False,
+            worker_id=worker_id,
+            worker_version="1",
+        )
+        self._fixture_worker = worker
+        self._fixture_authority = authority
+
+    def invoke(self, invocation, *, parent_task_context, ref_admission_service,
+               global_budget_tracker, tool_execution_evidence, input_reader=None):
+        identity = subagent_attempt_identity(invocation)
+        task = {
+            "invocation": invocation.to_dict(),
+            "context": invocation.context_envelope.to_dict(),
+            "input_refs": list(invocation.input_refs),
+            "budget": invocation.subagent_spec.budget,
+        }
+        dependency_outputs = self._fixture_authority.read_dependency_outputs(
+            identity,
+            input_refs=invocation.input_refs,
+        )
+        if dependency_outputs:
+            task["dependency_outputs"] = dependency_outputs
+        self._fixture_worker.execute(
+            task,
+            execution_identity=RefAuthoritySnapshot.execution_for_attempt(identity),
+        )
+        return super().invoke(
+            invocation,
+            parent_task_context=parent_task_context,
+            ref_admission_service=ref_admission_service,
+            global_budget_tracker=global_budget_tracker,
+            tool_execution_evidence=tool_execution_evidence,
+            input_reader=input_reader,
+        )
+
+
 def _setup(root, *, include_document=True, include_memory=False, dependency_ref=None, share_dependency=True):
     template, template_identity = _runtime()
+    template_policy = template._policy_registry.policies[0]
     policy = replace(
-        template._policy_registry.policies[0], stage_id="run-agent-loop", max_planning_tool_calls=0,
+        template_policy,
+        stage_id="run-agent-loop",
+        max_planning_tool_calls=0,
         allowed_subagent_ids=("structure-worker", "contribution-worker"),
         shared_dependency_output_roles=("structure",) if dependency_ref is not None and share_dependency else (),
+        per_task_budget=replace(
+            template_policy.per_task_budget,
+            max_memory_ops=max(1, template_policy.per_task_budget.max_memory_ops),
+            max_output_tokens=max(template_policy.per_task_budget.token_limit, template_policy.per_task_budget.max_output_tokens),
+        ),
+        aggregate_task_budget=replace(
+            template_policy.aggregate_task_budget,
+            max_memory_ops=max(2, template_policy.aggregate_task_budget.max_memory_ops),
+            max_output_tokens=max(template_policy.aggregate_task_budget.token_limit, template_policy.aggregate_task_budget.max_output_tokens),
+        ),
     )
     spec = _runtime_run_spec("parent-ref-run", identity_scope_ref=checksum_for("production"))
     declaration = HarnessGraphTaskPlanStageBinding(
@@ -140,33 +226,81 @@ def _setup(root, *, include_document=True, include_memory=False, dependency_ref=
                 assert invocation["input_refs"] == ["document"]
             return HarnessWorkerResult(status="succeeded", output={"summary": "completed"})
 
+    transcripts = FilesystemSubAgentTranscriptStore(root / "transcripts")
+    child_artifacts = FilesystemHarnessArtifactPort(root / "child-artifacts")
+    authority = HarnessResultRefAuthority(
+        grants,
+        transcript_store=transcripts,
+        artifact_descriptors=child_artifacts,
+        tenant_id="production",
+    )
     registrations = []
     workers = {}
     for role in ("structure", "contribution"):
         worker_id = f"{role}-worker"
         worker = Worker(worker_id)
-        workers[worker_id] = worker
+        worker_implementation = _RecordingChildRunnerAdapter(
+            worker=worker,
+            authority=authority,
+            role=role,
+            worker_id=worker_id,
+            root=root / "child-conversations" / role,
+        )
+        workers[worker_id] = worker_implementation
         registrations.append(TaskCapabilityRegistration(
             f"cap.{role}", HarnessWorkerBinding(
                 HarnessContractReference(HarnessContractKind.WORKER, worker_id, "1"),
-                HarnessWorkerType.SUBAGENT, worker,
+                HarnessWorkerType.SUBAGENT, worker_implementation,
             ), f"{role}-contract@1", "schema://input@1", "schema://result@1",
             subagent_spec=SubAgentSpec(
                 subagent_id=worker_id, role=role, purpose=f"Analyze {role}",
                 input_schema={"required": ["input_refs"]},
                 output_schema={"required": ["summary"], "properties": {"summary": {"type": "string"}}},
                 allowed_tools=policy.allowed_tool_ids, allowed_memory_namespaces=policy.allowed_memory_namespaces,
+                budget={
+                    "max_turns": policy.per_task_budget.max_turns,
+                    "max_tool_calls": policy.per_task_budget.max_tool_calls,
+                    "max_memory_ops": policy.per_task_budget.max_memory_ops,
+                },
             ),
         ))
     capabilities = TaskCapabilityRegistry(registrations)
-    transcripts = FilesystemSubAgentTranscriptStore(root / "transcripts")
-    child_artifacts = FilesystemHarnessArtifactPort(root / "child-artifacts")
-    authority = HarnessResultRefAuthority(grants, transcript_store=transcripts, artifact_descriptors=child_artifacts, tenant_id="production")
     subagents = SubAgentRuntime(workers=workers, transcript_store=transcripts, result_ref_authority=authority)
-    executor = HarnessSubAgentTaskExecutor(store=task_store, runtime=subagents, ref_admission_service=admission, task_policy=policy)
+    canonical_tracker = GlobalBudgetTracker(GlobalBudgetPolicy(max_llm_calls=10_000))
+    budget_trackers = CanonicalChildBudgetTrackerProvider(canonical_tracker)
+    execution_service = HarnessChildExecutionService(
+        store=task_store,
+        ref_admission_service=admission,
+        state_runtime=task_store._runtime,
+        state_reader=task_store._reader,
+        artifact_store=task_store._artifact_store,
+        budget_trackers=budget_trackers,
+        leases=None,
+        evidence_limits=AdmissionChildToolEvidenceLimitsProvider(),
+        usage_meter=CanonicalChildExecutionUsageMeter(budget_trackers),
+        input_reader=None,
+    )
+    executor = HarnessSubAgentTaskExecutor(
+        store=task_store,
+        runtime=subagents,
+        ref_admission_service=admission,
+        task_policy=policy,
+        execution_service=execution_service,
+    )
     gates = TaskPlanGateRegistry()
     gates.register("gate@1", lambda request: request.worker_result.output.get("summary") == "completed", deterministic=True)
     verifier = TaskPlanResultVerifier(gates, transcript_store=transcripts, artifact_reference_verifier=child_artifacts, result_ref_authority=authority)
+    child_event_log = DurableChildAgentEventLog(
+        state_runtime=task_store._runtime,
+        state_reader=task_store._reader,
+        state_key=f"agent-loop-parent-child:{root.resolve()}",
+    )
+    owned_child_runtime = HarnessOwnedChildAgentRuntime(
+        event_log=child_event_log,
+        max_children=max(1, policy.max_parallelism),
+        renewal_interval_seconds=None,
+    )
+    owned_child_runtime.start()
 
     configured, _ = _runtime(
         policy=policy, stage_binding=binding, store=task_store,
@@ -174,7 +308,7 @@ def _setup(root, *, include_document=True, include_memory=False, dependency_ref=
     runtime = build_agent_loop_harness_orchestration_runtime(
         stage_binding=binding, policy_registry=configured._policy_registry,
         capability_registry=capabilities, store=task_store,
-        child_supervisor=configured._child_supervisor, candidate_builder=_CandidateBuilder(),
+        child_supervisor=owned_child_runtime.supervisor, candidate_builder=_CandidateBuilder(),
         worker_executor=executor, task_profiles=tuple(configured._profiles.values()),
         result_verifier=verifier,
         checkpoint_store=JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"),
@@ -225,7 +359,6 @@ def _setup(root, *, include_document=True, include_memory=False, dependency_ref=
         side_effect_store=effects, side_effect_registry=effect_registry,
     )
     return SimpleNamespace(**locals())
-
 
 def test_real_graph_recall_and_tool_share_admitted_namespace(tmp_path):
     setup = _setup(tmp_path, include_memory=True)
@@ -313,12 +446,43 @@ def _reopen_runtime(setup, root):
     artifacts = FilesystemHarnessArtifactPort(root / "child-artifacts")
     authority = HarnessResultRefAuthority(grants, transcript_store=transcripts, artifact_descriptors=artifacts, tenant_id="production")
     subagents = SubAgentRuntime(workers=setup.workers, transcript_store=transcripts, result_ref_authority=authority)
-    executor = HarnessSubAgentTaskExecutor(store=store, runtime=subagents, ref_admission_service=admission, task_policy=setup.policy)
+    canonical_tracker = GlobalBudgetTracker(GlobalBudgetPolicy(max_llm_calls=10_000))
+    budget_trackers = CanonicalChildBudgetTrackerProvider(canonical_tracker)
+    execution_service = HarnessChildExecutionService(
+        store=store,
+        ref_admission_service=admission,
+        state_runtime=store._runtime,
+        state_reader=store._reader,
+        artifact_store=store._artifact_store,
+        budget_trackers=budget_trackers,
+        leases=None,
+        evidence_limits=AdmissionChildToolEvidenceLimitsProvider(),
+        usage_meter=CanonicalChildExecutionUsageMeter(budget_trackers),
+        input_reader=None,
+    )
+    executor = HarnessSubAgentTaskExecutor(
+        store=store,
+        runtime=subagents,
+        ref_admission_service=admission,
+        task_policy=setup.policy,
+        execution_service=execution_service,
+    )
     verifier = TaskPlanResultVerifier(setup.gates, transcript_store=transcripts, artifact_reference_verifier=artifacts, result_ref_authority=authority)
+    child_event_log = DurableChildAgentEventLog(
+        state_runtime=store._runtime,
+        state_reader=store._reader,
+        state_key=f"agent-loop-parent-child-reopen:{root.resolve()}",
+    )
+    owned_child_runtime = HarnessOwnedChildAgentRuntime(
+        event_log=child_event_log,
+        max_children=max(1, setup.policy.max_parallelism),
+        renewal_interval_seconds=None,
+    )
+    owned_child_runtime.start()
     return build_agent_loop_harness_orchestration_runtime(
         stage_binding=setup.binding, policy_registry=setup.configured._policy_registry,
         capability_registry=setup.capabilities, store=store,
-        child_supervisor=setup.configured._child_supervisor, candidate_builder=_CandidateBuilder(),
+        child_supervisor=owned_child_runtime.supervisor, candidate_builder=_CandidateBuilder(),
         worker_executor=executor, task_profiles=tuple(setup.configured._profiles.values()), result_verifier=verifier,
         checkpoint_store=JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"), ref_admission_service=admission,
     ), executor

@@ -47,6 +47,8 @@ class ChildAgentRunnerAdapter:
         conversation_store: Any,
         execution_environment: Any,
         require_explicit_execution_profile: bool = True,
+        worker_id: str | None = None,
+        worker_version: str = "1",
     ) -> None:
         if not isinstance(registered_agent, AgentSpec):
             raise TypeError("registered_agent must be AgentSpec")
@@ -60,12 +62,32 @@ class ChildAgentRunnerAdapter:
             raise TypeError("execution_environment is required")
         if not isinstance(require_explicit_execution_profile, bool):
             raise TypeError("require_explicit_execution_profile must be boolean")
+        resolved_worker_id = worker_id or registered_agent.agent_id
+        if not isinstance(resolved_worker_id, str) or not resolved_worker_id.strip():
+            raise ValueError("worker_id must be non-empty text")
+        if not isinstance(worker_version, str) or not worker_version.strip():
+            raise ValueError("worker_version must be non-empty text")
+        self.worker_id = resolved_worker_id.strip()
+        self.worker_version = worker_version.strip()
+        # HarnessWorkerBinding validates this identity before a capability can
+        # enter the production registry.  The trusted path calls ``invoke``;
+        # ``execute`` exists only to make accidental legacy dispatch fail
+        # closed instead of bypassing the execution service.
+        self.worker_type = "subagent"
         self._registered_agent = deepcopy(registered_agent)
         self._llm_client = llm_client
         self._tool_registry = tool_registry
         self._conversation_store = conversation_store
         self._execution_environment = execution_environment
         self._require_explicit_execution_profile = require_explicit_execution_profile
+
+    def execute(self, _task: Mapping[str, Any], **_kwargs: Any) -> Any:
+        """Reject legacy worker dispatch outside the trusted execution service."""
+
+        raise HarnessValidationError(
+            "ChildAgentRunnerAdapter must be invoked through HarnessChildExecutionService",
+            code="task_plan_child_execution_service_required",
+        )
 
     def invoke(
         self,

@@ -241,6 +241,12 @@ class GlobalBudgetTracker:
     def budget_policy(self) -> BudgetPolicy:
         return self._budget_policy
 
+    @property
+    def event_sink(self) -> BudgetEventSink | None:
+        """Return the durable budget event sink used by this tracker."""
+
+        return self._event_sink
+
     def for_execution_identity(
         self,
         identity: GraphExecutionIdentity,

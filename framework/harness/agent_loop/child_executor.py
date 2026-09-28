@@ -24,6 +24,7 @@ from framework.harness.task_plan.dependency_refs import AcceptedDependencyResult
 from framework.harness.task_plan.policy import TaskPlanPolicy
 from framework.harness.task_plan.models import TaskInstance
 from framework.harness.task_plan.parallel import DispatchGroup, DispatchWave
+from framework.harness.task_plan.canonical import thaw_mapping
 from framework.harness.control_plane.budget_reservation import BudgetReservation
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
 from framework.harness.task_plan.verification import (
@@ -87,6 +88,18 @@ class HarnessSubAgentTaskExecutor:
     def result_ref_authority(self) -> HarnessResultRefAuthority:
         return self._require_authority()
 
+    @property
+    def execution_service(self) -> HarnessChildExecutionService | None:
+        """Return the optional trusted child execution boundary.
+
+        Direct executor construction keeps this dependency optional so focused
+        tests can exercise the lower-level ``SubAgentRuntime`` path. Production
+        composition validates the stronger invariant through
+        :meth:`require_production_bindings`.
+        """
+
+        return self._execution_service
+
     def _require_authority(self) -> HarnessResultRefAuthority:
         authority = self.runtime.result_ref_authority
         if not isinstance(authority, HarnessResultRefAuthority) or not authority.is_durable:
@@ -112,12 +125,20 @@ class HarnessSubAgentTaskExecutor:
         task_policy: TaskPlanPolicy,
     ) -> None:
         authority = self._require_authority()
+        if self._execution_service is None:
+            raise ValueError(
+                "production generic child requires HarnessChildExecutionService"
+            )
         if self._dependency_resolver.policy != task_policy:
             raise ValueError("child executor must use the pinned TaskPlan policy")
         if self.store is not store:
             raise ValueError("child executor must use the configured TaskPlan store")
         if self.ref_admission_service is not admission:
             raise ValueError("child executor must use the configured input admission service")
+        self._execution_service.require_production_bindings(
+            store=store,
+            ref_admission_service=admission,
+        )
         if not isinstance(verifier, TaskPlanResultVerifier):
             raise TypeError("result_verifier must be TaskPlanResultVerifier")
         if verifier.result_ref_authority is not authority or verifier.transcript_store is not self.runtime.transcript_store:
@@ -136,12 +157,13 @@ class HarnessSubAgentTaskExecutor:
         spec = binding.subagent_spec
         if binding.registration.worker_binding.worker_type is not HarnessWorkerType.SUBAGENT or spec is None:
             raise ValueError("generic child capability must bind a SUBAGENT worker")
+        implementation = binding.registration.worker_binding.implementation
+        if self.runtime.workers.get(spec.subagent_id) is not implementation:
+            raise ValueError("child runtime worker differs from its pinned capability binding")
         if self._execution_service is not None:
-            if not isinstance(binding.registration.worker_binding.implementation, ChildAgentRunnerAdapter):
+            if not isinstance(implementation, ChildAgentRunnerAdapter):
                 raise ValueError("production generic child requires ChildAgentRunnerAdapter")
             return
-        if self.runtime.workers.get(spec.subagent_id) is not binding.registration.worker_binding.implementation:
-            raise ValueError("child runtime worker differs from its pinned capability binding")
 
     def _invocation(
         self, binding: ResolvedCapabilityBinding, instance: TaskInstance,
@@ -254,8 +276,20 @@ class HarnessSubAgentTaskExecutor:
         intents = [
             event for event in history
             if event.event_type == "TASK_ATTEMPT_SPAWN_INTENT"
-            and (event.plan_id, event.plan_version, event.task_id, event.task_instance_id, event.attempt)
-            == (plan.plan_id, plan.version, instance.task_id, instance.task_instance_id, instance.attempt)
+            and (
+                event.plan_id,
+                event.plan_version,
+                event.payload.get("task_id"),
+                event.payload.get("task_instance_id"),
+                event.payload.get("attempt"),
+            )
+            == (
+                plan.plan_id,
+                plan.version,
+                instance.task_id,
+                instance.task_instance_id,
+                instance.attempt,
+            )
             and tuple(
                 getattr(event, name)
                 for name in (
@@ -281,10 +315,12 @@ class HarnessSubAgentTaskExecutor:
             )
         try:
             event, intent = admissions[0], intents[0]
-            group = DispatchGroup.from_dict(event.payload["group"])
-            wave = DispatchWave.from_dict(event.payload["wave"])
+            group = DispatchGroup.from_dict(thaw_mapping(event.payload["group"]))
+            wave = DispatchWave.from_dict(thaw_mapping(event.payload["wave"]))
             reservation = next(item for item in wave.reservations if item.task_id == instance.task_id)
-            budget = BudgetReservation.from_dict(intent.payload["budget_reservation"])
+            budget = BudgetReservation.from_dict(
+                thaw_mapping(intent.payload["budget_reservation"])
+            )
         except (KeyError, StopIteration, TypeError, ValueError, HarnessValidationError) as exc:
             raise HarnessValidationError(
                 "child execution admission payload is invalid",

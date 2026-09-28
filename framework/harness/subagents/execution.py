@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from hashlib import sha256
+import inspect
 from typing import Protocol, runtime_checkable
 
 from framework.agent.models import AgentLoopResult
@@ -105,6 +106,7 @@ class AdmittedChildExecution:
             self.execution_identity.graph_ref,
             self.execution_identity.graph_checksum,
         )
+        intent_payload = self.spawn_intent.payload
         if (
             not instance.matches_plan_identity(plan)
             or task is None
@@ -129,7 +131,11 @@ class AdmittedChildExecution:
             or self.spawn_intent.event_type != "TASK_ATTEMPT_SPAWN_INTENT"
             or (self.spawn_intent.run_id, self.spawn_intent.stage_id, self.spawn_intent.plan_id, self.spawn_intent.plan_version)
             != (plan.run_id, plan.stage_id, plan.plan_id, plan.version)
-            or (self.spawn_intent.task_id, self.spawn_intent.task_instance_id, self.spawn_intent.attempt)
+            or (
+                intent_payload.get("task_id"),
+                intent_payload.get("task_instance_id"),
+                intent_payload.get("attempt"),
+            )
             != (instance.task_id, instance.task_instance_id, instance.attempt)
             or tuple(getattr(self.spawn_intent, name) for name in ("run_id", "graph_id", "graph_version", "graph_ref", "graph_checksum"))
             != identity_fields
@@ -153,7 +159,12 @@ class AdmittedChildExecution:
 class ChildBudgetTrackerProviderPort(Protocol):
     """Issue the canonical-ledger tracker for exactly one admitted child."""
 
-    def tracker_for(self, admission: AdmittedChildExecution) -> GlobalBudgetTracker: ...
+    def tracker_for(
+        self,
+        admission: AdmittedChildExecution,
+        *,
+        attempt_identity: SubAgentAttemptIdentity | None = None,
+    ) -> GlobalBudgetTracker: ...
 
 
 @runtime_checkable
@@ -457,6 +468,73 @@ class HarnessChildExecutionService:
     def ref_admission_service(self) -> HarnessRefAdmissionService:
         return self._refs
 
+    def require_production_bindings(
+        self,
+        *,
+        store: DurableTaskPlanStore,
+        ref_admission_service: HarnessRefAdmissionService,
+    ) -> None:
+        """Require the complete provider-backed execution boundary.
+
+        ``HarnessChildExecutionService`` remains constructible with protocol
+        implementations so focused tests can substitute deterministic ports.
+        The generic production composition is stricter: it must use the
+        canonical TaskPlan state ports and the provider implementations that
+        derive limits and usage from durable admission/evidence/ledger state.
+        """
+
+        if self._store is not store:
+            raise ValueError(
+                "trusted child execution must share the configured TaskPlan store"
+            )
+        if self._refs is not ref_admission_service:
+            raise ValueError(
+                "trusted child execution must share the configured input admission service"
+            )
+        state_runtime = getattr(self, "_state_runtime", None)
+        state_reader = getattr(self, "_state_reader", None)
+        artifact_store = getattr(self, "_artifact_store", None)
+        if getattr(store, "_runtime", None) is not state_runtime:
+            raise ValueError(
+                "trusted child execution must use the TaskPlan transactional runtime"
+            )
+        if getattr(store, "_reader", None) is not state_reader:
+            raise ValueError(
+                "trusted child execution must use the TaskPlan transactional reader"
+            )
+        if getattr(store, "_artifact_store", None) is not artifact_store:
+            raise ValueError(
+                "trusted child execution must use the TaskPlan artifact owner"
+            )
+
+        # Import lazily to keep the protocol module dependency direction one
+        # way: the concrete provider module depends on this service contract.
+        from framework.harness.subagents.execution_providers import (
+            AdmissionChildToolEvidenceLimitsProvider,
+            CanonicalChildBudgetTrackerProvider,
+            CanonicalChildExecutionUsageMeter,
+        )
+
+        if not isinstance(self._budget_trackers, CanonicalChildBudgetTrackerProvider):
+            raise ValueError(
+                "production generic child requires CanonicalChildBudgetTrackerProvider"
+            )
+        if not isinstance(
+            self._evidence_limits,
+            AdmissionChildToolEvidenceLimitsProvider,
+        ):
+            raise ValueError(
+                "production generic child requires AdmissionChildToolEvidenceLimitsProvider"
+            )
+        if not isinstance(self._usage_meter, CanonicalChildExecutionUsageMeter):
+            raise ValueError(
+                "production generic child requires CanonicalChildExecutionUsageMeter"
+            )
+        if self._usage_meter.tracker_provider is not self._budget_trackers:
+            raise ValueError(
+                "trusted child usage meter must share the canonical budget provider"
+            )
+
     def execute(
         self,
         admission: AdmittedChildExecution,
@@ -491,7 +569,9 @@ class HarnessChildExecutionService:
             )
         control = self._require_live_control(admission)
         control.raise_if_active()
-        tracker = self._budget_trackers.tracker_for(admission)
+        tracker = self._call_tracker_provider(
+            self._budget_trackers, admission, invocation
+        )
         if not isinstance(tracker, GlobalBudgetTracker):
             raise HarnessValidationError("child budget tracker provider returned an invalid tracker", code="task_plan_budget_authority_missing")
         self._require_budget_tracker(admission, invocation, tracker)
@@ -676,6 +756,28 @@ class HarnessChildExecutionService:
                 code="subagent_tool_evidence_recovery_required",
             )
         return scope
+
+    @staticmethod
+    def _call_tracker_provider(
+        provider: ChildBudgetTrackerProviderPort,
+        admission: AdmittedChildExecution,
+        invocation: SubAgentInvocation,
+    ) -> GlobalBudgetTracker:
+        """Pass the invocation identity when supported, preserving old test ports."""
+
+        method = provider.tracker_for
+        try:
+            parameters = inspect.signature(method).parameters.values()
+            accepts_identity = any(
+                parameter.name == "attempt_identity"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_identity = False
+        if accepts_identity:
+            return method(admission, attempt_identity=invocation.attempt_identity)
+        return method(admission)
 
     @staticmethod
     def _require_budget_tracker(

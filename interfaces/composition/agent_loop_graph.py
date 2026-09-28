@@ -177,6 +177,7 @@ def build_agent_loop_harness_orchestration_runtime(
         raise TypeError("capability_registry must be TaskCapabilityRegistry")
     if not isinstance(child_supervisor, ChildAgentSupervisor):
         raise TypeError("child_supervisor must be ChildAgentSupervisor")
+    child_supervisor.require_durable_owner()
     if not isinstance(checkpoint_store, TaskPlanCheckpointStorePort):
         raise TypeError("checkpoint_store must implement TaskPlanCheckpointStorePort")
     if getattr(checkpoint_store, "is_durable", False) is not True:

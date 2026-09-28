@@ -217,6 +217,13 @@ class HarnessAgentOrchestrationRuntime:
         snapshot = self._ref_admission_service.admit_graph_inputs(
             task, stage_binding=self._stage_binding, task_policy=policy,
         )
+        # Durable child lifecycle events are tenant-bound and fail closed when
+        # a parent run has not been registered. Register the exact admitted
+        # run/tenant pair before TaskPlan execution can reach child spawn.
+        self._child_supervisor.register_run_scope(
+            snapshot.execution_identity.run_id,
+            snapshot.policy.tenant_id,
+        )
         if not isinstance(self._store, DurableTaskPlanStore):
             raise HarnessValidationError(
                 "parent execution context requires durable TaskPlan storage",

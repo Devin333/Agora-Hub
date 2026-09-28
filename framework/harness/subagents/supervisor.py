@@ -711,6 +711,53 @@ class ChildAgentSupervisor:
         """Configured upper bound used by Harness admission control."""
         return self._max_children
 
+    def require_durable_owner(self) -> None:
+        """Require the supervisor to be fenced by a durable owner scope.
+
+        The low-level supervisor intentionally remains usable with in-memory
+        events for focused lifecycle tests. Production composition must bind
+        it to the same durable event log for reads and writes and to an owner
+        guard that fences every mutating operation.
+        """
+
+        from framework.harness.subagents.supervisor_store import DurableChildAgentEventLog
+
+        if not callable(self._owner_guard):
+            raise ValueError(
+                "production child supervisor requires a durable owner guard"
+            )
+        if not isinstance(self._event_sink, DurableChildAgentEventLog):
+            raise ValueError(
+                "production child supervisor requires DurableChildAgentEventLog"
+            )
+        if self._event_reader is not self._event_sink:
+            raise ValueError(
+                "production child supervisor must share one durable event log"
+            )
+        self._owner_guard()
+
+    def register_run_scope(self, run_id: str, tenant_id: str) -> None:
+        """Bind a Graph run to the durable child lifecycle tenant scope.
+
+        The durable event log intentionally refuses lifecycle writes for an
+        unknown run. Production composition therefore registers the trusted
+        parent run at the Harness admission boundary, before the coordinator
+        can spawn a child. Keeping this operation on the supervisor preserves
+        the owner fence and prevents callers from reaching into the event log
+        directly.
+        """
+
+        from framework.harness.subagents.supervisor_store import DurableChildAgentEventLog
+
+        with self._lock:
+            self._assert_admission()
+            if not isinstance(self._event_sink, DurableChildAgentEventLog):
+                raise ChildAgentSupervisorError(
+                    "run scope registration requires a durable child event log",
+                    code="child_run_scope_unavailable",
+                )
+            self._event_sink.register_run_scope(run_id, tenant_id)
+
     @property
     def available_capacity(self) -> int:
         """Current admission headroom without exposing mutable handles."""

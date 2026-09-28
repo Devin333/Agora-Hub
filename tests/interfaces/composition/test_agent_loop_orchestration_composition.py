@@ -126,6 +126,7 @@ def _factory_kwargs(
         policy=policy,
         store=store,
         admission=admission,
+        trusted_execution=True,
     )
     policy = child.policy
     stage_binding = build_task_plan_stage_binding(
@@ -140,7 +141,7 @@ def _factory_kwargs(
         "policy_registry": TaskPlanPolicyRegistry((policy,)),
         "capability_registry": child.capability_registry,
         "store": store,
-        "child_supervisor": ChildAgentSupervisor(max_children=1),
+        "child_supervisor": child.owned_runtime.supervisor,
         "candidate_builder": candidate_builder or _CandidateBuilder(),
         "worker_executor": child.executor,
         "task_profiles": (
@@ -335,12 +336,27 @@ def test_production_factory_binds_one_authorized_executor_for_execution_and_reco
     assert runtime._stage_runner.worker_result_recovery == executor.recover
     assert executor.store is kwargs["store"]
     assert executor.ref_admission_service is kwargs["ref_admission_service"]
+    assert executor.execution_service is not None
     assert executor.result_ref_authority is verifier.result_ref_authority
     assert executor.runtime.transcript_store is verifier.transcript_store
     assert (
         verifier.artifact_reference_verifier
         is executor.result_ref_authority.artifact_descriptors
     )
+
+
+def test_production_factory_rejects_untrusted_child_execution_service(tmp_path) -> None:
+    kwargs = _factory_kwargs(tmp_path)
+    kwargs["worker_executor"] = build_child_dependencies(
+        tmp_path / "untrusted-child",
+        policy=kwargs["policy_registry"].policies[0],
+        store=kwargs["store"],
+        admission=kwargs["ref_admission_service"],
+        trusted_execution=False,
+    ).executor
+
+    with pytest.raises(ValueError, match="HarnessChildExecutionService"):
+        build_agent_loop_harness_orchestration_runtime(**kwargs)
 
 
 def test_runtime_state_prefers_bound_parallel_supervisor_over_serial_fallback(tmp_path) -> None:
@@ -368,6 +384,7 @@ def _break_production_child_binding(kwargs, root, case: str) -> str:
             policy=policy,
             store=other_store,
             admission=kwargs["ref_admission_service"],
+            trusted_execution=True,
         ).executor
         return "configured TaskPlan store"
     if case == "input_admission":
@@ -377,6 +394,7 @@ def _break_production_child_binding(kwargs, root, case: str) -> str:
             policy=policy,
             store=kwargs["store"],
             admission=other_admission,
+            trusted_execution=True,
         ).executor
         return "configured input admission service"
     if case == "result_authority":
@@ -385,6 +403,7 @@ def _break_production_child_binding(kwargs, root, case: str) -> str:
             policy=policy,
             store=kwargs["store"],
             admission=kwargs["ref_admission_service"],
+            trusted_execution=True,
         ).verifier
         return "share result authority"
     if case == "transcript_store":
