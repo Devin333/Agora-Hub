@@ -24,6 +24,7 @@ from framework.harness.task_plan.queue import (
     TaskPlanQueueReadback,
 )
 from framework.harness.task_plan.replay import TaskPlanReplayReducer, TaskPlanReplayReport
+from framework.harness.task_plan.gate_evidence import TaskPlanGateEvidenceReaderPort
 from framework.harness.task_plan.schema import GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA
 from framework.harness.task_plan.scheduler import materialize_queue_task
 from framework.harness.task_plan.store import TaskPlanEvent, TaskResultRecord
@@ -252,12 +253,14 @@ class TaskPlanRecoveryService:
         artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
         result_ref_authority: HarnessResultRefAuthority | None = None,
         execution_identity: GraphExecutionIdentity | None = None,
+        gate_evidence_reader: TaskPlanGateEvidenceReaderPort | None = None,
     ) -> None:
         self._reducer = TaskPlanReplayReducer(
             transcript_store=transcript_store,
             artifact_reference_verifier=artifact_reference_verifier,
             result_ref_authority=result_ref_authority,
             execution_identity=execution_identity,
+            gate_evidence_reader=gate_evidence_reader,
         )
         if queue_reader is not None and not isinstance(
             queue_reader,

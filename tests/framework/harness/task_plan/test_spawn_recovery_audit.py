@@ -22,10 +22,31 @@ from framework.harness.task_plan.parallel import (
 from framework.harness.task_plan.replay import _apply_parallel_event, _projection_for_plan
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
 from framework.harness.task_plan.stage import TaskPlanStageRunner
+from framework.harness.task_plan.verification import (
+    TaskPlanGateRegistry,
+    TaskPlanResultVerifier,
+)
+from framework.harness.workers.result import HarnessWorkerResult
 from infrastructure.storage.events.sqlite import SQLiteEventStore
 from tests.framework.harness.task_plan.test_parallel_orchestration import _accepted_parallel_plan, _request, _result, _admitted_request
 from tests.framework.harness.agent_loop.test_orchestration_runtime import _runtime, _request as _parent_request
 from tests.framework.harness.task_plan.test_durable_task_plan_store import _store, _EventStore, _ArtifactStore
+
+
+def _runtime_with_gate_owner(store):
+    gates = TaskPlanGateRegistry()
+    gates.register("gate@1", lambda _request: True, deterministic=True)
+    return _runtime(
+        store=store,
+        result_verifier=TaskPlanResultVerifier(
+            gates,
+            gate_artifact_writer=store,
+        ),
+        worker_executor=lambda _binding, instance, _identity: HarnessWorkerResult(
+            status="succeeded",
+            output={"summary": instance.task_id},
+        ),
+    )
 
 
 def _wait_for_spawned_wave(supervisor, session):
@@ -918,7 +939,7 @@ def test_durable_receipt_conflict_is_audited_before_recovery_stops(crashed_wave)
 
 def test_restart_finishes_active_wave_before_join_without_spawning_again(monkeypatch):
     events, artifacts = _EventStore(), _ArtifactStore()
-    runtime, identity = _runtime(store=_store(events, artifacts))
+    runtime, identity = _runtime_with_gate_owner(_store(events, artifacts))
     runner = runtime._stage_runner
     record = runner._record_parallel_events
     captured = {}
@@ -1158,7 +1179,7 @@ def test_sqlite_reopen_with_same_supervisor_recovers_confirmed_wave_once(
     database = tmp_path / "confirmed-spawn-recovery.sqlite3"
     events = SQLiteEventStore(database)
     artifacts = _ArtifactStore()
-    runtime, identity = _runtime(store=_store(events, artifacts))
+    runtime, identity = _runtime_with_gate_owner(_store(events, artifacts))
     runner = runtime._stage_runner
     record = runner._record_parallel_events
     captured = {}

@@ -7,7 +7,10 @@ import pytest
 from framework.events.errors import EventContractError
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
-from framework.harness.task_plan.canonical import thaw_mapping
+from framework.harness.task_plan.canonical import (
+    canonical_payload_checksum,
+    thaw_mapping,
+)
 from framework.harness.task_plan.capacity import (
     CapacityPool,
     CapacityScopeSnapshot,
@@ -61,6 +64,28 @@ def _parallel_event(plan, kind, sequence, payload):
         "event_type": kind, "parallel_event_idempotency_key": f"{kind}:{sequence}",
         "idempotency_key": str(sequence), **payload,
     })
+
+
+def _group_observation(plan, group):
+    """Build the versioned observation required by terminal group events."""
+
+    observation = {
+        "schema_version": "agora.harness-parent-observation/v1",
+        "group_id": group.group_id,
+        "group_status": group.state.value,
+        "plan_version": plan.version,
+        "waves": [],
+        "tasks": [],
+        "aggregate_ref": None,
+        "aggregate_checksum": None,
+        "diagnostics": [],
+        "result_refs": [],
+        "truncated": False,
+    }
+    return {
+        **observation,
+        "observation_checksum": canonical_payload_checksum(observation),
+    }
 
 
 @pytest.fixture(params=("memory", "durable"))
@@ -241,7 +266,9 @@ def test_closed_group_cannot_admit_a_new_wave(admitted):
     store, plan, group = admitted
     current = store.load_projection(plan.run_id, plan.stage_id)
     closed = _parallel_event(plan, "TASK_GROUP_FAILED", current.last_sequence + 1, {
-        "group": replace(group, state="FAILED").to_dict(), "reason_code": "TASK_FAILED",
+        "group": replace(group, state="FAILED").to_dict(),
+        "observation": _group_observation(plan, replace(group, state="FAILED")),
+        "reason_code": "TASK_FAILED",
     })
     store.commit_event(closed, replace(current, last_sequence=closed.sequence))
     initial, _, batch, projections = _wave_batch(store, plan, group, 0, 1)

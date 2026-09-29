@@ -285,10 +285,15 @@ def _validate_continuation_owner_binding(
             if isinstance(group_id, str):
                 groups[group_id] = group
         observation = payload.get("observation")
-        if event_type in {"TASK_GROUP_JOIN_WAITING", "TASK_GROUP_JOINED"} and isinstance(
-            observation,
-            Mapping,
-        ):
+        if event_type in {
+            "TASK_GROUP_JOIN_WAITING",
+            "TASK_GROUP_JOINED",
+            "TASK_GROUP_FAILED",
+            "TASK_GROUP_CANCELLED",
+            "TASK_GROUP_INDETERMINATE",
+            "TASK_GROUP_HALTED",
+            "TASK_GROUP_SUPERSEDED",
+        } and isinstance(observation, Mapping):
             group_id = observation.get("group_id")
             supplied = observation.get("observation_checksum")
             if isinstance(group_id, str) and isinstance(supplied, str):
@@ -299,11 +304,15 @@ def _validate_continuation_owner_binding(
                         if key != "observation_checksum"
                     }
                 )
-                if supplied == expected:
-                    latest_observations[group_id] = checksum(
-                        supplied,
-                        "observation_checksum",
+                if supplied != expected:
+                    raise HarnessValidationError(
+                        "recorded group observation checksum is invalid",
+                        code="parent_continuation_observation_mismatch",
                     )
+                latest_observations[group_id] = checksum(
+                    supplied,
+                    "observation_checksum",
+                )
 
     group = groups.get(continuation.group_id)
     if (

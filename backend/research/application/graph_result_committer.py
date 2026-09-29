@@ -535,6 +535,12 @@ class ResearchTaskPlanResultMaterializer(TaskPlanResultVerifierPort):
 
         return getattr(self._verifier, "artifact_reference_verifier", None)
 
+    @property
+    def gate_artifact_writer(self) -> Any:
+        """Expose the verifier-owned gate writer without adding authority."""
+
+        return getattr(self._verifier, "gate_artifact_writer", None)
+
     def verify(
         self,
         result: HarnessWorkerResult,

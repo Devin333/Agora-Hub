@@ -40,6 +40,7 @@ from framework.harness.task_plan.checkpoint import (
     TaskPlanCheckpoint,
     TaskPlanCheckpointStorePort,
 )
+from framework.harness.task_plan.gate_evidence import TaskPlanGateEvidenceReaderPort
 from framework.harness.task_plan.replay import TaskPlanReplayReducer, TaskPlanReplayReport
 from framework.harness.task_plan.scheduler import (
     TaskPlanReadyDecision,
@@ -150,6 +151,17 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         self.scheduler = scheduler or HarnessScheduler()
         self.aggregator = aggregator or TaskPlanAggregator()
         self.result_verifier = result_verifier or TaskPlanResultVerifier()
+        bind_gate_reader = getattr(store, "bind_gate_evidence_reader", None)
+        verifier_gate_owner = getattr(
+            self.result_verifier,
+            "gate_artifact_writer",
+            None,
+        )
+        if callable(bind_gate_reader) and isinstance(
+            verifier_gate_owner,
+            TaskPlanGateEvidenceReaderPort,
+        ):
+            bind_gate_reader(verifier_gate_owner)
         self.worker_executor = worker_executor
         if worker_result_recovery is not None and not callable(worker_result_recovery):
             raise TypeError("worker_result_recovery must be callable")
@@ -2028,6 +2040,19 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     code="task_plan_subagent_attempt_indeterminate",
                     details={"task_id": state.task_id, "attempt": state.attempts},
                 )
+            if isinstance(candidate, TaskResultRecord):
+                if (
+                    candidate.task_instance_id != instance.task_instance_id
+                    or candidate.attempt != instance.attempt
+                    or candidate.task_id != instance.task_id
+                ):
+                    raise HarnessValidationError(
+                        "recovered result artifact belongs to another attempt",
+                        code="task_plan_recovery_attempt_mismatch",
+                    )
+                self.store.append_result(candidate)
+                recovered_any = True
+                continue
             if not isinstance(candidate, HarnessWorkerResult):
                 raise HarnessValidationError(
                     "subagent result recovery returned invalid evidence",
@@ -2062,6 +2087,17 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                      if request.execution_identity is None else self.worker_result_recovery(binding, instance, request.execution_identity))
         if candidate is None:
             return None
+        if isinstance(candidate, TaskResultRecord):
+            if (
+                candidate.task_instance_id != instance.task_instance_id
+                or candidate.attempt != instance.attempt
+                or candidate.task_id != instance.task_id
+            ):
+                raise HarnessValidationError(
+                    "recovered result artifact belongs to another attempt",
+                    code="task_plan_recovery_attempt_mismatch",
+                )
+            return candidate, self._recovery_receipt_for_result(candidate)
         if not isinstance(candidate, HarnessWorkerResult):
             raise HarnessValidationError("subagent recovery returned invalid evidence", code="task_plan_result_invalid")
         verified = self.result_verifier.verify(candidate, task=definition, request=TaskPlanResultVerificationRequest(
@@ -2071,6 +2107,30 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         if len(entries) != 1:
             raise HarnessValidationError("subagent recovery requires one committed receipt", code="task_plan_subagent_evidence_required")
         return verified, SubAgentTranscriptReceipt.from_dict(entries[0].payload)
+
+    def _recovery_receipt_for_result(
+        self,
+        result: TaskResultRecord,
+    ) -> SubAgentTranscriptReceipt:
+        transcript_store = getattr(self.result_verifier, "transcript_store", None)
+        if transcript_store is None or result.transcript_ref is None:
+            raise HarnessValidationError(
+                "recovered subagent result is missing its transcript owner",
+                code="task_plan_subagent_transcript_store_required",
+            )
+        transcript = transcript_store.read(result.transcript_ref)
+        receipt = transcript_store.find_by_identity(transcript.identity)
+        if receipt is None or (
+            receipt.transcript_ref != result.transcript_ref
+            or receipt.transcript_checksum != result.transcript_checksum
+            or receipt.output_ref != result.subagent_output_ref
+            or receipt.output_checksum != result.subagent_output_checksum
+        ):
+            raise HarnessValidationError(
+                "recovered result artifact differs from its canonical receipt",
+                code="task_plan_subagent_evidence_mismatch",
+            )
+        return receipt
 
     def _commit_task_transition(
         self,
@@ -2285,6 +2345,22 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             artifact_reference_verifier=getattr(self.result_verifier, "artifact_reference_verifier", None),
             result_ref_authority=getattr(self.result_verifier, "result_ref_authority", None),
             execution_identity=request.execution_identity,
+            gate_evidence_reader=(
+                self.store
+                if isinstance(self.store, TaskPlanGateEvidenceReaderPort)
+                else (
+                    self.result_verifier.gate_artifact_writer
+                    if isinstance(
+                        getattr(
+                            self.result_verifier,
+                            "gate_artifact_writer",
+                            None,
+                        ),
+                        TaskPlanGateEvidenceReaderPort,
+                    )
+                    else None
+                )
+            ),
         ).replay(
             plan_history,
             events,

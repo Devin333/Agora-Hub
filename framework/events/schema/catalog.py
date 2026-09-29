@@ -1402,6 +1402,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "status": {"enum": ["PLANNED", "ADMITTED", "DISPATCHING", "RUNNING", "TERMINAL"]},
     })
     observation = object_schema({
+        "schema_version": {"const": "agora.harness-parent-observation/v1"},
         "group_id": _TEXT, "group_status": group_state, "plan_version": _POSITIVE_INTEGER,
         "waves": {"type": "array", "items": wave_summary, "maxItems": 128},
         "tasks": {"type": "array", "items": task_summary, "maxItems": 128},
@@ -1409,7 +1410,7 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "diagnostics": _ARRAY_OF_TEXT, "result_refs": _ARRAY_OF_TEXT,
         "truncated": {"type": "boolean"},
         "observation_checksum": _CHECKSUM_TEXT,
-    }, required=["observation_checksum"])
+    }, required=["schema_version", "observation_checksum"])
     continuation = object_schema({
         "schema_version": {"const": "newsroom.harness-parent-continuation/v1"},
         "run_id": _TEXT, "stage_id": _TEXT, "parent_turn_id": _TEXT,
@@ -1570,6 +1571,11 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "TASK_GROUP_CAPACITY_WAITING": ["group_id", "waiting", "reason_code", "idempotency_key"],
         "TASK_GROUP_JOIN_WAITING": ["group", "observation", "idempotency_key"],
         "TASK_GROUP_JOINED": ["group", "observation", "idempotency_key"],
+        "TASK_GROUP_FAILED": ["group", "observation", "idempotency_key"],
+        "TASK_GROUP_CANCELLED": ["group", "observation", "idempotency_key"],
+        "TASK_GROUP_INDETERMINATE": ["group", "observation", "idempotency_key"],
+        "TASK_GROUP_HALTED": ["group", "observation", "idempotency_key"],
+        "TASK_GROUP_SUPERSEDED": ["group", "observation", "idempotency_key"],
         "PARENT_OBSERVATION_CONTINUATION": ["continuation", "idempotency_key"],
         "TASK_GROUP_RECOVERY": ["group", "group_id", "recovered_results", "recovery_outcome", "idempotency_key"],
         "RECOVERY_STATUS_READ": ["group_id", "wave_id", "task_id", "task_instance_id", "attempt", "operation_key", "recovery_outcome", "idempotency_key"],
@@ -1647,6 +1653,7 @@ def _task_plan_event_payload_schema(
                 "maxItems": 64,
                 "uniqueItems": True,
             },
+            "worker_result_proof_ref": nullable_checksum,
             "transcript_ref": nullable_text,
             "transcript_checksum": nullable_checksum,
             "subagent_output_ref": nullable_text,

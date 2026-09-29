@@ -29,11 +29,15 @@ from framework.harness.task_plan import (
     TaskCapabilityRegistry,
     TaskOutputContract,
     TaskPlanEvent,
+    TaskPlanGateEvidence,
+    TaskPlanGateRegistry,
     TaskPlanPolicy,
     TaskPlanScheduler,
     TaskPlanStageRequest,
     TaskPlanStageIdentity,
     TaskPlanStageRunner,
+    TaskPlanResultVerifier,
+    TaskPlanResultVerificationRequest,
     TaskPlanValidator,
     TaskResultRecord,
     TaskSpec,
@@ -68,6 +72,7 @@ from framework.harness.workers.result import HarnessWorkerResult
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.shared.graph_identity import GraphExecutionIdentity
 from tests.fixtures.task_plan import build_task_plan_stage_binding
+from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 
 
 class _Worker:
@@ -82,42 +87,47 @@ class _Worker:
 class _AcceptingResultVerifier:
     registered_gate_refs = ("gate@1",)
 
-    def verify(self, result, *, task, request):
-        instance = request.instance
-        return TaskResultRecord.for_plan(
-            request.plan,
-            task_id=instance.task_id,
-            task_instance_id=instance.task_instance_id,
-            attempt=instance.attempt,
-            status=TaskLifecycle.SUCCEEDED,
-            result_ref=f"result://{instance.task_id}",
-            output_roles=(task.output_role,),
-            output_schema_ref=task.task.output_contract.schema_ref,
-            verified_gate_refs=task.gate_refs,
-            gate_evidence_refs=tuple(
-                f"evidence://gate/{index}"
-                for index, _gate_ref in enumerate(task.gate_refs, start=1)
-            ),
+    def __init__(self) -> None:
+        self._gate_owner = InMemoryTaskPlanGateArtifactWriter()
+        gates = TaskPlanGateRegistry()
+        gates.register("gate@1", self._evaluate_gate, deterministic=True)
+        self._delegate = TaskPlanResultVerifier(
+            gates,
+            gate_artifact_writer=self._gate_owner,
         )
+
+    @property
+    def gate_artifact_writer(self):
+        return self._gate_owner
+
+    def _evaluate_gate(self, _request):
+        return True
+
+    def verify(self, result, *, task, request):
+        return self._delegate.verify(result, task=task, request=request)
 
 
 class _FailOnceResultVerifier(_AcceptingResultVerifier):
     def __init__(self, *, failure_code: str = "task_worker_failed") -> None:
+        super().__init__()
         self.calls = 0
         self.failure_code = failure_code
 
+    def _evaluate_gate(self, request):
+        if self.calls != 1:
+            return True
+        return TaskPlanGateEvidence(
+            gate_ref="gate@1",
+            input_checksum=request.input_checksum,
+            result_checksum=canonical_payload_checksum(
+                request.worker_result.candidate_payload()
+            ),
+            passed=False,
+            reason_code=self.failure_code,
+        )
+
     def verify(self, result, *, task, request):
         self.calls += 1
-        if self.calls == 1:
-            instance = request.instance
-            return TaskResultRecord.for_plan(
-                request.plan,
-                task_id=instance.task_id,
-                task_instance_id=instance.task_instance_id,
-                attempt=instance.attempt,
-                status=TaskLifecycle.FAILED,
-                error_code=self.failure_code,
-            )
         return super().verify(result, task=task, request=request)
 
 
@@ -745,16 +755,21 @@ def test_store_accepts_duplicate_identical_result_once():
         task_id=instance.task_id, task_instance_id=instance.task_instance_id,
         attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
     ), projection)
-    result = TaskResultRecord.for_plan(
-        plan,
-        task_id="a",
-        task_instance_id=instance.task_instance_id,
-        attempt=1,
-        status=TaskLifecycle.SUCCEEDED,
-        result_ref="result://a",
-        output_refs=("artifact://a",),
-        output_roles=("role",),
-        output_schema_ref="schema://result@1",
+    verifier = _AcceptingResultVerifier()
+    store.bind_gate_evidence_reader(verifier.gate_artifact_writer)
+    worker_result = HarnessWorkerResult(
+        status="succeeded",
+        artifacts=("artifact://a",),
+    )
+    result = verifier.verify(
+        worker_result,
+        task=plan.tasks[0],
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=plan.tasks[0],
+            instance=instance,
+            worker_result=worker_result,
+        ),
     )
     assert store.append_result(result) == store.append_result(result)
     assert len(store.results_for("run", "dynamic_stage", plan.plan_id, 1)) == 1

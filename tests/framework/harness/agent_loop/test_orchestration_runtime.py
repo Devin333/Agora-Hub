@@ -19,32 +19,55 @@ from framework.harness.task_plan.models import TaskBudget
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.task_plan.policy import TaskPlanPolicy, TaskPlanPolicyRegistry
 from framework.harness.task_plan.stage import TaskPlanStageRunner
-from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskResultRecord
+from framework.harness.task_plan.store import InMemoryTaskPlanStore
 from framework.harness.task_plan.checkpoint import InMemoryTaskPlanCheckpointStore
+from framework.harness.task_plan.verification import TaskPlanGateRegistry, TaskPlanResultVerifier
+from framework.harness.task_plan.gate_evidence import TaskPlanGateArtifactWriterPort
 from framework.harness.workers.result import HarnessWorkerResult
 from framework.shared.graph_identity import GraphExecutionIdentity
 from interfaces.composition.agent_loop_graph import (
     build_agent_loop_orchestration_binding,
 )
-from tests.fixtures.task_plan import build_task_plan_stage_binding
+from tests.fixtures.task_plan import (
+    InMemoryTaskPlanGateArtifactWriter,
+    build_task_plan_stage_binding,
+)
+
+
+def _gate_owner(store):
+    """Reuse the test store's verifier owner across reopened runtimes."""
+
+    if isinstance(store, TaskPlanGateArtifactWriterPort):
+        return store
+    existing = getattr(store, "_gate_evidence_reader", None)
+    return existing if existing is not None else InMemoryTaskPlanGateArtifactWriter()
 
 
 class _AcceptingResultVerifier:
-    registered_gate_refs = ("gate@1",)
+    """Test adapter that uses the production verifier and durable gate owner."""
+
+    def __init__(self, gate_artifact_writer) -> None:
+        gates = TaskPlanGateRegistry()
+        gates.register(
+            "gate@1",
+            lambda request: request.worker_result.output.get("summary") == "completed",
+            deterministic=True,
+        )
+        self._delegate = TaskPlanResultVerifier(
+            gates,
+            gate_artifact_writer=gate_artifact_writer,
+        )
+
+    @property
+    def registered_gate_refs(self):
+        return self._delegate.registered_gate_refs
+
+    @property
+    def gate_artifact_writer(self):
+        return self._delegate.gate_artifact_writer
 
     def verify(self, result, *, task, request):
-        instance = request.instance
-        return TaskResultRecord.for_plan(
-            request.plan,
-            task_id=instance.task_id,
-            task_instance_id=instance.task_instance_id,
-            attempt=instance.attempt,
-            status="succeeded",
-            result_ref=f"result://{instance.task_id}",
-            output_roles=(task.output_role,),
-            output_schema_ref=task.task.output_contract.schema_ref,
-            verified_gate_refs=task.gate_refs,
-        )
+        return self._delegate.verify(result, task=task, request=request)
 
 
 class _BoundWorker:
@@ -54,8 +77,11 @@ class _BoundWorker:
     def __init__(self, worker_id: str) -> None:
         self.worker_id = worker_id
 
-    def execute(self, _task):
-        return HarnessWorkerResult(status="succeeded", output={"summary": "completed"})
+    def execute(self, task):
+        return HarnessWorkerResult(
+            status="succeeded",
+            output={"summary": "completed", "task_id": task.task_id},
+        )
 
 
 def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admission_service=None, agent_delegation=False, policy=None, stage_binding=None) -> tuple[HarnessAgentOrchestrationRuntime, GraphExecutionIdentity]:
@@ -134,15 +160,16 @@ def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admi
     capability_registry = TaskCapabilityRegistry(registrations)
     store = store if store is not None else InMemoryTaskPlanStore()
     checkpoint_store = InMemoryTaskPlanCheckpointStore()
+    result_verifier = result_verifier or _AcceptingResultVerifier(_gate_owner(store))
     supervisor = ChildAgentSupervisor(max_children=2)
     runner = TaskPlanStageRunner(
         candidate_builder=object(),
         capability_registry=capability_registry,
         store=store,
-        result_verifier=result_verifier or _AcceptingResultVerifier(),
-        worker_executor=worker_executor or (lambda _binding, _task, _identity: HarnessWorkerResult(
+        result_verifier=result_verifier,
+        worker_executor=worker_executor or (lambda _binding, task, _identity: HarnessWorkerResult(
             status="succeeded",
-            output={"summary": "completed"},
+            output={"summary": "completed", "task_id": task.task_id},
         )),
         parallel_coordinator=ParallelAgentCoordinator(
             max_workers=2,

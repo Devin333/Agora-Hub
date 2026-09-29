@@ -56,6 +56,8 @@ from framework.harness.task_plan.dependency import (
     dependency_blocked_task_ids,
     dependency_blocking_predecessor_ids,
 )
+from framework.harness.task_plan.gate_evidence import TaskPlanGateEvidenceReaderPort
+from framework.harness.task_plan.result_proof import verify_task_result_proof
 from framework.harness.task_plan.store import (
     LogicalTaskReadiness,
     TaskQueueAdmissionEvidence,
@@ -468,6 +470,7 @@ class TaskPlanReplayReducer:
         artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
         result_ref_authority: HarnessResultRefAuthority | None = None,
         execution_identity: GraphExecutionIdentity | None = None,
+        gate_evidence_reader: TaskPlanGateEvidenceReaderPort | None = None,
     ) -> None:
         if transcript_store is not None and not isinstance(
             transcript_store,
@@ -509,6 +512,14 @@ class TaskPlanReplayReducer:
         # Metadata-only plans can carry a recorded Graph identity without a
         # SubAgent payload capability. Require authority at the evidence ingress.
         self._execution_identity = execution_identity
+        if gate_evidence_reader is not None and not isinstance(
+            gate_evidence_reader,
+            TaskPlanGateEvidenceReaderPort,
+        ):
+            raise TypeError(
+                "gate_evidence_reader must implement TaskPlanGateEvidenceReaderPort"
+            )
+        self._gate_evidence_reader = gate_evidence_reader
 
     def reduce(
         self,
@@ -566,6 +577,7 @@ class TaskPlanReplayReducer:
         instances: dict[str, TaskInstance] = {}
         active_sequences: dict[str, int] = {}
         pending_results: dict[tuple[str, int, int], TaskResultRecord] = {}
+        result_event_keys: set[tuple[str, int, int]] = set()
         failed_result_checksums: dict[tuple[str, int, int], str] = {}
         retry_counts: dict[str, int] = {}
         aggregate_ref: str | None = None
@@ -782,6 +794,7 @@ class TaskPlanReplayReducer:
                         execution_identity=self._execution_identity,
                         plan=record_plan,
                         expected_receipt_checksum=record.recovery_receipt["receipt_checksum"],
+                        gate_evidence_reader=self._gate_evidence_reader,
                     )
                 attempt_history.setdefault(record.record_checksum, record)
                 parallel_event_sequence = event.sequence
@@ -798,10 +811,17 @@ class TaskPlanReplayReducer:
                     artifact_reference_verifier=self._artifact_reference_verifier,
                     result_ref_authority=self._result_ref_authority,
                     execution_identity=self._execution_identity,
+                    gate_evidence_reader=self._gate_evidence_reader,
                 )
                 record = history_record_for_result(task_plan, result, ordered_events[:event.sequence - 1])
                 attempt_history.setdefault(record.record_checksum, record)
-                pending_results[(instance.task_instance_id, instance.attempt, task_plan.version)] = result
+                result_key = (
+                    instance.task_instance_id,
+                    instance.attempt,
+                    task_plan.version,
+                )
+                result_event_keys.add(result_key)
+                pending_results[result_key] = result
             elif event.event_type in _TASK_TERMINAL_EVENTS:
                 projection = _require_projection(projection, event)
                 task_plan = _task_plan_for_event(event, plans_by_version)
@@ -1096,6 +1116,39 @@ class TaskPlanReplayReducer:
                 "TaskPlan replay ends before the accepted patch plan",
                 code="task_plan_replay_patch_mismatch",
             )
+        active_result_keys = {
+            (state.active_instance_id, state.attempts, projection.plan_version)
+            for state in projection.tasks
+            if state.active_instance_id is not None
+            and state.status in _ACTIVE_TASK_STATES
+        }
+        for result_key, orphan in results_by_attempt.items():
+            if result_key in result_event_keys:
+                continue
+            if result_key not in active_result_keys:
+                if through_sequence is None:
+                    raise HarnessValidationError(
+                        "supplied TaskPlan result has no matching active attempt or event",
+                        code="task_plan_replay_result_event_missing",
+                        details={"task_instance_id": orphan.task_instance_id},
+                    )
+                continue
+            orphan_plan = plans_by_version[orphan.plan_version]
+            definition = next(
+                item for item in orphan_plan.tasks if item.task_id == orphan.task_id
+            )
+            _verify_replay_subagent_evidence(
+                orphan,
+                definition=definition,
+                transcript_store=self._transcript_store,
+                artifact_reference_verifier=self._artifact_reference_verifier,
+                result_ref_authority=self._result_ref_authority,
+                execution_identity=self._execution_identity,
+                plan=orphan_plan,
+                gate_evidence_reader=self._gate_evidence_reader,
+            )
+            history_record_for_result(orphan_plan, orphan, ordered_events)
+            pending_results[result_key] = orphan
         pending_report: tuple[TaskResultRecord, ...] = ()
         if pending_results:
             if require_terminal_events:
@@ -1732,6 +1785,7 @@ def _apply_parallel_event(
             event,
             allow_same=False,
         )
+        _record_parallel_observation(payload, group, diagnostics, event)
     elif event.event_type == "TASK_GROUP_REPLAN_PENDING":
         _require_group_snapshot_target(
             group_payload,
@@ -1772,6 +1826,7 @@ def _apply_parallel_event(
             allow_same=False,
         )
         _release_parallel_group_reservations(group_id, waves, reservations, event)
+        _record_parallel_observation(payload, group, diagnostics, event)
     elif event.event_type == "TASK_GROUP_INDETERMINATE":
         _require_group_snapshot_target(
             group_payload,
@@ -1787,6 +1842,7 @@ def _apply_parallel_event(
         )
         # Unknown external outcomes are not evidence that resources are free.
         # Only a recorded per-reservation settlement can release this charge.
+        _record_parallel_observation(payload, group, diagnostics, event)
     elif event.event_type == "TASK_GROUP_HALTED":
         _require_group_snapshot_target(
             group_payload,
@@ -1801,6 +1857,7 @@ def _apply_parallel_event(
             allow_same=False,
         )
         _release_parallel_group_reservations(group_id, waves, reservations, event)
+        _record_parallel_observation(payload, group, diagnostics, event)
     elif event.event_type == "TASK_GROUP_SUPERSEDED":
         _require_group_snapshot_target(
             group_payload,
@@ -1815,6 +1872,7 @@ def _apply_parallel_event(
             allow_same=False,
         )
         _release_parallel_group_reservations(group_id, waves, reservations, event)
+        _record_parallel_observation(payload, group, diagnostics, event)
     elif event.event_type == "TASK_GROUP_RECLAIMED":
         task_ids = payload.get("task_ids")
         if task_ids is None:
@@ -3124,6 +3182,7 @@ def _result_for_event(
     artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
     result_ref_authority: HarnessResultRefAuthority | None = None,
     execution_identity: GraphExecutionIdentity | None = None,
+    gate_evidence_reader: TaskPlanGateEvidenceReaderPort | None = None,
 ) -> TaskResultRecord:
     assert event.task_instance_id is not None
     assert event.attempt is not None
@@ -3151,6 +3210,9 @@ def _result_for_event(
         or payload.get("result_checksum") != result.result_checksum
         or tuple(payload.get("gate_refs", ())) != result.verified_gate_refs
         or tuple(payload.get("gate_evidence_refs", ())) != result.gate_evidence_refs
+        or payload.get("worker_result_proof_ref")
+        != result.worker_result_proof_ref
+        or event.reason_code != result.error_code
         or payload.get("transcript_ref") != result.transcript_ref
         or payload.get("transcript_checksum") != result.transcript_checksum
         or payload.get("subagent_output_ref") != result.subagent_output_ref
@@ -3169,6 +3231,7 @@ def _result_for_event(
         result_ref_authority=result_ref_authority,
         execution_identity=execution_identity,
         plan=plan,
+        gate_evidence_reader=gate_evidence_reader,
     )
     return result
 
@@ -3183,7 +3246,13 @@ def _verify_replay_subagent_evidence(
     execution_identity: GraphExecutionIdentity | None,
     plan: ValidatedTaskPlan,
     expected_receipt_checksum: str | None = None,
+    gate_evidence_reader: TaskPlanGateEvidenceReaderPort | None = None,
 ) -> None:
+    proof = verify_task_result_proof(
+        plan,
+        result,
+        gate_evidence_reader=gate_evidence_reader,
+    )
     if definition.subagent_id is None:
         return
     if (
@@ -3258,13 +3327,15 @@ def _verify_replay_subagent_evidence(
         or transcript.identity.task_id != result.task_id
         or transcript.identity.subagent_id != definition.subagent_id
         or not _subagent_identity_matches_result(transcript.identity, result)
+        or ((not proof.worker_failed) != (output.status == "succeeded"))
         or (
-            result.status is TaskLifecycle.SUCCEEDED
-            and output.status != "succeeded"
-        )
-        or (
-            result.status is TaskLifecycle.FAILED
-            and output.status == "succeeded"
+            proof.artifacts is not None
+            and (
+                canonical_payload_checksum(output.output)
+                != canonical_payload_checksum(proof.artifacts.worker_result.output)
+                or output.artifact_refs
+                != proof.artifacts.worker_result.artifacts
+            )
         )
     ):
         raise HarnessValidationError(
@@ -3347,6 +3418,12 @@ def _apply_terminal_result(
     ) != result.gate_evidence_refs:
         raise HarnessValidationError(
             "TaskPlan terminal event gate evidence does not match result evidence",
+            code="task_plan_replay_result_mismatch",
+            details={"task_id": result.task_id},
+        )
+    if event.reason_code != result.error_code:
+        raise HarnessValidationError(
+            "TaskPlan terminal event reason does not match result evidence",
             code="task_plan_replay_result_mismatch",
             details={"task_id": result.task_id},
         )

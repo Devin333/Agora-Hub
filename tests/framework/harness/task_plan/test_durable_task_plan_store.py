@@ -47,6 +47,8 @@ from framework.harness.task_plan.store import (
     TASK_PLAN_EVENT_SCHEMA_V2,
     TASK_PLAN_EVENT_SCHEMA_V3,
     TaskQueueAdmissionEvidence,
+    _result_event,
+    _terminal_result_event,
 )
 from framework.harness.task_plan import (
     DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
@@ -72,9 +74,14 @@ from framework.harness.task_plan import (
     TaskLifecycle,
     TaskOutputContract,
     TaskPlanEvent,
+    TaskPlanGateArtifactOwnerPort,
+    TaskPlanGateEvidence,
+    TaskPlanGateRegistry,
     TaskPlanCheckpoint,
     TaskPlanContractKind,
     TaskPlanReadyDecision,
+    TaskPlanResultVerificationRequest,
+    TaskPlanResultVerifier,
     TaskPlanRecoveryService,
     TaskPlanReplayReducer,
     TaskPlanQueueProjection,
@@ -92,6 +99,7 @@ from framework.harness.task_plan import (
     materialize_queue_task,
     task_instance_for_attempt,
 )
+from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
 from framework.harness.task_plan.patches import TaskPlanPatchValidator
 from framework.harness.task_plan.policy import TaskPlanPolicy
 from framework.harness.graph.bindings import HarnessWorkerBinding
@@ -101,11 +109,15 @@ from framework.harness.graph.activity import HarnessWorkerType
 from framework.workers.models.status import TaskStatus as WorkerTaskStatus
 from framework.workers.models.task import Task as WorkerTask
 from infrastructure.storage.events.sqlite import SQLiteEventStore
+from infrastructure.storage.artifacts import FilesystemArtifactStore
 from infrastructure.storage.workers.redis_queue import RedisStreamTaskQueue
 from infrastructure.storage.workers.task_plan_queue import (
     RedisTaskPlanQueueReadAdapter,
 )
-from tests.fixtures.task_plan import build_task_plan_stage_binding
+from tests.fixtures.task_plan import (
+    InMemoryTaskPlanGateArtifactWriter,
+    build_task_plan_stage_binding,
+)
 
 
 FIXED_NOW = datetime(2026, 8, 2, 0, 0, tzinfo=UTC)
@@ -177,6 +189,22 @@ class _ArtifactStore:
 
     def exists(self, artifact_ref: ArtifactRef) -> bool:
         return (artifact_ref.run_id, artifact_ref.path) in self._content
+
+
+class _FailOnceGateEvidenceArtifactStore(_ArtifactStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    def write(self, artifact: ArtifactWriteRequest) -> ArtifactRef:
+        if (
+            not self.failed
+            and artifact.relative_path is not None
+            and "/gate_evidence/" in artifact.relative_path
+        ):
+            self.failed = True
+            raise OSError("interrupted gate evidence write")
+        return super().write(artifact)
 
 
 def _sha256(content: bytes) -> str:
@@ -446,6 +474,36 @@ class _ConflictOnceRuntime:
         )
 
 
+class _FailBatchOnceRuntime:
+    """Leave prewritten artifacts unreachable, then allow an idempotent retry."""
+
+    def __init__(self, delegate: EventRuntime) -> None:
+        self.delegate = delegate
+        self.failed = False
+
+    def publish(self, event: EventPublishRequest, **kwargs):
+        return self.delegate.publish(event, **kwargs)
+
+    def publish_batch(self, events: Sequence[EventPublishRequest], **kwargs):
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("injected result batch interruption")
+        return self.delegate.publish_batch(events, **kwargs)
+
+    def publish_batch_with_state_cas(
+        self,
+        events: Sequence[EventPublishRequest],
+        **kwargs,
+    ):
+        return self.delegate.publish_batch_with_state_cas(events, **kwargs)
+
+    def compare_and_swap_transactional_state(self, next_snapshot, **kwargs):
+        return self.delegate.compare_and_swap_transactional_state(
+            next_snapshot,
+            **kwargs,
+        )
+
+
 class _PublishOnlyRuntime:
     """Implements event publication but intentionally lacks state CAS."""
 
@@ -649,6 +707,60 @@ def _store(event_store: _EventStore, artifacts: _ArtifactStore, *, runtime=None)
     )
 
 
+def _gate_verification_fixture(plan: ValidatedTaskPlan):
+    instance = task_instance_for_attempt(plan, "structure", 1)
+    worker_result = HarnessWorkerResult(
+        status=HarnessWorkerStatus.SUCCEEDED,
+        output={"summary": "bounded gate candidate"},
+        metrics={"turns": 1},
+    )
+    input_checksum = canonical_payload_checksum(
+        {
+            "instance": instance.checksum_projection(),
+            "worker_result": worker_result.candidate_payload(),
+        }
+    )
+    evidence = TaskPlanGateEvidence(
+        gate_ref="SummaryGate@1",
+        input_checksum=input_checksum,
+        result_checksum=canonical_payload_checksum(
+            worker_result.candidate_payload()
+        ),
+        passed=True,
+    )
+    return instance, worker_result, evidence
+
+
+def _worker_failure_result(
+    plan: ValidatedTaskPlan,
+    instance,
+    owner: TaskPlanGateArtifactOwnerPort,
+    *,
+    status: HarnessWorkerStatus = HarnessWorkerStatus.FAILED,
+    metrics=None,
+):
+    worker_result = HarnessWorkerResult(
+        status=status,
+        diagnostics={"reason_code": "worker_unavailable"},
+        metrics=metrics or {},
+        error="worker unavailable",
+    )
+    result = TaskPlanResultVerifier(
+        TaskPlanGateRegistry(),
+        gate_artifact_writer=owner,
+    ).verify(
+        worker_result,
+        task=plan.tasks[0],
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=plan.tasks[0],
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
+    return result, worker_result
+
+
 def test_durable_task_plan_store_requires_transactional_state_reader() -> None:
     event_store = _EventStore()
 
@@ -782,28 +894,66 @@ def _start(store: DurableTaskPlanStore, plan: ValidatedTaskPlan, task_id: str):
     return instance
 
 
-def _result(plan: ValidatedTaskPlan, instance, *, status: TaskLifecycle, role: str = "analysis.structure") -> TaskResultRecord:
+def _result(
+    plan: ValidatedTaskPlan,
+    instance,
+    *,
+    status: TaskLifecycle,
+    role: str = "analysis.structure",
+    gate_artifact_owner: TaskPlanGateArtifactOwnerPort | None = None,
+    metrics=None,
+) -> TaskResultRecord:
     definition = next(item for item in plan.tasks if item.task_id == instance.task_id)
     if plan.is_graph_only:
-        return TaskResultRecord.for_plan(
-            plan,
-            task_id=instance.task_id,
-            task_instance_id=instance.task_instance_id,
-            attempt=instance.attempt,
-            status=status,
-            result_ref=(
-                f"result://{instance.task_id}"
+        if gate_artifact_owner is None:
+            return TaskResultRecord.for_plan(
+                plan,
+                task_id=instance.task_id,
+                task_instance_id=instance.task_instance_id,
+                attempt=instance.attempt,
+                status=status,
+                result_ref=(
+                    f"result://{instance.task_id}"
+                    if status is TaskLifecycle.SUCCEEDED
+                    else None
+                ),
+                output_refs=(
+                    (f"artifact://{instance.task_id}",)
+                    if status is TaskLifecycle.SUCCEEDED
+                    else ()
+                ),
+                output_roles=(role,) if status is TaskLifecycle.SUCCEEDED else (),
+                output_schema_ref=f"schema://{role}@1",
+                error_code=None if status is TaskLifecycle.SUCCEEDED else "worker_failed",
+            )
+        worker_result = HarnessWorkerResult(
+            status=(
+                HarnessWorkerStatus.SUCCEEDED
                 if status is TaskLifecycle.SUCCEEDED
-                else None
+                else HarnessWorkerStatus.FAILED
             ),
-            output_refs=(
+            artifacts=(
                 (f"artifact://{instance.task_id}",)
                 if status is TaskLifecycle.SUCCEEDED
                 else ()
             ),
-            output_roles=(role,) if status is TaskLifecycle.SUCCEEDED else (),
-            output_schema_ref=f"schema://{role}@1",
-            error_code=None if status is TaskLifecycle.SUCCEEDED else "worker_failed",
+            metrics=metrics if metrics is not None else {},
+            error=None if status is TaskLifecycle.SUCCEEDED else "worker_failed",
+        )
+        gates = TaskPlanGateRegistry()
+        gates.register("SummaryGate@1", lambda _request: True, deterministic=True)
+        return TaskPlanResultVerifier(
+            gates,
+            gate_artifact_writer=gate_artifact_owner,
+        ).verify(
+            worker_result,
+            task=definition,
+            request=TaskPlanResultVerificationRequest(
+                plan=plan,
+                task=definition,
+                instance=instance,
+                worker_result=worker_result,
+            ),
         )
     if status is TaskLifecycle.SUCCEEDED:
         return TaskResultRecord(
@@ -860,6 +1010,815 @@ def test_durable_store_rebuilds_plan_projection_and_artifacts_after_reopen():
         "PLAN_CANDIDATE_BUILT",
         "PLAN_ACCEPTED",
     ]
+
+
+def test_gate_artifact_owner_round_trips_typed_input_and_evidence_in_memory():
+    artifacts = _ArtifactStore()
+    event_store = _EventStore()
+    store = _store(event_store, artifacts)
+    _, plan, _, _ = _accepted_plan((_task("structure"),))
+    instance, worker_result, evidence = _gate_verification_fixture(plan)
+
+    assert isinstance(store, TaskPlanGateArtifactOwnerPort)
+    refs = store.persist_gate_verification(
+        plan,
+        instance,
+        worker_result,
+        (evidence,),
+    )
+    restored = store.read_gate_evidence(
+        plan.run_id,
+        plan.stage_id,
+        refs.evidence_checksums,
+    )
+
+    assert refs.input_checksum == evidence.input_checksum
+    assert refs.evidence_checksums == (evidence.evidence_checksum,)
+    assert restored.instance == instance
+    assert restored.worker_result == worker_result
+    assert restored.evidences == (evidence,)
+    assert event_store._events == []
+
+    with pytest.raises(TypeError, match="TaskPlanGateEvidence"):
+        store.persist_gate_verification(
+            plan,
+            instance,
+            worker_result,
+            ({"passed": True},),
+        )
+
+
+@pytest.mark.parametrize(
+    ("gate_passes", "expected_status"),
+    (
+        (True, TaskLifecycle.SUCCEEDED),
+        (False, TaskLifecycle.FAILED),
+    ),
+)
+def test_result_verifier_persists_real_gate_verdict_before_building_result(
+    gate_passes,
+    expected_status,
+):
+    artifacts = _ArtifactStore()
+    store = _store(_EventStore(), artifacts)
+    _, plan, _, _ = _accepted_plan((_task("structure"),))
+    instance, worker_result, _ = _gate_verification_fixture(plan)
+    gates = TaskPlanGateRegistry()
+    gates.register(
+        "SummaryGate@1",
+        lambda _request: gate_passes,
+        deterministic=True,
+    )
+    verifier = TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=store,
+    )
+
+    result = verifier.verify(
+        worker_result,
+        task=plan.tasks[0],
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=plan.tasks[0],
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
+
+    assert result.status is expected_status
+    assert tuple(
+        "gate_input" if "/gate_input/" in path else "gate_evidence"
+        for _, path in artifacts._content
+    ) == ("gate_input", "gate_evidence")
+    restored = store.read_gate_evidence(
+        plan.run_id,
+        plan.stage_id,
+        result.gate_evidence_refs,
+    )
+    assert restored.instance == instance
+    assert restored.worker_result == worker_result
+    assert tuple(item.passed for item in restored.evidences) == (gate_passes,)
+
+
+def test_result_verifier_fails_closed_when_gate_artifact_owner_is_missing():
+    _, plan, _, _ = _accepted_plan((_task("structure"),))
+    instance, worker_result, _ = _gate_verification_fixture(plan)
+    gate_calls = 0
+    gates = TaskPlanGateRegistry()
+
+    def gate(_request):
+        nonlocal gate_calls
+        gate_calls += 1
+        return True
+
+    gates.register("SummaryGate@1", gate, deterministic=True)
+    verifier = TaskPlanResultVerifier(gates)
+
+    with pytest.raises(HarnessValidationError) as error:
+        verifier.verify(
+            worker_result,
+            task=plan.tasks[0],
+            request=TaskPlanResultVerificationRequest(
+                plan=plan,
+                task=plan.tasks[0],
+                instance=instance,
+                worker_result=worker_result,
+            ),
+        )
+    assert error.value.code == "task_plan_gate_artifact_owner_unavailable"
+    assert gate_calls == 0
+
+
+def test_result_verifier_retries_after_interrupted_gate_evidence_write():
+    artifacts = _FailOnceGateEvidenceArtifactStore()
+    store = _store(_EventStore(), artifacts)
+    _, plan, _, _ = _accepted_plan((_task("structure"),))
+    instance, worker_result, _ = _gate_verification_fixture(plan)
+    gates = TaskPlanGateRegistry()
+    gates.register("SummaryGate@1", lambda _request: True, deterministic=True)
+    verifier = TaskPlanResultVerifier(gates, gate_artifact_writer=store)
+    request = TaskPlanResultVerificationRequest(
+        plan=plan,
+        task=plan.tasks[0],
+        instance=instance,
+        worker_result=worker_result,
+    )
+
+    with pytest.raises(HarnessValidationError) as interrupted:
+        verifier.verify(worker_result, task=plan.tasks[0], request=request)
+    assert interrupted.value.code == "task_plan_artifact_store_failed"
+    assert [
+        path for _, path in artifacts._content if "/gate_input/" in path
+    ]
+    assert not [
+        path for _, path in artifacts._content if "/gate_evidence/" in path
+    ]
+
+    result = verifier.verify(worker_result, task=plan.tasks[0], request=request)
+    restored = store.read_gate_evidence(
+        plan.run_id,
+        plan.stage_id,
+        result.gate_evidence_refs,
+    )
+    assert restored.refs.input_checksum == restored.evidences[0].input_checksum
+
+
+@pytest.mark.parametrize(
+    ("kind", "mutation", "expected_code"),
+    (
+        (
+            "gate_input",
+            lambda payload: payload.update(schema_version="unknown/gate-input/v99"),
+            "task_plan_gate_artifact_schema_unsupported",
+        ),
+        (
+            "gate_input",
+            lambda payload: payload["gate_input"].update(unexpected=True),
+            "task_plan_gate_artifact_corrupt",
+        ),
+        (
+            "gate_input",
+            lambda payload: payload["gate_input"]["worker_result"]["output"].update(
+                summary="tampered"
+            ),
+            "task_plan_gate_artifact_checksum_mismatch",
+        ),
+        (
+            "gate_evidence",
+            lambda payload: payload["gate_evidence"].update(unexpected=True),
+            "task_plan_gate_artifact_corrupt",
+        ),
+        (
+            "gate_evidence",
+            lambda payload: payload["gate_evidence"].pop("reason_code"),
+            "task_plan_gate_artifact_corrupt",
+        ),
+    ),
+)
+def test_gate_artifact_reader_rejects_schema_drift_and_pollution(
+    kind,
+    mutation,
+    expected_code,
+):
+    artifacts = _ArtifactStore()
+    store = _store(_EventStore(), artifacts)
+    _, plan, _, _ = _accepted_plan((_task("structure"),))
+    instance, worker_result, evidence = _gate_verification_fixture(plan)
+    refs = store.persist_gate_verification(
+        plan,
+        instance,
+        worker_result,
+        (evidence,),
+    )
+    key = next(key for key in artifacts._content if f"/{kind}/" in key[1])
+    payload = json.loads(artifacts._content[key].decode("utf-8"))
+    mutation(payload)
+    artifacts._content[key] = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+    with pytest.raises(HarnessValidationError) as error:
+        store.read_gate_evidence(
+            plan.run_id,
+            plan.stage_id,
+            refs.evidence_checksums,
+        )
+    assert error.value.code == expected_code
+
+
+def test_gate_artifact_reader_rejects_missing_scope_and_same_ref_conflicts():
+    artifacts = _ArtifactStore()
+    event_store = _EventStore()
+    store = DurableTaskPlanStore(
+        _runtime(event_store),
+        event_store,
+        artifact_store=artifacts,
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    _, plan, _, _ = _accepted_plan((_task("structure"),))
+    instance, worker_result, evidence = _gate_verification_fixture(plan)
+    refs = store.persist_gate_verification(
+        plan,
+        instance,
+        worker_result,
+        (evidence,),
+    )
+    input_key = next(
+        key for key in artifacts._content if "/gate_input/" in key[1]
+    )
+    original = artifacts._content.pop(input_key)
+    with pytest.raises(HarnessValidationError) as missing:
+        store.read_gate_evidence(
+            plan.run_id,
+            plan.stage_id,
+            refs.evidence_checksums,
+        )
+    assert missing.value.code == "task_plan_artifact_missing"
+
+    artifacts._content[input_key] = original
+    wrong_tenant = DurableTaskPlanStore(
+        _runtime(event_store),
+        event_store,
+        artifact_store=artifacts,
+        tenant_id="tenant-b",
+        clock=lambda: FIXED_NOW,
+    )
+    with pytest.raises(HarnessValidationError) as scope:
+        wrong_tenant.read_gate_evidence(
+            plan.run_id,
+            plan.stage_id,
+            refs.evidence_checksums,
+        )
+    assert scope.value.code == "task_plan_gate_artifact_scope_mismatch"
+
+    polluted = json.loads(original.decode("utf-8"))
+    polluted["scope"]["tenant_id"] = "tenant-b"
+    artifacts._content[input_key] = json.dumps(
+        polluted,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    with pytest.raises(HarnessValidationError) as conflict:
+        store.persist_gate_verification(
+            plan,
+            instance,
+            worker_result,
+            (evidence,),
+        )
+    assert conflict.value.code == "task_plan_artifact_checksum_mismatch"
+
+
+def test_gate_artifacts_reopen_with_filesystem_and_sqlite_and_reject_tampering(
+    tmp_path,
+):
+    database = tmp_path / "events.sqlite3"
+    artifact_root = tmp_path / "artifacts"
+    events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    store = DurableTaskPlanStore(
+        _runtime(events),
+        events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    _, plan, _, _ = _accepted_plan((_task("structure"),))
+    instance, worker_result, evidence = _gate_verification_fixture(plan)
+    refs = store.persist_gate_verification(
+        plan,
+        instance,
+        worker_result,
+        (evidence,),
+    )
+
+    reopened_events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    reopened = DurableTaskPlanStore(
+        _runtime(reopened_events),
+        reopened_events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    restored = reopened.read_gate_evidence(
+        plan.run_id,
+        plan.stage_id,
+        refs.evidence_checksums,
+    )
+    assert restored.instance == instance
+    assert restored.evidences == (evidence,)
+
+    evidence_path = next(
+        path
+        for path in (artifact_root / plan.run_id).rglob("*.json")
+        if "gate_evidence" in path.parts
+    )
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    payload["gate_evidence"]["reason_code"] = "tampered-verdict"
+    evidence_path.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(HarnessValidationError) as tampered:
+        reopened.read_gate_evidence(
+            plan.run_id,
+            plan.stage_id,
+            refs.evidence_checksums,
+        )
+    assert tampered.value.code == "task_plan_gate_artifact_checksum_mismatch"
+
+
+@pytest.mark.parametrize(
+    "worker_status",
+    (
+        HarnessWorkerStatus.FAILED,
+        HarnessWorkerStatus.BLOCKED,
+        HarnessWorkerStatus.WAITING_APPROVAL,
+    ),
+)
+def test_in_memory_worker_failure_proof_binds_terminal_status_and_offline_replay(
+    worker_status,
+):
+    candidate, plan = _graph_only_candidate_and_plan()
+    owner = InMemoryTaskPlanGateArtifactWriter()
+    store = InMemoryTaskPlanStore(gate_evidence_reader=owner)
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    instance = _start(store, plan, plan.tasks[0].task_id)
+    result, worker_result = _worker_failure_result(
+        plan,
+        instance,
+        owner,
+        status=worker_status,
+        metrics={"turns": 1},
+    )
+
+    assert result.status is TaskLifecycle.FAILED
+    assert result.error_code == "task_worker_failed"
+    assert result.worker_result_proof_ref is not None
+    assert result.verified_gate_refs == ()
+    assert result.gate_evidence_refs == ()
+    restored = owner.read_worker_result_input(
+        plan.run_id,
+        plan.stage_id,
+        result.worker_result_proof_ref,
+    )
+    assert restored.instance == instance
+    assert restored.worker_result == worker_result
+
+    assert store.append_result(result) == result.result_checksum
+    events = store.read_events(plan.run_id, plan.stage_id)
+    assert events[-2].payload["worker_result_proof_ref"] == result.worker_result_proof_ref
+    assert events[-1].payload["worker_result_proof_ref"] == result.worker_result_proof_ref
+    replay = TaskPlanReplayReducer(gate_evidence_reader=owner).replay(
+        (plan,),
+        events,
+        results=(result,),
+    )
+    assert replay.projection.tasks[0].status is TaskLifecycle.FAILED
+
+
+def test_worker_failure_result_rejects_missing_forged_and_wrong_attempt_proofs():
+    candidate, plan = _graph_only_candidate_and_plan()
+    owner = InMemoryTaskPlanGateArtifactWriter()
+    store = InMemoryTaskPlanStore(gate_evidence_reader=owner)
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    instance = _start(store, plan, plan.tasks[0].task_id)
+    result, _ = _worker_failure_result(
+        plan,
+        instance,
+        owner,
+        metrics={"turns": 1},
+    )
+
+    with pytest.raises(HarnessValidationError) as missing:
+        replace(result, worker_result_proof_ref=None)
+    assert missing.value.code == "task_plan_result_invalid"
+    with pytest.raises(HarnessValidationError) as wrong_error:
+        replace(result, error_code="forged_worker_error")
+    assert wrong_error.value.code == "task_plan_result_invalid"
+
+    payload = result.to_dict()
+    payload["usage"] = {"turns": 1, "forged": 1}
+    payload["result_checksum"] = canonical_payload_checksum(
+        {key: value for key, value in payload.items() if key != "result_checksum"}
+    )
+    forged = TaskResultRecord.from_dict(payload)
+    with pytest.raises(HarnessValidationError) as self_checksummed:
+        store.append_result(forged)
+    assert self_checksummed.value.code == "task_plan_result_proof_mismatch"
+
+    other_instance = task_instance_for_attempt(plan, instance.task_id, 2)
+    _, other_worker_result = _worker_failure_result(
+        plan,
+        other_instance,
+        owner,
+        metrics={"turns": 1},
+    )
+    wrong_attempt_ref = owner.persist_worker_result_input(
+        plan,
+        other_instance,
+        other_worker_result,
+    )
+    with pytest.raises(HarnessValidationError) as wrong_attempt:
+        store.append_result(
+            replace(result, worker_result_proof_ref=wrong_attempt_ref)
+        )
+    assert wrong_attempt.value.code == "task_plan_result_proof_mismatch"
+
+    succeeded_worker = HarnessWorkerResult(
+        status=HarnessWorkerStatus.SUCCEEDED,
+        metrics={"turns": 1},
+    )
+    succeeded_input_checksum = canonical_payload_checksum(
+        {
+            "instance": instance.checksum_projection(),
+            "worker_result": succeeded_worker.candidate_payload(),
+        }
+    )
+    succeeded_evidence = TaskPlanGateEvidence(
+        gate_ref=plan.tasks[0].gate_refs[0],
+        input_checksum=succeeded_input_checksum,
+        result_checksum=canonical_payload_checksum(
+            succeeded_worker.candidate_payload()
+        ),
+        passed=True,
+    )
+    succeeded_refs = owner.persist_gate_verification(
+        plan,
+        instance,
+        succeeded_worker,
+        (succeeded_evidence,),
+    )
+    with pytest.raises(HarnessValidationError) as wrong_status:
+        store.append_result(
+            replace(
+                result,
+                worker_result_proof_ref=succeeded_refs.input_checksum,
+            )
+        )
+    assert wrong_status.value.code == "task_plan_result_proof_mismatch"
+
+
+def test_worker_failure_artifact_is_scoped_content_addressed_and_reopens(
+    tmp_path,
+):
+    database = tmp_path / "worker-proof.sqlite3"
+    artifact_root = tmp_path / "artifacts"
+    events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    store = DurableTaskPlanStore(
+        _runtime(events),
+        events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    candidate, plan = _graph_only_candidate_and_plan()
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    instance = _start(store, plan, plan.tasks[0].task_id)
+    result, worker_result = _worker_failure_result(
+        plan,
+        instance,
+        store,
+        metrics={"turns": 1},
+    )
+    assert result.worker_result_proof_ref is not None
+
+    wrong_tenant = DurableTaskPlanStore(
+        _runtime(events),
+        events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-b",
+        clock=lambda: FIXED_NOW,
+    )
+    with pytest.raises(HarnessValidationError) as wrong_scope:
+        wrong_tenant.read_worker_result_input(
+            plan.run_id,
+            plan.stage_id,
+            result.worker_result_proof_ref,
+        )
+    assert wrong_scope.value.code == "task_plan_gate_artifact_scope_mismatch"
+
+    input_path = next(
+        path
+        for path in (artifact_root / plan.run_id).rglob("*.json")
+        if "gate_input" in path.parts
+    )
+    original = input_path.read_bytes()
+    input_path.unlink()
+    with pytest.raises(HarnessValidationError) as missing_artifact:
+        store.append_result(result)
+    assert missing_artifact.value.code == "task_plan_artifact_missing"
+    input_path.write_bytes(original)
+
+    polluted = json.loads(original.decode("utf-8"))
+    polluted["scope"]["tenant_id"] = "tenant-b"
+    input_path.write_text(
+        json.dumps(
+            polluted,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(HarnessValidationError) as cas_conflict:
+        store.persist_worker_result_input(plan, instance, worker_result)
+    assert cas_conflict.value.code == "task_plan_artifact_checksum_mismatch"
+    input_path.write_bytes(original)
+
+    assert store.append_result(result) == result.result_checksum
+    committed_events = store.read_events(plan.run_id, plan.stage_id)
+    reopened_events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    reopened = DurableTaskPlanStore(
+        _runtime(reopened_events),
+        reopened_events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    restored = reopened.read_worker_result_input(
+        plan.run_id,
+        plan.stage_id,
+        result.worker_result_proof_ref,
+    )
+    assert restored.instance == instance
+    assert restored.worker_result == worker_result
+    history = reopened.result_history_for(
+        plan.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    )
+    assert len(history) == 1
+    assert history[0].result == result
+    replay = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
+        (plan,),
+        committed_events,
+        results=(result,),
+    )
+    assert replay.projection.tasks[0].status is TaskLifecycle.FAILED
+
+
+def test_result_proof_repairs_result_only_sqlite_crash_without_reexecuting_gate(
+    tmp_path,
+):
+    database = tmp_path / "e.db"
+    artifact_root = tmp_path / "a"
+    events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    store = DurableTaskPlanStore(
+        _runtime(events),
+        events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    candidate, plan = _graph_only_candidate_and_plan()
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    instance = _start(store, plan, plan.tasks[0].task_id)
+    gate_calls = 0
+    worker_result = HarnessWorkerResult(
+        status=HarnessWorkerStatus.SUCCEEDED,
+        artifacts=("artifact://structure",),
+    )
+    gates = TaskPlanGateRegistry()
+
+    def gate(_request):
+        nonlocal gate_calls
+        gate_calls += 1
+        return True
+
+    gates.register("SummaryGate@1", gate, deterministic=True)
+    result = TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=store,
+    ).verify(
+        worker_result,
+        task=plan.tasks[0],
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=plan.tasks[0],
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
+    assert gate_calls == 1
+    before_events = store.read_events(plan.run_id, plan.stage_id)
+    before_projection = store.load_projection(plan.run_id, plan.stage_id)
+    before_files = tuple(sorted(path.relative_to(artifact_root) for path in artifact_root.rglob("*.json")))
+
+    forged_usage = replace(result, usage={"turns": 1})
+    with pytest.raises(HarnessValidationError) as forged:
+        store.append_result(forged_usage)
+    assert forged.value.code == "task_plan_result_proof_mismatch"
+    assert store.read_events(plan.run_id, plan.stage_id) == before_events
+    assert store.load_projection(plan.run_id, plan.stage_id) == before_projection
+    assert tuple(sorted(path.relative_to(artifact_root) for path in artifact_root.rglob("*.json"))) == before_files
+
+    crashing = DurableTaskPlanStore(
+        _FailBatchOnceRuntime(_runtime(events)),
+        events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    with pytest.raises(RuntimeError, match="result batch interruption"):
+        crashing.append_result(result)
+    assert crashing.read_events(plan.run_id, plan.stage_id) == before_events
+    assert crashing.load_projection(plan.run_id, plan.stage_id) == before_projection
+    assert any("result" in path.parts for path in artifact_root.rglob("*.json"))
+
+    reopened_events = SQLiteEventStore(database, clock=lambda: FIXED_NOW)
+    reopened = DurableTaskPlanStore(
+        _runtime(reopened_events),
+        reopened_events,
+        artifact_store=FilesystemArtifactStore(artifact_root),
+        tenant_id="tenant-a",
+        clock=lambda: FIXED_NOW,
+    )
+    recovery = TaskPlanRecoveryService(
+        queue_reader=_TaskPlanQueueReader(),
+        gate_evidence_reader=reopened,
+    ).recover(
+        (plan,),
+        before_events,
+        results=(result,),
+    )
+    assert recovery.pending_terminal_results == (result,)
+    assert recovery.missing_queue_projections == ()
+    assert gate_calls == 1
+
+    assert reopened.append_result(result) == result.result_checksum
+    committed_events = reopened.read_events(plan.run_id, plan.stage_id)
+    assert len(committed_events) == len(before_events) + 2
+    assert committed_events[-2].event_type == "TASK_RESULT_ACCEPTED"
+    assert committed_events[-1].event_type == "TASK_COMPLETED"
+    committed_files = tuple(sorted(path.relative_to(artifact_root) for path in artifact_root.rglob("*.json")))
+    assert reopened.append_result(result) == result.result_checksum
+    assert reopened.read_events(plan.run_id, plan.stage_id) == committed_events
+    assert tuple(sorted(path.relative_to(artifact_root) for path in artifact_root.rglob("*.json"))) == committed_files
+    assert gate_calls == 1
+
+
+def test_in_memory_result_owner_requires_the_same_gate_proof_reader():
+    candidate, plan = _graph_only_candidate_and_plan()
+    gate_owner = InMemoryTaskPlanGateArtifactWriter()
+    source = InMemoryTaskPlanStore(gate_evidence_reader=gate_owner)
+    source.append_candidate(candidate)
+    source.accept_plan(plan)
+    instance = _start(source, plan, plan.tasks[0].task_id)
+    worker_result = HarnessWorkerResult(status=HarnessWorkerStatus.SUCCEEDED)
+    gates = TaskPlanGateRegistry()
+    gates.register("SummaryGate@1", lambda _request: True, deterministic=True)
+    result = TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=gate_owner,
+    ).verify(
+        worker_result,
+        task=plan.tasks[0],
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=plan.tasks[0],
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
+
+    unbound = InMemoryTaskPlanStore()
+    unbound.append_candidate(candidate)
+    unbound.accept_plan(plan)
+    _start(unbound, plan, plan.tasks[0].task_id)
+    with pytest.raises(HarnessValidationError) as missing_reader:
+        unbound.append_result(result)
+    assert missing_reader.value.code == "task_plan_gate_evidence_reader_required"
+    assert not {
+        "TASK_RESULT_ACCEPTED",
+        "TASK_COMPLETED",
+    }.intersection(
+        event.event_type for event in unbound.read_events(plan.run_id, plan.stage_id)
+    )
+
+    assert source.append_result(result) == result.result_checksum
+
+
+def test_result_owner_rejects_forged_gate_failure_and_accepts_real_first_failure():
+    artifacts = _ArtifactStore()
+    store = _store(_EventStore(), artifacts)
+    candidate, plan = _graph_only_candidate_and_plan()
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    instance = _start(store, plan, plan.tasks[0].task_id)
+    proofless = _result(
+        plan,
+        instance,
+        status=TaskLifecycle.SUCCEEDED,
+    )
+    with pytest.raises(HarnessValidationError) as missing_proof:
+        store.append_result(proofless)
+    assert missing_proof.value.code == "task_plan_gate_proof_required"
+
+    worker_result = HarnessWorkerResult(
+        status=HarnessWorkerStatus.SUCCEEDED,
+        artifacts=("artifact://structure",),
+    )
+    gates = TaskPlanGateRegistry()
+    gates.register("SummaryGate@1", lambda _request: False, deterministic=True)
+    result = TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=store,
+    ).verify(
+        worker_result,
+        task=plan.tasks[0],
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=plan.tasks[0],
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
+    assert result.status is TaskLifecycle.FAILED
+    assert result.error_code == "task_gate_failed"
+
+    before_events = store.read_events(plan.run_id, plan.stage_id)
+    before_artifacts = dict(artifacts._content)
+    forged = replace(result, error_code="self_declared_failure")
+    with pytest.raises(HarnessValidationError) as rejected:
+        store.append_result(forged)
+    assert rejected.value.code == "task_plan_result_proof_mismatch"
+    assert store.read_events(plan.run_id, plan.stage_id) == before_events
+    assert artifacts._content == before_artifacts
+
+    assert store.append_result(result) == result.result_checksum
+    events = store.read_events(plan.run_id, plan.stage_id)
+    with pytest.raises(HarnessValidationError) as missing_reader:
+        TaskPlanReplayReducer().replay(
+            (plan,),
+            events,
+            results=(result,),
+        )
+    assert missing_reader.value.code == "task_plan_gate_evidence_reader_required"
+
+    replay = TaskPlanReplayReducer(gate_evidence_reader=store).replay(
+        (plan,),
+        events,
+        results=(result,),
+    )
+    assert replay.projection.tasks[0].status is TaskLifecycle.FAILED
+
+    forged_result = replace(result, error_code="self_declared_failure")
+    forged_events = (
+        *events[:-2],
+        _result_event(
+            forged_result,
+            "TASK_RESULT_REJECTED",
+            events[-2].sequence,
+            plan=plan,
+        ),
+        _terminal_result_event(
+            forged_result,
+            "TASK_FAILED",
+            events[-1].sequence,
+            plan=plan,
+        ),
+    )
+    with pytest.raises(HarnessValidationError) as self_consistent_forgery:
+        TaskPlanReplayReducer(gate_evidence_reader=store).replay(
+            (plan,),
+            forged_events,
+            results=(forged_result,),
+        )
+    assert self_consistent_forgery.value.code == "task_plan_result_proof_mismatch"
 
 
 def test_retired_task_plan_contracts_are_not_readable():
@@ -1130,7 +2089,12 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     store.append_candidate(candidate)
     store.accept_plan(plan)
     instance = _start(store, plan, plan.tasks[0].task_id)
-    result = _result(plan, instance, status=TaskLifecycle.SUCCEEDED)
+    result = _result(
+        plan,
+        instance,
+        status=TaskLifecycle.SUCCEEDED,
+        gate_artifact_owner=store,
+    )
 
     expected_instance_projection = {
         "schema_version": "newsroom.harness-task-instance/v3",
@@ -1372,7 +2336,7 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
         plan.plan_id,
         plan.version + 99,
     ) == ()
-    report = TaskPlanReplayReducer().replay(
+    report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
         (plan,),
         events,
         results=(result,),
@@ -1389,7 +2353,7 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     assert report.reducer_version == TASK_PLAN_REPLAY_REDUCER_VERSION_V4
     # Replay binds the complete accepted attempt and ledger receipt, including
     # the canonical readiness/admission split, to one deterministic checksum.
-    wire_report = TaskPlanReplayReducer().replay(
+    wire_report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
         (ValidatedTaskPlan.from_dict(plan.to_dict()),),
         tuple(TaskPlanEvent.from_dict(event.to_dict()) for event in events),
         results=(TaskResultRecord.from_dict(result.to_dict()),),
@@ -1461,7 +2425,7 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     )
 
     with pytest.raises(HarnessValidationError) as missing_terminal_error:
-        TaskPlanReplayReducer().replay(
+        TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
             (plan,),
             events[:-1],
             results=(result,),
@@ -1470,7 +2434,9 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
         missing_terminal_error.value.code
         == "task_plan_replay_terminal_event_missing"
     )
-    pending_projection = TaskPlanReplayReducer().reduce(
+    pending_projection = TaskPlanReplayReducer(
+        gate_evidence_reader=reopened,
+    ).reduce(
         plan,
         events[:-1],
         results=(result,),
@@ -1478,7 +2444,7 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
     )
     assert pending_projection.tasks[0].status is TaskLifecycle.RUNNING
     assert pending_projection.tasks[0].result is None
-    pending_report = TaskPlanReplayReducer().replay(
+    pending_report = TaskPlanReplayReducer(gate_evidence_reader=store).replay(
         (plan,),
         events[:-1],
         results=(result,),
@@ -1497,7 +2463,7 @@ def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store()
         pending_checkpoint
     )
     with pytest.raises(HarnessValidationError) as inferred_terminal_error:
-        TaskPlanReplayReducer().replay(
+        TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
             (plan,),
             events[:-1],
             results=(result,),
@@ -1527,7 +2493,12 @@ def test_sqlite_result_owner_rejects_tampering_before_any_durable_write(
     store.append_candidate(candidate)
     store.accept_plan(plan)
     instance = _start(store, plan, plan.tasks[0].task_id)
-    result = _result(plan, instance, status=TaskLifecycle.SUCCEEDED)
+    result = _result(
+        plan,
+        instance,
+        status=TaskLifecycle.SUCCEEDED,
+        gate_artifact_owner=store,
+    )
 
     before_events = store.read_events(plan.run_id, plan.stage_id)
     before_projection = store.load_projection(plan.run_id, plan.stage_id)
@@ -1649,11 +2620,16 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
     accepted_events = store.read_events(plan.run_id, plan.stage_id)
     instance = _start(store, plan, plan.tasks[0].task_id)
     running_events = store.read_events(plan.run_id, plan.stage_id)
-    result = _result(plan, instance, status=TaskLifecycle.SUCCEEDED)
+    result = _result(
+        plan,
+        instance,
+        status=TaskLifecycle.SUCCEEDED,
+        gate_artifact_owner=store,
+    )
     store.append_result(result)
     terminal_events = store.read_events(plan.run_id, plan.stage_id)
     pending_result_events = terminal_events[:-1]
-    pending_report = TaskPlanReplayReducer().replay(
+    pending_report = TaskPlanReplayReducer(gate_evidence_reader=store).replay(
         (plan,),
         pending_result_events,
         results=(result,),
@@ -1666,7 +2642,7 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
         pending_report,
         created_at="2026-08-02T00:00:03Z",
     )
-    terminal_report = TaskPlanReplayReducer().replay(
+    terminal_report = TaskPlanReplayReducer(gate_evidence_reader=store).replay(
         (plan,),
         terminal_events,
         results=(result,),
@@ -1678,7 +2654,10 @@ def test_graph_only_recovery_continues_each_recorded_lifecycle_without_io():
         created_at="2026-08-02T00:00:04Z",
     )
     queue_reader = _TaskPlanQueueReader()
-    service = TaskPlanRecoveryService(queue_reader=queue_reader)
+    service = TaskPlanRecoveryService(
+        queue_reader=queue_reader,
+        gate_evidence_reader=store,
+    )
 
     pending = service.recover((plan,), accepted_events)
     assert pending.missing_queue_projections == ()
@@ -2117,7 +3096,12 @@ def test_result_document_and_terminal_events_are_atomic(
     store.append_candidate(candidate)
     store.accept_plan(plan)
     instance = _start(store, plan, "structure")
-    result = _result(plan, instance, status=status)
+    result = _result(
+        plan,
+        instance,
+        status=status,
+        gate_artifact_owner=store,
+    )
     before_events = store.read_events(plan.run_id, plan.stage_id)
 
     with pytest.raises(RuntimeError, match="injected batch failure"):
@@ -2177,10 +3161,20 @@ def test_patch_and_terminal_result_are_recoverable_from_event_and_artifact_refs(
     store.accept_plan(plan)
 
     structure_instance = _start(store, plan, "structure")
-    structure_result = _result(plan, structure_instance, status=TaskLifecycle.SUCCEEDED)
+    structure_result = _result(
+        plan,
+        structure_instance,
+        status=TaskLifecycle.SUCCEEDED,
+        gate_artifact_owner=store,
+    )
     store.append_result(structure_result)
     helper_instance = _start(store, plan, "helper")
-    helper_failure = _result(plan, helper_instance, status=TaskLifecycle.FAILED)
+    helper_failure = _result(
+        plan,
+        helper_instance,
+        status=TaskLifecycle.FAILED,
+        gate_artifact_owner=store,
+    )
     store.append_result(helper_failure)
 
     patch = PlanPatch.for_plan(

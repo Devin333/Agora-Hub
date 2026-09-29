@@ -64,6 +64,8 @@ from framework.harness.task_plan.schema import (
 # READY attempts and must not be silently reinterpreted as logical readiness.
 TASK_PLAN_EVENT_SCHEMA = TASK_PLAN_EVENT_SCHEMA_V3
 TASK_PLAN_RESULT_SCHEMA_V3 = "newsroom.harness-task-plan-result/v3"
+TASK_PLAN_RESULT_SCHEMA_V4 = "newsroom.harness-task-plan-result/v4"
+TASK_PLAN_RESULT_SCHEMA = TASK_PLAN_RESULT_SCHEMA_V4
 LOGICAL_TASK_READINESS_SCHEMA = "newsroom.harness-task-readiness/v1"
 TASK_QUEUE_ADMISSION_SCHEMA = "newsroom.harness-task-queue-admission/v1"
 
@@ -272,15 +274,16 @@ class TaskResultRecord:
     error_code: str | None = None
     verified_gate_refs: tuple[str, ...] = ()
     gate_evidence_refs: tuple[str, ...] = ()
+    worker_result_proof_ref: str | None = None
     transcript_ref: str | None = None
     transcript_checksum: str | None = None
     subagent_output_ref: str | None = None
     subagent_output_checksum: str | None = None
-    schema_version: str = TASK_PLAN_RESULT_SCHEMA_V3
+    schema_version: str = TASK_PLAN_RESULT_SCHEMA
     result_checksum: str = field(init=False)
 
     def __post_init__(self) -> None:
-        if self.schema_version != TASK_PLAN_RESULT_SCHEMA_V3:
+        if self.schema_version != TASK_PLAN_RESULT_SCHEMA:
             raise HarnessValidationError(
                 "TaskResultRecord schema is unsupported",
                 code="task_plan_result_schema_unsupported",
@@ -289,7 +292,7 @@ class TaskResultRecord:
             object.__setattr__(self, name, identifier(getattr(self, name), name))
         _normalize_task_plan_contract_identity(
             self,
-            graph_only_schema=TASK_PLAN_RESULT_SCHEMA_V3,
+            graph_only_schema=TASK_PLAN_RESULT_SCHEMA,
             graph_only_identity_fields=_GRAPH_ONLY_TASK_RESULT_IDENTITY_FIELDS,
         )
         object.__setattr__(self, "plan_version", positive_int(self.plan_version, "plan_version"))
@@ -333,6 +336,13 @@ class TaskResultRecord:
                 "gate_evidence_refs",
                 item_kind="reference",
             ),
+        )
+        object.__setattr__(
+            self,
+            "worker_result_proof_ref",
+            checksum(self.worker_result_proof_ref, "worker_result_proof_ref")
+            if self.worker_result_proof_ref
+            else None,
         )
         evidence_values = (
             self.transcript_ref,
@@ -405,6 +415,18 @@ class TaskResultRecord:
                 "failed task result must not carry accepted output references",
                 code="task_plan_result_invalid",
             )
+        has_gate_proof = bool(self.verified_gate_refs or self.gate_evidence_refs)
+        if self.error_code == "task_worker_failed" and not has_gate_proof:
+            if self.worker_result_proof_ref is None:
+                raise HarnessValidationError(
+                    "worker failure requires immutable worker result proof",
+                    code="task_plan_result_invalid",
+                )
+        elif self.worker_result_proof_ref is not None:
+            raise HarnessValidationError(
+                "worker result proof is only valid for a worker failure",
+                code="task_plan_result_invalid",
+            )
         if (
             self.status is TaskLifecycle.SUCCEEDED
             and self.subagent_output_ref is not None
@@ -438,6 +460,7 @@ class TaskResultRecord:
             "error_code": self.error_code,
             "verified_gate_refs": list(self.verified_gate_refs),
             "gate_evidence_refs": list(self.gate_evidence_refs),
+            "worker_result_proof_ref": self.worker_result_proof_ref,
         }
         return {
             "schema_version": self.schema_version,
@@ -463,10 +486,11 @@ class TaskResultRecord:
                 "task_checksum", "binding_checksum", "status", "result_ref",
                 "output_refs", "output_roles", "output_schema_ref", "usage",
                 "error_code", "verified_gate_refs", "gate_evidence_refs",
+                "worker_result_proof_ref",
                 "result_checksum",
             }
         )
-        if value.get("schema_version") != TASK_PLAN_RESULT_SCHEMA_V3:
+        if value.get("schema_version") != TASK_PLAN_RESULT_SCHEMA:
             raise HarnessValidationError(
                 "TaskResultRecord schema is unsupported",
                 code="task_plan_result_schema_unsupported",
@@ -489,7 +513,7 @@ class TaskResultRecord:
 
     @property
     def is_graph_only(self) -> bool:
-        return self.schema_version == TASK_PLAN_RESULT_SCHEMA_V3
+        return self.schema_version == TASK_PLAN_RESULT_SCHEMA
 
     def matches_plan_identity(self, plan: ValidatedTaskPlan) -> bool:
         if not isinstance(plan, ValidatedTaskPlan):
@@ -521,6 +545,7 @@ class TaskResultRecord:
         error_code: str | None = None,
         verified_gate_refs: tuple[str, ...] = (),
         gate_evidence_refs: tuple[str, ...] = (),
+        worker_result_proof_ref: str | None = None,
         transcript_ref: str | None = None,
         transcript_checksum: str | None = None,
         subagent_output_ref: str | None = None,
@@ -558,11 +583,12 @@ class TaskResultRecord:
             error_code=error_code,
             verified_gate_refs=verified_gate_refs,
             gate_evidence_refs=gate_evidence_refs,
+            worker_result_proof_ref=worker_result_proof_ref,
             transcript_ref=transcript_ref,
             transcript_checksum=transcript_checksum,
             subagent_output_ref=subagent_output_ref,
             subagent_output_checksum=subagent_output_checksum,
-            schema_version=TASK_PLAN_RESULT_SCHEMA_V3,
+            schema_version=TASK_PLAN_RESULT_SCHEMA,
             **_task_plan_graph_identity_kwargs(plan),
         )
 
@@ -1026,8 +1052,20 @@ class TaskPlanStorePort(Protocol):
 class InMemoryTaskPlanStore:
     """Deterministic test store with immutable plan history and projections."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, gate_evidence_reader: Any | None = None) -> None:
+        from framework.harness.task_plan.gate_evidence import (
+            TaskPlanGateEvidenceReaderPort,
+        )
+
+        if gate_evidence_reader is not None and not isinstance(
+            gate_evidence_reader,
+            TaskPlanGateEvidenceReaderPort,
+        ):
+            raise TypeError(
+                "gate_evidence_reader must implement TaskPlanGateEvidenceReaderPort"
+            )
         self._lock = RLock()
+        self._gate_evidence_reader = gate_evidence_reader
         self._candidates: dict[str, PlanCandidate] = {}
         self._submissions: dict[str, CandidateSubmission] = {}
         self._plans: dict[tuple[str, str, int], ValidatedTaskPlan] = {}
@@ -1043,6 +1081,60 @@ class InMemoryTaskPlanStore:
         self._capacity_settlement_transitions: dict[
             str, tuple[object, object, tuple[object, ...]]
         ] = {}
+
+    def read_gate_evidence(
+        self,
+        run_id: str,
+        stage_id: str,
+        gate_evidence_refs: Sequence[str],
+    ) -> Any:
+        """Delegate strict proof reads to the explicitly installed test owner."""
+
+        if self._gate_evidence_reader is None:
+            raise HarnessValidationError(
+                "TaskPlan gate proof requires its evidence reader",
+                code="task_plan_gate_evidence_reader_required",
+            )
+        return self._gate_evidence_reader.read_gate_evidence(
+            run_id,
+            stage_id,
+            gate_evidence_refs,
+        )
+
+    def read_worker_result_input(
+        self,
+        run_id: str,
+        stage_id: str,
+        input_checksum: str,
+    ) -> Any:
+        """Delegate worker-failure proof reads to the installed test owner."""
+
+        if self._gate_evidence_reader is None:
+            raise HarnessValidationError(
+                "TaskPlan worker result proof requires its evidence reader",
+                code="task_plan_gate_evidence_reader_required",
+            )
+        return self._gate_evidence_reader.read_worker_result_input(
+            run_id,
+            stage_id,
+            input_checksum,
+        )
+
+    def bind_gate_evidence_reader(self, reader: Any) -> None:
+        """Install the one strict test owner before any result is accepted."""
+
+        from framework.harness.task_plan.gate_evidence import (
+            TaskPlanGateEvidenceReaderPort,
+        )
+
+        if not isinstance(reader, TaskPlanGateEvidenceReaderPort):
+            raise TypeError("reader must implement TaskPlanGateEvidenceReaderPort")
+        if self._gate_evidence_reader is not None and self._gate_evidence_reader is not reader:
+            raise HarnessValidationError(
+                "in-memory TaskPlan store gate owner cannot be replaced",
+                code="task_plan_gate_evidence_reader_conflict",
+            )
+        self._gate_evidence_reader = reader
 
     def append_candidate(self, candidate: PlanCandidate, *, event_type: str = "PLAN_CANDIDATE_BUILT") -> str:
         if not isinstance(candidate, PlanCandidate):
@@ -1468,6 +1560,21 @@ class InMemoryTaskPlanStore:
             if existing is not None:
                 if existing.result_checksum != result.result_checksum:
                     raise HarnessValidationError("conflicting duplicate task result", code="task_plan_duplicate_result_conflict")
+                plan = self._plans.get(
+                    (result.run_id, result.stage_id, result.plan_version)
+                )
+                if plan is None:
+                    raise HarnessValidationError(
+                        "task result plan is unavailable",
+                        code="task_plan_stale_result",
+                    )
+                from framework.harness.task_plan.result_proof import verify_task_result_proof
+
+                verify_task_result_proof(
+                    plan,
+                    result,
+                    gate_evidence_reader=self._gate_evidence_reader,
+                )
                 return existing.result_checksum
             projection = self._projections.get((result.run_id, result.stage_id))
             if projection is None or projection.plan_id != result.plan_id or projection.plan_version != result.plan_version:
@@ -1508,6 +1615,13 @@ class InMemoryTaskPlanStore:
             history_record_for_result(plan, result, self.read_events(result.run_id, result.stage_id))
             _require_subagent_result_evidence(result, definition)
             _validate_result_usage(result, definition)
+            from framework.harness.task_plan.result_proof import verify_task_result_proof
+
+            verify_task_result_proof(
+                plan,
+                result,
+                gate_evidence_reader=self._gate_evidence_reader,
+            )
             if result.status is TaskLifecycle.SUCCEEDED:
                 if result.output_schema_ref != definition.task.output_contract.schema_ref:
                     raise HarnessValidationError(
@@ -3368,6 +3482,7 @@ def _result_event(
             "result_checksum": result.result_checksum,
             "gate_refs": list(result.verified_gate_refs),
             "gate_evidence_refs": list(result.gate_evidence_refs),
+            "worker_result_proof_ref": result.worker_result_proof_ref,
             "transcript_ref": result.transcript_ref,
             "transcript_checksum": result.transcript_checksum,
             "subagent_output_ref": result.subagent_output_ref,
@@ -3403,6 +3518,7 @@ def _terminal_result_event(
             "result_checksum": result.result_checksum,
             "gate_refs": list(result.verified_gate_refs),
             "gate_evidence_refs": list(result.gate_evidence_refs),
+            "worker_result_proof_ref": result.worker_result_proof_ref,
             "transcript_ref": result.transcript_ref,
             "transcript_checksum": result.transcript_checksum,
             "subagent_output_ref": result.subagent_output_ref,
@@ -3626,6 +3742,8 @@ __all__ = [
     "TASK_QUEUE_ADMISSION_SCHEMA",
     "TaskQueueAdmissionEvidence",
     "TASK_PLAN_RESULT_SCHEMA_V3",
+    "TASK_PLAN_RESULT_SCHEMA_V4",
+    "TASK_PLAN_RESULT_SCHEMA",
     "TaskPlanEvent",
     "TaskPlanStorePort",
     "TaskResultRecord",

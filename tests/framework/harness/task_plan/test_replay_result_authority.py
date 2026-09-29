@@ -33,7 +33,9 @@ def _committed_history(tmp_path):
     fixture = _authorized_fixture(tmp_path)
     child = fixture["runtime"].invoke(fixture["invocation"])
     record = _verify(fixture, _worker_result_from_child(child))
-    store = InMemoryTaskPlanStore()
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=fixture["gate_artifact_owner"],
+    )
     store.append_candidate(fixture["candidate"])
     store.accept_plan(fixture["plan"])
     _start_attempt(store, fixture["plan"], fixture["instance"])
@@ -49,6 +51,7 @@ def _replay(fixture, record, events, **changes):
         "transcript_store": fixture["transcript_store"],
         "result_ref_authority": fixture["authority"],
         "execution_identity": fixture["execution_identity"],
+        "gate_evidence_reader": fixture["gate_artifact_owner"],
     }
     options.update(changes)
     return TaskPlanReplayReducer(**options).replay(
@@ -73,6 +76,7 @@ def test_graph_subagent_replay_and_recovery_share_committed_result_authority(
         transcript_store=fixture["transcript_store"],
         result_ref_authority=fixture["authority"],
         execution_identity=fixture["execution_identity"],
+        gate_evidence_reader=fixture["gate_artifact_owner"],
     ).recover(
         (fixture["plan"],),
         events,
@@ -97,7 +101,10 @@ def test_graph_subagent_replay_requires_authority_before_payload_read(
     _no_payload_reads(monkeypatch, fixture["transcript_store"])
 
     with pytest.raises(HarnessValidationError) as captured:
-        TaskPlanReplayReducer(fixture["transcript_store"]).replay(
+        TaskPlanReplayReducer(
+            fixture["transcript_store"],
+            gate_evidence_reader=fixture["gate_artifact_owner"],
+        ).replay(
             (fixture["plan"],),
             events,
             results=(record,),
@@ -122,6 +129,7 @@ def test_replay_rechecks_authority_before_each_payload_ingress(tmp_path, monkeyp
         transcript_store=fixture["transcript_store"],
         result_ref_authority=fixture["authority"],
         execution_identity=fixture["execution_identity"],
+        gate_evidence_reader=fixture["gate_artifact_owner"],
     )
     _no_payload_reads(monkeypatch, fixture["transcript_store"])
     if change == "durability":
@@ -241,6 +249,7 @@ def test_graph_subagent_recovery_requires_explicit_authority_before_payload_read
         TaskPlanRecoveryService(
             queue_reader=_EmptyQueueReader(),
             transcript_store=fixture["transcript_store"],
+            gate_evidence_reader=fixture["gate_artifact_owner"],
         ).recover(
             (fixture["plan"],),
             events,

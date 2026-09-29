@@ -35,6 +35,11 @@ from framework.harness.ref_snapshot import (
 )
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.task_plan.capability import TaskCapabilityRegistry
+from framework.harness.task_plan.continuation import (
+    PARENT_CONTINUATION_EVENT,
+    ParentContinuation,
+    continuation_from_event,
+)
 from framework.harness.task_plan.durable_store import DurableTaskPlanStore
 from framework.harness.task_plan.models import (
     PlanBuildBudget,
@@ -53,7 +58,7 @@ from framework.harness.task_plan.policy import TaskPlanPolicy, TaskPlanPolicyReg
 from framework.harness.task_plan.ports import TaskPlanStageRequest
 from framework.harness.task_plan.stage import TaskPlanStageRunner
 from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
-from framework.harness.task_plan.store import TaskPlanStorePort
+from framework.harness.task_plan.store import TaskPlanEvent, TaskPlanStorePort
 from framework.harness.task_plan.submission import CandidateDedupIdentity
 from framework.harness.task_plan.canonical import canonical_payload_checksum, task_reference_producer
 from framework.shared.graph_identity import GraphExecutionIdentity
@@ -706,6 +711,13 @@ class HarnessAgentOrchestrationRuntime:
             required_output_roles=tuple(getattr(plan, "required_output_roles", ())),
             covered_output_roles=covered_roles,
         )
+        self._persist_parent_continuation(
+            request,
+            plan,
+            events,
+            group=group,
+            submission_receipt=submission_receipt,
+        )
         return AgentOrchestrationResult(
             status=(
                 "succeeded" if succeeded
@@ -716,6 +728,123 @@ class HarnessAgentOrchestrationRuntime:
             reason_code=None if succeeded else reason_code,
             submission_receipt=submission_receipt,
         )
+
+    def _persist_parent_continuation(
+        self,
+        request: AgentOrchestrationRequest,
+        plan: Any,
+        events: tuple[Any, ...],
+        *,
+        group: Mapping[str, Any],
+        submission_receipt: AgentSubmissionReceipt | None,
+    ) -> None:
+        """Persist one checksum-bound wake-up for the parent turn.
+
+        The observation delivered to an AgentLoop parent is derived from the
+        canonical group join event.  Keeping the continuation as a separate
+        TaskPlan event makes delivery restartable without re-running workers;
+        repeated dispatches reuse the existing terminal version.
+        """
+
+        if submission_receipt is None:
+            return
+        group_id = group.get("group_id")
+        if not isinstance(group_id, str) or not group_id:
+            return
+        canonical_observation = _latest_group_observation(events, group_id)
+        if canonical_observation is None:
+            return
+        observation_checksum = canonical_observation.get("observation_checksum")
+        if not isinstance(observation_checksum, str) or not observation_checksum:
+            return
+        group_state = group.get("state")
+        if not isinstance(group_state, str) or not group_state:
+            return
+        terminal_states = {
+            "SUCCEEDED",
+            "FAILED",
+            "CANCELLED",
+            "INDETERMINATE",
+            "HALTED",
+            "SUPERSEDED",
+        }
+        status = "DELIVERED" if group_state in terminal_states else "PENDING"
+        prior = []
+        for event in events:
+            if getattr(event, "event_type", None) != PARENT_CONTINUATION_EVENT:
+                continue
+            try:
+                continuation = continuation_from_event(event)
+            except HarnessValidationError:
+                continue
+            if (
+                continuation.run_id == plan.run_id
+                and continuation.stage_id == plan.stage_id
+                and continuation.parent_turn_id == request.parent_turn_id
+                and continuation.submission_id == submission_receipt.submission_id
+            ):
+                prior.append(continuation)
+        group_prior = [item for item in prior if item.group_id == group_id]
+        current = max(group_prior, key=lambda item: item.observation_version, default=None)
+        latest_version = max(
+            (item.observation_version for item in prior),
+            default=0,
+        )
+        if current is not None and (
+            current.observation_checksum == observation_checksum
+            and current.status == status
+            and current.group_state == group_state
+        ):
+            return
+        if current is not None and current.observation_checksum == observation_checksum:
+            # A delivery-state transition for the same canonical observation
+            # keeps its identity. A changed observation is a new version.
+            version = current.observation_version
+        else:
+            version = latest_version + 1
+        continuation = ParentContinuation(
+            run_id=plan.run_id,
+            stage_id=plan.stage_id,
+            parent_turn_id=request.parent_turn_id,
+            observation_id=f"parent-observation:{group_id}",
+            observation_version=version,
+            group_id=group_id,
+            observation_checksum=observation_checksum,
+            status=status,
+            submission_id=submission_receipt.submission_id,
+            group_state=group_state,
+            metadata={"correlation_id": request.candidate.correlation_id},
+        )
+        sequence = max((getattr(event, "sequence", 0) for event in events), default=0) + 1
+        event = TaskPlanEvent.for_plan(
+            PARENT_CONTINUATION_EVENT,
+            plan,
+            sequence=sequence,
+            input_checksum=observation_checksum,
+            payload={
+                "event_type": PARENT_CONTINUATION_EVENT,
+                "parallel_event_idempotency_key": (
+                    f"parent-continuation:{group_id}:{version}"
+                ),
+                "idempotency_key": continuation.continuation_checksum,
+                "continuation": continuation.to_dict(),
+            },
+        )
+        try:
+            self._store.append_event(event)
+        except HarnessValidationError as exc:
+            # Two parent deliveries may race after the same durable join.  A
+            # sequence collision is safe only when the committed event is the
+            # exact continuation we intended to write.
+            if exc.code != "task_plan_sequence_conflict":
+                raise
+            latest = self._store.read_events(plan.run_id, plan.stage_id)
+            if not any(
+                getattr(item, "event_type", None) == PARENT_CONTINUATION_EVENT
+                and getattr(item, "event_checksum", None) == event.event_checksum
+                for item in latest
+            ):
+                raise
 
 
 AgentOrchestrationDispatch = Callable[
@@ -1099,6 +1228,49 @@ def _orchestration_group_projection(
             code="agent_orchestration_group_missing",
         )
     return group, tuple(sorted(waves.values(), key=lambda item: item.ordinal))
+
+
+def _latest_group_observation(
+    events: tuple[Any, ...],
+    group_id: str,
+) -> Mapping[str, Any] | None:
+    """Return the latest checksum-validated observation emitted by the group."""
+
+    latest: Mapping[str, Any] | None = None
+    for event in events:
+        if getattr(event, "event_type", None) not in {
+            "TASK_GROUP_JOIN_WAITING",
+            "TASK_GROUP_JOINED",
+            "TASK_GROUP_FAILED",
+            "TASK_GROUP_CANCELLED",
+            "TASK_GROUP_INDETERMINATE",
+            "TASK_GROUP_HALTED",
+            "TASK_GROUP_SUPERSEDED",
+        }:
+            continue
+        payload = getattr(event, "payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        observation = payload.get("observation")
+        if not isinstance(observation, Mapping) or observation.get("group_id") != group_id:
+            continue
+        supplied = observation.get("observation_checksum")
+        if not isinstance(supplied, str) or not supplied:
+            continue
+        expected = canonical_payload_checksum(
+            {
+                key: value
+                for key, value in observation.items()
+                if key != "observation_checksum"
+            }
+        )
+        if supplied != expected:
+            raise HarnessValidationError(
+                "parent continuation source observation checksum is invalid",
+                code="parent_continuation_observation_mismatch",
+            )
+        latest = observation
+    return latest
 
 
 def _validate_harness_joined_result(

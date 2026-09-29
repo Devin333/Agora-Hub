@@ -24,16 +24,19 @@ from framework.harness.task_plan import (
     TaskPlanPolicy,
     TaskPlanPolicyRegistry,
     TaskPlanEvent,
+    TaskPlanGateRegistry,
     TaskPlanProjection,
     TaskPlanQueueProjection,
     TaskPlanReplayReducer,
+    TaskPlanResultVerificationRequest,
+    TaskPlanResultVerifier,
     TaskPlanScheduler,
     TaskPlanStageIdentity,
     TaskPlanValidationContext,
     TaskPlanValidator,
     TaskProjection,
     TaskResultReference,
-    TASK_PLAN_RESULT_SCHEMA_V3,
+    TASK_PLAN_RESULT_SCHEMA,
     TaskRetryPolicy,
     TaskSpec,
     ValidatedTaskPlan,
@@ -51,7 +54,10 @@ from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
 from framework.harness.graph.activity import HarnessWorkerType
 from framework.harness.workers.result import HarnessWorkerResult
-from tests.fixtures.task_plan import build_task_plan_stage_binding
+from tests.fixtures.task_plan import (
+    InMemoryTaskPlanGateArtifactWriter,
+    build_task_plan_stage_binding,
+)
 
 
 ACCEPTED_AT = "2026-08-01T00:00:00Z"
@@ -229,6 +235,39 @@ def _accepted_plan(
         accepted_at=ACCEPTED_AT,
     )
     return plan, selected_policy, registry, workers
+
+
+def _verified_success_result(
+    plan: ValidatedTaskPlan,
+    instance,
+    owner: InMemoryTaskPlanGateArtifactWriter,
+    *,
+    artifacts: tuple[str, ...],
+    metrics: dict[str, int],
+):
+    definition = next(item for item in plan.tasks if item.task_id == instance.task_id)
+    gates = TaskPlanGateRegistry()
+    for gate_ref in definition.gate_refs:
+        gates.register(gate_ref, lambda _request: True, deterministic=True)
+    worker_result = HarnessWorkerResult(
+        status="succeeded",
+        artifacts=artifacts,
+        metrics=metrics,
+    )
+    result = TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=owner,
+    ).verify(
+        worker_result,
+        task=definition,
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=definition,
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
+    return result
 
 
 def test_contracts_are_immutable_canonical_and_fail_closed_on_tamper():
@@ -611,7 +650,8 @@ def test_scheduler_queue_projection_and_result_identity_are_deterministic():
         required_roles=policy.required_output_roles,
         policy=policy,
     )
-    store = InMemoryTaskPlanStore()
+    gate_owner = InMemoryTaskPlanGateArtifactWriter()
+    store = InMemoryTaskPlanStore(gate_evidence_reader=gate_owner)
     store.append_candidate(candidate)
     plan = replace(plan, source_candidate_ref=candidate.candidate_checksum)
     store.accept_plan(plan)
@@ -688,36 +728,12 @@ def test_scheduler_queue_projection_and_result_identity_are_deterministic():
         task_id=instance.task_id, task_instance_id=instance.task_instance_id,
         attempt=instance.attempt, input_checksum=instance.task_definition_checksum,
     ), projection)
-    accepted = TaskResultRecord(
-        run_id=plan.run_id,
-        stage_id=plan.stage_id,
-        plan_id=plan.plan_id,
-        plan_version=plan.version,
-        task_id=instance.task_id,
-        task_instance_id=instance.task_instance_id,
-        attempt=instance.attempt,
-        worker_ref=instance.worker_ref,
-        task_checksum=instance.task_definition_checksum,
-        binding_checksum=next(
-            item.binding_checksum for item in plan.tasks if item.task_id == instance.task_id
-        ),
-        status=TaskLifecycle.SUCCEEDED,
-        schema_version=TASK_PLAN_RESULT_SCHEMA_V3,
-        graph_checksum=instance.graph_checksum,
-        graph_id=instance.graph_id,
-        graph_version=instance.graph_version,
-        graph_ref=instance.graph_ref,
-        graph_schema_version=instance.graph_schema_version,
-        compiler_version=instance.compiler_version,
-        condition_policy_version=instance.condition_policy_version,
-        stage_binding_checksum=instance.stage_binding_checksum,
-        stage_identity_schema=instance.stage_identity_schema,
-        stage_identity_checksum=instance.stage_identity_checksum,
-        result_ref="result://a-root",
-        output_refs=("artifact://a-root",),
-        output_roles=("analysis.helper",),
-        output_schema_ref="schema://analysis.helper@1",
-        usage={"turns": 1},
+    accepted = _verified_success_result(
+        plan,
+        instance,
+        gate_owner,
+        artifacts=("artifact://a-root",),
+        metrics={"turns": 1},
     )
 
     before_events = store.read_events(plan.run_id, plan.stage_id)
@@ -802,7 +818,8 @@ def test_harness_scheduler_and_store_commit_terminal_result_with_budget_parity()
         required_roles=policy.required_output_roles,
         policy=policy,
     )
-    store = InMemoryTaskPlanStore()
+    gate_owner = InMemoryTaskPlanGateArtifactWriter()
+    store = InMemoryTaskPlanStore(gate_evidence_reader=gate_owner)
     store.append_candidate(candidate)
     plan = replace(plan, source_candidate_ref=candidate.candidate_checksum)
     store.accept_plan(plan)
@@ -887,34 +904,12 @@ def test_harness_scheduler_and_store_commit_terminal_result_with_budget_parity()
             input_checksum=instance.task_definition_checksum,
         ), projection)
 
-    result = TaskResultRecord(
-        run_id=plan.run_id,
-        stage_id=plan.stage_id,
-        plan_id=plan.plan_id,
-        plan_version=plan.version,
-        task_id=instance.task_id,
-        task_instance_id=instance.task_instance_id,
-        attempt=instance.attempt,
-        worker_ref=instance.worker_ref,
-        task_checksum=instance.task_definition_checksum,
-        binding_checksum=plan.tasks[0].binding_checksum,
-        status=TaskLifecycle.SUCCEEDED,
-        schema_version=TASK_PLAN_RESULT_SCHEMA_V3,
-        graph_checksum=instance.graph_checksum,
-        graph_id=instance.graph_id,
-        graph_version=instance.graph_version,
-        graph_ref=instance.graph_ref,
-        graph_schema_version=instance.graph_schema_version,
-        compiler_version=instance.compiler_version,
-        condition_policy_version=instance.condition_policy_version,
-        stage_binding_checksum=instance.stage_binding_checksum,
-        stage_identity_schema=instance.stage_identity_schema,
-        stage_identity_checksum=instance.stage_identity_checksum,
-        result_ref="result://structure",
-        output_refs=("artifact://structure",),
-        output_roles=("analysis.structure",),
-        output_schema_ref="schema://analysis.structure@1",
-        usage={"turns": 1, "tool_calls": 1},
+    result = _verified_success_result(
+        plan,
+        instance,
+        gate_owner,
+        artifacts=("artifact://structure",),
+        metrics={"turns": 1, "tool_calls": 1},
     )
     store.append_result(result)
 
@@ -928,7 +923,9 @@ def test_harness_scheduler_and_store_commit_terminal_result_with_budget_parity()
     assert projection.consumed_budget["reserved_max_turns"] == 0
     assert projection.consumed_budget["consumed_max_turns"] == 1
     assert projection.consumed_budget["consumed_max_tool_calls"] == 1
-    replay = TaskPlanReplayReducer().replay((plan,), events, results=(result,))
+    replay = TaskPlanReplayReducer(gate_evidence_reader=gate_owner).replay(
+        (plan,), events, results=(result,)
+    )
     assert replay.projection.projection_checksum == projection.projection_checksum
 
 
@@ -1256,7 +1253,8 @@ def test_replay_uses_only_recorded_evidence_and_matches_projection_checksum():
         required_roles=policy.required_output_roles,
         policy=policy,
     )
-    store = InMemoryTaskPlanStore()
+    gate_owner = InMemoryTaskPlanGateArtifactWriter()
+    store = InMemoryTaskPlanStore(gate_evidence_reader=gate_owner)
     store.append_candidate(candidate)
     plan = replace(plan, source_candidate_ref=candidate.candidate_checksum)
     store.accept_plan(plan)
@@ -1323,39 +1321,16 @@ def test_replay_uses_only_recorded_evidence_and_matches_projection_checksum():
         )
     )
     store.update_projection(replace(projection, last_sequence=5))
-    result = TaskResultRecord(
-        run_id=plan.run_id,
-        stage_id=plan.stage_id,
-        plan_id=plan.plan_id,
-        plan_version=plan.version,
-        task_id=instance.task_id,
-        task_instance_id=instance.task_instance_id,
-        attempt=instance.attempt,
-        worker_ref=instance.worker_ref,
-        task_checksum=instance.task_definition_checksum,
-        binding_checksum=next(
-            item.binding_checksum for item in plan.tasks if item.task_id == instance.task_id
-        ),
-        status=TaskLifecycle.SUCCEEDED,
-        schema_version=TASK_PLAN_RESULT_SCHEMA_V3,
-        graph_checksum=instance.graph_checksum,
-        graph_id=instance.graph_id,
-        graph_version=instance.graph_version,
-        graph_ref=instance.graph_ref,
-        graph_schema_version=instance.graph_schema_version,
-        compiler_version=instance.compiler_version,
-        condition_policy_version=instance.condition_policy_version,
-        stage_binding_checksum=instance.stage_binding_checksum,
-        stage_identity_schema=instance.stage_identity_schema,
-        stage_identity_checksum=instance.stage_identity_checksum,
-        result_ref="result://structure",
-        output_refs=("artifact://structure",),
-        output_roles=("analysis.structure",),
-        output_schema_ref="schema://analysis.structure@1",
+    result = _verified_success_result(
+        plan,
+        instance,
+        gate_owner,
+        artifacts=("artifact://structure",),
+        metrics={},
     )
     store.append_result(result)
     live_calls = sum(worker.calls for worker in workers.values())
-    replay = TaskPlanReplayReducer().reduce(
+    replay = TaskPlanReplayReducer(gate_evidence_reader=gate_owner).reduce(
         plan,
         store.read_events(plan.run_id, plan.stage_id),
         results=(result,),

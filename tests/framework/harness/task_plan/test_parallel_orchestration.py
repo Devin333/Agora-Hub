@@ -42,6 +42,7 @@ from framework.harness.task_plan.parallel import (
     ParallelEventSink,
     ParentObservation,
     ParentObservationLimits,
+    PARENT_OBSERVATION_SCHEMA,
     ReservationState,
     SerialTaskExecutorAdapter,
     SideEffectClass,
@@ -317,6 +318,8 @@ def test_parent_observation_projection_enforces_total_byte_limit() -> None:
         ).encode("utf-8")
     ) <= 512
     assert projected["group_id"] == "group-parallel"
+    assert projected["schema_version"] == PARENT_OBSERVATION_SCHEMA
+    assert projected["observation_checksum"].startswith("sha256:")
     assert projected["truncated"] is True
 
 

@@ -12,10 +12,36 @@ from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.task_plan.parallel import child_budget_reservation
 from framework.harness.task_plan.queue import TaskPlanQueueProjection
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
+from framework.harness.task_plan.verification import (
+    TaskPlanGateRegistry,
+    TaskPlanResultVerificationRequest,
+    TaskPlanResultVerifier,
+)
+from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
 from tests.framework.harness.task_plan.test_budget_ledger import _failed
 from tests.framework.harness.task_plan.test_durable_task_plan_store import _ArtifactStore, _EventStore, _start, _store
 from tests.framework.harness.task_plan.test_task_plan_runtime import _candidate, _setup, _task, validator_context
 
+def _verified_worker_failure(plan, instance, store, usage):
+    task = next(item for item in plan.tasks if item.task_id == instance.task_id)
+    worker_result = HarnessWorkerResult(
+        status=HarnessWorkerStatus.FAILED,
+        metrics=dict(usage),
+        error="worker_failed",
+    )
+    return TaskPlanResultVerifier(
+        TaskPlanGateRegistry(),
+        gate_artifact_writer=store,
+    ).verify(
+        worker_result,
+        task=task,
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=task,
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
 
 def _allocation(**overrides):
     fields = dict(max_turns=2, max_tool_calls=3, max_memory_ops=2, max_output_tokens=10, token_limit=100, time_limit_ms=1000, cost_limit=500)
@@ -264,7 +290,7 @@ def test_durable_settlement_is_atomic_and_replays_all_dimensions_without_live_ca
     store.append_candidate(candidate)
     store.accept_plan(plan)
     instance = _start(store, plan, "a")
-    result = _failed(plan, instance, usage=_usage())
+    result = _verified_worker_failure(plan, instance, store, _usage())
     before = store.load_projection(plan.run_id, plan.stage_id)
     with pytest.raises(RuntimeError, match="injected batch failure"):
         store.append_result(result)
@@ -276,7 +302,7 @@ def test_durable_settlement_is_atomic_and_replays_all_dimensions_without_live_ca
     history = reopened.read_events(plan.run_id, plan.stage_id)
     reopened.append_result(result)
     assert reopened.read_events(plan.run_id, plan.stage_id) == history
-    report = TaskPlanReplayReducer().replay(
+    report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
         (plan,), history,
         results=reopened.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, plan.version),
     )

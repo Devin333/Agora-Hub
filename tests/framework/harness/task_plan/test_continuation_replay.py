@@ -359,14 +359,26 @@ def test_sqlite_pending_to_terminal_continuation_is_idempotent_and_replayable(
         tmp_path,
         "sqlite",
     )
-    observation_payload = {
-        "group_id": group.group_id,
-        "group_status": "JOINING",
-    }
-    observation = {
-        **observation_payload,
-        "observation_checksum": canonical_payload_checksum(observation_payload),
-    }
+    def observation_for(group_snapshot, status):
+        observation_payload = {
+            "schema_version": "agora.harness-parent-observation/v1",
+            "group_id": group_snapshot.group_id,
+            "group_status": status,
+            "plan_version": plan.version,
+            "waves": [],
+            "tasks": [],
+            "aggregate_ref": None,
+            "aggregate_checksum": None,
+            "diagnostics": [],
+            "result_refs": [],
+            "truncated": False,
+        }
+        return {
+            **observation_payload,
+            "observation_checksum": canonical_payload_checksum(observation_payload),
+        }
+
+    observation = observation_for(group, "JOINING")
     current = store.load_projection(plan.run_id, plan.stage_id)
     pending = _continuation_event(
         plan,
@@ -387,11 +399,16 @@ def test_sqlite_pending_to_terminal_continuation_is_idempotent_and_replayable(
     waiting_projection = replace(pending_projection, last_sequence=waiting.sequence)
     store.commit_event(waiting, waiting_projection)
     failed_group = replace(joining, state="FAILED")
+    failed_observation = observation_for(failed_group, "FAILED")
     failed = _parallel_event(
         plan,
         "TASK_GROUP_FAILED",
         waiting.sequence + 1,
-        {"group": failed_group.to_dict(), "reason_code": "TASK_FAILED"},
+        {
+            "group": failed_group.to_dict(),
+            "observation": failed_observation,
+            "reason_code": "TASK_FAILED",
+        },
     )
     failed_projection = replace(waiting_projection, last_sequence=failed.sequence)
     store.commit_event(failed, failed_projection)
@@ -399,7 +416,8 @@ def test_sqlite_pending_to_terminal_continuation_is_idempotent_and_replayable(
         plan,
         failed_group,
         failed.sequence + 1,
-        observation_checksum=observation["observation_checksum"],
+        version=2,
+        observation_checksum=failed_observation["observation_checksum"],
         status="DELIVERED",
         group_state="FAILED",
     )

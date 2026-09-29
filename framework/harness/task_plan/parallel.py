@@ -847,6 +847,7 @@ class ParentObservation:
             for item in self.diagnostics[: limits.max_diagnostics]
         ]
         projected: dict[str, Any] = {
+            "schema_version": PARENT_OBSERVATION_SCHEMA,
             "group_id": self.group_id,
             "group_status": self.group_state,
             "plan_version": self.plan_version,
@@ -2484,9 +2485,15 @@ class ParallelAgentCoordinator:
                 if len(session.waves) >= session.group.max_waves:
                     session.group = session.group.transitioned(DispatchGroupState.HALTED)
                     session.terminal_diagnostics = ("WAVE_LIMIT_EXCEEDED",)
+                    halted_result = self._result_for_session(
+                        session,
+                        request,
+                        limits=limits,
+                    )
                     self._emit(
                         "TASK_GROUP_HALTED", event_sink=event_sink,
                         group=session.group.to_dict(), group_id=group.group_id,
+                        observation=thaw_mapping(halted_result.projected_observation),
                         reason_code="WAVE_LIMIT_EXCEEDED",
                         idempotency_key=group.group_id,
                     )
@@ -2777,10 +2784,16 @@ class ParallelAgentCoordinator:
                         reason_code="fail_fast",
                         capacity_snapshot=capacity_after_release,
                     )
+                    failed_result = self._result_for_session(
+                        session,
+                        request,
+                        limits=limits,
+                    )
                     self._emit(
                         "TASK_GROUP_FAILED",
                         event_sink=event_sink,
                         group=session.group.to_dict(),
+                        observation=thaw_mapping(failed_result.projected_observation),
                         reason_code="TASK_FAILED",
                         quarantined_task_ids=sorted(outcome.quarantined_task_ids),
                         group_duration_ms=_elapsed_ms(session.started_at),
@@ -2976,11 +2989,18 @@ class ParallelAgentCoordinator:
                                         reason_code="termination_unconfirmed" if unconfirmed else reason_code)
             state = DispatchGroupState.INDETERMINATE if unconfirmed else DispatchGroupState.CANCELLED
             session.group = session.group.transitioned(state)
+            terminal_result = self._result_for_session(
+                session,
+                request,
+                limits=limits,
+                diagnostics=(reason_code,),
+            )
             self._emit(
                 "TASK_GROUP_INDETERMINATE" if unconfirmed else "TASK_GROUP_CANCELLED",
                 event_sink=event_sink,
                 group=session.group.to_dict(),
                 group_id=group_id,
+                observation=thaw_mapping(terminal_result.projected_observation),
                 reason_code=reason_code,
                 group_duration_ms=_elapsed_ms(session.started_at),
                 idempotency_key=group_id,
@@ -3610,11 +3630,21 @@ class ParallelAgentCoordinator:
             indeterminate_group = session.group.transitioned(
                 DispatchGroupState.INDETERMINATE
             )
+            previous_group = session.group
+            session.group = indeterminate_group
+            terminal_result = self._result_for_session(
+                session,
+                session.request,
+                limits=None,
+                diagnostics=diagnostics or (reason_code,),
+            )
+            session.group = previous_group
             self._emit(
                 "TASK_GROUP_INDETERMINATE",
                 event_sink=event_sink,
                 group=indeterminate_group.to_dict(),
                 group_id=group_id,
+                observation=thaw_mapping(terminal_result.projected_observation),
                 reason_code=reason_code,
                 diagnostics=list(diagnostics),
                 group_duration_ms=_elapsed_ms(session.started_at),

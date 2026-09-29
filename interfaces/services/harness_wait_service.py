@@ -730,6 +730,7 @@ class HarnessWaitApplicationService:
                 "payload_ref",
                 "cancellation_event_ref",
                 "deadline_ref",
+                "timeout_event_ref",
             )
             if isinstance(value := getattr(cause, name, None), str)
         )

@@ -58,11 +58,25 @@ from framework.harness.task_plan.submission import (
 from framework.harness.task_plan.models import (
     PlanCandidate,
     PlanPatch,
+    TaskInstance,
     TaskLifecycle,
     TaskPlanProjection,
     TaskResultReference,
     ValidatedTaskPlan,
 )
+from framework.harness.task_plan.gate_evidence import (
+    TASK_PLAN_GATE_EVIDENCE_SCHEMA,
+    TASK_PLAN_GATE_INPUT_SCHEMA,
+    TaskPlanGateArtifactOwnerPort,
+    TaskPlanGateArtifactRefs,
+    TaskPlanGateArtifactWriterPort,
+    TaskPlanGateEvidence,
+    TaskPlanGateEvidenceReaderPort,
+    TaskPlanGateVerificationArtifacts,
+    TaskPlanWorkerResultInputArtifacts,
+    normalize_gate_evidence_refs,
+)
+from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
 from framework.harness.task_plan.store import (
     TASK_PLAN_EVENT_SCHEMAS,
     TASK_PLAN_EVENT_TYPES,
@@ -133,7 +147,15 @@ class _DocumentReference:
     schema: str = TASK_PLAN_STORAGE_SCHEMA
 
     def __post_init__(self) -> None:
-        if self.kind not in {"candidate", "patch", "plan", "projection", "result"}:
+        if self.kind not in {
+            "candidate",
+            "gate_evidence",
+            "gate_input",
+            "patch",
+            "plan",
+            "projection",
+            "result",
+        }:
             raise HarnessValidationError(
                 "TaskPlan artifact kind is unsupported",
                 code="task_plan_artifact_kind_unsupported",
@@ -283,6 +305,259 @@ class DurableTaskPlanStore:
         )
         self._producer = producer
         self._clock = clock
+
+    def persist_worker_result_input(
+        self,
+        plan: ValidatedTaskPlan,
+        instance: TaskInstance,
+        worker_result: HarnessWorkerResult,
+    ) -> str:
+        """Persist one verifier-observed terminal worker failure input."""
+
+        _, gate_input, input_checksum, scope = self._validated_worker_result_input(
+            plan,
+            instance,
+            worker_result,
+            require_succeeded=False,
+        )
+        self._put_document(
+            "gate_input",
+            plan.run_id,
+            plan.stage_id,
+            input_checksum,
+            {
+                "schema_version": TASK_PLAN_GATE_INPUT_SCHEMA,
+                "scope": scope,
+                "gate_input": gate_input,
+            },
+        )
+        return input_checksum
+
+    def persist_gate_verification(
+        self,
+        plan: ValidatedTaskPlan,
+        instance: TaskInstance,
+        worker_result: HarnessWorkerResult,
+        evidences: Sequence[TaskPlanGateEvidence],
+    ) -> TaskPlanGateArtifactRefs:
+        """Persist the exact input and typed output of completed gate evaluation.
+
+        This method does not evaluate gates or grant result authority.  Its
+        caller is responsible for invoking the pinned deterministic evaluator
+        before crossing this immutable artifact boundary.
+        """
+
+        if isinstance(evidences, (str, bytes)) or not isinstance(
+            evidences,
+            Sequence,
+        ):
+            raise TypeError("evidences must be a sequence of TaskPlanGateEvidence")
+        evidence_items = tuple(evidences)
+        if not evidence_items or any(
+            not isinstance(item, TaskPlanGateEvidence) for item in evidence_items
+        ):
+            raise TypeError("evidences must contain TaskPlanGateEvidence values")
+        task, gate_input, input_checksum, scope = self._validated_worker_result_input(
+            plan,
+            instance,
+            worker_result,
+            require_succeeded=True,
+        )
+        result_checksum = canonical_payload_checksum(gate_input["worker_result"])
+        if tuple(item.gate_ref for item in evidence_items) != task.gate_refs:
+            raise HarnessValidationError(
+                "gate evidence does not match the accepted task gate order",
+                code="task_plan_gate_artifact_evidence_mismatch",
+            )
+        if any(
+            item.input_checksum != input_checksum
+            or item.result_checksum != result_checksum
+            for item in evidence_items
+        ):
+            raise HarnessValidationError(
+                "gate evidence does not match its persisted input",
+                code="task_plan_gate_artifact_evidence_mismatch",
+            )
+
+        self._put_document(
+            "gate_input",
+            plan.run_id,
+            plan.stage_id,
+            input_checksum,
+            {
+                "schema_version": TASK_PLAN_GATE_INPUT_SCHEMA,
+                "scope": scope,
+                "gate_input": gate_input,
+            },
+        )
+        for evidence in evidence_items:
+            self._put_document(
+                "gate_evidence",
+                plan.run_id,
+                plan.stage_id,
+                evidence.evidence_checksum,
+                {
+                    "schema_version": TASK_PLAN_GATE_EVIDENCE_SCHEMA,
+                    "scope": scope,
+                    "gate_evidence": evidence.to_dict(),
+                },
+            )
+        return TaskPlanGateArtifactRefs(
+            input_checksum=input_checksum,
+            evidence_checksums=tuple(
+                item.evidence_checksum for item in evidence_items
+            ),
+        )
+
+    def _validated_worker_result_input(
+        self,
+        plan: ValidatedTaskPlan,
+        instance: TaskInstance,
+        worker_result: HarnessWorkerResult,
+        *,
+        require_succeeded: bool,
+    ) -> tuple[Any, dict[str, Any], str, dict[str, Any]]:
+        if not isinstance(plan, ValidatedTaskPlan):
+            raise TypeError("plan must be ValidatedTaskPlan")
+        if not isinstance(instance, TaskInstance):
+            raise TypeError("instance must be TaskInstance")
+        if not isinstance(worker_result, HarnessWorkerResult):
+            raise TypeError("worker_result must be HarnessWorkerResult")
+        if not instance.matches_plan_identity(plan):
+            raise HarnessValidationError(
+                "worker result input is outside the accepted plan scope",
+                code="task_plan_gate_artifact_scope_mismatch",
+            )
+        task = next(
+            (item for item in plan.tasks if item.task_id == instance.task_id),
+            None,
+        )
+        if (
+            task is None
+            or task.task_definition_checksum != instance.task_definition_checksum
+            or task.worker_ref != instance.worker_ref
+        ):
+            raise HarnessValidationError(
+                "worker result input binding differs from the accepted plan",
+                code="task_plan_gate_artifact_scope_mismatch",
+            )
+        if worker_result.effect_intent is not None:
+            raise HarnessValidationError(
+                "worker result input cannot carry a side-effect intent",
+                code="task_plan_gate_artifact_input_invalid",
+            )
+        if require_succeeded != (
+            worker_result.status is HarnessWorkerStatus.SUCCEEDED
+        ):
+            raise HarnessValidationError(
+                "worker result input status does not match its artifact purpose",
+                code="task_plan_gate_artifact_input_invalid",
+            )
+        gate_input = {
+            "instance": instance.checksum_projection(),
+            "worker_result": worker_result.candidate_payload(),
+        }
+        return (
+            task,
+            gate_input,
+            canonical_payload_checksum(gate_input),
+            _gate_artifact_scope(
+                self._tenant_id,
+                plan.run_id,
+                plan.stage_id,
+            ),
+        )
+
+    def read_worker_result_input(
+        self,
+        run_id: str,
+        stage_id: str,
+        input_checksum: str,
+    ) -> TaskPlanWorkerResultInputArtifacts:
+        """Read one exact scoped worker result input by content checksum."""
+
+        run = identifier(run_id, "run_id")
+        stage = identifier(stage_id, "stage_id")
+        input_ref = checksum(input_checksum, "input_checksum")
+        instance, worker_result = _decode_gate_input_document(
+            self._load_raw_document("gate_input", run, stage, input_ref),
+            expected_scope=_gate_artifact_scope(self._tenant_id, run, stage),
+            expected_checksum=input_ref,
+        )
+        return TaskPlanWorkerResultInputArtifacts(
+            input_checksum=input_ref,
+            instance=instance,
+            worker_result=worker_result,
+        )
+
+    def read_gate_evidence(
+        self,
+        run_id: str,
+        stage_id: str,
+        gate_evidence_refs: Sequence[str],
+    ) -> TaskPlanGateVerificationArtifacts:
+        """Recover evidence and its input from result-owned evidence refs."""
+
+        run = identifier(run_id, "run_id")
+        stage = identifier(stage_id, "stage_id")
+        evidence_refs = normalize_gate_evidence_refs(gate_evidence_refs)
+        expected_scope = _gate_artifact_scope(self._tenant_id, run, stage)
+        evidence_items = tuple(
+            _decode_gate_evidence_document(
+                self._load_raw_document(
+                    "gate_evidence",
+                    run,
+                    stage,
+                    evidence_checksum,
+                ),
+                expected_scope=expected_scope,
+                expected_checksum=evidence_checksum,
+            )
+            for evidence_checksum in evidence_refs
+        )
+        input_checksums = {item.input_checksum for item in evidence_items}
+        result_checksums = {item.result_checksum for item in evidence_items}
+        if len(input_checksums) != 1 or len(result_checksums) != 1:
+            raise HarnessValidationError(
+                "gate evidence refs do not identify one input and result",
+                code="task_plan_gate_artifact_evidence_mismatch",
+            )
+        gate_refs = tuple(item.gate_ref for item in evidence_items)
+        if len(gate_refs) != len(set(gate_refs)):
+            raise HarnessValidationError(
+                "gate evidence contains duplicate gate identities",
+                code="task_plan_gate_artifact_evidence_mismatch",
+            )
+        input_checksum = next(iter(input_checksums))
+        input_content = self._load_raw_document(
+            "gate_input",
+            run,
+            stage,
+            input_checksum,
+        )
+        instance, worker_result = _decode_gate_input_document(
+            input_content,
+            expected_scope=expected_scope,
+            expected_checksum=input_checksum,
+        )
+        result_checksum = canonical_payload_checksum(
+            worker_result.candidate_payload()
+        )
+        if result_checksum != next(iter(result_checksums)):
+            raise HarnessValidationError(
+                "gate evidence does not match its persisted input",
+                code="task_plan_gate_artifact_evidence_mismatch",
+            )
+        refs = TaskPlanGateArtifactRefs(
+            input_checksum=input_checksum,
+            evidence_checksums=evidence_refs,
+        )
+        return TaskPlanGateVerificationArtifacts(
+            refs=refs,
+            instance=instance,
+            worker_result=worker_result,
+            evidences=evidence_items,
+        )
 
     def append_candidate(
         self,
@@ -836,6 +1111,17 @@ class DurableTaskPlanStore:
 
         validate_task_result_owner_contract(result)
         events = self.read_events(result.run_id, result.stage_id)
+        plan = self.plan(result.run_id, result.stage_id, result.plan_version)
+        if plan is None:
+            raise HarnessValidationError(
+                "task result plan is unavailable",
+                code="task_plan_stale_result",
+            )
+        if not result.matches_plan_identity(plan):
+            raise HarnessValidationError(
+                "task result identity does not match accepted plan",
+                code="task_plan_result_identity_mismatch",
+            )
         existing_events = [
             event
             for event in events
@@ -866,6 +1152,13 @@ class DurableTaskPlanStore:
                     "conflicting duplicate task result",
                     code="task_plan_duplicate_result_conflict",
                 )
+            from framework.harness.task_plan.result_proof import verify_task_result_proof
+
+            verify_task_result_proof(
+                plan,
+                result,
+                gate_evidence_reader=self,
+            )
             return result.result_checksum
 
         projection = self.load_projection(result.run_id, result.stage_id)
@@ -876,17 +1169,6 @@ class DurableTaskPlanStore:
             raise HarnessValidationError(
                 "task result belongs to stale plan",
                 code="task_plan_stale_result",
-            )
-        plan = self.plan(result.run_id, result.stage_id, result.plan_version)
-        if plan is None:
-            raise HarnessValidationError(
-                "task result plan is unavailable",
-                code="task_plan_stale_result",
-            )
-        if not result.matches_plan_identity(plan):
-            raise HarnessValidationError(
-                "task result identity does not match accepted plan",
-                code="task_plan_result_identity_mismatch",
             )
         from framework.harness.task_plan.attempt_history_index import history_record_for_result
 
@@ -938,6 +1220,13 @@ class DurableTaskPlanStore:
         history_record_for_result(plan, result, events)
         _require_subagent_result_evidence(result, definition)
         _validate_result_usage(result, definition)
+        from framework.harness.task_plan.result_proof import verify_task_result_proof
+
+        verify_task_result_proof(
+            plan,
+            result,
+            gate_evidence_reader=self,
+        )
 
         if result.status is TaskLifecycle.SUCCEEDED:
             if result.output_schema_ref != definition.task.output_contract.schema_ref:
@@ -1907,7 +2196,9 @@ class DurableTaskPlanStore:
         artifact_ref = reference.artifact_ref()
         try:
             if self._artifact_store.exists(artifact_ref):
-                existing = self._artifact_store.read(artifact_ref)
+                existing = self._artifact_store.read(
+                    replace(artifact_ref, checksum=None, size_bytes=None)
+                )
                 if existing != content:
                     raise HarnessValidationError(
                         "TaskPlan artifact identity contains different content",
@@ -2550,6 +2841,179 @@ def _document_reference(
     )
 
 
+def _gate_artifact_scope(
+    tenant_id: str | None,
+    run_id: str,
+    stage_id: str,
+) -> dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "run_id": identifier(run_id, "run_id"),
+        "stage_id": identifier(stage_id, "stage_id"),
+    }
+
+
+def _decode_gate_input_document(
+    content: bytes,
+    *,
+    expected_scope: Mapping[str, Any],
+    expected_checksum: str,
+) -> tuple[TaskInstance, HarnessWorkerResult]:
+    value = _decode_gate_artifact_json(content)
+    if set(value) != {"schema_version", "scope", "gate_input"}:
+        raise HarnessValidationError(
+            "gate input artifact fields are invalid",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    if value["schema_version"] != TASK_PLAN_GATE_INPUT_SCHEMA:
+        raise HarnessValidationError(
+            "gate input artifact schema is unsupported",
+            code="task_plan_gate_artifact_schema_unsupported",
+        )
+    _require_gate_artifact_scope(value["scope"], expected_scope)
+    gate_input = value["gate_input"]
+    if not isinstance(gate_input, Mapping) or set(gate_input) != {
+        "instance",
+        "worker_result",
+    }:
+        raise HarnessValidationError(
+            "gate input preimage must contain exactly instance and worker_result",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    actual_checksum = canonical_payload_checksum(gate_input)
+    if actual_checksum != expected_checksum:
+        raise HarnessValidationError(
+            "gate input artifact checksum does not match its reference",
+            code="task_plan_gate_artifact_checksum_mismatch",
+            details={"expected": expected_checksum, "actual": actual_checksum},
+        )
+    raw_instance = gate_input["instance"]
+    raw_worker_result = gate_input["worker_result"]
+    if not isinstance(raw_instance, Mapping) or "instance_checksum" in raw_instance:
+        raise HarnessValidationError(
+            "gate input instance projection is invalid",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    if not isinstance(raw_worker_result, Mapping):
+        raise HarnessValidationError(
+            "gate input worker result is invalid",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    try:
+        instance_projection = dict(raw_instance)
+        instance = TaskInstance.from_dict(
+            {
+                **instance_projection,
+                "instance_checksum": canonical_payload_checksum(
+                    instance_projection
+                ),
+            }
+        )
+        worker_result = HarnessWorkerResult.from_dict(raw_worker_result)
+    except (HarnessValidationError, TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "gate input artifact does not match its typed schema",
+            code="task_plan_gate_artifact_corrupt",
+        ) from exc
+    if (
+        instance.checksum_projection() != instance_projection
+        or worker_result.candidate_payload() != dict(raw_worker_result)
+    ):
+        raise HarnessValidationError(
+            "gate input artifact is not canonical",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    if (
+        instance.run_id != expected_scope["run_id"]
+        or instance.stage_id != expected_scope["stage_id"]
+    ):
+        raise HarnessValidationError(
+            "gate input instance is outside the artifact scope",
+            code="task_plan_gate_artifact_scope_mismatch",
+        )
+    return instance, worker_result
+
+
+def _decode_gate_evidence_document(
+    content: bytes,
+    *,
+    expected_scope: Mapping[str, Any],
+    expected_checksum: str,
+) -> TaskPlanGateEvidence:
+    value = _decode_gate_artifact_json(content)
+    if set(value) != {"schema_version", "scope", "gate_evidence"}:
+        raise HarnessValidationError(
+            "gate evidence artifact fields are invalid",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    if value["schema_version"] != TASK_PLAN_GATE_EVIDENCE_SCHEMA:
+        raise HarnessValidationError(
+            "gate evidence artifact schema is unsupported",
+            code="task_plan_gate_artifact_schema_unsupported",
+        )
+    _require_gate_artifact_scope(value["scope"], expected_scope)
+    raw_evidence = value["gate_evidence"]
+    if not isinstance(raw_evidence, Mapping):
+        raise HarnessValidationError(
+            "gate evidence artifact payload is invalid",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    try:
+        evidence = TaskPlanGateEvidence.from_dict(raw_evidence)
+    except HarnessValidationError as exc:
+        if exc.code == "task_plan_gate_evidence_checksum_mismatch":
+            raise HarnessValidationError(
+                "gate evidence artifact checksum does not match its content",
+                code="task_plan_gate_artifact_checksum_mismatch",
+            ) from exc
+        raise HarnessValidationError(
+            "gate evidence artifact does not match its typed schema",
+            code="task_plan_gate_artifact_corrupt",
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise HarnessValidationError(
+            "gate evidence artifact does not match its typed schema",
+            code="task_plan_gate_artifact_corrupt",
+        ) from exc
+    if evidence.evidence_checksum != expected_checksum:
+        raise HarnessValidationError(
+            "gate evidence artifact checksum does not match its reference",
+            code="task_plan_gate_artifact_checksum_mismatch",
+            details={
+                "expected": expected_checksum,
+                "actual": evidence.evidence_checksum,
+            },
+        )
+    return evidence
+
+
+def _decode_gate_artifact_json(content: bytes) -> Mapping[str, Any]:
+    try:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise HarnessValidationError(
+            "gate artifact is not JSON",
+            code="task_plan_gate_artifact_corrupt",
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise HarnessValidationError(
+            "gate artifact must be an object",
+            code="task_plan_gate_artifact_corrupt",
+        )
+    return value
+
+
+def _require_gate_artifact_scope(
+    actual: Any,
+    expected: Mapping[str, Any],
+) -> None:
+    if not isinstance(actual, Mapping) or dict(actual) != dict(expected):
+        raise HarnessValidationError(
+            "gate artifact scope does not match the reader scope",
+            code="task_plan_gate_artifact_scope_mismatch",
+        )
+
+
 def _domain_ref(value: Any) -> str:
     # Projection documents also carry the plan identity fields, so resolve
     # their own checksum before the broader plan/result alternatives.
@@ -2902,9 +3366,16 @@ def _require_projection_matches_event(
 __all__ = [
     "DurableTaskPlanStore",
     "TASK_PLAN_CAPACITY_STATE_NAMESPACE",
+    "TASK_PLAN_GATE_EVIDENCE_SCHEMA",
+    "TASK_PLAN_GATE_INPUT_SCHEMA",
     "TASK_PLAN_PARENT_CONTEXT_STATE_NAMESPACE",
     "TASK_PLAN_EVENT_SOURCE",
     "TASK_PLAN_STORAGE_EXTENSION",
     "TASK_PLAN_STORAGE_SCHEMA",
     "TaskPlanArtifactStorePort",
+    "TaskPlanGateArtifactOwnerPort",
+    "TaskPlanGateArtifactRefs",
+    "TaskPlanGateArtifactWriterPort",
+    "TaskPlanGateEvidenceReaderPort",
+    "TaskPlanGateVerificationArtifacts",
 ]

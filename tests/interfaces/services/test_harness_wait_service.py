@@ -16,7 +16,13 @@ from framework.harness.runtime.graph_dispatcher import HarnessGraphPhysicalActiv
 from framework.harness.runtime.activity_executor import HarnessGraphPhysicalActivityExecutor
 from framework.harness import InMemoryHarnessNodeOutputResource
 from framework.shared.attempts import AttemptSupervisor
-from framework.harness.graph.dsl import HarnessGraphSpec, Sequence, StepRef, Wait
+from framework.harness.graph.dsl import (
+    HarnessGraphSpec,
+    Sequence,
+    StepRef,
+    Wait,
+    WaitTimeoutPolicy,
+)
 from framework.harness.graph.activity import HarnessLeafActivityKind, HarnessStepSpec, HarnessWorkerType
 from framework.harness.graph.bindings import (
     HarnessActivityCapabilities,
@@ -33,6 +39,7 @@ from framework.harness.side_effects.registry import HarnessSideEffectHandlerBind
 from framework.harness.workers.result import HarnessWorkerResult
 from framework.harness.waits.models import (
     HarnessWaitScope,
+    HarnessWaitTimeoutRecord,
     HarnessWaitTimerWakeRecord,
     approval_event_ref_for,
 )
@@ -565,6 +572,33 @@ def test_wait_mutations_emit_redacted_runtime_facts() -> None:
     assert events[0].metadata["operation"] == "timer"
 
 
+def test_wait_timeout_emits_canonical_timeout_with_bounded_evidence_refs() -> None:
+    projection = RuntimeEventProjection()
+    service, registration, _ = _waiting_service(
+        "runtime-timeout",
+        wait_kind="timer",
+        runtime_event_sink=projection,
+    )
+    timeout_event_ref = checksum_for({"timeout": "runtime-timeout"})
+    service.record_wait_timeout(
+        HarnessWaitTimeoutRecord(
+            _wait_scope("run-service-runtime-timeout", registration),
+            registration.deadline_ref,
+            timeout_event_ref,
+            0,
+        )
+    )
+
+    events = projection.timeline(stream_id="run-service-runtime-timeout").events
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type.value == "timeout"
+    assert event.status == "timed_out"
+    assert event.reason_code == "wait_timeout"
+    assert registration.deadline_ref in event.refs
+    assert timeout_event_ref in event.refs
+
+
 def _waiting_service(
     suffix: str,
     *,
@@ -614,6 +648,9 @@ def _waiting_service(
                         "graph.inputs.deadline_ref"
                         if wait_kind == "timer"
                         else None
+                    ),
+                    timeout_policy=(
+                        WaitTimeoutPolicy("halt") if wait_kind == "timer" else None
                     ),
                 ),
                 StepRef("after"),

@@ -17,6 +17,7 @@ from framework.harness.task_plan.store import (
     TaskResultRecord,
 )
 from framework.harness.task_plan import TaskPlanCheckpoint, TaskPlanReplayReducer, TaskPlanValidator
+from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 from tests.framework.harness.task_plan.test_dependency_blocking import _accepted_plan
 from tests.framework.harness.task_plan.test_task_plan_runtime import _candidate, _setup, _task, validator_context
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
@@ -359,11 +360,18 @@ def test_memory_store_rolls_back_result_events_and_budget_together(failed_event_
     from framework.harness.task_plan.store import InMemoryTaskPlanStore
 
     store = InMemoryTaskPlanStore()
+    gate_artifact_owner = InMemoryTaskPlanGateArtifactWriter()
+    store.bind_gate_evidence_reader(gate_artifact_owner)
     candidate, plan = _graph_only_candidate_and_plan()
     store.append_candidate(candidate)
     store.accept_plan(plan)
     instance = _start(store, plan, plan.tasks[0].task_id)
-    result = _result(plan, instance, status=TaskLifecycle.SUCCEEDED)
+    result = _result(
+        plan,
+        instance,
+        status=TaskLifecycle.SUCCEEDED,
+        gate_artifact_owner=gate_artifact_owner,
+    )
     before = store.load_projection(plan.run_id, plan.stage_id)
     history = store.read_events(plan.run_id, plan.stage_id)
     append = store._append_event
@@ -413,7 +421,13 @@ def test_durable_budget_transition_failure_reopen_and_offline_replay(failed_even
         events.fail_on_event_type = None
     instance = _start(store, plan, task_id)
     before = store.load_projection(plan.run_id, plan.stage_id)
-    result = replace(_result(plan, instance, status=TaskLifecycle.SUCCEEDED), usage={"turns": 0})
+    result = _result(
+        plan,
+        instance,
+        status=TaskLifecycle.SUCCEEDED,
+        gate_artifact_owner=store,
+        metrics={"turns": 0},
+    )
     if failed_event_type == "TASK_COMPLETED":
         with pytest.raises(RuntimeError, match="injected batch failure"):
             store.append_result(result)
@@ -425,7 +439,7 @@ def test_durable_budget_transition_failure_reopen_and_offline_replay(failed_even
     history = reopened.read_events(plan.run_id, plan.stage_id)
     reopened.append_result(result)
     assert reopened.read_events(plan.run_id, plan.stage_id) == history
-    report = TaskPlanReplayReducer().replay((plan,), history, results=reopened.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, plan.version))
+    report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay((plan,), history, results=reopened.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, plan.version))
     assert report.projection == projection
     assert projection.consumed_budget["reserved_max_turns"] == 0
     assert projection.consumed_budget["consumed_max_turns"] == 0

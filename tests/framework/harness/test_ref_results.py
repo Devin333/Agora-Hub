@@ -18,6 +18,7 @@ from tests.framework.harness.test_ref_snapshot_store import _store
 from tests.framework.harness.task_plan.test_subagent_result_lineage import (
     _fixture, _start_attempt, _worker_result_from_child,
 )
+from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 
 
 TENANT = "result-tenant"
@@ -60,12 +61,15 @@ def _authorized_fixture(tmp_path):
         workers={invocation.subagent_spec.subagent_id: fixture["worker"]},
         transcript_store=fixture["transcript_store"], result_ref_authority=authority,
     )
+    gate_artifact_owner = InMemoryTaskPlanGateArtifactWriter()
     verifier = TaskPlanResultVerifier(
         fixture["verifier"]._gates, transcript_store=fixture["transcript_store"],
         result_ref_authority=authority,
+        gate_artifact_writer=gate_artifact_owner,
     )
     fixture.update(invocation=invocation, grants=grants, events=events, authority=authority,
-                   runtime=runtime, verifier=verifier, root=root, child_grant=child)
+                   runtime=runtime, verifier=verifier, root=root, child_grant=child,
+                   gate_artifact_owner=gate_artifact_owner)
     return fixture
 
 
@@ -169,7 +173,9 @@ def test_replay_uses_committed_result_grants_without_new_events_or_worker(tmp_pa
     f = _authorized_fixture(tmp_path)
     child = f["runtime"].invoke(f["invocation"])
     record = _verify(f, _worker_result_from_child(child))
-    store = InMemoryTaskPlanStore()
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=f["gate_artifact_owner"],
+    )
     store.append_candidate(f["candidate"])
     store.accept_plan(f["plan"])
     _start_attempt(store, f["plan"], f["instance"])
@@ -177,6 +183,7 @@ def test_replay_uses_committed_result_grants_without_new_events_or_worker(tmp_pa
     replay = TaskPlanReplayReducer(
         transcript_store=f["transcript_store"], result_ref_authority=f["authority"],
         execution_identity=f["execution_identity"],
+        gate_evidence_reader=f["gate_artifact_owner"],
     ).replay((f["plan"],), store.read_events(f["plan"].run_id, f["plan"].stage_id), results=(record,))
     assert replay.projection.tasks[0].status.value == "succeeded"
     assert f["worker"].calls == 1
@@ -294,8 +301,13 @@ def test_research_materialized_results_replay_exact_authorized_ref_union(tmp_pat
             descriptor = catalog.describe_artifact_ref(ref, expected_run_id=expected_run_id, expected_tenant_id=TENANT)
             assert checksum_for(artifacts.read_artifact(ref)["payload"]["value"]) == descriptor.checksum
     artifact_verifier = ArtifactVerifier()
-    verifier = TaskPlanResultVerifier(f["verifier"]._gates, transcript_store=f["transcript_store"],
-                                      result_ref_authority=authority, artifact_reference_verifier=artifact_verifier)
+    verifier = TaskPlanResultVerifier(
+        f["verifier"]._gates,
+        transcript_store=f["transcript_store"],
+        result_ref_authority=authority,
+        artifact_reference_verifier=artifact_verifier,
+        gate_artifact_writer=f["verifier"].gate_artifact_writer,
+    )
     f["verifier"] = ResearchTaskPlanResultMaterializer(
         verifier=verifier, adapter=adapter, config=config, tenant_id=TENANT,
         tenant_scope_ref=checksum_for(TENANT), invocation_factory=lambda *_args: f["invocation"],
@@ -304,13 +316,16 @@ def test_research_materialized_results_replay_exact_authorized_ref_union(tmp_pat
     record = _verify(f, worker_result)
     assert len(record.output_refs) == 1 and worker_result.artifacts == ()
     assert _verify(f, worker_result) == record
-    store = InMemoryTaskPlanStore()
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=f["gate_artifact_owner"],
+    )
     store.append_candidate(f["candidate"])
     store.accept_plan(f["plan"])
     _start_attempt(store, f["plan"], f["instance"])
     store.append_result(record)
     replay = TaskPlanReplayReducer(transcript_store=f["transcript_store"], result_ref_authority=authority,
-                                   execution_identity=f["execution_identity"], artifact_reference_verifier=artifact_verifier)
+                                   execution_identity=f["execution_identity"], artifact_reference_verifier=artifact_verifier,
+                                   gate_evidence_reader=f["gate_artifact_owner"])
     report = replay.replay((f["plan"],), store.read_events(f["plan"].run_id, f["plan"].stage_id), results=(record,))
     assert report.projection.tasks[0].status.value == "succeeded"
     assert f["worker"].calls == 1
@@ -367,8 +382,13 @@ def test_failed_replay_authorizes_original_artifacts_before_payload(tmp_path, mo
     catalog = Catalog()
     authority = HarnessResultRefAuthority(f["grants"], transcript_store=f["transcript_store"], artifact_descriptors=catalog, tenant_id=TENANT)
     runtime = SubAgentRuntime(workers={identity.subagent_id: f["worker"]}, transcript_store=f["transcript_store"], result_ref_authority=authority)
-    f["verifier"] = TaskPlanResultVerifier(f["verifier"]._gates, transcript_store=f["transcript_store"],
-                                          result_ref_authority=authority, artifact_reference_verifier=catalog)
+    f["verifier"] = TaskPlanResultVerifier(
+        f["verifier"]._gates,
+        transcript_store=f["transcript_store"],
+        result_ref_authority=authority,
+        artifact_reference_verifier=catalog,
+        gate_artifact_writer=f["verifier"].gate_artifact_writer,
+    )
     record = _verify(f, _worker_result_from_child(runtime.invoke(f["invocation"])))
     assert record.status.value == "failed" and record.output_refs == ()
     store = InMemoryTaskPlanStore()

@@ -61,6 +61,7 @@ from framework.harness.graph.model import (
 )
 from framework.harness.graph.validation import HarnessGraphPreflightPolicy
 from framework.harness.task_plan import task_plan_context_identities
+from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.task_plan.attempt_history import TaskAttemptOutcome
 from framework.harness.task_plan.attempt_history_index import validate_history_record, validate_attempt_history_append
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -68,6 +69,7 @@ from framework.harness.subagents.transcript import SubAgentTranscriptReceipt
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
+from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_results import HarnessResultRefAuthority
 from tests.framework.harness.test_ref_snapshot_store import _store as _snapshot_store
@@ -252,7 +254,10 @@ class _DynamicTaskPlanFactory:
             transcript_store=transcript_store,
             result_ref_authority=result_authority,
         )
-        store = InMemoryTaskPlanStore()
+        gate_artifact_owner = InMemoryTaskPlanGateArtifactWriter()
+        store = InMemoryTaskPlanStore(
+            gate_evidence_reader=gate_artifact_owner,
+        )
         adapter = ResolvedSubAgentTaskAdapter(
             runtime, ref_admission_service=self.ref_admission_service,
             dependency_result_resolver=(AcceptedDependencyResultResolver(
@@ -421,6 +426,7 @@ class _DynamicTaskPlanFactory:
                 task_gate_registry,
                 transcript_store=transcript_store,
                 result_ref_authority=result_authority,
+                gate_artifact_writer=gate_artifact_owner,
             ),
             policy=policy,
             parallel_coordinator=parallel_coordinator,
@@ -634,6 +640,96 @@ def test_static_and_dynamic_public_result_and_artifact_contracts_match(tmp_path)
     )
 
 
+def test_dynamic_golden_parity_binds_branch_refs_gates_and_publication_successors(
+    tmp_path,
+) -> None:
+    static = _analyze("golden-static", dynamic=False)
+    factory = _DynamicTaskPlanFactory(transcript_root=tmp_path / "transcripts")
+    dynamic = _analyze(
+        "golden-dynamic",
+        dynamic=True,
+        dynamic_factory=factory,
+    )
+
+    assert static.succeeded is dynamic.succeeded is True
+    assert static.analysis is not None and dynamic.analysis is not None
+    assert dynamic.analysis.model_dump(exclude={"analysis_id"}) == (
+        static.analysis.model_dump(exclude={"analysis_id"})
+    )
+    assert dynamic.quality.to_dict() == static.quality.to_dict()
+    assert dynamic.reader_payload is not None and static.reader_payload is not None
+    assert dynamic.reader_payload.to_dict() == static.reader_payload.to_dict()
+    assert dynamic.paper_card is not None and static.paper_card is not None
+    assert dynamic.paper_card.to_dict() == static.paper_card.to_dict()
+    assert dynamic.artifact_refs == static.artifact_refs
+
+    events = factory.stores[0].read_events(
+        dynamic.run_id,
+        RESEARCH_DYNAMIC_STAGE_ID,
+    )
+    aggregate = next(
+        event for event in events if event.event_type == "STAGE_OUTPUT_AGGREGATED"
+    )
+    aggregate_payload = aggregate.payload
+    branch_refs = aggregate_payload["branch_refs"]
+    assert {
+        (item["role"], item["producer_node_id"], item["output_key"])
+        for item in branch_refs
+    } == {
+        ("analysis.structure", "analyze_structure", "structure_candidate"),
+        ("analysis.contribution", "analyze_contribution", "contribution_candidate"),
+        ("analysis.experiments", "analyze_experiments", "experiment_candidate"),
+    }
+    assert set(aggregate_payload["output_refs_by_role"]) == {
+        item["role"] for item in branch_refs
+    }
+    assert tuple(aggregate_payload["result_refs"]) == tuple(
+        sorted(aggregate_payload["result_refs"])
+    )
+    expected_aggregate_checksum = canonical_payload_checksum(
+        {
+            "roles": aggregate_payload["output_refs_by_role"],
+            "result_refs": aggregate_payload["result_refs"],
+            "branch_refs": [dict(item) for item in branch_refs],
+        }
+    )
+    assert aggregate_payload["aggregate_checksum"] == expected_aggregate_checksum
+    assert aggregate_payload["aggregate_ref"] == (
+        f"task-plan-aggregate:{expected_aggregate_checksum}"
+    )
+
+    accepted = [
+        event for event in events if event.event_type == "TASK_RESULT_ACCEPTED"
+    ]
+    assert len(accepted) == 3
+    accepted_by_task = {event.task_id: event for event in accepted}
+    for task_id in ("analyze-structure", "analyze-contribution", "analyze-experiments"):
+        payload = accepted_by_task[task_id].payload
+        assert payload["gate_refs"]
+        assert all(
+            isinstance(ref, str) and ref.startswith("sha256:")
+            for ref in payload["gate_evidence_refs"]
+        )
+        assert payload["result_checksum"].startswith("sha256:")
+
+    verified_claims = next(
+        item
+        for item in dynamic.diagnostics["worker_results"].values()
+        if item["node_id"] == "verify_claims"
+    )
+    assert {
+        (item["role"], item["producer_node_id"], item["output_key"])
+        for item in verified_claims["output"]["analysis_branch_refs"]
+    } == {
+        (item["role"], item["producer_node_id"], item["output_key"])
+        for item in branch_refs
+    }
+    assert all(
+        item["passed"]
+        for item in verified_claims["output"]["claim_gate_results"]
+    )
+
+
 def test_dynamic_replay_uses_recorded_outer_result_without_live_plan_or_subagents(tmp_path) -> None:
     event_port = InMemoryHarnessEventPort()
     artifact_port = FakeArtifactPort()
@@ -715,6 +811,7 @@ def test_dynamic_task_plan_filesystem_transcripts_reopen_and_replay_offline(
     execution = factory.ref_admission_service.snapshot.execution_identity
     replay = TaskPlanReplayReducer(
         reopened, result_ref_authority=authority, execution_identity=execution,
+        gate_evidence_reader=store,
     ).replay(
         (plan,),
         store.read_events(result.run_id, plan.stage_id),
@@ -862,6 +959,7 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
         factory.transcript_stores[0],
         result_ref_authority=factory.subagent_runtimes[0].result_ref_authority,
         execution_identity=factory.ref_admission_service.snapshot.execution_identity,
+        gate_evidence_reader=store,
     )
     replay = reducer.replay((plan,), events, results=records)
     assert len(replay.parallel_groups) == 1

@@ -8,7 +8,7 @@ in ``ResolvedTaskSpec`` have produced bounded evidence.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -39,9 +39,13 @@ from framework.harness.task_plan.canonical import (
     checksum,
     exact_reference,
     identifier,
-    optional_text,
     stable_text_tuple,
     thaw_mapping,
+)
+from framework.harness.task_plan.gate_evidence import (
+    TaskPlanGateArtifactRefs,
+    TaskPlanGateArtifactWriterPort,
+    TaskPlanGateEvidence,
 )
 from framework.harness.task_plan.models import (
     ResolvedTaskSpec,
@@ -60,45 +64,6 @@ from framework.shared.graph_identity import GraphExecutionIdentity
 
 
 SUBAGENT_ATTEMPT_EVIDENCE_TYPE = "subagent_attempt"
-
-
-@dataclass(frozen=True, slots=True)
-class TaskPlanGateEvidence:
-    """Reference-only outcome for one exact deterministic task gate."""
-
-    gate_ref: str
-    input_checksum: str
-    result_checksum: str
-    passed: bool
-    reason_code: str | None = None
-    evidence_checksum: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "gate_ref", exact_reference(self.gate_ref, "gate_ref"))
-        object.__setattr__(self, "input_checksum", checksum(self.input_checksum, "input_checksum"))
-        object.__setattr__(self, "result_checksum", checksum(self.result_checksum, "result_checksum"))
-        if not isinstance(self.passed, bool):
-            raise TypeError("passed must be a bool")
-        reason_code = optional_text(self.reason_code, "reason_code")
-        if not self.passed and reason_code is None:
-            raise HarnessValidationError(
-                "failed TaskPlan gate evidence requires a stable reason code",
-                code="task_plan_gate_evidence_invalid",
-            )
-        object.__setattr__(self, "reason_code", reason_code)
-        object.__setattr__(self, "evidence_checksum", canonical_payload_checksum(self.checksum_projection()))
-
-    def checksum_projection(self) -> dict[str, Any]:
-        return {
-            "gate_ref": self.gate_ref,
-            "input_checksum": self.input_checksum,
-            "result_checksum": self.result_checksum,
-            "passed": self.passed,
-            "reason_code": self.reason_code,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {**self.checksum_projection(), "evidence_checksum": self.evidence_checksum}
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +254,7 @@ class TaskPlanResultVerifier:
         ref_resolution: RefResolutionPort | None = None,
         ref_descriptors: Mapping[str, RefDescriptor] | None = None,
         result_ref_authority: HarnessResultRefAuthority | None = None,
+        gate_artifact_writer: TaskPlanGateArtifactWriterPort | None = None,
     ) -> None:
         self._gates = gates or TaskPlanGateRegistry()
         if not isinstance(self._gates, TaskPlanGateEvaluatorPort):
@@ -327,6 +293,15 @@ class TaskPlanResultVerifier:
             if ref_authority is not None:
                 raise ValueError("static and execution-bound result authority cannot be combined")
         self.result_ref_authority = result_ref_authority
+        if gate_artifact_writer is not None and not isinstance(
+            gate_artifact_writer,
+            TaskPlanGateArtifactWriterPort,
+        ):
+            raise TypeError(
+                "gate_artifact_writer must implement "
+                "TaskPlanGateArtifactWriterPort"
+            )
+        self._gate_artifact_writer = gate_artifact_writer
 
     @property
     def gate_registry(self) -> TaskPlanGateEvaluatorPort:
@@ -357,6 +332,12 @@ class TaskPlanResultVerifier:
         """Expose the shared reference authority for composition checks."""
 
         return self._ref_authority
+
+    @property
+    def gate_artifact_writer(self) -> TaskPlanGateArtifactWriterPort | None:
+        """Expose the immutable owner required before result construction."""
+
+        return self._gate_artifact_writer
 
     def verify(
         self,
@@ -403,12 +384,36 @@ class TaskPlanResultVerifier:
             self._authorize_result_refs(result.artifacts)
 
         if result.status is not HarnessWorkerStatus.SUCCEEDED:
+            if self._gate_artifact_writer is None:
+                raise HarnessValidationError(
+                    "TaskPlan worker result artifact owner is unavailable",
+                    code="task_plan_gate_artifact_owner_unavailable",
+                )
+            worker_result_proof_ref = (
+                self._gate_artifact_writer.persist_worker_result_input(
+                    plan,
+                    instance,
+                    result,
+                )
+            )
+            expected_proof_ref = canonical_payload_checksum(
+                {
+                    "instance": instance.checksum_projection(),
+                    "worker_result": result.candidate_payload(),
+                }
+            )
+            if worker_result_proof_ref != expected_proof_ref:
+                raise HarnessValidationError(
+                    "TaskPlan worker result artifact owner returned a conflicting ref",
+                    code="task_plan_gate_artifact_ref_mismatch",
+                )
             return _failure_record(
                 plan,
                 task,
                 instance,
                 result,
                 "task_worker_failed",
+                worker_result_proof_ref=worker_result_proof_ref,
                 receipt=receipt,
             )
 
@@ -426,10 +431,30 @@ class TaskPlanResultVerifier:
             worker_result=result,
             input_checksum=input_checksum,
         )
+        if self._gate_artifact_writer is None:
+            raise HarnessValidationError(
+                "TaskPlan gate artifact owner is unavailable",
+                code="task_plan_gate_artifact_owner_unavailable",
+            )
         evidence = tuple(
             self._gates.evaluate(gate_ref, gate_request)
             for gate_ref in task.gate_refs
         )
+        persisted = self._gate_artifact_writer.persist_gate_verification(
+            plan,
+            instance,
+            result,
+            evidence,
+        )
+        if not isinstance(persisted, TaskPlanGateArtifactRefs) or (
+            persisted.input_checksum != input_checksum
+            or persisted.evidence_checksums
+            != tuple(item.evidence_checksum for item in evidence)
+        ):
+            raise HarnessValidationError(
+                "TaskPlan gate artifact owner returned conflicting refs",
+                code="task_plan_gate_artifact_ref_mismatch",
+            )
         failed = next((item for item in evidence if not item.passed), None)
         if failed is not None:
             return _failure_record(
@@ -439,7 +464,7 @@ class TaskPlanResultVerifier:
                 result,
                 failed.reason_code or "task_gate_failed",
                 verified_gate_refs=tuple(item.gate_ref for item in evidence),
-                gate_evidence_refs=tuple(item.evidence_checksum for item in evidence),
+                gate_evidence_refs=persisted.evidence_checksums,
                 receipt=receipt,
             )
         return TaskResultRecord.for_plan(
@@ -460,7 +485,7 @@ class TaskPlanResultVerifier:
             output_schema_ref=task.task.output_contract.schema_ref,
             usage=dict(result.metrics),
             verified_gate_refs=tuple(item.gate_ref for item in evidence),
-            gate_evidence_refs=tuple(item.evidence_checksum for item in evidence),
+            gate_evidence_refs=persisted.evidence_checksums,
             transcript_ref=receipt.transcript_ref if receipt else None,
             transcript_checksum=receipt.transcript_checksum if receipt else None,
             subagent_output_ref=receipt.output_ref if receipt else None,
@@ -634,6 +659,7 @@ def _failure_record(
     *,
     verified_gate_refs: tuple[str, ...] = (),
     gate_evidence_refs: tuple[str, ...] = (),
+    worker_result_proof_ref: str | None = None,
     receipt: SubAgentTranscriptReceipt | None = None,
 ) -> TaskResultRecord:
     return TaskResultRecord.for_plan(
@@ -647,6 +673,7 @@ def _failure_record(
         error_code=identifier(reason_code, "reason_code"),
         verified_gate_refs=verified_gate_refs,
         gate_evidence_refs=gate_evidence_refs,
+        worker_result_proof_ref=worker_result_proof_ref,
         transcript_ref=receipt.transcript_ref if receipt else None,
         transcript_checksum=receipt.transcript_checksum if receipt else None,
         subagent_output_ref=receipt.output_ref if receipt else None,

@@ -116,7 +116,12 @@ def test_real_graph_inputs_and_children_use_persisted_read_only_grants(tmp_path,
         records = plan_store.results_for(root.run_id, root.stage_id, plan.plan_id, plan.version)
         assert len(records) == 3
         with pytest.raises(HarnessValidationError) as replay_error:
-            TaskPlanReplayReducer(transcript_store).replay(
-                (plan,), plan_store.read_events(root.run_id, root.stage_id), results=records,
-            )
+                TaskPlanReplayReducer(
+                    transcript_store,
+                    gate_evidence_reader=plan_store,
+                ).replay(
+                    (plan,),
+                    plan_store.read_events(root.run_id, root.stage_id),
+                    results=records,
+                )
         assert replay_error.value.code == "task_plan_result_ref_authority_required"

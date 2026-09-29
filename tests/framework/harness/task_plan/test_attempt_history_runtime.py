@@ -24,10 +24,64 @@ from framework.harness.task_plan.store import (
     TaskPlanEvent,
     TaskQueueAdmissionEvidence,
 )
+from framework.harness.task_plan.verification import (
+    TaskPlanGateRegistry,
+    TaskPlanResultVerificationRequest,
+    TaskPlanResultVerifier,
+)
+from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
+from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 from tests.framework.harness.agent_loop.test_orchestration_runtime import _runtime, _request
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
     _ArtifactStore, _EventStore, _store, _accepted_plan, _task, _start, _result, _lifecycle_event,
 )
+
+
+def _gate_artifact_owner(store, *, durable):
+    if durable:
+        return store
+    owner = InMemoryTaskPlanGateArtifactWriter()
+    store.bind_gate_evidence_reader(owner)
+    return owner
+
+
+def _verified_result(
+    plan,
+    instance,
+    *,
+    gate_artifact_owner,
+    worker_succeeds=True,
+    gate_passes=True,
+):
+    task = next(item for item in plan.tasks if item.task_id == instance.task_id)
+    worker_result = HarnessWorkerResult(
+        status=(
+            HarnessWorkerStatus.SUCCEEDED
+            if worker_succeeds
+            else HarnessWorkerStatus.FAILED
+        ),
+        artifacts=(f"artifact://{instance.task_id}",) if worker_succeeds else (),
+        error=None if worker_succeeds else "worker_failed",
+    )
+    gates = TaskPlanGateRegistry()
+    gates.register(
+        "SummaryGate@1",
+        lambda _request: gate_passes,
+        deterministic=True,
+    )
+    return TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=gate_artifact_owner,
+    ).verify(
+        worker_result,
+        task=task,
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=task,
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
 
 
 def test_recovery_history_selects_only_the_current_active_attempt():
@@ -83,8 +137,19 @@ def test_recovery_history_selects_only_the_current_active_attempt():
     assert recovery_results_from_history(history, pending) == ()
     assert tuple(item.result for item in history) == (first_result, second_result)
     for reason in ("gate_failed", "task_worker_failed"):
-        rejected = replace(second_result, status=TaskLifecycle.FAILED, error_code=reason,
-                           result_ref=None, output_refs=(), output_roles=())
+        rejected = replace(
+            second_result,
+            status=TaskLifecycle.FAILED,
+            error_code=reason,
+            result_ref=None,
+            output_refs=(),
+            output_roles=(),
+            worker_result_proof_ref=(
+                "sha256:" + "a" * 64
+                if reason == "task_worker_failed"
+                else None
+            ),
+        )
         rejected_history = (history[0], TaskAttemptHistoryRecord.for_result(plan, rejected))
         assert recovery_results_from_history(rejected_history, projection) == (rejected,)
 
@@ -94,12 +159,20 @@ def test_recovery_history_selects_only_the_current_active_attempt():
 def test_retry_keeps_failed_attempt_and_only_projects_the_accepted_result(durable, reason, outcome):
     artifacts, event_log = _ArtifactStore(), _EventStore()
     store = _store(event_log, artifacts) if durable else InMemoryTaskPlanStore()
+    gate_artifact_owner = _gate_artifact_owner(store, durable=durable)
     task = replace(_task("structure"), retry_policy=TaskRetryPolicy(max_attempts=2, retryable_reason_codes=(reason,)))
     candidate, plan, _, _ = _accepted_plan((task,))
     store.append_candidate(candidate)
     store.accept_plan(plan)
     first = _start(store, plan, "structure")
-    failed = replace(_result(plan, first, status=TaskLifecycle.FAILED), error_code=reason)
+    failed = _verified_result(
+        plan,
+        first,
+        gate_artifact_owner=gate_artifact_owner,
+        worker_succeeds=reason != "task_worker_failed",
+        gate_passes=reason != "task_gate_failed",
+    )
+    assert failed.error_code == reason
     store.append_result(failed)
     projection = store.load_projection(plan.run_id, plan.stage_id)
     retry = TaskPlanEvent.for_plan("TASK_RETRY_SCHEDULED", plan, task_id=first.task_id,
@@ -169,13 +242,21 @@ def test_retry_keeps_failed_attempt_and_only_projects_the_accepted_result(durabl
     ):
         projection = replace(transition(projection), last_sequence=projection.last_sequence + 1)
         store.commit_event(_lifecycle_event(event_type, projection.last_sequence, plan, second), projection)
-    accepted = _result(plan, second, status=TaskLifecycle.SUCCEEDED)
+    accepted = _verified_result(
+        plan,
+        second,
+        gate_artifact_owner=gate_artifact_owner,
+    )
     store.append_result(accepted)
     reopened = _store(event_log, artifacts) if durable else store
     history = reopened.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, 1)
     assert [(item.attempt, item.outcome, item.result) for item in history] == [(1, outcome, failed), (2, TaskAttemptOutcome.ACCEPTED, accepted)]
     assert reopened.results_for(plan.run_id, plan.stage_id, plan.plan_id, 1) == (accepted,)
-    report = TaskPlanReplayReducer().replay((plan,), reopened.read_events(plan.run_id, plan.stage_id), results=history)
+    report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
+        (plan,),
+        reopened.read_events(plan.run_id, plan.stage_id),
+        results=history,
+    )
     assert report.attempt_history == history
 
 
@@ -183,13 +264,23 @@ def test_retry_keeps_failed_attempt_and_only_projects_the_accepted_result(durabl
 def test_replaced_attempts_survive_reopen_and_old_version_queries(durable):
     artifacts, event_log = _ArtifactStore(), _EventStore()
     store = _store(event_log, artifacts) if durable else InMemoryTaskPlanStore()
+    gate_artifact_owner = _gate_artifact_owner(store, durable=durable)
     candidate, plan, policy, registry = _accepted_plan((
         _task("structure"), _task("helper", capability="research.helper", role="analysis.helper"),
     ), two_tasks=True)
     store.append_candidate(candidate)
     store.accept_plan(plan)
-    accepted = _result(plan, _start(store, plan, "structure"), status=TaskLifecycle.SUCCEEDED)
-    failed = _result(plan, _start(store, plan, "helper"), status=TaskLifecycle.FAILED, role="analysis.helper")
+    accepted = _verified_result(
+        plan,
+        _start(store, plan, "structure"),
+        gate_artifact_owner=gate_artifact_owner,
+    )
+    failed = _verified_result(
+        plan,
+        _start(store, plan, "helper"),
+        gate_artifact_owner=gate_artifact_owner,
+        gate_passes=False,
+    )
     store.append_result(accepted)
     store.append_result(failed)
     patch = PlanPatch.for_plan(plan, patch_id="history-replacement", reason_code="replacement",
@@ -201,8 +292,11 @@ def test_replaced_attempts_survive_reopen_and_old_version_queries(durable):
                                               policy, registry, accepted_at="2026-08-02T00:01:00Z",
                                               available_input_refs=("document",))
     store.accept_patched_plan(patch, next_plan)
-    replacement = _result(next_plan, _start(store, next_plan, "replacement"),
-                          status=TaskLifecycle.SUCCEEDED, role="analysis.helper")
+    replacement = _verified_result(
+        next_plan,
+        _start(store, next_plan, "replacement"),
+        gate_artifact_owner=gate_artifact_owner,
+    )
     store.append_result(replacement)
     reopened = _store(event_log, artifacts) if durable else store
     old_history = reopened.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, 1)
@@ -211,8 +305,12 @@ def test_replaced_attempts_survive_reopen_and_old_version_queries(durable):
     assert [item.result for item in history] == [accepted, failed, replacement]
     assert [item.outcome for item in history] == [TaskAttemptOutcome.ACCEPTED, TaskAttemptOutcome.REJECTED, TaskAttemptOutcome.ACCEPTED]
     assert {item.result_checksum for item in reopened.results_for(plan.run_id, plan.stage_id, next_plan.plan_id, 2)} == {accepted.result_checksum, replacement.result_checksum}
-    report = TaskPlanReplayReducer().replay((plan, next_plan), reopened.read_events(plan.run_id, plan.stage_id),
-                                          results=history, patches=(patch,))
+    report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
+        (plan, next_plan),
+        reopened.read_events(plan.run_id, plan.stage_id),
+        results=history,
+        patches=(patch,),
+    )
     assert report.attempt_history == history
 
 
@@ -220,7 +318,20 @@ def test_replaced_attempts_survive_reopen_and_old_version_queries(durable):
 def test_supervised_history_is_replayable_without_live_runtime(durable):
     artifacts, event_log = _ArtifactStore(), _EventStore()
     store = _store(event_log, artifacts) if durable else InMemoryTaskPlanStore()
-    runtime, identity = _runtime(store=store)
+    gate_artifact_owner = _gate_artifact_owner(store, durable=durable)
+    gates = TaskPlanGateRegistry()
+    gates.register("gate@1", lambda _request: True, deterministic=True)
+    runtime, identity = _runtime(
+        store=store,
+        result_verifier=TaskPlanResultVerifier(
+            gates,
+            gate_artifact_writer=gate_artifact_owner,
+        ),
+        worker_executor=lambda _binding, instance, _identity: HarnessWorkerResult(
+            status=HarnessWorkerStatus.SUCCEEDED,
+            output={"summary": instance.task_id},
+        ),
+    )
     try:
         result = runtime.dispatch(_request(identity))
         assert result.status == "succeeded", result.reason_code
@@ -233,7 +344,11 @@ def test_supervised_history_is_replayable_without_live_runtime(durable):
     assert len(history) == 2
     assert all(item.outcome is TaskAttemptOutcome.ACCEPTED and item.terminal_receipt is not None for item in history)
     assert len({item.operation_key for item in history}) == 2
-    report = TaskPlanReplayReducer().replay((plan,), events, results=history)
+    report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
+        (plan,),
+        events,
+        results=history,
+    )
     assert report.attempt_history == history
     assert {item["operation_key"] for item in report.parallel_spawn_operations.values()} == {item.operation_key for item in history}
     checkpoint = TaskPlanCheckpoint.from_replay("complete-history", plan, report, created_at="2026-09-09T00:00:00Z")
@@ -261,7 +376,11 @@ def test_supervised_history_is_replayable_without_live_runtime(durable):
     assert reopened.read_events(plan.run_id, plan.stage_id) == events
     assert reopened.load_projection(plan.run_id, plan.stage_id) == projection
     with pytest.raises(HarnessValidationError, match="confirmed child"):
-        TaskPlanReplayReducer().replay((plan,), (*events, event), results=history)
+        TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
+            (plan,),
+            (*events, event),
+            results=history,
+        )
 
     quarantined = replace(record, outcome=TaskAttemptOutcome.QUARANTINED, reason_code="late_result")
     late_event = replace(event, payload={**dict(event.payload),
@@ -273,6 +392,10 @@ def test_supervised_history_is_replayable_without_live_runtime(durable):
     all_history = reopened.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, plan.version)
     assert all_history == (*history, quarantined)
     assert reopened.results_for(plan.run_id, plan.stage_id, plan.plan_id, plan.version) == accepted_results
-    replayed = TaskPlanReplayReducer().replay((plan,), (*events, late_event), results=all_history)
+    replayed = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
+        (plan,),
+        (*events, late_event),
+        results=all_history,
+    )
     assert replayed.attempt_history == all_history
     assert replayed.projection.tasks == projection.tasks

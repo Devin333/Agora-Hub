@@ -453,7 +453,11 @@ def test_for_result_classifies_accepted_rejected_and_runtime_failed_candidates()
         _result(plan, instance, status=TaskLifecycle.FAILED),
         error_code="gate_rejected",
     )
-    failed = replace(rejected, error_code="task_worker_failed")
+    failed = replace(
+        rejected,
+        error_code="task_worker_failed",
+        worker_result_proof_ref=canonical_payload_checksum({"worker_input": "fixture"}),
+    )
 
     assert TaskAttemptHistoryRecord.for_result(plan, accepted).outcome is TaskAttemptOutcome.ACCEPTED
     assert TaskAttemptHistoryRecord.for_result(plan, rejected).outcome is TaskAttemptOutcome.REJECTED

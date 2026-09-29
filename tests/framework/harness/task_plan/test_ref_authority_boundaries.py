@@ -44,6 +44,7 @@ from tests.framework.harness.task_plan.test_task_plan_runtime import (
     _setup,
     _task,
 )
+from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 
 
 class _RecordingAuthority(RefAuthority):
@@ -217,6 +218,7 @@ def test_result_verifier_authorizes_subagent_refs_before_transcript_and_gate(
             stage_id=fixture["plan"].stage_id,
         ),
         ref_descriptors={item.ref: item for item in descriptors},
+        gate_artifact_writer=InMemoryTaskPlanGateArtifactWriter(),
     )
 
     record = verifier.verify(

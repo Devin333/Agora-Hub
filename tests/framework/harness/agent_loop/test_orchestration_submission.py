@@ -18,10 +18,11 @@ from framework.harness.task_plan.canonical import canonical_payload_checksum, th
 from framework.harness.task_plan.ports import TaskPlanStageRequest
 from framework.harness.task_plan.parallel import DispatchGroup
 from framework.harness.task_plan.replay import TaskPlanReplayReducer
-from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskPlanEvent, TaskResultRecord
+from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskPlanEvent
+from framework.harness.task_plan.verification import TaskPlanGateRegistry, TaskPlanResultVerifier
 from framework.harness.task_plan.submission import CandidateDedupIdentity
 from framework.harness.workers.result import HarnessWorkerResult
-from tests.framework.harness.agent_loop.test_orchestration_runtime import _runtime, _request
+from tests.framework.harness.agent_loop.test_orchestration_runtime import _gate_owner, _runtime, _request
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
     _ArtifactStore, _store,
 )
@@ -40,7 +41,10 @@ def store_factory(request):
 def _counting_worker(calls):
     def execute(_binding, task, _identity):
         calls.append(task)
-        return HarnessWorkerResult(status="succeeded", output={"summary": "completed"})
+        return HarnessWorkerResult(
+            status="succeeded",
+            output={"summary": "completed", "task_id": task.task_id},
+        )
     return execute
 
 
@@ -116,7 +120,10 @@ def test_active_resubmission_cannot_recover_or_halt_original_execution(store_fac
     def worker(_binding, task, _identity):
         calls.append(task)
         assert release.wait(15)
-        return HarnessWorkerResult(status="succeeded", output={"summary": "done"})
+        return HarnessWorkerResult(
+            status="succeeded",
+            output={"summary": "completed", "task_id": task.task_id},
+        )
 
     store = store_factory()
     runtime, identity = _runtime(store=store, worker_executor=worker)
@@ -531,22 +538,33 @@ def test_restart_with_no_candidate_reads_durable_candidate_without_calling_build
 
 
 class _RejectingVerifier:
-    registered_gate_refs = ("gate@1",)
+    """Test adapter that exercises a deterministic failing gate."""
 
-    def verify(self, _result, *, task, request):
-        instance = request.instance
-        return TaskResultRecord.for_plan(
-            request.plan, task_id=instance.task_id,
-            task_instance_id=instance.task_instance_id, attempt=instance.attempt,
-            status="failed", error_code="gate_failed",
+    def __init__(self, gate_artifact_writer) -> None:
+        gates = TaskPlanGateRegistry()
+        gates.register("gate@1", lambda _request: False, deterministic=True)
+        self._delegate = TaskPlanResultVerifier(
+            gates,
+            gate_artifact_writer=gate_artifact_writer,
         )
+
+    @property
+    def registered_gate_refs(self):
+        return self._delegate.registered_gate_refs
+
+    @property
+    def gate_artifact_writer(self):
+        return self._delegate.gate_artifact_writer
+
+    def verify(self, result, *, task, request):
+        return self._delegate.verify(result, task=task, request=request)
 
 
 def test_terminal_failure_reuses_original_observation_without_new_attempts(store_factory):
     calls = []
     store = store_factory()
     runtime, identity = _runtime(
-        store=store, worker_executor=_counting_worker(calls), result_verifier=_RejectingVerifier(),
+        store=store, worker_executor=_counting_worker(calls), result_verifier=_RejectingVerifier(_gate_owner(store)),
     )
     request = _request(identity)
     failed = runtime.dispatch(request)
@@ -587,7 +605,12 @@ def test_replay_rejects_tampered_submission_outcome_without_live_calls(field):
         events = [replace(event, sequence=i + 1) for i, event in enumerate(events)]
     else:
         plans = (plan,)
-        event = events[-1]
+        terminal_index = next(
+            index
+            for index, candidate_event in enumerate(events)
+            if candidate_event.event_type == "TASK_PLAN_VERIFIED"
+        )
+        event = events[terminal_index]
         assert event.event_type == "TASK_PLAN_VERIFIED"
         payload = thaw_mapping(event.payload)
         if field == "aggregate_ref":
@@ -603,9 +626,9 @@ def test_replay_rejects_tampered_submission_outcome_without_live_calls(field):
                 del payload[key]
         else:
             payload["terminal_result_checksum"] = canonical_payload_checksum({"wrong": "checksum"})
-        events[-1] = replace(event, payload=payload)
+        events[terminal_index] = replace(event, payload=payload)
     with pytest.raises(HarnessValidationError) as rejected:
-        TaskPlanReplayReducer().replay(
+        TaskPlanReplayReducer(gate_evidence_reader=store).replay(
             plans, events, results=store.result_history_for(plan.run_id, plan.stage_id, plan.plan_id, plan.version),
         )
     assert rejected.value.code in {"task_plan_submission_result_invalid", "task_plan_replay_candidate_mismatch"}
@@ -640,10 +663,15 @@ def test_corrupt_terminal_cache_fails_closed_without_reexecuting_workers():
     request = _request(identity)
     assert runtime.dispatch(request).status == "succeeded"
     events = store._events[(identity.run_id, "delegate_stage")]
-    terminal = events[-1]
+    terminal_index = next(
+        index
+        for index, candidate_event in enumerate(events)
+        if candidate_event.event_type == "TASK_PLAN_VERIFIED"
+    )
+    terminal = events[terminal_index]
     payload = thaw_mapping(terminal.payload)
     del payload["submission_key"]
-    events[-1] = replace(terminal, payload=payload)
+    events[terminal_index] = replace(terminal, payload=payload)
     before = tuple(events)
     restarted, _ = _runtime(store=store, worker_executor=_counting_worker(calls))
     result = restarted.dispatch(request)

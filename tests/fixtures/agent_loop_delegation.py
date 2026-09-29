@@ -240,6 +240,7 @@ def build_child_dependencies(
         transcript_store=transcripts,
         artifact_reference_verifier=artifacts,
         result_ref_authority=result_ref_authority,
+        gate_artifact_writer=store,
     )
     execution_service = None
     owned_runtime = None

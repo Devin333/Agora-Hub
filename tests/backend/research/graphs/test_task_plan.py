@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -12,14 +13,17 @@ from backend.research.graphs import (
     RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY,
     RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS,
     RESEARCH_DYNAMIC_STAGE_ID,
+    RESEARCH_DYNAMIC_TOOL_IDS,
     RESEARCH_DYNAMIC_WORKER_CONTRACT_REFS,
     RESEARCH_DYNAMIC_WORKER_REFS,
     ResearchAnalysisPlanCandidateBuilder,
+    ResearchAnalysisTaskPlanStageWorker,
     build_dynamic_paper_analysis_graph_definition,
     build_paper_analysis_gate_registry,
     build_research_analysis_capability_registry,
     build_research_analysis_task_plan_aggregator,
     build_research_analysis_task_plan_policy,
+    build_research_artifact_terminal_policy,
     validate_research_analysis_candidate,
 )
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -42,14 +46,16 @@ from framework.harness.task_plan import (
     TaskAcceptanceCriteria,
     TaskBudget,
     TaskLifecycle,
+    TaskPlanGateEvidence,
     TaskPlanPatchValidator,
     TaskPlanStageRequest,
-    TASK_PLAN_RESULT_SCHEMA_V3,
+    TASK_PLAN_RESULT_SCHEMA,
     TaskPlanEvent,
     TaskPlanReadyDecision,
     TaskResultRecord,
     TaskPlanScheduler,
     TaskPlanStageBinding,
+    TaskPlanResultVerifier,
     TaskPlanStageIdentity,
     TaskPlanValidationContext,
     TaskPlanValidator,
@@ -65,6 +71,11 @@ from framework.harness.graph.model import (
 )
 from framework.harness.graph.activity import HarnessWorkerType
 from framework.harness.workers.result import HarnessWorkerResult
+from framework.harness.workers.result import HarnessWorkerEvidence
+from framework.harness.subagents.transcript import SubAgentTranscriptReceipt
+from framework.harness.subagents.supervisor import ChildAgentSupervisor
+from framework.harness.task_plan.parallel import ParallelAgentCoordinator
+from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 
 
 class _BoundResearchWorker:
@@ -122,6 +133,56 @@ def test_policy_pins_existing_research_gates_workers_and_subagents() -> None:
     }
 
 
+def test_stage_worker_rejects_same_ref_policy_with_changed_tool_boundary() -> None:
+    policy = build_research_analysis_task_plan_policy()
+    changed = replace(policy, allowed_tool_ids=("retrieval.untrusted",))
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        _test_stage_worker(policy=changed)
+
+    assert exc_info.value.code == "research_task_plan_policy_mismatch"
+
+
+def test_stage_worker_rejects_changed_research_publication_policy() -> None:
+    terminal_policy = build_research_artifact_terminal_policy()
+    definition = replace(
+        build_dynamic_paper_analysis_graph_definition(),
+        terminal_side_effect_policy=replace(
+            terminal_policy,
+            retry_limit=terminal_policy.retry_limit + 1,
+        ),
+        definition_checksum=None,
+    )
+    graph = HarnessGraphCompiler().compile(definition).graph
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        _test_stage_worker(
+            stage_binding=TaskPlanStageBinding(
+                graph,
+                RESEARCH_DYNAMIC_STAGE_ID,
+            )
+        )
+
+    assert exc_info.value.code == (
+        "research_task_plan_publication_policy_required"
+    )
+
+
+def test_stage_worker_rejects_capacity_below_pinned_parallel_policy() -> None:
+    supervisor = ChildAgentSupervisor(max_children=2)
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        child_supervisor=supervisor,
+    )
+    with pytest.raises(HarnessValidationError) as exc_info:
+        _test_stage_worker(
+            parallel_coordinator=coordinator,
+            child_agent_supervisor=supervisor,
+        )
+
+    assert exc_info.value.code == "research_task_plan_parallel_capacity_invalid"
+
+
 def test_capability_registry_requires_every_exact_subagent_binding() -> None:
     bindings = _worker_bindings()
     registry = build_research_analysis_capability_registry(bindings)
@@ -151,11 +212,19 @@ def test_candidate_builder_accepts_only_outline_and_pins_control_fields() -> Non
     worker = _OutlineWorker(_valid_outline())
     policy = build_research_analysis_task_plan_policy()
     builder = ResearchAnalysisPlanCandidateBuilder(worker)
-    request = _plan_build_request(policy)
+    request = replace(
+        _plan_build_request(policy),
+        metadata={
+            "parent_raw_messages": ["controller-private"],
+            "hidden_prompt": "controller-only",
+        },
+    )
 
     candidate = builder.build_candidate(request)
 
     assert worker.calls[0][0] == "candidate_task_plan"
+    assert "controller-private" not in repr(worker.calls[0][1])
+    assert "controller-only" not in repr(worker.calls[0][1])
     assert candidate.generated_by == "research.task-plan-builder@1"
     assert candidate.schema_version == GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA
     assert candidate.matches_stage_identity(request.stage_identity)
@@ -175,7 +244,7 @@ def test_candidate_builder_accepts_only_outline_and_pins_control_fields() -> Non
         assert task.acceptance_criteria.gate_refs == (
             RESEARCH_DYNAMIC_GATES_BY_CAPABILITY[capability]
         )
-        assert task.requested_tools == ()
+        assert task.requested_tools == RESEARCH_DYNAMIC_TOOL_IDS
         assert task.requested_memory_namespaces == ()
         assert task.retry_policy.max_attempts == policy.max_task_attempts
 
@@ -186,6 +255,41 @@ def test_candidate_builder_accepts_only_outline_and_pins_control_fields() -> Non
             _plan_build_request(policy)
         )
     assert exc_info.value.code == "research_task_plan_builder_output_invalid"
+
+
+def test_candidate_requires_both_isolated_research_input_refs() -> None:
+    policy = build_research_analysis_task_plan_policy()
+    outline = _valid_outline()
+    outline["tasks"][0]["input_refs"] = ["document"]
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        ResearchAnalysisPlanCandidateBuilder(_OutlineWorker(outline)).build_candidate(
+            _plan_build_request(policy)
+        )
+
+    assert exc_info.value.code == "research_task_plan_required_input_missing"
+    assert exc_info.value.details == {"missing": ["evidence_pack"]}
+
+
+def test_research_candidate_contract_rejects_dropped_tool_policy() -> None:
+    policy = build_research_analysis_task_plan_policy()
+    candidate = ResearchAnalysisPlanCandidateBuilder(
+        _OutlineWorker(_valid_outline())
+    ).build_candidate(_plan_build_request(policy))
+    first = candidate.tasks[0]
+    forged = replace(
+        candidate,
+        candidate_id="research-plan-with-dropped-tool-policy",
+        tasks=(replace(first, requested_tools=()), *candidate.tasks[1:]),
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_research_analysis_candidate(forged)
+
+    assert exc_info.value.code == "research_task_plan_candidate_contract_mismatch"
+    assert exc_info.value.details["violations"] == [
+        {"task_id": first.task_id, "reason": "tool_policy_mismatch"}
+    ]
 
 
 def test_research_candidate_rejects_capability_gate_substitution() -> None:
@@ -348,7 +452,7 @@ def test_graph_only_task_result_contract_is_strict_and_lifecycle_bound() -> None
     )
     payload = result.to_dict()
 
-    assert result.schema_version == TASK_PLAN_RESULT_SCHEMA_V3
+    assert result.schema_version == TASK_PLAN_RESULT_SCHEMA
     assert result.matches_plan_identity(plan)
     assert result.worker_ref == definition.worker_ref
     assert result.task_checksum == definition.task_definition_checksum
@@ -356,6 +460,15 @@ def test_graph_only_task_result_contract_is_strict_and_lifecycle_bound() -> None
     assert result.graph_checksum == plan.graph_checksum
     assert not {"workflow_id", "workflow_ref"}.intersection(payload)
     assert TaskResultRecord.from_dict(payload) == result
+
+    with pytest.raises(HarnessValidationError) as retired_schema:
+        TaskResultRecord.from_dict(
+            {
+                **payload,
+                "schema_version": "newsroom.harness-task-plan-result/v3",
+            }
+        )
+    assert retired_schema.value.code == "task_plan_result_schema_unsupported"
 
     with pytest.raises(HarnessValidationError) as alias_error:
         TaskResultRecord.from_dict(
@@ -407,7 +520,64 @@ def test_graph_only_task_result_contract_is_strict_and_lifecycle_bound() -> None
     )
     assert not result.matches_plan_identity(other_plan)
 
-    store = InMemoryTaskPlanStore()
+    gate_owner = InMemoryTaskPlanGateArtifactWriter()
+    receipt = SubAgentTranscriptReceipt(
+        transcript_ref=result.transcript_ref,
+        transcript_checksum=result.transcript_checksum,
+        transcript_id="research-contract-transcript",
+        invocation_id="research-contract-invocation",
+        parent_run_id=plan.run_id,
+        child_run_id="research-contract-child",
+        task_instance_id=instance.task_instance_id,
+        attempt=instance.attempt,
+        context_ref="subagent-context://research-contract",
+        context_checksum="sha256:" + "3" * 64,
+        output_ref=result.subagent_output_ref,
+        output_checksum=result.subagent_output_checksum,
+        storage_revision="research-contract-revision",
+        committed_at=datetime(2026, 8, 17, tzinfo=UTC),
+        identity_checksum="sha256:" + "4" * 64,
+    )
+    worker_result = HarnessWorkerResult(
+        status="succeeded",
+        artifacts=result.output_refs,
+        metrics={"turns": 1},
+        evidence=(
+            HarnessWorkerEvidence(
+                evidence_type="subagent_attempt",
+                payload=receipt.to_dict(),
+            ),
+        ),
+    )
+    input_checksum = canonical_payload_checksum(
+        {
+            "instance": instance.checksum_projection(),
+            "worker_result": worker_result.candidate_payload(),
+        }
+    )
+    evidences = tuple(
+        TaskPlanGateEvidence(
+            gate_ref=gate_ref,
+            input_checksum=input_checksum,
+            result_checksum=canonical_payload_checksum(
+                worker_result.candidate_payload()
+            ),
+            passed=True,
+        )
+        for gate_ref in definition.gate_refs
+    )
+    refs = gate_owner.persist_gate_verification(
+        plan,
+        instance,
+        worker_result,
+        evidences,
+    )
+    result = replace(
+        result,
+        verified_gate_refs=definition.gate_refs,
+        gate_evidence_refs=refs.evidence_checksums,
+    )
+    store = InMemoryTaskPlanStore(gate_evidence_reader=gate_owner)
     store.append_candidate(candidate)
     store.accept_plan(plan)
     scheduler = TaskPlanScheduler()
@@ -619,6 +789,38 @@ def _worker_bindings() -> dict[str, HarnessWorkerBinding]:
         )
         for capability in RESEARCH_DYNAMIC_CAPABILITIES
     }
+
+
+def _test_stage_worker(
+    *,
+    policy=None,
+    stage_binding: TaskPlanStageBinding | None = None,
+    parallel_coordinator: ParallelAgentCoordinator | None = None,
+    child_agent_supervisor: ChildAgentSupervisor | None = None,
+) -> ResearchAnalysisTaskPlanStageWorker:
+    actual_policy = policy or build_research_analysis_task_plan_policy()
+    if stage_binding is None:
+        graph = HarnessGraphCompiler().compile(
+            build_dynamic_paper_analysis_graph_definition()
+        ).graph
+        stage_binding = TaskPlanStageBinding(graph, RESEARCH_DYNAMIC_STAGE_ID)
+    return ResearchAnalysisTaskPlanStageWorker(
+        stage_binding=stage_binding,
+        accepted_at="2026-08-17T00:00:00Z",
+        candidate_builder=ResearchAnalysisPlanCandidateBuilder(
+            _OutlineWorker(_valid_outline())
+        ),
+        capability_registry=build_research_analysis_capability_registry(
+            _worker_bindings()
+        ),
+        store=InMemoryTaskPlanStore(),
+        worker_executor=lambda *_args: HarnessWorkerResult(status="succeeded"),
+        result_verifier=TaskPlanResultVerifier(),
+        policy=actual_policy,
+        parallel_coordinator=parallel_coordinator,
+        child_agent_supervisor=child_agent_supervisor,
+        allow_test_store=True,
+    )
 
 
 def _plan_build_request(

@@ -22,7 +22,9 @@ from framework.harness.task_plan import (
     TaskOutputContract,
     TaskPlanCheckpoint,
     TaskPlanEvent,
-    TASK_PLAN_RESULT_SCHEMA_V3,
+    TaskPlanGateRegistry,
+    TaskPlanResultVerificationRequest,
+    TaskPlanResultVerifier,
     TaskPlanPolicy,
     TaskPlanRecoveryService,
     TaskPlanReplayReducer,
@@ -50,8 +52,11 @@ from framework.harness.task_plan.replay import TASK_PLAN_REPLAY_REDUCER_VERSION_
 from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
 from framework.harness.graph.activity import HarnessWorkerType
-from framework.harness.workers.result import HarnessWorkerResult
-from tests.fixtures.task_plan import build_task_plan_stage_binding
+from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
+from tests.fixtures.task_plan import (
+    InMemoryTaskPlanGateArtifactWriter,
+    build_task_plan_stage_binding,
+)
 
 
 class _NeverCalledWorker:
@@ -108,6 +113,7 @@ def _history_fixture():
         input_keys=("document",),
     )
     worker = _NeverCalledWorker()
+    worker.gate_artifact_owner = InMemoryTaskPlanGateArtifactWriter()
     registry = TaskCapabilityRegistry(
         (
             TaskCapabilityRegistration(
@@ -167,7 +173,17 @@ def _history_fixture():
     return plan, tuple(store.read_events(plan.run_id, plan.stage_id)), worker
 
 
-def _lifecycle_event(event_type, sequence, plan, instance, *, input_checksum=None, output_refs=(), payload=None):
+def _lifecycle_event(
+    event_type,
+    sequence,
+    plan,
+    instance,
+    *,
+    input_checksum=None,
+    output_refs=(),
+    payload=None,
+    reason_code=None,
+):
     return TaskPlanEvent.for_plan(
         event_type,
         plan,
@@ -178,6 +194,7 @@ def _lifecycle_event(event_type, sequence, plan, instance, *, input_checksum=Non
         input_checksum=input_checksum or instance.task_definition_checksum,
         output_refs=output_refs,
         payload=payload or {},
+        reason_code=reason_code,
     )
 
 
@@ -214,37 +231,39 @@ def _admission_events(plan, instance, *, sequence: int = 3):
     )
 
 
-def _result(plan, instance):
+def _result(
+    plan,
+    instance,
+    gate_artifact_owner=None,
+    *,
+    gate_passed: bool = True,
+):
     definition = plan.tasks[0]
-    return TaskResultRecord(
-        run_id=plan.run_id,
-        stage_id=plan.stage_id,
-        plan_id=plan.plan_id,
-        plan_version=plan.version,
-        task_id=instance.task_id,
-        task_instance_id=instance.task_instance_id,
-        attempt=instance.attempt,
-        worker_ref=instance.worker_ref,
-        task_checksum=instance.task_definition_checksum,
-        binding_checksum=definition.binding_checksum,
-        status=TaskLifecycle.SUCCEEDED,
-        schema_version=TASK_PLAN_RESULT_SCHEMA_V3,
-        graph_checksum=instance.graph_checksum,
-        graph_id=instance.graph_id,
-        graph_version=instance.graph_version,
-        graph_ref=instance.graph_ref,
-        graph_schema_version=instance.graph_schema_version,
-        compiler_version=instance.compiler_version,
-        condition_policy_version=instance.condition_policy_version,
-        stage_binding_checksum=instance.stage_binding_checksum,
-        stage_identity_schema=instance.stage_identity_schema,
-        stage_identity_checksum=instance.stage_identity_checksum,
-        result_ref="result://recover-task",
-        output_refs=("artifact://recover-task",),
-        output_roles=("analysis.result",),
-        output_schema_ref="schema://analysis.result@1",
-        verified_gate_refs=("ResultGate@1",),
-        gate_evidence_refs=("evidence://result-gate",),
+    gate_artifact_owner = (
+        gate_artifact_owner or InMemoryTaskPlanGateArtifactWriter()
+    )
+    worker_result = HarnessWorkerResult(
+        status=HarnessWorkerStatus.SUCCEEDED,
+        artifacts=("artifact://recover-task",),
+    )
+    gates = TaskPlanGateRegistry()
+    gates.register(
+        "ResultGate@1",
+        lambda _request: gate_passed,
+        deterministic=True,
+    )
+    return TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=gate_artifact_owner,
+    ).verify(
+        worker_result,
+        task=definition,
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=definition,
+            instance=instance,
+            worker_result=worker_result,
+        ),
     )
 
 
@@ -612,7 +631,7 @@ def test_legacy_replay_rejects_plan_history_with_changed_graph_checksum():
 def test_recovery_preserves_committed_result_until_terminal_event_without_redispatch():
     plan, base_events, worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
-    result = _result(plan, instance)
+    result = _result(plan, instance, worker.gate_artifact_owner)
     events_before_terminal = (
         *base_events,
         *_admission_events(plan, instance, sequence=3),
@@ -634,14 +653,19 @@ def test_recovery_preserves_committed_result_until_terminal_event_without_redisp
     )
 
     with pytest.raises(HarnessValidationError) as captured:
-        TaskPlanReplayReducer().replay(
+        TaskPlanReplayReducer(
+            gate_evidence_reader=worker.gate_artifact_owner,
+        ).replay(
             (plan,),
             events_before_terminal,
             results=(result,),
         )
     assert captured.value.code == "task_plan_replay_terminal_event_missing"
 
-    recovery = TaskPlanRecoveryService(queue_reader=_EmptyQueueReader()).recover(
+    recovery = TaskPlanRecoveryService(
+        queue_reader=_EmptyQueueReader(),
+        gate_evidence_reader=worker.gate_artifact_owner,
+    ).recover(
         (plan,),
         events_before_terminal,
         results=(result,),
@@ -666,7 +690,9 @@ def test_recovery_preserves_committed_result_until_terminal_event_without_redisp
             "gate_evidence_refs": list(result.gate_evidence_refs),
         },
     )
-    completed = TaskPlanReplayReducer().replay(
+    completed = TaskPlanReplayReducer(
+        gate_evidence_reader=worker.gate_artifact_owner,
+    ).replay(
         (plan,),
         (*events_before_terminal, terminal),
         results=(result,),
@@ -680,13 +706,11 @@ def test_recovery_preserves_committed_result_until_terminal_event_without_redisp
 def test_recovery_quarantines_terminal_failure_without_durable_halt() -> None:
     plan, base_events, worker = _history_fixture()
     instance = task_instance_for_attempt(plan, "recover-task", 1)
-    result = replace(
-        _result(plan, instance),
-        status=TaskLifecycle.FAILED,
-        result_ref=None,
-        output_refs=(),
-        output_roles=(),
-        error_code="terminal_failure",
+    result = _result(
+        plan,
+        instance,
+        worker.gate_artifact_owner,
+        gate_passed=False,
     )
     result_payload = {
         "result_ref": result.result_ref,
@@ -706,6 +730,7 @@ def test_recovery_quarantines_terminal_failure_without_durable_halt() -> None:
             instance,
             output_refs=result.output_refs,
             payload=result_payload,
+            reason_code=result.error_code,
         ),
         _lifecycle_event(
             "TASK_FAILED",
@@ -715,11 +740,15 @@ def test_recovery_quarantines_terminal_failure_without_durable_halt() -> None:
             input_checksum=result.result_checksum,
             output_refs=result.output_refs,
             payload=result_payload,
+            reason_code=result.error_code,
         ),
     )
 
     with pytest.raises(HarnessValidationError) as missing_halt:
-        TaskPlanRecoveryService(queue_reader=_EmptyQueueReader()).recover((plan,), events, results=(result,))
+        TaskPlanRecoveryService(
+            queue_reader=_EmptyQueueReader(),
+            gate_evidence_reader=worker.gate_artifact_owner,
+        ).recover((plan,), events, results=(result,))
     assert missing_halt.value.code == "task_plan_recovery_halt_missing"
     assert worker.calls == 0
 
@@ -727,14 +756,17 @@ def test_recovery_quarantines_terminal_failure_without_durable_halt() -> None:
         "TASK_PLAN_HALTED",
         plan,
         sequence=9,
-        reason_code="terminal_failure",
+        reason_code=result.error_code,
         payload={
             "diagnostic_ref": canonical_payload_checksum(
-                {"reason_code": "terminal_failure"}
+                {"reason_code": result.error_code}
             )
         },
     )
-    recovery = TaskPlanRecoveryService(queue_reader=_EmptyQueueReader()).recover(
+    recovery = TaskPlanRecoveryService(
+        queue_reader=_EmptyQueueReader(),
+        gate_evidence_reader=worker.gate_artifact_owner,
+    ).recover(
         (plan,),
         (*events, halted),
         results=(result,),

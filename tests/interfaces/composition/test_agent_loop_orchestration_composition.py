@@ -419,14 +419,21 @@ def _break_production_child_binding(kwargs, root, case: str) -> str:
                 root / "other-artifacts"
             ),
             result_ref_authority=authority,
+            gate_artifact_writer=kwargs["store"],
         )
         return "canonical artifact owner"
+    if case == "gate_artifact_owner":
+        kwargs["result_verifier"]._gate_artifact_writer = build_task_plan_store(
+            root / "other-gate-artifacts"
+        )
+        return "gate artifact owner"
     if case == "gate_registry":
         kwargs["result_verifier"] = TaskPlanResultVerifier(
             TaskPlanGateRegistry(),
             transcript_store=executor.runtime.transcript_store,
             artifact_reference_verifier=executor.runtime.result_ref_authority.artifact_descriptors,
             result_ref_authority=authority,
+            gate_artifact_writer=kwargs["store"],
         )
         return "every profile gate"
     if case == "runtime_worker":
@@ -470,6 +477,7 @@ def _break_production_child_binding(kwargs, root, case: str) -> str:
         "result_authority",
         "transcript_store",
         "artifact_owner",
+        "gate_artifact_owner",
         "gate_registry",
         "runtime_worker",
         "subagent_gates",

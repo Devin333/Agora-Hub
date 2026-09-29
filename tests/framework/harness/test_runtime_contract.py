@@ -65,7 +65,7 @@ from framework.harness.runtime_contract import (
 )
 from framework.harness.task_plan.parallel import PARENT_OBSERVATION_SCHEMA, ParallelAgentCoordinator
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
-from framework.harness.task_plan.store import TASK_PLAN_RESULT_SCHEMA_V3, TaskPlanEvent, TaskResultRecord
+from framework.harness.task_plan.store import TASK_PLAN_RESULT_SCHEMA, TaskPlanEvent, TaskResultRecord
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool.models.result_envelope import (
     TOOL_RESULT_ENVELOPE_SCHEMA,
@@ -97,7 +97,7 @@ def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
     assert binding.owners["subagent_attempt_identity"] == SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3
     assert binding.owners["subagent_context"] == SUBAGENT_CONTEXT_SCHEMA_V3
     assert binding.owners["subagent_output"] == SUBAGENT_OUTPUT_SCHEMA_V3
-    assert binding.owners["task_result"] == TASK_PLAN_RESULT_SCHEMA_V3
+    assert binding.owners["task_result"] == TASK_PLAN_RESULT_SCHEMA
     assert binding.owners["parent_observation"] == PARENT_OBSERVATION_SCHEMA
     assert binding.owners["graph_terminal"] == GRAPH_TERMINAL_MANIFEST_SCHEMA
     assert binding.owners["artifact_manifest"] == GRAPH_TERMINAL_MANIFEST_V2_SCHEMA

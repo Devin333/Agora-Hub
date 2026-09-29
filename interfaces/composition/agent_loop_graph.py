@@ -217,6 +217,10 @@ def build_agent_loop_harness_orchestration_runtime(
         raise TypeError(
             "result_verifier must implement TaskPlanResultVerifierPort"
         )
+    if getattr(result_verifier, "gate_artifact_writer", None) is not store:
+        raise ValueError(
+            "result_verifier must use the configured TaskPlan gate artifact owner"
+        )
     if (
         planning_observation_port is not None or policy.max_planning_tool_calls > 0
     ) and not isinstance(planning_observation_port, PlanningObservationPort):

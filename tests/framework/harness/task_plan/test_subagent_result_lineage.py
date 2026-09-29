@@ -93,7 +93,10 @@ from framework.harness.task_plan.store import (
 from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.storage.harness import FilesystemSubAgentTranscriptStore
 from infrastructure.storage.events import SQLiteEventStore
-from tests.fixtures.task_plan import build_task_plan_stage_binding
+from tests.fixtures.task_plan import (
+    InMemoryTaskPlanGateArtifactWriter,
+    build_task_plan_stage_binding,
+)
 from tests.framework.harness.test_ref_snapshot_store import _store as _ref_snapshot_store
 
 
@@ -321,10 +324,12 @@ def _fixture(
     adapter = ResolvedSubAgentTaskAdapter(runtime)
     gates = TaskPlanGateRegistry()
     gates.register("LineageGate@1", lambda _request: True, deterministic=True)
+    gate_artifact_owner = InMemoryTaskPlanGateArtifactWriter()
     verifier = TaskPlanResultVerifier(
         gates,
         transcript_store=transcript_store,
         artifact_reference_verifier=artifact_reference_verifier,
+        gate_artifact_writer=gate_artifact_owner,
     )
     binding = registry.resolve(task.worker_capability, policy)
     resolved = plan.tasks[0]
@@ -398,6 +403,7 @@ def _fixture(
         "worker": worker,
         "transcript_store": transcript_store,
         "artifact_reference_verifier": artifact_reference_verifier,
+        "gate_artifact_owner": gate_artifact_owner,
         "verifier": verifier,
         "instance": instance,
         "execution_identity": execution_identity,
@@ -710,7 +716,9 @@ def _committed_lineage(
         worker_artifacts=worker_artifacts,
         artifact_reference_verifier=artifact_reference_verifier,
     )
-    store = InMemoryTaskPlanStore()
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=fixture["gate_artifact_owner"],
+    )
     store.append_candidate(fixture["candidate"])
     store.accept_plan(fixture["plan"])
     _start_attempt(store, fixture["plan"], fixture["instance"])
@@ -1000,6 +1008,14 @@ def test_success_and_failure_events_carry_complete_typed_lineage(tmp_path: Path)
             assert record.result_ref == record.subagent_output_ref
         else:
             assert record.result_ref is None
+            assert record.worker_result_proof_ref is not None
+            worker_input = fixture["gate_artifact_owner"].read_worker_result_input(
+                record.run_id,
+                record.stage_id,
+                record.worker_result_proof_ref,
+            )
+            assert worker_input.instance == fixture["instance"]
+            assert worker_input.worker_result == fixture["worker_result"]
         events = fixture["store"].read_events(
             fixture["plan"].run_id,
             fixture["plan"].stage_id,
@@ -1011,6 +1027,10 @@ def test_success_and_failure_events_carry_complete_typed_lineage(tmp_path: Path)
             assert event.payload["transcript_checksum"] == record.transcript_checksum
             assert event.payload["subagent_output_ref"] == record.subagent_output_ref
             assert event.payload["subagent_output_checksum"] == record.subagent_output_checksum
+            assert (
+                event.payload["worker_result_proof_ref"]
+                == record.worker_result_proof_ref
+            )
         transcript = fixture["transcript_store"].read(record.transcript_ref)
         output = fixture["transcript_store"].read_output(record.subagent_output_ref)
         assert transcript.identity.task_instance_id == record.task_instance_id
@@ -1269,8 +1289,11 @@ def test_attempt_scoped_grant_rejects_other_legal_attempt_bundle_before_gate_or_
         gates,
         transcript_store=fixture["transcript_store"],
         result_ref_authority=authority,
+        gate_artifact_writer=fixture["gate_artifact_owner"],
     )
-    store = InMemoryTaskPlanStore()
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=fixture["gate_artifact_owner"],
+    )
     store.append_candidate(candidate)
     store.accept_plan(plan)
     _start_attempt(store, plan, first_instance)
@@ -1444,7 +1467,9 @@ def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(
 ) -> None:
     fixture = _fixture(tmp_path)
     candidate, plan, instance = _graph_only_candidate_plan_for_fixture(fixture)
-    store = InMemoryTaskPlanStore()
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=fixture["gate_artifact_owner"],
+    )
     store.append_candidate(candidate)
     store.accept_plan(plan)
     _start_attempt(store, plan, instance)
@@ -1474,6 +1499,7 @@ def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(
         fixture["transcript_store"],
         result_ref_authority=result_authority,
         execution_identity=_execution_identity(plan, instance),
+        gate_evidence_reader=fixture["gate_artifact_owner"],
     ).replay(
         (plan,),
         events,
@@ -1513,6 +1539,7 @@ def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(
             fixture["transcript_store"],
             result_ref_authority=result_authority,
             execution_identity=_execution_identity(plan, instance),
+            gate_evidence_reader=fixture["gate_artifact_owner"],
         ).replay(
             (plan,),
             events,
@@ -1609,6 +1636,7 @@ def test_offline_replay_verifies_transcript_and_rejects_event_lineage_mismatch(
         fixture["transcript_store"],
         result_ref_authority=result_authority,
         execution_identity=fixture["execution_identity"],
+        gate_evidence_reader=fixture["gate_artifact_owner"],
     ).replay(
         (fixture["plan"],),
         events,
@@ -1636,6 +1664,7 @@ def test_offline_replay_verifies_transcript_and_rejects_event_lineage_mismatch(
             fixture["transcript_store"],
             result_ref_authority=result_authority,
             execution_identity=fixture["execution_identity"],
+            gate_evidence_reader=fixture["gate_artifact_owner"],
         ).replay(
             (fixture["plan"],),
             tuple(tampered_events),
@@ -1725,6 +1754,7 @@ def test_offline_replay_revalidates_artifact_refs_without_live_worker_call(
         artifact_reference_verifier=artifact_verifier,
         result_ref_authority=result_authority,
         execution_identity=fixture["execution_identity"],
+        gate_evidence_reader=fixture["gate_artifact_owner"],
     ).replay(
         (fixture["plan"],),
         events,
@@ -1745,6 +1775,7 @@ def test_offline_replay_revalidates_artifact_refs_without_live_worker_call(
             artifact_reference_verifier=artifact_verifier,
             result_ref_authority=result_authority,
             execution_identity=fixture["execution_identity"],
+            gate_evidence_reader=fixture["gate_artifact_owner"],
         ).replay(
             (fixture["plan"],),
             events,
@@ -1758,6 +1789,7 @@ def test_offline_replay_revalidates_artifact_refs_without_live_worker_call(
             fixture["transcript_store"],
             result_ref_authority=result_authority,
             execution_identity=fixture["execution_identity"],
+            gate_evidence_reader=fixture["gate_artifact_owner"],
         ).replay(
             (fixture["plan"],),
             events,
@@ -1883,3 +1915,56 @@ def test_receipt_before_task_result_is_recovered_without_live_worker_call(
         "STAGE_OUTPUT_AGGREGATED",
         "TASK_PLAN_VERIFIED",
     ]
+
+
+def test_persisted_task_result_recovery_does_not_reexecute_gate_or_worker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from tests.framework.harness.test_ref_results import _authorized_fixture
+
+    fixture = _authorized_fixture(tmp_path)
+    fixture["adapter"]._runtime = fixture["runtime"]
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=fixture["gate_artifact_owner"],
+    )
+    store.append_candidate(fixture["candidate"])
+    store.accept_plan(fixture["plan"])
+    _start_attempt(store, fixture["plan"], fixture["instance"])
+    worker_result = fixture["invoke"]()
+    record = fixture["verifier"].verify(
+        worker_result,
+        task=fixture["resolved"],
+        request=TaskPlanResultVerificationRequest(
+            plan=fixture["plan"],
+            task=fixture["resolved"],
+            instance=fixture["instance"],
+            worker_result=worker_result,
+            execution_identity=fixture["execution_identity"],
+        ),
+    )
+    assert fixture["worker"].calls == 1
+    monkeypatch.setattr(
+        fixture["verifier"]._gates,
+        "evaluate",
+        lambda *_args, **_kwargs: pytest.fail("gate must not run during result recovery"),
+    )
+
+    runner = TaskPlanStageRunner(
+        candidate_builder=FakePlanCandidateBuilder(fixture["candidate"]),
+        capability_registry=fixture["registry"],
+        store=store,
+        result_verifier=fixture["verifier"],
+        worker_executor=lambda *_args: pytest.fail("worker must not run during result recovery"),
+        worker_result_recovery=lambda *_args: record,
+    )
+    result = runner.run(fixture["request"])
+
+    assert result.status.value == "succeeded"
+    assert fixture["worker"].calls == 1
+    assert store.results_for(
+        fixture["plan"].run_id,
+        fixture["plan"].stage_id,
+        fixture["plan"].plan_id,
+        fixture["plan"].version,
+    ) == (record,)

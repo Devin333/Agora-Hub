@@ -654,6 +654,7 @@ class RuntimeEventEmitter:
         "tool_succeeded": RuntimeEventType.EXECUTION_TERMINAL,
         "tool_failed": RuntimeEventType.EXECUTION_TERMINAL,
         "tool_timeout": RuntimeEventType.TIMEOUT,
+        "timeout": RuntimeEventType.TIMEOUT,
         "attempt_terminal": RuntimeEventType.EXECUTION_TERMINAL,
         "child_spawned": RuntimeEventType.CHILD_SPAWNED,
         "child_status": RuntimeEventType.CHILD_STATUS,
@@ -669,6 +670,29 @@ class RuntimeEventEmitter:
         "cancel_requested": RuntimeEventType.CANCEL_REQUESTED,
         "cancellation_confirmed": RuntimeEventType.CANCELLATION_CONFIRMED,
         "indeterminate": RuntimeEventType.INDETERMINATE,
+    }
+    # AgentLoop's local recorder also contains model, parser, judge, tool, and
+    # approval diagnostics.  Those records are useful in its bounded
+    # transcript, but they are not canonical runtime facts.  In particular,
+    # tool and approval facts are already owned by ToolExecutor and mirroring
+    # them here would create two producers for the same lifecycle.  Keep this
+    # source policy deliberately small and expand it only when a new durable
+    # event family has an explicit owner and safe projection.
+    _AGENT_LOOP_TYPE_MAP = {
+        "agent_started": RuntimeEventType.TURN_STARTED,
+        "agent_completed": RuntimeEventType.TURN_STOPPED,
+        "agent_failed": RuntimeEventType.TURN_ABORTED,
+        "agent_blocked": RuntimeEventType.TURN_ABORTED,
+        "agent_stalled": RuntimeEventType.TURN_ABORTED,
+    }
+    _CONTEXT_TYPE_MAP = {
+        "context_compaction_planned": RuntimeEventType.CONTEXT_COMPACTION_PLANNED,
+        "context_compaction_committed": RuntimeEventType.CONTEXT_COMPACTION_COMMITTED,
+        "context_compaction_rejected": RuntimeEventType.CONTEXT_COMPACTION_REJECTED,
+    }
+    _WORKER_TYPE_MAP = {
+        "worker_heartbeat": RuntimeEventType.WORKER_HEARTBEAT,
+        "worker_status": RuntimeEventType.WORKER_STATUS,
     }
 
     def __init__(
@@ -704,9 +728,23 @@ class RuntimeEventEmitter:
         metadata: Mapping[str, Any] | None = None,
         stream_id: str | None = None,
         source: str | None = None,
-    ) -> RuntimeEventEnvelope:
+    ) -> RuntimeEventEnvelope | None:
         local_type = str(event_type)
-        canonical_type = self._TYPE_MAP.get(local_type, RuntimeEventType.RUNTIME_ERROR)
+        resolved_source = source or self._source
+        source_type_map = {
+            "agent-loop": self._AGENT_LOOP_TYPE_MAP,
+            "context-compaction-runtime": self._CONTEXT_TYPE_MAP,
+            "worker-heartbeat": self._WORKER_TYPE_MAP,
+        }.get(resolved_source)
+        if source_type_map is not None:
+            canonical_type = source_type_map.get(local_type)
+            if canonical_type is None:
+                return None
+        else:
+            canonical_type = self._TYPE_MAP.get(
+                local_type,
+                RuntimeEventType.RUNTIME_ERROR,
+            )
         resolved_identity = (
             identity
             if isinstance(identity, RuntimeEventIdentity)
@@ -720,6 +758,15 @@ class RuntimeEventEmitter:
         resolved_checksums = _bounded_checksums(checksums)
         safe_metadata = redact_runtime_value(dict(metadata or {}))
         resolved_stream = stream_id or self._stream_id or resolved_identity.run_id
+        if resolved_source == "agent-loop":
+            if resolved_identity.graph_identity is None:
+                raise RuntimeEventIdentityConflict(
+                    "AgentLoop runtime events require Graph execution identity"
+                )
+            if resolved_stream != resolved_identity.run_id:
+                raise RuntimeEventIdentityConflict(
+                    "AgentLoop runtime event stream must match Graph run identity"
+                )
         if event_id is None:
             event_id = "runtime:" + hashlib.sha256(
                 stable_json_dumps(
@@ -746,7 +793,7 @@ class RuntimeEventEmitter:
             refs=resolved_refs,
             checksums=resolved_checksums,
             metadata=safe_metadata,
-            source=source or self._source,
+            source=resolved_source,
         )
         result: Any = None
         if callable(self._sink):

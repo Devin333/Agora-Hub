@@ -21,15 +21,21 @@ from framework.harness.task_plan.scheduler import (
     TaskPlanScheduler,
     task_instance_for_attempt,
 )
+from framework.harness.task_plan.verification import (
+    TaskPlanGateRegistry,
+    TaskPlanResultVerificationRequest,
+    TaskPlanResultVerifier,
+)
+from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
 from framework.harness.task_plan.store import LogicalTaskReadiness, TaskPlanEvent
 from infrastructure.storage.events.sqlite import SQLiteEventStore
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
     FIXED_NOW,
     _ArtifactStore,
-    _result,
     _start,
     _store,
 )
+
 from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _request as _parallel_request,
 )
@@ -39,6 +45,31 @@ from tests.framework.harness.task_plan.test_task_plan_contract_matrix import (
     _policy,
     _task,
 )
+
+def _verified_success_result(plan, instance, store):
+    definition = next(item for item in plan.tasks if item.task_id == instance.task_id)
+    worker_result = HarnessWorkerResult(
+        status=HarnessWorkerStatus.SUCCEEDED,
+        output={"task_id": instance.task_id},
+        artifacts=(f"artifact://{instance.task_id}",),
+        metrics={"turns": 1},
+    )
+    gates = TaskPlanGateRegistry()
+    for gate_ref in definition.gate_refs:
+        gates.register(gate_ref, lambda _request: True, deterministic=True)
+    return TaskPlanResultVerifier(
+        gates,
+        gate_artifact_writer=store,
+    ).verify(
+        worker_result,
+        task=definition,
+        request=TaskPlanResultVerificationRequest(
+            plan=plan,
+            task=definition,
+            instance=instance,
+            worker_result=worker_result,
+        ),
+    )
 
 
 def _commit_complete_ready_order(store, plan, policy):
@@ -200,12 +231,7 @@ def test_ready_order_and_capacity_overflow_survive_sqlite_offline_replay(
 
     seed_instance = _start(store, plan, "seed")
     store.append_result(
-        _result(
-            plan,
-            seed_instance,
-            status=TaskLifecycle.SUCCEEDED,
-            role=roles[0],
-        )
+        _verified_success_result(plan, seed_instance, store)
     )
     before_ready = store.load_projection(plan.run_id, plan.stage_id)
     budget_before_ready = before_ready.consumed_budget
@@ -449,7 +475,7 @@ def test_ready_order_and_capacity_overflow_survive_sqlite_offline_replay(
         plan.plan_id,
         plan.version,
     )
-    report = TaskPlanReplayReducer().replay(
+    report = TaskPlanReplayReducer(gate_evidence_reader=reopened).replay(
         (reopened_plan,),
         reopened.read_events(plan.run_id, plan.stage_id),
         results=results,

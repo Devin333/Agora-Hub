@@ -143,6 +143,10 @@ class HarnessSubAgentTaskExecutor:
             raise TypeError("result_verifier must be TaskPlanResultVerifier")
         if verifier.result_ref_authority is not authority or verifier.transcript_store is not self.runtime.transcript_store:
             raise ValueError("child executor and result_verifier must share result authority and transcript store")
+        if verifier.gate_artifact_writer is not store:
+            raise ValueError(
+                "child executor and result_verifier must share the TaskPlan gate artifact owner"
+            )
         if (
             authority.artifact_descriptors is None
             or verifier.artifact_reference_verifier is not authority.artifact_descriptors

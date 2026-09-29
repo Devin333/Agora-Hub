@@ -320,7 +320,13 @@ def _setup(
     )
     gates = TaskPlanGateRegistry()
     gates.register("gate@1", lambda request: request.worker_result.output.get("summary") == "completed", deterministic=True)
-    verifier = TaskPlanResultVerifier(gates, transcript_store=transcripts, artifact_reference_verifier=child_artifacts, result_ref_authority=authority)
+    verifier = TaskPlanResultVerifier(
+        gates,
+        transcript_store=transcripts,
+        artifact_reference_verifier=child_artifacts,
+        result_ref_authority=authority,
+        gate_artifact_writer=task_store,
+    )
     child_event_log = DurableChildAgentEventLog(
         state_runtime=task_store._runtime,
         state_reader=task_store._reader,
@@ -576,7 +582,13 @@ def _reopen_runtime(setup, root):
         task_policy=setup.policy,
         execution_service=execution_service,
     )
-    verifier = TaskPlanResultVerifier(setup.gates, transcript_store=transcripts, artifact_reference_verifier=artifacts, result_ref_authority=authority)
+    verifier = TaskPlanResultVerifier(
+        setup.gates,
+        transcript_store=transcripts,
+        artifact_reference_verifier=artifacts,
+        result_ref_authority=authority,
+        gate_artifact_writer=store,
+    )
     child_event_log = DurableChildAgentEventLog(
         state_runtime=store._runtime,
         state_reader=store._reader,

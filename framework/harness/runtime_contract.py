@@ -90,7 +90,7 @@ class RuntimeContractBinding:
         )
         from framework.harness.task_plan.store import (
             TASK_PLAN_EVENT_SCHEMA,
-            TASK_PLAN_RESULT_SCHEMA_V3,
+            TASK_PLAN_RESULT_SCHEMA,
         )
         from framework.tool.models.result_envelope import (
             TOOL_RESULT_ENVELOPE_SCHEMA,
@@ -107,7 +107,7 @@ class RuntimeContractBinding:
             "task_instance": GRAPH_ONLY_TASK_INSTANCE_SCHEMA,
             "task_plan_projection": GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA,
             "task_plan_event": TASK_PLAN_EVENT_SCHEMA,
-            "task_result": TASK_PLAN_RESULT_SCHEMA_V3,
+            "task_result": TASK_PLAN_RESULT_SCHEMA,
             "dispatch_request": PARALLEL_DISPATCH_REQUEST_SCHEMA,
             "dispatch_result": PARALLEL_DISPATCH_RESULT_SCHEMA,
             "dispatch_group": DISPATCH_GROUP_SCHEMA,
