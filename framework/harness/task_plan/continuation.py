@@ -245,6 +245,145 @@ def validate_parent_continuation_append(
         latest[scope] = max(continuation.observation_version, prior_version or 0)
 
 
+def validate_parent_continuation_owner_append(
+    history: Sequence[Any], events: Sequence[Any],
+) -> None:
+    """Bind newly appended continuations to the canonical TaskPlan prefix."""
+
+    validate_parent_continuation_append(history, events)
+    prefix = list(history)
+    for event in events:
+        event_type = _event_type(event)
+        if event_type == PARENT_CONTINUATION_EVENT:
+            _validate_continuation_owner_binding(
+                continuation_from_event(event),
+                prefix,
+            )
+        prefix.append(event)
+
+
+def _validate_continuation_owner_binding(
+    continuation: ParentContinuation,
+    history: Sequence[Any],
+) -> None:
+    groups: dict[str, Mapping[str, Any]] = {}
+    prior_continuations: list[ParentContinuation] = []
+    latest_observations: dict[str, str] = {}
+    for event in history:
+        event_type = _event_type(event)
+        payload = _event_payload(event)
+        if event_type == PARENT_CONTINUATION_EVENT:
+            prior_continuations.append(continuation_from_event(event))
+            continue
+        group = payload.get("group")
+        if (
+            isinstance(event_type, str)
+            and event_type.startswith("TASK_GROUP_")
+            and isinstance(group, Mapping)
+        ):
+            group_id = group.get("group_id")
+            if isinstance(group_id, str):
+                groups[group_id] = group
+        observation = payload.get("observation")
+        if event_type in {"TASK_GROUP_JOIN_WAITING", "TASK_GROUP_JOINED"} and isinstance(
+            observation,
+            Mapping,
+        ):
+            group_id = observation.get("group_id")
+            supplied = observation.get("observation_checksum")
+            if isinstance(group_id, str) and isinstance(supplied, str):
+                expected = canonical_payload_checksum(
+                    {
+                        key: value
+                        for key, value in thaw_mapping(observation).items()
+                        if key != "observation_checksum"
+                    }
+                )
+                if supplied == expected:
+                    latest_observations[group_id] = checksum(
+                        supplied,
+                        "observation_checksum",
+                    )
+
+    group = groups.get(continuation.group_id)
+    if (
+        group is None
+        or group.get("run_id") != continuation.run_id
+        or group.get("stage_id") != continuation.stage_id
+    ):
+        raise HarnessValidationError(
+            "parent continuation is outside recorded group scope",
+            code="parent_continuation_scope_mismatch",
+        )
+
+    bound = next(
+        (
+            item
+            for item in prior_continuations
+            if item.run_id == continuation.run_id
+            and item.stage_id == continuation.stage_id
+            and item.group_id == continuation.group_id
+        ),
+        None,
+    )
+    if bound is not None and (
+        bound.parent_turn_id != continuation.parent_turn_id
+        or bound.submission_id != continuation.submission_id
+    ):
+        raise HarnessValidationError(
+            "parent continuation differs from its recorded parent scope",
+            code="parent_continuation_scope_mismatch",
+        )
+
+    from framework.harness.task_plan.submission import submissions_from_events
+
+    matching_submissions = tuple(
+        item
+        for item in submissions_from_events(history)
+        if item.plan_id == group.get("plan_id")
+    )
+    if len(matching_submissions) > 1:
+        raise HarnessValidationError(
+            "parent continuation submission identity is ambiguous",
+            code="parent_continuation_scope_mismatch",
+        )
+    submission = matching_submissions[0] if matching_submissions else None
+    if (
+        submission is not None
+        and (
+            continuation.submission_id != submission.submission_id
+            or continuation.parent_turn_id != submission.identity.parent_turn_id
+        )
+    ) or (submission is None and continuation.submission_id is not None):
+        raise HarnessValidationError(
+            "parent continuation submission identity is not recorded",
+            code="parent_continuation_scope_mismatch",
+        )
+
+    validate_continuation_projection(
+        continuation,
+        run_id=continuation.run_id,
+        stage_id=continuation.stage_id,
+        group=group,
+        observation_checksum=latest_observations.get(continuation.group_id),
+    )
+
+
+def _event_type(event: Any) -> str | None:
+    return getattr(
+        event,
+        "event_type",
+        event.get("event_type") if isinstance(event, Mapping) else None,
+    )
+
+
+def _event_payload(event: Any) -> Mapping[str, Any]:
+    payload = getattr(event, "payload", None)
+    if isinstance(event, Mapping):
+        payload = event.get("payload", event)
+    return payload if isinstance(payload, Mapping) else {}
+
+
 # Short alias used by stores that validate multiple canonical append families.
 validate_continuation_append = validate_parent_continuation_append
 
@@ -257,4 +396,5 @@ __all__ = [
     "validate_continuation_append",
     "validate_continuation_projection",
     "validate_parent_continuation_append",
+    "validate_parent_continuation_owner_append",
 ]
