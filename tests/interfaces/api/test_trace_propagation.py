@@ -15,7 +15,8 @@ REMOTE_TRACE_ID = "1" * 32
 REMOTE_SPAN_ID = "2" * 16
 
 
-def test_http_inbound_creates_child_and_injects_response_context() -> None:
+def test_http_inbound_creates_child_and_injects_response_context(monkeypatch) -> None:
+    monkeypatch.setenv("NEWS_PRELOAD_RERANKER", "0")
     app, observed = _trace_probe_app()
 
     with TestClient(app) as client:
@@ -45,7 +46,10 @@ def test_http_inbound_creates_child_and_injects_response_context() -> None:
     ]
 
 
-def test_http_restarts_malformed_or_duplicate_context_without_scope_leak() -> None:
+def test_http_restarts_malformed_or_duplicate_context_without_scope_leak(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NEWS_PRELOAD_RERANKER", "0")
     app, observed = _trace_probe_app()
     second_trace_id = "3" * 32
     second_span_id = "4" * 16
