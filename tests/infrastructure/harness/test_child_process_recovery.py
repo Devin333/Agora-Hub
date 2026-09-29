@@ -291,7 +291,7 @@ def test_corrupt_transactional_spawn_log_fails_closed_before_new_admission(
             assert payload["code"] == (
                 "child_event_store_unavailable"
                 if corruption == "snapshot_checksum"
-                else "child_recovery_corrupt"
+                else "child_event_store_corrupt"
             )
             assert blocked.wait(timeout=15) == 0
         finally:

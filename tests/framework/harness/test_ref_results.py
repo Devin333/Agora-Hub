@@ -391,7 +391,9 @@ def test_failed_replay_authorizes_original_artifacts_before_payload(tmp_path, mo
     )
     record = _verify(f, _worker_result_from_child(runtime.invoke(f["invocation"])))
     assert record.status.value == "failed" and record.output_refs == ()
-    store = InMemoryTaskPlanStore()
+    store = InMemoryTaskPlanStore(
+        gate_evidence_reader=f["gate_artifact_owner"],
+    )
     store.append_candidate(f["candidate"])
     store.accept_plan(f["plan"])
     _start_attempt(store, f["plan"], f["instance"])
@@ -408,7 +410,8 @@ def test_failed_replay_authorizes_original_artifacts_before_payload(tmp_path, mo
         return original_read(ref)
     monkeypatch.setattr(f["transcript_store"], "read", read)
     report = TaskPlanReplayReducer(transcript_store=f["transcript_store"], result_ref_authority=authority,
-                                   execution_identity=f["execution_identity"], artifact_reference_verifier=catalog).replay(
+                                   execution_identity=f["execution_identity"], artifact_reference_verifier=catalog,
+                                   gate_evidence_reader=f["gate_artifact_owner"]).replay(
         (f["plan"],), store.read_events(f["plan"].run_id, f["plan"].stage_id), results=(record,),
     )
     assert report.projection.tasks[0].status.value == "failed"

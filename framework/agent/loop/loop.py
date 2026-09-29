@@ -131,7 +131,8 @@ class AgentLoop:
     ) -> None:
         self._llm_client = llm_client
         self._tool_executor = tool_executor
-        if tool_executor.execution_evidence is not tool_execution_evidence:
+        executor_evidence = getattr(tool_executor, "execution_evidence", None)
+        if executor_evidence is not tool_execution_evidence:
             raise ValueError(
                 "AgentLoop and ToolExecutor must use the same tool evidence capability"
             )
