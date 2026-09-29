@@ -50,8 +50,8 @@
 
 ## 7. Verification And Release
 
-- [ ] 7.1 Run focused Harness, AgentLoop, tool, supervisor, Research, architecture, and source-boundary tests and fix root causes.
-- [ ] 7.2 Run `python -m scripts.dev compile`, `python -m scripts.dev test`, `python -m scripts.dev smoke`, and strict OpenSpec validation for the merged change and repository. Verify retained prerequisites from `model-aware-llm-context-preflight` 7.1-7.6, `durable-event-runtime` 9.5, and `harness-workflow-graph-runtime` 1.1 before release qualification; keep their evidence with their existing owners.
+- [x] 7.1 Run focused Harness, AgentLoop, tool, supervisor, Research, architecture, and source-boundary tests and fix root causes. See `evidence/release-gates-20260930.md` for the integrating full-suite verification.
+- [x] 7.2 Run `python -m scripts.dev compile`, `python -m scripts.dev test`, `python -m scripts.dev smoke`, and strict OpenSpec validation for the merged change and repository. Verify retained prerequisites from `model-aware-llm-context-preflight` 7.1-7.6, `durable-event-runtime` 9.5, and `harness-workflow-graph-runtime` 1.1 before release qualification; keep their evidence with their existing owners. See `evidence/release-gates-20260930.md` for the command results and the remaining external release prerequisites.
 - [ ] 7.3 Capture run/stage/group/wave/capability admission, wait, run, join, budget, retry, recovery, cancellation, and degraded telemetry evidence.
 - [ ] 7.4 Exercise generic AgentLoop only in controlled allowlisted runs after coordinator and continuation gates pass.
 - [ ] 7.5 Exercise allowlisted dynamic Research only after golden parity, quality gates, and dependency provenance pass.
