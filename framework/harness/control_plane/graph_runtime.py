@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
 from framework.events.errors import EventReplayMismatchError, EventStoreCorruptionError
+from framework.events.graph_phase import GraphPhaseTransitionRecord
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.graph.decision import (
     HarnessGraphDecision,
@@ -843,6 +844,7 @@ class HarnessGraphRecovery:
     projection_commits: tuple[HarnessGraphProjectionCommit, ...] = ()
     activity_result_commits: tuple[HarnessGraphActivityResultCommit, ...] = ()
     observation_commits: tuple[HarnessGraphObservationCommit, ...] = ()
+    phase_transition_records: tuple[GraphPhaseTransitionRecord, ...] = ()
     activities: tuple[HarnessGraphActivity, ...] = ()
     dispatched_activity_ids: frozenset[str] = frozenset()
 
@@ -865,6 +867,7 @@ class HarnessGraphRecovery:
         projections = tuple(self.projection_commits)
         results = tuple(self.activity_result_commits)
         observations = tuple(self.observation_commits)
+        phase_transitions = tuple(self.phase_transition_records)
         activities = tuple(self.activities)
         dispatched_activity_ids = frozenset(self.dispatched_activity_ids)
         if not all(isinstance(item, HarnessGraphDecisionCommit) for item in decisions):
@@ -883,12 +886,23 @@ class HarnessGraphRecovery:
             raise TypeError(
                 "observation_commits must contain HarnessGraphObservationCommit values"
             )
+        if not all(
+            isinstance(item, GraphPhaseTransitionRecord)
+            for item in phase_transitions
+        ):
+            raise TypeError(
+                "phase_transition_records must contain "
+                "GraphPhaseTransitionRecord values"
+            )
         if not all(isinstance(item, HarnessGraphActivity) for item in activities):
             raise TypeError("activities must contain HarnessGraphActivity values")
         decisions = tuple(sorted(decisions, key=lambda item: item.sequence))
         projections = tuple(sorted(projections, key=lambda item: item.sequence))
         results = tuple(sorted(results, key=lambda item: item.sequence))
         observations = tuple(sorted(observations, key=lambda item: item.sequence))
+        phase_transitions = tuple(
+            sorted(phase_transitions, key=lambda item: item.event_sequence)
+        )
         ordered_sequences = tuple(
             sorted(
                 (
@@ -896,6 +910,7 @@ class HarnessGraphRecovery:
                     *(item.sequence for item in projections),
                     *(item.sequence for item in results),
                     *(item.sequence for item in observations),
+                    *(item.event_sequence for item in phase_transitions),
                 )
             )
         )
@@ -909,6 +924,7 @@ class HarnessGraphRecovery:
                 or self.graph is not None
                 or self.run_spec_checksum is not None
                 or self.state is not None
+                or phase_transitions
                 or activities
                 or dispatched_activity_ids
             ):
@@ -919,6 +935,11 @@ class HarnessGraphRecovery:
             object.__setattr__(self, "projection_commits", projections)
             object.__setattr__(self, "activity_result_commits", results)
             object.__setattr__(self, "observation_commits", observations)
+            object.__setattr__(
+                self,
+                "phase_transition_records",
+                phase_transitions,
+            )
             object.__setattr__(self, "activities", activities)
             object.__setattr__(self, "dispatched_activity_ids", dispatched_activity_ids)
             return
@@ -1166,6 +1187,11 @@ class HarnessGraphRecovery:
         object.__setattr__(self, "projection_commits", projections)
         object.__setattr__(self, "activity_result_commits", results)
         object.__setattr__(self, "observation_commits", observations)
+        object.__setattr__(
+            self,
+            "phase_transition_records",
+            phase_transitions,
+        )
         object.__setattr__(self, "activities", activities)
         object.__setattr__(
             self,

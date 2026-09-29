@@ -12,7 +12,6 @@ from framework.events import (
     graph_event_context,
 )
 from framework.events.canonical import checksum_for
-from framework.events.errors import EventStreamVersionConflictError
 from framework.events.runtime.models import StreamReadRequest
 from framework.events.graph_phase import (
     GraphExecutionPhase,
@@ -90,35 +89,17 @@ def _runtime(tmp_path):
     return store, runtime
 
 
-def test_phase_writer_round_trips_context_and_rejects_stale_cas(tmp_path) -> None:
-    store, runtime = _runtime(tmp_path)
+def test_phase_writer_requires_durable_graph_transition_owner(tmp_path) -> None:
+    _, runtime = _runtime(tmp_path)
     port = DurableHarnessEventPort(
         runtime,
-        reader=store,
         adapter=HarnessEventCanonicalAdapter(tenant_id="tenant-a"),
     )
 
-    first = port.record_graph_phase_transition(_record(1), expected_last_sequence=0)
-    second = port.record_graph_phase_transition(
-        _record(2, phase=GraphExecutionPhase.EXECUTE),
-        expected_last_sequence=1,
-    )
-    stored = store.get_event(second.event_id, tenant_id="tenant-a")
+    with pytest.raises(HarnessValidationError) as captured:
+        port.record_graph_phase_transition(_record(1), expected_last_sequence=0)
 
-    assert first.event_type is HarnessEventType.GRAPH_PHASE_TRANSITION_RECORDED
-    assert stored is not None
-    assert graph_event_context(stored).to_dict() == _context().to_dict()
-    assert stored.stream_sequence == 2
-
-    with pytest.raises(EventStreamVersionConflictError):
-        port.record_graph_phase_transition(
-            _record(2, phase=GraphExecutionPhase.VERIFY),
-            expected_last_sequence=1,
-        )
-    assert store.get_stream_high_watermark(
-        "run:run-writer-test",
-        tenant_id="tenant-a",
-    ) == 2
+    assert captured.value.code == "graph_phase_transition_owner_required"
 
 
 def test_generic_durable_record_cannot_bypass_phase_writer(tmp_path) -> None:

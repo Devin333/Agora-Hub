@@ -30,7 +30,11 @@ from framework.events.projection import (
     GraphEventExecutionVersion,
     graph_event_context,
 )
-from framework.events.graph_phase import GraphPhaseTransitionRecord
+from framework.events.graph_phase import (
+    GraphExecutionPhase,
+    GraphPhaseBoundary,
+    GraphPhaseTransitionRecord,
+)
 from framework.shared.graph_identity import (
     GraphExecutionIdentity,
     GraphRunIdentity,
@@ -608,7 +612,7 @@ class HarnessEventCanonicalAdapter:
         )
 
     def from_stored_event(self, event: StoredEvent) -> HarnessEvent:
-        _validate_stored_harness_event(event)
+        _validate_stored_harness_event(event, adapter=self)
         context = _stored_graph_context(event)
         if event.event_type == "graph_worker_result_recorded" and event.payload_ref is None:
             raise EventStoreCorruptionError(
@@ -851,14 +855,11 @@ class DurableHarnessEventPort:
                 "Graph phase transition sequence must follow the durable stream",
                 code="graph_phase_sequence_mismatch",
             )
-        event = HarnessEvent(
-            event_type="graph_phase_transition_recorded",
-            run_id=record.context.identity.run_id,
-            node_id=record.context.node_id,
-            payload=record.to_dict(),
-            metadata={GRAPH_EVENT_CONTEXT_EXTENSION: record.context.to_dict()},
-            occurred_at=record.occurred_at,
+        self._admit_graph_phase_transition(
+            record,
+            expected_last_sequence=expected_last_sequence,
         )
+        event = _graph_phase_event(record)
         request = self._adapter.to_publish_request(
             event,
             graph_context=record.context,
@@ -886,6 +887,18 @@ class DurableHarnessEventPort:
         self.events.append(projected)
         self.event_log_entries.append(event_log_entry_from_stored_event(stored))
         return projected
+
+    def _admit_graph_phase_transition(
+        self,
+        record: GraphPhaseTransitionRecord,
+        *,
+        expected_last_sequence: int,
+    ) -> None:
+        del record, expected_last_sequence
+        raise HarnessValidationError(
+            "Graph phase transitions require the durable Graph transition owner",
+            code="graph_phase_transition_owner_required",
+        )
 
     def entries_for_run(self, run_id: str) -> tuple[HarnessEventLogEntry, ...]:
         if self._reader is not None:
@@ -1332,6 +1345,49 @@ class DurableHarnessTransitionPort(DurableHarnessEventPort):
         self._graph_snapshot_lock = RLock()
         self._graph_snapshots: dict[str, HarnessGraphRecovery] = {}
         self._graph_refs: dict[str, HarnessGraphReference] = {}
+
+    def _admit_graph_phase_transition(
+        self,
+        record: GraphPhaseTransitionRecord,
+        *,
+        expected_last_sequence: int,
+    ) -> None:
+        request = self._adapter.to_publish_request(
+            _graph_phase_event(record),
+            graph_context=record.context,
+        )
+        existing = self._require_reader().get_event(
+            request.event_id,
+            tenant_id=self._adapter.tenant_id,
+        )
+        if existing is not None:
+            restored = _stored_graph_phase_transition(
+                existing,
+                adapter=self._adapter,
+            )
+            if restored.to_dict() != record.to_dict():
+                raise EventStoreCorruptionError(
+                    "Graph phase event identity resolves conflicting content"
+                )
+            self._recover_graph_snapshot(record.context.identity.run_id)
+            return
+        recovery, canonical_head = self._recover_graph_snapshot(
+            record.context.identity.run_id
+        )
+        _require_graph_stream_head(recovery, expected_last_sequence)
+        if canonical_head != expected_last_sequence:
+            raise EventReplayMismatchError(
+                sequence=canonical_head,
+                reason="Graph phase transition attempted from a stale stream head",
+            )
+        graph, state = _require_initialized_graph(recovery)
+        _validate_graph_phase_transition(
+            record,
+            graph=graph,
+            state=state,
+            prior_records=recovery.phase_transition_records,
+            durable=False,
+        )
 
     def initialize_graph(
         self,
@@ -2985,6 +3041,7 @@ def _extend_graph_recovery(
     projections = list(recovery.projection_commits)
     results = list(recovery.activity_result_commits)
     observations = list(recovery.observation_commits)
+    phase_transitions = list(recovery.phase_transition_records)
     activities = {item.activity_id: item for item in recovery.activities}
     dispatched = set(recovery.dispatched_activity_ids)
     expected_sequence = recovery.expected_last_sequence
@@ -3065,6 +3122,20 @@ def _extend_graph_recovery(
             raise EventStoreCorruptionError(
                 "canonical Harness graph schema is bound to an unknown event type"
             )
+        elif event.event_type == HarnessEventType.GRAPH_PHASE_TRANSITION_RECORDED.value:
+            if graph is None or state is None:
+                raise EventIncompleteHistoryError(
+                    "Graph phase transition appears before initialization"
+                )
+            record = _stored_graph_phase_transition(event, adapter=adapter)
+            _validate_graph_phase_transition(
+                record,
+                graph=graph,
+                state=state,
+                prior_records=tuple(phase_transitions),
+                durable=True,
+            )
+            phase_transitions.append(record)
         elif graph is not None:
             activity_id = _dispatched_graph_activity_id(
                 event,
@@ -3090,6 +3161,7 @@ def _extend_graph_recovery(
         projection_commits=tuple(projections),
         activity_result_commits=tuple(results),
         observation_commits=tuple(observations),
+        phase_transition_records=tuple(phase_transitions),
         activities=tuple(activities.values()),
         dispatched_activity_ids=frozenset(
             dispatched.intersection(activities)
@@ -3474,7 +3546,11 @@ def _validate_commit_result(stored: StoredEvent, request: EventPublishRequest) -
         )
 
 
-def _validate_stored_harness_event(event: StoredEvent) -> None:
+def _validate_stored_harness_event(
+    event: StoredEvent,
+    *,
+    adapter: HarnessEventCanonicalAdapter,
+) -> None:
     if not isinstance(event, StoredEvent):
         raise TypeError("event must be StoredEvent")
     event.verify_integrity()
@@ -3489,24 +3565,258 @@ def _validate_stored_harness_event(event: StoredEvent) -> None:
             "flat Harness worker events are quarantined and cannot enter live history",
             code="legacy_harness_activity_event",
         )
-    context = _stored_graph_context(event)
     if event.event_type == "graph_phase_transition_recorded":
+        _stored_graph_phase_transition(
+            event,
+            adapter=adapter,
+        )
+
+
+def _graph_phase_event(record: GraphPhaseTransitionRecord) -> HarnessEvent:
+    return HarnessEvent(
+        event_type=HarnessEventType.GRAPH_PHASE_TRANSITION_RECORDED,
+        run_id=record.context.identity.run_id,
+        node_id=record.context.node_id,
+        payload=record.to_dict(),
+        metadata={GRAPH_EVENT_CONTEXT_EXTENSION: record.context.to_dict()},
+        occurred_at=record.occurred_at,
+    )
+
+
+def _stored_graph_phase_transition(
+    event: StoredEvent,
+    *,
+    adapter: HarnessEventCanonicalAdapter,
+) -> GraphPhaseTransitionRecord:
+    if not isinstance(event, StoredEvent):
+        raise TypeError("event must be StoredEvent")
+    if not isinstance(adapter, HarnessEventCanonicalAdapter):
+        raise TypeError("adapter must be HarnessEventCanonicalAdapter")
+    try:
+        event.verify_integrity()
         payload = thaw_canonical_json(event.payload or {})
         if not isinstance(payload, Mapping):
-            raise EventStoreCorruptionError("stored Graph phase payload must be an object")
-        try:
-            record = GraphPhaseTransitionRecord.from_dict(
-                payload.get("graph_phase_transition", {})
+            raise TypeError("Graph phase payload must be an object")
+        record = GraphPhaseTransitionRecord.from_dict(
+            payload.get("graph_phase_transition", {})
+        )
+        record.assert_envelope_sequence(event.stream_sequence)
+        expected = adapter.to_publish_request(
+            _graph_phase_event(record),
+            graph_context=record.context,
+        )
+        actual_context = _stored_graph_context(event)
+        envelope_matches = (
+            event.event_id == expected.event_id
+            and event.event_type == expected.event_type
+            and event.data_schema == expected.data_schema
+            and event.source == expected.source
+            and event.subject == expected.subject
+            and event.occurred_at == expected.occurred_at
+            and event.stream_id == expected.stream_id
+            and event.correlation_id == expected.correlation_id
+            and event.business_context == expected.business_context
+            and event.producer == expected.producer
+            and event.tenant_id == expected.tenant_id
+            and event.security_classification is expected.security_classification
+            and event.content_type == expected.content_type
+            and event.payload_ref is None
+            and thaw_canonical_json(event.payload) == thaw_canonical_json(expected.payload)
+            and thaw_canonical_json(event.extensions)
+            == thaw_canonical_json(expected.extensions)
+            and actual_context.to_dict() == record.context.to_dict()
+        )
+        if not envelope_matches:
+            raise ValueError("Graph phase envelope identity is inconsistent")
+    except Exception as exc:
+        if isinstance(exc, EventStoreCorruptionError):
+            raise
+        raise EventStoreCorruptionError(
+            "stored Graph phase transition is invalid"
+        ) from exc
+    return record
+
+
+def _validate_graph_phase_transition(
+    record: GraphPhaseTransitionRecord,
+    *,
+    graph: NormalizedHarnessGraph,
+    state: HarnessGraphState,
+    prior_records: tuple[GraphPhaseTransitionRecord, ...],
+    durable: bool,
+) -> None:
+    error_type = EventStoreCorruptionError if durable else HarnessValidationError
+    try:
+        record.verify_integrity()
+        graph_ref = HarnessGraphReference.from_graph(graph)
+        node = next(
+            (
+                item
+                for item in state.node_instances
+                if item.instance_id == record.context.node_instance_id
+            ),
+            None,
+        )
+        if node is None or node.identity.node_id != record.context.node_id:
+            raise ValueError("node instance is not present in trusted Graph state")
+        definition = next(
+            (item for item in graph.nodes if item.node_id == node.identity.node_id),
+            None,
+        )
+        if not isinstance(definition, HarnessExecutableNode):
+            raise ValueError("phase transition does not identify an executable node")
+        expected_context = GraphEventContext(
+            identity=GraphRunIdentity(
+                run_id=state.run_id,
+                graph_id=graph_ref.graph_id,
+                graph_version=graph_ref.identity_version,
+                graph_ref=f"{graph_ref.graph_id}@{graph_ref.identity_version}",
+                graph_checksum=graph_ref.checksum,
+            ),
+            execution_version=GraphEventExecutionVersion(
+                graph_schema_version=graph_ref.schema_version,
+                compiler_version=graph_ref.compiler_version,
+                normalized_graph_checksum=graph_ref.checksum,
+            ),
+            stage_identity=GraphStageIdentity(
+                run_id=state.run_id,
+                graph_id=graph_ref.graph_id,
+                graph_version=graph_ref.identity_version,
+                graph_ref=f"{graph_ref.graph_id}@{graph_ref.identity_version}",
+                graph_checksum=graph_ref.checksum,
+                node_id=node.identity.node_id,
+                node_instance_id=node.instance_id,
+            ),
+        )
+        if record.context.to_dict() != expected_context.to_dict():
+            raise ValueError("phase transition changed the trusted Graph identity")
+        if record.attempt != node.attempt:
+            raise ValueError("phase transition changed the trusted node attempt")
+        if node.is_terminal and record.phase is not GraphExecutionPhase.HALT:
+            raise ValueError("terminal node attempt cannot execute another phase")
+        expected_statuses = {
+            GraphExecutionPhase.PLAN: frozenset({"planning"}),
+            GraphExecutionPhase.EXECUTE: frozenset({"running"}),
+            GraphExecutionPhase.VERIFY: frozenset({"verifying"}),
+            GraphExecutionPhase.REPLAN: frozenset({"replanning"}),
+            GraphExecutionPhase.HALT: frozenset({"failed", "halted"}),
+        }[record.phase]
+        step_status = None if node.step_status is None else node.step_status.value
+        if step_status not in expected_statuses:
+            raise ValueError("phase transition conflicts with trusted node state")
+        prior_for_node = tuple(
+            item
+            for item in prior_records
+            if item.context.node_instance_id == node.instance_id
+        )
+        previous = None if not prior_for_node else prior_for_node[-1]
+        _validate_graph_phase_predecessor(record, previous)
+    except Exception as exc:
+        if isinstance(exc, error_type):
+            raise
+        message = "Graph phase transition conflicts with durable Graph history"
+        if durable:
+            raise EventStoreCorruptionError(message) from exc
+        raise HarnessValidationError(
+            message,
+            code="graph_phase_transition_invalid",
+        ) from exc
+
+
+def _validate_graph_phase_predecessor(
+    record: GraphPhaseTransitionRecord,
+    previous: GraphPhaseTransitionRecord | None,
+) -> None:
+    current = (record.phase, record.boundary, record.attempt)
+    if previous is None:
+        if current != (
+            GraphExecutionPhase.PLAN,
+            GraphPhaseBoundary.ENTRY,
+            record.attempt,
+        ):
+            raise ValueError("first node phase must be PLAN entry")
+        return
+    if record.event_sequence <= previous.event_sequence:
+        raise ValueError("phase event sequence is not strictly increasing")
+    if previous.boundary is GraphPhaseBoundary.ENTRY:
+        expected = (previous.phase, GraphPhaseBoundary.EXIT, previous.attempt)
+        if current != expected:
+            raise ValueError("phase entry is missing its matching exit")
+        return
+    allowed: set[tuple[GraphExecutionPhase, GraphPhaseBoundary, int]] = set()
+    if previous.phase is GraphExecutionPhase.PLAN:
+        allowed.update(
+            {
+                (
+                    GraphExecutionPhase.EXECUTE,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt + 1,
+                ),
+                (
+                    GraphExecutionPhase.PLAN,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt,
+                ),
+                (
+                    GraphExecutionPhase.REPLAN,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt,
+                ),
+            }
+        )
+    elif previous.phase is GraphExecutionPhase.EXECUTE:
+        allowed.update(
+            {
+                (
+                    GraphExecutionPhase.VERIFY,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt,
+                ),
+                (
+                    GraphExecutionPhase.EXECUTE,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt + 1,
+                ),
+            }
+        )
+    elif previous.phase is GraphExecutionPhase.VERIFY:
+        allowed.update(
+            {
+                (
+                    GraphExecutionPhase.EXECUTE,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt + 1,
+                ),
+                (
+                    GraphExecutionPhase.PLAN,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt,
+                ),
+                (
+                    GraphExecutionPhase.REPLAN,
+                    GraphPhaseBoundary.ENTRY,
+                    previous.attempt,
+                ),
+            }
+        )
+    elif previous.phase is GraphExecutionPhase.REPLAN:
+        allowed.add(
+            (
+                GraphExecutionPhase.PLAN,
+                GraphPhaseBoundary.ENTRY,
+                previous.attempt,
             )
-            record.assert_envelope_sequence(event.stream_sequence)
-        except Exception as exc:
-            raise EventStoreCorruptionError(
-                "stored Graph phase transition is invalid"
-            ) from exc
-        if record.context.to_dict() != context.to_dict():
-            raise EventStoreCorruptionError(
-                "stored Graph phase context conflicts with canonical context"
+        )
+    if previous.phase is not GraphExecutionPhase.HALT:
+        allowed.add(
+            (
+                GraphExecutionPhase.HALT,
+                GraphPhaseBoundary.ENTRY,
+                previous.attempt,
             )
+        )
+    if current not in allowed:
+        raise ValueError("phase transition has no legal predecessor")
 
 
 def _validate_payload_context(
