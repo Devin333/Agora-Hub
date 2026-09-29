@@ -111,15 +111,19 @@ class ToolPolicy:
         return True, None
 
     def requires_approval(self, definition: ToolDefinition) -> bool:
+        # Explicit per-tool approval is a hard requirement. The policy switch
+        # controls the default side-effect approval gate, including tool
+        # definitions that declare approval as their default.
+        if definition.name in self.require_approval_for:
+            return True
+        if not self.require_approval_for_side_effects:
+            return False
         if (
-            definition.name in self.require_approval_for
-            or definition.requires_approval
+            definition.requires_approval
             or definition.is_dangerous
             or is_default_dangerous_tool_name(definition.name)
         ):
             return True
-        if not self.require_approval_for_side_effects:
-            return False
         side_effect = definition.side_effect
         if isinstance(side_effect, ToolSideEffect):
             return side_effect.requires_approval()

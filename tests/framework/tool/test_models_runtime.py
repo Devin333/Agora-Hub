@@ -61,6 +61,44 @@ def test_tool_executor_returns_success_result() -> None:
     assert observation.result.output == {"message": "hello"}
 
 
+def test_tool_policy_can_disable_default_approval_for_authorized_side_effect() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="sample.publish",
+            input_schema={},
+            side_effect="publishing",
+            requires_approval=True,
+        ),
+        lambda args: {"published": True},
+    )
+
+    observation = ToolExecutor(registry).execute(
+        ToolCall(tool_name="sample.publish", arguments={}),
+        ToolPolicy(
+            allowed_tools=["sample.publish"],
+            require_approval_for_side_effects=False,
+        ),
+    )
+
+    assert observation.status == ToolStatus.SUCCEEDED
+    assert observation.result.output == {"published": True}
+
+
+def test_tool_policy_per_tool_approval_overrides_side_effect_setting() -> None:
+    definition = ToolDefinition(
+        name="sample.publish",
+        input_schema={},
+        side_effect="publishing",
+        requires_approval=True,
+    )
+
+    assert ToolPolicy(
+        require_approval_for=[definition.name],
+        require_approval_for_side_effects=False,
+    ).requires_approval(definition)
+
+
 def test_tool_executor_binds_and_rejects_graph_execution_identity() -> None:
     identity = _graph_identity()
     registry = ToolRegistry()
