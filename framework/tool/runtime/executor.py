@@ -1263,24 +1263,10 @@ class ToolExecutor:
         if sink is None:
             return
         from framework.events.runtime.projection import (
-            RuntimeEventEnvelope,
+            RuntimeEventEmitter,
             RuntimeEventIdentity,
-            RuntimeEventType,
         )
 
-        mapping = {
-            "tool_call_requested": RuntimeEventType.TOOL_REQUESTED,
-            "tool_started": RuntimeEventType.EXECUTION_STARTED,
-            "attempt_started": RuntimeEventType.EXECUTION_STARTED,
-            "tool_approval_required": RuntimeEventType.APPROVAL_REQUESTED,
-            "tool_succeeded": RuntimeEventType.EXECUTION_TERMINAL,
-            "tool_failed": RuntimeEventType.EXECUTION_TERMINAL,
-            "tool_timeout": RuntimeEventType.TIMEOUT,
-            "tool_call_blocked": RuntimeEventType.RUNTIME_ERROR,
-            "attempt_admission_rejected": RuntimeEventType.RUNTIME_ERROR,
-            "attempt_terminal": RuntimeEventType.EXECUTION_TERMINAL,
-        }
-        canonical_type = mapping.get(event_type, RuntimeEventType.RUNTIME_ERROR)
         identity = RuntimeEventIdentity(
             graph_identity=call.graph_identity,
             activity_id=(call.graph_identity.activity_id if call.graph_identity else None),
@@ -1307,50 +1293,42 @@ class ToolExecutor:
         stable_event_id = "tool-runtime:" + sha256(
             f"{call.call_id}|{event_type}|{operation_identity}|{status}|{payload.get('reason_code') or payload.get('reason')}".encode("utf-8")
         ).hexdigest()
-        event = RuntimeEventEnvelope(
-            event_id=stable_event_id,
-            event_type=canonical_type,
-            occurred_at=datetime.now(UTC),
-            identity=identity,
-            status=str(status) if status is not None else None,
-            reason_code=payload.get("reason_code") or payload.get("reason"),
-            stream_id=call.graph_identity.run_id if call.graph_identity else None,
-            refs=tuple(
-                str(value)
-                for key, value in payload.items()
-                if key.endswith("_ref") and isinstance(value, str)
-            ),
-            checksums=(
-                {
-                    key: str(payload[key])
-                    for key in ("execution_receipt_checksum", "execution_capability_checksum")
-                    if isinstance(payload.get(key), str)
-                    and payload[key].startswith("sha256:")
-                }
-            ),
-            metadata={
-                "tool_name": call.tool_name,
-                "tool_call_id": call.call_id,
-                "argument_keys": payload.get("argument_keys"),
-                "status": status,
-                "execution_receipt_ref": payload.get("execution_receipt_ref"),
-                "execution_receipt_checksum": payload.get("execution_receipt_checksum"),
-                "execution_capability_checksum": payload.get("execution_capability_checksum"),
-                "execution_provider_id": payload.get("execution_provider_id"),
-                "termination_confirmed": payload.get("termination_confirmed"),
-                "execution_environment_halt": payload.get("execution_environment_halt"),
-            },
-            source="tool",
+        refs = tuple(
+            str(value)
+            for key, value in payload.items()
+            if key.endswith("_ref") and isinstance(value, str)
         )
+        checksums = {
+            key: str(payload[key])
+            for key in ("execution_receipt_checksum", "execution_capability_checksum")
+            if isinstance(payload.get(key), str)
+            and payload[key].startswith("sha256:")
+        }
+        metadata = {
+            "tool_name": call.tool_name,
+            "tool_call_id": call.call_id,
+            "argument_keys": payload.get("argument_keys"),
+            "status": status,
+            "execution_receipt_ref": payload.get("execution_receipt_ref"),
+            "execution_receipt_checksum": payload.get("execution_receipt_checksum"),
+            "execution_capability_checksum": payload.get("execution_capability_checksum"),
+            "execution_provider_id": payload.get("execution_provider_id"),
+            "termination_confirmed": payload.get("termination_confirmed"),
+            "execution_environment_halt": payload.get("execution_environment_halt"),
+        }
         try:
-            if callable(sink):
-                sink(event)
-            elif hasattr(sink, "append"):
-                sink.append(event)
-            elif hasattr(sink, "publish"):
-                sink.publish(event)
-            else:
-                raise TypeError("runtime event sink must be callable or expose append/publish")
+            RuntimeEventEmitter(sink, source="tool").emit(
+                event_type,
+                event_id=stable_event_id,
+                occurred_at=datetime.now(UTC),
+                identity=identity,
+                status=str(status) if status is not None else None,
+                reason_code=payload.get("reason_code") or payload.get("reason"),
+                stream_id=call.graph_identity.run_id if call.graph_identity else None,
+                refs=refs,
+                checksums=checksums,
+                metadata=metadata,
+            )
         except Exception:
             # Runtime event projection is a required canonical boundary when
             # supplied; make failures visible instead of silently losing facts.
