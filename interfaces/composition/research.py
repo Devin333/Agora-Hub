@@ -109,6 +109,7 @@ from framework.harness import (
     transcript_entry_from_event,
 )
 from framework.harness.subagents import ChildAgentSupervisorError
+from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.graph import HarnessWorkerType
 from framework.harness.graph.compiler import HarnessGraphCompiler
 from framework.harness.graph.bindings import HarnessWorkerBinding
@@ -1692,6 +1693,17 @@ def _build_configured_composition(
                     store=dynamic_task_plan_store, authority=result_ref_authority, policy=policy,
                 ),
             )
+            # Keep Research on the same Harness-owned TaskPlan execution
+            # boundary as generic AgentLoop delegation.  The stage runner
+            # still owns routing and verification; this executor owns the
+            # admitted invocation, dependency refs, transcript reuse, and
+            # recovery identity for each physical child attempt.
+            task_plan_worker_executor = HarnessSubAgentTaskExecutor(
+                store=dynamic_task_plan_store,
+                runtime=subagent_runtime,
+                ref_admission_service=dynamic_ref_admission_service,
+                task_policy=policy,
+            )
             gate_registry = build_paper_analysis_gate_registry()
 
             def gate_context(request):
@@ -1735,6 +1747,7 @@ def _build_configured_composition(
                 transcript_store=subagent_transcript_store,
                 artifact_reference_verifier=artifact_port,
                 result_ref_authority=result_ref_authority,
+                gate_artifact_writer=dynamic_task_plan_store,
             )
             def task_context_pack(plan, instance, execution_identity):
                 if not isinstance(execution_identity, GraphExecutionIdentity):
@@ -1816,84 +1829,14 @@ def _build_configured_composition(
                     invocation_factory=child_invocation,
                 )
 
-            def execute(binding, instance, execution_identity):
-                plan = dynamic_task_plan_store.plan(
-                    instance.run_id,
-                    instance.stage_id,
-                    instance.plan_version,
-                )
-                if plan is None:
-                    raise RuntimeError("dynamic TaskPlan plan artifact is unavailable")
-                resolved = next(item for item in plan.tasks if item.task_id == instance.task_id)
-                child = subagent_adapter.invoke(
-                    plan=plan,
-                    resolved_task=resolved,
-                    binding=binding,
-                    instance=instance,
-                    context_pack=task_context_pack(
-                        plan,
-                        instance,
-                        execution_identity,
-                    ),
-                    budget_snapshot=HarnessBudgetSnapshot.from_budget(HarnessBudget.safe_default()),
-                    execution_identity=execution_identity,
-                )
-                succeeded = child.status.value == "succeeded"
-                return HarnessWorkerResult(
-                    status="succeeded" if succeeded else "failed",
-                    output=child.output,
-                    artifacts=child.artifact_refs,
-                    diagnostics={"subagent_id": child.subagent_id},
-                    evidence=(subagent_attempt_evidence(child.transcript_receipt),)
-                    if child.transcript_receipt is not None
-                    else (),
-                    error=None if succeeded else "Research analysis subagent gate failed",
-                )
-
-            def recover(binding, instance, execution_identity):
-                plan = dynamic_task_plan_store.plan(
-                    instance.run_id,
-                    instance.stage_id,
-                    instance.plan_version,
-                )
-                if plan is None:
-                    raise RuntimeError("dynamic TaskPlan plan artifact is unavailable")
-                resolved = next(item for item in plan.tasks if item.task_id == instance.task_id)
-                child = subagent_adapter.recover(
-                    plan=plan,
-                    resolved_task=resolved,
-                    binding=binding,
-                    instance=instance,
-                    context_pack=task_context_pack(
-                        plan,
-                        instance,
-                        execution_identity,
-                    ),
-                    budget_snapshot=HarnessBudgetSnapshot.from_budget(HarnessBudget.safe_default()),
-                    execution_identity=execution_identity,
-                )
-                if child is None:
-                    return None
-                succeeded = child.status.value == "succeeded"
-                return HarnessWorkerResult(
-                    status="succeeded" if succeeded else "failed",
-                    output=child.output,
-                    artifacts=child.artifact_refs,
-                    diagnostics={"subagent_id": child.subagent_id, "recovered": True},
-                    evidence=(subagent_attempt_evidence(child.transcript_receipt),)
-                    if child.transcript_receipt is not None
-                    else (),
-                    error=None if succeeded else "Research analysis subagent gate failed",
-                )
-
             return ResearchAnalysisTaskPlanStageWorker(
                 stage_binding=stage_binding,
                 accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
                 candidate_builder=ResearchAnalysisPlanCandidateBuilder(candidate_worker),
                 capability_registry=capability_registry,
                 store=dynamic_task_plan_store,
-                worker_executor=execute,
-                worker_result_recovery=recover,
+                worker_executor=task_plan_worker_executor,
+                worker_result_recovery=task_plan_worker_executor.recover,
                 result_verifier=result_verifier,
                 policy=policy,
                 parallel_coordinator=child_runtime_binding.parallel_coordinator,

@@ -535,6 +535,14 @@ def test_valid_settings_compose_full_durable_production_graph(
             dynamic_stage._child_agent_supervisor,
             ChildAgentSupervisor,
         )
+        from framework.harness.agent_loop.child_executor import (
+            HarnessSubAgentTaskExecutor,
+        )
+
+        assert isinstance(
+            dynamic_stage._runner.worker_executor,
+            HarnessSubAgentTaskExecutor,
+        )
         assert (
             dynamic_stage._parallel_coordinator.max_workers
             == dynamic_stage._child_agent_supervisor.capacity
@@ -575,6 +583,32 @@ def test_valid_settings_compose_full_durable_production_graph(
         configured_verifier = dynamic_stage._runner.result_verifier
         assert configured_verifier.result_ref_authority.store is admission.store
         assert configured_verifier.result_ref_authority.is_durable is True
+        assert (
+            configured_verifier.gate_artifact_writer
+            is dynamic_stage._runner.store
+        )
+        def stage_without_gate_artifact_owner(**kwargs):
+            verifier = kwargs["result_verifier"]
+            while hasattr(verifier, "_verifier"):
+                verifier = verifier._verifier
+            verifier._gate_artifact_writer = None
+            return stage_worker_type(**kwargs)
+
+        with monkeypatch.context() as scope:
+            scope.setattr(
+                research_composition,
+                "ResearchAnalysisTaskPlanStageWorker",
+                stage_without_gate_artifact_owner,
+            )
+            with pytest.raises(HarnessValidationError) as error:
+                runtime.dynamic_task_plan_runner_factory(
+                    workspace=candidate_workspace,
+                    dependencies=object(),
+                )
+            assert (
+                error.value.code
+                == "research_task_plan_gate_artifact_owner_required"
+            )
         def stage_without_result_authority(**kwargs):
             kwargs["result_verifier"].result_ref_authority = None
             return stage_worker_type(**kwargs)
