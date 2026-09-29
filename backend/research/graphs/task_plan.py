@@ -83,12 +83,31 @@ from backend.research.graphs.contracts import (
     RESEARCH_DYNAMIC_TOOL_IDS,
     RESEARCH_DYNAMIC_WORKER_CONTRACT_REFS,
     RESEARCH_DYNAMIC_WORKER_REFS,
+    build_research_artifact_terminal_policy,
 )
 
 
 _RESEARCH_DYNAMIC_GRAPH_REF = (
     f"{RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID}@"
     f"{RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION}"
+)
+_RESEARCH_PLANNING_STAGE_FIELDS = (
+    "run_id",
+    "stage_id",
+    "graph_id",
+    "graph_version",
+    "graph_ref",
+    "graph_checksum",
+    "graph_schema_version",
+    "compiler_version",
+    "condition_policy_version",
+    "stage_identity_schema",
+    "stage_identity_checksum",
+    "stage_binding_ref",
+    "context_refs",
+    "policy_ref",
+    "budget",
+    "execution_identity",
 )
 _RESEARCH_BRANCH_IDENTITIES = MappingProxyType(
     {
@@ -266,12 +285,20 @@ class ResearchAnalysisPlanCandidateBuilder(PlanCandidateBuilderPort):
                 "Research TaskPlan builder received an incompatible policy",
                 code="research_task_plan_policy_mismatch",
             )
+        stage_payload = request.to_dict()
         candidate_request = {
             "task": "candidate_task_plan",
             "timeout_seconds": float(request.policy.planning_timeout_seconds),
             "max_transport_attempts": 1,
             "payload": {
-                "stage": request.to_dict(),
+                # Keep the planner on immutable identities and logical refs.
+                # PlanBuildRequest metadata may contain controller-private
+                # diagnostics and must never become model input implicitly.
+                "stage": {
+                    name: stage_payload[name]
+                    for name in _RESEARCH_PLANNING_STAGE_FIELDS
+                    if name in stage_payload
+                },
                 "required_output_roles": list(request.policy.required_output_roles),
                 "allowed_capabilities": list(
                     request.policy.allowed_worker_capabilities
@@ -362,6 +389,15 @@ class ResearchAnalysisPlanCandidateBuilder(PlanCandidateBuilderPort):
                 "Research TaskPlan task referenced context outside the analysis stage",
                 code="research_task_plan_input_not_allowed",
             )
+        missing_input_refs = sorted(
+            set(RESEARCH_DYNAMIC_INPUT_REFS).difference(input_refs)
+        )
+        if missing_input_refs:
+            raise HarnessValidationError(
+                "Research TaskPlan task omitted required isolated input references",
+                code="research_task_plan_required_input_missing",
+                details={"missing": missing_input_refs},
+            )
         return TaskSpec(
             task_id=value.get("task_id"),
             objective=value.get("objective"),
@@ -375,7 +411,7 @@ class ResearchAnalysisPlanCandidateBuilder(PlanCandidateBuilderPort):
                 RESEARCH_DYNAMIC_GATES_BY_CAPABILITY[capability]
             ),
             depends_on=tuple(dependencies),
-            requested_tools=(),
+            requested_tools=RESEARCH_DYNAMIC_TOOL_IDS,
             requested_memory_namespaces=(),
             budget_request=policy.per_task_budget,
             retry_policy=TaskRetryPolicy(
@@ -419,6 +455,24 @@ class ResearchAnalysisTaskPlanStageWorker:
             )
         if not callable(worker_executor):
             raise TypeError("worker_executor must be callable")
+        if not allow_test_store:
+            # Production Research children must enter through the shared
+            # Harness executor.  A plain callback can bypass ref admission,
+            # durable transcript recovery, and the accepted attempt identity.
+            from framework.harness.agent_loop.child_executor import (
+                HarnessSubAgentTaskExecutor,
+            )
+
+            if not isinstance(worker_executor, HarnessSubAgentTaskExecutor):
+                raise HarnessValidationError(
+                    "Research production TaskPlan requires the Harness child executor",
+                    code="research_task_plan_harness_executor_required",
+                )
+            if worker_executor.store is not store:
+                raise HarnessValidationError(
+                    "Research child executor must share the TaskPlan store",
+                    code="research_task_plan_executor_store_mismatch",
+                )
         if not isinstance(candidate_builder, PlanCandidateBuilderPort):
             raise TypeError(
                 "candidate_builder must implement PlanCandidateBuilderPort"
@@ -429,6 +483,15 @@ class ResearchAnalysisTaskPlanStageWorker:
             )
         if not isinstance(result_verifier, TaskPlanResultVerifierPort):
             raise TypeError("result_verifier must implement TaskPlanResultVerifierPort")
+        if not allow_test_store and getattr(
+            result_verifier,
+            "gate_artifact_writer",
+            None,
+        ) is not store:
+            raise HarnessValidationError(
+                "Research production TaskPlan requires its durable gate artifact owner",
+                code="research_task_plan_gate_artifact_owner_required",
+            )
         if parallel_coordinator is not None and not isinstance(
             parallel_coordinator,
             ParallelAgentCoordinator,
@@ -458,9 +521,11 @@ class ResearchAnalysisTaskPlanStageWorker:
                 "Research production TaskPlan requires a durable checkpoint store",
                 code="research_task_plan_durable_checkpoint_required",
             )
-        actual_policy = policy or build_research_analysis_task_plan_policy()
+        canonical_policy = build_research_analysis_task_plan_policy()
+        actual_policy = policy or canonical_policy
         if (
             actual_policy.exact_ref != RESEARCH_DYNAMIC_POLICY_REF
+            or actual_policy.policy_checksum != canonical_policy.policy_checksum
             or stage_binding.policy_ref != actual_policy.exact_ref
             or stage_binding.graph.identity_ref.exact_ref
             != _RESEARCH_DYNAMIC_GRAPH_REF
@@ -472,8 +537,36 @@ class ResearchAnalysisTaskPlanStageWorker:
                 "Research TaskPlan stage worker requires the pinned Graph stage",
                 code="research_task_plan_policy_mismatch",
             )
+        expected_publication_policy = build_research_artifact_terminal_policy()
+        if (
+            stage_binding.graph.terminal_policy != expected_publication_policy
+            or stage_binding.graph.terminal_policy_ref is None
+            or stage_binding.graph.terminal_policy_ref.exact_ref
+            != (
+                f"{expected_publication_policy.policy_id}@"
+                f"{expected_publication_policy.version}"
+            )
+        ):
+            raise HarnessValidationError(
+                "Research dynamic TaskPlan requires its pinned publication policy",
+                code="research_task_plan_publication_policy_required",
+            )
         for capability in actual_policy.allowed_worker_capabilities:
-            capability_registry.resolve(capability, actual_policy)
+            resolved = capability_registry.resolve(capability, actual_policy)
+            spec = resolved.subagent_spec
+            if (
+                resolved.allowed_tools != RESEARCH_DYNAMIC_TOOL_IDS
+                or spec is None
+                or spec.context_policy.get("allow_sibling_history") is not False
+                or spec.context_policy.get("allow_private_notes_export") is not False
+                or tuple(spec.context_policy.get("allowed_input_refs", ()))
+                != RESEARCH_DYNAMIC_INPUT_REFS
+            ):
+                raise HarnessValidationError(
+                    "Research dynamic capability has an incompatible input or tool policy",
+                    code="research_task_plan_child_policy_mismatch",
+                    details={"capability": capability},
+                )
         if not allow_test_store:
             transcript_store = getattr(result_verifier, "transcript_store", None)
             if not isinstance(transcript_store, SubAgentTranscriptStorePort) or (
@@ -506,9 +599,12 @@ class ResearchAnalysisTaskPlanStageWorker:
                     )
         if child_agent_supervisor is not None and parallel_coordinator is not None:
             supervisor_capacity = child_agent_supervisor.capacity
-            if supervisor_capacity < 1 or parallel_coordinator.max_workers > supervisor_capacity:
+            if (
+                supervisor_capacity != actual_policy.max_parallelism
+                or parallel_coordinator.max_workers != actual_policy.max_parallelism
+            ):
                 raise HarnessValidationError(
-                    "Research TaskPlan coordinator exceeds child supervisor capacity",
+                    "Research TaskPlan capacity differs from its pinned policy",
                     code="research_task_plan_parallel_capacity_invalid",
                 )
             if parallel_coordinator.child_supervisor is not child_agent_supervisor:
@@ -525,6 +621,13 @@ class ResearchAnalysisTaskPlanStageWorker:
             raise HarnessValidationError(
                 "Research production TaskPlan requires durable reference admission",
                 code="research_task_plan_ref_authority_required",
+            )
+        if not allow_test_store and (
+            worker_executor.ref_admission_service is not ref_admission_service
+        ):
+            raise HarnessValidationError(
+                "Research child executor must share reference admission",
+                code="research_task_plan_executor_ref_authority_mismatch",
             )
         self._ref_admission_service = ref_admission_service
         if not allow_test_store and actual_policy.max_planning_tool_calls > 0:
@@ -908,6 +1011,21 @@ def validate_research_analysis_candidate(candidate: PlanCandidate) -> None:
         if task.acceptance_criteria.gate_refs != expected_gates:
             violations.append(
                 {"task_id": task.task_id, "reason": "gate_binding_mismatch"}
+            )
+        missing_input_refs = sorted(
+            set(RESEARCH_DYNAMIC_INPUT_REFS).difference(task.input_refs)
+        )
+        if missing_input_refs:
+            violations.append(
+                {
+                    "task_id": task.task_id,
+                    "reason": "required_input_missing",
+                    "missing": missing_input_refs,
+                }
+            )
+        if task.requested_tools != RESEARCH_DYNAMIC_TOOL_IDS:
+            violations.append(
+                {"task_id": task.task_id, "reason": "tool_policy_mismatch"}
             )
     if violations:
         raise HarnessValidationError(
