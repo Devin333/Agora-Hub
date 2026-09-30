@@ -907,6 +907,7 @@ class TaskPlanReplayReducer:
                         "aggregate_ref": aggregate_ref,
                         "aggregate_checksum": aggregate_checksum,
                         "output_refs_by_role": aggregate_output_refs_by_role,
+                        "result_refs": list(_aggregate_result_refs),
                         "analysis_branch_refs": list(aggregate_branch_refs),
                     }
                     expected_diagnostics = {

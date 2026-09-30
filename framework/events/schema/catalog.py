@@ -1227,6 +1227,9 @@ def _task_plan_terminal_result_schema() -> dict[str, Any]:
                 "output_refs_by_role": {
                     "type": "object", "additionalProperties": _TEXT, "maxProperties": 128,
                 },
+                "result_refs": {
+                    "type": "array", "items": _TEXT, "maxItems": 128,
+                },
                 "analysis_branch_refs": {
                     "type": "array", "items": {"type": "object", "maxProperties": 16}, "maxItems": 128,
                 },
