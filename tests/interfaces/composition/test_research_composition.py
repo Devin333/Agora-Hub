@@ -99,6 +99,7 @@ from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
     RESEARCH_MINERU_PROFILE_ID,
 )
+
 from framework.shared.graph_identity import GraphExecutionIdentity
 from interfaces.services.research_service import (
     InMemoryResearchRunStore,
@@ -109,6 +110,35 @@ from interfaces.services.research_service import (
 )
 from interfaces.services.source_runtime import SourceRuntimeProvider
 from tests.interfaces.research_fixtures import FakeAnalyzeUseCase
+
+
+@pytest.mark.parametrize(
+    ("task", "expected_code"),
+    (
+        (
+            {"input_refs": ["document"]},
+            "research_dynamic_child_input_refs_invalid",
+        ),
+        (
+            {
+                "input_refs": ["document", "evidence_pack"],
+                "private_notes": "must not cross the child boundary",
+            },
+            "research_dynamic_child_private_context",
+        ),
+    ),
+)
+def test_production_dynamic_child_rejects_unadmitted_inputs(task, expected_code) -> None:
+    worker = research_composition._ProductionResearchAnalysisWorker(
+        "research.analysis.structure",
+        dependencies=object(),
+        workspace=object(),
+    )
+
+    with pytest.raises(HarnessValidationError) as error:
+        worker.execute(task)
+
+    assert error.value.code == expected_code
 
 
 class _ExplicitRunStore:

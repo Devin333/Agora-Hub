@@ -120,6 +120,7 @@ from framework.harness.task_plan.dependency_refs import AcceptedDependencyResult
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.task_plan.checkpoint import JsonlTaskPlanCheckpointStore
 from framework.harness.control_plane.gates import GateContext
+from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.graph_application import (
     HarnessGraphControlPlaneRuntime,
 )
@@ -192,6 +193,7 @@ from infrastructure.storage.harness import (
 )
 from backend.research.graphs import (
     RESEARCH_DYNAMIC_CAPABILITIES,
+    RESEARCH_DYNAMIC_INPUT_REFS,
     RESEARCH_DYNAMIC_STAGE_ID,
     RESEARCH_DYNAMIC_SUBAGENT_IDS,
     build_paper_analysis_gate_registry,
@@ -264,6 +266,35 @@ class _ProductionResearchAnalysisWorker:
         *,
         execution_identity: GraphExecutionIdentity | None = None,
     ) -> HarnessWorkerResult:
+        if not isinstance(task, Mapping):
+            raise HarnessValidationError(
+                "Research dynamic child task must be a mapping",
+                code="research_dynamic_child_input_invalid",
+            )
+        input_refs = task.get("input_refs")
+        if (
+            not isinstance(input_refs, (list, tuple))
+            or any(not isinstance(ref, str) or not ref.strip() for ref in input_refs)
+            or not set(RESEARCH_DYNAMIC_INPUT_REFS).issubset(input_refs)
+        ):
+            raise HarnessValidationError(
+                "Research dynamic child requires the admitted document and evidence references",
+                code="research_dynamic_child_input_refs_invalid",
+                details={"required": list(RESEARCH_DYNAMIC_INPUT_REFS)},
+            )
+        forbidden_context_fields = {
+            "parent_messages",
+            "raw_parent_messages",
+            "private_notes",
+            "conversation_history",
+        }
+        leaked_fields = sorted(forbidden_context_fields.intersection(task))
+        if leaked_fields:
+            raise HarnessValidationError(
+                "Research dynamic child input contains private parent context",
+                code="research_dynamic_child_private_context",
+                details={"fields": leaked_fields},
+            )
         method = self._methods.get(self.worker_id)
         if method is None:
             raise RuntimeError("Research dynamic capability binding is unavailable")
