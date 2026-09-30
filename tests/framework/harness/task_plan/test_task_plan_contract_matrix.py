@@ -49,6 +49,7 @@ from framework.harness.task_plan.store import (
     LogicalTaskReadiness,
     TaskQueueAdmissionEvidence,
     TaskResultRecord,
+    _projection_for_plan,
 )
 from framework.harness.graph.bindings import HarnessWorkerBinding
 from framework.harness.graph.model import HarnessContractKind, HarnessContractReference
@@ -1047,6 +1048,55 @@ def test_patch_history_is_immutable_and_running_tasks_cannot_be_edited():
             available_input_refs=("document", "evidence_pack"),
         )
     assert error.value.code == "task_plan_patch_task_not_pending"
+
+
+def test_patch_rejects_unrelated_active_sibling_before_projection_reset():
+    policy = _policy(
+        roles=("analysis.structure", "analysis.helper"),
+        required_roles=("analysis.structure", "analysis.helper"),
+        capabilities=("research.structure", "research.helper"),
+    )
+    plan, policy, registry, _ = _accepted_plan(
+        (_task("structure"), _task("helper", capability="research.helper", role="analysis.helper")),
+        policy=policy,
+    )
+    patch = PlanPatch.for_plan(
+        plan,
+        patch_id="active-sibling-patch",
+        reason_code="repair",
+        source_candidate_ref="candidate://active-sibling-patch",
+        operations=(
+            PlanPatchOperation(
+                PlanPatchOperationType.ADD_REPLACEMENT_TASK,
+                target_task_id="structure",
+                replacement_task=_task("structure-replacement"),
+            ),
+        ),
+    )
+    projection = replace(
+        _projection_for_plan(plan, sequence=1),
+        tasks=tuple(
+            replace(
+                item,
+                status=(TaskLifecycle.FAILED if item.task_id == "structure" else TaskLifecycle.RUNNING),
+                attempts=(0 if item.task_id == "structure" else 1),
+                active_instance_id=(None if item.task_id == "structure" else "active-helper"),
+                admission_owner=(None if item.task_id == "structure" else TaskAdmissionOwner.QUEUE),
+            )
+            for item in _projection_for_plan(plan, sequence=1).tasks
+        ),
+    )
+    with pytest.raises(HarnessValidationError) as error:
+        TaskPlanPatchValidator().apply(
+            plan,
+            patch,
+            projection,
+            policy,
+            registry,
+            accepted_at="2026-08-01T00:01:00Z",
+            available_input_refs=("document", "evidence_pack"),
+        )
+    assert error.value.code == "task_plan_patch_active_sibling"
 
 
 def test_replacement_rejects_cycle_created_by_automatic_dependency_rewire():

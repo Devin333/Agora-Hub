@@ -87,6 +87,7 @@ from framework.harness.task_plan.store import (
     _plan_event,
     _projection_for_plan,
     _replacement_mapping,
+    _supersede_group_event,
     _validate_patch_transition_targets,
     _require_event_matches_plan,
     _require_live_graph_only,
@@ -964,6 +965,7 @@ class DurableTaskPlanStore:
         plan: ValidatedTaskPlan,
         *,
         skipped_task_ids: tuple[str, ...] = (),
+        supersede_group: Mapping[str, Any] | None = None,
     ) -> str:
         """Persist patch, plan version, skip transitions, and projections together."""
 
@@ -999,6 +1001,16 @@ class DurableTaskPlanStore:
             replacements=replacements,
             skipped_task_ids=skip_ids,
         )
+        from framework.harness.task_plan.patches import validate_patch_active_siblings
+
+        validate_patch_active_siblings(
+            current_projection,
+            {
+                *replacements,
+                *skip_ids,
+                *(operation.target_task_id for operation in patch.operations if operation.target_task_id is not None),
+            },
+        )
         existing = self.plan(plan.run_id, plan.stage_id, plan.version)
         if existing is not None:
             if existing.plan_checksum != plan.plan_checksum:
@@ -1016,6 +1028,12 @@ class DurableTaskPlanStore:
         )
         events = self.read_events(plan.run_id, plan.stage_id)
         first_sequence = len(events) + 1
+        supersede_event = (
+            _supersede_group_event(current, supersede_group, sequence=first_sequence)
+            if supersede_group is not None else None
+        )
+        if supersede_event is not None:
+            first_sequence += 1
         patch_event = TaskPlanEvent.for_plan(
             "PLAN_PATCH_ACCEPTED",
             current,
@@ -1035,6 +1053,9 @@ class DurableTaskPlanStore:
             {"plan": plan_ref, "projection": self._put_projection(projection)},
         ]
         events_to_publish: list[TaskPlanEvent] = [patch_event, plan_event]
+        if supersede_event is not None:
+            events_to_publish.insert(0, supersede_event)
+            references.insert(0, {"projection": self._put_projection(replace(self.load_projection(plan.run_id, plan.stage_id), last_sequence=supersede_event.sequence))})
         for replaced_task_id, replacement_task_id in sorted(replacements.items()):
             old_state = next((item for item in projection.tasks if item.task_id == replaced_task_id), None)
             new_state = next((item for item in projection.tasks if item.task_id == replacement_task_id), None)

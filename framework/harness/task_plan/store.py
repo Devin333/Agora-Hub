@@ -1002,6 +1002,7 @@ class TaskPlanStorePort(Protocol):
         plan: ValidatedTaskPlan,
         *,
         skipped_task_ids: tuple[str, ...] = (),
+        supersede_group: Mapping[str, Any] | None = None,
     ) -> str: ...
     def append_result(self, result: TaskResultRecord) -> str: ...
     def load_projection(self, run_id: str, stage_id: str) -> TaskPlanProjection: ...
@@ -1400,6 +1401,7 @@ class InMemoryTaskPlanStore:
         plan: ValidatedTaskPlan,
         *,
         skipped_task_ids: tuple[str, ...] = (),
+        supersede_group: Mapping[str, Any] | None = None,
     ) -> str:
         """Atomically commit an accepted patch, its new plan, and skips."""
 
@@ -1448,6 +1450,16 @@ class InMemoryTaskPlanStore:
                 replacements=replacements,
                 skipped_task_ids=skip_ids,
             )
+            from framework.harness.task_plan.patches import validate_patch_active_siblings
+
+            validate_patch_active_siblings(
+                current_projection,
+                {
+                    *replacements,
+                    *skip_ids,
+                    *(operation.target_task_id for operation in patch.operations if operation.target_task_id is not None),
+                },
+            )
             existing = self._plans.get((plan.run_id, plan.stage_id, plan.version))
             if existing is not None:
                 if existing.plan_checksum != plan.plan_checksum:
@@ -1474,6 +1486,29 @@ class InMemoryTaskPlanStore:
                 previous=previous_projection,
             )
             events = [patch_event, plan_event]
+            if supersede_group is not None:
+                supersede_event = _supersede_group_event(
+                    current,
+                    supersede_group,
+                    sequence=sequence,
+                )
+                events.insert(0, supersede_event)
+                sequence += 1
+                patch_event = TaskPlanEvent.for_plan(
+                    "PLAN_PATCH_ACCEPTED",
+                    current,
+                    input_checksum=patch.patch_checksum,
+                    reason_code=patch.reason_code,
+                    payload={"patch_ref": patch.patch_checksum},
+                    sequence=sequence,
+                )
+                plan_event = _plan_event(plan, "PLAN_ACCEPTED", sequence + 1)
+                events[1:] = [patch_event, plan_event]
+                next_projection = _projection_for_plan(
+                    plan,
+                    sequence=plan_event.sequence,
+                    previous=previous_projection,
+                )
             for replaced_task_id, replacement_task_id in sorted(replacements.items()):
                 old_state = next((item for item in next_projection.tasks if item.task_id == replaced_task_id), None)
                 new_state = next((item for item in next_projection.tasks if item.task_id == replacement_task_id), None)
@@ -3282,6 +3317,51 @@ def _replacement_mapping(patch: PlanPatch) -> dict[str, str]:
             )
         mapping[operation.target_task_id] = operation.replacement_task.task_id
     return mapping
+
+
+def _supersede_group_event(
+    plan: ValidatedTaskPlan,
+    group_payload: Mapping[str, Any],
+    *,
+    sequence: int,
+) -> TaskPlanEvent:
+    """Build the terminal old-group fact for an atomic replacement batch."""
+
+    from framework.harness.task_plan.parallel import DispatchGroup, DispatchGroupState
+
+    try:
+        group = DispatchGroup.from_dict(thaw_mapping(group_payload))
+    except (TypeError, ValueError, HarnessValidationError) as exc:
+        raise HarnessValidationError(
+            "replacement replan group evidence is invalid",
+            code="TASK_GROUP_REPLAN_INVALID",
+        ) from exc
+    if (
+        group.run_id != plan.run_id
+        or group.stage_id != plan.stage_id
+        or group.plan_id != plan.plan_id
+        or group.plan_version != plan.version
+        or group.state is not DispatchGroupState.REPLAN_PENDING
+    ):
+        raise HarnessValidationError(
+            "only a settled REPLAN_PENDING group may be superseded",
+            code="TASK_GROUP_REPLAN_INVALID",
+            details={"group_id": group.group_id, "state": group.state.value},
+        )
+    terminal = group.transitioned(DispatchGroupState.SUPERSEDED)
+    return TaskPlanEvent.for_plan(
+        "TASK_GROUP_SUPERSEDED",
+        plan,
+        input_checksum=group.group_checksum,
+        reason_code="replacement_replan",
+        payload={
+            "group_id": terminal.group_id,
+            "group": terminal.to_dict(),
+            "observation": {"diagnostics": ["REPLACEMENT_REPLAN"]},
+            "idempotency_key": terminal.group_id,
+        },
+        sequence=sequence,
+    )
 
 
 def _validate_patch_transition_targets(

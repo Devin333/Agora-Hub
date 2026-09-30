@@ -102,6 +102,7 @@ class TaskPlanPatchValidator:
                 next_definitions[target] = _with_dependencies(old, operation.depends_on)
             else:
                 raise HarnessValidationError("unsupported PlanPatch operation", code="task_plan_patch_operation_not_allowed")
+        validate_patch_active_siblings(projection, targeted)
         if len(next_definitions) > policy.max_tasks:
             raise HarnessValidationError("patch exceeds max_tasks", code="task_plan_task_limit_exceeded")
         task_dependency_depths(
@@ -273,6 +274,31 @@ class TaskPlanPatchValidator:
             )
 
 
+def validate_patch_active_siblings(
+    projection: TaskPlanProjection,
+    targeted_task_ids: Iterable[str],
+) -> None:
+    """Reject patches while an unrelated task attempt is still active."""
+
+    targeted = frozenset(targeted_task_ids)
+    active = tuple(
+        item.task_id
+        for item in projection.tasks
+        if item.status in {
+            TaskLifecycle.ADMITTED,
+            TaskLifecycle.DISPATCHED,
+            TaskLifecycle.RUNNING,
+        }
+        and item.task_id not in targeted
+    )
+    if active:
+        raise HarnessValidationError(
+            "plan patch cannot modify a task while an unrelated sibling attempt is active",
+            code="task_plan_patch_active_sibling",
+            details={"active_task_ids": sorted(active)},
+        )
+
+
 def _with_dependencies(task: ResolvedTaskSpec, depends_on: tuple[str, ...]) -> ResolvedTaskSpec:
     return _with_task_graph(task, depends_on=depends_on)
 
@@ -316,4 +342,4 @@ def _rewire_task_reference(value: str, replacements: dict[str, str]) -> str:
     return replacement
 
 
-__all__ = ["TaskPlanPatchValidator"]
+__all__ = ["TaskPlanPatchValidator", "validate_patch_active_siblings"]

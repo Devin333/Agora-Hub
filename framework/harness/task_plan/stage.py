@@ -273,12 +273,42 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             if operation.operation.value == "SKIP_PENDING_TASK"
             and operation.target_task_id is not None
         }
+        supersede_group = self._pending_replan_group(request, current)
         self.store.accept_patched_plan(
             patch,
             next_plan,
             skipped_task_ids=tuple(sorted(skip_ids)),
+            supersede_group=supersede_group,
         )
         return next_plan
+
+    def _pending_replan_group(
+        self,
+        request: TaskPlanStageRequest,
+        plan: ValidatedTaskPlan,
+    ) -> Mapping[str, Any] | None:
+        """Return the old group's pending snapshot for an atomic replacement."""
+
+        events = self.store.read_events(request.run_id, request.stage_id)
+        pending: list[Mapping[str, Any]] = []
+        for event in events:
+            if event.event_type != "TASK_GROUP_REPLAN_PENDING":
+                continue
+            group = event.payload.get("group")
+            if (
+                isinstance(group, Mapping)
+                and group.get("plan_id") == plan.plan_id
+                and group.get("plan_version") == plan.version
+            ):
+                pending.append(group)
+        if not pending:
+            return None
+        if len(pending) != 1:
+            raise HarnessValidationError(
+                "accepted plan has multiple pending replacement groups",
+                code="TASK_GROUP_REPLAN_INVALID",
+            )
+        return pending[0]
 
     def run(self, request: TaskPlanStageRequest) -> HarnessWorkerResult:
         plan: ValidatedTaskPlan | None = None
@@ -1282,6 +1312,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             )
             return
         if result.error_code not in retryable_codes:
+            self._mark_parallel_replan_pending(request, plan, result.error_code)
             while self._propagate_dependency_blocks(
                 request,
                 plan,
@@ -1298,6 +1329,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     "retryable_reason_codes": sorted(retryable_codes),
                 },
             )
+        self._mark_parallel_replan_pending(request, plan, "retry_exhausted")
         while self._propagate_dependency_blocks(
             request,
             plan,
@@ -1309,6 +1341,76 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             code="task_plan_retry_exhausted",
             details={"task_id": result.task_id},
         )
+
+    def _mark_parallel_replan_pending(
+        self,
+        request: TaskPlanStageRequest,
+        plan: ValidatedTaskPlan,
+        reason_code: str,
+    ) -> None:
+        """Durably close the settled wave before exposing replacement replan."""
+
+        history = self.store.read_events(request.run_id, request.stage_id)
+        if any(
+            event.event_type == "TASK_GROUP_REPLAN_PENDING"
+            and isinstance(event.payload.get("group"), Mapping)
+            and event.payload["group"].get("plan_id") == plan.plan_id
+            for event in history
+        ):
+            return
+        admitted = [
+            event.payload.get("group")
+            for event in history
+            if event.event_type == "TASK_GROUP_ADMITTED"
+            and isinstance(event.payload.get("group"), Mapping)
+            and event.payload["group"].get("plan_id") == plan.plan_id
+        ]
+        if len(admitted) != 1:
+            raise HarnessValidationError(
+                "settled replacement requires exactly one admitted dispatch group",
+                code="TASK_GROUP_REPLAN_INVALID",
+            )
+        group = DispatchGroup.from_dict(thaw_mapping(admitted[0]))
+        if group.state in {
+            DispatchGroupState.SUCCEEDED,
+            DispatchGroupState.FAILED,
+            DispatchGroupState.CANCELLED,
+            DispatchGroupState.INDETERMINATE,
+            DispatchGroupState.HALTED,
+            DispatchGroupState.SUPERSEDED,
+        }:
+            return
+        joining = group.transitioned(DispatchGroupState.JOINING)
+        pending = joining.transitioned(DispatchGroupState.REPLAN_PENDING)
+        sequence = self._next_sequence(request)
+        self.store.append_events((
+            TaskPlanEvent.for_plan(
+                "TASK_GROUP_JOIN_WAITING",
+                plan,
+                input_checksum=joining.group_checksum,
+                reason_code=reason_code,
+                payload={
+                    "group_id": joining.group_id,
+                    "group": joining.to_dict(),
+                    "observation": {"diagnostics": ["REPLAN_SETTLEMENT"]},
+                    "idempotency_key": joining.group_id,
+                },
+                sequence=sequence,
+            ),
+            TaskPlanEvent.for_plan(
+                "TASK_GROUP_REPLAN_PENDING",
+                plan,
+                input_checksum=pending.group_checksum,
+                reason_code=reason_code,
+                payload={
+                    "group_id": pending.group_id,
+                    "group": pending.to_dict(),
+                    "observation": {"diagnostics": ["REPLAN_PENDING"]},
+                    "idempotency_key": pending.group_id,
+                },
+                sequence=sequence + 1,
+            ),
+        ))
 
     @staticmethod
     def _parallel_runtime_requested(policy: Any, plan: ValidatedTaskPlan) -> bool:

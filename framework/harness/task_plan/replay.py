@@ -587,6 +587,7 @@ class TaskPlanReplayReducer:
         aggregate_branch_refs: tuple[Any, ...] = ()
         aggregate_projection_checksum: str | None = None
         accepted_patch: tuple[TaskPlanEvent, PlanPatch] | None = None
+        supersede_pending: TaskPlanEvent | None = None
         parallel_groups: dict[str, dict[str, Any]] = {}
         parallel_waves: dict[str, dict[str, Any]] = {}
         parallel_reservations: dict[str, dict[str, Any]] = {}
@@ -598,6 +599,11 @@ class TaskPlanReplayReducer:
         continuation_events: list[TaskPlanEvent] = []
 
         for event in ordered_events:
+            if supersede_pending is not None and event.event_type != "PLAN_PATCH_ACCEPTED":
+                raise HarnessValidationError(
+                    "TASK_GROUP_SUPERSEDED must be atomically adjacent to its accepted patch",
+                    code="task_plan_replay_replan_atomicity",
+                )
             if accepted_patch is not None and event.event_type != "PLAN_ACCEPTED":
                 raise HarnessValidationError(
                     "accepted TaskPlan patch is not followed by its new plan",
@@ -717,6 +723,16 @@ class TaskPlanReplayReducer:
                             code="task_plan_replay_patch_mismatch",
                         )
                     accepted_patch = (event, patch)
+                    if supersede_pending is not None:
+                        if (
+                            supersede_pending.plan_id != patch.base_plan_id
+                            or supersede_pending.plan_version != patch.base_plan_version
+                        ):
+                            raise HarnessValidationError(
+                                "superseded group does not belong to the accepted patch base plan",
+                                code="task_plan_replay_replan_atomicity",
+                            )
+                        supersede_pending = None
             elif event.event_type == "TASK_READY":
                 projection = _require_projection(projection, event)
                 task_plan = _task_plan_for_event(event, plans_by_version)
@@ -1026,6 +1042,13 @@ class TaskPlanReplayReducer:
                     continue
                 if event.event_type == "TASK_GROUP_ADMITTED":
                     validate_group_plan_binding(event.payload.get("group", {}), current_plan)
+                if event.event_type == "TASK_GROUP_SUPERSEDED":
+                    if supersede_pending is not None:
+                        raise HarnessValidationError(
+                            "parallel history contains consecutive supersede events",
+                            code="task_plan_replay_replan_atomicity",
+                        )
+                    supersede_pending = event
                 if event.event_type == "TASK_WAVE_ADMITTED":
                     before = TaskPlanBudgetLedger.from_snapshot(
                         projection.consumed_budget
@@ -1116,6 +1139,11 @@ class TaskPlanReplayReducer:
             raise HarnessValidationError(
                 "TaskPlan replay ends before the accepted patch plan",
                 code="task_plan_replay_patch_mismatch",
+            )
+        if supersede_pending is not None:
+            raise HarnessValidationError(
+                "TASK_GROUP_SUPERSEDED is missing its atomic accepted patch",
+                code="task_plan_replay_replan_atomicity",
             )
         active_result_keys = {
             (state.active_instance_id, state.attempts, projection.plan_version)
