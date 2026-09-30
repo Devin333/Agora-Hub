@@ -1526,6 +1526,17 @@ class DurableTaskPlanStore:
             raise TypeError("event must be TaskPlanEvent")
         _require_live_graph_only(event, "event")
         events = self.read_events(event.run_id, event.stage_id)
+        plan = self.plan(event.run_id, event.stage_id)
+        from framework.harness.runtime_contract import validate_task_plan_event_contract
+
+        validate_task_plan_event_contract(
+            event,
+            # Historical idempotent replays may belong to a superseded plan;
+            # their durable checksum/owner identity is still validated below,
+            # while current-plan binding applies only to a new append.
+            plan=plan if event.sequence > len(events) else None,
+            previous_events=events[: max(event.sequence - 1, 0)],
+        )
         if event.sequence <= len(events):
             existing = events[event.sequence - 1]
             if existing.event_checksum == event.event_checksum:
@@ -1540,14 +1551,6 @@ class DurableTaskPlanStore:
                 code="task_plan_sequence_conflict",
                 details={"expected": len(events) + 1, "actual": event.sequence},
             )
-        plan = self.plan(event.run_id, event.stage_id)
-        from framework.harness.runtime_contract import validate_task_plan_event_contract
-
-        validate_task_plan_event_contract(
-            event,
-            plan=plan,
-            previous_events=events,
-        )
         if plan is not None:
             _require_event_matches_plan(event, plan)
         _reject_uncoordinated_capacity_transition((event,), events)
@@ -1577,21 +1580,22 @@ class DurableTaskPlanStore:
         run_id = batch[0].run_id
         stage_id = batch[0].stage_id
         history = self.read_events(run_id, stage_id)
-        if _classify_atomic_event_batch_history(batch, history):
-            return tuple(event.event_checksum for event in batch)
-        _reject_uncoordinated_capacity_transition(batch, history)
-
         plan = self.plan(run_id, stage_id)
+        replayed = _classify_atomic_event_batch_history(batch, history)
         from framework.harness.runtime_contract import validate_task_plan_event_contract
 
         previous_events = history
         for event in batch:
             validate_task_plan_event_contract(
                 event,
-                plan=plan,
+                plan=None if replayed else plan,
                 previous_events=previous_events,
             )
             previous_events = (*previous_events, event)
+        if replayed:
+            return tuple(event.event_checksum for event in batch)
+        _reject_uncoordinated_capacity_transition(batch, history)
+
         if plan is not None:
             for event in batch:
                 _require_event_matches_plan(event, plan)
