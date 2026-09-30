@@ -75,6 +75,28 @@ class AgentLoopEventRecorder:
         if self._runtime_event_sink is not None:
             from framework.events.runtime.projection import RuntimeEventEmitter, RuntimeEventIdentity
 
+            runtime_source = "agent-loop"
+            runtime_refs: tuple[str, ...] = ()
+            runtime_reason_code = (
+                str(event.payload.get("stop_reason"))
+                if event.payload.get("stop_reason") is not None
+                else None
+            )
+            # ToolExecutor owns tool approval requests. AgentLoop owns the
+            # approval request created by control.request_human_review and
+            # control.escalate, which otherwise only remained in the local
+            # transcript because the canonical agent-loop map intentionally
+            # excludes approval facts.
+            if (
+                event_type is AgentLoopEventType.AGENT_WAITING_FOR_APPROVAL
+                and event.payload.get("approval_kind") != "tool_approval"
+            ):
+                runtime_source = "agent-loop-approval"
+                approval_id = event.payload.get("approval_id")
+                if isinstance(approval_id, str) and approval_id.strip():
+                    runtime_refs = (approval_id.strip(),)
+                runtime_reason_code = "approval_requested"
+
             RuntimeEventEmitter(
                 self._runtime_event_sink,
                 identity=RuntimeEventIdentity(
@@ -84,7 +106,7 @@ class AgentLoopEventRecorder:
                     node_instance_id=(self.execution_identity.node_instance_id if self.execution_identity else None),
                     attempt_id=(str(self.execution_identity.attempt) if self.execution_identity else None),
                 ),
-                source="agent-loop",
+                source=runtime_source,
                 stream_id=self.run_id,
             ).emit(
                 event_type.value,
@@ -93,11 +115,8 @@ class AgentLoopEventRecorder:
                     if event.payload.get("status") is not None
                     else None
                 ),
-                reason_code=(
-                    str(event.payload.get("stop_reason"))
-                    if event.payload.get("stop_reason") is not None
-                    else None
-                ),
+                reason_code=runtime_reason_code,
+                refs=runtime_refs,
                 metadata={
                     "agent_id": self.agent_id,
                     "iteration": iteration,

@@ -706,6 +706,12 @@ class RuntimeEventEmitter:
         "agent_blocked": RuntimeEventType.TURN_ABORTED,
         "agent_stalled": RuntimeEventType.TURN_ABORTED,
     }
+    # Human-review and escalation waits are approval facts owned by the
+    # AgentLoop boundary. Tool approvals are emitted by ToolExecutor and stay
+    # excluded here to avoid two producers for the same request.
+    _AGENT_LOOP_APPROVAL_TYPE_MAP = {
+        "agent_waiting_for_approval": RuntimeEventType.APPROVAL_REQUESTED,
+    }
     _CONTEXT_TYPE_MAP = {
         "context_compaction_planned": RuntimeEventType.CONTEXT_COMPACTION_PLANNED,
         "context_compaction_committed": RuntimeEventType.CONTEXT_COMPACTION_COMMITTED,
@@ -754,6 +760,7 @@ class RuntimeEventEmitter:
         resolved_source = source or self._source
         source_type_map = {
             "agent-loop": self._AGENT_LOOP_TYPE_MAP,
+            "agent-loop-approval": self._AGENT_LOOP_APPROVAL_TYPE_MAP,
             "context-compaction-runtime": self._CONTEXT_TYPE_MAP,
             "worker-heartbeat": self._WORKER_TYPE_MAP,
         }.get(resolved_source)
@@ -781,7 +788,7 @@ class RuntimeEventEmitter:
         resolved_stream = stream_id or self._stream_id or resolved_identity.run_id
         if canonical_type in _REASON_REQUIRED_EVENT_TYPES and reason_code is None:
             reason_code = canonical_type.value
-        if resolved_source == "agent-loop":
+        if resolved_source in {"agent-loop", "agent-loop-approval"}:
             if resolved_identity.graph_identity is None:
                 raise RuntimeEventIdentityConflict(
                     "AgentLoop runtime events require Graph execution identity"

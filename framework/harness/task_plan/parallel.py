@@ -1050,6 +1050,13 @@ class _GroupSession:
     wave_dispatched_at: dict[str, float] = field(default_factory=dict)
     dispatch_lock: Any = field(default_factory=Lock)
     terminal_diagnostics: tuple[str, ...] = ()
+    # A terminal event is prepared before the in-memory transition is
+    # committed. If the durable sink writes and loses its acknowledgement, a
+    # retry must resend the exact same payload and only then expose terminal
+    # state to callers.
+    pending_terminal_event: dict[str, Any] | None = None
+    pending_terminal_group: DispatchGroup | None = None
+    pending_terminal_diagnostics: tuple[str, ...] = ()
 
 
 @dataclass
@@ -2934,6 +2941,28 @@ class ParallelAgentCoordinator:
             if missing:
                 result = self._result_for_session(session, request, limits=limits, diagnostics=diagnostics)
                 return result
+            if session.pending_terminal_event is not None:
+                pending_group = session.pending_terminal_group
+                if pending_group is None:
+                    raise HarnessValidationError(
+                        "pending terminal event has no target group",
+                        code="TASK_GROUP_TERMINAL_EVENT_INVALID",
+                    )
+                pending_event = dict(session.pending_terminal_event)
+                pending_type = pending_event.pop("event_type")
+                self._emit(pending_type, event_sink=event_sink, **pending_event)
+                session.group = pending_group
+                session.terminal_diagnostics = session.pending_terminal_diagnostics
+                session.pending_terminal_event = None
+                session.pending_terminal_group = None
+                session.pending_terminal_diagnostics = ()
+                return self._result_for_session(
+                    session,
+                    request,
+                    limits=limits,
+                    diagnostics=session.terminal_diagnostics,
+                )
+            rollback_group = session.group
             if state in {
                 DispatchGroupState.SUCCEEDED,
                 DispatchGroupState.FAILED,
@@ -2943,7 +2972,9 @@ class ParallelAgentCoordinator:
                 DispatchGroupState.REPLAN_PENDING,
             }:
                 session.group = session.group.transitioned(DispatchGroupState.JOINING)
-            session.group = session.group.transitioned(state)
+            previous_diagnostics = session.terminal_diagnostics
+            terminal_group = session.group.transitioned(state)
+            session.group = terminal_group
             result = self._result_for_session(session, request, limits=limits, diagnostics=diagnostics)
             if state is DispatchGroupState.SUCCEEDED:
                 event_type = "TASK_GROUP_JOINED"
@@ -2964,15 +2995,33 @@ class ParallelAgentCoordinator:
                 DispatchGroupState.SUPERSEDED,
             }:
                 return result
+            terminal_event = {
+                "event_type": event_type,
+                "group": session.group.to_dict(),
+                "observation": thaw_mapping(result.projected_observation),
+                "join_duration_ms": _elapsed_ms(session.join_started_at),
+                "group_duration_ms": _elapsed_ms(session.started_at),
+                "idempotency_key": session.group.group_id,
+            }
+            session.pending_terminal_event = terminal_event
+            session.pending_terminal_group = terminal_group
+            session.pending_terminal_diagnostics = diagnostics
+            session.group = rollback_group
+            session.terminal_diagnostics = previous_diagnostics
             self._emit(
-                event_type,
+                terminal_event["event_type"],
                 event_sink=event_sink,
-                group=session.group.to_dict(),
-                observation=thaw_mapping(result.projected_observation),
-                join_duration_ms=_elapsed_ms(session.join_started_at),
-                group_duration_ms=_elapsed_ms(session.started_at),
-                idempotency_key=session.group.group_id,
+                **{
+                    key: value
+                    for key, value in terminal_event.items()
+                    if key != "event_type"
+                },
             )
+            session.group = terminal_group
+            session.terminal_diagnostics = diagnostics
+            session.pending_terminal_event = None
+            session.pending_terminal_group = None
+            session.pending_terminal_diagnostics = ()
             return result
 
     def sync_task_terminals(

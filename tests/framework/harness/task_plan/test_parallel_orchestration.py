@@ -502,6 +502,48 @@ def test_late_durable_sink_replays_group_admission_before_wave_dispatch() -> Non
     assert coordinator._sessions[admitted.group_id].admission_recorded is True
 
 
+def test_join_terminal_event_ack_loss_keeps_state_pending_and_replays_stable_payload() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = replace(_request(plan), serial_fallback=True)
+    events: list[dict[str, object]] = []
+    fail_join_ack = True
+
+    def append(event):
+        nonlocal fail_join_ack
+        copied = dict(event)
+        events.append(copied)
+        if copied["event_type"] == "TASK_GROUP_JOINED" and fail_join_ack:
+            fail_join_ack = False
+            raise RuntimeError("terminal event acknowledgement lost")
+
+    sink = ParallelEventSink(append, lambda _events: None)
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+
+    with pytest.raises(RuntimeError, match="acknowledgement lost"):
+        coordinator.dispatch(
+            request,
+            lambda instance: _result(plan, instance),
+            event_sink=sink,
+        )
+
+    group_id = coordinator._group_definition(request).group_id
+    session = coordinator._sessions[group_id]
+    assert session.group.state is not DispatchGroupState.SUCCEEDED
+    assert session.pending_terminal_event is not None
+
+    resumed = coordinator.join(request, event_sink=sink)
+
+    assert resumed.succeeded is True
+    assert coordinator._sessions[group_id].group.state is DispatchGroupState.SUCCEEDED
+    joined = [event for event in events if event["event_type"] == "TASK_GROUP_JOINED"]
+    assert len(joined) == 2
+    assert joined[0] == joined[1]
+    assert coordinator._sessions[group_id].pending_terminal_event is None
+
+
 def test_concurrent_late_sink_replay_has_one_admission_owner() -> None:
     plan = _accepted_parallel_plan(("task-1",))
     request = replace(_request(plan), serial_fallback=True)

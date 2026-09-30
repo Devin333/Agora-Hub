@@ -4,6 +4,7 @@ from framework.agent.loop.events import AgentLoopEventRecorder
 from framework.agent.models import AgentLoopEventType
 from framework.agent.models.trace import AgentLoopTrace
 from framework.events import TraceContext, is_valid_span_id, is_valid_trace_id
+from framework.events.runtime.projection import RuntimeEventProjection, RuntimeEventType
 from framework.shared import GraphExecutionIdentity
 
 
@@ -32,6 +33,72 @@ def test_agent_loop_event_recorder_outputs_trace_fields() -> None:
     assert is_valid_span_id(event["span_id"])
     assert event["parent_span_id"] == trace.span_id
     assert event["agent_id"] == "agent-1"
+
+
+def test_agent_loop_human_review_wait_is_projected_as_canonical_approval_request() -> None:
+    identity = GraphExecutionIdentity(
+        run_id="run-approval",
+        graph_id="research.graph",
+        graph_version="1",
+        graph_ref="research.graph@1",
+        graph_checksum="sha256:" + "a" * 64,
+        node_id="analyze",
+        node_instance_id="analyze:1",
+        activity_id="activity-1",
+        attempt=1,
+    )
+    projection = RuntimeEventProjection()
+    recorder = AgentLoopEventRecorder(
+        agent_id="agent-1",
+        execution_identity=identity,
+        runtime_event_sink=projection,
+    )
+
+    recorder.waiting_for_approval(
+        iteration=2,
+        stop_reason="tool_approval_required",
+        approval_id="approval-human-1",
+        approval_kind="human_review",
+        tool_name="control.request_human_review",
+        control_action="request_human_review",
+    )
+
+    events = projection.store.all_events(stream_id=identity.run_id)
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type is RuntimeEventType.APPROVAL_REQUESTED
+    assert event.reason_code == "approval_requested"
+    assert event.refs == ("approval-human-1",)
+    assert event.identity.graph_identity == identity
+
+
+def test_agent_loop_tool_approval_wait_is_not_duplicated_by_agent_loop_projection() -> None:
+    identity = GraphExecutionIdentity(
+        run_id="run-tool-approval",
+        graph_id="research.graph",
+        graph_version="1",
+        graph_ref="research.graph@1",
+        graph_checksum="sha256:" + "b" * 64,
+        node_id="analyze",
+        node_instance_id="analyze:1",
+        activity_id="activity-1",
+        attempt=1,
+    )
+    projection = RuntimeEventProjection()
+    recorder = AgentLoopEventRecorder(
+        agent_id="agent-1",
+        execution_identity=identity,
+        runtime_event_sink=projection,
+    )
+
+    recorder.waiting_for_approval(
+        iteration=2,
+        stop_reason="tool_approval_required",
+        approval_id="approval-tool-1",
+        approval_kind="tool_approval",
+    )
+
+    assert projection.store.all_events(stream_id=identity.run_id) == ()
 
 
 def test_agent_loop_trace_default_iteration_ids_are_w3c_compatible() -> None:
