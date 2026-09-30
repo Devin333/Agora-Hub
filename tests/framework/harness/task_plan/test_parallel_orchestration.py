@@ -475,6 +475,76 @@ def test_group_admission_identity_ignores_live_capacity_availability() -> None:
     assert repeated.admission_policy_checksum == admitted.admission_policy_checksum
 
 
+def test_late_durable_sink_replays_group_admission_before_wave_dispatch() -> None:
+    """An early in-memory admission must not hide the durable group fact."""
+
+    plan = _accepted_parallel_plan(("task-1",))
+    request = replace(_request(plan), serial_fallback=True)
+    events: list[dict[str, object]] = []
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+
+    # This is a valid read/retry path, but it cannot publish the group fact.
+    admitted = coordinator.create_group(request)
+    assert coordinator._sessions[admitted.group_id].admission_recorded is False
+
+    dispatched = coordinator.dispatch(
+        request,
+        lambda instance: _result(plan, instance),
+        event_sink=ParallelEventSink(events.append, events.extend),
+    )
+
+    assert dispatched.succeeded is True
+    assert [event["event_type"] for event in events].count("TASK_GROUP_ADMITTED") == 1
+    assert events[0]["event_type"] == "TASK_GROUP_ADMITTED"
+    assert coordinator._sessions[admitted.group_id].admission_recorded is True
+
+
+def test_concurrent_late_sink_replay_has_one_admission_owner() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = replace(_request(plan), serial_fallback=True)
+    coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+    admitted = coordinator.create_group(request)
+    events: list[dict[str, object]] = []
+    append_started = Event()
+    release_append = Event()
+
+    def append(event):
+        append_started.set()
+        assert release_append.wait(timeout=2)
+        events.append(dict(event))
+
+    sink = ParallelEventSink(append, lambda _events: None)
+    results: list[DispatchGroup] = []
+    errors: list[BaseException] = []
+
+    def replay() -> None:
+        try:
+            results.append(coordinator.create_group(request, event_sink=sink))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    first = Thread(target=replay)
+    second = Thread(target=replay)
+    first.start()
+    assert append_started.wait(timeout=2)
+    second.start()
+    sleep(0.05)
+    assert second.is_alive()
+    release_append.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert results == [admitted, admitted]
+    assert [event["event_type"] for event in events] == ["TASK_GROUP_ADMITTED"]
+
+
 def _restore_snapshots(plan, request) -> tuple[DispatchGroup, tuple[DispatchWave, ...]]:
     definition = ParallelAgentCoordinator(
         max_workers=2,

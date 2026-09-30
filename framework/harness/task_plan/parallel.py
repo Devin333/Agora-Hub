@@ -1026,6 +1026,8 @@ class ParallelDispatchResult:
 class _GroupSession:
     group: DispatchGroup
     request: ParallelDispatchRequest
+    admission_recorded: bool = False
+    admission_effective_parallelism: int | None = None
     waves: list[DispatchWave] = field(default_factory=list)
     results: dict[str, TaskResultRecord] = field(default_factory=dict)
     attempt_history: dict[str, TaskAttemptHistoryRecord] = field(default_factory=dict)
@@ -1451,6 +1453,7 @@ class ParallelAgentCoordinator:
         _require_live_execution_budget(request.plan)
         group = self._group_definition(request)
         validate_parallel_dispatch_contract(request, group)
+        replay_admission = False
         with self._lock:
             session = self._sessions.get(group.group_id)
             if session is not None:
@@ -1460,9 +1463,27 @@ class ParallelAgentCoordinator:
                         "dispatch group identity conflicts with immutable admission",
                         code="TASK_GROUP_ADMISSION_CONFLICT",
                     )
-                return session.group
+                # A caller may have created an in-memory session before a
+                # durable event sink became available.  Do not let that
+                # transient admission suppress the canonical group fact on a
+                # later retry; the wave admission depends on this snapshot
+                # for offline replay.
+                replay_admission = (
+                    not session.admission_recorded
+                    and (event_sink is not None or self.event_sink is not None)
+                )
+                result_group = session.group
+                if not replay_admission:
+                    return result_group
             pending = self._pending_admissions.get(group.group_id)
-            if pending is None:
+            if session is not None and replay_admission:
+                if pending is None:
+                    pending = _PendingGroupAdmission(group=result_group)
+                    self._pending_admissions[group.group_id] = pending
+                    admission_owner = True
+                else:
+                    admission_owner = False
+            elif pending is None:
                 pending = _PendingGroupAdmission(group=group)
                 self._pending_admissions[group.group_id] = pending
                 admission_owner = True
@@ -1475,6 +1496,57 @@ class ParallelAgentCoordinator:
                     )
                 group = pending.group
                 admission_owner = False
+
+        if replay_admission and not admission_owner:
+            if pending is None or not pending.completed.wait(timeout=request.max_group_runtime_seconds):
+                raise HarnessValidationError(
+                    "group admission replay wait exceeded its bound",
+                    code="TASK_GROUP_ADMISSION_TIMEOUT",
+                )
+            if pending.failure is not None:
+                raise pending.failure
+            with self._lock:
+                current = self._sessions.get(result_group.group_id)
+                if current is None or not current.admission_recorded:
+                    raise HarnessValidationError(
+                        "group admission replay completed without a durable session",
+                        code="TASK_GROUP_ADMISSION_CONFLICT",
+                    )
+                return current.group
+
+        if replay_admission:
+            effective_parallelism = result_group.max_parallelism
+            with self._lock:
+                current = self._sessions.get(result_group.group_id)
+                if current is not None and current.admission_effective_parallelism is not None:
+                    effective_parallelism = current.admission_effective_parallelism
+            try:
+                self._emit(
+                    "TASK_GROUP_ADMITTED",
+                    event_sink=event_sink,
+                    group=result_group.to_dict(),
+                    requested_parallelism=request.requested_parallelism
+                    or result_group.max_parallelism,
+                    effective_parallelism=effective_parallelism,
+                    idempotency_key=result_group.group_id,
+                )
+            except BaseException as exc:
+                with self._lock:
+                    pending.failure = exc
+                    self._pending_admissions.pop(result_group.group_id, None)
+                    pending.completed.set()
+                raise
+            with self._lock:
+                current = self._sessions.get(result_group.group_id)
+                if current is None or current.group.group_checksum != result_group.group_checksum:
+                    raise HarnessValidationError(
+                        "dispatch group admission changed during durable replay",
+                        code="TASK_GROUP_ADMISSION_CONFLICT",
+                    )
+                current.admission_recorded = True
+                self._pending_admissions.pop(result_group.group_id, None)
+                pending.completed.set()
+                return current.group
 
         if not admission_owner:
             if not pending.completed.wait(timeout=request.max_group_runtime_seconds):
@@ -1513,7 +1585,12 @@ class ParallelAgentCoordinator:
             raise
 
         with self._lock:
-            self._sessions[group.group_id] = _GroupSession(group=group, request=request)
+            self._sessions[group.group_id] = _GroupSession(
+                group=group,
+                request=request,
+                admission_recorded=(event_sink is not None or self.event_sink is not None),
+                admission_effective_parallelism=admitted_parallelism,
+            )
             self._pending_admissions.pop(group.group_id, None)
             pending.completed.set()
         return group
@@ -1560,7 +1637,15 @@ class ParallelAgentCoordinator:
                 return existing.group
             if group.group_id in self._pending_admissions:
                 raise HarnessValidationError("group admission is still being committed", code="TASK_GROUP_DISPATCH_BUSY")
-            session = _GroupSession(group=group, request=request)
+            session = _GroupSession(
+                group=group,
+                request=request,
+                # A restored group originates from a verified durable
+                # TASK_GROUP_ADMITTED snapshot, even when this coordinator
+                # instance has no live sink yet.
+                admission_recorded=True,
+                admission_effective_parallelism=group.max_parallelism,
+            )
             session.waves = list(ordered)
             for wave in ordered:
                 instances = []
@@ -2165,7 +2250,12 @@ class ParallelAgentCoordinator:
                 request, group, session, intents, admitted_waves,
             )
             if session is None:
-                session = _GroupSession(group=group, request=request)
+                session = _GroupSession(
+                    group=group,
+                    request=request,
+                    admission_recorded=admitted_group is not None,
+                    admission_effective_parallelism=group.max_parallelism,
+                )
                 self._sessions[group.group_id] = session
             if not session.dispatch_lock.acquire(blocking=False):
                 raise HarnessValidationError(
