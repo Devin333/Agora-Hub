@@ -431,6 +431,84 @@ def validate_task_result_owner_contract(result: Any) -> None:
     _validate_task_result_owner_contract(result, runtime_contract_binding())
 
 
+def validate_task_plan_event_contract(
+    event: Any,
+    *,
+    plan: Any | None = None,
+    previous_events: Any = (),
+) -> None:
+    """Validate a TaskPlan event before it crosses a durable append boundary."""
+
+    binding = runtime_contract_binding()
+    from framework.harness.task_plan.models import ValidatedTaskPlan
+    from framework.harness.task_plan.store import (
+        TASK_PLAN_EVENT_SCHEMAS,
+        TaskPlanEvent,
+    )
+
+    if (
+        type(event) is not TaskPlanEvent
+        or event.schema_version != binding.owners["task_plan_event"]
+        or event.schema_version not in TASK_PLAN_EVENT_SCHEMAS
+    ):
+        raise HarnessValidationError(
+            "TaskPlan event does not use the canonical owner type and schema",
+            code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+        )
+    try:
+        canonical = TaskPlanEvent.from_dict(event.to_dict())
+    except (HarnessValidationError, TypeError, ValueError, AttributeError, KeyError) as exc:
+        raise HarnessValidationError(
+            "TaskPlan event checksum differs from canonical content",
+            code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+        ) from exc
+    if canonical != event:
+        raise HarnessValidationError(
+            "TaskPlan event differs from its canonical owner model",
+            code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+        )
+
+    if plan is not None:
+        if type(plan) is not ValidatedTaskPlan:
+            raise HarnessValidationError(
+                "TaskPlan event binding requires a canonical validated plan",
+                code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+            )
+        if not event.matches_contract_identity(plan):
+            raise HarnessValidationError(
+                "TaskPlan event identity does not match the accepted plan",
+                code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+            )
+        if event.plan_id is not None and (
+            event.plan_id != plan.plan_id or event.plan_version != plan.version
+        ):
+            raise HarnessValidationError(
+                "TaskPlan event plan version does not match the accepted plan",
+                code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+            )
+
+    previous = tuple(previous_events)
+    if previous:
+        for prior in previous:
+            if type(prior) is not TaskPlanEvent:
+                raise HarnessValidationError(
+                    "TaskPlan event history contains a non-canonical owner",
+                    code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+                )
+        prior = previous[-1]
+        if (prior.run_id, prior.stage_id) != (event.run_id, event.stage_id):
+            raise HarnessValidationError(
+                "TaskPlan event append crosses its durable scope",
+                code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+            )
+        if event.sequence != prior.sequence + 1:
+            raise HarnessValidationError(
+                "TaskPlan event sequence is not contiguous at append",
+                code="RUNTIME_CONTRACT_TRANSITION_INVALID",
+                details={"expected": prior.sequence + 1, "actual": event.sequence},
+            )
+
+
 def validate_task_result_contract(
     plan: Any,
     projection: Any,
@@ -680,6 +758,7 @@ __all__ = [
     "runtime_contract_binding",
     "validate_history_read_contract",
     "validate_parallel_dispatch_contract",
+    "validate_task_plan_event_contract",
     "validate_task_result_contract",
     "validate_task_result_owner_contract",
 ]

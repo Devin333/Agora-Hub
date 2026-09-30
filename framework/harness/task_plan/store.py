@@ -1842,6 +1842,13 @@ class InMemoryTaskPlanStore:
             if event.sequence != current:
                 raise HarnessValidationError("event sequence is not monotonic", code="task_plan_sequence_conflict", details={"expected": current, "actual": event.sequence})
             plan = self._current_plan(event.run_id, event.stage_id)
+            from framework.harness.runtime_contract import validate_task_plan_event_contract
+
+            validate_task_plan_event_contract(
+                event,
+                plan=plan,
+                previous_events=self._events.get((event.run_id, event.stage_id), ()),
+            )
             if plan is not None:
                 _require_event_matches_plan(event, plan)
             history = tuple(self._events.get((event.run_id, event.stage_id), ()))
@@ -1876,6 +1883,16 @@ class InMemoryTaskPlanStore:
             _reject_uncoordinated_capacity_transition(batch, history)
 
             plan = self._current_plan(run_id, stage_id)
+            from framework.harness.runtime_contract import validate_task_plan_event_contract
+
+            previous_events = history
+            for event in batch:
+                validate_task_plan_event_contract(
+                    event,
+                    plan=plan,
+                    previous_events=previous_events,
+                )
+                previous_events = (*previous_events, event)
             if plan is not None:
                 for event in batch:
                     _require_event_matches_plan(event, plan)

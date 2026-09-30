@@ -61,11 +61,17 @@ from framework.harness.runtime_contract import (
     runtime_contract_binding,
     validate_history_read_contract,
     validate_parallel_dispatch_contract,
+    validate_task_plan_event_contract,
     validate_task_result_owner_contract,
 )
 from framework.harness.task_plan.parallel import PARENT_OBSERVATION_SCHEMA, ParallelAgentCoordinator
 from framework.harness.task_plan.scheduler import task_instance_for_attempt
-from framework.harness.task_plan.store import TASK_PLAN_RESULT_SCHEMA, TaskPlanEvent, TaskResultRecord
+from framework.harness.task_plan.store import (
+    TASK_PLAN_RESULT_SCHEMA,
+    InMemoryTaskPlanStore,
+    TaskPlanEvent,
+    TaskResultRecord,
+)
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool.models.result_envelope import (
     TOOL_RESULT_ENVELOPE_SCHEMA,
@@ -426,6 +432,41 @@ def test_dispatch_contract_rejects_group_before_admission_transition() -> None:
 def test_history_contract_rejects_unknown_event_schema_before_replay() -> None:
     with pytest.raises(HarnessValidationError, match="unsupported event"):
         validate_history_read_contract((), (type("Event", (), {"schema_version": "newsroom.invalid/v1"})(),), ())
+
+
+def test_task_plan_event_contract_rejects_tampered_checksum_before_append() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    event = TaskPlanEvent.for_plan("PLAN_ACCEPTED", plan, sequence=1)
+    object.__setattr__(event, "event_checksum", "sha256:" + "f" * 64)
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_task_plan_event_contract(event, plan=plan)
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+
+
+def test_task_plan_store_routes_event_writes_through_runtime_contract() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    event = TaskPlanEvent.for_plan("PLAN_ACCEPTED", plan, sequence=1)
+    object.__setattr__(event, "event_checksum", "sha256:" + "f" * 64)
+    store = InMemoryTaskPlanStore()
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        store.append_event(event)
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+    assert store.read_events(plan.run_id, plan.stage_id) == ()
+
+
+def test_task_plan_event_contract_rejects_noncontiguous_append() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    first = TaskPlanEvent.for_plan("PLAN_ACCEPTED", plan, sequence=1)
+    second = TaskPlanEvent.for_plan("TASK_PLAN_VERIFIED", plan, sequence=3)
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_task_plan_event_contract(second, plan=plan, previous_events=(first,))
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_TRANSITION_INVALID"
 
 
 def test_history_contract_rejects_unknown_task_result_schema_before_replay() -> None:
