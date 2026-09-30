@@ -62,6 +62,7 @@ from framework.events.runtime.history import (
     DeterministicHistoryRecord,
 )
 from framework.events.runtime.publisher import EventPublishRequest
+from framework.events.runtime.projection import CanonicalRuntimeEventPublisher
 from framework.events.schema.security import SecurityClassification
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.event import (
@@ -796,11 +797,21 @@ class DurableHarnessEventPort:
         )
         self._activity_handles: dict[str, ActivityRecordingHandle] = {}
         self._adapter = adapter or HarnessEventCanonicalAdapter()
+        self._runtime_event_publisher = CanonicalRuntimeEventPublisher(
+            runtime,
+            tenant_id=self._adapter.tenant_id,
+        )
         self._graph_event_writer: GraphEventContextWriterPort = (
             DurableGraphEventContextWriter(runtime)
         )
         self.events: list[HarnessEvent] = []
         self.event_log_entries: list[HarnessEventLogEntry] = []
+
+    @property
+    def runtime_event_publisher(self) -> CanonicalRuntimeEventPublisher:
+        """Return the canonical runtime publisher for this durable tenant scope."""
+
+        return self._runtime_event_publisher
 
     def record(self, event: HarnessEvent) -> HarnessEvent:
         if event.event_type is HarnessEventType.GRAPH_PHASE_TRANSITION_RECORDED:

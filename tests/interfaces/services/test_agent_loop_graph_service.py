@@ -22,6 +22,7 @@ from framework.agent.models import (
 )
 from framework.events.canonical import checksum_for
 from framework.events.runtime.publisher import EventRuntime
+from framework.events.runtime.models import StreamReadRequest
 from framework.events.schema import EventSecurityProjector, default_event_schema_catalog
 from framework.harness.agent_loop import (
     AGENT_LOOP_GRAPH_ACTIVITY_TASK_SCHEMA,
@@ -384,6 +385,8 @@ def test_runtime_composition_installs_agent_loop_into_the_graph_dispatcher(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runtime-composition"
+    event_port = _durable_event_port(root)
+    runner = _runner(root, "runtime-topic")
     side_effect_store = InMemoryHarnessSideEffectStore()
     side_effect_registry = HarnessSideEffectRegistry(
         (
@@ -398,11 +401,11 @@ def test_runtime_composition_installs_agent_loop_into_the_graph_dispatcher(
         )
     )
     runtime = build_agent_loop_graph_runtime_composition(
-        agent_runner=_runner(root, "runtime-topic"),
+        agent_runner=runner,
         agent=_agent(),
         artifact_port=FilesystemHarnessArtifactPort(root),
         node_output_resource=SQLiteHarnessNodeOutputResource(root / "node.sqlite3"),
-        event_port=_durable_event_port(root),
+        event_port=event_port,
         worker_ref=WORKER_REF,
         activity_ref=ACTIVITY_REF,
         side_effect_registry=side_effect_registry,
@@ -424,6 +427,42 @@ def test_runtime_composition_installs_agent_loop_into_the_graph_dispatcher(
         event.event_type.value == "graph_worker_result_recorded"
         for event in runtime.control_plane.event_port.read_history(run_spec.run_id)
     )
+    assert runtime.runtime_event_publisher is event_port.runtime_event_publisher
+    assert runner.runtime_event_sink is runtime.runtime_event_publisher
+    assert runtime.runtime_event_publisher.tenant_id == "production"
+    assert runtime.runtime_event_publisher.runtime is not None
+    assert runtime.runtime_event_publisher.is_durable is True
+    stored = SQLiteEventStore(root / "events.sqlite3").read_stream(
+        StreamReadRequest(stream_id=run_spec.run_id, tenant_id="production")
+    ).events
+    assert any(
+        event.event_type in {"turn_started", "turn_stopped"}
+        for event in stored
+    ), [event.to_dict() for event in stored]
+    assert all(event.tenant_id == "production" for event in stored)
+    assert all(event.record_checksum.startswith("sha256:") for event in stored)
+    assert runtime.runtime_event_publisher is runtime.control_plane.event_port.runtime_event_publisher
+    assert runtime.runtime_event_publisher is not None
+
+
+def test_runtime_composition_rejects_durable_port_without_canonical_runtime_publisher(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "runtime-missing-runtime-publisher"
+
+    event_port = InMemoryHarnessEventPort()
+    event_port.is_durable = True
+
+    with pytest.raises(ValueError, match="canonical durable runtime event publisher"):
+        build_agent_loop_graph_runtime_composition(
+            agent_runner=_runner(root, "runtime-topic"),
+            agent=_agent(),
+            artifact_port=FilesystemHarnessArtifactPort(root),
+            node_output_resource=SQLiteHarnessNodeOutputResource(root / "node.sqlite3"),
+            event_port=event_port,
+            worker_ref=WORKER_REF,
+            activity_ref=ACTIVITY_REF,
+        )
 
 
 def test_runtime_composition_binds_shared_execution_registry(

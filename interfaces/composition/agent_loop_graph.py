@@ -61,6 +61,7 @@ from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
 from framework.shared.attempts import AttemptSupervisor
 from framework.shared.time import utc_now
 from framework.agent.models import AgentSpec
+from framework.events.runtime.projection import CanonicalRuntimeEventPublisher
 from framework.execution_environment.composition import RuntimeExecutionComposition
 from framework.execution_environment.errors import RuntimeCompositionDriftError
 from framework.tool import ToolExecutor, ToolRegistry
@@ -317,6 +318,13 @@ class AgentLoopGraphRuntimeComposition:
                 "AgentLoop Graph production composition requires a durable "
                 "HarnessTransitionPort; InMemoryHarnessEventPort is test-only"
             )
+        runtime_event_publisher = getattr(event_port, "runtime_event_publisher", None)
+        if not isinstance(runtime_event_publisher, CanonicalRuntimeEventPublisher):
+            raise ValueError(
+                "AgentLoop Graph production composition requires the canonical "
+                "durable runtime event publisher"
+            )
+        agent_runner.bind_runtime_event_sink(runtime_event_publisher)
         if runtime_execution_composition is not None:
             if not isinstance(runtime_execution_composition, RuntimeExecutionComposition):
                 raise TypeError(
@@ -415,6 +423,7 @@ class AgentLoopGraphRuntimeComposition:
         self._runtime_execution_composition = runtime_execution_composition
         self._orchestration_binding = orchestration_binding
         self._orchestration_feature = selected_feature
+        self._runtime_event_publisher = runtime_event_publisher
 
     @property
     def binding_bundle(self) -> AgentLoopGraphActivityBindingBundle:
@@ -427,6 +436,12 @@ class AgentLoopGraphRuntimeComposition:
     @property
     def runtime_execution_composition(self) -> RuntimeExecutionComposition | None:
         return self._runtime_execution_composition
+
+    @property
+    def runtime_event_publisher(self) -> Any:
+        """Return the canonical durable runtime event publisher selected at composition."""
+
+        return self._runtime_event_publisher
 
     @property
     def orchestration_binding(self) -> AgentOrchestrationBinding:

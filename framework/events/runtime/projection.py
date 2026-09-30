@@ -895,6 +895,10 @@ def runtime_event_publish_request(
 class CanonicalRuntimeEventPublisher:
     """Adapter that appends runtime facts through the existing EventRuntime."""
 
+    # Composition roots use this marker to reject callback-only or in-memory
+    # sinks. The publisher itself owns no second event store.
+    is_durable = True
+
     def __init__(self, runtime: Any, *, tenant_id: str | None = None) -> None:
         if not hasattr(runtime, "publish"):
             raise TypeError("runtime must expose the canonical publish port")
@@ -906,6 +910,12 @@ class CanonicalRuntimeEventPublisher:
         """Return the immutable durable event scope selected at composition."""
 
         return self._tenant_id
+
+    @property
+    def runtime(self) -> Any:
+        """Return the canonical EventRuntime owned by the composition root."""
+
+        return self._runtime
 
     def publish(self, event: RuntimeEventEnvelope) -> Any:
         return self._runtime.publish(

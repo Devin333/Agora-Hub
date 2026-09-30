@@ -68,6 +68,30 @@ class AgentRunner:
         return self._execution_environment
 
     @property
+    def runtime_event_sink(self) -> Any | None:
+        """Return the sink shared by AgentLoop and its ToolExecutor."""
+
+        return self._runtime_event_sink
+
+    def bind_runtime_event_sink(self, sink: Any) -> None:
+        """Bind one durable canonical sink before Graph execution starts."""
+
+        if sink is None or getattr(sink, "is_durable", False) is not True:
+            raise ValueError(
+                "AgentRunner production composition requires a durable canonical runtime event publisher"
+            )
+        existing = self._runtime_event_sink
+        if existing is not None and existing is not sink:
+            same_owner = (
+                getattr(existing, "is_durable", False) is True
+                and getattr(existing, "runtime", None) is getattr(sink, "runtime", None)
+                and getattr(existing, "tenant_id", None) == getattr(sink, "tenant_id", None)
+            )
+            if not same_owner:
+                raise ValueError("AgentRunner runtime event sink is already bound")
+        self._runtime_event_sink = sink
+
+    @property
     def orchestration_enabled(self) -> bool:
         """Whether the Harness-owned multi-child capability is enabled."""
 
