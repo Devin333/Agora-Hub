@@ -1541,6 +1541,13 @@ class DurableTaskPlanStore:
                 details={"expected": len(events) + 1, "actual": event.sequence},
             )
         plan = self.plan(event.run_id, event.stage_id)
+        from framework.harness.runtime_contract import validate_task_plan_event_contract
+
+        validate_task_plan_event_contract(
+            event,
+            plan=plan,
+            previous_events=events,
+        )
         if plan is not None:
             _require_event_matches_plan(event, plan)
         _reject_uncoordinated_capacity_transition((event,), events)
@@ -1575,6 +1582,16 @@ class DurableTaskPlanStore:
         _reject_uncoordinated_capacity_transition(batch, history)
 
         plan = self.plan(run_id, stage_id)
+        from framework.harness.runtime_contract import validate_task_plan_event_contract
+
+        previous_events = history
+        for event in batch:
+            validate_task_plan_event_contract(
+                event,
+                plan=plan,
+                previous_events=previous_events,
+            )
+            previous_events = (*previous_events, event)
         if plan is not None:
             for event in batch:
                 _require_event_matches_plan(event, plan)

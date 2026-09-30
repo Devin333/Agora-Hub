@@ -1905,6 +1905,28 @@ def test_planning_receipts_round_trip_through_canonical_event_store():
     assert projection.last_sequence == 4
 
 
+def test_durable_task_plan_store_rejects_tampered_event_before_publish():
+    artifacts = _ArtifactStore()
+    event_store = _EventStore()
+    store = _store(event_store, artifacts)
+    candidate, _ = _graph_only_candidate_and_plan()
+    from framework.harness.task_plan.store import _task_plan_event_identity_kwargs
+
+    event = TaskPlanEvent(
+        "PLAN_BUILD_INTENT",
+        **_task_plan_event_identity_kwargs(candidate),
+        payload={},
+        sequence=1,
+    )
+    object.__setattr__(event, "event_checksum", "sha256:" + "f" * 64)
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        store.append_event(event)
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_CHECKSUM_MISMATCH"
+    assert event_store._events == []
+
+
 def test_graph_only_patch_is_bound_to_its_base_plan_and_replays_after_replan():
     artifacts = _ArtifactStore()
     event_store = _EventStore()
