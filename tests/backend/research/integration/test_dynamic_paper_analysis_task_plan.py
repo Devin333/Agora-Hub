@@ -4,6 +4,8 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -70,6 +72,10 @@ from framework.harness.subagents.transcript import SubAgentTranscriptReceipt
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.task_plan.dependency_refs import AcceptedDependencyResultResolver
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
+from framework.harness.subagents.supervisor import (
+    ChildAgentSpawnRequest,
+    ChildAgentState,
+)
 from tests.fixtures.task_plan import InMemoryTaskPlanGateArtifactWriter
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_results import HarnessResultRefAuthority
@@ -192,6 +198,7 @@ class _DynamicTaskPlanFactory:
         crash_after_receipt_once: bool = False,
         ref_admission_service=None,
         authorize_results: bool = True,
+        policy_override=None,
     ) -> None:
         self.outline_transform = outline_transform
         self.transcript_root = transcript_root
@@ -200,6 +207,7 @@ class _DynamicTaskPlanFactory:
             _snapshot_store(transcript_root.parent / "grants")[0]
         )
         self.authorize_results = authorize_results
+        self.policy_override = policy_override
         self._crashed_after_receipt = False
         self.stores: list[InMemoryTaskPlanStore] = []
         self.transcript_stores: list[Any] = []
@@ -211,7 +219,7 @@ class _DynamicTaskPlanFactory:
         self.child_supervisors: list[ChildAgentSupervisor] = []
 
     def __call__(self, *, workspace: Any, dependencies: Any):
-        policy = build_research_analysis_task_plan_policy()
+        policy = self.policy_override or build_research_analysis_task_plan_policy()
         workers = {
             capability: _WorkspaceAnalysisSubAgent(
                 capability,
@@ -622,6 +630,32 @@ def test_dynamic_claim_gate_failure_blocks_quality_reader_and_publication(tmp_pa
         for failure in result.diagnostics["gate_failures"]
     )
 
+    # The failed Research run keeps its attempt ledger even though the fixed
+    # graph stops before quality/publication.  Replay must reconstruct the
+    # same terminal evidence without asking the live workers to run again.
+    store = factory.stores[0]
+    plan = store.plan(result.run_id, RESEARCH_DYNAMIC_STAGE_ID)
+    assert plan is not None
+    history = store.result_history_for(
+        result.run_id, plan.stage_id, plan.plan_id, plan.version
+    )
+    assert history
+    assert all(item.outcome is TaskAttemptOutcome.ACCEPTED for item in history)
+    replay = TaskPlanReplayReducer(
+        factory.transcript_stores[0],
+        result_ref_authority=factory.subagent_runtimes[0].result_ref_authority,
+        execution_identity=factory.ref_admission_service.snapshot.execution_identity,
+        gate_evidence_reader=store,
+    ).replay(
+        (plan,), store.read_events(result.run_id, plan.stage_id),
+        results=store.results_for(result.run_id, plan.stage_id, plan.plan_id, plan.version),
+    )
+    assert replay.attempt_history == history
+    assert replay.history_index_checksum is not None
+    assert replay.budget_ledger == replay.projection.consumed_budget
+    assert replay.replay_checksum
+    assert all(worker.calls for worker in factory.subagent_workers[0].values())
+
 
 def test_static_and_dynamic_public_result_and_artifact_contracts_match(tmp_path) -> None:
     static = _analyze("static-parity", dynamic=False)
@@ -857,6 +891,21 @@ def test_dynamic_task_plan_filesystem_transcripts_reopen_and_replay_offline(
         task.status is TaskLifecycle.SUCCEEDED
         for task in replay.projection.tasks
     )
+    assert replay.attempt_history == store.result_history_for(
+        result.run_id, plan.stage_id, plan.plan_id, plan.version
+    )
+    assert replay.history_index_checksum is not None
+    assert replay.event_history_checksum == canonical_payload_checksum(
+        {
+            "event_checksums": [
+                event.event_checksum
+                for event in store.read_events(result.run_id, plan.stage_id)
+            ]
+        }
+    )
+    assert replay.budget_ledger == replay.projection.consumed_budget
+    assert replay.aggregate_checksum is not None
+    assert replay.replay_checksum
     assert factory.outline_workers[0].calls == outline_calls
     assert {
         capability: len(worker.calls)
@@ -999,6 +1048,12 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
     replay = reducer.replay((plan,), events, results=records)
     assert len(replay.parallel_groups) == 1
     assert replay.attempt_history == history
+    assert replay.history_index_checksum is not None
+    assert replay.budget_ledger == replay.projection.consumed_budget
+    assert replay.event_history_checksum == canonical_payload_checksum(
+        {"event_checksums": [event.event_checksum for event in events]}
+    )
+    assert replay.replay_checksum
     assert {
         group["state"] for group in replay.parallel_groups.values()
     } == {"SUCCEEDED"}
@@ -1014,6 +1069,79 @@ def test_dynamic_task_plan_recovers_post_receipt_crash_without_duplicate_worker(
         break
     else:
         raise AssertionError("receipt recovery must record the recovered attempt identity")
+
+
+@pytest.mark.parametrize("confirmed, expected_state, expected_confirmed", [
+    (True, ChildAgentState.CANCELLED, True),
+    (False, ChildAgentState.LOST, False),
+])
+def test_research_cancel_history_uses_supervisor_termination_receipt(
+    confirmed: bool,
+    expected_state: ChildAgentState,
+    expected_confirmed: bool,
+) -> None:
+    class BlockingWorker:
+        def __init__(self):
+            self.started = Event()
+            self.release = Event()
+
+        def run(self, _handle):
+            self.started.set()
+            self.release.wait(timeout=1)
+            return {"candidate": "never-used"}
+
+        def cancel(self, _handle):
+            return confirmed
+
+    execution = GraphExecutionIdentity(
+        run_id="research-cancel-history",
+        graph_id="research.paper_analysis.dynamic.graph",
+        graph_version="1",
+        graph_ref="research.paper_analysis.dynamic.graph@1",
+        graph_checksum="sha256:" + "1" * 64,
+        node_id=RESEARCH_DYNAMIC_STAGE_ID,
+        node_instance_id="dynamic-cancel-instance",
+        activity_id="dynamic-cancel-activity",
+        attempt=1,
+    )
+    worker = BlockingWorker()
+    supervisor = ChildAgentSupervisor(max_children=1, cancel_timeout_seconds=0.01)
+    request = ChildAgentSpawnRequest(
+        parent_graph_identity=execution,
+        stage_id=RESEARCH_DYNAMIC_STAGE_ID,
+        task_id="analyze-structure",
+        task_instance_id="analyze-structure:1",
+        attempt=1,
+        allowed_tools=("retrieval.read_source",),
+        allowed_memory_namespaces=("research.analysis@1",),
+        budget={"max_turns": 1, "max_tool_calls": 1, "max_memory_ops": 1},
+        operation_id="research-cancel-history:spawn:1",
+    )
+    handle = supervisor.spawn(request, worker=worker)
+    assert worker.started.wait(timeout=1)
+    operation = supervisor.cancel(
+        handle.child_id,
+        operation_id=handle.operation_id,
+        reason="research_cancelled",
+    )
+    assert operation.receipt is not None
+    assert operation.receipt.status is expected_state
+    assert operation.receipt.termination_confirmed is expected_confirmed
+    assert operation.receipt.reason_code in {
+        "research_cancelled",
+        "cancellation_unconfirmed",
+    }
+    if confirmed:
+        assert supervisor.close(
+            handle.child_id,
+            operation_id=handle.operation_id,
+        ).handle.state is ChildAgentState.CLOSED
+    else:
+        with pytest.raises(Exception) as error:
+            supervisor.close(handle.child_id, operation_id=handle.operation_id)
+        assert getattr(error.value, "code", None) == "termination_unconfirmed"
+    worker.release.set()
+    supervisor.shutdown(wait=True)
 
 
 
@@ -1041,6 +1169,29 @@ def test_production_shaped_stage_worker_rejects_in_memory_store_by_default() -> 
     assert getattr(exc_info.value, "code", None) == (
         "research_task_plan_durable_store_required"
     )
+
+
+def test_research_policy_rejects_explicit_serial_fallback_override(tmp_path: Path) -> None:
+    policy = replace(
+        build_research_analysis_task_plan_policy(),
+        serial_fallback=True,
+    )
+    factory = _DynamicTaskPlanFactory(
+        transcript_root=tmp_path / "transcripts",
+        policy_override=policy,
+    )
+    with pytest.raises(HarnessValidationError) as exc_info:
+        factory(
+            workspace=SimpleNamespace(
+                request=SimpleNamespace(
+                    tenant_id="tenant",
+                    user_id="user",
+                    memory_namespace="research",
+                )
+            ),
+            dependencies=SimpleNamespace(llm_worker=FakeResearchLLMWorker()),
+        )
+    assert exc_info.value.code == "research_task_plan_policy_mismatch"
 
 
 def test_missing_dynamic_production_composition_returns_sanitized_unavailable() -> None:
