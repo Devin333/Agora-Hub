@@ -844,6 +844,7 @@ def runtime_event_publish_request(
     *,
     producer_component: str = "harness-runtime",
     producer_version: str = "1",
+    tenant_id: str | None = None,
 ) -> Any:
     """Build an :class:`EventPublishRequest` for the canonical durable port."""
     from framework.events.canonical import BusinessContext, ProducerIdentity
@@ -886,6 +887,7 @@ def runtime_event_publish_request(
         business_context=context,
         producer=ProducerIdentity(component=producer_component, version=producer_version),
         subject=event.identity.activity_id or event.identity.attempt_id,
+        tenant_id=_optional_text(tenant_id, "tenant_id"),
         payload=payload,
     )
 
@@ -893,13 +895,22 @@ def runtime_event_publish_request(
 class CanonicalRuntimeEventPublisher:
     """Adapter that appends runtime facts through the existing EventRuntime."""
 
-    def __init__(self, runtime: Any) -> None:
+    def __init__(self, runtime: Any, *, tenant_id: str | None = None) -> None:
         if not hasattr(runtime, "publish"):
             raise TypeError("runtime must expose the canonical publish port")
         self._runtime = runtime
+        self._tenant_id = _optional_text(tenant_id, "tenant_id")
+
+    @property
+    def tenant_id(self) -> str | None:
+        """Return the immutable durable event scope selected at composition."""
+
+        return self._tenant_id
 
     def publish(self, event: RuntimeEventEnvelope) -> Any:
-        return self._runtime.publish(runtime_event_publish_request(event))
+        return self._runtime.publish(
+            runtime_event_publish_request(event, tenant_id=self._tenant_id)
+        )
 
     def append(self, event: RuntimeEventEnvelope) -> Any:
         return self.publish(event)

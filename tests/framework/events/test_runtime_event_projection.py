@@ -496,3 +496,25 @@ def test_runtime_publish_request_keeps_source_in_canonical_envelope() -> None:
         request.data_schema,
         {**request.payload, "source": event.source},
     )
+
+
+def test_canonical_runtime_event_publisher_binds_the_composed_tenant_scope(tmp_path) -> None:
+    store = SQLiteEventStore(tmp_path / "tenant-scoped-runtime.sqlite3")
+    runtime = EventRuntime(store=store, schema_catalog=default_event_schema_catalog())
+    publisher = CanonicalRuntimeEventPublisher(runtime, tenant_id="tenant-runtime")
+
+    publisher.publish(_event("tenant-scoped-event"))
+
+    stored = store.read_stream(
+        StreamReadRequest(stream_id="run-1", tenant_id="tenant-runtime")
+    )
+    assert len(stored.events) == 1
+    assert stored.events[0].tenant_id == "tenant-runtime"
+    assert publisher.tenant_id == "tenant-runtime"
+
+
+@pytest.mark.parametrize("tenant_id", ["", "   ", 42])
+def test_canonical_runtime_event_publisher_rejects_invalid_tenant_scope(tenant_id) -> None:
+    runtime = type("Runtime", (), {"publish": lambda self, event: None})()
+    with pytest.raises(ValueError):
+        CanonicalRuntimeEventPublisher(runtime, tenant_id=tenant_id)

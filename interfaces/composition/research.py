@@ -1618,7 +1618,8 @@ def _build_configured_composition(
             ),
         )
         runtime_event_publisher = CanonicalRuntimeEventPublisher(
-            durable_events.event_runtime
+            durable_events.event_runtime,
+            tenant_id=_RESEARCH_EVENT_TENANT_ID,
         )
         dynamic_child_runtime = LazyResearchChildRuntime(
             state_runtime=durable_events.event_runtime,
