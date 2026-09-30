@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from framework.agent.models import DelegateBatchCandidate, DelegateBatchProposal
 from framework.harness.agent_loop.orchestration import (
     AgentOrchestrationRequest,
@@ -263,6 +265,40 @@ def test_harness_runtime_materializes_and_joins_delegate_batch() -> None:
     ]
     assert len(result.observation.wave_summaries) == 1
     assert result.observation.aggregate_ref is not None
+    for summary in result.observation.task_summaries:
+        assert summary.summary_schema_version == "newsroom.parent-task-summary/v1"
+        assert summary.summary_checksum is not None
+        assert summary.verified_gate_refs == ("gate@1",)
+        assert summary.gate_evidence_refs
+        assert summary.spill_refs == ()
+        payload = json.loads(summary.summary or "{}")
+        assert payload["schema_version"] == summary.summary_schema_version
+        assert payload["output"]["summary"] == "completed"
+        assert "role=" not in (summary.summary or "")
+
+
+def test_parent_summary_rejects_missing_durable_gate_proof() -> None:
+    from framework.harness.agent_loop.orchestration import _gated_parent_task_summary
+
+    runtime, identity = _runtime()
+    result = runtime.dispatch(_request(identity))
+    plan = runtime._store.plan(identity.run_id, runtime._stage_binding.stage_id)
+    assert plan is not None
+    task_result = runtime._store.results_for(
+        plan.run_id, plan.stage_id, plan.plan_id, plan.version
+    )[0]
+
+    summary, diagnostic = _gated_parent_task_summary(
+        plan,
+        task_result,
+        gate_evidence_reader=None,
+    )
+
+    assert summary is None
+    assert diagnostic == (
+        f"task:{task_result.task_id}:summary_gate_proof_invalid:"
+        "task_plan_gate_evidence_reader_required"
+    )
 
 
 def test_runtime_binding_is_available_only_when_a_real_runtime_is_supplied() -> None:

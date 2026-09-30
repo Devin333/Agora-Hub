@@ -11,6 +11,7 @@ from framework.agent.models.orchestration import (
     AGENT_ORCHESTRATION_RESULT_SCHEMA,
     PARENT_OBSERVATION_REJECTED_SCHEMA,
     PARENT_OBSERVATION_SCHEMA,
+    PARENT_TASK_SUMMARY_SCHEMA,
     AgentOrchestrationPort,
     AgentOrchestrationRequest,
     AgentOrchestrationResult,
@@ -59,8 +60,10 @@ from framework.harness.task_plan.ports import TaskPlanStageRequest
 from framework.harness.task_plan.stage import TaskPlanStageRunner
 from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
 from framework.harness.task_plan.store import TaskPlanEvent, TaskPlanStorePort
+from framework.harness.task_plan.result_proof import verify_task_result_proof
 from framework.harness.task_plan.submission import CandidateDedupIdentity
 from framework.harness.task_plan.canonical import canonical_payload_checksum, task_reference_producer
+from framework.shared.json import stable_json_dumps, to_jsonable
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.time import utc_now
 
@@ -653,22 +656,40 @@ class HarnessAgentOrchestrationRuntime:
             status == "blocked" and reason_code == "TASK_GROUP_CAPACITY_WAITING"
         )
         succeeded = status == "succeeded" and group.get("state") == "SUCCEEDED"
-        summaries = tuple(
-            ParentTaskSummary(
-                logical_task_id=item.task_id,
-                status=item.status.value,
-                summary=f"role={','.join(item.output_roles)}" if item.output_roles else None,
-                result_ref=item.result_ref,
-                result_checksum=item.result_checksum,
-                output_roles=tuple(item.output_roles),
-                terminal_reason=item.error_code,
+        summary_values: list[ParentTaskSummary] = []
+        summary_diagnostics: list[str] = []
+        for item in sorted(results, key=lambda item: item.task_id):
+            summary, diagnostic = _gated_parent_task_summary(
+                plan,
+                item,
+                gate_evidence_reader=self._store,
             )
-            for item in sorted(results, key=lambda item: item.task_id)
-        )
+            if diagnostic is not None:
+                summary_diagnostics.append(diagnostic)
+            summary_values.append(
+                ParentTaskSummary(
+                    logical_task_id=item.task_id,
+                    status=item.status.value,
+                    summary=summary,
+                    result_ref=item.result_ref,
+                    result_checksum=item.result_checksum,
+                    output_roles=tuple(item.output_roles),
+                    terminal_reason=item.error_code,
+                    verified_gate_refs=tuple(item.verified_gate_refs),
+                    gate_evidence_refs=tuple(item.gate_evidence_refs),
+                    spill_refs=(tuple(item.output_refs) if summary is not None else ()),
+                )
+            )
+        summaries = tuple(summary_values)
         result_refs = tuple(
-            item.result_ref
-            for item in summaries
-            if item.result_ref is not None and item.result_checksum is not None
+            dict.fromkeys(
+                ref
+                for item in summaries
+                for ref in (
+                    *((item.result_ref,) if item.result_ref is not None and item.result_checksum is not None else ()),
+                    *item.spill_refs,
+                )
+            )
         )
         output = getattr(run_result, "output", {})
         aggregate_ref = output.get("aggregate_ref") if isinstance(output, Mapping) else None
@@ -681,6 +702,7 @@ class HarnessAgentOrchestrationRuntime:
             events=events,
             run_result=run_result,
             include_fallback=not succeeded,
+            extra=summary_diagnostics,
         )
         telemetry = _joined_telemetry(events=events, plan=plan, group=group)
         covered_roles = tuple(
@@ -1084,12 +1106,62 @@ def _reason_from_worker_result(value: Any, fallback: str) -> str:
     return fallback
 
 
+def _gated_parent_task_summary(
+    plan: Any,
+    result: Any,
+    *,
+    gate_evidence_reader: Any,
+) -> tuple[str | None, str | None]:
+    """Build a parent summary only from the verifier-owned gate artifacts."""
+
+    status = getattr(getattr(result, "status", None), "value", getattr(result, "status", None))
+    if str(status).casefold() != "succeeded":
+        return None, None
+    task_id = getattr(result, "task_id", "unknown")
+    try:
+        proof = verify_task_result_proof(
+            plan,
+            result,
+            gate_evidence_reader=gate_evidence_reader,
+        )
+    except HarnessValidationError as exc:
+        code = getattr(exc, "code", None) or "task_plan_result_proof_invalid"
+        return None, f"task:{task_id}:summary_gate_proof_invalid:{code}"
+    except (TypeError, ValueError):
+        return None, f"task:{task_id}:summary_gate_proof_invalid:reader_unavailable"
+    artifacts = proof.artifacts
+    if proof.worker_failed or artifacts is None:
+        return None, f"task:{task_id}:summary_gate_proof_missing"
+    if not artifacts.evidences or any(not item.passed for item in artifacts.evidences):
+        return None, f"task:{task_id}:summary_gate_proof_not_passed"
+    try:
+        output = to_jsonable(artifacts.worker_result.output)
+        summary = stable_json_dumps(
+            {
+                "schema_version": PARENT_TASK_SUMMARY_SCHEMA,
+                "task_id": result.task_id,
+                "status": str(status),
+                "output": output,
+                "result_ref": result.result_ref,
+                "result_checksum": result.result_checksum,
+                "output_roles": list(result.output_roles),
+                "verified_gate_refs": list(result.verified_gate_refs),
+                "gate_evidence_refs": list(result.gate_evidence_refs),
+                "spill_refs": list(result.output_refs),
+            }
+        )
+    except (TypeError, ValueError):
+        return None, f"task:{task_id}:summary_gate_output_invalid"
+    return summary, None
+
+
 def _joined_diagnostics(
     *,
     results: tuple[Any, ...],
     events: tuple[Any, ...],
     run_result: Any,
     include_fallback: bool,
+    extra: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Project only typed gate/retry/recovery facts from durable Harness state."""
 
@@ -1128,6 +1200,7 @@ def _joined_diagnostics(
                 "agent_orchestration_group_not_succeeded",
             )
         )
+    diagnostics.update(item for item in extra if isinstance(item, str) and item)
     return tuple(sorted(diagnostics))
 
 

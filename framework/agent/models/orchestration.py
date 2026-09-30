@@ -16,6 +16,7 @@ AGENT_ORCHESTRATION_REQUEST_SCHEMA = "newsroom.agent-orchestration-request/v2"
 AGENT_ORCHESTRATION_RESULT_SCHEMA = "newsroom.agent-orchestration-result/v1"
 PARENT_OBSERVATION_SCHEMA = "newsroom.parent-observation/v1"
 PARENT_OBSERVATION_REJECTED_SCHEMA = "newsroom.parent-observation/rejected/v2"
+PARENT_TASK_SUMMARY_SCHEMA = "newsroom.parent-task-summary/v1"
 AGENT_SUBMISSION_RECEIPT_SCHEMA = "newsroom.agent-submission-receipt/v1"
 _CANDIDATE_DEDUP_IDENTITY_SCHEMA = "newsroom.harness-candidate-dedup-identity/v1"
 _CANDIDATE_SUBMISSION_SCHEMA = "newsroom.harness-candidate-submission/v2"
@@ -68,20 +69,57 @@ class ParentTaskSummary:
     result_checksum: str | None = None
     output_roles: tuple[str, ...] = ()
     terminal_reason: str | None = None
+    summary_schema_version: str = PARENT_TASK_SUMMARY_SCHEMA
+    summary_checksum: str | None = None
+    verified_gate_refs: tuple[str, ...] = ()
+    gate_evidence_refs: tuple[str, ...] = ()
+    spill_refs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in ("logical_task_id", "status"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{field_name} must be a non-empty string")
-        for field_name in ("summary", "result_ref", "result_checksum", "terminal_reason"):
+        for field_name in ("summary", "result_ref", "result_checksum", "terminal_reason", "summary_checksum"):
             value = getattr(self, field_name)
             if value is not None and not isinstance(value, str):
                 raise TypeError(f"{field_name} must be a string or None")
+        if self.summary_schema_version != PARENT_TASK_SUMMARY_SCHEMA:
+            raise ValueError("unsupported parent task summary schema")
         output_roles = tuple(self.output_roles)
         if any(not isinstance(item, str) or not item.strip() for item in output_roles):
             raise TypeError("output_roles must contain non-empty strings")
         object.__setattr__(self, "output_roles", output_roles)
+        refs = {}
+        for field_name in ("verified_gate_refs", "gate_evidence_refs", "spill_refs"):
+            values = tuple(getattr(self, field_name))
+            if any(not isinstance(item, str) or not item.strip() for item in values):
+                raise TypeError(f"{field_name} must contain non-empty strings")
+            refs[field_name] = values
+            object.__setattr__(self, field_name, values)
+        if self.summary is None:
+            if self.summary_checksum is not None:
+                raise ValueError("summary_checksum requires summary content")
+        else:
+            expected_checksum = checksum_for(self._checksum_projection())
+            if self.summary_checksum is not None and self.summary_checksum != expected_checksum:
+                raise ValueError("summary_checksum does not match summary content")
+            object.__setattr__(self, "summary_checksum", expected_checksum)
+
+    def _checksum_projection(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.summary_schema_version,
+            "logical_task_id": self.logical_task_id,
+            "status": self.status,
+            "summary": self.summary,
+            "result_ref": self.result_ref,
+            "result_checksum": self.result_checksum,
+            "output_roles": list(self.output_roles),
+            "terminal_reason": self.terminal_reason,
+            "verified_gate_refs": list(self.verified_gate_refs),
+            "gate_evidence_refs": list(self.gate_evidence_refs),
+            "spill_refs": list(self.spill_refs),
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +130,11 @@ class ParentTaskSummary:
             "result_checksum": self.result_checksum,
             "output_roles": list(self.output_roles),
             "terminal_reason": self.terminal_reason,
+            "summary_schema_version": self.summary_schema_version,
+            "summary_checksum": self.summary_checksum,
+            "verified_gate_refs": list(self.verified_gate_refs),
+            "gate_evidence_refs": list(self.gate_evidence_refs),
+            "spill_refs": list(self.spill_refs),
         }
 
     @classmethod
@@ -99,10 +142,18 @@ class ParentTaskSummary:
         payload = _strict_fields(
             value,
             set(cls.__dataclass_fields__),
-            optional={"output_roles", "terminal_reason"},
+            optional={
+                "output_roles", "terminal_reason", "summary_schema_version",
+                "summary_checksum", "verified_gate_refs", "gate_evidence_refs", "spill_refs",
+            },
         )
         payload.setdefault("output_roles", ())
         payload.setdefault("terminal_reason", None)
+        payload.setdefault("summary_schema_version", PARENT_TASK_SUMMARY_SCHEMA)
+        payload.setdefault("summary_checksum", None)
+        payload.setdefault("verified_gate_refs", ())
+        payload.setdefault("gate_evidence_refs", ())
+        payload.setdefault("spill_refs", ())
         return cls(**payload)
 
 
@@ -248,6 +299,12 @@ class ParentObservation:
             for item in task_summaries
             if item.result_ref is not None and item.result_checksum is not None
         }
+        checksum_bound_refs.update(
+            ref
+            for item in task_summaries
+            if item.summary_checksum is not None
+            for ref in item.spill_refs
+        )
         if self.aggregate_ref is not None:
             checksum_bound_refs.add(self.aggregate_ref)
         if not set(refs).issubset(checksum_bound_refs):
@@ -718,6 +775,12 @@ def _project_checksum_bound_refs(
         for item in task_summaries
         if item["result_ref"] is not None and item["result_checksum"] is not None
     }
+    task_refs.update(
+        ref
+        for item in task_summaries
+        if item.get("summary_checksum") is not None
+        for ref in item.get("spill_refs", ())
+    )
     permitted = task_refs | ({aggregate_ref} if aggregate_ref is not None else set())
     return [ref for ref in requested_refs if ref in permitted][:max_refs]
 
@@ -777,6 +840,7 @@ __all__ = [
     "AGENT_SUBMISSION_RECEIPT_SCHEMA",
     "PARENT_OBSERVATION_SCHEMA",
     "PARENT_OBSERVATION_REJECTED_SCHEMA",
+    "PARENT_TASK_SUMMARY_SCHEMA",
     "AgentOrchestrationPort",
     "AgentOrchestrationRequest",
     "AgentOrchestrationResult",
