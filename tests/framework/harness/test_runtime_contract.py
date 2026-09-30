@@ -481,6 +481,116 @@ def test_history_contract_rejects_non_monotonic_event_transition() -> None:
     assert exc_info.value.code == "RUNTIME_CONTRACT_TRANSITION_INVALID"
 
 
+def _replacement_plan(plan, **changes):
+    return replace(
+        plan,
+        plan_id="replacement-plan",
+        version=2,
+        parent_plan_id=plan.plan_id,
+        **changes,
+    )
+
+
+def _replacement_with_scope_drift(plan, field_name: str, value: str):
+    replacement = _replacement_plan(plan)
+    object.__setattr__(replacement, field_name, value)
+    object.__setattr__(
+        replacement,
+        "stage_identity_checksum",
+        canonical_payload_checksum(
+            {
+                "schema_version": replacement.stage_identity_schema,
+                "run_id": replacement.run_id,
+                "graph_schema_version": replacement.graph_schema_version,
+                "compiler_version": replacement.compiler_version,
+                "condition_policy_version": replacement.condition_policy_version,
+                "graph_id": replacement.graph_id,
+                "graph_version": replacement.graph_version,
+                "graph_checksum": replacement.graph_checksum,
+                "stage_id": replacement.stage_id,
+                "stage_binding_checksum": replacement.stage_binding_checksum,
+                "graph_ref": replacement.graph_ref,
+            }
+        ),
+    )
+    object.__setattr__(
+        replacement,
+        "plan_checksum",
+        canonical_payload_checksum(replacement.checksum_projection()),
+    )
+    return replacement
+
+
+def test_history_contract_accepts_contiguous_plan_lineage() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+
+    validate_history_read_contract((plan, _replacement_plan(plan)), (), ())
+
+
+@pytest.mark.parametrize("field_name", ["run_id", "stage_id", "graph_checksum"])
+def test_history_contract_rejects_plan_scope_drift(field_name: str) -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    value = "another-scope"
+    if field_name == "graph_checksum":
+        value = "sha256:" + "e" * 64
+    replacement = _replacement_with_scope_drift(plan, field_name, value)
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_history_read_contract((plan, replacement), (), ())
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_SCOPE_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("policy_ref", "other-policy@1"),
+        ("policy_checksum", "sha256:" + "e" * 64),
+    ],
+)
+def test_history_contract_rejects_plan_policy_drift(
+    field_name: str,
+    value: str,
+) -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    replacement = _replacement_plan(plan, **{field_name: value})
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_history_read_contract((plan, replacement), (), ())
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_POLICY_MISMATCH"
+
+
+def test_history_contract_rejects_duplicate_plan_version() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    conflicting = replace(plan, plan_id="conflicting-plan")
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_history_read_contract((plan, conflicting), (), ())
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_REFERENCE_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        {"version": 3},
+        {"parent_plan_id": "unrelated-plan"},
+    ],
+)
+def test_history_contract_rejects_broken_plan_transition(
+    replacement: dict[str, object],
+) -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    next_plan = _replacement_plan(plan)
+    next_plan = replace(next_plan, **replacement)
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_history_read_contract((plan, next_plan), (), ())
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_TRANSITION_INVALID"
+
+
 def test_task_result_owner_contract_accepts_canonical_result() -> None:
     validate_task_result_owner_contract(_history_result(_accepted_parallel_plan(("task-1",))))
 

@@ -509,6 +509,7 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
             )
         canonical_plans.append(plan)
 
+    _validate_plan_history_contract(canonical_plans)
     plans_by_identity = {
         (plan.plan_id, plan.version): plan for plan in canonical_plans
     }
@@ -607,6 +608,69 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
             raise HarnessValidationError(
                 "history result scope differs from its plan",
                 code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+            )
+
+
+def _validate_plan_history_contract(plans: list[Any]) -> None:
+    """Bind a history read to one immutable, contiguous plan lineage."""
+
+    if not plans:
+        return
+    ordered = sorted(plans, key=lambda item: item.version)
+    plan_ids = [plan.plan_id for plan in ordered]
+    versions = [plan.version for plan in ordered]
+    if len(set(plan_ids)) != len(plan_ids) or len(set(versions)) != len(versions):
+        raise HarnessValidationError(
+            "history contains duplicate plan references",
+            code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
+        )
+
+    first = ordered[0]
+    scope_fields = (
+        "run_id",
+        "stage_id",
+        "graph_id",
+        "graph_version",
+        "graph_ref",
+        "graph_checksum",
+        "graph_schema_version",
+        "compiler_version",
+        "condition_policy_version",
+        "stage_binding_checksum",
+        "stage_identity_schema",
+        "stage_identity_checksum",
+    )
+    policy_fields = ("policy_ref", "policy_checksum")
+    for plan in ordered[1:]:
+        if any(getattr(plan, field) != getattr(first, field) for field in scope_fields):
+            raise HarnessValidationError(
+                "history plans do not share one Graph stage scope",
+                code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+            )
+        if any(getattr(plan, field) != getattr(first, field) for field in policy_fields):
+            raise HarnessValidationError(
+                "history plans do not share one pinned policy",
+                code="RUNTIME_CONTRACT_POLICY_MISMATCH",
+            )
+
+    expected_versions = list(range(1, len(ordered) + 1))
+    if versions != expected_versions:
+        raise HarnessValidationError(
+            "history plan versions are not contiguous",
+            code="RUNTIME_CONTRACT_TRANSITION_INVALID",
+            details={"versions": versions},
+        )
+    for index, plan in enumerate(ordered):
+        expected_parent = None if index == 0 else ordered[index - 1].plan_id
+        if plan.parent_plan_id != expected_parent:
+            raise HarnessValidationError(
+                "history plan parent reference does not match its predecessor",
+                code="RUNTIME_CONTRACT_TRANSITION_INVALID",
+                details={
+                    "plan_id": plan.plan_id,
+                    "plan_version": plan.version,
+                    "expected_parent_plan_id": expected_parent,
+                },
             )
 
 
