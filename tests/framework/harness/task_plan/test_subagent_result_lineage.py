@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -102,6 +103,17 @@ from tests.framework.harness.test_ref_snapshot_store import _store as _ref_snaps
 
 ACCEPTED_AT = "2026-08-13T00:00:00Z"
 RESULT_AUTHORITY_TENANT = "lineage-result-tenant"
+
+
+class _AdmissionHistoryStore(InMemoryTaskPlanStore):
+    """Expose synthetic historical receipts without weakening store validation."""
+
+    def __init__(self, extra_events=()):
+        super().__init__()
+        self._extra_events = tuple(extra_events)
+
+    def read_events(self, run_id, stage_id):
+        return (*super().read_events(run_id, stage_id), *self._extra_events)
 
 
 def _execution_identity(
@@ -1460,6 +1472,81 @@ def test_stage_rejects_result_when_durable_group_has_no_target_wave(
         fixture["plan"].run_id,
         fixture["plan"].stage_id,
     ) == baseline_projection
+
+
+def test_verification_admission_binds_wave_and_spawn_receipts_to_plan_version(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    plan = fixture["plan"]
+    instance = fixture["instance"]
+
+    def event(event_type, *, version, payload):
+        return SimpleNamespace(
+            event_type=event_type,
+            plan_id=plan.plan_id,
+            plan_version=version,
+            payload=payload,
+        )
+
+    wave_payload = {
+        "wave": {
+            "reservations": [
+                {"idempotency_key": instance.idempotency_key},
+            ],
+        },
+    }
+    stale_wave = event(
+        "TASK_WAVE_ADMITTED",
+        version=plan.version + 1,
+        payload=wave_payload,
+    )
+    stale_group = event(
+        "TASK_GROUP_ADMITTED",
+        version=plan.version + 1,
+        payload={},
+    )
+    stale_intent = event(
+        "TASK_ATTEMPT_SPAWN_INTENT",
+        version=plan.version + 1,
+        payload={"task_instance_id": instance.task_instance_id},
+    )
+
+    stale_store = _AdmissionHistoryStore(
+        (stale_group, stale_wave, stale_intent),
+    )
+    stale_runner = TaskPlanStageRunner(
+        candidate_builder=FakePlanCandidateBuilder(fixture["candidate"]),
+        capability_registry=fixture["registry"],
+        store=stale_store,
+        result_verifier=fixture["verifier"],
+    )
+    assert stale_runner._verification_admission(plan, instance) == {}
+
+    current_wave = event(
+        "TASK_WAVE_ADMITTED",
+        version=plan.version,
+        payload=wave_payload,
+    )
+    current_intent = event(
+        "TASK_ATTEMPT_SPAWN_INTENT",
+        version=plan.version,
+        payload={"task_instance_id": instance.task_instance_id},
+    )
+    mixed_store = _AdmissionHistoryStore(
+        (current_wave, current_intent, stale_intent),
+    )
+    mixed_runner = TaskPlanStageRunner(
+        candidate_builder=FakePlanCandidateBuilder(fixture["candidate"]),
+        capability_registry=fixture["registry"],
+        store=mixed_store,
+        result_verifier=fixture["verifier"],
+    )
+    admission = mixed_runner._verification_admission(plan, instance)
+    assert admission == {
+        "admission_event": current_wave,
+        "spawn_intent": current_intent,
+    }
 
 
 def test_graph_only_offline_replay_verifies_v3_transcript_without_worker_call(

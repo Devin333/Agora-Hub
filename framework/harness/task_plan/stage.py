@@ -2224,16 +2224,25 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
     def _verification_admission(self, plan: ValidatedTaskPlan, instance: TaskInstance) -> dict[str, Any]:
         history = self.store.read_events(plan.run_id, plan.stage_id)
         admissions = [event for event in history if event.event_type == "TASK_WAVE_ADMITTED"
-                      and event.plan_id == plan.plan_id and any(
+                      and event.plan_id == plan.plan_id
+                      and event.plan_version == plan.version
+                      and any(
                           reservation.get("idempotency_key") == instance.idempotency_key
                           for reservation in event.payload["wave"]["reservations"])]
         if not admissions:
-            if any(event.event_type == "TASK_GROUP_ADMITTED" and event.plan_id == plan.plan_id for event in history):
+            if any(
+                event.event_type == "TASK_GROUP_ADMITTED"
+                and event.plan_id == plan.plan_id
+                and event.plan_version == plan.version
+                for event in history
+            ):
                 raise HarnessValidationError("parallel result has no admitted wave", code="task_plan_result_admission_mismatch")
             return {}
         if len(admissions) != 1:
             raise HarnessValidationError("result has conflicting wave admissions", code="task_plan_result_admission_mismatch")
         intents = [event for event in history if event.event_type == "TASK_ATTEMPT_SPAWN_INTENT"
+                   and event.plan_id == plan.plan_id
+                   and event.plan_version == plan.version
                    and event.payload.get("task_instance_id") == instance.task_instance_id]
         if len(intents) > 1:
             raise HarnessValidationError("result has conflicting spawn intents", code="task_plan_result_admission_mismatch")
