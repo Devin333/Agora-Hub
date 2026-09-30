@@ -100,6 +100,7 @@ from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
     RESEARCH_MINERU_PROFILE_ID,
 )
+from interfaces.models.actor import ActorContext
 
 from framework.shared.graph_identity import GraphExecutionIdentity
 from interfaces.services.research_service import (
@@ -520,6 +521,17 @@ def test_valid_settings_compose_full_durable_production_graph(
         )
         assert child_runtime is composition.resources[-1]
         assert child_runtime.started is False
+        wait_factory = composition.harness_wait_service_factory()
+        assert wait_factory is not None
+        wait_service = wait_factory(
+            ActorContext(
+                actor_id="composition-test",
+                actor_type="service",
+                roles=["service"],
+                request_id="composition-wait-request",
+            )
+        )
+        assert wait_service._runtime_event_sink is composition.runtime_event_publisher
         event_store_index = next(
             index
             for index, resource in enumerate(composition.resources)

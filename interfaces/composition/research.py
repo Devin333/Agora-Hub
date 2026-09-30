@@ -378,6 +378,7 @@ class ResearchRuntimeComposition:
         "_harness_wait_actor_scope_resolver",
         "_harness_wait_runtime_registry",
         "_reader_repair_service",
+        "_runtime_event_publisher",
         "_resources",
         "_service",
         "_settings",
@@ -400,6 +401,7 @@ class ResearchRuntimeComposition:
         harness_wait_runtime_registry: HarnessWaitRuntimeRegistry | None = None,
         harness_wait_approval_resolver: DurableHarnessWaitApprovalResolver | None = None,
         harness_wait_actor_scope_resolver: _ResearchHarnessWaitActorScopeResolver | None = None,
+        runtime_event_publisher: CanonicalRuntimeEventPublisher | None = None,
         execution_composition: Any | None = None,
         subagent_transcript_store: Any | None = None,
     ) -> None:
@@ -441,6 +443,13 @@ class ResearchRuntimeComposition:
             raise TypeError(
                 "subagent_transcript_store must be a durable transcript store"
             )
+        if runtime_event_publisher is not None and not isinstance(
+            runtime_event_publisher,
+            CanonicalRuntimeEventPublisher,
+        ):
+            raise TypeError(
+                "runtime_event_publisher must be CanonicalRuntimeEventPublisher"
+            )
 
         unique_resources: list[Any] = []
         seen: set[int] = set()
@@ -464,6 +473,7 @@ class ResearchRuntimeComposition:
         self._harness_wait_runtime_registry = harness_wait_runtime_registry
         self._harness_wait_approval_resolver = harness_wait_approval_resolver
         self._harness_wait_actor_scope_resolver = harness_wait_actor_scope_resolver
+        self._runtime_event_publisher = runtime_event_publisher
         self._close_lock = Lock()
         self._closed = False
 
@@ -490,6 +500,12 @@ class ResearchRuntimeComposition:
         """Process-scoped execution composition used by external adapters."""
 
         return self._execution_composition
+
+    @property
+    def runtime_event_publisher(self) -> CanonicalRuntimeEventPublisher | None:
+        """Canonical durable runtime event owner shared by wait and child paths."""
+
+        return self._runtime_event_publisher
 
     @property
     def resources(self) -> tuple[Any, ...]:
@@ -527,6 +543,7 @@ class ResearchRuntimeComposition:
                 runtime_resolver=self._harness_wait_runtime_registry,
                 actor_scope_resolver=self._harness_wait_actor_scope_resolver,
                 approval_resolver=self._harness_wait_approval_resolver,
+                runtime_event_sink=self._runtime_event_publisher,
             )
 
         return factory
@@ -1922,6 +1939,7 @@ def _build_configured_composition(
             harness_wait_runtime_registry=harness_wait_runtime_registry,
             harness_wait_approval_resolver=harness_wait_approval_resolver,
             harness_wait_actor_scope_resolver=harness_wait_actor_scope_resolver,
+            runtime_event_publisher=runtime_event_publisher,
             subagent_transcript_store=subagent_transcript_store,
         )
     except BaseException:
