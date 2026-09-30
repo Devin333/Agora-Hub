@@ -2081,6 +2081,51 @@ def test_graph_only_patch_is_bound_to_its_base_plan_and_replays_after_replan():
     assert cross_graph_error.value.code == "task_plan_patch_scope_mismatch"
 
 
+def test_patched_plan_batch_retry_after_durable_publish_interruption_is_atomic():
+    artifacts = _ArtifactStore()
+    event_store = _EventStore()
+    store = _store(event_store, artifacts)
+    candidate, plan = _graph_only_candidate_and_plan()
+    store.append_candidate(candidate)
+    store.accept_plan(plan)
+    patch = PlanPatch.for_plan(
+        plan,
+        patch_id="interrupted-patch",
+        reason_code="repair",
+        source_candidate_ref="candidate://interrupted-patch",
+        operations=(
+            PlanPatchOperation(
+                PlanPatchOperationType.UPDATE_PENDING_DEPENDENCY,
+                target_task_id="structure",
+                depends_on=("document",),
+            ),
+        ),
+    )
+    next_plan = replace(
+        plan,
+        plan_id="graph-plan-2",
+        version=2,
+        parent_plan_id=plan.plan_id,
+        source_candidate_ref=patch.patch_checksum,
+        accepted_at="2026-08-02T00:01:00Z",
+    )
+    interrupted = _store(
+        event_store,
+        artifacts,
+        runtime=_FailBatchOnceRuntime(_runtime(event_store)),
+    )
+    with pytest.raises(RuntimeError, match="injected result batch interruption"):
+        interrupted.accept_patched_plan(patch, next_plan)
+    assert interrupted.plan(plan.run_id, plan.stage_id, 2) is None
+
+    reopened = _store(event_store, artifacts)
+    assert reopened.accept_patched_plan(patch, next_plan) == next_plan.plan_checksum
+    assert [event.event_type for event in reopened.read_events(plan.run_id, plan.stage_id)][-2:] == [
+        "PLAN_PATCH_ACCEPTED",
+        "PLAN_ACCEPTED",
+    ]
+
+
 def test_graph_only_task_lifecycle_and_result_round_trip_through_durable_store():
     artifacts = _ArtifactStore()
     event_store = _EventStore()
