@@ -260,6 +260,48 @@ def test_terminal_redelivery_returns_the_same_submission_receipt(store_factory):
         AgentOrchestrationResult.from_dict(tampered)
 
 
+def test_continuation_sequence_race_accepts_terminal_advance(store_factory):
+    """A stale pending writer must accept a concurrent terminal continuation."""
+    store = store_factory()
+    runtime, identity = _runtime(store=store)
+    request = _request(identity)
+    first = runtime.dispatch(request)
+    assert first.status == "succeeded"
+    assert first.submission_receipt is not None
+
+    plan = store.plan(identity.run_id, "delegate_stage")
+    assert plan is not None
+    history = store.read_events(identity.run_id, "delegate_stage")
+    continuation_events = [
+        event for event in history
+        if event.event_type == "PARENT_OBSERVATION_CONTINUATION"
+    ]
+    assert len(continuation_events) == 1
+    without_continuation = tuple(
+        event for event in history
+        if event.event_type != "PARENT_OBSERVATION_CONTINUATION"
+    )
+    admitted_group = next(
+        event.payload["group"]
+        for event in without_continuation
+        if event.event_type == "TASK_GROUP_ADMITTED"
+    )
+    stale_group = {**admitted_group, "state": "JOINING"}
+
+    # The terminal writer has already committed the same observation. A stale
+    # process reconstructing PENDING uses the old sequence and must treat the
+    # terminal event as the idempotent winner instead of failing the delivery.
+    runtime._persist_parent_continuation(
+        request,
+        plan,
+        without_continuation,
+        group=stale_group,
+        submission_receipt=first.submission_receipt,
+    )
+
+    assert store.read_events(identity.run_id, "delegate_stage") == history
+
+
 def test_rejected_observation_uses_a_new_schema_boundary():
     payload = ParentObservation(
         group_id=None,

@@ -834,15 +834,37 @@ class HarnessAgentOrchestrationRuntime:
             self._store.append_event(event)
         except HarnessValidationError as exc:
             # Two parent deliveries may race after the same durable join.  A
-            # sequence collision is safe only when the committed event is the
-            # exact continuation we intended to write.
+            # sequence collision is safe when the committed event is the exact
+            # continuation we intended to write, or when another writer has
+            # legally advanced that same observation from PENDING to its
+            # terminal delivery.  The latter has the same identity and
+            # checksum-bound observation, so accepting it is idempotent and
+            # avoids replaying child work after a restart race.
             if exc.code != "task_plan_sequence_conflict":
                 raise
             latest = self._store.read_events(plan.run_id, plan.stage_id)
+            committed = []
+            for item in latest:
+                if getattr(item, "event_type", None) != PARENT_CONTINUATION_EVENT:
+                    continue
+                try:
+                    committed.append(continuation_from_event(item))
+                except HarnessValidationError:
+                    continue
+            target = continuation
             if not any(
-                getattr(item, "event_type", None) == PARENT_CONTINUATION_EVENT
-                and getattr(item, "event_checksum", None) == event.event_checksum
-                for item in latest
+                item.identity_key() == target.identity_key()
+                and item.observation_checksum == target.observation_checksum
+                and item.parent_scope() == target.parent_scope()
+                and item.submission_id == target.submission_id
+                and (
+                    item.continuation_checksum == target.continuation_checksum
+                    or (
+                        item.status == "DELIVERED"
+                        and target.status == "PENDING"
+                    )
+                )
+                for item in committed
             ):
                 raise
 
