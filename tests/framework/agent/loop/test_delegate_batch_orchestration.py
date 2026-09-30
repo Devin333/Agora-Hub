@@ -15,6 +15,7 @@ from framework.agent.models.orchestration import (
     ParentTaskSummary,
     ParentWaveSummary,
 )
+from framework.events.canonical import checksum_for
 from framework.llm import FakeLLMClient
 from framework.tool import ToolExecutor, ToolRegistry
 
@@ -43,7 +44,7 @@ def _agent(*, max_tasks: int = 3) -> AgentSpec:
                 "max_summary_bytes": 24,
                 "max_diagnostics": 1,
                 "max_refs": 1,
-                "max_observation_bytes": 512,
+                "max_observation_bytes": 1024,
             }
         },
     )
@@ -384,7 +385,39 @@ def test_parent_observation_projection_respects_total_byte_limit() -> None:
     )
 
     assert len(json.dumps(projected, sort_keys=True, separators=(",", ":")).encode("utf-8")) <= 512
+    assert projected["observation_checksum"] == checksum_for(
+        {key: value for key, value in projected.items() if key != "observation_checksum"}
+    )
     assert projected["truncated"] is True
+
+
+def test_parent_observation_projection_checksum_binds_final_redacted_view() -> None:
+    observation = ParentObservation(
+        group_id="group-1",
+        group_status="succeeded",
+        plan_version="1",
+        task_summaries=(
+            ParentTaskSummary(
+                logical_task_id="task-1",
+                status="succeeded",
+                summary="secret=sk-abcdefghijklmnopqrstuvwxyz",
+            ),
+        ),
+        diagnostics=("private transcript: sk-abcdefghijklmnopqrstuvwxyz",),
+    )
+
+    projected = observation.project(ParentObservationLimits(max_summary_bytes=24))
+    assert projected["observation_checksum"] == checksum_for(
+        {key: value for key, value in projected.items() if key != "observation_checksum"}
+    )
+    assert "sk-abcdefghijklmnopqrstuvwxyz" not in json.dumps(projected)
+    assert projected["observation_checksum"] != "sha256:" + "0" * 64
+
+    forged = dict(projected)
+    forged["truncated"] = not forged["truncated"]
+    assert forged["observation_checksum"] != checksum_for(
+        {key: value for key, value in forged.items() if key != "observation_checksum"}
+    )
 
 
 @pytest.mark.parametrize("max_bytes", [1, 2, 3, 4, 5, 8])

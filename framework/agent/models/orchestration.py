@@ -371,6 +371,9 @@ class ParentObservation:
             "terminal_reason": self.terminal_reason,
             "required_output_roles": list(self.required_output_roles),
             "covered_output_roles": list(self.covered_output_roles),
+            # Reserve the digest in the byte budget before fitting; the actual
+            # checksum is computed over the final redacted and truncated view.
+            "observation_checksum": "sha256:" + "0" * 64,
             "truncated": (
                 detail_truncated
                 or len(self.task_summaries) > len(tasks)
@@ -379,7 +382,15 @@ class ParentObservation:
             ),
         }
         payload = redact_sensitive_values(payload)
-        return _fit_parent_observation(payload, limits.max_observation_bytes)
+        projected = _fit_parent_observation(payload, limits.max_observation_bytes)
+        projected["observation_checksum"] = checksum_for(
+            {
+                key: value
+                for key, value in projected.items()
+                if key != "observation_checksum"
+            }
+        )
+        return projected
 
 
 @dataclass(frozen=True, slots=True)
