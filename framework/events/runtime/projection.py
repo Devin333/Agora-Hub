@@ -87,6 +87,20 @@ _PROTECTED_PAYLOAD_KEY = re.compile(
 _CHECKSUM_KEY = re.compile(r"(?:checksum|digest)$", re.IGNORECASE)
 _REF_KEY = re.compile(r"(?:ref|uri|id)$", re.IGNORECASE)
 _CHECKSUM = re.compile(r"sha256:[0-9a-f]{64}\Z", re.IGNORECASE)
+_REASON_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+_REASON_REQUIRED_EVENT_TYPES = frozenset(
+    {
+        RuntimeEventType.TURN_ABORTED,
+        RuntimeEventType.APPROVAL_DECIDED,
+        RuntimeEventType.EXECUTION_TERMINAL,
+        RuntimeEventType.CHILD_TERMINAL,
+        RuntimeEventType.TIMEOUT,
+        RuntimeEventType.CANCEL_REQUESTED,
+        RuntimeEventType.CANCELLATION_CONFIRMED,
+        RuntimeEventType.INDETERMINATE,
+        RuntimeEventType.RUNTIME_ERROR,
+    }
+)
 
 
 def _utc(value: datetime, field_name: str = "timestamp") -> datetime:
@@ -241,7 +255,14 @@ class RuntimeEventEnvelope:
         if self.sequence is not None and (isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 1):
             raise ValueError("sequence must be a positive integer or None")
         object.__setattr__(self, "status", _optional_text(self.status, "status"))
-        object.__setattr__(self, "reason_code", _optional_text(self.reason_code, "reason_code"))
+        reason_code = _optional_text(self.reason_code, "reason_code", max_length=128)
+        if reason_code is not None and _REASON_CODE.fullmatch(reason_code) is None:
+            raise ValueError("reason_code must be a bounded diagnostic code")
+        if self.event_type in _REASON_REQUIRED_EVENT_TYPES and reason_code is None:
+            raise ValueError(
+                f"{self.event_type.value} runtime events require reason_code"
+            )
+        object.__setattr__(self, "reason_code", reason_code)
         object.__setattr__(self, "stream_id", _optional_text(self.stream_id, "stream_id"))
         object.__setattr__(self, "source", _text(self.source, "source"))
         refs = _bounded_refs(self.refs)
@@ -758,6 +779,8 @@ class RuntimeEventEmitter:
         resolved_checksums = _bounded_checksums(checksums)
         safe_metadata = redact_runtime_value(dict(metadata or {}))
         resolved_stream = stream_id or self._stream_id or resolved_identity.run_id
+        if canonical_type in _REASON_REQUIRED_EVENT_TYPES and reason_code is None:
+            reason_code = canonical_type.value
         if resolved_source == "agent-loop":
             if resolved_identity.graph_identity is None:
                 raise RuntimeEventIdentityConflict(

@@ -302,6 +302,53 @@ def test_runtime_emitter_maps_wait_timeout_to_canonical_timeout() -> None:
     assert projection.store.all_events(stream_id="run-1") == (event,)
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    (
+        RuntimeEventType.TURN_ABORTED,
+        RuntimeEventType.EXECUTION_TERMINAL,
+        RuntimeEventType.CHILD_TERMINAL,
+        RuntimeEventType.TIMEOUT,
+        RuntimeEventType.CANCEL_REQUESTED,
+        RuntimeEventType.CANCELLATION_CONFIRMED,
+        RuntimeEventType.INDETERMINATE,
+        RuntimeEventType.RUNTIME_ERROR,
+    ),
+)
+def test_terminal_runtime_facts_require_bounded_reason_codes(event_type) -> None:
+    with pytest.raises(ValueError, match="require reason_code"):
+        RuntimeEventEnvelope(
+            event_id=f"missing-reason-{event_type.value}",
+            event_type=event_type,
+            occurred_at=datetime.now(UTC),
+            identity=RuntimeEventIdentity(graph_identity=_identity()),
+        )
+
+    with pytest.raises(ValueError, match="bounded diagnostic code"):
+        RuntimeEventEnvelope(
+            event_id=f"invalid-reason-{event_type.value}",
+            event_type=event_type,
+            occurred_at=datetime.now(UTC),
+            identity=RuntimeEventIdentity(graph_identity=_identity()),
+            reason_code="secret reason with spaces",
+        )
+
+
+def test_runtime_emitter_assigns_explicit_fallback_reason_for_unannotated_terminal_fact() -> None:
+    projection = RuntimeEventProjection()
+    emitter = RuntimeEventEmitter(
+        projection,
+        identity=RuntimeEventIdentity(graph_identity=_identity()),
+        stream_id="run-1",
+    )
+
+    event = emitter.emit("child_closed", metadata={"child_id": "child-1"})
+
+    assert event is not None
+    assert event.event_type is RuntimeEventType.CHILD_TERMINAL
+    assert event.reason_code == RuntimeEventType.CHILD_TERMINAL.value
+
+
 def test_agent_loop_emitter_forwards_only_turn_lifecycle_facts() -> None:
     projection = RuntimeEventProjection()
     emitter = RuntimeEventEmitter(
