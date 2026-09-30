@@ -31,8 +31,10 @@ from interfaces.services.research_service import (
     ResearchApplicationService,
     ResearchAskInput,
     ResearchServiceError,
+    _research_runtime_service_error,
     bind_research_actor_input,
 )
+from interfaces.composition.research_errors import ResearchRuntimeUnavailableError
 from framework.harness import FakeArtifactPort, InMemoryHarnessEventPort
 from infrastructure.research.filesystem_run_store import FilesystemResearchRunStore
 from interfaces.models import ActorContext
@@ -49,6 +51,26 @@ from tests.interfaces.research_fixtures import (
     FakeResearchAnalysisResult,
     make_research_result,
 )
+
+
+def test_research_runtime_composition_error_is_sanitized_as_unavailable() -> None:
+    service_error = _research_runtime_service_error(
+        ResearchRuntimeUnavailableError(
+            ("research.task_plan.child_execution",),
+            retryable=False,
+        )
+    )
+
+    assert service_error.code == "research_runtime_unavailable"
+    assert service_error.status_code == 503
+    assert service_error.retryable is False
+    assert service_error.details == {
+        "capabilities": ["research.task_plan.child_execution"],
+        "remediation": {
+            "code": "restore_research_runtime_capability",
+            "message": "Restore the named Research capability and retry the request.",
+        },
+    }
 
 
 def test_research_service_analyze_calls_research_application_and_stores_result() -> None:

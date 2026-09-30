@@ -55,6 +55,7 @@ class ResearchCapability(str, Enum):
     DOCUMENT_COMPILER = "research.document_compiler"
     CANDIDATE_WORKER = "research.candidate_worker"
     GITHUB_REPOSITORY = "research.github_repository"
+    TASK_PLAN_CHILD_EXECUTION = "research.task_plan.child_execution"
 
 
 class ResearchRemediation(str, Enum):

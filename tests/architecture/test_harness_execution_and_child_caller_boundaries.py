@@ -48,10 +48,6 @@ _CHILD_RUNTIME_CALLERS = {
         "ChildAgentSupervisor",
     ),
     (
-        "interfaces/composition/research.py",
-        "SubAgentRuntime",
-    ),
-    (
         "interfaces/composition/research_child_runtime.py",
         "HarnessOwnedChildAgentRuntime",
     ),
@@ -141,70 +137,17 @@ def test_child_runtime_construction_is_harness_owned_or_candidate_only() -> None
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "dynamic_task_plan_runner_factory"
     )
-    stage = next(
-        node
-        for node in ast.walk(factory)
-        if isinstance(node, ast.Call)
+    assert not any(
+        isinstance(node, ast.Call)
         and _call_name(node.func) == "ResearchAnalysisTaskPlanStageWorker"
+        for node in ast.walk(factory)
     )
-    bindings = {
-        keyword.arg: ast.unparse(keyword.value)
-        for keyword in stage.keywords
-        if keyword.arg is not None
-    }
-    assert bindings["worker_executor"] == "task_plan_worker_executor"
-    assert bindings["worker_result_recovery"] == (
-        "task_plan_worker_executor.recover"
+    assert any(
+        isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and _call_name(node.exc.func) == "ResearchRuntimeUnavailableError"
+        for node in ast.walk(factory)
     )
-    assert bindings["store"] == "dynamic_task_plan_store"
-    assert bindings["policy"] == "policy"
-    assert bindings["parallel_coordinator"] == (
-        "child_runtime_binding.parallel_coordinator"
-    )
-    assert bindings["child_agent_supervisor"] == (
-        "child_runtime_binding.supervisor"
-    )
-
-    assignments = {
-        node.targets[0].id: node.value
-        for node in factory.body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-    }
-    policy_call = assignments["policy"]
-    assert isinstance(policy_call, ast.Call)
-    assert _call_name(policy_call.func) == "build_research_analysis_task_plan_policy"
-
-    executor_call = assignments["task_plan_worker_executor"]
-    assert isinstance(executor_call, ast.Call)
-    assert _call_name(executor_call.func) == "HarnessSubAgentTaskExecutor"
-    executor_bindings = {
-        keyword.arg: ast.unparse(keyword.value)
-        for keyword in executor_call.keywords
-        if keyword.arg is not None
-    }
-    assert executor_bindings == {
-        "store": "dynamic_task_plan_store",
-        "runtime": "subagent_runtime",
-        "ref_admission_service": "dynamic_ref_admission_service",
-        "task_policy": "policy",
-    }
-
-    runtime_call = assignments["subagent_runtime"]
-    assert isinstance(runtime_call, ast.Call)
-    assert _call_name(runtime_call.func) == "SubAgentRuntime"
-    runtime_bindings = {
-        keyword.arg: ast.unparse(keyword.value)
-        for keyword in runtime_call.keywords
-        if keyword.arg is not None
-    }
-    assert runtime_bindings["workers"] == (
-        "{RESEARCH_DYNAMIC_SUBAGENT_IDS[capability]: worker "
-        "for capability, worker in task_workers.items()}"
-    )
-    assert runtime_bindings["transcript_store"] == "subagent_transcript_store"
-    assert runtime_bindings["result_ref_authority"] == "result_ref_authority"
 
 
 def test_subagent_runtime_has_no_child_lifecycle_authority() -> None:

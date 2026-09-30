@@ -1828,6 +1828,7 @@ def _apply_parallel_event(
             event,
             allow_same=False,
         )
+        _record_parallel_observation(payload, group, diagnostics, event)
     elif event.event_type == "TASK_GROUP_CANCEL_REQUESTED":
         _require_parallel_state(
             group["state"],
@@ -2770,7 +2771,23 @@ def _record_parallel_observation(
     group_id = group["group_id"]
     observation = payload.get("observation")
     if observation is not None:
-        if not isinstance(observation, Mapping) or observation.get("group_id") != group_id:
+        if not isinstance(observation, Mapping):
+            _parallel_error("parallel observation does not match group", event)
+        # Replan settlement events carry a small diagnostic marker in the
+        # observation field. It is an event-local note, rather than the
+        # canonical parent observation used for continuation checks. Accept
+        # only that explicit marker shape; every other observation must carry
+        # the group identity and checksum so replay remains fail-closed.
+        if "group_id" not in observation:
+            if (
+                event.event_type in {"TASK_GROUP_JOIN_WAITING", "TASK_GROUP_REPLAN_PENDING"}
+                and set(observation) == {"diagnostics"}
+                and isinstance(observation.get("diagnostics"), list)
+                and all(isinstance(item, str) and item for item in observation["diagnostics"])
+            ):
+                return
+            _parallel_error("parallel observation does not match group", event)
+        if observation.get("group_id") != group_id:
             _parallel_error("parallel observation does not match group", event)
         normalized = thaw_mapping(frozen_mapping(observation, "parallel_observation"))
         supplied = normalized.get("observation_checksum")

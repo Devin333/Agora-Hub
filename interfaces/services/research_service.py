@@ -1672,6 +1672,21 @@ def _run_store_service_error(
 
 
 def _research_runtime_service_error(error: Exception) -> ResearchServiceError:
+    from interfaces.composition.research_errors import ResearchCompositionError
+
+    if isinstance(error, ResearchCompositionError):
+        public = error.to_public_dict()
+        return ResearchServiceError(
+            str(public["code"]),
+            str(public["message"]),
+            status_code=503,
+            details={
+                "capabilities": list(public["capabilities"]),
+                "remediation": dict(public["remediation"]),
+            },
+            retryable=bool(public["retryable"]),
+            user_action_required=True,
+        )
     if isinstance(error, ResearchDynamicTaskPlanUnavailableError):
         return ResearchServiceError(
             "research_runtime_unavailable",

@@ -381,6 +381,7 @@ class ResearchRuntimeComposition:
         "_resources",
         "_service",
         "_settings",
+        "_subagent_transcript_store",
         "_source_runtime_provider",
     )
 
@@ -400,6 +401,7 @@ class ResearchRuntimeComposition:
         harness_wait_approval_resolver: DurableHarnessWaitApprovalResolver | None = None,
         harness_wait_actor_scope_resolver: _ResearchHarnessWaitActorScopeResolver | None = None,
         execution_composition: Any | None = None,
+        subagent_transcript_store: Any | None = None,
     ) -> None:
         if settings is not None and not isinstance(settings, ResearchRuntimeSettings):
             raise TypeError("settings must be ResearchRuntimeSettings")
@@ -431,6 +433,15 @@ class ResearchRuntimeComposition:
                 "ReaderRepairGraphApplicationService"
             )
 
+        if subagent_transcript_store is not None and not getattr(
+            subagent_transcript_store,
+            "is_durable",
+            False,
+        ):
+            raise TypeError(
+                "subagent_transcript_store must be a durable transcript store"
+            )
+
         unique_resources: list[Any] = []
         seen: set[int] = set()
         for resource in resources:
@@ -443,6 +454,7 @@ class ResearchRuntimeComposition:
         self._execution_composition = execution_composition
         self._service = service
         self._source_runtime_provider = source_runtime_provider
+        self._subagent_transcript_store = subagent_transcript_store
         self._resources = tuple(unique_resources)
         self._availability_error = availability_error
         self._graph_artifact_governance_service = (
@@ -466,6 +478,12 @@ class ResearchRuntimeComposition:
     @property
     def source_runtime_provider(self) -> SourceRuntimeProvider:
         return self._source_runtime_provider
+
+    @property
+    def subagent_transcript_store(self) -> Any | None:
+        """Durable transcript adapter owned by this process composition."""
+
+        return self._subagent_transcript_store
 
     @property
     def execution_composition(self) -> Any | None:
@@ -1648,6 +1666,11 @@ def _build_configured_composition(
                 12 * 1024 * 1024,
             ),
         )
+        # Keep the production transcript adapter under composition ownership
+        # even while dynamic child execution remains fail-closed. The future
+        # ChildAgentRunnerAdapter will receive this same durable store through
+        # the composition boundary instead of constructing a second adapter.
+        owned_resources.append(subagent_transcript_store)
         runtime_event_publisher = CanonicalRuntimeEventPublisher(
             durable_events.event_runtime,
             tenant_id=_RESEARCH_EVENT_TENANT_ID,
@@ -1660,221 +1683,16 @@ def _build_configured_composition(
         )
 
         def dynamic_task_plan_runner_factory(*, workspace: Any, dependencies: Any):
-            actor_metadata = {
-                "tenant_id": workspace.request.tenant_id,
-                "user_id": workspace.request.user_id,
-                "memory_namespace": workspace.request.memory_namespace,
-            }
-            result_tenant_id = research_event_tenant_id(actor_metadata)
-            try:
-                child_runtime_binding = dynamic_child_runtime.start_for_run(
-                    run_id=workspace.request.run_id,
-                    tenant_id=result_tenant_id,
-                )
-            except (ResearchChildRuntimeUnavailableError, ChildAgentSupervisorError):
-                raise ResearchRuntimeUnavailableError(
-                    (ResearchCapability.EVENT_LOG,),
-                    retryable=False,
-                ) from None
-            graph = HarnessGraphCompiler().compile(
-                build_dynamic_paper_analysis_graph_definition()
-            ).graph
-            stage_binding = TaskPlanStageBinding(
-                graph,
-                RESEARCH_DYNAMIC_STAGE_ID,
-            )
-            policy = build_research_analysis_task_plan_policy()
-            task_workers: dict[str, Any] = {}
-            bindings: dict[str, HarnessWorkerBinding] = {}
-            for capability in RESEARCH_DYNAMIC_CAPABILITIES:
-                worker = _ProductionResearchAnalysisWorker(
-                    capability,
-                    dependencies=dependencies,
-                    workspace=workspace,
-                )
-                task_workers[capability] = worker
-                bindings[capability] = HarnessWorkerBinding(
-                    HarnessContractReference(
-                        HarnessContractKind.WORKER,
-                        capability,
-                        "1",
-                    ),
-                    HarnessWorkerType.SUBAGENT,
-                    worker,
-                )
-            capability_registry = build_research_analysis_capability_registry(bindings)
-            result_ref_authority = HarnessResultRefAuthority(
-                dynamic_ref_admission_service.store,
-                transcript_store=subagent_transcript_store,
-                artifact_descriptors=graph_result_catalog,
-                tenant_id=result_tenant_id,
-            )
-            subagent_runtime = SubAgentRuntime(
-                workers={
-                    RESEARCH_DYNAMIC_SUBAGENT_IDS[capability]: worker
-                    for capability, worker in task_workers.items()
-                },
-                transcript_store=subagent_transcript_store,
-                result_ref_authority=result_ref_authority,
-                runtime_event_sink=runtime_event_publisher,
-            )
-            subagent_adapter = ResolvedSubAgentTaskAdapter(
-                subagent_runtime,
-                ref_admission_service=dynamic_ref_admission_service,
-                dependency_result_resolver=AcceptedDependencyResultResolver(
-                    store=dynamic_task_plan_store, authority=result_ref_authority, policy=policy,
-                ),
-            )
-            # Keep Research on the same Harness-owned TaskPlan execution
-            # boundary as generic AgentLoop delegation.  The stage runner
-            # still owns routing and verification; this executor owns the
-            # admitted invocation, dependency refs, transcript reuse, and
-            # recovery identity for each physical child attempt.
-            task_plan_worker_executor = HarnessSubAgentTaskExecutor(
-                store=dynamic_task_plan_store,
-                runtime=subagent_runtime,
-                ref_admission_service=dynamic_ref_admission_service,
-                task_policy=policy,
-            )
-            gate_registry = build_paper_analysis_gate_registry()
-
-            def gate_context(request):
-                run_spec = build_research_harness_run_spec(
-                    workspace.request,
-                    created_at=utc_now(),
-                )
-                compiled_graph = HarnessGraphCompiler().compile(run_spec.graph).graph
-                graph_state = initial_graph_state(
-                    run_spec,
-                    compiled_graph,
-                    HarnessGraphPreflightPolicy(),
-                    run_spec_checksum=run_spec_checksum(run_spec),
-                )
-                step_spec = next(
-                    item for item in run_spec.graph.activities
-                    if item.step_id == "dynamic_analysis_stage"
-                )
-                return GateContext(
-                    run_spec=run_spec,
-                    graph_state=graph_state,
-                    step_spec=step_spec,
-                    outputs={
-                        "evidence_pack": {
-                            "evidence_pack": (
-                                workspace.evidence_pack.to_dict()
-                                if workspace.evidence_pack is not None
-                                else {}
-                            )
-                        }
-                    },
-                    worker_result=request.worker_result,
-                    budget=HarnessBudgetSnapshot.from_budget(HarnessBudget.safe_default()),
-                )
-
-            result_verifier = TaskPlanResultVerifier(
-                build_research_analysis_task_gate_registry(
-                    gate_registry,
-                    context_factory=gate_context,
-                ),
-                transcript_store=subagent_transcript_store,
-                artifact_reference_verifier=artifact_port,
-                result_ref_authority=result_ref_authority,
-                gate_artifact_writer=dynamic_task_plan_store,
-            )
-            def task_context_pack(plan, instance, execution_identity):
-                if not isinstance(execution_identity, GraphExecutionIdentity):
-                    raise HarnessValidationError(
-                        "Research TaskPlan SubAgent requires physical Graph identity",
-                        code="task_plan_execution_identity_required",
-                    )
-                graph_identity, task_identity = task_plan_context_identities(
-                    plan,
-                    instance,
-                    execution_identity=execution_identity,
-                )
-                return ContextEnvelope.for_graph(
-                    envelope_id=(
-                        "research-task-plan-context:"
-                        f"{instance.task_instance_id}:{execution_identity.activity_id}"
-                    ),
-                    graph_identity=graph_identity,
-                    task_execution_identity=task_identity,
-                    phase="EXECUTE",
-                    worker_id="research.task-plan",
-                    worker_type=HarnessWorkerType.TASK_PLAN.value,
-                    dynamic_tail={
-                        "input_refs": ["document", "evidence_pack"],
-                        "raw_parent_messages_included": False,
-                    },
-                )
-
-            if (
-                settings.graph_artifact_persistence.mode
-                is GraphArtifactRolloutMode.ENFORCE
-            ):
-                transition_port = workspace.graph_transition_port
-                if not isinstance(transition_port, HarnessTransitionPort):
-                    raise TypeError(
-                        "dynamic TaskPlan requires the bound Graph transition port"
-                    )
-                if not isinstance(graph_result_materializer, ResultMaterializer):
-                    raise ResearchRuntimeUnavailableError(
-                        (ResearchCapability.GRAPH_ARTIFACT_PERSISTENCE,),
-                        retryable=False,
-                    )
-                child_adapter = HarnessSubAgentResultAdapter(
-                    materializer=graph_result_materializer,
-                    graph_result_runtime=HarnessGraphResultRuntime(
-                        HarnessGraphControlPlaneRuntime(transition_port)
-                    ),
-                    transcript_store=subagent_transcript_store,
-                    result_ref_authority=result_ref_authority,
-                )
-
-                def child_invocation(plan, resolved, instance, execution_identity):
-                    binding = capability_registry.resolve(
-                        resolved.task.worker_capability,
-                        policy,
-                    )
-                    return subagent_adapter.build_invocation(
-                        plan=plan,
-                        resolved_task=resolved,
-                        binding=binding,
-                        instance=instance,
-                        context_pack=task_context_pack(
-                            plan,
-                            instance,
-                            execution_identity,
-                        ),
-                        budget_snapshot=HarnessBudgetSnapshot.from_budget(
-                            HarnessBudget.safe_default()
-                        ),
-                        execution_identity=execution_identity,
-                    )
-
-                result_verifier = ResearchTaskPlanResultMaterializer(
-                    verifier=result_verifier,
-                    adapter=child_adapter,
-                    config=settings.graph_artifact_persistence,
-                    tenant_id=result_tenant_id,
-                    tenant_scope_ref=checksum_for(result_tenant_id),
-                    invocation_factory=child_invocation,
-                )
-
-            return ResearchAnalysisTaskPlanStageWorker(
-                stage_binding=stage_binding,
-                accepted_at=utc_now().isoformat().replace("+00:00", "Z"),
-                candidate_builder=ResearchAnalysisPlanCandidateBuilder(candidate_worker),
-                capability_registry=capability_registry,
-                store=dynamic_task_plan_store,
-                worker_executor=task_plan_worker_executor,
-                worker_result_recovery=task_plan_worker_executor.recover,
-                result_verifier=result_verifier,
-                policy=policy,
-                parallel_coordinator=child_runtime_binding.parallel_coordinator,
-                child_agent_supervisor=child_runtime_binding.supervisor,
-                checkpoint_store=dynamic_checkpoint_store,
-                ref_admission_service=dynamic_ref_admission_service,
+            # The existing Research branch workers operate on a mutable
+            # ``_ResearchRunWorkspace`` and invoke the domain candidate worker
+            # directly.  They cannot be projected into an ``AgentSpec`` with
+            # an authorized input reader and a real ``ChildAgentRunnerAdapter``
+            # without changing the branch contract and bypassing its evidence
+            # and quality boundaries.  Keep the dynamic production path
+            # fail-closed until that adapter is implemented.
+            raise ResearchRuntimeUnavailableError(
+                (ResearchCapability.TASK_PLAN_CHILD_EXECUTION,),
+                retryable=False,
             )
         def event_port_factory(_run_id: str) -> HarnessTransitionPort:
             return durable_events.create_harness_transition_port(
@@ -2104,6 +1922,7 @@ def _build_configured_composition(
             harness_wait_runtime_registry=harness_wait_runtime_registry,
             harness_wait_approval_resolver=harness_wait_approval_resolver,
             harness_wait_actor_scope_resolver=harness_wait_actor_scope_resolver,
+            subagent_transcript_store=subagent_transcript_store,
         )
     except BaseException:
         for resource in reversed(owned_resources):

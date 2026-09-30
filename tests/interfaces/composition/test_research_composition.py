@@ -93,6 +93,7 @@ from interfaces.composition.research import (
     default_research_runtime_provider,
     reset_default_research_runtime,
 )
+from interfaces.composition.research_errors import ResearchRuntimeUnavailableError
 from interfaces.composition.research_settings import ResearchRuntimeSettings
 from interfaces.composition.research_child_runtime import LazyResearchChildRuntime
 from interfaces.composition.runtime_execution import (
@@ -540,119 +541,13 @@ def test_valid_settings_compose_full_durable_production_graph(
                 "candidate-object-graph"
             ),
         )
-        dynamic_stage = runtime.dynamic_task_plan_runner_factory(
-            workspace=candidate_workspace,
-            dependencies=object(),
-        )
-        repeated_dynamic_stage = runtime.dynamic_task_plan_runner_factory(
-            workspace=candidate_workspace,
-            dependencies=object(),
-        )
-        assert child_runtime.started is True
-        assert (
-            repeated_dynamic_stage._child_agent_supervisor
-            is dynamic_stage._child_agent_supervisor
-        )
-        assert (
-            repeated_dynamic_stage._parallel_coordinator
-            is dynamic_stage._parallel_coordinator
-        )
-        assert isinstance(
-            dynamic_stage._parallel_coordinator,
-            ParallelAgentCoordinator,
-        )
-        assert isinstance(
-            dynamic_stage._child_agent_supervisor,
-            ChildAgentSupervisor,
-        )
-        from framework.harness.agent_loop.child_executor import (
-            HarnessSubAgentTaskExecutor,
-        )
-
-        assert isinstance(
-            dynamic_stage._runner.worker_executor,
-            HarnessSubAgentTaskExecutor,
-        )
-        assert (
-            dynamic_stage._parallel_coordinator.max_workers
-            == dynamic_stage._child_agent_supervisor.capacity
-            == dynamic_stage._policy.max_parallelism
-        )
-        admission = dynamic_stage._ref_admission_service
-        assert isinstance(admission, HarnessRefAdmissionService)
-        assert isinstance(admission.store, DurableRefAuthoritySnapshotStore)
-        assert admission.store.is_durable is True
-        assert admission.store._artifacts is runtime.artifact_port.store
-        from infrastructure.storage.memory.namespace import FilesystemMemoryNamespaceStore
-        assert isinstance(admission.memory_namespaces, FilesystemMemoryNamespaceStore)
-        assert admission.memory_namespaces.is_durable is True
-        assert admission.memory_namespace_refs == ()
-        stage_worker_type = research_composition.ResearchAnalysisTaskPlanStageWorker
-        volatile_admission = HarnessRefAdmissionService(SimpleNamespace(
-            commit=admission.store.commit,
-            get=admission.store.get,
-            find=admission.store.find,
-        ))
-        for unavailable_admission in (None, volatile_admission):
-            def stage_without_durable_authority(**kwargs):
-                return stage_worker_type(**{
-                    **kwargs, "ref_admission_service": unavailable_admission,
-                })
-
-            with monkeypatch.context() as scope:
-                scope.setattr(
-                    research_composition,
-                    "ResearchAnalysisTaskPlanStageWorker",
-                    stage_without_durable_authority,
-                )
-                with pytest.raises(HarnessValidationError) as error:
-                    runtime.dynamic_task_plan_runner_factory(
-                        workspace=candidate_workspace, dependencies=object(),
-                    )
-                assert error.value.code == "research_task_plan_ref_authority_required"
-        configured_verifier = dynamic_stage._runner.result_verifier
-        assert configured_verifier.result_ref_authority.store is admission.store
-        assert configured_verifier.result_ref_authority.is_durable is True
-        assert (
-            configured_verifier.gate_artifact_writer
-            is dynamic_stage._runner.store
-        )
-        def stage_without_gate_artifact_owner(**kwargs):
-            verifier = kwargs["result_verifier"]
-            while hasattr(verifier, "_verifier"):
-                verifier = verifier._verifier
-            verifier._gate_artifact_writer = None
-            return stage_worker_type(**kwargs)
-
-        with monkeypatch.context() as scope:
-            scope.setattr(
-                research_composition,
-                "ResearchAnalysisTaskPlanStageWorker",
-                stage_without_gate_artifact_owner,
+        with pytest.raises(ResearchRuntimeUnavailableError) as error:
+            runtime.dynamic_task_plan_runner_factory(
+                workspace=candidate_workspace,
+                dependencies=object(),
             )
-            with pytest.raises(HarnessValidationError) as error:
-                runtime.dynamic_task_plan_runner_factory(
-                    workspace=candidate_workspace,
-                    dependencies=object(),
-                )
-            assert (
-                error.value.code
-                == "research_task_plan_gate_artifact_owner_required"
-            )
-        def stage_without_result_authority(**kwargs):
-            kwargs["result_verifier"].result_ref_authority = None
-            return stage_worker_type(**kwargs)
-
-        with monkeypatch.context() as scope:
-            scope.setattr(research_composition, "ResearchAnalysisTaskPlanStageWorker", stage_without_result_authority)
-            with pytest.raises(HarnessValidationError) as error:
-                runtime.dynamic_task_plan_runner_factory(workspace=candidate_workspace, dependencies=object())
-            assert error.value.code == "research_task_plan_result_authority_required"
-        while hasattr(configured_verifier, "_verifier"):
-            configured_verifier = configured_verifier._verifier
-        configured_verifier = configured_verifier._artifact_reference_verifier
-        assert configured_verifier is runtime.artifact_port
-        assert isinstance(configured_verifier, ArtifactReferenceVerifierPort)
+        assert error.value.capabilities == ("research.task_plan.child_execution",)
+        assert child_runtime.started is False
         publish_worker = runtime._worker_registry(candidate_workspace)[
             "publish_artifacts"
         ]
@@ -863,16 +758,12 @@ def test_enforce_mode_composes_real_graph_result_runtime(
             context_assembler=ContextAssembler(),
             graph_transition_port=event_port,
         )
-        dynamic_stage = runtime.dynamic_task_plan_runner_factory(
-            workspace=workspace,
-            dependencies=object(),
-        )
-        child_verifier = dynamic_stage._runner.result_verifier
-        assert isinstance(child_verifier, ResearchTaskPlanResultMaterializer)
-        assert child_verifier._adapter._materializer is materializer
-        assert child_verifier.result_ref_authority is child_verifier._adapter.result_ref_authority
-        assert child_verifier.result_ref_authority is child_verifier._verifier.result_ref_authority
-        assert child_verifier.result_ref_authority._artifacts is materializer._catalog
+        with pytest.raises(ResearchRuntimeUnavailableError) as error:
+            runtime.dynamic_task_plan_runner_factory(
+                workspace=workspace,
+                dependencies=object(),
+            )
+        assert error.value.capabilities == ("research.task_plan.child_execution",)
     finally:
         composition.close()
 
