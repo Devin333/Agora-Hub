@@ -1589,7 +1589,11 @@ class DurableTaskPlanStore:
             validate_task_plan_event_contract(
                 event,
                 plan=None if replayed else plan,
-                previous_events=previous_events,
+                previous_events=(
+                    history[: max(event.sequence - 1, 0)]
+                    if replayed
+                    else previous_events
+                ),
             )
             previous_events = (*previous_events, event)
         if replayed:

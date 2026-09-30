@@ -1878,10 +1878,6 @@ class InMemoryTaskPlanStore:
         with self._lock:
             history = tuple(self._events.get(key, ()))
             replayed = _classify_atomic_event_batch_history(batch, history)
-            if replayed:
-                return tuple(event.event_checksum for event in batch)
-            _reject_uncoordinated_capacity_transition(batch, history)
-
             plan = self._current_plan(run_id, stage_id)
             from framework.harness.runtime_contract import validate_task_plan_event_contract
 
@@ -1889,10 +1885,18 @@ class InMemoryTaskPlanStore:
             for event in batch:
                 validate_task_plan_event_contract(
                     event,
-                    plan=plan,
-                    previous_events=previous_events,
+                    plan=None if replayed else plan,
+                    previous_events=(
+                        history[: max(event.sequence - 1, 0)]
+                        if replayed
+                        else previous_events
+                    ),
                 )
                 previous_events = (*previous_events, event)
+            if replayed:
+                return tuple(event.event_checksum for event in batch)
+            _reject_uncoordinated_capacity_transition(batch, history)
+
             if plan is not None:
                 for event in batch:
                     _require_event_matches_plan(event, plan)
