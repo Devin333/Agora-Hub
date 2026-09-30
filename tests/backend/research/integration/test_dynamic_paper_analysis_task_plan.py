@@ -15,6 +15,7 @@ from backend.research.application import (
 )
 from backend.research.application.single_paper_runtime import (
     ResearchSinglePaperRuntime,
+    _validated_analysis_branch_refs_from_input,
 )
 from backend.research.graphs import (
     RESEARCH_DYNAMIC_CAPABILITIES,
@@ -728,6 +729,40 @@ def test_dynamic_golden_parity_binds_branch_refs_gates_and_publication_successor
         item["passed"]
         for item in verified_claims["output"]["claim_gate_results"]
     )
+
+
+def test_dynamic_aggregate_checksum_tampering_is_rejected() -> None:
+    branches = [
+        {
+            "role": role,
+            "output_ref": f"result://{role}",
+            "producer_node_id": producer,
+            "output_key": output_key,
+        }
+        for role, producer, output_key in (
+            ("analysis.structure", "analyze_structure", "structure_candidate"),
+            ("analysis.contribution", "analyze_contribution", "contribution_candidate"),
+            ("analysis.experiments", "analyze_experiments", "experiment_candidate"),
+        )
+    ]
+    roles = {item["role"]: item["output_ref"] for item in branches}
+    result_refs = sorted(item["output_ref"] for item in branches)
+    checksum = canonical_payload_checksum(
+        {"roles": roles, "result_refs": result_refs, "branch_refs": branches}
+    )
+    aggregate = {
+        "aggregate_ref": f"task-plan-aggregate:{checksum}",
+        "aggregate_checksum": checksum,
+        "output_refs_by_role": roles,
+        "result_refs": result_refs,
+        "analysis_branch_refs": branches,
+    }
+
+    assert _validated_analysis_branch_refs_from_input(aggregate) == branches
+    aggregate["result_refs"][-1] = "result://zzzz"
+    with pytest.raises(HarnessValidationError) as error:
+        _validated_analysis_branch_refs_from_input(aggregate)
+    assert error.value.code == "research_dynamic_aggregate_checksum_invalid"
 
 
 def test_dynamic_replay_uses_recorded_outer_result_without_live_plan_or_subagents(tmp_path) -> None:

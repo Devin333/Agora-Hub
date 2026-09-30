@@ -112,6 +112,7 @@ from backend.research.services import (
 )
 from backend.research.taxonomy import TaxonomyAssignment, TaxonomyAssignmentBuilder, TaxonomyCandidate, TaxonomyRegistry
 from backend.research.graphs import (
+    RESEARCH_DYNAMIC_OUTPUT_ROLES,
     build_dynamic_paper_analysis_graph_definition,
     build_paper_analysis_context_graph_identity,
     build_paper_analysis_gate_registry,
@@ -2011,9 +2012,12 @@ class ResearchSinglePaperRuntime:
     ) -> HarnessWorkerResult:
         if workspace.evidence_pack is None:
             return _failed("evidence pack is required before claim verification")
-        branch_refs = _analysis_branch_refs_from_input(
-            task.get("inputs", {}).get("analysis_branch_refs")
-        )
+        try:
+            branch_refs = _validated_analysis_branch_refs_from_input(
+                task.get("inputs", {}).get("analysis_branch_refs")
+            )
+        except HarnessValidationError as exc:
+            return _failed(str(exc))
         if not isinstance(branch_refs, tuple | list):
             return _failed(
                 "analysis branch refs are required before claim verification"
@@ -2840,14 +2844,105 @@ def _analysis_branch_refs_from_input(value: Any) -> Any:
     deeper. Only that exact envelope shape is unwrapped.
     """
 
-    if isinstance(value, Mapping) and set(value) == {
+    if isinstance(value, Mapping) and set(value) in ({
         "aggregate_ref",
         "aggregate_checksum",
         "output_refs_by_role",
         "analysis_branch_refs",
-    }:
+    }, {
+        "aggregate_ref",
+        "aggregate_checksum",
+        "output_refs_by_role",
+        "result_refs",
+        "analysis_branch_refs",
+    }):
         return value.get("analysis_branch_refs")
     return value
+
+
+def _validated_analysis_branch_refs_from_input(value: Any) -> Any:
+    """Validate the dynamic aggregate envelope before downstream Research gates.
+
+    Static Graph merges provide branch refs directly. Dynamic TaskPlan stages
+    additionally provide a checksum-bound aggregate envelope; accepting only
+    the branch producer names would allow output refs or aggregate identity to
+    be replaced before claim verification and publication.
+    """
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "aggregate_ref",
+        "aggregate_checksum",
+        "output_refs_by_role",
+        "result_refs",
+        "analysis_branch_refs",
+    }:
+        return _analysis_branch_refs_from_input(value)
+    roles = value.get("output_refs_by_role")
+    result_refs = value.get("result_refs")
+    branch_refs = value.get("analysis_branch_refs")
+    if not isinstance(roles, Mapping) or not isinstance(result_refs, list):
+        raise HarnessValidationError(
+            "Research dynamic aggregate envelope is malformed",
+            code="research_dynamic_aggregate_invalid",
+        )
+    if not isinstance(branch_refs, list) or tuple(sorted(result_refs)) != tuple(result_refs):
+        raise HarnessValidationError(
+            "Research dynamic aggregate result refs are not canonical",
+            code="research_dynamic_aggregate_invalid",
+        )
+    expected_roles = set(RESEARCH_DYNAMIC_OUTPUT_ROLES)
+    if set(roles) != expected_roles or len(branch_refs) != len(expected_roles):
+        raise HarnessValidationError(
+            "Research dynamic aggregate roles are incomplete",
+            code="research_dynamic_aggregate_invalid",
+        )
+    branch_roles: dict[str, str] = {}
+    for branch in branch_refs:
+        if not isinstance(branch, Mapping) or set(branch) != {
+            "role",
+            "output_ref",
+            "producer_node_id",
+            "output_key",
+        }:
+            raise HarnessValidationError(
+                "Research dynamic aggregate branch ref is malformed",
+                code="research_dynamic_aggregate_invalid",
+            )
+        role = branch["role"]
+        output_ref = branch["output_ref"]
+        if (
+            not isinstance(role, str)
+            or role in branch_roles
+            or role not in expected_roles
+            or not isinstance(output_ref, str)
+            or not output_ref.strip()
+            or roles.get(role) != output_ref
+        ):
+            raise HarnessValidationError(
+                "Research dynamic aggregate branch ref conflicts with its role map",
+                code="research_dynamic_aggregate_invalid",
+            )
+        branch_roles[role] = output_ref
+    if set(branch_roles) != expected_roles:
+        raise HarnessValidationError(
+            "Research dynamic aggregate branch refs are incomplete",
+            code="research_dynamic_aggregate_invalid",
+        )
+    expected_checksum = checksum_for(
+        {
+            "roles": dict(roles),
+            "result_refs": result_refs,
+            "branch_refs": [dict(item) for item in branch_refs],
+        }
+    )
+    if value.get("aggregate_checksum") != expected_checksum or value.get(
+        "aggregate_ref"
+    ) != f"task-plan-aggregate:{expected_checksum}":
+        raise HarnessValidationError(
+            "Research dynamic aggregate identity checksum is invalid",
+            code="research_dynamic_aggregate_checksum_invalid",
+        )
+    return branch_refs
 
 
 def _score_candidate_is_in_supported_range(candidate: dict[str, Any]) -> bool:

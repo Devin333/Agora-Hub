@@ -319,6 +319,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
                     "aggregate_ref": aggregate.aggregate_ref,
                     "aggregate_checksum": aggregate.aggregate_checksum,
                     "output_refs_by_role": dict(aggregate.output_refs_by_role),
+                    "result_refs": list(aggregate.result_refs),
                     "analysis_branch_refs": [dict(item) for item in aggregate.branch_refs],
                 },
                 diagnostics={"plan_id": plan.plan_id, "plan_version": plan.version, "projection_checksum": projection.projection_checksum},
