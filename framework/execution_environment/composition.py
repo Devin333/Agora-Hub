@@ -23,6 +23,7 @@ from framework.execution_environment.errors import (
 from framework.execution_environment.models import (
     CAPABILITY_DENIAL_CODE_VERSION,
     DeploymentCapabilityEvidence,
+    DeploymentRollbackEvidence,
     EXECUTION_CAPABILITY_FIELDS,
     ExecutionMode,
     ExecutionProfile,
@@ -60,6 +61,18 @@ _DEPLOYMENT_EVIDENCE_DENIAL_CODES = MappingProxyType({
     "deployment_capability_evidence_inconsistent": (
         "execution_deployment_capability_evidence_inconsistent"
     ),
+    "deployment_rollback_evidence_missing": (
+        "execution_deployment_rollback_evidence_missing"
+    ),
+    "deployment_rollback_evidence_unbound": (
+        "execution_deployment_rollback_evidence_unbound"
+    ),
+    "deployment_rollback_evidence_mismatch": (
+        "execution_deployment_rollback_evidence_mismatch"
+    ),
+    "deployment_rollback_evidence_failed": (
+        "execution_deployment_rollback_evidence_failed"
+    ),
 })
 
 
@@ -88,6 +101,9 @@ class RuntimeCompositionManifest:
     deployment_capability_evidence: tuple[
         DeploymentCapabilityEvidence | Mapping[str, Any], ...
     ] = ()
+    deployment_rollback_evidence: tuple[
+        DeploymentRollbackEvidence | Mapping[str, Any], ...
+    ] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "composition_id", _identifier(self.composition_id, "composition_id"))
@@ -113,6 +129,20 @@ class RuntimeCompositionManifest:
             )
         object.__setattr__(self, "deployment_capability_evidence", tuple(sorted(
             evidence, key=lambda item: item.provider_id
+        )))
+        rollback_evidence: list[DeploymentRollbackEvidence] = []
+        for item in self.deployment_rollback_evidence:
+            normalized = (
+                item
+                if isinstance(item, DeploymentRollbackEvidence)
+                else DeploymentRollbackEvidence.from_dict(item)
+            )
+            rollback_evidence.append(normalized)
+        rollback_refs = [item.evidence_ref for item in rollback_evidence]
+        if len(set(rollback_refs)) != len(rollback_refs):
+            raise ValueError("deployment rollback evidence refs must be unique")
+        object.__setattr__(self, "deployment_rollback_evidence", tuple(sorted(
+            rollback_evidence, key=lambda item: item.evidence_ref
         )))
 
     @property
@@ -143,6 +173,7 @@ class RuntimeCompositionManifest:
             "composition_id", "version", "policy_fingerprint", "provider_fingerprint",
             "metadata",
             "deployment_capability_evidence",
+            "deployment_rollback_evidence",
         }
         unknown = sorted(set(value) - expected)
         if unknown:
@@ -158,6 +189,9 @@ class RuntimeCompositionManifest:
             "metadata": dict(self.metadata),
             "deployment_capability_evidence": [
                 item.to_dict() for item in self.deployment_capability_evidence
+            ],
+            "deployment_rollback_evidence": [
+                item.to_dict() for item in self.deployment_rollback_evidence
             ],
         }
 
@@ -331,6 +365,11 @@ class RuntimeExecutionComposition:
                 for item in self.manifest.deployment_capability_evidence
             ],
             "deployment_capability_evidence_issues": evidence_issues,
+            "deployment_qualification_issues": self.deployment_qualification_issues(),
+            "deployment_rollback_evidence": [
+                item.to_operator_projection()
+                for item in self.manifest.deployment_rollback_evidence
+            ],
             "provider_capabilities": provider_capabilities,
         }
 
@@ -447,6 +486,123 @@ class RuntimeExecutionComposition:
                     "denials": denials,
                 },
             )
+
+    def deployment_qualification_issues(self) -> list[dict[str, Any]]:
+        """Validate deployment and rollback receipts for every enabled provider.
+
+        ``required_provider_ids`` is the explicit enabled-provider set for a
+        process role.  This gate is intentionally separate from local
+        provider admission: a Docker daemon probe or capability checksum is
+        insufficient without a deployment-owned receipt and a successful,
+        identity-bound rollback rehearsal.
+        """
+
+        self.verify_integrity()
+        evidence_by_provider = {
+            item.provider_id: item
+            for item in self.manifest.deployment_capability_evidence
+        }
+        rollback_by_ref = {
+            item.evidence_ref: item
+            for item in self.manifest.deployment_rollback_evidence
+        }
+        issues: list[dict[str, Any]] = []
+
+        def add(provider_id: str, capability: str) -> None:
+            issues.append({
+                "provider_id": provider_id,
+                "capability": capability,
+                "denial_code": _DEPLOYMENT_EVIDENCE_DENIAL_CODES[capability],
+            })
+
+        enabled = set(self.required_provider_ids)
+        for rollback in self.manifest.deployment_rollback_evidence:
+            if rollback.provider_id not in enabled:
+                add(rollback.provider_id, "deployment_rollback_evidence_unbound")
+
+        for provider_id in self.required_provider_ids:
+            if provider_id not in self.execution_registry.provider_ids():
+                add(provider_id, "deployment_capability_evidence_missing")
+                continue
+            capabilities = self.execution_registry.resolve_capabilities(provider_id)
+            evidence = evidence_by_provider.get(provider_id)
+            if evidence is None:
+                add(provider_id, "deployment_capability_evidence_missing")
+                continue
+            static_issues = self._deployment_capability_evidence_issues_for(
+                provider_id, capabilities, evidence
+            )
+            if static_issues:
+                issues.extend(static_issues)
+                continue
+            rollback = rollback_by_ref.get(evidence.rollback_evidence_ref)
+            if rollback is None:
+                add(provider_id, "deployment_rollback_evidence_missing")
+                continue
+            if rollback.provider_id != provider_id:
+                add(provider_id, "deployment_rollback_evidence_mismatch")
+                continue
+            if (
+                rollback.deployment_identity != evidence.deployment_identity
+                or rollback.image_digest != evidence.image_digest
+                or rollback.provider_capability_checksum != capabilities.checksum
+            ):
+                add(provider_id, "deployment_rollback_evidence_mismatch")
+                continue
+            if rollback.status != "succeeded" or not rollback.termination_confirmed:
+                add(provider_id, "deployment_rollback_evidence_failed")
+        return issues
+
+    def require_deployment_ready(self) -> None:
+        """Fail closed unless enabled providers have deployment/rollback proof."""
+
+        issues = self.deployment_qualification_issues()
+        if issues:
+            raise ExecutionEnvironmentUnavailableError(
+                "runtime deployment qualification is unavailable",
+                details={
+                    "provider_ids": sorted({item["provider_id"] for item in issues}),
+                    "missing": [item["capability"] for item in issues],
+                    "denial_code_version": CAPABILITY_DENIAL_CODE_VERSION,
+                    "denial_code": issues[0]["denial_code"],
+                    "denials": issues,
+                },
+            )
+
+    @staticmethod
+    def _deployment_capability_evidence_issues_for(
+        provider_id: str,
+        capabilities: Any,
+        evidence: DeploymentCapabilityEvidence,
+    ) -> list[dict[str, Any]]:
+        reason: str | None = None
+        if not all((evidence.deployment_ref, evidence.deployment_identity,
+                    evidence.image_ref, evidence.image_digest,
+                    evidence.rollback_evidence_ref)):
+            reason = "deployment_capability_evidence_incomplete"
+        elif evidence.provider_capability_checksum != capabilities.checksum:
+            reason = "deployment_capability_evidence_mismatch"
+        else:
+            advertised_capabilities = {
+                capability_name
+                for field_name, capability_name in EXECUTION_CAPABILITY_FIELDS
+                if getattr(capabilities, field_name)
+            }
+            if set(evidence.tested_capabilities) - advertised_capabilities:
+                reason = "deployment_capability_evidence_inconsistent"
+            elif set(evidence.unsupported_capabilities) & advertised_capabilities:
+                reason = "deployment_capability_evidence_unsupported"
+        if reason is None and not evidence.is_valid_at(utc_now()):
+            reason = (
+                "deployment_capability_evidence_not_yet_valid"
+                if utc_now() < evidence.qualified_at
+                else "deployment_capability_evidence_expired"
+            )
+        return [] if reason is None else [{
+            "provider_id": provider_id,
+            "capability": reason,
+            "denial_code": _DEPLOYMENT_EVIDENCE_DENIAL_CODES[reason],
+        }]
 
     def tool_executor_factory(self, registry: Any, **kwargs: Any) -> Any:
         self.verify_integrity()

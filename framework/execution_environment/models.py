@@ -67,6 +67,9 @@ EXECUTION_RECEIPT_SCHEMA = "newsroom.execution-receipt/v1"
 DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA = (
     "newsroom.execution-deployment-capability-evidence/v1"
 )
+DEPLOYMENT_ROLLBACK_EVIDENCE_SCHEMA = (
+    "newsroom.execution-deployment-rollback-evidence/v1"
+)
 EXECUTION_CAPABILITY_FIELDS = (
     ("enforces_filesystem_roots", "filesystem_roots"),
     ("enforces_network_deny", "network_deny"),
@@ -957,6 +960,131 @@ class DeploymentCapabilityEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentRollbackEvidence:
+    """Provider-owned receipt for a deployment rollback rehearsal.
+
+    A capability admission probe cannot produce this record.  The receipt
+    must come from the deployment owner after switching away from the
+    qualified deployment and proving that the pinned rollback target became
+    active again.  Keeping this contract separate from local provider
+    admission prevents a daemon probe from being mistaken for deployment
+    qualification.
+    """
+
+    evidence_ref: str
+    provider_id: str
+    deployment_identity: str
+    image_digest: str
+    provider_capability_checksum: str
+    rollback_target_identity: str
+    rollback_target_image_digest: str
+    status: str
+    termination_confirmed: bool
+    verified_at: datetime
+    schema_version: str = DEPLOYMENT_ROLLBACK_EVIDENCE_SCHEMA
+
+    def __post_init__(self) -> None:
+        if self.schema_version != DEPLOYMENT_ROLLBACK_EVIDENCE_SCHEMA:
+            raise ValueError(
+                "unsupported deployment rollback evidence schema: "
+                f"{self.schema_version}"
+            )
+        for field_name in (
+            "evidence_ref",
+            "provider_id",
+            "deployment_identity",
+            "rollback_target_identity",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _evidence_identifier(getattr(self, field_name), field_name),
+            )
+        for field_name in ("image_digest", "rollback_target_image_digest", "provider_capability_checksum"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str):
+                raise TypeError(f"{field_name} must be a string")
+            normalized = value.strip().lower()
+            pattern = r"sha256:[0-9a-f]{64}"
+            if re.fullmatch(pattern, normalized) is None:
+                raise ValueError(f"{field_name} must be a sha256 checksum")
+            object.__setattr__(self, field_name, normalized)
+        status = str(self.status).strip().lower()
+        if status not in {"succeeded", "failed", "indeterminate"}:
+            raise ValueError("status must be succeeded, failed, or indeterminate")
+        object.__setattr__(self, "status", status)
+        if not isinstance(self.termination_confirmed, bool):
+            raise TypeError("termination_confirmed must be boolean")
+        object.__setattr__(self, "verified_at", _utc_time(self.verified_at, "verified_at"))
+
+    @property
+    def checksum(self) -> str:
+        return _checksum(self.to_dict())
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DeploymentRollbackEvidence":
+        if not isinstance(value, Mapping):
+            raise TypeError("deployment rollback evidence must be an object")
+        expected = {
+            "schema_version",
+            "evidence_ref",
+            "provider_id",
+            "deployment_identity",
+            "image_digest",
+            "provider_capability_checksum",
+            "rollback_target_identity",
+            "rollback_target_image_digest",
+            "status",
+            "termination_confirmed",
+            "verified_at",
+        }
+        unknown = sorted(set(value) - expected)
+        if unknown:
+            raise ValueError(
+                "deployment rollback evidence contains unknown fields: "
+                f"{unknown}"
+            )
+        if value.get("schema_version") != DEPLOYMENT_ROLLBACK_EVIDENCE_SCHEMA:
+            raise ValueError(
+                "deployment rollback evidence schema_version must be "
+                f"{DEPLOYMENT_ROLLBACK_EVIDENCE_SCHEMA!r}"
+            )
+        payload = dict(value)
+        payload["verified_at"] = parse_datetime(payload.get("verified_at"))
+        return cls(**payload)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "evidence_ref": self.evidence_ref,
+            "provider_id": self.provider_id,
+            "deployment_identity": self.deployment_identity,
+            "image_digest": self.image_digest,
+            "provider_capability_checksum": self.provider_capability_checksum,
+            "rollback_target_identity": self.rollback_target_identity,
+            "rollback_target_image_digest": self.rollback_target_image_digest,
+            "status": self.status,
+            "termination_confirmed": self.termination_confirmed,
+            "verified_at": format_datetime(self.verified_at),
+        }
+
+    def to_operator_projection(self) -> dict[str, Any]:
+        return {
+            "evidence_ref_checksum": _checksum(self.evidence_ref),
+            "provider_id": self.provider_id,
+            "deployment_identity_checksum": _checksum(self.deployment_identity),
+            "image_digest": self.image_digest,
+            "provider_capability_checksum": self.provider_capability_checksum,
+            "rollback_target_identity_checksum": _checksum(self.rollback_target_identity),
+            "rollback_target_image_digest": self.rollback_target_image_digest,
+            "status": self.status,
+            "termination_confirmed": self.termination_confirmed,
+            "verified_at": format_datetime(self.verified_at),
+            "evidence_checksum": self.checksum,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionReceipt:
     execution_id: str
     tool_id: str
@@ -1262,11 +1390,13 @@ def _evidence_identifier(value: Any, field_name: str) -> str:
 __all__ = [
     "CAPABILITY_DENIAL_CODE_VERSION",
     "DEPLOYMENT_CAPABILITY_EVIDENCE_SCHEMA",
+    "DEPLOYMENT_ROLLBACK_EVIDENCE_SCHEMA",
     "EXECUTION_CAPABILITY_FIELDS",
     "EXECUTION_PROFILE_SCHEMA",
     "EXECUTION_RECEIPT_SCHEMA",
     "ExecutionCapabilityProfile",
     "DeploymentCapabilityEvidence",
+    "DeploymentRollbackEvidence",
     "ExecutionMode",
     "ExecutionOutcome",
     "ExecutionProfile",

@@ -13,7 +13,6 @@ from typing import Any, Mapping
 
 from framework.harness.control_plane.errors import HarnessValidationError
 
-
 HARNESS_RUNTIME_CONTRACT_VERSION = "newsroom.harness-runtime-contract/v2"
 
 
@@ -440,6 +439,7 @@ def validate_task_result_contract(
     """Validate result identity and transition before a result is persisted."""
 
     from framework.harness.task_plan.models import TaskLifecycle, TaskPlanProjection, ValidatedTaskPlan
+    from framework.harness.task_plan.task_lifecycle import ACTIVE_TASK_STATES
 
     if not isinstance(plan, ValidatedTaskPlan) or not isinstance(projection, TaskPlanProjection):
         raise HarnessValidationError("result acceptance requires validated plan and projection", code="RUNTIME_CONTRACT_IDENTITY_MISMATCH")
@@ -458,8 +458,15 @@ def validate_task_result_contract(
         raise HarnessValidationError("result binding checksum differs from plan", code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH")
     if task.active_instance_id != result.task_instance_id or task.attempts != result.attempt:
         raise HarnessValidationError("result belongs to a different attempt", code="RUNTIME_CONTRACT_TRANSITION_INVALID")
-    if task.status in {TaskLifecycle.SUCCEEDED, TaskLifecycle.SKIPPED}:
-        raise HarnessValidationError("result transition is already terminal", code="RUNTIME_CONTRACT_TRANSITION_INVALID")
+    # A result is accepted only for an attempt that is durably active.  READY
+    # and dependency/terminal states have no owner for a physical result; an
+    # otherwise valid, re-checksummed result in those states is still a forged
+    # transition and must be rejected before store mutation.
+    if task.status not in ACTIVE_TASK_STATES:
+        raise HarnessValidationError(
+            "result transition requires an active admitted attempt",
+            code="RUNTIME_CONTRACT_TRANSITION_INVALID",
+        )
 
 
 def validate_history_read_contract(plans: Any, events: Any, results: Any) -> None:
@@ -515,6 +522,7 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
             code="RUNTIME_CONTRACT_REFERENCE_MISMATCH",
         )
 
+    last_sequence_by_scope: dict[tuple[str, str], int] = {}
     for event in events:
         if (
             type(event) is not TaskPlanEvent
@@ -542,6 +550,15 @@ def validate_history_read_contract(plans: Any, events: Any, results: Any) -> Non
                 "history event differs from its canonical owner model",
                 code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
             )
+        scope_key = (event.run_id, event.stage_id)
+        previous_sequence = last_sequence_by_scope.get(scope_key)
+        if previous_sequence is not None and event.sequence <= previous_sequence:
+            raise HarnessValidationError(
+                "history event sequence does not advance monotonically",
+                code="RUNTIME_CONTRACT_TRANSITION_INVALID",
+                details={"previous": previous_sequence, "current": event.sequence},
+            )
+        last_sequence_by_scope[scope_key] = event.sequence
         if event.plan_id is None:
             if event.plan_version is not None or not any(
                 event.matches_contract_identity(plan) for plan in canonical_plans

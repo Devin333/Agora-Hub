@@ -16,6 +16,8 @@ from framework.execution_environment import (
     ExecutionProfileRegistry,
     RuntimeCompositionManifest,
     RuntimeExecutionComposition,
+    DeploymentCapabilityEvidence,
+    DeploymentRollbackEvidence,
     build_runtime_execution_composition,
 )
 from infrastructure.execution_environment.docker import DockerExecutionEnvironment
@@ -43,6 +45,8 @@ def build_process_execution_composition(
     *,
     required_provider_ids: tuple[str, ...] = (),
     expected_manifest_fingerprint: str | None = None,
+    deployment_capability_evidence: tuple[DeploymentCapabilityEvidence, ...] = (),
+    deployment_rollback_evidence: tuple[DeploymentRollbackEvidence, ...] = (),
 ) -> RuntimeExecutionComposition:
     """Build the shared execution composition used by every process root.
 
@@ -96,6 +100,8 @@ def build_process_execution_composition(
                 "mineru": RESEARCH_MINERU_PROFILE_ID,
             },
         },
+        deployment_capability_evidence=deployment_capability_evidence,
+        deployment_rollback_evidence=deployment_rollback_evidence,
     )
     return build_runtime_execution_composition(
         manifest=manifest,

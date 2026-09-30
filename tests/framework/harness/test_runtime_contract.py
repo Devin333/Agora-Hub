@@ -470,6 +470,17 @@ def test_history_contract_accepts_canonical_plan_event_and_result() -> None:
     validate_history_read_contract((plan,), (event,), (_history_result(plan),))
 
 
+def test_history_contract_rejects_non_monotonic_event_transition() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    first = TaskPlanEvent.for_plan("PLAN_ACCEPTED", plan, sequence=1)
+    second = TaskPlanEvent.for_plan("PLAN_BUILD_INTENT", plan, sequence=1)
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_history_read_contract((plan,), (first, second), ())
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_TRANSITION_INVALID"
+
+
 def test_task_result_owner_contract_accepts_canonical_result() -> None:
     validate_task_result_owner_contract(_history_result(_accepted_parallel_plan(("task-1",))))
 

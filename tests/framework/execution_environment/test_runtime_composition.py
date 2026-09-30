@@ -6,6 +6,7 @@ import pytest
 
 from framework.execution_environment import (
     DeploymentCapabilityEvidence,
+    DeploymentRollbackEvidence,
     ExecutionCapabilityProfile,
     ExecutionEnvironmentRegistry,
     ExecutionEnvironmentUnavailableError,
@@ -43,6 +44,17 @@ def test_manifest_fingerprint_is_stable_and_round_trips() -> None:
     assert restored == composition.manifest
     assert restored.fingerprint == composition.fingerprint
     assert composition.diagnostics()["status"] == "ready"
+
+
+def test_manifest_round_trip_preserves_rollback_evidence() -> None:
+    provider = _AvailableProvider().capabilities
+    capability = _deployment_evidence(provider)
+    rollback = _rollback_evidence(provider, capability)
+    composition = _qualified_composition((capability,), (rollback,))
+    restored = RuntimeCompositionManifest.from_dict(composition.manifest.to_dict())
+
+    assert restored.deployment_rollback_evidence == (rollback,)
+    assert restored.fingerprint == composition.manifest.fingerprint
 
 
 def test_profile_registry_missing_profile_is_typed_denial() -> None:
@@ -146,6 +158,7 @@ def _deployment_evidence(
 
 def _qualified_composition(
     evidence: tuple[DeploymentCapabilityEvidence, ...] = (),
+    rollback: tuple[DeploymentRollbackEvidence, ...] = (),
 ) -> RuntimeExecutionComposition:
     profiles = ExecutionProfileRegistry()
     profiles.register(
@@ -163,6 +176,7 @@ def _qualified_composition(
         profile_registry=profiles,
         execution_registry=providers,
         deployment_capability_evidence=evidence,
+        deployment_rollback_evidence=rollback,
     )
     return RuntimeExecutionComposition(
         manifest=manifest,
@@ -172,6 +186,29 @@ def _qualified_composition(
     )
 
 
+def _rollback_evidence(
+    provider: ExecutionCapabilityProfile,
+    evidence: DeploymentCapabilityEvidence,
+    *,
+    status: str = "succeeded",
+    termination_confirmed: bool = True,
+    provider_id: str | None = None,
+    deployment_identity: str | None = None,
+    image_digest: str | None = None,
+    capability_checksum: str | None = None,
+) -> DeploymentRollbackEvidence:
+    return DeploymentRollbackEvidence(
+        evidence_ref=evidence.rollback_evidence_ref,
+        provider_id=provider_id or provider.provider_id,
+        deployment_identity=deployment_identity or evidence.deployment_identity,
+        image_digest=image_digest or evidence.image_digest,
+        provider_capability_checksum=capability_checksum or provider.checksum,
+        rollback_target_identity="deployment-qualified-previous",
+        rollback_target_image_digest="sha256:" + "b" * 64,
+        status=status,
+        termination_confirmed=termination_confirmed,
+        verified_at=datetime.now(UTC),
+    )
 def test_deployment_capability_evidence_round_trips_with_stable_checksum() -> None:
     provider = _AvailableProvider().capabilities
     evidence = _deployment_evidence(provider)
@@ -179,6 +216,83 @@ def test_deployment_capability_evidence_round_trips_with_stable_checksum() -> No
 
     assert restored == evidence
     assert restored.checksum == evidence.checksum
+
+
+def test_deployment_rollback_evidence_round_trips_with_stable_checksum() -> None:
+    provider = _AvailableProvider().capabilities
+    evidence = _deployment_evidence(provider)
+    rollback = _rollback_evidence(provider, evidence)
+    restored = DeploymentRollbackEvidence.from_dict(rollback.to_dict())
+
+    assert restored == rollback
+    assert restored.checksum == rollback.checksum
+
+
+def test_deployment_qualification_requires_provider_bound_successful_rollback() -> None:
+    provider = _AvailableProvider().capabilities
+    evidence = _deployment_evidence(provider)
+    composition = _qualified_composition((evidence,), (_rollback_evidence(provider, evidence),))
+
+    assert composition.deployment_qualification_issues() == []
+    composition.require_deployment_ready()
+
+
+def test_deployment_qualification_rejects_advertised_unsupported_capability() -> None:
+    provider = _AvailableProvider().capabilities
+    evidence = _deployment_evidence(provider, unsupported_capabilities=("argv_policy",))
+    rollback = _rollback_evidence(provider, evidence)
+    composition = _qualified_composition((evidence,), (rollback,))
+
+    issue = composition.deployment_qualification_issues()[0]
+    assert issue["capability"] == "deployment_capability_evidence_unsupported"
+
+
+@pytest.mark.parametrize(
+    ("status", "termination_confirmed"),
+    [("failed", True), ("indeterminate", False), ("succeeded", False)],
+)
+def test_deployment_qualification_rejects_failed_or_unconfirmed_rollback(
+    status: str,
+    termination_confirmed: bool,
+) -> None:
+    provider = _AvailableProvider().capabilities
+    evidence = _deployment_evidence(provider)
+    rollback = _rollback_evidence(
+        provider,
+        evidence,
+        status=status,
+        termination_confirmed=termination_confirmed,
+    )
+    composition = _qualified_composition((evidence,), (rollback,))
+
+    issue = composition.deployment_qualification_issues()[0]
+    assert issue["capability"] == "deployment_rollback_evidence_failed"
+    with pytest.raises(ExecutionEnvironmentUnavailableError):
+        composition.require_deployment_ready()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"deployment_identity": "other-deployment"},
+        {"image_digest": "sha256:" + "c" * 64},
+        {"capability_checksum": "sha256:" + "d" * 64},
+        {"provider_id": "other-provider"},
+    ],
+)
+def test_deployment_qualification_rejects_rollback_identity_drift(kwargs: dict[str, str]) -> None:
+    provider = _AvailableProvider().capabilities
+    evidence = _deployment_evidence(provider)
+    rollback = _rollback_evidence(provider, evidence, **kwargs)
+    composition = _qualified_composition((evidence,), (rollback,))
+
+    issue = composition.deployment_qualification_issues()[0]
+    expected = (
+        "deployment_rollback_evidence_unbound"
+        if kwargs.get("provider_id")
+        else "deployment_rollback_evidence_mismatch"
+    )
+    assert issue["capability"] == expected
 
 
 def test_required_provider_without_deployment_evidence_is_blocked() -> None:
