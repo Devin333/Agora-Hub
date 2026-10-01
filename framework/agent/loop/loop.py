@@ -67,6 +67,7 @@ from framework.llm.budget import (
     bind_llm_budget_invocation,
     current_llm_budget_invocation,
 )
+from framework.governance.budget.models import MAX_BUDGET_INTEGER
 from framework.llm.context import estimate_request_tokens
 from framework.llm.models import (
     LLMClient,
@@ -1700,6 +1701,14 @@ class AgentLoop:
         )
         available_output_tokens = tracker.available_output_tokens()
         if available_output_tokens is not None:
+            # An unbounded policy exposes MAX_BUDGET_INTEGER as a sentinel.
+            # Keep the reservation inside the ledger integer domain after
+            # accounting for already committed/reserved output.
+            current_output_tokens = tracker.usage.token_usage.output_tokens
+            available_output_tokens = min(
+                available_output_tokens,
+                max(0, MAX_BUDGET_INTEGER - current_output_tokens),
+            )
             requested_output_tokens = min(
                 requested_output_tokens
                 if requested_output_tokens is not None
