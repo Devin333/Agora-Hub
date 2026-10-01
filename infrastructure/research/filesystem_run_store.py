@@ -46,6 +46,8 @@ _LATEST_INDEX_MAX_BYTES = 65_536
 _MIN_RECORD_BYTES = 1_024
 _MAX_RECORD_BYTES = 536_870_912
 _MAX_ID_BYTES = 4_096
+_WINDOWS_LOCK_TIMEOUT_SECONDS = 30.0
+_WINDOWS_LOCK_POLL_SECONDS = 0.05
 _CHECKSUM = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RECORD_FILENAME = re.compile(r"^[0-9a-f]{64}\.json$")
 _PATH_LOCKS_GUARD = threading.Lock()
@@ -1419,6 +1421,26 @@ def _assert_descendant(root: Path, path: Path) -> None:
         ) from None
 
 
+def _acquire_windows_file_lock(descriptor: int) -> None:
+    """Acquire the one-byte Windows lock with bounded contention polling."""
+
+    import msvcrt
+
+    deadline = time.monotonic() + _WINDOWS_LOCK_TIMEOUT_SECONDS
+    while True:
+        # msvcrt.locking uses the current file position as the lock offset and
+        # advances it after each call, so every retry must seek back to byte 0.
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(_WINDOWS_LOCK_POLL_SECONDS, remaining))
+
+
 @contextmanager
 def _exclusive_file_lock(path: Path) -> Iterator[None]:
     _assert_missing_or_regular_file(path)
@@ -1447,13 +1469,10 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
                 ResearchRunStoreReason.IDENTITY_MISMATCH
             )
         if os.name == "nt":
-            import msvcrt
-
             if opened.st_size == 0:
                 os.write(descriptor, b"\0")
                 os.fsync(descriptor)
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+            _acquire_windows_file_lock(descriptor)
         else:
             import fcntl
 

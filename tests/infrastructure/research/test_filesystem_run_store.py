@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing
+import os
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, dataclass
 from hashlib import sha256
@@ -901,6 +904,67 @@ def test_concurrent_processes_serialize_latest_index_updates(tmp_path: Path) -> 
         _read_json(_index_path(reopened, "paper-1"))["commit_generation"]
         == process_count
     )
+
+
+def test_windows_file_lock_retries_transient_contention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[tuple[int, int, int]] = []
+
+    class FakeMsvcrt:
+        LK_NBLCK = 2
+
+        @staticmethod
+        def locking(descriptor: int, mode: int, size: int) -> None:
+            attempts.append((descriptor, mode, size))
+            if len(attempts) < 3:
+                raise OSError("lock is busy")
+
+    lock_path = tmp_path / "windows-lock"
+    lock_path.write_bytes(b"\0")
+    descriptor = os.open(lock_path, os.O_RDWR)
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeMsvcrt)
+    monkeypatch.setattr(run_store_module.time, "sleep", lambda _seconds: None)
+    try:
+        run_store_module._acquire_windows_file_lock(descriptor)
+    finally:
+        os.close(descriptor)
+
+    assert len(attempts) == 3
+    assert all(mode == FakeMsvcrt.LK_NBLCK and size == 1 for _, mode, size in attempts)
+
+
+def test_windows_file_lock_timeout_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    class FakeMsvcrt:
+        LK_NBLCK = 2
+
+        @staticmethod
+        def locking(_descriptor: int, _mode: int, _size: int) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise OSError("lock is busy")
+
+    lock_path = tmp_path / "windows-lock-timeout"
+    lock_path.write_bytes(b"\0")
+    descriptor = os.open(lock_path, os.O_RDWR)
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeMsvcrt)
+    monkeypatch.setattr(run_store_module, "_WINDOWS_LOCK_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(run_store_module, "_WINDOWS_LOCK_POLL_SECONDS", 0.001)
+    started = time.monotonic()
+    try:
+        with pytest.raises(OSError, match="lock is busy"):
+            run_store_module._acquire_windows_file_lock(descriptor)
+    finally:
+        os.close(descriptor)
+
+    assert attempts >= 2
+    assert time.monotonic() - started < 1.0
 
 
 def test_run_store_diagnostics_have_bounded_operations_and_hashed_identities(
