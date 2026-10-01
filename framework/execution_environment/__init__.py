@@ -35,6 +35,13 @@ from framework.execution_environment.ports import (
     ExecutionEnvironmentPort,
 )
 from framework.execution_environment.registry import ExecutionEnvironmentRegistry
+from framework.execution_environment.qualification import (
+    DEPLOYMENT_QUALIFICATION_SCHEMA,
+    DeploymentQualificationIssue,
+    DeploymentQualificationProbe,
+    DeploymentQualificationResult,
+    DeploymentQualificationService,
+)
 from framework.execution_environment.composition import (
     ExecutionProfileRegistry,
     RuntimeCompositionManifest,
@@ -60,6 +67,11 @@ __all__ = [
     "ExecutionCancellationSignal",
     "ExecutionEnvironmentPort",
     "ExecutionEnvironmentRegistry",
+    "DEPLOYMENT_QUALIFICATION_SCHEMA",
+    "DeploymentQualificationIssue",
+    "DeploymentQualificationProbe",
+    "DeploymentQualificationResult",
+    "DeploymentQualificationService",
     "ExecutionEnvironmentUnavailableError",
     "ExecutionIdentityMismatchError",
     "ExecutionMode",

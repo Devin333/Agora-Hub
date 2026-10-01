@@ -62,7 +62,9 @@ from framework.harness.task_plan.inspection import (
 )
 from framework.harness.task_plan.observability import (
     TaskPlanMetricSample,
+    TaskPlanTelemetryEvidence,
     task_plan_metric_samples,
+    task_plan_telemetry_evidence,
     task_plan_trace_events,
 )
 from framework.harness.graph.bindings import HarnessWorkerBinding
@@ -997,6 +999,30 @@ def test_parallel_runner_retries_with_a_new_attempt_in_the_same_dispatch_group()
         if event.event_type == "TASK_GROUP_ADMITTED"
     }
     assert any(event.event_type == "TASK_GROUP_JOINED" for event in events)
+    accepted_plan = store.plan("run", "dynamic_stage")
+    assert accepted_plan is not None
+    telemetry = task_plan_telemetry_evidence(
+        accepted_plan,
+        store.load_projection("run", "dynamic_stage"),
+        events,
+    )
+    assert telemetry.group_ids == tuple(
+        sorted(
+            {
+                event.payload["group"]["group_id"]
+                for event in events
+                if event.event_type == "TASK_GROUP_ADMITTED"
+            }
+        )
+    )
+    assert len(telemetry.wave_ids) == 2
+    assert telemetry.retry_count == 1
+    assert telemetry.capability_admission_count == 3
+    assert telemetry.budget_usage
+    assert any(
+        key.startswith(("consumed_", "released_")) and value > 0
+        for key, value in telemetry.budget_usage.items()
+    )
 
 
 def test_parallel_policy_without_coordinator_fails_closed_even_when_serial_fallback_is_enabled():
@@ -1132,10 +1158,18 @@ def test_task_plan_metrics_and_trace_are_low_cardinality_and_payload_free() -> N
         replay_verified=True,
     )
     trace = task_plan_trace_events(events)
+    evidence = task_plan_telemetry_evidence(
+        plan,
+        store.load_projection("run", "dynamic_stage"),
+        events,
+    )
 
     assert all("run_id" not in sample.labels for sample in samples)
     assert any(sample.name == "harness_task_plan_replay_verification" for sample in samples)
     assert all("payload" not in item.to_dict() for item in trace)
+    assert TaskPlanTelemetryEvidence.from_dict(evidence.to_dict()) == evidence
+    assert evidence.run_id == plan.run_id
+    assert evidence.plan_checksum == plan.plan_checksum
     with pytest.raises(HarnessValidationError) as captured:
         TaskPlanMetricSample("bad", 1, {"run_id": "run"})
     assert captured.value.code == "task_plan_metric_label_rejected"

@@ -10,10 +10,17 @@ startup dependency here.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 import hashlib
 import re
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from framework.execution_environment.qualification import (
+        DeploymentQualificationProbe,
+        DeploymentQualificationResult,
+    )
 
 from framework.execution_environment.errors import (
     ExecutionEnvironmentUnavailableError,
@@ -436,10 +443,14 @@ class RuntimeExecutionComposition:
                     for field_name, capability_name in EXECUTION_CAPABILITY_FIELDS
                     if getattr(capabilities, field_name)
                 }
-                if set(evidence.tested_capabilities) - advertised_capabilities:
-                    reason = "deployment_capability_evidence_inconsistent"
-                elif set(evidence.unsupported_capabilities) & advertised_capabilities:
+                tested_capabilities = set(evidence.tested_capabilities)
+                if set(evidence.unsupported_capabilities) & advertised_capabilities:
                     reason = "deployment_capability_evidence_unsupported"
+                elif (
+                    tested_capabilities - advertised_capabilities
+                    or advertised_capabilities - tested_capabilities
+                ):
+                    reason = "deployment_capability_evidence_inconsistent"
             if reason is None:
                 if now < evidence.qualified_at:
                     reason = "deployment_capability_evidence_not_yet_valid"
@@ -569,6 +580,28 @@ class RuntimeExecutionComposition:
                 },
             )
 
+    def qualify_deployment(
+        self,
+        *,
+        probes: Mapping[str, "DeploymentQualificationProbe"] | None = None,
+        reference_time: datetime | None = None,
+    ) -> "DeploymentQualificationResult":
+        """Run explicit deployment-owner probes for every enabled provider.
+
+        The returned receipts are not installed into this immutable
+        composition.  A release owner must bind and review them before
+        constructing the next manifest; this prevents a running process from
+        self-promoting based on a local daemon probe.
+        """
+
+        from framework.execution_environment.qualification import DeploymentQualificationService
+
+        self.verify_integrity()
+        return DeploymentQualificationService(
+            execution_registry=self.execution_registry,
+            required_provider_ids=self.required_provider_ids,
+        ).qualify(probes=probes, reference_time=reference_time)
+
     @staticmethod
     def _deployment_capability_evidence_issues_for(
         provider_id: str,
@@ -588,10 +621,14 @@ class RuntimeExecutionComposition:
                 for field_name, capability_name in EXECUTION_CAPABILITY_FIELDS
                 if getattr(capabilities, field_name)
             }
-            if set(evidence.tested_capabilities) - advertised_capabilities:
-                reason = "deployment_capability_evidence_inconsistent"
-            elif set(evidence.unsupported_capabilities) & advertised_capabilities:
+            tested_capabilities = set(evidence.tested_capabilities)
+            if set(evidence.unsupported_capabilities) & advertised_capabilities:
                 reason = "deployment_capability_evidence_unsupported"
+            elif (
+                tested_capabilities - advertised_capabilities
+                or advertised_capabilities - tested_capabilities
+            ):
+                reason = "deployment_capability_evidence_inconsistent"
         if reason is None and not evidence.is_valid_at(utc_now()):
             reason = (
                 "deployment_capability_evidence_not_yet_valid"

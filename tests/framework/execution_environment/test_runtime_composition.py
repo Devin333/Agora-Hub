@@ -134,7 +134,11 @@ def _deployment_evidence(
     qualified_at: datetime | None = None,
     expires_at: datetime | None = None,
     capability_checksum: str | None = None,
-    tested_capabilities: tuple[str, ...] = ("filesystem_roots", "network_deny"),
+    tested_capabilities: tuple[str, ...] = (
+        "filesystem_roots",
+        "network_deny",
+        "argv_policy",
+    ),
     rollback_evidence_ref: str = "rollback-qualification-1",
     unsupported_capabilities: tuple[str, ...] = ("network_allowlist",),
 ) -> DeploymentCapabilityEvidence:
@@ -239,12 +243,29 @@ def test_deployment_qualification_requires_provider_bound_successful_rollback() 
 
 def test_deployment_qualification_rejects_advertised_unsupported_capability() -> None:
     provider = _AvailableProvider().capabilities
-    evidence = _deployment_evidence(provider, unsupported_capabilities=("argv_policy",))
+    evidence = _deployment_evidence(
+        provider,
+        tested_capabilities=("filesystem_roots", "network_deny"),
+        unsupported_capabilities=("argv_policy",),
+    )
     rollback = _rollback_evidence(provider, evidence)
     composition = _qualified_composition((evidence,), (rollback,))
 
     issue = composition.deployment_qualification_issues()[0]
     assert issue["capability"] == "deployment_capability_evidence_unsupported"
+
+
+def test_deployment_qualification_rejects_incomplete_advertised_coverage() -> None:
+    provider = _AvailableProvider().capabilities
+    evidence = _deployment_evidence(
+        provider,
+        tested_capabilities=("filesystem_roots", "network_deny"),
+    )
+    rollback = _rollback_evidence(provider, evidence)
+    composition = _qualified_composition((evidence,), (rollback,))
+
+    issue = composition.deployment_qualification_issues()[0]
+    assert issue["capability"] == "deployment_capability_evidence_inconsistent"
 
 
 @pytest.mark.parametrize(
@@ -377,7 +398,11 @@ def test_tested_unadvertised_capability_blocks_readiness() -> None:
 
 def test_advertised_unsupported_capability_blocks_readiness() -> None:
     provider = _AvailableProvider().capabilities
-    evidence = _deployment_evidence(provider, unsupported_capabilities=("argv_policy",))
+    evidence = _deployment_evidence(
+        provider,
+        tested_capabilities=("filesystem_roots", "network_deny"),
+        unsupported_capabilities=("argv_policy",),
+    )
     composition = _qualified_composition((evidence,))
 
     issue = composition.diagnostics()["deployment_capability_evidence_issues"][0]
