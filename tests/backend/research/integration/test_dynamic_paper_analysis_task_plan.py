@@ -4,7 +4,8 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
+from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import Any
 
@@ -109,12 +110,16 @@ class _WorkspaceAnalysisSubAgent:
         *,
         dependencies: Any,
         workspace: Any,
+        block_started: Event | None = None,
+        block_release: Event | None = None,
     ) -> None:
         self.worker_id = capability
         self._dependencies = dependencies
         self._workspace = workspace
         self.calls: list[dict[str, Any]] = []
         self.execution_identities: list[GraphExecutionIdentity | None] = []
+        self._block_started = block_started
+        self._block_release = block_release
 
     def execute(
         self,
@@ -124,6 +129,10 @@ class _WorkspaceAnalysisSubAgent:
     ) -> HarnessWorkerResult:
         self.calls.append(task)
         self.execution_identities.append(execution_identity)
+        if self._block_started is not None and self._block_release is not None:
+            self._block_started.set()
+            if not self._block_release.wait(timeout=5):
+                raise TimeoutError("blocked Research worker was not released")
         worker = {
             "research.analysis.structure": (
                 ResearchSinglePaperRuntime._analyze_structure
@@ -199,6 +208,7 @@ class _DynamicTaskPlanFactory:
         ref_admission_service=None,
         authorize_results: bool = True,
         policy_override=None,
+        blocked_capability: str | None = None,
     ) -> None:
         self.outline_transform = outline_transform
         self.transcript_root = transcript_root
@@ -208,6 +218,9 @@ class _DynamicTaskPlanFactory:
         )
         self.authorize_results = authorize_results
         self.policy_override = policy_override
+        self.blocked_capability = blocked_capability
+        self.block_started = Event()
+        self.block_release = Event()
         self._crashed_after_receipt = False
         self.stores: list[InMemoryTaskPlanStore] = []
         self.transcript_stores: list[Any] = []
@@ -225,6 +238,16 @@ class _DynamicTaskPlanFactory:
                 capability,
                 dependencies=dependencies,
                 workspace=workspace,
+                block_started=(
+                    self.block_started
+                    if capability == self.blocked_capability
+                    else None
+                ),
+                block_release=(
+                    self.block_release
+                    if capability == self.blocked_capability
+                    else None
+                ),
             )
             for capability in RESEARCH_DYNAMIC_CAPABILITIES
         }
@@ -655,6 +678,197 @@ def test_dynamic_claim_gate_failure_blocks_quality_reader_and_publication(tmp_pa
     assert replay.budget_ledger == replay.projection.consumed_budget
     assert replay.replay_checksum
     assert all(worker.calls for worker in factory.subagent_workers[0].values())
+
+
+def test_dynamic_partial_worker_failure_replays_full_ledger_without_live_calls(
+    tmp_path: Path,
+) -> None:
+    class FailingExperimentWorker(FakeResearchLLMWorker):
+        def generate_candidate(self, *, task, payload, **kwargs):
+            if task == "candidate_experiment_claims":
+                raise RuntimeError("injected experiment candidate failure")
+            return super().generate_candidate(task=task, payload=payload, **kwargs)
+
+    factory = _DynamicTaskPlanFactory(
+        transcript_root=tmp_path / "transcripts",
+    )
+    result = _analyze(
+        "dynamic-partial-worker-failure",
+        dynamic=True,
+        dynamic_factory=factory,
+        llm_worker=FailingExperimentWorker(),
+    )
+
+    assert result.succeeded is False
+    assert result.artifact_refs == {}
+    assert {
+        item["node_id"] for item in result.diagnostics["worker_results"].values()
+    } == {
+        "load_paper_source",
+        "compile_document",
+        "run_research_rag",
+        "build_evidence_pack",
+        "dynamic_analysis_stage",
+    }
+    store = factory.stores[0]
+    plan = store.plan(result.run_id, RESEARCH_DYNAMIC_STAGE_ID)
+    assert plan is not None
+    events = store.read_events(result.run_id, plan.stage_id)
+    history = store.result_history_for(
+        result.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    )
+    records = tuple(item.result for item in history if item.result is not None)
+    assert {item.outcome for item in history} == {
+        TaskAttemptOutcome.ACCEPTED,
+        TaskAttemptOutcome.FAILED,
+    }
+    assert sum(item.outcome is TaskAttemptOutcome.ACCEPTED for item in history) == 2
+    assert sum(item.outcome is TaskAttemptOutcome.FAILED for item in history) == 1
+    live_calls = {
+        capability: len(worker.calls)
+        for capability, worker in factory.subagent_workers[0].items()
+    }
+    replay = TaskPlanReplayReducer(
+        factory.transcript_stores[0],
+        result_ref_authority=factory.subagent_runtimes[0].result_ref_authority,
+        execution_identity=factory.ref_admission_service.snapshot.execution_identity,
+        gate_evidence_reader=store,
+    ).replay((plan,), events, results=records)
+
+    assert replay.attempt_history == history
+    assert replay.history_index_checksum is not None
+    assert replay.event_history_checksum == canonical_payload_checksum(
+        {"event_checksums": [event.event_checksum for event in events]}
+    )
+    assert replay.budget_ledger == replay.projection.consumed_budget
+    assert replay.replay_checksum
+    assert {
+        capability: len(worker.calls)
+        for capability, worker in factory.subagent_workers[0].items()
+    } == live_calls
+    assert not any(
+        item["node_id"] in {
+            "verify_claims",
+            "quality_gate",
+            "build_reader_payload",
+            "build_paper_card",
+            "publish_artifacts",
+        }
+        for item in result.diagnostics["worker_results"].values()
+    )
+
+
+def test_dynamic_indeterminate_child_replays_full_ledger_without_live_calls(
+    tmp_path: Path,
+) -> None:
+    factory = _DynamicTaskPlanFactory(
+        transcript_root=tmp_path / "transcripts",
+        blocked_capability="research.analysis.structure",
+    )
+    outcome: dict[str, Any] = {}
+
+    def analyze() -> None:
+        try:
+            outcome["result"] = _analyze(
+                "dynamic-indeterminate-child",
+                dynamic=True,
+                dynamic_factory=factory,
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            outcome["error"] = exc
+
+    thread = Thread(target=analyze, daemon=True)
+    thread.start()
+    assert factory.block_started.wait(timeout=5)
+    deadline = monotonic() + 5
+    active_child = None
+    supervisor = factory.child_supervisors[0]
+    while active_child is None and monotonic() < deadline:
+        coordinator = factory.parallel_coordinators[0]
+        sessions = tuple(coordinator._sessions.values())
+        for session in sessions:
+            active = session.active_children.get("analyze-structure")
+            if active is not None:
+                active_child = active[0]
+                break
+        if active_child is None:
+            sleep(0.01)
+    assert active_child is not None
+
+    cancellation = supervisor.cancel(
+        active_child.child_id,
+        operation_id=active_child.operation_id,
+        reason="research_indeterminate_test",
+    )
+    assert cancellation.receipt is not None
+    assert cancellation.receipt.status is ChildAgentState.LOST
+    assert cancellation.receipt.termination_confirmed is False
+    factory.block_release.set()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert "error" not in outcome, outcome.get("error")
+
+    result = outcome["result"]
+    assert result.succeeded is False
+    assert result.artifact_refs == {}
+    store = factory.stores[0]
+    plan = store.plan(result.run_id, RESEARCH_DYNAMIC_STAGE_ID)
+    assert plan is not None
+    events = store.read_events(result.run_id, plan.stage_id)
+    history = store.result_history_for(
+        result.run_id,
+        plan.stage_id,
+        plan.plan_id,
+        plan.version,
+    )
+    indeterminate = tuple(
+        item for item in history
+        if item.outcome is TaskAttemptOutcome.INDETERMINATE
+    )
+    structure_attempt = next(
+        item for item in indeterminate if item.task_id == "analyze-structure"
+    )
+    assert structure_attempt.terminal_receipt is not None
+    assert structure_attempt.terminal_receipt["termination_confirmed"] is False
+    assert "TASK_GROUP_INDETERMINATE" in {
+        event.event_type for event in events
+    }
+    records = tuple(item.result for item in history if item.result is not None)
+    live_calls = {
+        capability: len(worker.calls)
+        for capability, worker in factory.subagent_workers[0].items()
+    }
+    replay = TaskPlanReplayReducer(
+        factory.transcript_stores[0],
+        result_ref_authority=factory.subagent_runtimes[0].result_ref_authority,
+        execution_identity=factory.ref_admission_service.snapshot.execution_identity,
+        gate_evidence_reader=store,
+    ).replay((plan,), events, results=records)
+
+    assert replay.attempt_history == history
+    assert replay.history_index_checksum is not None
+    assert replay.event_history_checksum == canonical_payload_checksum(
+        {"event_checksums": [event.event_checksum for event in events]}
+    )
+    assert replay.budget_ledger == replay.projection.consumed_budget
+    assert replay.replay_checksum
+    assert {
+        capability: len(worker.calls)
+        for capability, worker in factory.subagent_workers[0].items()
+    } == live_calls
+    assert not any(
+        item["node_id"] in {
+            "verify_claims",
+            "quality_gate",
+            "build_reader_payload",
+            "build_paper_card",
+            "publish_artifacts",
+        }
+        for item in result.diagnostics["worker_results"].values()
+    )
 
 
 def test_static_and_dynamic_public_result_and_artifact_contracts_match(tmp_path) -> None:

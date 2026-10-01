@@ -9,10 +9,15 @@ from typing import Any
 
 from framework.agent.artifacts.models import ArtifactRef, ArtifactWriteRequest
 from framework.events.canonical import BusinessContext, ProducerIdentity, StoredEvent, canonical_json_bytes, checksum_for, thaw_canonical_json
-from framework.events.errors import EventIdentityCollisionError, EventStreamVersionConflictError
+from framework.events.errors import (
+    EventContractError,
+    EventIdentityCollisionError,
+    EventStreamVersionConflictError,
+)
 from framework.events.ports import EventReaderPort, EventRuntimePort
 from framework.events.runtime.models import StreamReadRequest
 from framework.events.runtime.publisher import EventPublishRequest
+from framework.events.projection import GRAPH_EVENT_CONTEXT_EXTENSION, GraphEventContext
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.ref_snapshot import RefAuthoritySnapshot, RefSnapshotPhase
 from framework.harness.task_plan.canonical import checksum, identifier, positive_int
@@ -95,6 +100,7 @@ class DurableRefAuthoritySnapshotStore:
                 business_context=self._business_context(snapshot),
                 producer=ProducerIdentity(component=REF_SNAPSHOT_EVENT_SOURCE, version="1"),
                 payload=self._event_payload(snapshot, artifact),
+                extensions=self._graph_context_extensions(snapshot),
             )
             try:
                 committed = self._runtime.publish(request, expected_last_sequence=high)
@@ -104,6 +110,73 @@ class DurableRefAuthoritySnapshotStore:
                 raise _error("reference snapshot commit returned different evidence")
             return snapshot.snapshot_ref
         raise _error("reference grant exceeded bounded append retries", "REF_SNAPSHOT_CONTENTION")
+
+    def _graph_context_extensions(
+        self,
+        snapshot: RefAuthoritySnapshot,
+    ) -> dict[str, Any]:
+        """Bind ref events to the already committed Graph execution context.
+
+        Ref snapshots share the run stream with Graph and TaskPlan events. A
+        terminal Graph projection must therefore be able to validate every
+        event in that stream. The context is read from a prior canonical event
+        carrying the same immutable Graph identity; it is never synthesized
+        from the snapshot alone because schema/compiler provenance is not part
+        of the ref snapshot contract.
+        """
+
+        stream = f"run:{snapshot.run_id}"
+        high = self._reader.get_stream_high_watermark(
+            stream,
+            tenant_id=self._tenant_id,
+        )
+        if high is None:
+            return {}
+        cursor = None
+        while True:
+            page = self._reader.read_stream(
+                StreamReadRequest(
+                    stream_id=stream,
+                    cursor=cursor,
+                    through_sequence=high,
+                    limit=500,
+                    tenant_id=self._tenant_id,
+                )
+            )
+            for event in page.events:
+                raw = thaw_canonical_json(
+                    event.extensions.get(GRAPH_EVENT_CONTEXT_EXTENSION)
+                )
+                if not isinstance(raw, Mapping):
+                    continue
+                try:
+                    context = GraphEventContext.from_dict(raw)
+                except (TypeError, ValueError, EventContractError):
+                    continue
+                if (
+                    context.identity.run_id
+                    == snapshot.execution_identity.run_id
+                    and context.identity.graph_id
+                    == snapshot.execution_identity.graph_id
+                    and context.identity.graph_version
+                    == snapshot.execution_identity.graph_version
+                    and context.identity.graph_checksum
+                    == snapshot.execution_identity.graph_checksum
+                ):
+                    snapshot_context = GraphEventContext(
+                        identity=context.identity,
+                        execution_version=context.execution_version,
+                        execution_identity=snapshot.execution_identity,
+                    )
+                    return {
+                        GRAPH_EVENT_CONTEXT_EXTENSION: snapshot_context.to_dict()
+                    }
+            if page.next_cursor is None:
+                break
+            if page.next_cursor == cursor:
+                raise _error("reference snapshot graph context cursor did not advance")
+            cursor = page.next_cursor
+        return {}
 
     def get(self, *, run_id: str, snapshot_ref: str) -> RefAuthoritySnapshot:
         run_id = identifier(run_id, "run_id")
@@ -278,10 +351,7 @@ class DurableRefAuthoritySnapshotStore:
     def _business_context(snapshot: RefAuthoritySnapshot) -> BusinessContext:
         execution = snapshot.execution_identity
         return BusinessContext(
-            run_id=execution.run_id, graph_id=execution.graph_id,
-            graph_version=execution.graph_version, graph_ref=execution.graph_ref,
-            graph_checksum=execution.graph_checksum, stage_id=snapshot.stage_id,
-            node_instance_id=execution.node_instance_id,
+            execution_identity=execution,
             task_id=None if snapshot.attempt_identity is None else snapshot.attempt_identity.task_id,
         )
 

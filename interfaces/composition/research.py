@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Condition, Lock
-from typing import Any
+from typing import Any, Protocol
 
 from backend.research.application.analyze_paper import AnalyzePaperUseCase
 from backend.research.application.ask_paper import AskPaperUseCase
@@ -260,6 +260,69 @@ from interfaces.services.harness_wait_service import (
 from interfaces.models.actor import ActorContext
 
 
+@dataclass(frozen=True, slots=True)
+class ResearchDynamicRolloutAdmissionReceipt:
+    """Composition-authorized evidence for one dynamic Research admission."""
+
+    run_id: str
+    scope_ref: str
+    policy_ref: str
+    policy_checksum: str
+    allowlist_evidence_ref: str
+    golden_parity_evidence_ref: str
+    quality_gate_evidence_ref: str
+    dependency_provenance_ref: str
+    golden_parity_passed: bool
+    quality_gates_passed: bool
+    dependency_provenance_passed: bool
+    rollout_state: str = "ENABLED_PARALLEL"
+
+    def __post_init__(self) -> None:
+        values = {
+            "run_id": self.run_id,
+            "scope_ref": self.scope_ref,
+            "policy_ref": self.policy_ref,
+            "policy_checksum": self.policy_checksum,
+            "allowlist_evidence_ref": self.allowlist_evidence_ref,
+            "golden_parity_evidence_ref": self.golden_parity_evidence_ref,
+            "quality_gate_evidence_ref": self.quality_gate_evidence_ref,
+            "dependency_provenance_ref": self.dependency_provenance_ref,
+        }
+        if any(
+            not isinstance(value, str) or not value.strip() or value != value.strip()
+            for value in values.values()
+        ):
+            raise ValueError("dynamic Research rollout evidence fields must be non-blank text")
+        if self.rollout_state != "ENABLED_PARALLEL":
+            raise ValueError("dynamic Research admission must be ENABLED_PARALLEL")
+        passed = {
+            "golden_parity_passed": self.golden_parity_passed,
+            "quality_gates_passed": self.quality_gates_passed,
+            "dependency_provenance_passed": self.dependency_provenance_passed,
+        }
+        if any(type(value) is not bool for value in passed.values()):
+            raise TypeError("dynamic Research rollout evidence decisions must be boolean")
+        failed = sorted(name for name, value in passed.items() if not value)
+        if failed:
+            raise ValueError(
+                "dynamic Research rollout evidence has not passed: "
+                + ", ".join(failed)
+            )
+
+
+class ResearchDynamicRolloutAdmissionPort(Protocol):
+    """Trusted composition authority for controlled dynamic Research rollout."""
+
+    def admit(
+        self,
+        *,
+        run_id: str,
+        scope_ref: str,
+        policy_ref: str,
+        policy_checksum: str,
+    ) -> ResearchDynamicRolloutAdmissionReceipt: ...
+
+
 class _ProductionResearchAnalysisWorker:
     """Adapter that keeps dynamic task execution on existing Research logic."""
 
@@ -360,8 +423,10 @@ class _ResearchDynamicInputReader(AuthorizedChildInputReaderPort):
                 values[ref] = evidence_pack.to_dict()
 
         # Dependency refs are already rewritten to Harness-issued result refs
-        # in the child grant.  Resolve them through the result authority and
-        # expose only those exact descriptors to AgentRunner.
+        # in the child grant. Resolve them through the result authority and
+        # expose only those exact descriptors to AgentRunner. The logical ref
+        # remains inside the value envelope so the Research worker can address
+        # the public dependency by the name admitted in the candidate plan.
         if getattr(grant, "dependency_bindings", ()):
             outputs = self._result_authority.read_dependency_outputs(
                 grant.attempt_identity,
@@ -373,7 +438,10 @@ class _ResearchDynamicInputReader(AuthorizedChildInputReaderPort):
                         "dynamic child dependency output is unavailable",
                         code="REF_UNRESOLVED",
                     )
-                values[binding.descriptor.ref] = outputs[binding.logical_ref]
+                values[binding.descriptor.ref] = {
+                    "logical_ref": binding.logical_ref,
+                    "output": outputs[binding.logical_ref],
+                }
         if set(values) != set(refs):
             raise HarnessValidationError(
                 "dynamic child input reader returned values outside its grant",
@@ -428,13 +496,26 @@ class _ResearchCandidateLLMClient:
         }
         resolved = inputs.get("resolved_inputs")
         if isinstance(resolved, Mapping):
-            dependency_outputs.update(
-                {
-                    key: value
-                    for key, value in resolved.items()
-                    if key not in {"document", "evidence_pack"}
-                }
-            )
+            for key, value in resolved.items():
+                if key in {"document", "evidence_pack"}:
+                    continue
+                if (
+                    not isinstance(value, Mapping)
+                    or set(value) != {"logical_ref", "output"}
+                    or not isinstance(value.get("logical_ref"), str)
+                    or not value["logical_ref"].strip()
+                ):
+                    raise HarnessValidationError(
+                        "dynamic child dependency input envelope is invalid",
+                        code="subagent_runner_input_resolution_invalid",
+                    )
+                logical_ref = value["logical_ref"]
+                if logical_ref in dependency_outputs:
+                    raise HarnessValidationError(
+                        "dynamic child dependency input is duplicated",
+                        code="subagent_runner_input_resolution_invalid",
+                    )
+                dependency_outputs[logical_ref] = value["output"]
         task: dict[str, Any] = {"input_refs": list(input_refs)}
         if dependency_outputs:
             task["dependency_outputs"] = dependency_outputs
@@ -478,10 +559,53 @@ def _dynamic_research_gate_context(
         run_spec=run_spec,
         graph_state=graph_state,
         step_spec=step_spec,
-        outputs={},
+        outputs={
+            "document": {"document": workspace.document.to_dict()},
+            "evidence_pack": {"evidence_pack": workspace.evidence_pack.to_dict()},
+        },
         worker_result=worker_result,
         budget=HarnessBudgetSnapshot.from_budget(HarnessBudget.safe_default()),
     )
+
+
+def _admit_dynamic_research_rollout(
+    authority: ResearchDynamicRolloutAdmissionPort | None,
+    *,
+    run_id: str,
+    scope_ref: str,
+    policy: Any,
+) -> ResearchDynamicRolloutAdmissionReceipt:
+    if authority is None:
+        raise HarnessValidationError(
+            "dynamic Research rollout is disabled until release evidence is admitted",
+            code="research_dynamic_rollout_disabled",
+            details={"composition_state": "FEATURE_DISABLED"},
+        )
+    admit = getattr(authority, "admit", None)
+    if not callable(admit):
+        raise TypeError("dynamic_rollout_admission must implement admit")
+    receipt = admit(
+        run_id=run_id,
+        scope_ref=scope_ref,
+        policy_ref=policy.exact_ref,
+        policy_checksum=policy.policy_checksum,
+    )
+    if not isinstance(receipt, ResearchDynamicRolloutAdmissionReceipt):
+        raise HarnessValidationError(
+            "dynamic Research rollout authority returned an invalid receipt",
+            code="research_dynamic_rollout_evidence_invalid",
+        )
+    if (
+        receipt.run_id != run_id
+        or receipt.scope_ref != scope_ref
+        or receipt.policy_ref != policy.exact_ref
+        or receipt.policy_checksum != policy.policy_checksum
+    ):
+        raise HarnessValidationError(
+            "dynamic Research rollout receipt does not match this admission",
+            code="research_dynamic_rollout_evidence_mismatch",
+        )
+    return receipt
 
 
 _RESEARCH_EVENT_TENANT_ID = "research-runtime"
@@ -828,6 +952,7 @@ def build_research_runtime_composition(
     settings_factory: SettingsFactory | None = None,
     source_runtime_provider: SourceRuntimeProvider | None = None,
     configured_factory: ConfiguredCompositionFactory | None = None,
+    dynamic_rollout_admission: ResearchDynamicRolloutAdmissionPort | None = None,
 ) -> ResearchRuntimeComposition:
     if settings is not None and settings_factory is not None:
         raise ValueError("settings and settings_factory are mutually exclusive")
@@ -845,10 +970,18 @@ def build_research_runtime_composition(
             )
 
     try:
-        composition = (configured_factory or _build_configured_composition)(
-            actual_settings,
-            provider,
-        )
+        if configured_factory is None:
+            composition = _build_configured_composition(
+                actual_settings,
+                provider,
+                dynamic_rollout_admission=dynamic_rollout_admission,
+            )
+        else:
+            if dynamic_rollout_admission is not None:
+                raise ValueError(
+                    "dynamic_rollout_admission is owned by the configured composition"
+                )
+            composition = configured_factory(actual_settings, provider)
     except ResearchCompositionError as exc:
         return _unavailable_composition(
             exc,
@@ -1574,6 +1707,8 @@ def _close_quietly(resource: Any | None) -> None:
 def _build_configured_composition(
     settings: ResearchRuntimeSettings,
     source_runtime_provider: SourceRuntimeProvider,
+    *,
+    dynamic_rollout_admission: ResearchDynamicRolloutAdmissionPort | None = None,
 ) -> ResearchRuntimeComposition:
     owned_resources: list[Any] = []
     try:
@@ -1802,25 +1937,32 @@ def _build_configured_composition(
                 index_store=graph_index_store,
             ),
         )
-        dynamic_task_plan_store = DurableTaskPlanStore(
-            durable_events.event_runtime,
-            durable_events.event_store,
-            artifact_store=artifact_port.store,
-            tenant_id=_RESEARCH_EVENT_TENANT_ID,
-        )
         from interfaces.composition.harness_memory import build_harness_ref_admission_service
         from framework.harness.ref_results import HarnessResultRefAuthority
         from framework.harness.ref_snapshot_store import DurableRefAuthoritySnapshotStore
 
-        dynamic_ref_admission_service = build_harness_ref_admission_service(
-            snapshot_store=DurableRefAuthoritySnapshotStore(
+        def dynamic_ref_admission_service_for_tenant(
+            tenant_id: str,
+        ) -> HarnessRefAdmissionService:
+            return build_harness_ref_admission_service(
+                snapshot_store=DurableRefAuthoritySnapshotStore(
+                    durable_events.event_runtime,
+                    durable_events.event_store,
+                    artifact_store=artifact_port.store,
+                    tenant_id=tenant_id,
+                ),
+                namespace_root=settings.artifact.root / "memory-namespaces",
+            )
+
+        def dynamic_task_plan_store_for_tenant(
+            tenant_id: str,
+        ) -> DurableTaskPlanStore:
+            return DurableTaskPlanStore(
                 durable_events.event_runtime,
                 durable_events.event_store,
                 artifact_store=artifact_port.store,
-                tenant_id=_RESEARCH_EVENT_TENANT_ID,
-            ),
-            namespace_root=settings.artifact.root / "memory-namespaces",
-        )
+                tenant_id=tenant_id,
+            )
         dynamic_checkpoint_store = JsonlTaskPlanCheckpointStore(
             settings.artifact.root / "task-plan-checkpoints.jsonl"
         )
@@ -1832,10 +1974,9 @@ def _build_configured_composition(
                 12 * 1024 * 1024,
             ),
         )
-        # Keep the production transcript adapter under composition ownership
-        # even while dynamic child execution remains fail-closed. The future
-        # ChildAgentRunnerAdapter will receive this same durable store through
-        # the composition boundary instead of constructing a second adapter.
+        # Keep the production transcript adapter under composition ownership.
+        # Every dynamic ChildAgentRunnerAdapter shares this durable store
+        # instead of constructing a second transcript authority.
         owned_resources.append(subagent_transcript_store)
         runtime_event_publisher = CanonicalRuntimeEventPublisher(
             durable_events.event_runtime,
@@ -1855,18 +1996,27 @@ def _build_configured_composition(
                     code="research_dynamic_workspace_invalid",
                 )
             request = workspace.request
-            tenant_id = research_event_tenant_id(
-                {
-                    "tenant_id": request.tenant_id,
-                    "user_id": request.user_id,
-                    "memory_namespace": request.memory_namespace,
-                }
+            actor_scope = {
+                "tenant_id": request.tenant_id,
+                "user_id": request.user_id,
+                "memory_namespace": request.memory_namespace,
+            }
+            tenant_id = research_event_tenant_id(actor_scope)
+            policy = build_research_analysis_task_plan_policy()
+            _admit_dynamic_research_rollout(
+                dynamic_rollout_admission,
+                run_id=request.run_id,
+                scope_ref=research_identity_scope_ref(actor_scope),
+                policy=policy,
+            )
+            dynamic_task_plan_store = dynamic_task_plan_store_for_tenant(tenant_id)
+            dynamic_ref_admission_service = (
+                dynamic_ref_admission_service_for_tenant(tenant_id)
             )
             binding = dynamic_child_runtime.start_for_run(
                 run_id=request.run_id,
                 tenant_id=tenant_id,
             )
-            policy = build_research_analysis_task_plan_policy()
             graph = HarnessGraphCompiler().compile(
                 build_dynamic_paper_analysis_graph_definition()
             ).graph
@@ -2637,6 +2787,8 @@ _DEFAULT_RESEARCH_RUNTIME_PROVIDER = ResearchRuntimeProvider()
 
 __all__ = [
     "ConfiguredCompositionFactory",
+    "ResearchDynamicRolloutAdmissionPort",
+    "ResearchDynamicRolloutAdmissionReceipt",
     "ResearchRuntimeComposition",
     "ResearchRuntimeProvider",
     "build_research_application_service",

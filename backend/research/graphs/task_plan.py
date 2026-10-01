@@ -629,6 +629,17 @@ class ResearchAnalysisTaskPlanStageWorker:
                 "Research child executor must share reference admission",
                 code="research_task_plan_executor_ref_authority_mismatch",
             )
+        parent_context_registrar = getattr(
+            store,
+            "register_parent_execution_context",
+            None,
+        )
+        if not allow_test_store and not callable(parent_context_registrar):
+            raise HarnessValidationError(
+                "Research production TaskPlan requires durable parent execution context registration",
+                code="research_task_plan_parent_context_owner_required",
+            )
+        self._parent_context_registrar = parent_context_registrar
         self._ref_admission_service = ref_admission_service
         if not allow_test_store and actual_policy.max_planning_tool_calls > 0:
             from framework.harness.ref_planning import HarnessPlanningRefAuthority
@@ -755,6 +766,13 @@ class ResearchAnalysisTaskPlanStageWorker:
             activity_id=activity.activity_id,
             attempt=activity.attempt,
         )
+        if self._parent_context_registrar is not None:
+            self._parent_context_registrar(
+                activity_context,
+                execution_identity=execution_identity,
+                stage_id=self._stage_binding.stage_id,
+                stage_binding_checksum=self._stage_binding.binding_checksum,
+            )
         input_checksums = {
             name: canonical_payload_checksum({"name": name, "value": inputs[name]})
             for name in RESEARCH_DYNAMIC_INPUT_REFS

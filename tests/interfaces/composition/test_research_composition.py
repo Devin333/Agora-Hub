@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import inspect
 import json
+import shutil
+from copy import deepcopy
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
@@ -32,6 +35,7 @@ from backend.research.application.single_paper_runtime import (
 )
 from backend.research.document.cascade_parser import CascadeDocumentParser
 from backend.research.domain.paper import PaperSourceRecord
+from backend.research.domain import research_event_tenant_id, research_identity_scope_ref
 from backend.research.document.chunk_storage import PaperChunkStoreAdapter
 from backend.research.document.latex_compiler import ArxivLatexDocumentCompiler
 from framework.execution_environment import (
@@ -54,6 +58,8 @@ from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from framework.harness.control_plane.durable_events import (
     DurableHarnessTransitionPort,
 )
+from framework.events.projection import graph_event_context
+from framework.events.runtime.models import StreamReadRequest
 from framework.harness.runtime import (
     GraphArtifactRolloutMode,
     ResultMaterializer,
@@ -86,6 +92,7 @@ from infrastructure.storage.artifacts import (
     SQLiteGraphResultStore,
 )
 from interfaces.composition.research import (
+    ResearchDynamicRolloutAdmissionReceipt,
     ResearchRuntimeComposition,
     ResearchRuntimeProvider,
     build_research_application_service,
@@ -97,7 +104,10 @@ from interfaces.composition.research import (
 from interfaces.composition.research_errors import ResearchRuntimeUnavailableError
 from interfaces.composition.research_settings import ResearchRuntimeSettings
 from interfaces.composition.research_child_runtime import LazyResearchChildRuntime
-from backend.research.graphs.task_plan import ResearchAnalysisTaskPlanStageWorker
+from backend.research.graphs.task_plan import (
+    ResearchAnalysisTaskPlanStageWorker,
+    build_research_analysis_task_plan_policy,
+)
 from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
     RESEARCH_MINERU_PROFILE_ID,
@@ -114,6 +124,151 @@ from interfaces.services.research_service import (
 )
 from interfaces.services.source_runtime import SourceRuntimeProvider
 from tests.interfaces.research_fixtures import FakeAnalyzeUseCase
+from tests.backend.research.fakes import (
+    FakeGithubRepositoryPort,
+    FakeResearchDocumentCompiler,
+    FakeResearchLLMWorker,
+    FakeResearchRAGRuntime,
+    FakeResearchSourceProvider,
+)
+
+
+class _AllowlistedDynamicResearchAdmission:
+    def __init__(self, run_id: str, scope_ref: str) -> None:
+        self._run_id = run_id
+        self._scope_ref = scope_ref
+
+    def admit(self, *, run_id, scope_ref, policy_ref, policy_checksum):
+        if run_id != self._run_id or scope_ref != self._scope_ref:
+            raise HarnessValidationError(
+                "dynamic Research run or identity scope is not allowlisted",
+                code="research_dynamic_rollout_scope_not_allowlisted",
+            )
+        return ResearchDynamicRolloutAdmissionReceipt(
+            run_id=run_id,
+            scope_ref=scope_ref,
+            policy_ref=policy_ref,
+            policy_checksum=policy_checksum,
+            allowlist_evidence_ref="test-evidence://allowlist/fixed-research-paper",
+            golden_parity_evidence_ref="test-evidence://golden-parity/fixed-research-paper",
+            quality_gate_evidence_ref="test-evidence://quality-gates/fixed-research-paper",
+            dependency_provenance_ref="test-evidence://dependency-provenance/fixed-research-paper",
+            golden_parity_passed=True,
+            quality_gates_passed=True,
+            dependency_provenance_passed=True,
+        )
+
+
+def test_dynamic_rollout_receipt_requires_all_release_evidence() -> None:
+    with pytest.raises(ValueError, match="evidence fields"):
+        ResearchDynamicRolloutAdmissionReceipt(
+            run_id="dynamic-receipt",
+            scope_ref="scope",
+            policy_ref="research.analysis@1",
+            policy_checksum="sha256:" + "1" * 64,
+            allowlist_evidence_ref="evidence://allowlist",
+            golden_parity_evidence_ref="",
+            quality_gate_evidence_ref="evidence://quality",
+            dependency_provenance_ref="evidence://dependency",
+            golden_parity_passed=True,
+            quality_gates_passed=True,
+            dependency_provenance_passed=True,
+        )
+
+
+def test_dynamic_rollout_receipt_rejects_unpassed_release_gate() -> None:
+    with pytest.raises(ValueError, match="quality_gates_passed"):
+        ResearchDynamicRolloutAdmissionReceipt(
+            run_id="dynamic-receipt",
+            scope_ref="scope",
+            policy_ref="research.analysis@1",
+            policy_checksum="sha256:" + "1" * 64,
+            allowlist_evidence_ref="evidence://allowlist",
+            golden_parity_evidence_ref="evidence://golden",
+            quality_gate_evidence_ref="evidence://quality",
+            dependency_provenance_ref="evidence://dependency",
+            golden_parity_passed=True,
+            quality_gates_passed=False,
+            dependency_provenance_passed=True,
+        )
+
+
+def test_dynamic_rollout_receipt_must_match_current_run_scope_and_policy() -> None:
+    class MismatchedAuthority:
+        def admit(self, *, run_id, scope_ref, policy_ref, policy_checksum):
+            return ResearchDynamicRolloutAdmissionReceipt(
+                run_id=run_id,
+                scope_ref=f"{scope_ref}-other",
+                policy_ref=policy_ref,
+                policy_checksum=policy_checksum,
+                allowlist_evidence_ref="evidence://allowlist",
+                golden_parity_evidence_ref="evidence://golden",
+                quality_gate_evidence_ref="evidence://quality",
+                dependency_provenance_ref="evidence://dependency",
+                golden_parity_passed=True,
+                quality_gates_passed=True,
+                dependency_provenance_passed=True,
+            )
+
+    with pytest.raises(HarnessValidationError) as error:
+        research_composition._admit_dynamic_research_rollout(
+            MismatchedAuthority(),
+            run_id="dynamic-receipt-mismatch",
+            scope_ref="tenant-scope",
+            policy=build_research_analysis_task_plan_policy(),
+        )
+
+    assert error.value.code == "research_dynamic_rollout_evidence_mismatch"
+
+
+def test_dynamic_flag_alone_does_not_start_production_child_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_root = Path.cwd() / ".tmp" / f"dr-disabled-{uuid4().hex[:8]}"
+    settings = _settings(test_root)
+    monkeypatch.delenv("NEWS_DATABASE_DSN", raising=False)
+    monkeypatch.setenv(
+        "NEWS_ACTIVITY_ENCRYPTION_KEY",
+        Fernet.generate_key().decode("ascii"),
+    )
+    monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(settings.artifact.root))
+    monkeypatch.setenv(settings.llm.api_key_env, "sk-dynamic-disabled-test")
+    composition = build_research_runtime_composition(settings=settings)
+    try:
+        assert composition.available is True
+        runtime = composition.service._analyze_use_case._runtime
+        runtime.source_provider = FakeResearchSourceProvider()
+        runtime.document_compiler = FakeResearchDocumentCompiler()
+        runtime.github_repository = FakeGithubRepositoryPort()
+        runtime.rag_runtime = FakeResearchRAGRuntime()
+        child_runtime = next(
+            resource
+            for resource in composition.resources
+            if isinstance(resource, LazyResearchChildRuntime)
+        )
+
+        with pytest.raises(HarnessValidationError) as error:
+            AnalyzePaperUseCase(runtime).analyze(
+                AnalyzePaperRequest(
+                    run_id="production-dynamic-disabled",
+                    paper_id="paper-harness-001",
+                    source_ref="https://arxiv.org/abs/2606.00123",
+                    tenant_id="tenant-dynamic-disabled",
+                    user_id="user-dynamic-disabled",
+                    memory_namespace=(
+                        "research:tenant:tenant-dynamic-disabled:"
+                        "user:user-dynamic-disabled"
+                    ),
+                    options={"dynamic_analysis": True},
+                )
+            )
+
+        assert error.value.code == "research_dynamic_rollout_disabled"
+        assert error.value.details == {"composition_state": "FEATURE_DISABLED"}
+        assert child_runtime.started is False
+    finally:
+        composition.close()
+        shutil.rmtree(test_root, ignore_errors=True)
 
 
 @pytest.mark.parametrize(
@@ -143,6 +298,203 @@ def test_production_dynamic_child_rejects_unadmitted_inputs(task, expected_code)
         worker.execute(task)
 
     assert error.value.code == expected_code
+
+
+def test_dynamic_research_production_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_root = Path.cwd() / ".tmp" / f"dr-{uuid4().hex[:8]}"
+    settings = _settings(test_root)
+    monkeypatch.delenv("NEWS_DATABASE_DSN", raising=False)
+    monkeypatch.setenv(
+        "NEWS_ACTIVITY_ENCRYPTION_KEY",
+        Fernet.generate_key().decode("ascii"),
+    )
+    monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(settings.artifact.root))
+    monkeypatch.setenv(settings.llm.api_key_env, "sk-dynamic-composition-test")
+    fixed_candidates = FakeResearchLLMWorker()
+    dependency_ref = "task://analyze-structure/output"
+    experiment_inputs: list[dict[str, object]] = []
+
+    def generate_candidate(_self, **kwargs):
+        if kwargs["task"] == "candidate_experiment_claims":
+            experiment_inputs.append(deepcopy(kwargs["payload"]))
+        candidate = fixed_candidates.generate_candidate(**kwargs)
+        if kwargs["task"] == "candidate_task_plan":
+            candidate = deepcopy(candidate)
+            experiment_task = next(
+                task
+                for task in candidate["tasks"]
+                if task["task_id"] == "analyze-experiments"
+            )
+            experiment_task["input_refs"].append(dependency_ref)
+        return candidate
+
+    monkeypatch.setattr(
+        StructuredResearchCandidateWorker,
+        "generate_candidate",
+        generate_candidate,
+    )
+    composition = build_research_runtime_composition(
+        settings=settings,
+        dynamic_rollout_admission=_AllowlistedDynamicResearchAdmission(
+            "production-dynamic-task-plan",
+            research_identity_scope_ref(
+                {
+                    "tenant_id": "tenant-dynamic-production",
+                    "user_id": "user-dynamic-production",
+                    "memory_namespace": (
+                        "research:tenant:tenant-dynamic-production:"
+                        "user:user-dynamic-production"
+                    ),
+                }
+            ),
+        ),
+    )
+    try:
+        assert composition.available is True
+        runtime = composition.service._analyze_use_case._runtime
+        runtime.source_provider = FakeResearchSourceProvider()
+        runtime.document_compiler = FakeResearchDocumentCompiler()
+        runtime.github_repository = FakeGithubRepositoryPort()
+        runtime.rag_runtime = FakeResearchRAGRuntime()
+        child_runtime = next(
+            resource
+            for resource in composition.resources
+            if isinstance(resource, LazyResearchChildRuntime)
+        )
+        captured_workers: list[ResearchAnalysisTaskPlanStageWorker] = []
+        production_factory = runtime.dynamic_task_plan_runner_factory
+
+        def capture_factory(**kwargs):
+            worker = production_factory(**kwargs)
+            captured_workers.append(worker)
+            return worker
+
+        runtime.dynamic_task_plan_runner_factory = capture_factory
+        request = AnalyzePaperRequest(
+            run_id="production-dynamic-task-plan",
+            paper_id="paper-harness-001",
+            source_ref="https://arxiv.org/abs/2606.00123",
+            tenant_id="tenant-dynamic-production",
+            user_id="user-dynamic-production",
+            memory_namespace=(
+                "research:tenant:tenant-dynamic-production:"
+                "user:user-dynamic-production"
+            ),
+            options={"dynamic_analysis": True},
+        )
+
+        result = AnalyzePaperUseCase(runtime).analyze(request)
+
+        assert result.succeeded is True, {
+            "status": result.status,
+            "terminal_reason": result.diagnostics["terminal_reason"],
+            "workers": [
+                (value["node_id"], value["status"], value["error"])
+                for value in result.diagnostics["worker_results"].values()
+                if value["status"] != "succeeded"
+            ],
+        }
+        assert child_runtime.started is True
+        assert len(captured_workers) == 1
+        stage_worker = captured_workers[0]
+        executor = stage_worker._runner.worker_executor
+        assert isinstance(executor, HarnessSubAgentTaskExecutor)
+        assert executor.execution_service is not None
+        assert all(
+            isinstance(worker, research_composition.ChildAgentRunnerAdapter)
+            for worker in executor.runtime.workers.values()
+        )
+        plan = executor.store.plan(request.run_id, "dynamic_analysis_stage")
+        assert plan is not None
+        results = executor.store.results_for(
+            request.run_id,
+            plan.stage_id,
+            plan.plan_id,
+            plan.version,
+        )
+        assert len(results) == 3
+        assert all(record.transcript_ref for record in results)
+        assert len(experiment_inputs) == 1
+        dependency_outputs = experiment_inputs[0]["dependency_outputs"]
+        assert isinstance(dependency_outputs, dict)
+        assert set(dependency_outputs) == {dependency_ref}
+        dependency_output = dependency_outputs[dependency_ref]
+        assert isinstance(dependency_output, dict)
+        assert dependency_output["three_minute_read"]["core_idea"] == (
+            "Harness owns routing while LLM workers generate candidate research content."
+        )
+        assert "context_pack" not in dependency_output
+        assert "transcript" not in dependency_output
+        dynamic_result = next(
+            value
+            for value in result.diagnostics["worker_results"].values()
+            if value["node_id"] == "dynamic_analysis_stage"
+        )
+        assert {
+            item["role"]
+            for item in dynamic_result["output"]["analysis_branch_refs"]
+        } == {
+            "analysis.structure",
+            "analysis.contribution",
+            "analysis.experiments",
+        }
+        assert {
+            "research-analysis",
+            "research-quality-result",
+            "research-reader-payload",
+            "research-paper-card",
+            "harness-trace",
+            "harness-transcript",
+        }.issubset(result.artifact_refs)
+        assert result.analysis is not None
+        assert result.quality is not None
+        assert result.reader_payload is not None
+        assert result.paper_card is not None
+        event_store = SQLiteEventStore(settings.artifact.root / "_records" / "events.sqlite3")
+        event_tenant = research_event_tenant_id(
+            {
+                "tenant_id": request.tenant_id,
+                "user_id": request.user_id,
+                "memory_namespace": request.memory_namespace,
+            }
+        )
+        high = event_store.get_stream_high_watermark(
+            f"run:{request.run_id}", tenant_id=event_tenant
+        )
+        assert high is not None
+        cursor = None
+        stream_events = []
+        while True:
+            page = event_store.read_stream(
+                StreamReadRequest(
+                    stream_id=f"run:{request.run_id}",
+                    tenant_id=event_tenant,
+                    cursor=cursor,
+                    through_sequence=high,
+                    limit=500,
+                )
+            )
+            stream_events.extend(page.events)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        ref_events = [
+            event
+            for event in stream_events
+            if event.event_type == "harness_ref_authority_committed"
+        ]
+        assert ref_events
+        canonical_context = graph_event_context(stream_events[0])
+        for event in ref_events:
+            context = graph_event_context(event)
+            assert context.identity == canonical_context.identity
+            assert context.execution_version == canonical_context.execution_version
+            assert context.execution_identity == event.business_context.execution_identity
+    finally:
+        composition.close()
+        shutil.rmtree(test_root, ignore_errors=True)
 
 
 class _ExplicitRunStore:
@@ -555,17 +907,13 @@ def test_valid_settings_compose_full_durable_production_graph(
                 "candidate-object-graph"
             ),
         )
-        dynamic_worker = runtime.dynamic_task_plan_runner_factory(
-            workspace=candidate_workspace,
-            dependencies=object(),
-        )
-        assert isinstance(dynamic_worker, ResearchAnalysisTaskPlanStageWorker)
-        assert child_runtime.started is True
-        assert isinstance(
-            dynamic_worker._runner.worker_executor,
-            HarnessSubAgentTaskExecutor,
-        )
-        assert dynamic_worker._runner.worker_executor.execution_service is not None
+        with pytest.raises(HarnessValidationError) as rollout_error:
+            runtime.dynamic_task_plan_runner_factory(
+                workspace=candidate_workspace,
+                dependencies=object(),
+            )
+        assert rollout_error.value.code == "research_dynamic_rollout_disabled"
+        assert child_runtime.started is False
         publish_worker = runtime._worker_registry(candidate_workspace)[
             "publish_artifacts"
         ]
@@ -776,11 +1124,12 @@ def test_enforce_mode_composes_real_graph_result_runtime(
             context_assembler=ContextAssembler(),
             graph_transition_port=event_port,
         )
-        dynamic_worker = runtime.dynamic_task_plan_runner_factory(
-            workspace=workspace,
-            dependencies=object(),
-        )
-        assert isinstance(dynamic_worker, ResearchAnalysisTaskPlanStageWorker)
+        with pytest.raises(HarnessValidationError) as rollout_error:
+            runtime.dynamic_task_plan_runner_factory(
+                workspace=workspace,
+                dependencies=object(),
+            )
+        assert rollout_error.value.code == "research_dynamic_rollout_disabled"
     finally:
         composition.close()
 
