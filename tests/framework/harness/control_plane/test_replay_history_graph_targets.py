@@ -2,7 +2,25 @@ from __future__ import annotations
 
 import pytest
 
+from framework.events.errors import EventStoreCorruptionError
+from framework.events.runtime.activities import ReplayActivityKind
 from framework.harness.control_plane import replay_history
+from framework.harness.graph.activity import HarnessWorkerType
+
+
+def test_task_plan_replay_activity_uses_composite_tool_family() -> None:
+    assert (
+        replay_history.harness_activity_kind(HarnessWorkerType.TASK_PLAN)
+        is ReplayActivityKind.TOOL
+    )
+
+
+def test_replay_activity_kind_rejects_unknown_worker_type() -> None:
+    with pytest.raises(
+        EventStoreCorruptionError,
+        match="unsupported Harness replay activity type: unknown_worker",
+    ):
+        replay_history.harness_activity_kind("unknown_worker")
 
 
 def test_replay_command_target_never_falls_back_to_step_id() -> None:

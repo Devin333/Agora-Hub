@@ -68,6 +68,10 @@ _ACTIVITY_KIND_BY_TYPE = {
     # AgentLoop is a Harness-controlled LLM worker whose durable activity
     # lineage uses the same replay family as direct LLM execution.
     "agent_loop": ReplayActivityKind.LLM,
+    # TaskPlan is a composite Harness worker. Its child LLM and subagent calls
+    # retain their own durable lineage, while the outer Graph activity replays
+    # through the same tool family as other composite worker boundaries.
+    "task_plan": ReplayActivityKind.TOOL,
     "mcp": ReplayActivityKind.MCP,
     "memory": ReplayActivityKind.MEMORY_WRITE,
     "publication": ReplayActivityKind.PUBLICATION,
