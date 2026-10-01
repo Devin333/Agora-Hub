@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+
+import pytest
 
 from framework.agent.models import DelegateBatchCandidate, DelegateBatchProposal
 from framework.harness.agent_loop.orchestration import (
@@ -8,6 +11,7 @@ from framework.harness.agent_loop.orchestration import (
     AgentOrchestrationTaskProfile,
     HarnessAgentOrchestrationRuntime,
     ParentObservationLimits,
+    AgentOrchestrationRolloutReceipt,
 )
 from framework.harness.graph.activity import HarnessWorkerType
 from framework.harness.graph.bindings import HarnessWorkerBinding
@@ -18,7 +22,7 @@ from framework.harness.task_plan.capability import (
     TaskCapabilityRegistry,
 )
 from framework.harness.task_plan.models import TaskBudget
-from framework.harness.task_plan.parallel import ParallelAgentCoordinator
+from framework.harness.task_plan.parallel import ParallelAgentCoordinator, SerialTaskExecutorAdapter
 from framework.harness.task_plan.policy import TaskPlanPolicy, TaskPlanPolicyRegistry
 from framework.harness.task_plan.stage import TaskPlanStageRunner
 from framework.harness.task_plan.store import InMemoryTaskPlanStore
@@ -102,7 +106,17 @@ class _ArtifactVerifier:
             raise ValueError("artifact is unavailable")
 
 
-def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admission_service=None, agent_delegation=False, policy=None, stage_binding=None) -> tuple[HarnessAgentOrchestrationRuntime, GraphExecutionIdentity]:
+class _RolloutAuthority:
+    def __init__(self, receipt):
+        self.receipt = receipt
+        self.calls = []
+
+    def admit(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.receipt
+
+
+def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admission_service=None, rollout_admission=None, rollout_scope_ref="generic", agent_delegation=False, policy=None, stage_binding=None) -> tuple[HarnessAgentOrchestrationRuntime, GraphExecutionIdentity]:
     policy = policy or TaskPlanPolicy(
         policy_id="agent.loop.delegate",
         version="1",
@@ -219,6 +233,8 @@ def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admi
         ),
         require_durable_store=False,
         ref_admission_service=ref_admission_service,
+        rollout_admission=rollout_admission,
+        rollout_scope_ref=rollout_scope_ref,
     )
     graph = stage_binding.graph
     identity = GraphExecutionIdentity(
@@ -309,12 +325,159 @@ def test_parent_summary_rejects_missing_durable_gate_proof() -> None:
         task_result,
         gate_evidence_reader=None,
     )
-
     assert summary is None
     assert diagnostic == (
         f"task:{task_result.task_id}:summary_gate_proof_invalid:"
         "task_plan_gate_evidence_reader_required"
     )
+
+
+def test_rollout_receipt_requires_exact_scope_and_gate_evidence() -> None:
+    receipt = AgentOrchestrationRolloutReceipt(
+        run_id="run-1",
+        stage_id="delegate_stage",
+        policy_ref="agent.loop.delegate@1",
+        policy_checksum="sha256:" + "a" * 64,
+        scope_ref="generic",
+        allowlist_ref="evidence://allowlist/1",
+        coordinator_gate_ref="evidence://coordinator/1",
+        continuation_gate_ref="evidence://continuation/1",
+        coordinator_gate_passed=True,
+        continuation_gate_passed=True,
+    )
+    assert receipt.rollout_state == "ENABLED_PARALLEL"
+    with pytest.raises(ValueError, match="non-empty text"):
+        AgentOrchestrationRolloutReceipt(
+            run_id="run-1",
+            stage_id="delegate_stage",
+            policy_ref="agent.loop.delegate@1",
+            policy_checksum="sha256:" + "a" * 64,
+            scope_ref="",
+            allowlist_ref="evidence://allowlist/1",
+            coordinator_gate_ref="evidence://coordinator/1",
+            continuation_gate_ref="evidence://continuation/1",
+            coordinator_gate_passed=True,
+            continuation_gate_passed=True,
+        )
+    with pytest.raises(ValueError, match="has not passed"):
+        AgentOrchestrationRolloutReceipt(
+            run_id="run-1",
+            stage_id="delegate_stage",
+            policy_ref="agent.loop.delegate@1",
+            policy_checksum="sha256:" + "a" * 64,
+            scope_ref="generic",
+            allowlist_ref="evidence://allowlist/1",
+            coordinator_gate_ref="evidence://coordinator/1",
+            continuation_gate_ref="evidence://continuation/1",
+            coordinator_gate_passed=True,
+            continuation_gate_passed=False,
+        )
+    with pytest.raises(ValueError, match="has not passed"):
+        AgentOrchestrationRolloutReceipt(
+            run_id="run-1",
+            stage_id="delegate_stage",
+            policy_ref="agent.loop.delegate@1",
+            policy_checksum="sha256:" + "a" * 64,
+            scope_ref="generic",
+            allowlist_ref="evidence://allowlist/1",
+            coordinator_gate_ref="evidence://coordinator/1",
+            continuation_gate_ref="evidence://continuation/1",
+            coordinator_gate_passed=True,
+            continuation_gate_passed=True,
+            allowlist_passed=False,
+        )
+
+
+def _rollout_receipt(runtime: HarnessAgentOrchestrationRuntime, *, state="ENABLED_PARALLEL"):
+    policy = runtime._policy_registry.resolve("agent.loop.delegate@1", stage_id="delegate_stage")
+    return AgentOrchestrationRolloutReceipt(
+        run_id="run-1",
+        stage_id="delegate_stage",
+        policy_ref=policy.exact_ref,
+        policy_checksum=policy.policy_checksum,
+        scope_ref="generic",
+        allowlist_ref="evidence://allowlist/generic-v1",
+        coordinator_gate_ref="evidence://coordinator/generic-v1",
+        continuation_gate_ref="evidence://continuation/generic-v1",
+        coordinator_gate_passed=True,
+        continuation_gate_passed=True,
+        rollout_state=state,
+    )
+
+
+def test_rollout_disable_blocks_new_admission_but_recovers_accepted_group() -> None:
+    runtime, identity = _runtime()
+    authority = _RolloutAuthority(_rollout_receipt(runtime))
+    # The fixture intentionally uses an in-memory worker setup.  Enabling the
+    # durable admission switch here exercises the production dispatch fence
+    # without pretending that this test owns production child bindings.
+    runtime._require_durable_store = True
+    runtime._rollout_admission = authority
+    request = _request(identity)
+
+    accepted = runtime.dispatch(request)
+    assert accepted.status == "succeeded"
+    assert len(authority.calls) == 1
+
+    runtime._rollout_admission = None
+    recovered = runtime.dispatch(request)
+    assert recovered.status == "succeeded"
+    assert len(authority.calls) == 1
+
+    new_request = replace(
+        request,
+        candidate=replace(request.candidate, correlation_id="turn-2"),
+    )
+    denied = runtime.dispatch(new_request)
+    assert denied.status == "rejected"
+    assert denied.reason_code == "agent_orchestration_rollout_disabled"
+
+
+def test_serial_rollout_requires_supervised_single_concurrency_policy() -> None:
+    runtime, identity = _runtime()
+    authority = _RolloutAuthority(
+        _rollout_receipt(runtime, state="DEGRADED_SERIAL")
+    )
+    runtime._require_durable_store = True
+    runtime._rollout_admission = authority
+
+    result = runtime.dispatch(_request(identity))
+
+    assert result.status == "rejected"
+    assert result.reason_code == "agent_orchestration_serial_policy_required"
+
+
+def test_serial_rollout_rejects_bare_serial_executor() -> None:
+    runtime, identity = _runtime()
+    runtime._stage_runner.parallel_coordinator = ParallelAgentCoordinator(
+        max_workers=1,
+        serial_executor=SerialTaskExecutorAdapter(),
+    )
+    authority = _RolloutAuthority(
+        _rollout_receipt(runtime, state="DEGRADED_SERIAL")
+    )
+    runtime._require_durable_store = True
+    runtime._rollout_admission = authority
+
+    result = runtime.dispatch(_request(identity))
+
+    assert result.status == "rejected"
+    assert result.reason_code == "agent_orchestration_serial_supervision_required"
+
+
+def test_coordinator_disable_preserves_recovery_and_rejects_new_groups() -> None:
+    runtime, identity = _runtime()
+    coordinator = runtime._stage_runner.parallel_coordinator
+
+    coordinator.disable_new_admissions()
+    assert coordinator.rollout_state == "FEATURE_DISABLED"
+    assert coordinator.new_admissions_enabled is False
+    with pytest.raises(ValueError, match="single-concurrency"):
+        coordinator.enable_new_admissions(rollout_state="DEGRADED_SERIAL")
+
+    coordinator.enable_new_admissions()
+    assert coordinator.rollout_state == "ENABLED_PARALLEL"
+    assert coordinator.new_admissions_enabled is True
 
 
 def test_parent_join_exposes_only_owner_verified_spill_refs() -> None:

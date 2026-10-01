@@ -1277,6 +1277,7 @@ class ParallelAgentCoordinator:
         child_supervisor: ChildAgentSupervisor | None = None,
         serial_executor: SerialTaskExecutorPort | None = None,
         allow_test_executor: bool = False,
+        rollout_state: str = "ENABLED_PARALLEL",
     ) -> None:
         if isinstance(max_workers, bool) or not isinstance(max_workers, int) or max_workers < 1:
             raise ValueError("max_workers must be positive")
@@ -1298,12 +1299,56 @@ class ParallelAgentCoordinator:
                 "production parallel coordination requires ChildAgentSupervisor "
                 "or SerialTaskExecutorPort"
             )
+        if rollout_state not in {"ENABLED_PARALLEL", "DEGRADED_SERIAL", "FEATURE_DISABLED"}:
+            raise ValueError("unsupported coordinator rollout state")
+        if rollout_state == "DEGRADED_SERIAL" and (
+            child_supervisor is None or max_workers != 1
+        ):
+            raise ValueError(
+                "DEGRADED_SERIAL requires a supervised single-concurrency coordinator"
+            )
         self.child_supervisor = child_supervisor
         self.serial_executor = serial_executor
         self._allow_test_executor = allow_test_executor
+        self._rollout_state = rollout_state
+        self._new_admissions_enabled = rollout_state != "FEATURE_DISABLED"
         self._lock = RLock()
         self._sessions: dict[str, _GroupSession] = {}
         self._pending_admissions: dict[str, _PendingGroupAdmission] = {}
+
+    @property
+    def rollout_state(self) -> str:
+        """Return the immutable transport state selected for new groups."""
+
+        with self._lock:
+            return self._rollout_state
+
+    @property
+    def new_admissions_enabled(self) -> bool:
+        with self._lock:
+            return self._new_admissions_enabled
+
+    def disable_new_admissions(self) -> None:
+        """Stop new groups while retaining recovery for accepted sessions."""
+
+        with self._lock:
+            self._new_admissions_enabled = False
+            self._rollout_state = "FEATURE_DISABLED"
+
+    def enable_new_admissions(self, *, rollout_state: str = "ENABLED_PARALLEL") -> None:
+        """Re-enable new groups under a validated transport state."""
+
+        if rollout_state not in {"ENABLED_PARALLEL", "DEGRADED_SERIAL"}:
+            raise ValueError("new admissions require an enabled rollout state")
+        if rollout_state == "DEGRADED_SERIAL" and (
+            self.child_supervisor is None or self.max_workers != 1
+        ):
+            raise ValueError(
+                "DEGRADED_SERIAL requires a supervised single-concurrency coordinator"
+            )
+        with self._lock:
+            self._rollout_state = rollout_state
+            self._new_admissions_enabled = True
 
     def _group_parallelism_limit(self, request: ParallelDispatchRequest) -> int:
         """Return the immutable admission ceiling used in group identity."""
@@ -1463,6 +1508,16 @@ class ParallelAgentCoordinator:
         replay_admission = False
         with self._lock:
             session = self._sessions.get(group.group_id)
+            pending = self._pending_admissions.get(group.group_id)
+            if (
+                session is None
+                and pending is None
+                and not self._new_admissions_enabled
+            ):
+                raise HarnessValidationError(
+                    "parallel rollout is disabled for new group admissions",
+                    code="TASK_GROUP_ADMISSION_DISABLED",
+                )
             if session is not None:
                 group = _reuse_admission_clock(group, session.group)
                 if session.group.group_checksum != group.group_checksum:
@@ -1482,7 +1537,6 @@ class ParallelAgentCoordinator:
                 result_group = session.group
                 if not replay_admission:
                     return result_group
-            pending = self._pending_admissions.get(group.group_id)
             if session is not None and replay_admission:
                 if pending is None:
                     pending = _PendingGroupAdmission(group=result_group)

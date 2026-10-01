@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 from framework.memory.recall_port import ExecutionMemoryRecallPort
 from framework.agent.models import AgentSpec, DelegateBatchCandidate, DelegateBatchProposal
@@ -95,6 +95,73 @@ class AgentOrchestrationTaskProfile:
             raise ValueError("capability_hint must be a non-empty string")
 
 
+@dataclass(frozen=True, slots=True)
+class AgentOrchestrationRolloutReceipt:
+    """Composition-owned evidence authorizing one generic admission.
+
+    The receipt is scoped to the exact run and policy.  Its refs are opaque
+    evidence identities; the authority that creates the typed value remains
+    outside the worker-facing dispatch path.
+    """
+
+    run_id: str
+    stage_id: str
+    policy_ref: str
+    policy_checksum: str
+    scope_ref: str
+    allowlist_ref: str
+    coordinator_gate_ref: str
+    continuation_gate_ref: str
+    coordinator_gate_passed: bool
+    continuation_gate_passed: bool
+    allowlist_passed: bool = True
+    rollout_state: str = "ENABLED_PARALLEL"
+
+    def __post_init__(self) -> None:
+        fields = (
+            self.run_id,
+            self.stage_id,
+            self.policy_ref,
+            self.policy_checksum,
+            self.scope_ref,
+            self.allowlist_ref,
+            self.coordinator_gate_ref,
+            self.continuation_gate_ref,
+        )
+        if any(not isinstance(value, str) or not value.strip() for value in fields):
+            raise ValueError("orchestration rollout receipt fields must be non-empty text")
+        passed = {
+            "coordinator_gate_passed": self.coordinator_gate_passed,
+            "continuation_gate_passed": self.continuation_gate_passed,
+            "allowlist_passed": self.allowlist_passed,
+        }
+        if any(type(value) is not bool for value in passed.values()):
+            raise TypeError("orchestration rollout gate decisions must be boolean")
+        failed = sorted(name for name, value in passed.items() if not value)
+        if failed:
+            raise ValueError(
+                "orchestration rollout evidence has not passed: "
+                + ", ".join(failed)
+            )
+        if self.rollout_state not in {"ENABLED_PARALLEL", "DEGRADED_SERIAL"}:
+            raise ValueError("unsupported orchestration rollout state")
+
+
+@runtime_checkable
+class AgentOrchestrationRolloutAdmissionPort(Protocol):
+    """Trusted composition authority for generic AgentLoop admission."""
+
+    def admit(
+        self,
+        *,
+        run_id: str,
+        stage_id: str,
+        policy_ref: str,
+        policy_checksum: str,
+        scope_ref: str,
+    ) -> AgentOrchestrationRolloutReceipt: ...
+
+
 class HarnessAgentOrchestrationRuntime:
     """Production AgentLoop-to-Harness delegation runtime.
 
@@ -116,6 +183,8 @@ class HarnessAgentOrchestrationRuntime:
         task_profiles: tuple[AgentOrchestrationTaskProfile, ...],
         require_durable_store: bool = True,
         ref_admission_service: HarnessRefAdmissionService | None = None,
+        rollout_admission: AgentOrchestrationRolloutAdmissionPort | None = None,
+        rollout_scope_ref: str = "generic",
     ) -> None:
         if not isinstance(stage_binding, TaskPlanStageBinding):
             raise TypeError("stage_binding must be TaskPlanStageBinding")
@@ -131,6 +200,7 @@ class HarnessAgentOrchestrationRuntime:
             raise TypeError("child_supervisor must be ChildAgentSupervisor")
         if not isinstance(require_durable_store, bool):
             raise TypeError("require_durable_store must be boolean")
+        self._require_durable_store = require_durable_store
         profiles = tuple(task_profiles)
         if not profiles or not all(isinstance(item, AgentOrchestrationTaskProfile) for item in profiles):
             raise TypeError("task_profiles must contain AgentOrchestrationTaskProfile values")
@@ -170,6 +240,15 @@ class HarnessAgentOrchestrationRuntime:
                 "production orchestration requires a declared AgentLoop stage and durable input admission"
             )
         self._ref_admission_service = ref_admission_service
+        if rollout_admission is not None and not isinstance(
+            rollout_admission, AgentOrchestrationRolloutAdmissionPort
+        ):
+            raise TypeError("rollout_admission must implement AgentOrchestrationRolloutAdmissionPort")
+        if not isinstance(rollout_scope_ref, str) or not rollout_scope_ref.strip():
+            raise ValueError("rollout_scope_ref must be non-empty text")
+        self._rollout_admission = rollout_admission
+        self._rollout_scope_ref = rollout_scope_ref
+        self._admission_enabled = True
         if require_durable_store:
             self.require_production_child_authority()
 
@@ -198,10 +277,46 @@ class HarnessAgentOrchestrationRuntime:
         )
 
     @property
+    def admission_enabled(self) -> bool:
+        """Whether new generic groups may be admitted through this runtime."""
+
+        coordinator = self._stage_runner.parallel_coordinator
+        return self._admission_enabled and bool(
+            getattr(coordinator, "new_admissions_enabled", True)
+        )
+
+    def disable_new_admissions(self) -> None:
+        """Fence new groups while retaining recovery for accepted submissions."""
+
+        self._admission_enabled = False
+        coordinator = self._stage_runner.parallel_coordinator
+        disable = getattr(coordinator, "disable_new_admissions", None)
+        if callable(disable):
+            disable()
+
+    def enable_new_admissions(self, *, rollout_state: str = "ENABLED_PARALLEL") -> None:
+        """Reopen admission only under a validated coordinator state."""
+
+        coordinator = self._stage_runner.parallel_coordinator
+        enable = getattr(coordinator, "enable_new_admissions", None)
+        if not callable(enable):
+            raise HarnessValidationError(
+                "orchestration coordinator cannot reopen admissions",
+                code="agent_orchestration_dependency_unavailable",
+            )
+        enable(rollout_state=rollout_state)
+        self._admission_enabled = True
+
+    @property
     def composition_state(self) -> AgentOrchestrationCompositionState:
         """Return the rollout state implied by the bound coordinator transport."""
 
         coordinator = self._stage_runner.parallel_coordinator
+        rollout_state = getattr(coordinator, "rollout_state", None)
+        if rollout_state == "FEATURE_DISABLED":
+            return AgentOrchestrationCompositionState.FEATURE_DISABLED
+        if rollout_state == "DEGRADED_SERIAL":
+            return AgentOrchestrationCompositionState.DEGRADED_SERIAL
         # A serial adapter may be retained as an explicit fallback while the
         # production child supervisor remains bound.  In that configuration
         # the live transport is still parallel; serial degradation applies
@@ -385,6 +500,14 @@ class HarnessAgentOrchestrationRuntime:
             )
         if recover and original is None:
             raise HarnessValidationError("recovery requires an existing submission", code="task_plan_submission_missing")
+        if original is None and not recover:
+            if not self.admission_enabled:
+                raise HarnessValidationError(
+                    "generic AgentLoop orchestration is disabled for new admissions",
+                    code="agent_orchestration_feature_disabled",
+                )
+            if self._require_durable_store:
+                self._require_rollout_admission(request, policy)
         # A conflicting payload retains its original dedup diagnostic. All
         # other external inputs are authorized before any submission write.
         TaskPlanStageRequest(
@@ -495,6 +618,64 @@ class HarnessAgentOrchestrationRuntime:
                 wait_status="pending" if waiting_for_capacity else "terminal",
             ),
         )
+
+    def _require_rollout_admission(
+        self,
+        request: AgentOrchestrationRequest,
+        policy: TaskPlanPolicy,
+    ) -> AgentOrchestrationRolloutReceipt:
+        authority = self._rollout_admission
+        if authority is None:
+            raise HarnessValidationError(
+                "generic AgentLoop rollout is disabled until coordinator and continuation evidence is admitted",
+                code="agent_orchestration_rollout_disabled",
+            )
+        receipt = authority.admit(
+            run_id=request.run_id or "",
+            stage_id=self._stage_binding.stage_id,
+            policy_ref=policy.exact_ref,
+            policy_checksum=policy.policy_checksum,
+            scope_ref=self._rollout_scope_ref,
+        )
+        if not isinstance(receipt, AgentOrchestrationRolloutReceipt):
+            raise HarnessValidationError(
+                "rollout authority returned an invalid generic admission receipt",
+                code="agent_orchestration_rollout_evidence_invalid",
+            )
+        if (
+            receipt.run_id != request.run_id
+            or receipt.stage_id != self._stage_binding.stage_id
+            or receipt.policy_ref != policy.exact_ref
+            or receipt.policy_checksum != policy.policy_checksum
+            or receipt.scope_ref != self._rollout_scope_ref
+        ):
+            raise HarnessValidationError(
+                "generic rollout receipt does not match this admission",
+                code="agent_orchestration_rollout_evidence_mismatch",
+            )
+        coordinator = self._stage_runner.parallel_coordinator
+        if not getattr(coordinator, "new_admissions_enabled", True):
+            raise HarnessValidationError(
+                "generic AgentLoop rollout is disabled for new admissions",
+                code="agent_orchestration_rollout_disabled",
+            )
+        if receipt.rollout_state == "DEGRADED_SERIAL":
+            if coordinator.child_supervisor is None:
+                raise HarnessValidationError(
+                    "serial rollout requires the supervised child execution path",
+                    code="agent_orchestration_serial_supervision_required",
+                )
+            if coordinator.max_workers != 1 or policy.max_parallelism != 1:
+                raise HarnessValidationError(
+                    "serial rollout requires a pinned single-concurrency policy",
+                    code="agent_orchestration_serial_policy_required",
+                )
+        elif coordinator.child_supervisor is None:
+            raise HarnessValidationError(
+                "parallel rollout requires the supervised child execution path",
+                code="agent_orchestration_parallel_supervision_required",
+            )
+        return receipt
 
     def _submission_receipt(
         self,
@@ -990,12 +1171,17 @@ class AgentOrchestrationBinding:
     port: AgentOrchestrationPort | None
     availability_reason: str | None = None
     composition_state: AgentOrchestrationCompositionState | str | None = None
+    recovery_port: AgentOrchestrationPort | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.feature_enabled, bool):
             raise TypeError("feature_enabled must be boolean")
         if self.port is not None and not isinstance(self.port, AgentOrchestrationPort):
             raise TypeError("port must implement AgentOrchestrationPort or be None")
+        if self.recovery_port is not None and not isinstance(
+            self.recovery_port, AgentOrchestrationPort
+        ):
+            raise TypeError("recovery_port must implement AgentOrchestrationPort or be None")
         if self.availability_reason is not None and (
             not isinstance(self.availability_reason, str)
             or not self.availability_reason.strip()
@@ -1021,6 +1207,8 @@ class AgentOrchestrationBinding:
                 raise ValueError(
                     "composition_state must be a supported AgentLoop composition state"
                 ) from exc
+        if self.recovery_port is None and self.port is not None:
+            object.__setattr__(self, "recovery_port", self.port)
         object.__setattr__(self, "composition_state", state)
 
         if state is AgentOrchestrationCompositionState.FEATURE_DISABLED:
@@ -1083,6 +1271,7 @@ class AgentOrchestrationBinding:
                 port=None,
                 availability_reason="feature_disabled",
                 composition_state=state,
+                recovery_port=None,
             )
         if dispatch is None:
             return cls(
@@ -1093,9 +1282,11 @@ class AgentOrchestrationBinding:
             )
         if not feature_enabled:
             raise ValueError("enabled composition state requires feature_enabled=True")
+        port = HarnessAgentOrchestrationPort(dispatch=dispatch)
         return cls(
             feature_enabled=feature_enabled,
-            port=HarnessAgentOrchestrationPort(dispatch=dispatch),
+            port=port,
+            recovery_port=port,
             composition_state=state,
         )
 

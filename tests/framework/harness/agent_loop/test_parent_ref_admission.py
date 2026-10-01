@@ -15,6 +15,7 @@ from framework.events.canonical import checksum_for
 from framework.events.schema import default_event_schema_catalog
 from framework.execution_environment.registry import ExecutionEnvironmentRegistry
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.agent_loop import AgentOrchestrationRolloutReceipt
 from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.graph.activity import HarnessWorkerType
 from framework.harness.graph.bindings import HarnessWorkerBinding
@@ -84,6 +85,39 @@ class _RecordingAdmission(HarnessRefAdmissionService):
         self.task = deepcopy(task)
         self.snapshot = super().admit_graph_inputs(task, **kwargs)
         return self.snapshot
+
+
+class _AllowlistedGenericRolloutAdmission:
+    """Typed test authority for the real durable generic composition fixture."""
+
+    def __init__(self, *, run_id: str, policy_ref: str, policy_checksum: str) -> None:
+        self._run_id = run_id
+        self._policy_ref = policy_ref
+        self._policy_checksum = policy_checksum
+
+    def admit(self, *, run_id, stage_id, policy_ref, policy_checksum, scope_ref):
+        if (
+            run_id != self._run_id
+            or scope_ref != "generic"
+            or policy_ref != self._policy_ref
+            or policy_checksum != self._policy_checksum
+        ):
+            raise HarnessValidationError(
+                "generic rollout run or policy is not allowlisted",
+                code="agent_orchestration_rollout_scope_not_allowlisted",
+            )
+        return AgentOrchestrationRolloutReceipt(
+            run_id=run_id,
+            stage_id=stage_id,
+            policy_ref=policy_ref,
+            policy_checksum=policy_checksum,
+            scope_ref=scope_ref,
+            allowlist_ref="test-evidence://allowlist/generic-parent",
+            coordinator_gate_ref="test-evidence://coordinator/generic-parent",
+            continuation_gate_ref="test-evidence://continuation/generic-parent",
+            coordinator_gate_passed=True,
+            continuation_gate_passed=True,
+        )
 
 
 class _RecordingChildRunnerAdapter(ChildAgentRunnerAdapter):
@@ -350,6 +384,11 @@ def _setup(
         result_verifier=verifier,
         checkpoint_store=JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"),
         ref_admission_service=admission,
+        rollout_admission=_AllowlistedGenericRolloutAdmission(
+            run_id=spec.run_id,
+            policy_ref=policy.exact_ref,
+            policy_checksum=policy.policy_checksum,
+        ),
     )
     agent = replace(_agent(), loop_policy=AgentLoopPolicy(max_iterations=3 if include_memory else 2, allow_subagents=True), metadata={
         "agent_orchestration": {"policy_ref": policy.exact_ref, "max_tasks_per_group": 2},
@@ -606,6 +645,11 @@ def _reopen_runtime(setup, root):
         child_supervisor=owned_child_runtime.supervisor, candidate_builder=_CandidateBuilder(),
         worker_executor=executor, task_profiles=tuple(setup.configured._profiles.values()), result_verifier=verifier,
         checkpoint_store=JsonlTaskPlanCheckpointStore(root / "checkpoints.jsonl"), ref_admission_service=admission,
+        rollout_admission=_AllowlistedGenericRolloutAdmission(
+            run_id=setup.spec.run_id,
+            policy_ref=setup.policy.exact_ref,
+            policy_checksum=setup.policy.policy_checksum,
+        ),
     ), executor
 
 

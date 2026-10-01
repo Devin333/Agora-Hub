@@ -11,6 +11,7 @@ from framework.harness.agent_loop import (
     AgentOrchestrationCompositionState,
     AgentOrchestrationDispatch,
     AgentOrchestrationTaskProfile,
+    AgentOrchestrationRolloutAdmissionPort,
     AgentLoopGraphActivityBindingBundle,
     AgentLoopGraphArtifactRecorder,
     HarnessAgentOrchestrationRuntime,
@@ -160,6 +161,8 @@ def build_agent_loop_harness_orchestration_runtime(
     metrics_sink: Any | None = None,
     checkpoint_store: TaskPlanCheckpointStorePort,
     ref_admission_service: HarnessRefAdmissionService | None = None,
+    rollout_admission: AgentOrchestrationRolloutAdmissionPort | None = None,
+    rollout_scope_ref: str = "generic",
 ) -> HarnessAgentOrchestrationRuntime:
     """Compose the real AgentLoop fan-out runtime from durable dependencies.
 
@@ -271,6 +274,8 @@ def build_agent_loop_harness_orchestration_runtime(
         task_profiles=task_profiles,
         require_durable_store=True,
         ref_admission_service=ref_admission_service,
+        rollout_admission=rollout_admission,
+        rollout_scope_ref=rollout_scope_ref,
     )
 
 
@@ -379,6 +384,7 @@ class AgentLoopGraphRuntimeComposition:
         agent_runner.bind_orchestration(
             orchestration_port=orchestration_binding.port,
             orchestration_enabled=orchestration_binding.feature_enabled,
+            recovery_port=orchestration_binding.recovery_port,
         )
 
         bundle = build_agent_loop_graph_activity_binding_bundle(
@@ -590,6 +596,7 @@ def build_agent_loop_orchestration_binding(
             return AgentOrchestrationBinding(
                 feature_enabled=False,
                 port=None,
+                recovery_port=runtime,
                 availability_reason="feature_disabled",
                 composition_state=AgentOrchestrationCompositionState.FEATURE_DISABLED,
             )
@@ -602,6 +609,7 @@ def build_agent_loop_orchestration_binding(
         return AgentOrchestrationBinding(
             feature_enabled=True,
             port=runtime,
+            recovery_port=runtime,
             composition_state=state,
         )
     return AgentOrchestrationBinding.from_dispatch(
