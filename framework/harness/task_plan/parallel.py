@@ -83,6 +83,7 @@ DISPATCH_WAVE_SCHEMA = "agora.harness-dispatch-wave/v4"
 TASK_RESERVATION_SCHEMA = "agora.harness-task-reservation/v1"
 PARENT_OBSERVATION_SCHEMA = "agora.harness-parent-observation/v1"
 CAPACITY_WAITING_EVIDENCE_SCHEMA = "agora.task-group-capacity-waiting/v1"
+PARALLEL_SERIAL_ROLLBACK_RECEIPT_SCHEMA = "agora.harness-parallel-serial-rollback-receipt/v1"
 
 
 class JoinPolicy(StrEnum):
@@ -1022,10 +1023,130 @@ class ParallelDispatchResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ParallelSerialRollbackReceipt:
+    """Durable authority for fencing admissions and auditing accepted groups.
+
+    The receipt records only immutable group identities. It never rewrites the
+    admitted group or wave policy; the coordinator keeps the receipt alongside
+    the in-memory session so recovery can inspect the same rollback decision.
+    """
+
+    rollback_id: str
+    reason_code: str
+    active_group_checksums: tuple[tuple[str, str], ...] = ()
+    rollout_state: str = "DEGRADED_SERIAL"
+    new_admissions_enabled: bool = False
+    receipt_checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rollback_id, str) or not self.rollback_id.strip():
+            raise ValueError("rollback_id must be non-empty text")
+        if not isinstance(self.reason_code, str) or not self.reason_code.strip():
+            raise ValueError("reason_code must be non-empty text")
+        if self.rollout_state != "DEGRADED_SERIAL":
+            raise ValueError("serial rollback receipt requires DEGRADED_SERIAL state")
+        if self.new_admissions_enabled:
+            raise ValueError("serial rollback receipt must fence new admissions")
+        entries = tuple(self.active_group_checksums)
+        normalized: list[tuple[str, str]] = []
+        for entry in entries:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                raise ValueError("active_group_checksums must contain group/checksum pairs")
+            group_id, group_checksum = entry
+            if not isinstance(group_id, str) or not group_id.strip():
+                raise ValueError("rollback group_id must be non-empty text")
+            try:
+                normalized_checksum = checksum(group_checksum, "group_checksum")
+            except HarnessValidationError as exc:
+                raise ValueError("rollback group_checksum must use sha256:<64 lowercase hex> form") from exc
+            normalized.append((group_id, normalized_checksum))
+        if tuple(sorted(normalized)) != entries:
+            raise ValueError("active_group_checksums must be sorted")
+        if len({group_id for group_id, _ in normalized}) != len(normalized):
+            raise ValueError("active_group_checksums must not contain duplicate groups")
+        payload = {
+            "schema_version": PARALLEL_SERIAL_ROLLBACK_RECEIPT_SCHEMA,
+            "rollback_id": self.rollback_id,
+            "reason_code": self.reason_code,
+            "active_group_checksums": [
+                {"group_id": group_id, "group_checksum": group_checksum}
+                for group_id, group_checksum in entries
+            ],
+            "rollout_state": self.rollout_state,
+            "new_admissions_enabled": self.new_admissions_enabled,
+        }
+        object.__setattr__(self, "receipt_checksum", canonical_payload_checksum(payload))
+
+    def to_dict(self, *, include_checksum: bool = True) -> dict[str, Any]:
+        payload = {
+            "schema_version": PARALLEL_SERIAL_ROLLBACK_RECEIPT_SCHEMA,
+            "rollback_id": self.rollback_id,
+            "reason_code": self.reason_code,
+            "active_group_checksums": [
+                {"group_id": group_id, "group_checksum": group_checksum}
+                for group_id, group_checksum in self.active_group_checksums
+            ],
+            "rollout_state": self.rollout_state,
+            "new_admissions_enabled": self.new_admissions_enabled,
+        }
+        if include_checksum:
+            payload["receipt_checksum"] = self.receipt_checksum
+        return payload
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ParallelSerialRollbackReceipt":
+        payload = exact_keys(
+            value,
+            required=frozenset({
+                "schema_version", "rollback_id", "reason_code",
+                "active_group_checksums", "rollout_state", "new_admissions_enabled",
+                "receipt_checksum",
+            }),
+            model=cls.__name__,
+        )
+        if payload["schema_version"] != PARALLEL_SERIAL_ROLLBACK_RECEIPT_SCHEMA:
+            raise HarnessValidationError(
+                "serial rollback receipt schema is unsupported",
+                code="TASK_GROUP_SERIAL_ROLLBACK_SCHEMA_INVALID",
+            )
+        raw_entries = payload["active_group_checksums"]
+        if not isinstance(raw_entries, (list, tuple)):
+            raise HarnessValidationError(
+                "serial rollback receipt active groups must be a list",
+                code="TASK_GROUP_SERIAL_ROLLBACK_SCHEMA_INVALID",
+            )
+        entries: list[tuple[str, str]] = []
+        for raw_entry in raw_entries:
+            entry = exact_keys(
+                raw_entry,
+                required=frozenset({"group_id", "group_checksum"}),
+                model=f"{cls.__name__}.active_group_checksums",
+            )
+            entries.append((entry["group_id"], entry["group_checksum"]))
+        supplied_checksum = checksum(payload.pop("receipt_checksum"), "receipt_checksum")
+        payload["active_group_checksums"] = tuple(entries)
+        payload.pop("schema_version")
+        try:
+            receipt = cls(**payload)
+        except (TypeError, ValueError) as exc:
+            raise HarnessValidationError(
+                "serial rollback receipt payload is invalid",
+                code="TASK_GROUP_SERIAL_ROLLBACK_SCHEMA_INVALID",
+            ) from exc
+        if supplied_checksum != receipt.receipt_checksum:
+            raise HarnessValidationError(
+                "serial rollback receipt checksum does not match canonical content",
+                code="TASK_GROUP_SERIAL_ROLLBACK_RECEIPT_CHECKSUM_MISMATCH",
+            )
+        return receipt
+
+
 @dataclass
 class _GroupSession:
     group: DispatchGroup
     request: ParallelDispatchRequest
+    event_sink: Callable[[Mapping[str, Any]], Any] | None = None
     admission_recorded: bool = False
     admission_effective_parallelism: int | None = None
     waves: list[DispatchWave] = field(default_factory=list)
@@ -1038,6 +1159,8 @@ class _GroupSession:
     failed_task_ids: set[str] = field(default_factory=set)
     reserved: set[str] = field(default_factory=set)
     degraded_reason: str | None = None
+    serial_rollback: bool = False
+    serial_rollback_id: str | None = None
     active_children: dict[str, tuple[ChildAgentHandle, "_SupervisorTaskWorker"]] = field(default_factory=dict)
     spawn_receipts: dict[str, tuple[str, str | None]] = field(default_factory=dict)
     recovery_status_reads: dict[str, tuple[str, ChildAgentHandle | None]] = field(default_factory=dict)
@@ -1315,6 +1438,8 @@ class ParallelAgentCoordinator:
         self._lock = RLock()
         self._sessions: dict[str, _GroupSession] = {}
         self._pending_admissions: dict[str, _PendingGroupAdmission] = {}
+        self._serial_rollback_receipt: ParallelSerialRollbackReceipt | None = None
+        self._pending_serial_rollback_receipt: ParallelSerialRollbackReceipt | None = None
 
     @property
     def rollout_state(self) -> str:
@@ -1327,6 +1452,167 @@ class ParallelAgentCoordinator:
     def new_admissions_enabled(self) -> bool:
         with self._lock:
             return self._new_admissions_enabled
+
+    @property
+    def admissions_enabled(self) -> bool:
+        """Alias used by release/inspection callers."""
+
+        return self.new_admissions_enabled
+
+    @property
+    def serial_rollback_receipt(self) -> ParallelSerialRollbackReceipt | None:
+        with self._lock:
+            return self._serial_rollback_receipt
+
+    @property
+    def serial_rollback_enabled(self) -> bool:
+        with self._lock:
+            return self._serial_rollback_receipt is not None
+
+    def rollback_to_serial(
+        self,
+        *,
+        reason_code: str = "rollout_serial_rollback",
+        event_sink: Callable[[Mapping[str, Any]], Any] | None = None,
+    ) -> ParallelSerialRollbackReceipt:
+        """Fence new admissions and record rollback for accepted groups.
+
+        Active groups retain their admitted parallelism and execution policy.
+        Each active group records the same receipt through its original stage
+        event owner before the rollback is considered committed.
+        """
+
+        if not isinstance(reason_code, str) or not reason_code.strip():
+            raise ValueError("reason_code must be non-empty text")
+        if self.child_supervisor is None:
+            raise HarnessValidationError(
+                "serial rollback requires the supervised child execution path",
+                code="TASK_GROUP_SERIAL_ROLLBACK_SUPERVISION_REQUIRED",
+            )
+        with self._lock:
+            existing = self._serial_rollback_receipt
+            if existing is not None:
+                if existing.reason_code != reason_code:
+                    raise HarnessValidationError(
+                        "serial rollback is already bound to another reason",
+                        code="TASK_GROUP_SERIAL_ROLLBACK_CONFLICT",
+                    )
+                return existing
+            # Fence admissions before any storage write. A pending admission
+            # may already have committed its group fact but not installed its
+            # local session; wait for a retry after that admission settles.
+            self._new_admissions_enabled = False
+            self._rollout_state = "FEATURE_DISABLED"
+            if self._pending_admissions:
+                raise HarnessValidationError(
+                    "serial rollback is waiting for group admissions to settle",
+                    code="TASK_GROUP_SERIAL_ROLLBACK_ADMISSION_PENDING",
+                )
+            receipt = self._pending_serial_rollback_receipt
+            if receipt is None:
+                active = tuple(
+                    sorted(
+                        (session.group.group_id, session.group.group_checksum)
+                        for session in self._sessions.values()
+                        if _GROUP_TRANSITIONS[session.group.state]
+                    )
+                )
+                for group_id, _group_checksum in active:
+                    session = self._sessions[group_id]
+                    if not session.admission_recorded or not (
+                        session.event_sink or self.event_sink or event_sink
+                    ):
+                        raise HarnessValidationError(
+                            "active group rollback requires its durable event owner",
+                            code="TASK_GROUP_SERIAL_ROLLBACK_EVENT_SINK_REQUIRED",
+                        )
+                receipt = ParallelSerialRollbackReceipt(
+                    rollback_id=f"rollback-{uuid4().hex}",
+                    reason_code=reason_code,
+                    active_group_checksums=active,
+                )
+                self._pending_serial_rollback_receipt = receipt
+            elif receipt.reason_code != reason_code:
+                raise HarnessValidationError(
+                    "serial rollback is already bound to another reason",
+                    code="TASK_GROUP_SERIAL_ROLLBACK_CONFLICT",
+                )
+            for group_id, group_checksum in receipt.active_group_checksums:
+                session = self._sessions[group_id]
+                sink = session.event_sink or self.event_sink or event_sink
+                if sink is None:
+                    raise HarnessValidationError(
+                        "active group rollback requires its durable event owner",
+                        code="TASK_GROUP_SERIAL_ROLLBACK_EVENT_SINK_REQUIRED",
+                    )
+                sink({
+                    "event_type": "DEGRADED_SERIAL",
+                    "group_id": group_id,
+                    "group_checksum": group_checksum,
+                    "reason_code": reason_code,
+                    "rollout_state": receipt.rollout_state,
+                    "new_admissions_enabled": False,
+                    "rollback_receipt": receipt.to_dict(),
+                    "idempotency_key": f"{receipt.rollback_id}:{group_id}",
+                })
+            self._install_serial_rollback_locked(receipt)
+            self._pending_serial_rollback_receipt = None
+            return receipt
+
+    def restore_serial_rollback(
+        self,
+        receipt: ParallelSerialRollbackReceipt | Mapping[str, Any],
+    ) -> ParallelSerialRollbackReceipt:
+        """Hydrate a durable serial rollback decision during stage recovery."""
+
+        if isinstance(receipt, Mapping):
+            receipt = ParallelSerialRollbackReceipt.from_dict(receipt)
+        if not isinstance(receipt, ParallelSerialRollbackReceipt):
+            raise TypeError("receipt must be ParallelSerialRollbackReceipt or mapping")
+        if self.child_supervisor is None:
+            raise HarnessValidationError(
+                "serial rollback recovery requires the supervised child execution path",
+                code="TASK_GROUP_SERIAL_ROLLBACK_SUPERVISION_REQUIRED",
+            )
+        with self._lock:
+            existing = self._serial_rollback_receipt
+            if existing is not None:
+                if existing.receipt_checksum != receipt.receipt_checksum:
+                    self._new_admissions_enabled = False
+                    self._rollout_state = "FEATURE_DISABLED"
+                    raise HarnessValidationError(
+                        "serial rollback recovery conflicts with the installed receipt",
+                        code="TASK_GROUP_SERIAL_ROLLBACK_CONFLICT",
+                    )
+                return existing
+            self._new_admissions_enabled = False
+            self._rollout_state = "FEATURE_DISABLED"
+            self._install_serial_rollback_locked(receipt)
+            return receipt
+
+    def _install_serial_rollback_locked(
+        self,
+        receipt: ParallelSerialRollbackReceipt,
+    ) -> None:
+        """Install a validated receipt while ``_lock`` is held."""
+
+        active_checksums = dict(receipt.active_group_checksums)
+        for session in self._sessions.values():
+            expected_checksum = active_checksums.get(session.group.group_id)
+            if expected_checksum is None:
+                continue
+            if expected_checksum != session.group.group_checksum:
+                raise HarnessValidationError(
+                    "serial rollback receipt does not match the admitted group",
+                    code="TASK_GROUP_SERIAL_ROLLBACK_CONFLICT",
+                )
+        self._serial_rollback_receipt = receipt
+        self._new_admissions_enabled = False
+        self._rollout_state = "DEGRADED_SERIAL"
+        for session in self._sessions.values():
+            if session.group.group_id in active_checksums:
+                session.serial_rollback = True
+                session.serial_rollback_id = receipt.rollback_id
 
     def disable_new_admissions(self) -> None:
         """Stop new groups while retaining recovery for accepted sessions."""
@@ -1347,6 +1633,11 @@ class ParallelAgentCoordinator:
                 "DEGRADED_SERIAL requires a supervised single-concurrency coordinator"
             )
         with self._lock:
+            if self._serial_rollback_receipt is not None or self._pending_serial_rollback_receipt is not None:
+                raise HarnessValidationError(
+                    "rollback admissions can only reopen under a new release authority",
+                    code="TASK_GROUP_SERIAL_ROLLBACK_CONFLICT",
+                )
             self._rollout_state = rollout_state
             self._new_admissions_enabled = True
 
@@ -1605,6 +1896,7 @@ class ParallelAgentCoordinator:
                         code="TASK_GROUP_ADMISSION_CONFLICT",
                     )
                 current.admission_recorded = True
+                current.event_sink = event_sink or self.event_sink
                 self._pending_admissions.pop(result_group.group_id, None)
                 pending.completed.set()
                 return current.group
@@ -1649,6 +1941,7 @@ class ParallelAgentCoordinator:
             self._sessions[group.group_id] = _GroupSession(
                 group=group,
                 request=request,
+                event_sink=event_sink or self.event_sink,
                 admission_recorded=(event_sink is not None or self.event_sink is not None),
                 admission_effective_parallelism=admitted_parallelism,
             )
@@ -1661,6 +1954,8 @@ class ParallelAgentCoordinator:
         request: ParallelDispatchRequest,
         group: DispatchGroup,
         waves: tuple[DispatchWave, ...],
+        *,
+        event_sink: Callable[[Mapping[str, Any]], Any] | None = None,
     ) -> DispatchGroup:
         """Restore canonical replay snapshots without repeating admission or spawn."""
         definition = self._group_definition(request)
@@ -1695,12 +1990,29 @@ class ParallelAgentCoordinator:
                     raise HarnessValidationError("restored group conflicts with local admission", code="TASK_GROUP_ADMISSION_CONFLICT")
                 if tuple(existing.waves) != ordered or existing.next_wave_ordinal != len(ordered) + 1:
                     raise HarnessValidationError("restored waves conflict with local admission history", code="TASK_GROUP_RECOVERY_WAVE_INVALID")
+                if existing.event_sink is None:
+                    existing.event_sink = event_sink or self.event_sink
                 return existing.group
             if group.group_id in self._pending_admissions:
                 raise HarnessValidationError("group admission is still being committed", code="TASK_GROUP_DISPATCH_BUSY")
+            rollback_receipt = self._serial_rollback_receipt
+            rollback_group_checksum = (
+                dict(rollback_receipt.active_group_checksums).get(group.group_id)
+                if rollback_receipt is not None else None
+            )
+            if rollback_group_checksum is not None and rollback_group_checksum != group.group_checksum:
+                raise HarnessValidationError(
+                    "serial rollback receipt does not match the restored group",
+                    code="TASK_GROUP_SERIAL_ROLLBACK_CONFLICT",
+                )
             session = _GroupSession(
                 group=group,
                 request=request,
+                event_sink=event_sink or self.event_sink,
+                serial_rollback=rollback_group_checksum is not None,
+                serial_rollback_id=(
+                    rollback_receipt.rollback_id if rollback_group_checksum is not None else None
+                ),
                 # A restored group originates from a verified durable
                 # TASK_GROUP_ADMITTED snapshot, even when this coordinator
                 # instance has no live sink yet.
@@ -2314,10 +2626,13 @@ class ParallelAgentCoordinator:
                 session = _GroupSession(
                     group=group,
                     request=request,
+                    event_sink=event_sink or self.event_sink,
                     admission_recorded=admitted_group is not None,
                     admission_effective_parallelism=group.max_parallelism,
                 )
                 self._sessions[group.group_id] = session
+            elif session.event_sink is None:
+                session.event_sink = event_sink or self.event_sink
             if not session.dispatch_lock.acquire(blocking=False):
                 raise HarnessValidationError(
                     "dispatch group already has an active operation",

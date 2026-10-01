@@ -49,6 +49,7 @@ class AgentRunner:
         subagent_executor: SubAgentExecutor | None = None,
         orchestration_port: AgentOrchestrationPort | None = None,
         orchestration_enabled: bool = False,
+        orchestration_recovery_port: AgentOrchestrationPort | None = None,
         memory_runtime: MemoryRuntime | None = None,
         memory_policy: MemoryPolicy | None = None,
         output_judge: OutputJudge | None = None,
@@ -62,7 +63,15 @@ class AgentRunner:
         self._conversation_store = conversation_store
         self._global_budget_tracker = global_budget_tracker
         self._subagent_executor = subagent_executor
+        # Constructor compatibility intentionally remains permissive; the
+        # production composition root performs protocol validation when it binds
+        # the exact Harness ports.
         self._orchestration_port = orchestration_port
+        self._orchestration_recovery_port = (
+            orchestration_recovery_port
+            if orchestration_recovery_port is not None
+            else orchestration_port
+        )
         self._orchestration_enabled = orchestration_enabled
         self._memory_runtime = memory_runtime
         self._memory_policy = memory_policy
@@ -110,15 +119,22 @@ class AgentRunner:
 
     @property
     def orchestration_port(self) -> AgentOrchestrationPort | None:
-        """Expose the configured Harness boundary for composition integrity checks."""
+        """Expose the configured Harness boundary for new admissions."""
 
         return self._orchestration_port
+
+    @property
+    def orchestration_recovery_port(self) -> AgentOrchestrationPort | None:
+        """Expose the recovery-only Harness boundary for committed groups."""
+
+        return self._orchestration_recovery_port
 
     def bind_orchestration(
         self,
         *,
         orchestration_port: AgentOrchestrationPort | None,
         orchestration_enabled: bool,
+        recovery_port: AgentOrchestrationPort | None = None,
     ) -> None:
         """Bind the production-owned orchestration boundary before execution.
 
@@ -130,6 +146,10 @@ class AgentRunner:
             orchestration_port, AgentOrchestrationPort
         ):
             raise TypeError("orchestration_port must implement AgentOrchestrationPort")
+        if recovery_port is not None and not isinstance(
+            recovery_port, AgentOrchestrationPort
+        ):
+            raise TypeError("recovery_port must implement AgentOrchestrationPort")
         if not isinstance(orchestration_enabled, bool):
             raise TypeError("orchestration_enabled must be boolean")
         if (
@@ -139,8 +159,21 @@ class AgentRunner:
         ):
             raise ValueError("AgentRunner orchestration port is already bound")
         if self._orchestration_enabled and not orchestration_enabled:
-            raise ValueError("AgentRunner orchestration feature cannot be disabled after binding")
-        self._orchestration_port = orchestration_port or self._orchestration_port
+            raise ValueError(
+                "AgentRunner orchestration feature cannot be disabled after binding"
+            )
+        if (
+            self._orchestration_recovery_port is not None
+            and recovery_port is not None
+            and self._orchestration_recovery_port is not recovery_port
+        ):
+            raise ValueError("AgentRunner orchestration recovery port is already bound")
+        if orchestration_port is not None:
+            self._orchestration_port = orchestration_port
+        if recovery_port is not None:
+            self._orchestration_recovery_port = recovery_port
+        elif orchestration_port is not None and self._orchestration_recovery_port is None:
+            self._orchestration_recovery_port = orchestration_port
         self._orchestration_enabled = orchestration_enabled
 
     def run(
@@ -419,8 +452,9 @@ class AgentRunner:
         if (
             not resume_from_cursor
             or graph_identity is None
-            or not self._orchestration_enabled
-            or not isinstance(self._orchestration_port, AgentOrchestrationPort)
+            or not isinstance(
+                self._orchestration_recovery_port, AgentOrchestrationPort
+            )
             or self._conversation_store is None
             or not conversation_id
         ):
@@ -461,7 +495,14 @@ class AgentRunner:
             raise ValueError("durable orchestration continuation Graph identity mismatch")
         if request.run_id != run_id:
             raise ValueError("durable orchestration continuation run mismatch")
-        result = self._orchestration_port.dispatch(request)
+        recovery_dispatch = getattr(
+            self._orchestration_recovery_port, "recover_submission", None
+        )
+        result = (
+            recovery_dispatch(request)
+            if callable(recovery_dispatch)
+            else self._orchestration_recovery_port.dispatch(request)
+        )
         if result.status.casefold() in {"waiting", "pending"}:
             observation = result.observation.project(request.parent_observation_limits)
             output: dict[str, Any] = {

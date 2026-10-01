@@ -14,6 +14,7 @@ from framework.agent.models import (
 )
 from framework.agent.models.action import DelegateBatchCandidate, DelegateBatchProposal
 from framework.agent.models.orchestration import (
+    AgentOrchestrationPort,
     AgentOrchestrationRequest,
     AgentOrchestrationResult,
     ParentObservation,
@@ -320,13 +321,24 @@ def test_agent_runner_rejects_partial_graph_identity(graph_runner) -> None:
         )
 
 
-def test_agent_runner_resumes_pending_parent_turn_without_llm_or_child_rerun(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "recovery_only",
+    (False, True),
+    ids=("enabled-new-groups", "disabled-new-groups-recovery-only"),
+)
+def test_agent_runner_resumes_pending_parent_turn_without_llm_or_child_rerun(
+    tmp_path,
+    recovery_only: bool,
+) -> None:
     class _Port:
         def __init__(self) -> None:
-            self.calls = 0
+            self.dispatch_calls = 0
+            self.recovery_calls = 0
 
-        def dispatch(self, request: AgentOrchestrationRequest) -> AgentOrchestrationResult:
-            self.calls += 1
+        @staticmethod
+        def _result(
+            request: AgentOrchestrationRequest,
+        ) -> AgentOrchestrationResult:
             assert request.parent_turn_id == "parent-turn-1"
             return AgentOrchestrationResult(
                 status="succeeded",
@@ -337,6 +349,28 @@ def test_agent_runner_resumes_pending_parent_turn_without_llm_or_child_rerun(tmp
                     task_summaries=(),
                 ),
             )
+
+        def dispatch(
+            self,
+            request: AgentOrchestrationRequest,
+        ) -> AgentOrchestrationResult:
+            self.dispatch_calls += 1
+            return self._result(request)
+
+    class _RecoveryPort(_Port):
+        def dispatch(
+            self,
+            _request: AgentOrchestrationRequest,
+        ) -> AgentOrchestrationResult:  # pragma: no cover - must stay fenced
+            self.dispatch_calls += 1
+            raise AssertionError("disabled rollout must not admit a new group")
+
+        def recover_submission(
+            self,
+            request: AgentOrchestrationRequest,
+        ) -> AgentOrchestrationResult:
+            self.recovery_calls += 1
+            return self._result(request)
 
     class _NoLLM:
         def complete(self, _request):  # pragma: no cover - should never execute
@@ -404,13 +438,15 @@ def test_agent_runner_resumes_pending_parent_turn_without_llm_or_child_rerun(tmp
             attempt=identity.attempt,
         ),
     )
-    port = _Port()
+    port = _RecoveryPort() if recovery_only else _Port()
+    assert isinstance(port, AgentOrchestrationPort)
     runner = AgentRunner(
         llm_client=_NoLLM(),
         tool_registry=ToolRegistry(),
         conversation_store=store,
-        orchestration_port=port,
-        orchestration_enabled=True,
+        orchestration_port=None if recovery_only else port,
+        orchestration_enabled=not recovery_only,
+        orchestration_recovery_port=port if recovery_only else None,
     )
     agent = AgentSpec(agent_id="analyst", name="Analyst", instructions="inspect")
 
@@ -433,4 +469,5 @@ def test_agent_runner_resumes_pending_parent_turn_without_llm_or_child_rerun(tmp
 
     assert result.success is True
     assert result.output["delegate_batch_observation"]["observation_checksum"].startswith("sha256:")
-    assert port.calls == 1
+    assert port.dispatch_calls == (0 if recovery_only else 1)
+    assert port.recovery_calls == (1 if recovery_only else 0)

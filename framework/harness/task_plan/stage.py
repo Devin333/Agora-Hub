@@ -76,6 +76,7 @@ from framework.harness.task_plan.parallel import (
     ParallelAgentCoordinator,
     ParallelDispatchRequest,
     ParallelEventSink,
+    ParallelSerialRollbackReceipt,
     ParentObservationLimits,
     SideEffectClass,
     child_budget_reservation,
@@ -1554,6 +1555,32 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
         event_sink: ParallelEventSink,
     ) -> None:
         history = self.store.read_events(request.run_id, request.stage_id)
+        rollback_receipts: list[ParallelSerialRollbackReceipt] = []
+        for event in history:
+            if event.event_type != "DEGRADED_SERIAL":
+                continue
+            raw_receipt = event.payload.get("rollback_receipt")
+            if raw_receipt is None:
+                continue
+            try:
+                rollback_receipts.append(
+                    ParallelSerialRollbackReceipt.from_dict(raw_receipt)
+                )
+            except (HarnessValidationError, TypeError, ValueError):
+                self.parallel_coordinator.disable_new_admissions()
+                raise
+        if rollback_receipts:
+            canonical_receipt = rollback_receipts[0]
+            if any(
+                item.receipt_checksum != canonical_receipt.receipt_checksum
+                for item in rollback_receipts[1:]
+            ):
+                self.parallel_coordinator.disable_new_admissions()
+                raise HarnessValidationError(
+                    "durable serial rollback receipts conflict",
+                    code="TASK_GROUP_SERIAL_ROLLBACK_CONFLICT",
+                )
+            self.parallel_coordinator.restore_serial_rollback(canonical_receipt)
         if not any(event.event_type == "TASK_GROUP_ADMITTED" for event in history):
             return
         report = self._replay_history(request, plan)
@@ -1568,6 +1595,7 @@ class TaskPlanStageRunner(TaskPlanStageRunnerPort):
             canonical_group,
             tuple(DispatchWave.from_dict(thaw_mapping(wave)) for wave in report.parallel_waves.values()
                   if wave["group_id"] == canonical_group.group_id),
+            event_sink=event_sink,
         )
         pending = [wave for wave in report.parallel_waves.values()
                    if wave["state"] in {"ADMITTED", "RUNNING"} and wave["execution_mode"] == "SUPERVISED"

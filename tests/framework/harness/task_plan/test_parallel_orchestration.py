@@ -40,6 +40,7 @@ from framework.harness.task_plan.parallel import (
     ParallelAgentCoordinator,
     ParallelDispatchRequest,
     ParallelEventSink,
+    ParallelSerialRollbackReceipt,
     ParentObservation,
     ParentObservationLimits,
     PARENT_OBSERVATION_SCHEMA,
@@ -365,6 +366,175 @@ def test_production_parallel_coordinator_requires_child_supervisor() -> None:
         assert coordinator.child_supervisor is supervisor
     finally:
         supervisor.shutdown()
+
+
+def test_explicit_serial_rollback_fences_admission_and_preserves_active_group_policy() -> None:
+    plan = _accepted_parallel_plan()
+    request = _request(plan)
+    events: list[dict[str, object]] = []
+    supervisor = ChildAgentSupervisor(max_children=2)
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        child_supervisor=supervisor,
+        event_sink=ParallelEventSink(events.append, events.extend),
+    )
+
+    def invoke(instance):
+        return _result(plan, instance)
+
+    try:
+        admitted = coordinator.create_group(request)
+        receipt = coordinator.rollback_to_serial(reason_code="release_rollback")
+
+        assert receipt.rollout_state == "DEGRADED_SERIAL"
+        assert receipt.new_admissions_enabled is False
+        assert receipt.active_group_checksums == (
+            (admitted.group_id, admitted.group_checksum),
+        )
+        assert ParallelSerialRollbackReceipt.from_dict(receipt.to_dict()) == receipt
+        assert coordinator.rollout_state == "DEGRADED_SERIAL"
+        assert coordinator.admissions_enabled is False
+        with pytest.raises(HarnessValidationError) as reopening:
+            coordinator.enable_new_admissions()
+        assert reopening.value.code == "TASK_GROUP_SERIAL_ROLLBACK_CONFLICT"
+        assert coordinator.rollback_to_serial(reason_code="release_rollback") == receipt
+        with pytest.raises(HarnessValidationError) as conflict:
+            coordinator.rollback_to_serial(reason_code="another_reason")
+        assert conflict.value.code == "TASK_GROUP_SERIAL_ROLLBACK_CONFLICT"
+
+        with pytest.raises(HarnessValidationError) as denied:
+            coordinator.create_group(replace(request, correlation_id="turn-2"))
+        assert denied.value.code == "TASK_GROUP_ADMISSION_DISABLED"
+
+        dispatched = coordinator.dispatch(request, invoke)
+        assert dispatched.succeeded is True
+        assert dispatched.group.group_id == admitted.group_id
+        assert dispatched.group.group_checksum == admitted.group_checksum
+        assert admitted.max_parallelism == 2
+        assert [wave.effective_parallelism for wave in dispatched.waves] == [2, 2]
+        assert [len(wave.task_ids) for wave in dispatched.waves] == [2, 1]
+        assert all(wave.execution_mode == "SUPERVISED" for wave in dispatched.waves)
+        degraded = [event for event in events if event["event_type"] == "DEGRADED_SERIAL"]
+        assert len(degraded) == 1
+        assert degraded[0]["rollback_receipt"] == receipt.to_dict()
+    finally:
+        supervisor.shutdown()
+
+
+def test_serial_rollback_requires_admitted_group_event_owner() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = _request(plan)
+    supervisor = ChildAgentSupervisor(max_children=2)
+    coordinator = ParallelAgentCoordinator(max_workers=2, child_supervisor=supervisor)
+    events: list[dict[str, object]] = []
+    try:
+        group = coordinator.create_group(request)
+        with pytest.raises(HarnessValidationError) as missing:
+            coordinator.rollback_to_serial(reason_code="release_rollback")
+        assert missing.value.code == "TASK_GROUP_SERIAL_ROLLBACK_EVENT_SINK_REQUIRED"
+        assert coordinator.new_admissions_enabled is False
+        assert coordinator.rollout_state == "FEATURE_DISABLED"
+        assert coordinator.serial_rollback_receipt is None
+        coordinator.create_group(
+            request, event_sink=ParallelEventSink(events.append, events.extend),
+        )
+        receipt = coordinator.rollback_to_serial(reason_code="release_rollback")
+        assert receipt.active_group_checksums == ((group.group_id, group.group_checksum),)
+        assert [event["event_type"] for event in events] == [
+            "TASK_GROUP_ADMITTED", "DEGRADED_SERIAL",
+        ]
+    finally:
+        supervisor.shutdown()
+
+
+def test_serial_rollback_retries_the_same_receipt_after_lost_acknowledgement() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = _request(plan)
+    supervisor = ChildAgentSupervisor(max_children=2)
+    events: list[dict[str, object]] = []
+    lose_acknowledgement = True
+
+    def append(event):
+        nonlocal lose_acknowledgement
+        if event not in events:
+            events.append(event)
+        if event["event_type"] == "DEGRADED_SERIAL" and lose_acknowledgement:
+            lose_acknowledgement = False
+            raise RuntimeError("rollback acknowledgement lost")
+
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        child_supervisor=supervisor,
+        event_sink=ParallelEventSink(append, lambda batch: [append(item) for item in batch]),
+    )
+    try:
+        coordinator.create_group(request)
+        with pytest.raises(RuntimeError, match="acknowledgement lost"):
+            coordinator.rollback_to_serial(reason_code="release_rollback")
+        written = next(event for event in events if event["event_type"] == "DEGRADED_SERIAL")
+        assert coordinator.new_admissions_enabled is False
+        assert coordinator.rollout_state == "FEATURE_DISABLED"
+        assert coordinator.serial_rollback_receipt is None
+        receipt = coordinator.rollback_to_serial(reason_code="release_rollback")
+        assert written["rollback_receipt"] == receipt.to_dict()
+        assert sum(event["event_type"] == "DEGRADED_SERIAL" for event in events) == 1
+        assert coordinator.rollout_state == "DEGRADED_SERIAL"
+    finally:
+        supervisor.shutdown()
+
+
+def test_serial_rollback_conflicting_restored_group_fails_closed() -> None:
+    plan = _accepted_parallel_plan(("task-1",))
+    request = _request(plan)
+    supervisor = ChildAgentSupervisor(max_children=2)
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2, child_supervisor=supervisor, event_sink=lambda _event: None,
+    )
+    try:
+        group = coordinator.create_group(request)
+        conflicting = ParallelSerialRollbackReceipt(
+            rollback_id="rollback-conflict",
+            reason_code="release_rollback",
+            active_group_checksums=((group.group_id, "sha256:" + "0" * 64),),
+        )
+        with pytest.raises(HarnessValidationError) as mismatch:
+            coordinator.restore_serial_rollback(conflicting)
+        assert mismatch.value.code == "TASK_GROUP_SERIAL_ROLLBACK_CONFLICT"
+        assert coordinator.serial_rollback_receipt is None
+        assert coordinator.new_admissions_enabled is False
+        assert coordinator.rollout_state == "FEATURE_DISABLED"
+    finally:
+        supervisor.shutdown()
+
+
+def test_serial_rollback_receipt_rehydrates_after_coordinator_restart() -> None:
+    supervisor = ChildAgentSupervisor(max_children=2)
+    restored_supervisor = ChildAgentSupervisor(max_children=2)
+    try:
+        source = ParallelAgentCoordinator(max_workers=2, child_supervisor=supervisor)
+        receipt = source.rollback_to_serial(reason_code="release_rollback")
+        target = ParallelAgentCoordinator(max_workers=2, child_supervisor=restored_supervisor)
+
+        restored = target.restore_serial_rollback(receipt.to_dict())
+
+        assert restored == receipt
+        assert target.rollout_state == "DEGRADED_SERIAL"
+        assert target.new_admissions_enabled is False
+        with pytest.raises(HarnessValidationError) as tampered:
+            ParallelSerialRollbackReceipt.from_dict(
+                {**receipt.to_dict(), "reason_code": "tampered"}
+            )
+        assert tampered.value.code == "TASK_GROUP_SERIAL_ROLLBACK_RECEIPT_CHECKSUM_MISMATCH"
+        malformed = receipt.to_dict()
+        malformed["active_group_checksums"] = [
+            {"group_id": "group-1", "group_checksum": "sha256:invalid"}
+        ]
+        with pytest.raises(HarnessValidationError) as invalid_checksum:
+            ParallelSerialRollbackReceipt.from_dict(malformed)
+        assert invalid_checksum.value.code == "TASK_GROUP_SERIAL_ROLLBACK_SCHEMA_INVALID"
+    finally:
+        supervisor.shutdown()
+        restored_supervisor.shutdown()
 
 
 def test_group_admission_append_failure_does_not_leave_ghost_session() -> None:
@@ -983,6 +1153,9 @@ def test_reconcile_spawn_intents_reuses_confirmed_children_without_spawn() -> No
             for event in recovery_events
             if event["event_type"] == "TASK_ATTEMPT_SPAWN_CONFIRMED"
         } == {"SPAWN_CONFIRMED"}
+        rollback = restarted.rollback_to_serial(reason_code="recovery_rollback")
+        assert rollback.active_group_checksums == ((group_id, session.group.group_checksum),)
+        assert [event["event_type"] for event in recovery_events].count("DEGRADED_SERIAL") == 1
     finally:
         supervisor.shutdown()
 

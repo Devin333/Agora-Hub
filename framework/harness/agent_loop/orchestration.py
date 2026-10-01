@@ -51,7 +51,7 @@ from framework.harness.task_plan.models import (
     TaskRetryPolicy,
     TaskSpec,
 )
-from framework.harness.task_plan.parallel import ParallelAgentCoordinator
+from framework.harness.task_plan.parallel import ParallelAgentCoordinator, ParallelSerialRollbackReceipt
 from framework.harness.task_plan.planning_observation import (
     PlanningObservationReceipt,
     PlanningObservationRequest,
@@ -293,6 +293,24 @@ class HarnessAgentOrchestrationRuntime:
         disable = getattr(coordinator, "disable_new_admissions", None)
         if callable(disable):
             disable()
+
+    def rollback_to_serial(
+        self,
+        *,
+        reason_code: str = "rollout_serial_rollback",
+        event_sink: Callable[[Mapping[str, Any]], Any] | None = None,
+    ) -> ParallelSerialRollbackReceipt:
+        """Fence new generic submissions; accepted groups retain their policy."""
+
+        self._admission_enabled = False
+        coordinator = self._stage_runner.parallel_coordinator
+        rollback = getattr(coordinator, "rollback_to_serial", None)
+        if not callable(rollback):
+            raise HarnessValidationError(
+                "orchestration coordinator cannot perform serial rollback",
+                code="agent_orchestration_dependency_unavailable",
+            )
+        return rollback(reason_code=reason_code, event_sink=event_sink)
 
     def enable_new_admissions(self, *, rollout_state: str = "ENABLED_PARALLEL") -> None:
         """Reopen admission only under a validated coordinator state."""

@@ -1452,16 +1452,36 @@ def _parallel_task_plan_details_schema(event_type: str) -> dict[str, Any]:
         "reason_code", "result_ref", "result_checksum",
         "termination_confirmed", "completed_at", "receipt_checksum",
     ])
+    serial_rollback_receipt = object_schema({
+        "schema_version": {"const": "agora.harness-parallel-serial-rollback-receipt/v1"},
+        "rollback_id": _TEXT,
+        "reason_code": _TEXT,
+        "active_group_checksums": {
+            "type": "array",
+            "items": object_schema({
+                "group_id": _TEXT,
+                "group_checksum": _CHECKSUM_TEXT,
+            }),
+            "maxItems": 128,
+        },
+        "rollout_state": {"const": "DEGRADED_SERIAL"},
+        "new_admissions_enabled": {"const": False},
+        "receipt_checksum": _CHECKSUM_TEXT,
+    })
     fields = {
         "event_type": {"const": event_type}, "parallel_event_idempotency_key": _TEXT,
         "idempotency_key": _TEXT, "group": group, "wave": wave,
-        "group_id": _TEXT, "wave_id": _TEXT, "task_ids": _ARRAY_OF_TEXT,
+        "group_id": _TEXT, "group_checksum": _CHECKSUM_TEXT,
+        "wave_id": _TEXT, "task_ids": _ARRAY_OF_TEXT,
         "task_id": _TEXT,
         "task_instance_id": _TEXT, "attempt": _POSITIVE_INTEGER, "child_id": _TEXT,
         "requested_parallelism": non_negative, "effective_parallelism": non_negative,
         "queue_wait_ms": non_negative, "run_duration_ms": non_negative,
         "join_duration_ms": non_negative, "group_duration_ms": non_negative,
         "reason_code": _TEXT, "diagnostics": _ARRAY_OF_TEXT,
+        "rollout_state": {"enum": ["DEGRADED_SERIAL", "ENABLED_PARALLEL", "FEATURE_DISABLED"]},
+        "new_admissions_enabled": {"type": "boolean"},
+        "rollback_receipt": serial_rollback_receipt,
         "quarantined_task_ids": _ARRAY_OF_TEXT, "retry_eligible": {"type": "boolean"},
         "reservation_state": reservation_state,
         "reservation_states": {"type": "object", "additionalProperties": reservation_state, "maxProperties": 128},

@@ -1929,7 +1929,48 @@ def _apply_parallel_event(
         diagnostics.append(_parallel_diagnostic(event, group_id, payload))
         return
     elif event.event_type == "DEGRADED_SERIAL":
-        diagnostics.append(_parallel_diagnostic(event, group_id, payload))
+        diagnostic = _parallel_diagnostic(event, group_id, payload)
+        raw_receipt = payload.get("rollback_receipt")
+        if raw_receipt is not None:
+            # Legacy capacity degradations have no rollout receipt. Explicit
+            # rollback receipts must bind this exact admitted group and their
+            # event envelope before offline replay may accept the history.
+            from framework.harness.task_plan.parallel import ParallelSerialRollbackReceipt
+
+            if not isinstance(raw_receipt, Mapping):
+                _parallel_error("serial rollback receipt must be a mapping", event)
+            try:
+                receipt = ParallelSerialRollbackReceipt.from_dict(raw_receipt)
+            except HarnessValidationError as exc:
+                if exc.code == "TASK_GROUP_SERIAL_ROLLBACK_RECEIPT_CHECKSUM_MISMATCH":
+                    raise HarnessValidationError(
+                        "serial rollback receipt checksum does not match canonical content",
+                        code=exc.code,
+                        details={"event_type": event.event_type, "sequence": event.sequence},
+                    ) from exc
+                _parallel_error("serial rollback receipt is invalid", event)
+            except (TypeError, ValueError):
+                _parallel_error("serial rollback receipt is invalid", event)
+            if (
+                (group_id, group["group_checksum"]) not in receipt.active_group_checksums
+                or payload.get("group_checksum") != group["group_checksum"]
+                or payload.get("reason_code") != receipt.reason_code
+                or payload.get("rollout_state") != receipt.rollout_state
+                or payload.get("new_admissions_enabled") is not False
+                or payload.get("idempotency_key") != f"{receipt.rollback_id}:{group_id}"
+            ):
+                _parallel_error("serial rollback event differs from its receipt", event)
+            for previous in diagnostics:
+                if (
+                    previous.get("event_type") == "DEGRADED_SERIAL"
+                    and previous.get("group_id") == group_id
+                    and "rollback_receipt_checksum" in previous
+                    and previous["rollback_receipt_checksum"] != receipt.receipt_checksum
+                ):
+                    _parallel_error("serial rollback receipt conflicts with group history", event)
+            diagnostic["rollback_receipt_checksum"] = receipt.receipt_checksum
+            diagnostic["rollback_id"] = receipt.rollback_id
+        diagnostics.append(diagnostic)
         return
     else:
         _parallel_error("unsupported parallel event", event)

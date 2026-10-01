@@ -15,9 +15,13 @@ from framework.harness.subagents.supervisor import (
 )
 from framework.harness.task_plan.attempt_history import TaskAttemptHistoryRecord
 from framework.harness.task_plan.budget_ledger import TaskPlanBudgetLedger
+from framework.harness.task_plan.canonical import canonical_payload_checksum
 from framework.harness.task_plan.models import TaskAdmissionOwner, TaskLifecycle
 from framework.harness.task_plan.parallel import (
-    DispatchGroupState, ParallelAgentCoordinator, ParallelEventSink,
+    DispatchGroupState,
+    ParallelAgentCoordinator,
+    ParallelEventSink,
+    ParallelSerialRollbackReceipt,
 )
 from framework.harness.task_plan.replay import _apply_parallel_event, _projection_for_plan
 from framework.harness.task_plan.scheduler import TaskPlanReadyDecision, TaskPlanScheduler
@@ -1501,3 +1505,329 @@ def test_sqlite_reopen_with_fresh_supervisor_fails_closed_on_missing_spawn_recei
         }) == 2
     finally:
         supervisor.shutdown()
+
+
+@pytest.fixture
+def durably_rolled_back_active_wave(monkeypatch):
+    events, artifacts = _EventStore(), _ArtifactStore()
+    runtime, identity = _runtime_with_gate_owner(_store(events, artifacts))
+    runner = runtime._stage_runner
+    record = runner._record_parallel_events
+    captured = {}
+    physical_spawns = []
+    original_spawn_batch = runtime._child_supervisor.spawn_batch
+
+    class ProcessCrash(BaseException):
+        pass
+
+    def counted_spawn_batch(requests, **kwargs):
+        physical_spawns.append(tuple(request.operation_id for request in requests))
+        return original_spawn_batch(requests, **kwargs)
+
+    def crash_after_dispatched_commit(request, plan, batch):
+        captured.update(request=request, plan=plan)
+        record(request, plan, batch)
+        if any(event["event_type"] == "TASK_WAVE_DISPATCHED" for event in batch):
+            raise ProcessCrash()
+
+    def process_disappeared_before_failure_audit(*_args, **_kwargs):
+        raise ProcessCrash()
+
+    supervisor = runtime._child_supervisor
+    monkeypatch.setattr(supervisor, "spawn_batch", counted_spawn_batch)
+    monkeypatch.setattr(runner, "_record_parallel_events", crash_after_dispatched_commit)
+    monkeypatch.setattr(
+        runner.parallel_coordinator,
+        "_mark_indeterminate",
+        process_disappeared_before_failure_audit,
+    )
+    try:
+        with pytest.raises(ProcessCrash):
+            runtime.dispatch(_parent_request(identity))
+        assert len(physical_spawns) == 1
+        monkeypatch.setattr(runner, "_record_parallel_events", record)
+
+        request, plan = captured["request"], captured["plan"]
+        history = runner.store.read_events(request.run_id, request.stage_id)
+        admission = next(
+            event for event in history if event.event_type == "TASK_GROUP_ADMITTED"
+        )
+        assert any(
+            event.event_type == "TASK_WAVE_DISPATCHED" for event in history
+        )
+        assert not any(
+            event.event_type == "TASK_GROUP_INDETERMINATE" for event in history
+        )
+
+        monkeypatch.setattr(
+            supervisor,
+            "spawn_batch",
+            lambda *args, **kwargs: pytest.fail("crash recovery spawned a new child"),
+        )
+        recovered_coordinator = ParallelAgentCoordinator(
+            max_workers=2,
+            child_supervisor=supervisor,
+        )
+        recovered_runner = TaskPlanStageRunner(
+            candidate_builder=runner.candidate_builder,
+            capability_registry=runner.capability_registry,
+            store=runner.store,
+            result_verifier=runner.result_verifier,
+            worker_executor=runner.worker_executor,
+            parallel_coordinator=recovered_coordinator,
+            child_supervisor_capacity=supervisor.capacity,
+            checkpoint_store=runner.checkpoint_store,
+        )
+        monkeypatch.setattr(
+            recovered_runner,
+            "_invoke",
+            lambda *args, **kwargs: pytest.fail("crash recovery invoked a worker"),
+        )
+        recovered_runner._recover_parallel_spawn_admission(
+            request,
+            plan,
+            recovered_runner._parallel_event_sink(request, plan),
+        )
+        recovered_session = next(iter(recovered_coordinator._sessions.values()))
+        assert recovered_session.group.state is DispatchGroupState.RUNNING
+
+        receipt = recovered_coordinator.rollback_to_serial(
+            reason_code="release_rollback",
+        )
+        yield SimpleNamespace(
+            events=events,
+            artifacts=artifacts,
+            runtime=runtime,
+            runner=recovered_runner,
+            supervisor=supervisor,
+            request=request,
+            plan=plan,
+            original_group=dict(admission.payload["group"]),
+            receipt=receipt,
+            physical_spawns=physical_spawns,
+        )
+    finally:
+        supervisor.shutdown()
+
+
+def test_durable_serial_rollback_rehydrates_and_fences_new_groups_without_live_replay(
+    durably_rolled_back_active_wave,
+    monkeypatch,
+):
+    fixture = durably_rolled_back_active_wave
+    history = fixture.runner.store.read_events(
+        fixture.request.run_id,
+        fixture.request.stage_id,
+    )
+    rollback_events = [
+        event for event in history if event.event_type == "DEGRADED_SERIAL"
+    ]
+    assert len(rollback_events) == 1
+    rollback_event = rollback_events[0]
+    restored_receipt = ParallelSerialRollbackReceipt.from_dict(
+        rollback_event.payload["rollback_receipt"]
+    )
+    assert restored_receipt == fixture.receipt
+    assert dict(restored_receipt.active_group_checksums) == {
+        fixture.original_group["group_id"]: fixture.original_group["group_checksum"]
+    }
+    assert rollback_event.payload["group_id"] == fixture.original_group["group_id"]
+    assert (
+        rollback_event.payload["group_checksum"]
+        == fixture.original_group["group_checksum"]
+    )
+    assert rollback_event.payload["reason_code"] == restored_receipt.reason_code
+    assert rollback_event.payload["rollout_state"] == "DEGRADED_SERIAL"
+    assert rollback_event.payload["new_admissions_enabled"] is False
+    assert rollback_event.payload["idempotency_key"] == (
+        f"{restored_receipt.rollback_id}:{fixture.original_group['group_id']}"
+    )
+
+    stored_rollback = next(
+        event for event in fixture.events._events
+        if event.event_type == "DEGRADED_SERIAL"
+    )
+    default_event_schema_catalog().validate(
+        stored_rollback.event_type,
+        stored_rollback.data_schema,
+        stored_rollback.payload,
+    )
+
+    status_calls = []
+    original_status = fixture.supervisor.status
+
+    def audited_status(child_id, *, operation_id):
+        status_calls.append((child_id, operation_id))
+        return original_status(child_id, operation_id=operation_id)
+
+    monkeypatch.setattr(fixture.supervisor, "status", audited_status)
+    monkeypatch.setattr(
+        fixture.supervisor,
+        "spawn_batch",
+        lambda *args, **kwargs: pytest.fail("rollback recovery spawned a new child"),
+    )
+    fresh_coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        child_supervisor=fixture.supervisor,
+    )
+    fresh_runner = TaskPlanStageRunner(
+        candidate_builder=fixture.runner.candidate_builder,
+        capability_registry=fixture.runner.capability_registry,
+        store=fixture.runner.store,
+        result_verifier=fixture.runner.result_verifier,
+        worker_executor=fixture.runner.worker_executor,
+        parallel_coordinator=fresh_coordinator,
+        child_supervisor_capacity=fixture.supervisor.capacity,
+        checkpoint_store=fixture.runner.checkpoint_store,
+    )
+    monkeypatch.setattr(
+        fresh_runner,
+        "_invoke",
+        lambda *args, **kwargs: pytest.fail("rollback recovery invoked a worker"),
+    )
+
+    fresh_runner._recover_parallel_spawn_admission(
+        fixture.request,
+        fixture.plan,
+        fresh_runner._parallel_event_sink(fixture.request, fixture.plan),
+    )
+
+    assert len(status_calls) == 2
+    assert len(fixture.physical_spawns) == 1
+    assert fresh_coordinator.rollout_state == "DEGRADED_SERIAL"
+    assert fresh_coordinator.new_admissions_enabled is False
+    assert fresh_coordinator.serial_rollback_receipt == restored_receipt
+    recovered_session = next(iter(fresh_coordinator._sessions.values()))
+    assert recovered_session.group.group_checksum == fixture.original_group["group_checksum"]
+    assert recovered_session.group.max_parallelism == fixture.original_group["max_parallelism"]
+    assert recovered_session.group.policy_checksum == fixture.original_group["policy_checksum"]
+
+    new_plan = _accepted_parallel_plan(("post-rollback-task",))
+    with pytest.raises(HarnessValidationError) as fenced:
+        fresh_coordinator.dispatch(
+            replace(
+                _request(new_plan),
+                correlation_id="post-rollback-new-group",
+            ),
+            lambda _instance: pytest.fail("fenced admission invoked a worker"),
+        )
+    assert fenced.value.code == "TASK_GROUP_ADMISSION_DISABLED"
+
+    history_before_replay = fixture.runner.store.read_events(
+        fixture.request.run_id,
+        fixture.request.stage_id,
+    )
+    monkeypatch.setattr(
+        fixture.supervisor,
+        "status",
+        lambda *args, **kwargs: pytest.fail("offline replay read supervisor state"),
+    )
+    first = fresh_runner._replay_history(fixture.request, fixture.plan)
+    second = fresh_runner._replay_history(fixture.request, fixture.plan)
+    assert first.replay_checksum == second.replay_checksum
+    assert first.parallel_groups[fixture.original_group["group_id"]][
+        "group_checksum"
+    ] == fixture.original_group["group_checksum"]
+    assert first.parallel_groups[fixture.original_group["group_id"]][
+        "max_parallelism"
+    ] == fixture.original_group["max_parallelism"]
+    assert fixture.runner.store.read_events(
+        fixture.request.run_id,
+        fixture.request.stage_id,
+    ) == history_before_replay
+    assert len(fixture.physical_spawns) == 1
+
+
+def test_resigned_durable_rollback_receipt_tampering_fails_closed_before_live_recovery(
+    durably_rolled_back_active_wave,
+    monkeypatch,
+):
+    fixture = durably_rolled_back_active_wave
+    history = fixture.runner.store.read_events(
+        fixture.request.run_id,
+        fixture.request.stage_id,
+    )
+    rollback_event = next(
+        event for event in history if event.event_type == "DEGRADED_SERIAL"
+    )
+    tampered_receipt = dict(rollback_event.payload["rollback_receipt"])
+    tampered_receipt["reason_code"] = "tampered_rollback_reason"
+    tampered_payload = {
+        **dict(rollback_event.payload),
+        "rollback_receipt": tampered_receipt,
+    }
+    tampered_event = replace(
+        rollback_event,
+        input_checksum=canonical_payload_checksum({
+            key: value
+            for key, value in tampered_payload.items()
+            if key != "parallel_event_idempotency_key"
+        }),
+        payload=tampered_payload,
+    )
+    stored_index, stored_event = next(
+        (index, event)
+        for index, event in enumerate(fixture.events._events)
+        if event.event_type == "DEGRADED_SERIAL"
+    )
+    stored_payload = tampered_event.to_dict()
+    stored_payload.pop("event_type")
+    stored_payload["details"] = stored_payload.pop("payload")
+    candidate_payload = stored_event.candidate.to_dict()
+    candidate_payload["payload"] = stored_payload
+    resigned_candidate = type(stored_event.candidate).from_dict(
+        candidate_payload,
+        verify_checksum=False,
+    )
+    fixture.events._events[stored_index] = type(stored_event)(
+        resigned_candidate,
+        stored_event.observed_at,
+        stored_event.stream_sequence,
+    )
+
+    monkeypatch.setattr(
+        fixture.supervisor,
+        "status",
+        lambda *args, **kwargs: pytest.fail("tampered rollback read live status"),
+    )
+    monkeypatch.setattr(
+        fixture.supervisor,
+        "spawn_batch",
+        lambda *args, **kwargs: pytest.fail("tampered rollback spawned a child"),
+    )
+    fresh_coordinator = ParallelAgentCoordinator(
+        max_workers=2,
+        child_supervisor=fixture.supervisor,
+    )
+    fresh_runner = TaskPlanStageRunner(
+        candidate_builder=fixture.runner.candidate_builder,
+        capability_registry=fixture.runner.capability_registry,
+        store=fixture.runner.store,
+        result_verifier=fixture.runner.result_verifier,
+        worker_executor=fixture.runner.worker_executor,
+        parallel_coordinator=fresh_coordinator,
+        child_supervisor_capacity=fixture.supervisor.capacity,
+        checkpoint_store=fixture.runner.checkpoint_store,
+    )
+    monkeypatch.setattr(
+        fresh_runner,
+        "_invoke",
+        lambda *args, **kwargs: pytest.fail("tampered rollback invoked a worker"),
+    )
+
+    with pytest.raises(HarnessValidationError) as replay_error:
+        fresh_runner._replay_history(fixture.request, fixture.plan)
+    assert replay_error.value.code == (
+        "TASK_GROUP_SERIAL_ROLLBACK_RECEIPT_CHECKSUM_MISMATCH"
+    )
+    with pytest.raises(HarnessValidationError) as recovery_error:
+        fresh_runner._recover_parallel_spawn_admission(
+            fixture.request,
+            fixture.plan,
+            fresh_runner._parallel_event_sink(fixture.request, fixture.plan),
+        )
+    assert recovery_error.value.code == (
+        "TASK_GROUP_SERIAL_ROLLBACK_RECEIPT_CHECKSUM_MISMATCH"
+    )
+    assert fresh_coordinator.serial_rollback_receipt is None
+    assert len(fixture.physical_spawns) == 1

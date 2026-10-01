@@ -7,6 +7,7 @@ import pytest
 
 from framework.agent.models import DelegateBatchCandidate, DelegateBatchProposal
 from framework.harness.agent_loop.orchestration import (
+    AgentOrchestrationCompositionState,
     AgentOrchestrationRequest,
     AgentOrchestrationTaskProfile,
     HarnessAgentOrchestrationRuntime,
@@ -463,6 +464,16 @@ def test_serial_rollout_rejects_bare_serial_executor() -> None:
 
     assert result.status == "rejected"
     assert result.reason_code == "agent_orchestration_serial_supervision_required"
+
+
+def test_explicit_serial_rollback_exposes_degraded_runtime_state() -> None:
+    runtime, _identity = _runtime()
+
+    receipt = runtime.rollback_to_serial(reason_code="release_rollback")
+
+    assert receipt.rollout_state == "DEGRADED_SERIAL"
+    assert runtime.admission_enabled is False
+    assert runtime.composition_state is AgentOrchestrationCompositionState.DEGRADED_SERIAL
 
 
 def test_coordinator_disable_preserves_recovery_and_rejects_new_groups() -> None:
