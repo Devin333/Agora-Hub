@@ -41,6 +41,7 @@ from framework.harness.runtime_contract import (
     runtime_contract_binding,
     validate_history_read_contract,
     validate_parallel_dispatch_contract,
+    validate_runtime_event_contract,
     validate_task_plan_event_contract,
     validate_task_result_contract,
 )

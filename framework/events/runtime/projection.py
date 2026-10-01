@@ -948,6 +948,12 @@ class CanonicalRuntimeEventPublisher:
         return self._runtime
 
     def publish(self, event: RuntimeEventEnvelope) -> Any:
+        # The publisher is the final durable boundary. Producers normally
+        # arrive through RuntimeEventEmitter, but direct callers must not
+        # bypass the shared Harness identity/scope/schema checks.
+        from framework.harness.runtime_contract import validate_runtime_event_contract
+
+        validate_runtime_event_contract(event, tenant_id=self._tenant_id)
         return self._runtime.publish(
             runtime_event_publish_request(event, tenant_id=self._tenant_id)
         )

@@ -14,6 +14,11 @@ from framework.events import (
     thaw_canonical_json,
 )
 from framework.events.runtime import RUNTIME_EVENT_SCHEMA_V1
+from framework.events.runtime.projection import (
+    RuntimeEventEnvelope,
+    RuntimeEventIdentity,
+    RuntimeEventType,
+)
 from framework.governance.budget import BUDGET_EVENT_SCHEMA_VERSION, BUDGET_SCHEMA_VERSION
 from framework.execution_environment import (
     EXECUTION_PROFILE_SCHEMA,
@@ -61,6 +66,7 @@ from framework.harness.runtime_contract import (
     runtime_contract_binding,
     validate_history_read_contract,
     validate_parallel_dispatch_contract,
+    validate_runtime_event_contract,
     validate_task_plan_event_contract,
     validate_task_result_owner_contract,
 )
@@ -82,6 +88,20 @@ from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _accepted_parallel_plan,
     _request,
 )
+
+
+def _runtime_graph_identity() -> GraphExecutionIdentity:
+    return GraphExecutionIdentity(
+        run_id="runtime-contract-run",
+        graph_id="runtime-contract-graph",
+        graph_version="1",
+        graph_ref="runtime-contract-graph@1",
+        graph_checksum="sha256:" + "a" * 64,
+        node_id="runtime-node",
+        node_instance_id="runtime-node-1",
+        activity_id="runtime-activity",
+        attempt=1,
+    )
 
 
 def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
@@ -118,6 +138,55 @@ def test_runtime_binding_is_derived_from_existing_owner_schemas() -> None:
         binding.owners["execution_profile"] = "newsroom.invalid/v1"  # type: ignore[index]
     with pytest.raises(TypeError):
         binding.projection_owners["child_agent_terminal_receipt"] = "invalid"  # type: ignore[index]
+
+
+def test_runtime_event_contract_rejects_stream_scope_drift() -> None:
+    identity = RuntimeEventIdentity(graph_identity=_runtime_graph_identity())
+    event = RuntimeEventEnvelope(
+        event_id="runtime-contract-event",
+        event_type=RuntimeEventType.WORKER_STATUS,
+        occurred_at=datetime.now(UTC),
+        identity=identity,
+        stream_id="different-run",
+        status="running",
+        reason_code="heartbeat",
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_runtime_event_contract(event, tenant_id="tenant-1")
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_SCOPE_MISMATCH"
+
+
+def test_runtime_event_contract_requires_attributable_identity() -> None:
+    event = RuntimeEventEnvelope(
+        event_id="runtime-contract-unbound",
+        event_type=RuntimeEventType.WORKER_STATUS,
+        occurred_at=datetime.now(UTC),
+        identity=RuntimeEventIdentity(),
+        stream_id="worker-1",
+        status="running",
+        reason_code="heartbeat",
+    )
+
+    with pytest.raises(HarnessValidationError) as exc_info:
+        validate_runtime_event_contract(event)
+
+    assert exc_info.value.code == "RUNTIME_CONTRACT_IDENTITY_MISMATCH"
+
+
+def test_runtime_event_contract_accepts_worker_scoped_identity() -> None:
+    event = RuntimeEventEnvelope(
+        event_id="runtime-contract-worker",
+        event_type=RuntimeEventType.WORKER_STATUS,
+        occurred_at=datetime.now(UTC),
+        identity=RuntimeEventIdentity(attempt_id="task-1"),
+        stream_id="worker-1",
+        status="running",
+        reason_code="heartbeat",
+    )
+
+    validate_runtime_event_contract(event, tenant_id="tenant-1")
 
 
 def test_child_lifecycle_reader_rejects_snapshot_from_another_schema(tmp_path) -> None:

@@ -431,6 +431,80 @@ def validate_task_result_owner_contract(result: Any) -> None:
     _validate_task_result_owner_contract(result, runtime_contract_binding())
 
 
+def validate_runtime_event_contract(
+    event: Any,
+    *,
+    expected_identity: Any | None = None,
+    tenant_id: str | None = None,
+) -> None:
+    """Validate one canonical runtime event before durable publication."""
+
+    binding = runtime_contract_binding()
+    from framework.events.runtime.projection import (
+        RUNTIME_EVENT_SCHEMA_V1,
+        RuntimeEventEnvelope,
+        RuntimeEventIdentity,
+    )
+
+    if (
+        type(event) is not RuntimeEventEnvelope
+        or event.schema_version != binding.owners["runtime_event_data"]
+        or event.schema_version != RUNTIME_EVENT_SCHEMA_V1
+    ):
+        raise HarnessValidationError(
+            "runtime event does not use the canonical owner type and schema",
+            code="RUNTIME_CONTRACT_SCHEMA_MISMATCH",
+        )
+    try:
+        canonical = RuntimeEventEnvelope.from_dict(event.to_dict())
+    except (TypeError, ValueError, AttributeError, KeyError) as exc:
+        raise HarnessValidationError(
+            "runtime event differs from canonical content",
+            code="RUNTIME_CONTRACT_CHECKSUM_MISMATCH",
+        ) from exc
+    if canonical != event:
+        raise HarnessValidationError(
+            "runtime event differs from its canonical owner model",
+            code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+        )
+
+    identity = event.identity
+    if type(identity) is not RuntimeEventIdentity:
+        raise HarnessValidationError(
+            "runtime event identity is not canonical",
+            code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+        )
+    graph_identity = identity.graph_identity
+    if graph_identity is None and not any(
+        getattr(identity, field_name) is not None
+        for field_name in ("activity_id", "attempt_id", "node_id", "node_instance_id")
+    ):
+        raise HarnessValidationError(
+            "runtime event has no attributable execution identity",
+            code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+        )
+    if graph_identity is not None and event.stream_id is not None and event.stream_id != graph_identity.run_id:
+        raise HarnessValidationError(
+            "runtime event stream crosses its Graph run scope",
+            code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+        )
+    if expected_identity is not None:
+        if not isinstance(expected_identity, RuntimeEventIdentity):
+            expected_identity = RuntimeEventIdentity(**dict(expected_identity))
+        if identity != expected_identity:
+            raise HarnessValidationError(
+                "runtime event identity differs from the bound producer scope",
+                code="RUNTIME_CONTRACT_IDENTITY_MISMATCH",
+            )
+    if tenant_id is not None and (
+        not isinstance(tenant_id, str) or not tenant_id.strip()
+    ):
+        raise HarnessValidationError(
+            "runtime event tenant scope is invalid",
+            code="RUNTIME_CONTRACT_SCOPE_MISMATCH",
+        )
+
+
 def validate_task_plan_event_contract(
     event: Any,
     *,
@@ -758,6 +832,7 @@ __all__ = [
     "runtime_contract_binding",
     "validate_history_read_contract",
     "validate_parallel_dispatch_contract",
+    "validate_runtime_event_contract",
     "validate_task_plan_event_contract",
     "validate_task_result_contract",
     "validate_task_result_owner_contract",
