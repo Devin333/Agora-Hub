@@ -346,6 +346,34 @@ class AgentLoopDiagnosticsBuilder:
             suggestions=[_approval_suggestion(approval_kind)],
         )
 
+    def orchestration_pending(
+        self,
+        *,
+        metrics: AgentLoopMetrics,
+        iterations: int,
+        reason: str,
+    ) -> AgentLoopDiagnostics:
+        """Represent a durable Harness continuation without treating it as failure."""
+
+        return self._build(
+            status=AgentLoopStatus.PENDING,
+            stop_reason=AgentLoopStopReason.ORCHESTRATION_PENDING,
+            summary=reason,
+            healthy=False,
+            severity=AgentLoopDiagnosticSeverity.INFO,
+            metrics=metrics,
+            iterations=iterations,
+            issues=[
+                AgentLoopIssue(
+                    code="agent_orchestration_pending",
+                    message=reason,
+                    severity=AgentLoopDiagnosticSeverity.INFO,
+                    iteration=iterations,
+                )
+            ],
+            suggestions=["wait for the Harness continuation signal before resuming"],
+        )
+
     def retry_exhausted(
         self,
         *,

@@ -12,6 +12,15 @@ from framework.agent.models import (
     AgentLoopStatus,
     AgentSpec,
 )
+from framework.agent.models.action import DelegateBatchCandidate, DelegateBatchProposal
+from framework.agent.models.orchestration import (
+    AgentOrchestrationRequest,
+    AgentOrchestrationResult,
+    ParentObservation,
+    ParentObservationLimits,
+)
+from framework.agent.messages import AgentMessageRecord, CONVERSATION_SCOPE_GRAPH
+from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool import ToolRegistry
 from infrastructure.storage.conversation import LocalJsonConversationStore
 
@@ -309,3 +318,119 @@ def test_agent_runner_rejects_partial_graph_identity(graph_runner) -> None:
             node_instance_id="analyze:1",
             graph_checkpoint_ref="checkpoint://run-1/1\nforged",
         )
+
+
+def test_agent_runner_resumes_pending_parent_turn_without_llm_or_child_rerun(tmp_path) -> None:
+    class _Port:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def dispatch(self, request: AgentOrchestrationRequest) -> AgentOrchestrationResult:
+            self.calls += 1
+            assert request.parent_turn_id == "parent-turn-1"
+            return AgentOrchestrationResult(
+                status="succeeded",
+                observation=ParentObservation(
+                    group_id="group-1",
+                    group_status="succeeded",
+                    plan_version="1",
+                    task_summaries=(),
+                ),
+            )
+
+    class _NoLLM:
+        def complete(self, _request):  # pragma: no cover - should never execute
+            raise AssertionError("pending continuation must not call the model")
+
+    identity = GraphExecutionIdentity(
+        run_id="run-1",
+        graph_id="test.graph",
+        graph_version="1",
+        graph_ref="test.graph@1",
+        graph_checksum="sha256:" + "a" * 64,
+        node_id="analyze",
+        node_instance_id="analyze:1",
+        activity_id="activity-1",
+        attempt=1,
+    )
+    candidate = DelegateBatchCandidate(
+        correlation_id="turn-1",
+        tasks=(
+            DelegateBatchProposal(
+                logical_task_id="task-1",
+                objective="inspect",
+                capability_hint="research.inspect@1",
+                input_refs=("document",),
+                output_role="analysis",
+            ),
+        ),
+    )
+    request = AgentOrchestrationRequest(
+        parent_agent_id="analyst",
+        parent_turn_id="parent-turn-1",
+        run_id="run-1",
+        execution_identity=identity,
+        graph_checkpoint_ref="checkpoint://run-1/7",
+        policy_ref="parent-policy@1",
+        max_tasks_per_group=1,
+        parent_observation_limits=ParentObservationLimits(),
+        candidate=candidate,
+    )
+    store = LocalJsonConversationStore(tmp_path / "conversations")
+    store.append_message(
+        "conversation-1",
+        AgentMessageRecord(
+            conversation_id="conversation-1",
+            role="assistant",
+            content={
+                "success": False,
+                "status": "pending",
+                "output": {
+                    "orchestration_request": request.to_dict(),
+                    "delegate_batch_candidate": candidate.to_dict(),
+                },
+            },
+            scope_kind=CONVERSATION_SCOPE_GRAPH,
+            agent_id="analyst",
+            run_id=identity.run_id,
+            graph_id=identity.graph_id,
+            graph_version=identity.graph_version,
+            graph_ref=identity.graph_ref,
+            graph_checksum=identity.graph_checksum,
+            node_id=identity.node_id,
+            node_instance_id=identity.node_instance_id,
+            graph_checkpoint_ref="checkpoint://run-1/7",
+            activity_id=identity.activity_id,
+            attempt=identity.attempt,
+        ),
+    )
+    port = _Port()
+    runner = AgentRunner(
+        llm_client=_NoLLM(),
+        tool_registry=ToolRegistry(),
+        conversation_store=store,
+        orchestration_port=port,
+        orchestration_enabled=True,
+    )
+    agent = AgentSpec(agent_id="analyst", name="Analyst", instructions="inspect")
+
+    result = runner.run(
+        agent,
+        {"query": "resume"},
+        conversation_id="conversation-1",
+        resume_from_cursor=True,
+        run_id=identity.run_id,
+        graph_id=identity.graph_id,
+        graph_version=identity.graph_version,
+        graph_ref=identity.graph_ref,
+        graph_checksum=identity.graph_checksum,
+        node_id=identity.node_id,
+        node_instance_id=identity.node_instance_id,
+        graph_checkpoint_ref="checkpoint://run-1/7",
+        activity_id=identity.activity_id,
+        attempt=identity.attempt,
+    )
+
+    assert result.success is True
+    assert result.output["delegate_batch_observation"]["observation_checksum"].startswith("sha256:")
+    assert port.calls == 1

@@ -108,6 +108,61 @@ def _result(*, status: str = "succeeded") -> AgentOrchestrationResult:
     )
 
 
+def _legacy_result(*, status: str = "succeeded") -> AgentOrchestrationResult:
+    succeeded = status == "succeeded"
+    waiting = status in {"waiting", "pending"}
+    result_ref = "artifact://critic" if succeeded else None
+    return AgentOrchestrationResult(
+        status=status,
+        reason_code=(
+            None
+            if succeeded
+            else "TASK_GROUP_CAPACITY_WAITING"
+            if waiting
+            else f"legacy_child_{status}"
+        ),
+        observation=ParentObservation(
+            group_id="legacy-group-1",
+            group_status=status,
+            plan_version="1",
+            task_summaries=(
+                ParentTaskSummary(
+                    logical_task_id="critic",
+                    status="succeeded" if succeeded else status,
+                    summary="legacy child completed" if succeeded else None,
+                    result_ref=result_ref,
+                    result_checksum="checksum-critic" if succeeded else None,
+                ),
+            ),
+            result_refs=(result_ref,) if result_ref is not None else (),
+        ),
+    )
+
+
+def _legacy_agent(*, mapping: dict[str, object] | None = None) -> AgentSpec:
+    return AgentSpec(
+        agent_id="parent",
+        name="Parent",
+        instructions="delegate safely",
+        loop_policy=AgentLoopPolicy(max_iterations=2, allow_subagents=True),
+        allowed_subagents=["critic"],
+        metadata={
+            "agent_orchestration": {
+                "policy_ref": "parent-policy@1",
+                "max_tasks_per_group": 2,
+                "legacy_delegate_capabilities": {
+                    "critic": mapping
+                    or {
+                        "capability_hint": "research.critic@1",
+                        "input_refs": ["document"],
+                        "output_role": "critique",
+                    },
+                },
+            }
+        },
+    )
+
+
 def test_parser_accepts_strict_versioned_delegate_batch() -> None:
     action = AgentActionParser().parse(_batch_action())
 
@@ -490,6 +545,136 @@ def test_legacy_delegate_uses_single_task_orchestration_adapter() -> None:
     request = port.requests[0]
     assert len(request.candidate.tasks) == 1
     assert request.candidate.tasks[0].logical_task_id == "critic"
+
+
+def test_legacy_delegate_mapping_is_pinned_and_golden() -> None:
+    port = _RecordingOrchestrationPort(_legacy_result())
+    loop = AgentLoop(
+        llm_client=FakeLLMClient(
+            [
+                json.dumps(
+                    {
+                        "action_type": "delegate",
+                        "subagent_id": "critic",
+                        "subagent_task": "Review the evidence",
+                    }
+                ),
+                json.dumps({"action_type": "final_output", "output": {"output": "done"}}),
+            ]
+        ),
+        tool_executor=ToolExecutor(ToolRegistry()),
+        orchestration_port=port,
+        orchestration_enabled=True,
+    )
+
+    result = loop.run(_legacy_agent(), {"run_id": "run-1"}, [], run_id="run-1", standalone=True)
+
+    assert result.success is True
+    request = port.requests[0]
+    assert request.candidate.to_dict() == {
+        "schema_version": "newsroom.agent.delegate-batch/v1",
+        "correlation_id": "legacy:parent:1:critic",
+        "parallelism_hint": None,
+        "tasks": [
+            {
+                "logical_task_id": "critic",
+                "objective": "Review the evidence",
+                "capability_hint": "research.critic@1",
+                "input_refs": ["document"],
+                "output_role": "critique",
+                "depends_on": [],
+            }
+        ],
+    }
+
+
+def test_legacy_delegate_pending_is_a_recoverable_parent_stop() -> None:
+    port = _RecordingOrchestrationPort(_legacy_result(status="waiting"))
+    client = FakeLLMClient(
+        [
+            json.dumps(
+                {
+                    "action_type": "delegate",
+                    "subagent_id": "critic",
+                    "subagent_task": "Review the evidence",
+                }
+            )
+        ]
+    )
+    loop = AgentLoop(
+        llm_client=client,
+        tool_executor=ToolExecutor(ToolRegistry()),
+        orchestration_port=port,
+        orchestration_enabled=True,
+    )
+
+    result = loop.run(_legacy_agent(), {"run_id": "run-1"}, [], run_id="run-1", standalone=True)
+
+    assert result.success is False
+    assert result.status.value == "pending"
+    assert result.diagnostics is not None
+    assert result.diagnostics.stop_reason is AgentLoopStopReason.ORCHESTRATION_PENDING
+    assert result.output["delegate_batch_observation"]["group_status"] == "waiting"
+    assert result.output["orchestration_request"]["candidate"]["tasks"][0]["logical_task_id"] == "critic"
+    assert len(client.requests) == 1
+
+
+@pytest.mark.parametrize("status", ["partial_failure", "cancelled", "indeterminate", "halted"])
+def test_legacy_delegate_preserves_terminal_error_and_stop_status(status: str) -> None:
+    port = _RecordingOrchestrationPort(_legacy_result(status=status))
+    client = FakeLLMClient(
+        [
+            json.dumps(
+                {
+                    "action_type": "delegate",
+                    "subagent_id": "critic",
+                    "subagent_task": "Review the evidence",
+                }
+            ),
+            json.dumps({"action_type": "final_output", "output": {"output": "unsafe"}}),
+        ]
+    )
+    loop = AgentLoop(
+        llm_client=client,
+        tool_executor=ToolExecutor(ToolRegistry()),
+        orchestration_port=port,
+        orchestration_enabled=True,
+    )
+
+    result = loop.run(_legacy_agent(), {"run_id": "run-1"}, [], run_id="run-1", standalone=True)
+
+    assert result.success is False
+    assert result.status.value == "failed"
+    assert result.output["delegate_batch_observation"]["group_status"] == status
+    assert len(client.requests) == 1
+    assert len(port.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "mapping",
+    [
+        {"capability_hint": 1, "input_refs": ["document"], "output_role": "critique"},
+        {"capability_hint": "research.critic@1", "input_refs": ["document"], "output_role": None},
+        {"capability_hint": "research.critic@1", "input_refs": [" document"], "output_role": "critique"},
+        {"capability_hint": "research.critic@1", "input_refs": ["document", "document"], "output_role": "critique"},
+    ],
+)
+def test_legacy_delegate_rejects_noncanonical_capability_mapping(mapping: dict[str, object]) -> None:
+    port = _RecordingOrchestrationPort(_legacy_result())
+    loop = AgentLoop(
+        llm_client=FakeLLMClient(
+            [json.dumps({"action_type": "delegate", "subagent_id": "critic"})]
+        ),
+        tool_executor=ToolExecutor(ToolRegistry()),
+        orchestration_port=port,
+        orchestration_enabled=True,
+    )
+
+    result = loop.run(_legacy_agent(mapping=mapping), {"run_id": "run-1"}, [], run_id="run-1", standalone=True)
+
+    assert result.success is False
+    assert port.requests == []
+    assert any("legacy_delegate_mapping_unavailable" in str(event) for event in result.events)
 
 
 def test_enabled_legacy_delegate_without_mapping_is_deferred() -> None:

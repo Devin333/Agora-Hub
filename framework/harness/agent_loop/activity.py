@@ -11,6 +11,10 @@ from framework.agent.models import (
     AgentLoopStopReason,
     AgentSpec,
 )
+from framework.agent.models.orchestration import (
+    AgentOrchestrationRequest,
+    AgentSubmissionReceipt,
+)
 from framework.events.canonical import checksum_for
 from framework.harness.agent_loop.artifacts import (
     AgentLoopGraphArtifactContext,
@@ -87,6 +91,17 @@ AGENT_LOOP_GRAPH_APPROVAL_SIGNAL_TYPE = "newsroom.agent-loop.approval"
 AGENT_LOOP_GRAPH_APPROVAL_SIGNAL_VERSION = "1"
 AGENT_LOOP_GRAPH_APPROVAL_WAIT_BINDING_SCHEMA = (
     "newsroom.agent-loop-graph-approval-wait-binding/v1"
+)
+AGENT_LOOP_GRAPH_CONTINUATION_WAIT_FACT_SCHEMA = (
+    "newsroom.agent-loop-graph-continuation-wait-fact/v1"
+)
+AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_TYPE = "newsroom.agent-loop.continuation"
+AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_VERSION = "1"
+AGENT_LOOP_GRAPH_CONTINUATION_WAIT_BINDING_SCHEMA = (
+    "newsroom.agent-loop-graph-continuation-wait-binding/v1"
+)
+AGENT_LOOP_GRAPH_CONTINUATION_WAIT_EVIDENCE_TYPE = (
+    "agent_loop_graph_continuation_wait"
 )
 AGENT_LOOP_GRAPH_BINDING_MANIFEST_SCHEMA = (
     "newsroom.agent-loop-graph-activity-binding/v2"
@@ -577,7 +592,7 @@ class AgentLoopGraphApprovalWaitFact:
             identity_scope_ref=candidate.identity_scope_ref,
         )
 
-    def correlation_projection(self) -> dict[str, str]:
+    def correlation_projection(self) -> dict[str, Any]:
         return {
             "approval_id": self.approval_id,
             "approval_kind": self.approval_kind,
@@ -625,6 +640,202 @@ class AgentLoopGraphApprovalWaitFact:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentLoopGraphContinuationWaitFact:
+    """Harness-owned signal fact for a durable parent-turn continuation."""
+
+    run_id: str
+    graph_id: str
+    graph_version: str
+    graph_checksum: str
+    node_id: str
+    node_instance_id: str
+    activity_id: str
+    activity_attempt: int
+    stage_id: str
+    parent_turn_id: str
+    submission_id: str
+    group_id: str
+    observation_checksum: str
+    graph_checkpoint_ref: str
+    tenant_scope_ref: str
+    identity_scope_ref: str
+    schema_version: str = AGENT_LOOP_GRAPH_CONTINUATION_WAIT_FACT_SCHEMA
+    correlation_ref: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "run_id",
+            "graph_id",
+            "graph_version",
+            "node_id",
+            "node_instance_id",
+            "activity_id",
+            "stage_id",
+            "parent_turn_id",
+            "submission_id",
+            "group_id",
+            "graph_checkpoint_ref",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _required_text(getattr(self, field_name), field_name),
+            )
+        for field_name in (
+            "graph_checksum",
+            "observation_checksum",
+            "tenant_scope_ref",
+            "identity_scope_ref",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _checksum(getattr(self, field_name), field_name),
+            )
+        if (
+            isinstance(self.activity_attempt, bool)
+            or not isinstance(self.activity_attempt, int)
+            or self.activity_attempt < 1
+        ):
+            raise _wait_error("activity_attempt must be a positive integer")
+        if self.schema_version != AGENT_LOOP_GRAPH_CONTINUATION_WAIT_FACT_SCHEMA:
+            raise HarnessValidationError(
+                "unsupported AgentLoop Graph continuation Wait fact schema",
+                code="unsupported_agent_loop_graph_activity_schema",
+            )
+        object.__setattr__(
+            self,
+            "correlation_ref",
+            checksum_for(self.correlation_projection()),
+        )
+
+    @classmethod
+    def from_result(
+        cls,
+        *,
+        task: AgentLoopGraphActivityTask,
+        result: AgentLoopResult,
+    ) -> "AgentLoopGraphContinuationWaitFact":
+        if result.status is not AgentLoopStatus.PENDING:
+            raise _wait_error("continuation Wait requires a pending AgentLoop result")
+        raw_output = result.output
+        raw_request = raw_output.get("orchestration_request")
+        raw_observation = raw_output.get("delegate_batch_observation")
+        if not isinstance(raw_request, Mapping) or not isinstance(raw_observation, Mapping):
+            raise _wait_error("pending AgentLoop result lacks durable continuation facts")
+        try:
+            request = AgentOrchestrationRequest.from_dict(raw_request)
+            receipt = raw_output.get("submission_receipt")
+            if not isinstance(receipt, Mapping):
+                raise ValueError("submission receipt is missing")
+            submission = AgentSubmissionReceipt.from_dict(receipt)
+        except (TypeError, ValueError) as exc:
+            raise _wait_error("pending AgentLoop continuation facts are invalid") from exc
+        observation_checksum = raw_observation.get("observation_checksum")
+        group_id = raw_observation.get("group_id")
+        if not isinstance(observation_checksum, str) or not isinstance(group_id, str):
+            raise _wait_error("pending AgentLoop observation identity is missing")
+        activity = task.task_context.activity
+        if request.run_id != activity.run_id or request.parent_turn_id != submission.parent_turn_id:
+            raise _wait_error("pending continuation identity does not match Graph activity")
+        identity = request.execution_identity
+        if identity is not None and (
+            identity.run_id != activity.run_id
+            or identity.graph_id != activity.graph_ref.graph_id
+            or identity.graph_version != activity.graph_ref.identity_version
+            or identity.graph_checksum != activity.graph_ref.checksum
+            or identity.node_id != activity.node_id
+            or identity.node_instance_id != activity.node_instance_id
+            or identity.activity_id != activity.activity_id
+            or identity.attempt != activity.attempt
+        ):
+            raise _wait_error("pending continuation Graph identity does not match activity")
+        return cls(
+            run_id=activity.run_id,
+            graph_id=activity.graph_ref.graph_id,
+            graph_version=activity.graph_ref.identity_version,
+            graph_checksum=activity.graph_ref.checksum,
+            node_id=activity.node_id,
+            node_instance_id=activity.node_instance_id,
+            activity_id=activity.activity_id,
+            activity_attempt=activity.attempt,
+            stage_id=submission.stage_id,
+            parent_turn_id=request.parent_turn_id,
+            submission_id=submission.submission_id,
+            group_id=group_id,
+            observation_checksum=observation_checksum,
+            graph_checkpoint_ref=task.task_context.graph_checkpoint_ref,
+            tenant_scope_ref=activity.tenant_scope_ref,
+            identity_scope_ref=activity.identity_scope_ref,
+        )
+
+    def correlation_projection(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "graph_id": self.graph_id,
+            "graph_version": self.graph_version,
+            "graph_checksum": self.graph_checksum,
+            "node_id": self.node_id,
+            "node_instance_id": self.node_instance_id,
+            "activity_id": self.activity_id,
+            "activity_attempt": self.activity_attempt,
+            "stage_id": self.stage_id,
+            "parent_turn_id": self.parent_turn_id,
+            "submission_id": self.submission_id,
+            "group_id": self.group_id,
+            "observation_checksum": self.observation_checksum,
+            "graph_checkpoint_ref": self.graph_checkpoint_ref,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            **self.correlation_projection(),
+            "tenant_scope_ref": self.tenant_scope_ref,
+            "identity_scope_ref": self.identity_scope_ref,
+            "correlation_ref": self.correlation_ref,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "AgentLoopGraphContinuationWaitFact":
+        payload = _exact_mapping(
+            value,
+            {
+                "schema_version",
+                "run_id",
+                "graph_id",
+                "graph_version",
+                "graph_checksum",
+                "node_id",
+                "node_instance_id",
+                "activity_id",
+                "activity_attempt",
+                "stage_id",
+                "parent_turn_id",
+                "submission_id",
+                "group_id",
+                "observation_checksum",
+                "graph_checkpoint_ref",
+                "tenant_scope_ref",
+                "identity_scope_ref",
+                "correlation_ref",
+            },
+            "continuation Wait fact",
+        )
+        supplied = payload.pop("correlation_ref")
+        fact = cls(**payload)
+        if supplied != fact.correlation_ref:
+            raise _wait_error("continuation Wait correlation checksum does not match")
+        return fact
+
+    def worker_evidence(self) -> HarnessWorkerEvidence:
+        return HarnessWorkerEvidence(
+            evidence_type=AGENT_LOOP_GRAPH_CONTINUATION_WAIT_EVIDENCE_TYPE,
+            payload=self.to_dict(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AgentLoopGraphActivityOutput:
     task_context_checksum: str
     agent_id: str
@@ -633,6 +844,7 @@ class AgentLoopGraphActivityOutput:
     artifact_refs: tuple[str, ...]
     artifact_receipt_checksum: str
     approval_wait: AgentLoopGraphApprovalWaitFact | None = None
+    continuation_wait: AgentLoopGraphContinuationWaitFact | None = None
     schema_version: str = AGENT_LOOP_GRAPH_ACTIVITY_OUTPUT_SCHEMA
     waiting: bool = field(init=False)
     output_checksum: str = field(init=False)
@@ -677,9 +889,22 @@ class AgentLoopGraphActivityOutput:
             raise TypeError(
                 "approval_wait must be AgentLoopGraphApprovalWaitFact"
             )
-        waiting = self.approval_wait is not None
+        if self.continuation_wait is not None and not isinstance(
+            self.continuation_wait,
+            AgentLoopGraphContinuationWaitFact,
+        ):
+            raise TypeError(
+                "continuation_wait must be AgentLoopGraphContinuationWaitFact"
+            )
+        if self.approval_wait is not None and self.continuation_wait is not None:
+            raise _activity_error("activity output cannot carry two Wait facts")
+        waiting = self.approval_wait is not None or self.continuation_wait is not None
         if (
-            result.get("status") == AgentLoopStatus.WAITING_FOR_APPROVAL.value
+            result.get("status")
+            in {
+                AgentLoopStatus.WAITING_FOR_APPROVAL.value,
+                AgentLoopStatus.PENDING.value,
+            }
         ) != waiting:
             raise _activity_error(
                 "AgentLoop result status and approval Wait fact do not match"
@@ -697,7 +922,7 @@ class AgentLoopGraphActivityOutput:
         )
 
     def checksum_projection(self) -> dict[str, Any]:
-        return {
+        projection = {
             "schema_version": self.schema_version,
             "task_context_checksum": self.task_context_checksum,
             "agent_id": self.agent_id,
@@ -712,18 +937,28 @@ class AgentLoopGraphActivityOutput:
             ),
             "waiting": self.waiting,
         }
+        if self.continuation_wait is not None:
+            projection["continuation_wait"] = self.continuation_wait.to_dict()
+        return projection
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             **self.checksum_projection(),
             "output_checksum": self.output_checksum,
         }
+        # Keep v2 approval output wire-compatible; emit this optional field
+        # only for the new durable continuation signal path.
+        if self.continuation_wait is None:
+            payload.pop("continuation_wait", None)
+        return payload
 
     @classmethod
     def from_dict(
         cls,
         value: Mapping[str, Any],
     ) -> AgentLoopGraphActivityOutput:
+        value = dict(value)
+        value.setdefault("continuation_wait", None)
         payload = _exact_mapping(
             value,
             {
@@ -735,6 +970,7 @@ class AgentLoopGraphActivityOutput:
                 "artifact_refs",
                 "artifact_receipt_checksum",
                 "approval_wait",
+                "continuation_wait",
                 "waiting",
                 "output_checksum",
             },
@@ -755,6 +991,15 @@ class AgentLoopGraphActivityOutput:
             payload["approval_wait"] = AgentLoopGraphApprovalWaitFact.from_dict(
                 raw_wait
             )
+        raw_continuation = payload.get("continuation_wait")
+        if raw_continuation is not None:
+            if not isinstance(raw_continuation, Mapping):
+                raise _activity_error("continuation_wait must be an object")
+            payload["continuation_wait"] = AgentLoopGraphContinuationWaitFact.from_dict(
+                raw_continuation
+            )
+        else:
+            payload["continuation_wait"] = None
         output = cls(**payload)
         if (
             supplied_waiting != output.waiting
@@ -895,7 +1140,15 @@ class AgentLoopGraphWorker:
                 code="agent_loop_graph_activity_result_invalid",
             )
         _assert_agent_result_identity(result, agent_id=self.agent.agent_id)
-        worker_status = _worker_status(result)
+        continuation_wait = (
+            AgentLoopGraphContinuationWaitFact.from_result(
+                task=parsed,
+                result=result,
+            )
+            if result.status is AgentLoopStatus.PENDING
+            else None
+        )
+        worker_status = _worker_status(result, continuation_wait=continuation_wait)
         wait_candidate = (
             AgentLoopGraphWaitCandidate.from_result(
                 task=parsed,
@@ -930,7 +1183,13 @@ class AgentLoopGraphWorker:
             ),
         )
         preliminary_evidence = (
-            () if wait_candidate is None else (wait_candidate.worker_evidence(),)
+            ()
+            if wait_candidate is None and continuation_wait is None
+            else (
+                wait_candidate.worker_evidence(),
+            )
+            if wait_candidate is not None
+            else (continuation_wait.worker_evidence(),)
         )
         error = (
             None
@@ -964,10 +1223,13 @@ class AgentLoopGraphWorker:
             artifact_refs=receipt.artifact_refs,
             artifact_receipt_checksum=receipt.receipt_checksum,
             approval_wait=approval_wait,
+            continuation_wait=continuation_wait,
         )
         evidence = [receipt.worker_evidence()]
         if wait_candidate is not None:
             evidence.append(wait_candidate.worker_evidence())
+        if continuation_wait is not None:
+            evidence.append(continuation_wait.worker_evidence())
         return HarnessWorkerResult(
             status=worker_status,
             output={self.result_output_key: output.to_dict()},
@@ -1035,9 +1297,13 @@ class AgentLoopGraphWaitCandidateGate(DeterministicGate):
         evidence = tuple(
             item
             for item in worker_result.evidence
-            if item.evidence_type == AGENT_LOOP_GRAPH_WAIT_EVIDENCE_TYPE
+            if item.evidence_type
+            in {
+                AGENT_LOOP_GRAPH_WAIT_EVIDENCE_TYPE,
+                AGENT_LOOP_GRAPH_CONTINUATION_WAIT_EVIDENCE_TYPE,
+            }
         )
-        if output.approval_wait is None:
+        if output.approval_wait is None and output.continuation_wait is None:
             if evidence:
                 return self._failure(
                     "non-waiting AgentLoop output carries waiting evidence",
@@ -1049,6 +1315,69 @@ class AgentLoopGraphWaitCandidateGate(DeterministicGate):
                 details={
                     "reason_code": "agent_loop_candidate_not_waiting",
                     "waiting": False,
+                    "output_checksum": output.output_checksum,
+                },
+            )
+        if output.continuation_wait is not None:
+            if len(evidence) != 1 or evidence[0].evidence_type != AGENT_LOOP_GRAPH_CONTINUATION_WAIT_EVIDENCE_TYPE:
+                return self._failure(
+                    "pending AgentLoop output requires one exact continuation evidence record",
+                    "agent_loop_continuation_wait_evidence_count_invalid",
+                )
+            try:
+                fact = AgentLoopGraphContinuationWaitFact.from_dict(evidence[0].payload)
+            except (HarnessValidationError, TypeError, ValueError):
+                return self._failure(
+                    "AgentLoop continuation evidence is invalid",
+                    "agent_loop_continuation_wait_evidence_invalid",
+                )
+            run_inputs = context.run_spec.inputs
+            graph_ref = context.graph_state.graph_ref
+            node_state = context.node_state
+            if node_state is None:
+                return self._failure(
+                    "AgentLoop Gate requires an exact Graph node instance",
+                    "agent_loop_wait_node_state_missing",
+                )
+            expected_tenant_scope = run_inputs.get(self.tenant_scope_input_key)
+            expected_identity_scope = run_inputs.get(self.identity_scope_input_key)
+            mismatches = tuple(
+                field_name
+                for field_name, expected, actual in (
+                    ("continuation_wait", fact, output.continuation_wait),
+                    ("run_id", context.run_spec.run_id, fact.run_id),
+                    ("graph_id", graph_ref.graph_id, fact.graph_id),
+                    ("graph_version", graph_ref.identity_version, fact.graph_version),
+                    ("graph_checksum", graph_ref.checksum, fact.graph_checksum),
+                    ("node_id", context.step_spec.step_id, fact.node_id),
+                    (
+                        "node_instance_id",
+                        node_state.metadata.get("node_instance_id", node_state.instance_id),
+                        fact.node_instance_id,
+                    ),
+                    ("activity_attempt", node_state.attempt, fact.activity_attempt),
+                    ("result_status", AgentLoopStatus.PENDING.value, output.result.get("status")),
+                    ("result_success", False, output.result.get("success")),
+                    ("tenant_scope_ref", expected_tenant_scope, fact.tenant_scope_ref),
+                    ("identity_scope_ref", expected_identity_scope, fact.identity_scope_ref),
+                )
+                if expected != actual
+            )
+            if mismatches:
+                return self._failure(
+                    "AgentLoop continuation output does not match its evidence",
+                    "agent_loop_continuation_wait_output_evidence_mismatch",
+                    mismatches=mismatches,
+                )
+            return HarnessGateResult(
+                gate_name=self.gate_name,
+                passed=True,
+                details={
+                    "reason_code": "agent_loop_continuation_wait_verified",
+                    "waiting": True,
+                    "submission_id": fact.submission_id,
+                    "observation_checksum": fact.observation_checksum,
+                    "correlation_ref": fact.correlation_ref,
                     "output_checksum": output.output_checksum,
                 },
             )
@@ -1321,6 +1650,123 @@ class AgentLoopGraphApprovalWaitBinding:
             "identity_scope_input_key": self.identity_scope_input_key,
             "gate_ref": self.gate_ref,
             "waiting_control_fact_path": f"{self.result_output_key}.waiting",
+            "waiting_condition": self.waiting_condition().to_dict(),
+            "control_fact_paths": list(self.control_fact_paths),
+            "wait": self.wait_expression().to_dict(),
+            "requires_deterministic_wait_branch": True,
+            "registers_graph_wait": False,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AgentLoopGraphContinuationWaitBinding:
+    """Declaration-only bridge from pending output to a Harness signal Wait."""
+
+    source_node_id: str
+    result_output_key: str
+    wait_id: str
+    tenant_scope_input_key: str = "tenant_scope_ref"
+    identity_scope_input_key: str = "identity_scope_ref"
+    schema_version: str = AGENT_LOOP_GRAPH_CONTINUATION_WAIT_BINDING_SCHEMA
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "source_node_id",
+            "result_output_key",
+            "wait_id",
+            "tenant_scope_input_key",
+            "identity_scope_input_key",
+        ):
+            object.__setattr__(self, field_name, _required_text(getattr(self, field_name), field_name))
+        if self.schema_version != AGENT_LOOP_GRAPH_CONTINUATION_WAIT_BINDING_SCHEMA:
+            raise HarnessValidationError(
+                "unsupported AgentLoop Graph continuation Wait binding schema",
+                code="unsupported_agent_loop_graph_activity_schema",
+            )
+
+    @property
+    def gate_ref(self) -> str:
+        return AGENT_LOOP_GRAPH_WAIT_GATE_REF
+
+    @property
+    def output_path(self) -> str:
+        return f"node.outputs.{self.source_node_id}.{self.result_output_key}.continuation_wait"
+
+    @property
+    def waiting_condition_path(self) -> str:
+        return f"node.outputs.{self.source_node_id}.{self.result_output_key}.waiting"
+
+    @property
+    def control_fact_paths(self) -> tuple[str, ...]:
+        prefix = f"{self.result_output_key}.continuation_wait"
+        return tuple(
+            sorted(
+                (
+                    f"{self.result_output_key}.waiting",
+                    *(f"{prefix}.{field}" for field in (
+                        "schema_version", "run_id", "graph_id", "graph_version",
+                        "graph_checksum", "node_id", "node_instance_id", "activity_id",
+                        "activity_attempt", "stage_id", "parent_turn_id",
+                        "submission_id", "group_id", "observation_checksum",
+                        "graph_checkpoint_ref", "tenant_scope_ref",
+                        "identity_scope_ref", "correlation_ref",
+                    )),
+                )
+            )
+        )
+
+    def waiting_condition(self) -> ConditionPredicate:
+        return ConditionPredicate(self.waiting_condition_path, "equals", True)
+
+    def wait_expression(self) -> Wait:
+        prefix = self.output_path
+        return Wait(
+            wait_id=self.wait_id,
+            kind="signal",
+            correlation={
+                field: f"{prefix}.{field}"
+                for field in (
+                    "schema_version", "run_id", "graph_id", "graph_version",
+                    "graph_checksum", "node_id", "node_instance_id", "activity_id",
+                    "activity_attempt", "stage_id", "parent_turn_id",
+                    "submission_id", "group_id", "observation_checksum",
+                    "graph_checkpoint_ref", "tenant_scope_ref",
+                    "identity_scope_ref", "correlation_ref",
+                )
+            },
+            signal_type=AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_TYPE,
+            signal_version=AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_VERSION,
+            tenant_scope_path=f"graph.inputs.{self.tenant_scope_input_key}",
+            identity_scope_path=f"graph.inputs.{self.identity_scope_input_key}",
+        )
+
+    def assert_step_contract(self, step: HarnessStepSpec) -> None:
+        if not isinstance(step, HarnessStepSpec):
+            raise TypeError("step must be HarnessStepSpec")
+        metadata = step.metadata
+        mismatches: list[str] = []
+        if step.step_id != self.source_node_id:
+            mismatches.append("source_node_id")
+        if step.output_key != self.result_output_key:
+            mismatches.append("result_output_key")
+        if step.quality_gate != self.gate_ref:
+            mismatches.append("gate_ref")
+        if tuple(sorted(metadata.get("control_fact_paths", ()))) != self.control_fact_paths:
+            mismatches.append("control_fact_paths")
+        if mismatches:
+            raise HarnessValidationError(
+                "AgentLoop continuation Wait binding does not match its Step contract",
+                code="agent_loop_graph_wait_binding_mismatch",
+                details={"mismatches": sorted(mismatches)},
+            )
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "source_node_id": self.source_node_id,
+            "result_output_key": self.result_output_key,
+            "wait_id": self.wait_id,
+            "gate_ref": self.gate_ref,
             "waiting_condition": self.waiting_condition().to_dict(),
             "control_fact_paths": list(self.control_fact_paths),
             "wait": self.wait_expression().to_dict(),
@@ -1635,7 +2081,11 @@ def _validated_memory_candidates(
     return normalized
 
 
-def _worker_status(result: AgentLoopResult) -> HarnessWorkerStatus:
+def _worker_status(
+    result: AgentLoopResult,
+    *,
+    continuation_wait: AgentLoopGraphContinuationWaitFact | None = None,
+) -> HarnessWorkerStatus:
     if result.success:
         if result.status not in {
             AgentLoopStatus.SUCCEEDED,
@@ -1649,7 +2099,6 @@ def _worker_status(result: AgentLoopResult) -> HarnessWorkerStatus:
     if result.status in {
         AgentLoopStatus.SUCCEEDED,
         AgentLoopStatus.ACCEPTED,
-        AgentLoopStatus.PENDING,
         AgentLoopStatus.RUNNING,
     }:
         raise HarnessValidationError(
@@ -1659,6 +2108,13 @@ def _worker_status(result: AgentLoopResult) -> HarnessWorkerStatus:
     if result.status is AgentLoopStatus.WAITING_FOR_APPROVAL:
         # The activity successfully produced a candidate. Only an explicit,
         # deterministic Graph Wait may turn that candidate into outer waiting.
+        return HarnessWorkerStatus.SUCCEEDED
+    if result.status is AgentLoopStatus.PENDING:
+        if continuation_wait is None:
+            raise HarnessValidationError(
+                "pending AgentLoop result lacks a durable continuation Wait fact",
+                code="agent_loop_graph_activity_result_invalid",
+            )
         return HarnessWorkerStatus.SUCCEEDED
     if result.status in {AgentLoopStatus.BLOCKED, AgentLoopStatus.STALLED}:
         return HarnessWorkerStatus.BLOCKED
@@ -1824,6 +2280,11 @@ __all__ = [
     "AGENT_LOOP_GRAPH_APPROVAL_SIGNAL_VERSION",
     "AGENT_LOOP_GRAPH_APPROVAL_WAIT_BINDING_SCHEMA",
     "AGENT_LOOP_GRAPH_APPROVAL_WAIT_FACT_SCHEMA",
+    "AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_TYPE",
+    "AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_VERSION",
+    "AGENT_LOOP_GRAPH_CONTINUATION_WAIT_BINDING_SCHEMA",
+    "AGENT_LOOP_GRAPH_CONTINUATION_WAIT_EVIDENCE_TYPE",
+    "AGENT_LOOP_GRAPH_CONTINUATION_WAIT_FACT_SCHEMA",
     "AGENT_LOOP_GRAPH_APPROVAL_REQUEST_SCHEMA",
     "AGENT_LOOP_GRAPH_BINDING_MANIFEST_SCHEMA",
     "AGENT_LOOP_GRAPH_WAIT_CANDIDATE_SCHEMA",
@@ -1836,6 +2297,8 @@ __all__ = [
     "AgentLoopGraphApprovalWaitBinding",
     "AgentLoopGraphApprovalWaitFact",
     "AgentLoopGraphApprovalRequest",
+    "AgentLoopGraphContinuationWaitBinding",
+    "AgentLoopGraphContinuationWaitFact",
     "AgentLoopGraphWaitCandidate",
     "AgentLoopGraphWaitCandidateGate",
     "AgentLoopGraphWorker",

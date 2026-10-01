@@ -1146,9 +1146,23 @@ class AgentLoop:
             events.subagent_failed(
                 iteration=iteration_trace.iteration,
                 child_agent_id="delegate_batch",
-                status=result.status,
+                status="pending" if result.status.casefold() in {"waiting", "pending"} else result.status,
                 error=result.reason_code or "agent_orchestration_group_not_succeeded",
             )
+            if result.status.casefold() in {"waiting", "pending"}:
+                return self._orchestration_group_pending_result(
+                    agent=agent,
+                    metrics=metrics,
+                    events=events,
+                    trace=trace,
+                    diagnostics=diagnostics,
+                    iterations=iteration_trace.iteration,
+                    candidate=candidate,
+                    request=request,
+                    observation=observation,
+                    result=result,
+                    llm_call_artifacts=llm_call_artifacts,
+                )
             return self._orchestration_group_failed_result(
                 agent=agent,
                 metrics=metrics,
@@ -1173,6 +1187,50 @@ class AgentLoop:
             separators=(",", ":"),
         )
 
+    def _orchestration_group_pending_result(
+        self,
+        *,
+        agent: AgentSpec,
+        metrics: AgentLoopMetrics,
+        events: AgentLoopEventRecorder,
+        trace: AgentLoopTrace,
+        diagnostics: AgentLoopDiagnosticsBuilder,
+        iterations: int,
+        candidate: DelegateBatchCandidate,
+        request: AgentOrchestrationRequest,
+        observation: dict[str, Any],
+        result: AgentOrchestrationResult,
+        llm_call_artifacts: list[LLMCallArtifact],
+    ) -> AgentLoopResult:
+        reason = result.reason_code or "agent_orchestration_pending"
+        result_diagnostics = diagnostics.orchestration_pending(
+            metrics=metrics,
+            iterations=iterations,
+            reason=reason,
+        )
+        output: dict[str, Any] = {
+            "delegate_batch_observation": observation,
+            # These are bounded, schema-validated recovery facts. They carry
+            # no worker handles or private parent context.
+            "delegate_batch_candidate": candidate.to_dict(),
+            "orchestration_request": request.to_dict(),
+        }
+        if result.submission_receipt is not None:
+            output["submission_receipt"] = result.submission_receipt.to_dict()
+        return _agent_loop_result(
+            loop_trace=trace,
+            stop_reason=AgentLoopStopReason.ORCHESTRATION_PENDING,
+            success=False,
+            status=AgentLoopStatus.PENDING,
+            output=output,
+            iterations=iterations,
+            metrics=metrics,
+            events=events.to_dicts(),
+            trace=_trace_payload(trace, agent),
+            diagnostics=result_diagnostics,
+            llm_call_artifacts=list(llm_call_artifacts),
+            error=reason,
+        )
     def _orchestration_group_failed_result(
         self,
         *,
@@ -1311,6 +1369,20 @@ class AgentLoop:
                 status=result.status,
                 error=result.reason_code or "agent_orchestration_group_not_succeeded",
             )
+            if result.status.casefold() in {"waiting", "pending"}:
+                return self._orchestration_group_pending_result(
+                    agent=agent,
+                    metrics=metrics,
+                    events=events,
+                    trace=trace,
+                    diagnostics=diagnostics,
+                    iterations=iteration_trace.iteration,
+                    candidate=candidate,
+                    request=request,
+                    observation=observation,
+                    result=result,
+                    llm_call_artifacts=llm_call_artifacts,
+                )
             return self._orchestration_group_failed_result(
                 agent=agent,
                 metrics=metrics,
@@ -2748,9 +2820,29 @@ def _legacy_delegate_mapping(
     capability_hint = raw_mapping["capability_hint"]
     output_role = raw_mapping["output_role"]
     input_refs = raw_mapping["input_refs"]
+    if (
+        not isinstance(capability_hint, str)
+        or not capability_hint.strip()
+        or capability_hint != capability_hint.strip()
+    ):
+        raise ValueError("legacy delegate capability_hint must be a canonical string")
+    if (
+        not isinstance(output_role, str)
+        or not output_role.strip()
+        or output_role != output_role.strip()
+    ):
+        raise ValueError("legacy delegate output_role must be a canonical string")
     if not isinstance(input_refs, (list, tuple)):
         raise ValueError("legacy delegate input_refs must be an array")
-    return str(capability_hint), tuple(input_refs), str(output_role)
+    normalized_refs = tuple(input_refs)
+    if any(
+        not isinstance(ref, str) or not ref.strip() or ref != ref.strip()
+        for ref in normalized_refs
+    ):
+        raise ValueError("legacy delegate input_refs must contain canonical strings")
+    if len(normalized_refs) != len(set(normalized_refs)):
+        raise ValueError("legacy delegate input_refs must not contain duplicates")
+    return capability_hint, normalized_refs, output_role
 
 
 def _legacy_orchestration_unavailable_feedback(

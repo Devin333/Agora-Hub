@@ -53,6 +53,7 @@ class AgentLoopStopReason(str, Enum):
     GLOBAL_BUDGET_EXCEEDED = "global_budget_exceeded"
     TOOL_FAILED = "tool_failed"
     UNKNOWN_FAILED = "unknown_failed"
+    ORCHESTRATION_PENDING = "orchestration_pending"
 
 
 class AgentLoopEventType(str, Enum):

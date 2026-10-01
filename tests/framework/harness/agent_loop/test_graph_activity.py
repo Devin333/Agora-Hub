@@ -26,6 +26,8 @@ from framework.agent.loop.runner import AgentRunner
 from framework.events.canonical import checksum_for
 from framework.harness.agent_loop import (
     AGENT_LOOP_GRAPH_APPROVAL_WAIT_FACT_SCHEMA,
+    AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_TYPE,
+    AgentLoopGraphContinuationWaitBinding,
     AGENT_LOOP_GRAPH_ACTIVITY_TASK_SCHEMA,
     AGENT_LOOP_GRAPH_WAIT_GATE_REF,
     AGENT_LOOP_GRAPH_WAIT_EVIDENCE_TYPE,
@@ -594,6 +596,26 @@ def test_approval_wait_binding_rejects_non_graph_wait_or_unverified_contract() -
         "approval_policy_must_use_graph_wait"
     ]
     assert gate_error.value.details["mismatches"] == ["gate_ref"]
+
+
+def test_continuation_wait_binding_uses_harness_signal_and_checksum_facts() -> None:
+    binding = AgentLoopGraphContinuationWaitBinding(
+        source_node_id="agent_loop",
+        result_output_key="agent_loop_result",
+        wait_id="agent-loop-continuation",
+    )
+
+    expression = binding.wait_expression()
+
+    assert expression.kind.value == "signal"
+    assert expression.signal_type == AGENT_LOOP_GRAPH_CONTINUATION_SIGNAL_TYPE
+    assert expression.signal_version == "1"
+    assert "agent_loop_result.continuation_wait.observation_checksum" in (
+        binding.control_fact_paths
+    )
+    assert expression.correlation["observation_checksum"].endswith(
+        ".continuation_wait.observation_checksum"
+    )
 
 
 def test_graph_worker_rejects_task_identity_alias_or_worker_substitution() -> None:

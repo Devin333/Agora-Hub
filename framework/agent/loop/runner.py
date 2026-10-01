@@ -4,7 +4,14 @@ from typing import Any
 
 from framework.agent.loop.extensions import OutputNormalizer
 from framework.agent.loop.loop import AgentLoop
-from framework.agent.models import AgentLoopResult, AgentSpec
+from framework.agent.models import (
+    AgentLoopDiagnosticSeverity,
+    AgentLoopDiagnostics,
+    AgentLoopResult,
+    AgentLoopStatus,
+    AgentLoopStopReason,
+    AgentSpec,
+)
 from framework.agent.loop.parser import AgentActionParser
 from framework.agent.loop.prompt import PromptBuilder
 from framework.agent.loop.judge import OutputJudge
@@ -25,7 +32,10 @@ from framework.agent.messages import (
     ConversationCursor,
 )
 from framework.shared.graph_identity import GraphExecutionIdentity
-from framework.agent.models.orchestration import AgentOrchestrationPort
+from framework.agent.models.orchestration import (
+    AgentOrchestrationPort,
+    AgentOrchestrationRequest,
+)
 
 
 class AgentRunner:
@@ -186,6 +196,17 @@ class AgentRunner:
                 "AgentRunner requires an exact GraphExecutionIdentity; "
                 "use standalone=True for an explicitly isolated run"
             )
+        resumed = self._resume_pending_orchestration(
+            agent,
+            conversation_id=conversation_id,
+            graph_identity=graph_identity,
+            run_id=run_id,
+            node_instance_id=node_instance_id,
+            graph_checkpoint_ref=graph_checkpoint_ref,
+            resume_from_cursor=resume_from_cursor,
+        )
+        if resumed is not None:
+            return resumed
         if memory_recall is not None and not isinstance(
             memory_recall, ExecutionMemoryRecallPort
         ):
@@ -376,6 +397,119 @@ class AgentRunner:
                 graph_checkpoint_ref=graph_checkpoint_ref,
             )
         return result
+
+    def _resume_pending_orchestration(
+        self,
+        agent: AgentSpec,
+        *,
+        conversation_id: str | None,
+        graph_identity: GraphExecutionIdentity | None,
+        run_id: str | None,
+        node_instance_id: str | None,
+        graph_checkpoint_ref: str | None,
+        resume_from_cursor: bool,
+    ) -> AgentLoopResult | None:
+        """Resume a durable pending parent turn without constructing an LLM loop.
+
+        The pending assistant record contains the exact Harness request that
+        admitted the candidate. Replaying that request is the only recovery
+        authority; the model and child workers are never called here.
+        """
+
+        if (
+            not resume_from_cursor
+            or graph_identity is None
+            or not self._orchestration_enabled
+            or not isinstance(self._orchestration_port, AgentOrchestrationPort)
+            or self._conversation_store is None
+            or not conversation_id
+        ):
+            return None
+        messages = self._conversation_store.read_messages(conversation_id)
+        pending_content: dict[str, Any] | None = None
+        for message in reversed(messages):
+            if message.role != "assistant" or not isinstance(message.content, dict):
+                continue
+            if (
+                message.run_id != run_id
+                or message.node_instance_id != node_instance_id
+                or message.graph_checkpoint_ref != graph_checkpoint_ref
+            ):
+                continue
+            if message.content.get("status") != AgentLoopStatus.PENDING.value:
+                continue
+            candidate = message.content.get("output")
+            if not isinstance(candidate, dict) or not isinstance(
+                candidate.get("orchestration_request"), dict
+            ):
+                continue
+            pending_content = candidate
+            break
+        if pending_content is None:
+            return None
+        try:
+            request = AgentOrchestrationRequest.from_dict(
+                pending_content["orchestration_request"]
+            )
+        except (TypeError, ValueError):
+            # A malformed persisted recovery fact must fail closed instead of
+            # falling through to a fresh model invocation.
+            raise ValueError("durable orchestration continuation is invalid")
+        if request.parent_agent_id != agent.agent_id:
+            raise ValueError("durable orchestration continuation agent mismatch")
+        if request.execution_identity != graph_identity:
+            raise ValueError("durable orchestration continuation Graph identity mismatch")
+        if request.run_id != run_id:
+            raise ValueError("durable orchestration continuation run mismatch")
+        result = self._orchestration_port.dispatch(request)
+        if result.status.casefold() in {"waiting", "pending"}:
+            observation = result.observation.project(request.parent_observation_limits)
+            output: dict[str, Any] = {
+                "delegate_batch_observation": observation,
+                "delegate_batch_candidate": request.candidate.to_dict(),
+                "orchestration_request": request.to_dict(),
+            }
+            if result.submission_receipt is not None:
+                output["submission_receipt"] = result.submission_receipt.to_dict()
+            return AgentLoopResult(
+                success=False,
+                status=AgentLoopStatus.PENDING,
+                output=output,
+                iterations=0,
+                diagnostics=AgentLoopDiagnostics(
+                    agent_id=agent.agent_id,
+                    status=AgentLoopStatus.PENDING,
+                    stop_reason=AgentLoopStopReason.ORCHESTRATION_PENDING,
+                    summary=result.reason_code or "agent_orchestration_pending",
+                    healthy=False,
+                    severity=AgentLoopDiagnosticSeverity.INFO,
+                ),
+                error=result.reason_code or "agent_orchestration_pending",
+                termination_reason=AgentLoopStopReason.ORCHESTRATION_PENDING.value,
+            )
+        if result.status.casefold() != "succeeded":
+            return AgentLoopResult.failure_result(
+                agent.agent_id,
+                RuntimeError(result.reason_code or "agent_orchestration_group_not_succeeded"),
+            )
+        observation = result.observation.project(request.parent_observation_limits)
+        output = {"delegate_batch_observation": observation}
+        if result.submission_receipt is not None:
+            output["submission_receipt"] = result.submission_receipt.to_dict()
+        return AgentLoopResult(
+            success=True,
+            status=AgentLoopStatus.SUCCEEDED,
+            output=output,
+            diagnostics=AgentLoopDiagnostics(
+                agent_id=agent.agent_id,
+                status=AgentLoopStatus.SUCCEEDED,
+                stop_reason=AgentLoopStopReason.CONTROL_OUTPUT_ACCEPTED,
+                summary="durable orchestration continuation delivered",
+                healthy=True,
+                severity=AgentLoopDiagnosticSeverity.OK,
+            ),
+            termination_reason=AgentLoopStopReason.CONTROL_OUTPUT_ACCEPTED.value,
+        )
 
     def run_spec(
         self,
@@ -793,20 +927,21 @@ def _assert_resume_graph_identity(
 
 
 def _conversation_result_payload(result: AgentLoopResult) -> dict[str, Any]:
-    if result.success:
-        return {
-            "success": True,
-            "status": result.status.value,
-            "output": result.output,
-            "diagnostics": result.diagnostics.to_dict() if result.diagnostics else None,
-        }
-    return {
-        "success": False,
+    payload: dict[str, Any] = {
+        "success": result.success,
         "status": result.status.value,
-        "error": result.error,
-        "verdict": result.verdict.to_dict() if result.verdict else None,
+        "output": result.output,
         "diagnostics": result.diagnostics.to_dict() if result.diagnostics else None,
     }
+    if result.success:
+        return payload
+    payload.update(
+        {
+            "error": result.error,
+            "verdict": result.verdict.to_dict() if result.verdict else None,
+        }
+    )
+    return payload
 
 
 def _conversation_message_from_event(
