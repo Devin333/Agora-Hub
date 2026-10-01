@@ -1692,15 +1692,34 @@ class AgentLoop:
         operation_id = tracker.next_operation_identity(
             f"agent:{agent.agent_id}:iteration:{iteration}"
         )
+        input_tokens = estimate_request_tokens(request)
+        requested_output_tokens = (
+            max(0, int(request.max_tokens))
+            if request.max_tokens is not None
+            else None
+        )
+        available_output_tokens = tracker.available_output_tokens()
+        if available_output_tokens is not None:
+            requested_output_tokens = min(
+                requested_output_tokens
+                if requested_output_tokens is not None
+                else available_output_tokens,
+                available_output_tokens,
+            )
+        available_total_tokens = tracker.available_total_tokens()
+        if available_total_tokens is not None:
+            total_output_ceiling = max(0, available_total_tokens - input_tokens)
+            requested_output_tokens = min(
+                requested_output_tokens
+                if requested_output_tokens is not None
+                else total_output_ceiling,
+                total_output_ceiling,
+            )
         operation = tracker.reserve_direct_operation(
             operation_id=operation_id,
             idempotency_key=f"{operation_id}:reservation",
-            input_tokens=estimate_request_tokens(request),
-            output_tokens=(
-                max(0, int(request.max_tokens))
-                if request.max_tokens is not None
-                else None
-            ),
+            input_tokens=input_tokens,
+            output_tokens=requested_output_tokens,
         )
         if isinstance(operation, GlobalBudgetCheck):
             raise GlobalBudgetExceededError(operation)

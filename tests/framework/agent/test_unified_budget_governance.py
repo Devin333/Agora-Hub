@@ -213,3 +213,57 @@ def test_agent_loop_preserves_invocation_child_budget_and_execution_guard() -> N
     assert root.usage.llm_calls == 1
     assert len(guard_calls) == 2
     assert child.authoritative_scope_usage().require_settled().committed.llm_calls == 1
+
+
+def test_direct_agent_call_clamps_implicit_output_reservation_to_child_budget() -> None:
+    provider = FakeLLMClient(
+        [
+            LLMResponse(
+                content=json.dumps(
+                    {
+                        "action_type": "final_output",
+                        "output": {"output": {"summary": "done"}},
+                    }
+                ),
+                usage=TokenUsage(input_tokens=5, output_tokens=3),
+            )
+        ]
+    )
+    root = GlobalBudgetTracker(
+        GlobalBudgetPolicy(max_llm_calls=3, max_total_tokens=1_000),
+        run_id="run-agent-direct-child-budget",
+    )
+    child = root.child_tracker(
+        "child-direct-agent-loop",
+        budget_policy=BudgetPolicy(
+            policy_revision="task-reservation:child-direct-agent-loop",
+            limits=BudgetLimits(
+                llm_calls=1,
+                total_tokens=500,
+                output_tokens=10,
+            ),
+        ),
+    )
+    agent = AgentSpec(
+        agent_id="direct-child-budget-agent",
+        name="Direct Child Budget Agent",
+        instructions="Return a final answer.",
+        loop_policy=AgentLoopPolicy(max_iterations=1),
+    )
+
+    result = AgentLoop(
+        llm_client=provider,
+        tool_executor=ToolExecutor(ToolRegistry()),
+        global_budget_tracker=child,
+    ).run(
+        agent,
+        {"topic": "budget"},
+        [],
+        run_id="run-agent-direct-child-budget",
+        standalone=True,
+    )
+
+    assert result.success is True
+    assert provider.call_count == 1
+    assert child.usage.token_usage.output_tokens == 3
+    assert child.authoritative_scope_usage().require_settled().committed.output_tokens == 3
