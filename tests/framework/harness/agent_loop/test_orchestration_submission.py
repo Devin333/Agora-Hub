@@ -22,7 +22,13 @@ from framework.harness.task_plan.store import InMemoryTaskPlanStore, TaskPlanEve
 from framework.harness.task_plan.verification import TaskPlanGateRegistry, TaskPlanResultVerifier
 from framework.harness.task_plan.submission import CandidateDedupIdentity
 from framework.harness.workers.result import HarnessWorkerResult
-from tests.framework.harness.agent_loop.test_orchestration_runtime import _gate_owner, _runtime, _request
+from tests.framework.harness.agent_loop.test_orchestration_runtime import (
+    _AcceptingResultVerifier,
+    _ArtifactVerifier,
+    _gate_owner,
+    _request,
+    _runtime,
+)
 from tests.framework.harness.task_plan.test_durable_task_plan_store import (
     _ArtifactStore, _store,
 )
@@ -76,6 +82,119 @@ def test_terminal_resubmission_reopens_without_new_events_or_worker_calls(store_
     assert recovered_store.read_events(request.run_id, "delegate_stage") == before
     assert recovered_store.plan(request.run_id, "delegate_stage") == plan
     assert recovered._stage_runner.parallel_coordinator._sessions == {}
+
+
+def test_terminal_reopen_fails_closed_when_spill_ref_owner_changes(store_factory):
+    artifact_ref = "artifact://run-1/reopened-spill"
+    artifact_verifier = _ArtifactVerifier((artifact_ref,))
+    calls = []
+
+    def worker(_binding, task, _identity):
+        calls.append(task.task_id)
+        return HarnessWorkerResult(
+            status="succeeded",
+            output={"summary": "completed", "task_id": task.task_id},
+            artifacts=(artifact_ref,),
+        )
+
+    store = store_factory()
+    runtime, identity = _runtime(
+        store=store,
+        result_verifier=_AcceptingResultVerifier(
+            _gate_owner(store),
+            artifact_reference_verifier=artifact_verifier,
+        ),
+        worker_executor=worker,
+    )
+    request = _request(identity)
+    first = runtime.dispatch(request)
+    assert first.status == "succeeded"
+    before = store.read_events(identity.run_id, "delegate_stage")
+    artifact_verifier.valid_refs.clear()
+
+    reopened_store = store_factory()
+    reopened, _ = _runtime(
+        store=reopened_store,
+        result_verifier=_AcceptingResultVerifier(
+            _gate_owner(reopened_store),
+            artifact_reference_verifier=artifact_verifier,
+        ),
+        worker_executor=worker,
+    )
+    repeated = reopened.dispatch(request)
+
+    assert repeated.status == "partial_failure"
+    assert repeated.reason_code == "agent_orchestration_parent_projection_invalid"
+    assert repeated.observation.group_status == "succeeded"
+    assert repeated.observation.aggregate_ref is None
+    assert repeated.observation.result_refs == ()
+    assert repeated.observation.task_summaries == ()
+    assert any(
+        "parent_submission_read_invalid" in item
+        or "summary_artifact_unverified" in item
+        for item in repeated.observation.diagnostics
+    )
+    assert sorted(calls) == ["contribution", "structure"]
+    assert reopened_store.read_events(identity.run_id, "delegate_stage") == before
+
+
+def test_terminal_reopen_fails_closed_when_gate_proof_is_missing():
+    calls = []
+    events, artifacts = _ConcurrentEventStore(), _ArtifactStore()
+    store = _store(events, artifacts)
+    runtime, identity = _runtime(
+        store=store,
+        result_verifier=_AcceptingResultVerifier(_gate_owner(store)),
+        worker_executor=_counting_worker(calls),
+    )
+    request = _request(identity)
+    first = runtime.dispatch(request)
+    assert first.status == "succeeded"
+    before = store.read_events(identity.run_id, "delegate_stage")
+    for key in tuple(artifacts._content):
+        if "/gate_evidence/" in key[1]:
+            del artifacts._content[key]
+
+    reopened_store = _store(events, artifacts)
+    reopened, _ = _runtime(
+        store=reopened_store,
+        result_verifier=_AcceptingResultVerifier(_gate_owner(reopened_store)),
+        worker_executor=_counting_worker(calls),
+    )
+    repeated = reopened.dispatch(request)
+
+    assert repeated.status == "partial_failure"
+    assert repeated.reason_code == "agent_orchestration_parent_projection_invalid"
+    assert repeated.observation.group_status == "succeeded"
+    assert repeated.observation.aggregate_ref is None
+    assert repeated.observation.result_refs == ()
+    assert repeated.observation.task_summaries == ()
+    assert any(
+        "parent_submission_read_invalid:task_plan_submission_result_invalid" in item
+        for item in repeated.observation.diagnostics
+    )
+    assert len(calls) == 2
+    assert reopened_store.read_events(identity.run_id, "delegate_stage") == before
+
+
+def test_terminal_reopen_does_not_mask_unexpected_reader_errors(monkeypatch):
+    runtime, identity = _runtime()
+    request = _request(identity)
+    assert runtime.dispatch(request).status == "succeeded"
+
+    def fail_unexpectedly(_request):
+        raise RuntimeError("reader implementation defect")
+
+    monkeypatch.setattr(
+        runtime._stage_runner,
+        "recorded_submission_result",
+        fail_unexpectedly,
+    )
+
+    rejected = runtime.dispatch(request)
+
+    assert rejected.status == "rejected"
+    assert rejected.reason_code == "agent_orchestration_runtime_failed"
 
 
 def test_terminal_resubmission_uses_persisted_candidate_not_current_profiles(store_factory):
@@ -297,6 +416,7 @@ def test_continuation_sequence_race_accepts_terminal_advance(store_factory):
         without_continuation,
         group=stale_group,
         submission_receipt=first.submission_receipt,
+        parent_projection_valid=True,
     )
 
     assert store.read_events(identity.run_id, "delegate_stage") == history

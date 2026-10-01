@@ -27,6 +27,7 @@ from framework.harness.control_plane.activity_execution import (
 )
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
+from framework.harness.artifacts import ArtifactReferenceVerifierPort
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_authority import RefAuthority
 from framework.harness.ref_snapshot import (
@@ -63,6 +64,7 @@ from framework.harness.task_plan.store import TaskPlanEvent, TaskPlanStorePort
 from framework.harness.task_plan.result_proof import verify_task_result_proof
 from framework.harness.task_plan.submission import CandidateDedupIdentity
 from framework.harness.task_plan.canonical import canonical_payload_checksum, task_reference_producer
+from framework.harness.workers.result import HarnessWorkerResult
 from framework.shared.json import stable_json_dumps, to_jsonable
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.shared.time import utc_now
@@ -419,7 +421,35 @@ class HarnessAgentOrchestrationRuntime:
             },
         )
         if not created and not recover:
-            run_result = self._stage_runner.recorded_submission_result(stage_request)
+            try:
+                run_result = self._stage_runner.recorded_submission_result(stage_request)
+            except HarnessValidationError as exc:
+                if (
+                    exc.code != "task_plan_submission_result_invalid"
+                    or exc.__cause__ is None
+                ):
+                    # A malformed terminal envelope is not a parent projection
+                    # failure. Preserve the stricter submission-level rejection;
+                    # only an otherwise valid terminal read whose replayed proof
+                    # became unavailable may produce the diagnostic projection.
+                    raise
+                code = exc.code or "task_plan_submission_result_invalid"
+                return self._joined_result(
+                    request,
+                    HarnessWorkerResult(
+                        status="failed",
+                        diagnostics={
+                            "reason_code": "agent_orchestration_parent_projection_invalid"
+                        },
+                    ),
+                    submission_receipt=self._submission_receipt(
+                        request,
+                        original,
+                        dedup_status="accepted",
+                        wait_status="terminal",
+                    ),
+                    parent_read_diagnostic=f"parent_submission_read_invalid:{code}",
+                )
             if run_result is None:
                 return _rejected_orchestration_result(
                     request,
@@ -627,6 +657,7 @@ class HarnessAgentOrchestrationRuntime:
         run_result: Any,
         *,
         submission_receipt: AgentSubmissionReceipt | None = None,
+        parent_read_diagnostic: str | None = None,
     ) -> AgentOrchestrationResult:
         plan = self._store.plan(request.run_id or "", self._stage_binding.stage_id)
         if plan is None:
@@ -655,17 +686,29 @@ class HarnessAgentOrchestrationRuntime:
         waiting_for_capacity = (
             status == "blocked" and reason_code == "TASK_GROUP_CAPACITY_WAITING"
         )
-        succeeded = status == "succeeded" and group.get("state") == "SUCCEEDED"
+        durable_group_succeeded = group.get("state") == "SUCCEEDED"
+        group_succeeded = status == "succeeded" and durable_group_succeeded
+        artifact_reference_verifier = getattr(
+            self._stage_runner.result_verifier,
+            "artifact_reference_verifier",
+            None,
+        )
         summary_values: list[ParentTaskSummary] = []
-        summary_diagnostics: list[str] = []
+        summary_diagnostics = (
+            [parent_read_diagnostic]
+            if isinstance(parent_read_diagnostic, str) and parent_read_diagnostic
+            else []
+        )
         for item in sorted(results, key=lambda item: item.task_id):
             summary, diagnostic = _gated_parent_task_summary(
                 plan,
                 item,
                 gate_evidence_reader=self._store,
+                artifact_reference_verifier=artifact_reference_verifier,
             )
             if diagnostic is not None:
                 summary_diagnostics.append(diagnostic)
+                continue
             summary_values.append(
                 ParentTaskSummary(
                     logical_task_id=item.task_id,
@@ -681,6 +724,10 @@ class HarnessAgentOrchestrationRuntime:
                 )
             )
         summaries = tuple(summary_values)
+        parent_projection_valid = not summary_diagnostics
+        succeeded = group_succeeded and parent_projection_valid
+        if durable_group_succeeded and not parent_projection_valid:
+            reason_code = "agent_orchestration_parent_projection_invalid"
         result_refs = tuple(
             dict.fromkeys(
                 ref
@@ -705,9 +752,7 @@ class HarnessAgentOrchestrationRuntime:
             extra=summary_diagnostics,
         )
         telemetry = _joined_telemetry(events=events, plan=plan, group=group)
-        covered_roles = tuple(
-            sorted({role for item in results for role in getattr(item, "output_roles", ())})
-        )
+        covered_roles = tuple(sorted({role for item in summaries for role in item.output_roles}))
         terminal_reason = None if succeeded or waiting_for_capacity else reason_code
         observation = ParentObservation(
             group_id=str(group["group_id"]),
@@ -739,6 +784,7 @@ class HarnessAgentOrchestrationRuntime:
             events,
             group=group,
             submission_receipt=submission_receipt,
+            parent_projection_valid=parent_projection_valid,
         )
         return AgentOrchestrationResult(
             status=(
@@ -759,6 +805,7 @@ class HarnessAgentOrchestrationRuntime:
         *,
         group: Mapping[str, Any],
         submission_receipt: AgentSubmissionReceipt | None,
+        parent_projection_valid: bool,
     ) -> None:
         """Persist one checksum-bound wake-up for the parent turn.
 
@@ -768,7 +815,7 @@ class HarnessAgentOrchestrationRuntime:
         repeated dispatches reuse the existing terminal version.
         """
 
-        if submission_receipt is None:
+        if submission_receipt is None or not parent_projection_valid:
             return
         group_id = group.get("group_id")
         if not isinstance(group_id, str) or not group_id:
@@ -1111,6 +1158,7 @@ def _gated_parent_task_summary(
     result: Any,
     *,
     gate_evidence_reader: Any,
+    artifact_reference_verifier: ArtifactReferenceVerifierPort | None = None,
 ) -> tuple[str | None, str | None]:
     """Build a parent summary only from the verifier-owned gate artifacts."""
 
@@ -1124,16 +1172,26 @@ def _gated_parent_task_summary(
             result,
             gate_evidence_reader=gate_evidence_reader,
         )
-    except HarnessValidationError as exc:
-        code = getattr(exc, "code", None) or "task_plan_result_proof_invalid"
+    except Exception as exc:
+        code = (
+            (exc.code or "task_plan_result_proof_invalid")
+            if isinstance(exc, HarnessValidationError)
+            else "reader_unavailable"
+        )
         return None, f"task:{task_id}:summary_gate_proof_invalid:{code}"
-    except (TypeError, ValueError):
-        return None, f"task:{task_id}:summary_gate_proof_invalid:reader_unavailable"
     artifacts = proof.artifacts
     if proof.worker_failed or artifacts is None:
         return None, f"task:{task_id}:summary_gate_proof_missing"
     if not artifacts.evidences or any(not item.passed for item in artifacts.evidences):
         return None, f"task:{task_id}:summary_gate_proof_not_passed"
+    artifact_diagnostic = _parent_artifact_ref_diagnostic(
+        tuple(result.output_refs),
+        task_id=task_id,
+        run_id=plan.run_id,
+        verifier=artifact_reference_verifier,
+    )
+    if artifact_diagnostic is not None:
+        return None, artifact_diagnostic
     try:
         output = to_jsonable(artifacts.worker_result.output)
         summary = stable_json_dumps(
@@ -1153,6 +1211,27 @@ def _gated_parent_task_summary(
     except (TypeError, ValueError):
         return None, f"task:{task_id}:summary_gate_output_invalid"
     return summary, None
+
+
+def _parent_artifact_ref_diagnostic(
+    refs: tuple[str, ...],
+    *,
+    task_id: str,
+    run_id: str,
+    verifier: ArtifactReferenceVerifierPort | None,
+) -> str | None:
+    """Revalidate spill refs before exposing them to the parent observation."""
+
+    if not refs:
+        return None
+    if not isinstance(verifier, ArtifactReferenceVerifierPort):
+        return f"task:{task_id}:summary_artifact_verifier_required"
+    for index, ref in enumerate(refs):
+        try:
+            verifier.verify_artifact_ref(ref, expected_run_id=run_id)
+        except Exception:
+            return f"task:{task_id}:summary_artifact_unverified:{index}"
+    return None
 
 
 def _joined_diagnostics(

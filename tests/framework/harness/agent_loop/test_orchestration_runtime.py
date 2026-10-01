@@ -48,7 +48,7 @@ def _gate_owner(store):
 class _AcceptingResultVerifier:
     """Test adapter that uses the production verifier and durable gate owner."""
 
-    def __init__(self, gate_artifact_writer) -> None:
+    def __init__(self, gate_artifact_writer, artifact_reference_verifier=None) -> None:
         gates = TaskPlanGateRegistry()
         gates.register(
             "gate@1",
@@ -57,6 +57,7 @@ class _AcceptingResultVerifier:
         )
         self._delegate = TaskPlanResultVerifier(
             gates,
+            artifact_reference_verifier=artifact_reference_verifier,
             gate_artifact_writer=gate_artifact_writer,
         )
 
@@ -67,6 +68,10 @@ class _AcceptingResultVerifier:
     @property
     def gate_artifact_writer(self):
         return self._delegate.gate_artifact_writer
+
+    @property
+    def artifact_reference_verifier(self):
+        return self._delegate.artifact_reference_verifier
 
     def verify(self, result, *, task, request):
         return self._delegate.verify(result, task=task, request=request)
@@ -84,6 +89,17 @@ class _BoundWorker:
             status="succeeded",
             output={"summary": "completed", "task_id": task.task_id},
         )
+
+
+class _ArtifactVerifier:
+    def __init__(self, valid_refs=()) -> None:
+        self.valid_refs = set(valid_refs)
+        self.calls = []
+
+    def verify_artifact_ref(self, ref, *, expected_run_id):
+        self.calls.append((ref, expected_run_id))
+        if ref not in self.valid_refs:
+            raise ValueError("artifact is unavailable")
 
 
 def _runtime(*, store=None, worker_executor=None, result_verifier=None, ref_admission_service=None, agent_delegation=False, policy=None, stage_binding=None) -> tuple[HarnessAgentOrchestrationRuntime, GraphExecutionIdentity]:
@@ -298,6 +314,63 @@ def test_parent_summary_rejects_missing_durable_gate_proof() -> None:
     assert diagnostic == (
         f"task:{task_result.task_id}:summary_gate_proof_invalid:"
         "task_plan_gate_evidence_reader_required"
+    )
+
+
+def test_parent_join_exposes_only_owner_verified_spill_refs() -> None:
+    artifact_ref = "artifact://run-1/verified-spill"
+    artifact_verifier = _ArtifactVerifier((artifact_ref,))
+    store = InMemoryTaskPlanStore()
+    runtime, identity = _runtime(
+        store=store,
+        result_verifier=_AcceptingResultVerifier(
+            _gate_owner(store),
+            artifact_reference_verifier=artifact_verifier,
+        ),
+        worker_executor=lambda _binding, task, _identity: HarnessWorkerResult(
+            status="succeeded",
+            output={"summary": "completed", "task_id": task.task_id},
+            artifacts=(artifact_ref,),
+        ),
+    )
+
+    result = runtime.dispatch(_request(identity))
+
+    assert result.status == "succeeded"
+    assert all(item.spill_refs == (artifact_ref,) for item in result.observation.task_summaries)
+    assert artifact_verifier.calls == [(artifact_ref, "run-1"), (artifact_ref, "run-1")]
+
+
+def test_parent_join_fails_closed_when_spill_ref_is_unreadable() -> None:
+    artifact_ref = "artifact://run-1/missing-spill"
+    artifact_verifier = _ArtifactVerifier()
+    store = InMemoryTaskPlanStore()
+    runtime, identity = _runtime(
+        store=store,
+        result_verifier=_AcceptingResultVerifier(
+            _gate_owner(store),
+            artifact_reference_verifier=artifact_verifier,
+        ),
+        worker_executor=lambda _binding, task, _identity: HarnessWorkerResult(
+            status="succeeded",
+            output={"summary": "completed", "task_id": task.task_id},
+            artifacts=(artifact_ref,),
+        ),
+    )
+
+    result = runtime.dispatch(_request(identity))
+    events = store.read_events(identity.run_id, "delegate_stage")
+
+    assert result.status == "partial_failure"
+    assert result.reason_code == "agent_orchestration_parent_projection_invalid"
+    assert result.observation.group_status == "succeeded"
+    assert result.observation.aggregate_ref is None
+    assert result.observation.result_refs == ()
+    assert result.observation.task_summaries == ()
+    assert result.observation.covered_output_roles == ()
+    assert any("summary_artifact_unverified" in item for item in result.observation.diagnostics)
+    assert not any(
+        event.event_type == "PARENT_OBSERVATION_CONTINUATION" for event in events
     )
 
 
