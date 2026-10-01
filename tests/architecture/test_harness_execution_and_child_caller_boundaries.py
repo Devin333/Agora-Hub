@@ -51,6 +51,10 @@ _CHILD_RUNTIME_CALLERS = {
         "interfaces/composition/research_child_runtime.py",
         "HarnessOwnedChildAgentRuntime",
     ),
+    (
+        "interfaces/composition/research.py",
+        "SubAgentRuntime",
+    ),
 }
 
 _CHILD_LIFECYCLE_METHODS = {
@@ -137,15 +141,14 @@ def test_child_runtime_construction_is_harness_owned_or_candidate_only() -> None
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "dynamic_task_plan_runner_factory"
     )
-    assert not any(
+    assert any(
         isinstance(node, ast.Call)
         and _call_name(node.func) == "ResearchAnalysisTaskPlanStageWorker"
         for node in ast.walk(factory)
     )
     assert any(
-        isinstance(node, ast.Raise)
-        and isinstance(node.exc, ast.Call)
-        and _call_name(node.exc.func) == "ResearchRuntimeUnavailableError"
+        isinstance(node, ast.Call)
+        and _call_name(node.func) == "HarnessSubAgentTaskExecutor"
         for node in ast.walk(factory)
     )
 

@@ -110,6 +110,20 @@ from framework.harness import (
 )
 from framework.harness.subagents import ChildAgentSupervisorError
 from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
+from framework.harness.subagents.agent_runner import (
+    AuthorizedChildInputReaderPort,
+    ChildAgentRunnerAdapter,
+)
+from framework.harness.subagents.execution import HarnessChildExecutionService
+from framework.harness.subagents.execution_providers import (
+    AdmissionChildToolEvidenceLimitsProvider,
+    CanonicalChildBudgetTrackerProvider,
+    CanonicalChildExecutionUsageMeter,
+)
+from framework.agent.models import AgentSpec
+from framework.llm.budget import GlobalBudgetPolicy, GlobalBudgetTracker
+from framework.llm.models import LLMRequest, LLMResponse
+from framework.tool.registry.registry import ToolRegistry
 from framework.harness.graph import HarnessWorkerType
 from framework.harness.graph.compiler import HarnessGraphCompiler
 from framework.harness.graph.bindings import HarnessWorkerBinding
@@ -191,6 +205,7 @@ from infrastructure.storage.harness import (
     SQLiteHarnessNodeOutputResource,
     SQLiteHarnessSideEffectStore,
 )
+from infrastructure.storage.conversation import LocalJsonConversationStore
 from backend.research.graphs import (
     RESEARCH_DYNAMIC_CAPABILITIES,
     RESEARCH_DYNAMIC_INPUT_REFS,
@@ -202,6 +217,7 @@ from backend.research.graphs import (
     build_research_analysis_task_plan_policy,
     ResearchAnalysisTaskPlanStageWorker,
     ResearchAnalysisPlanCandidateBuilder,
+    build_research_analysis_subagent_specs,
 )
 from interfaces.composition.research_errors import (
     ResearchCapability,
@@ -304,6 +320,139 @@ class _ProductionResearchAnalysisWorker:
             self._workspace,
             execution_identity=execution_identity,
         )
+
+
+class _ResearchDynamicInputReader(AuthorizedChildInputReaderPort):
+    """Resolve only the document/evidence grant and admitted child outputs."""
+
+    def __init__(self, *, workspace: Any, result_authority: HarnessResultRefAuthority) -> None:
+        self._workspace = workspace
+        self._result_authority = result_authority
+
+    def read(self, grant: Any) -> Mapping[str, Any]:
+        if getattr(grant, "attempt_identity", None) is None:
+            raise HarnessValidationError(
+                "dynamic child input grant has no attempt identity",
+                code="REF_SNAPSHOT_BINDING_MISMATCH",
+            )
+        descriptors = tuple(
+            item for item in grant.descriptors
+            if getattr(item, "ref_kind", None) != "memory"
+        )
+        refs = tuple(item.ref for item in descriptors)
+        values: dict[str, Any] = {}
+        for ref in refs:
+            if ref == "document":
+                document = getattr(self._workspace, "document", None)
+                if document is None:
+                    raise HarnessValidationError(
+                        "dynamic child document input is unavailable",
+                        code="REF_UNRESOLVED",
+                    )
+                values[ref] = document.to_dict()
+            elif ref == "evidence_pack":
+                evidence_pack = getattr(self._workspace, "evidence_pack", None)
+                if evidence_pack is None:
+                    raise HarnessValidationError(
+                        "dynamic child evidence input is unavailable",
+                        code="REF_UNRESOLVED",
+                    )
+                values[ref] = evidence_pack.to_dict()
+
+        # Dependency refs are already rewritten to Harness-issued result refs
+        # in the child grant.  Resolve them through the result authority and
+        # expose only those exact descriptors to AgentRunner.
+        if getattr(grant, "dependency_bindings", ()):
+            outputs = self._result_authority.read_dependency_outputs(
+                grant.attempt_identity,
+                input_refs=refs,
+            )
+            for binding in grant.dependency_bindings:
+                if binding.logical_ref not in outputs:
+                    raise HarnessValidationError(
+                        "dynamic child dependency output is unavailable",
+                        code="REF_UNRESOLVED",
+                    )
+                values[binding.descriptor.ref] = outputs[binding.logical_ref]
+        if set(values) != set(refs):
+            raise HarnessValidationError(
+                "dynamic child input reader returned values outside its grant",
+                code="REF_SNAPSHOT_BINDING_MISMATCH",
+            )
+        return values
+
+
+class _ResearchCandidateLLMClient:
+    """Adapt the existing Research candidate worker to the AgentRunner port.
+
+    AgentRunner remains the physical child execution boundary.  This adapter
+    only translates its final action request into the existing structured
+    candidate operation; it cannot route, gate, publish, or mutate memory.
+    """
+
+    def __init__(self, worker: _ProductionResearchAnalysisWorker) -> None:
+        self._worker = worker
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        if not isinstance(request, LLMRequest):
+            raise TypeError("request must be LLMRequest")
+        user_message = request.messages[-1].get("content", "")
+        if not isinstance(user_message, str) or "Inputs:" not in user_message:
+            raise HarnessValidationError(
+                "dynamic child AgentRunner request is missing its input envelope",
+                code="subagent_runner_input_resolution_invalid",
+            )
+        try:
+            encoded = user_message.split("Inputs:", 1)[1].split("\nMemory context:", 1)[0].strip()
+            inputs = json.loads(encoded)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise HarnessValidationError(
+                "dynamic child AgentRunner input envelope is invalid",
+                code="subagent_runner_input_resolution_invalid",
+            ) from exc
+        if not isinstance(inputs, Mapping):
+            raise HarnessValidationError(
+                "dynamic child AgentRunner inputs must be an object",
+                code="subagent_runner_input_resolution_invalid",
+            )
+        input_refs = inputs.get("input_refs")
+        if not isinstance(input_refs, list | tuple):
+            raise HarnessValidationError(
+                "dynamic child AgentRunner input refs are missing",
+                code="subagent_runner_input_resolution_invalid",
+            )
+        dependency_outputs = {
+            key: value
+            for key, value in inputs.items()
+            if key not in {"objective", "input_refs", "resolved_inputs"}
+        }
+        resolved = inputs.get("resolved_inputs")
+        if isinstance(resolved, Mapping):
+            dependency_outputs.update(
+                {
+                    key: value
+                    for key, value in resolved.items()
+                    if key not in {"document", "evidence_pack"}
+                }
+            )
+        task: dict[str, Any] = {"input_refs": list(input_refs)}
+        if dependency_outputs:
+            task["dependency_outputs"] = dependency_outputs
+        result = self._worker.execute(
+            task,
+            execution_identity=request.execution_identity,
+        )
+        if not isinstance(result, HarnessWorkerResult) or result.status.value != "succeeded":
+            raise HarnessValidationError(
+                "dynamic Research candidate worker did not produce a candidate",
+                code="subagent_worker_execution_failed",
+            )
+        content = json.dumps(
+            {"action_type": "final_output", "output": dict(result.output)},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return LLMResponse(content=content, execution_identity=request.execution_identity)
 
 
 def _dynamic_research_gate_context(
@@ -1700,16 +1849,166 @@ def _build_configured_composition(
         )
 
         def dynamic_task_plan_runner_factory(*, workspace: Any, dependencies: Any):
-            # The existing Research branch workers operate on a mutable
-            # ``_ResearchRunWorkspace`` and invoke the domain candidate worker
-            # directly.  They cannot be projected into an ``AgentSpec`` with
-            # an authorized input reader and a real ``ChildAgentRunnerAdapter``
-            # without changing the branch contract and bypassing its evidence
-            # and quality boundaries.  Keep the dynamic production path
-            # fail-closed until that adapter is implemented.
-            raise ResearchRuntimeUnavailableError(
-                (ResearchCapability.TASK_PLAN_CHILD_EXECUTION,),
-                retryable=False,
+            if not hasattr(workspace, "request") or not hasattr(workspace, "document"):
+                raise HarnessValidationError(
+                    "dynamic Research workspace is not a run-bound workspace",
+                    code="research_dynamic_workspace_invalid",
+                )
+            request = workspace.request
+            tenant_id = research_event_tenant_id(
+                {
+                    "tenant_id": request.tenant_id,
+                    "user_id": request.user_id,
+                    "memory_namespace": request.memory_namespace,
+                }
+            )
+            binding = dynamic_child_runtime.start_for_run(
+                run_id=request.run_id,
+                tenant_id=tenant_id,
+            )
+            policy = build_research_analysis_task_plan_policy()
+            graph = HarnessGraphCompiler().compile(
+                build_dynamic_paper_analysis_graph_definition()
+            ).graph
+            stage_binding = TaskPlanStageBinding(
+                graph,
+                RESEARCH_DYNAMIC_STAGE_ID,
+            )
+
+            transcript_store = subagent_transcript_store
+            result_authority = HarnessResultRefAuthority(
+                dynamic_ref_admission_service.store,
+                transcript_store=transcript_store,
+                artifact_descriptors=artifact_port,
+                tenant_id=tenant_id,
+            )
+            input_reader = _ResearchDynamicInputReader(
+                workspace=workspace,
+                result_authority=result_authority,
+            )
+
+            child_specs = build_research_analysis_subagent_specs()
+            workers: dict[str, Any] = {}
+            worker_bindings: dict[str, HarnessWorkerBinding] = {}
+            for child_spec in child_specs:
+                capability = str(child_spec.metadata["worker_capability"])
+                worker = _ProductionResearchAnalysisWorker(
+                    capability,
+                    dependencies=dependencies,
+                    workspace=workspace,
+                )
+                registered_agent = AgentSpec(
+                    agent_id=child_spec.subagent_id,
+                    name=child_spec.role,
+                    role=child_spec.role,
+                    goal=child_spec.purpose,
+                    instructions=(
+                        "Generate only the admitted Research candidate payload. "
+                        "Harness owns routing, gates, memory, and publication."
+                    ),
+                    output_key=str(child_spec.output_schema["required"][0]),
+                    output_schema=dict(child_spec.output_schema),
+                    allowed_tools=list(child_spec.allowed_tools),
+                    memory_enabled=False,
+                    max_iterations=int(child_spec.budget["max_turns"]),
+                )
+                worker_ref = policy.pinned_capability_bindings[capability]
+                worker_id, worker_version = worker_ref.rsplit("@", 1)
+                runner = ChildAgentRunnerAdapter(
+                    registered_agent=registered_agent,
+                    llm_client=_ResearchCandidateLLMClient(worker),
+                    tool_registry=ToolRegistry(),
+                    conversation_store=LocalJsonConversationStore(
+                        settings.artifact.root
+                        / "_state"
+                        / "research-dynamic-conversations"
+                        / child_spec.subagent_id
+                    ),
+                    execution_environment=execution_composition.execution_registry,
+                    require_explicit_execution_profile=True,
+                    worker_id=worker_id,
+                    worker_version=worker_version,
+                )
+                workers[child_spec.subagent_id] = runner
+                worker_bindings[capability] = HarnessWorkerBinding(
+                    HarnessContractReference(
+                        HarnessContractKind.WORKER,
+                        worker_id,
+                        worker_version,
+                    ),
+                    HarnessWorkerType.SUBAGENT,
+                    runner,
+                )
+
+            capability_registry = build_research_analysis_capability_registry(
+                worker_bindings
+            )
+            runtime = SubAgentRuntime(
+                workers=workers,
+                transcript_store=transcript_store,
+                result_ref_authority=result_authority,
+                runtime_event_sink=runtime_event_publisher,
+            )
+            budget_trackers = CanonicalChildBudgetTrackerProvider(
+                GlobalBudgetTracker(GlobalBudgetPolicy(max_llm_calls=10_000))
+            )
+            execution_service = HarnessChildExecutionService(
+                store=dynamic_task_plan_store,
+                ref_admission_service=dynamic_ref_admission_service,
+                state_runtime=durable_events.event_runtime,
+                state_reader=durable_events.event_store,
+                artifact_store=artifact_port.store,
+                budget_trackers=budget_trackers,
+                leases=None,
+                evidence_limits=AdmissionChildToolEvidenceLimitsProvider(),
+                usage_meter=CanonicalChildExecutionUsageMeter(budget_trackers),
+                input_reader=input_reader,
+            )
+            executor = HarnessSubAgentTaskExecutor(
+                store=dynamic_task_plan_store,
+                runtime=runtime,
+                ref_admission_service=dynamic_ref_admission_service,
+                task_policy=policy,
+                execution_service=execution_service,
+            )
+            gate_registry = build_research_analysis_task_gate_registry(
+                build_paper_analysis_gate_registry(),
+                context_factory=lambda gate_request: _dynamic_research_gate_context(
+                    workspace,
+                    gate_request.worker_result,
+                ),
+            )
+            verifier = TaskPlanResultVerifier(
+                gate_registry,
+                transcript_store=transcript_store,
+                artifact_reference_verifier=artifact_port,
+                result_ref_authority=result_authority,
+                gate_artifact_writer=dynamic_task_plan_store,
+            )
+            executor.require_production_bindings(
+                store=dynamic_task_plan_store,
+                admission=dynamic_ref_admission_service,
+                verifier=verifier,
+                bindings=tuple(capability_registry.resolve(capability, policy) for capability in policy.allowed_worker_capabilities),
+                gate_refs=policy.allowed_gate_refs,
+                task_policy=policy,
+            )
+            return ResearchAnalysisTaskPlanStageWorker(
+                stage_binding=stage_binding,
+                accepted_at=utc_now().isoformat(),
+                candidate_builder=ResearchAnalysisPlanCandidateBuilder(
+                    candidate_worker,
+                ),
+                capability_registry=capability_registry,
+                store=dynamic_task_plan_store,
+                worker_executor=executor,
+                worker_result_recovery=executor.recover,
+                result_verifier=verifier,
+                policy=policy,
+                parallel_coordinator=binding.parallel_coordinator,
+                child_agent_supervisor=binding.supervisor,
+                checkpoint_store=dynamic_checkpoint_store,
+                ref_admission_service=dynamic_ref_admission_service,
             )
         def event_port_factory(_run_id: str) -> HarnessTransitionPort:
             return durable_events.create_harness_transition_port(

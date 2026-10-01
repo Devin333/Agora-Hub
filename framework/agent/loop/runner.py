@@ -13,9 +13,10 @@ from framework.llm.budget import GlobalBudgetTracker
 from framework.llm.models import LLMClient
 from framework.memory import MemoryPolicy, MemoryRuntime
 from framework.memory.recall_port import ExecutionMemoryRecallPort
-from framework.tool import ToolExecutor
+from framework.tool.runtime.executor import ToolExecutor
 from framework.tool.runtime.evidence import ToolExecutionEvidencePort
-from framework.tool import ToolRegistry, register_memory_tools
+from framework.tool.registry.registry import ToolRegistry
+from framework.tool.builtin.memory import register_memory_tools
 from framework.agent.messages import (
     AgentIterationCheckpoint,
     AgentMessageRecord,

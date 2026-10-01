@@ -45,6 +45,7 @@ from framework.execution_environment import (
     RuntimeExecutionComposition,
 )
 from framework.harness import ArtifactReferenceVerifierPort, ContextAssembler
+from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.ref_admission import HarnessRefAdmissionService
 from framework.harness.ref_snapshot_store import DurableRefAuthoritySnapshotStore
@@ -96,6 +97,7 @@ from interfaces.composition.research import (
 from interfaces.composition.research_errors import ResearchRuntimeUnavailableError
 from interfaces.composition.research_settings import ResearchRuntimeSettings
 from interfaces.composition.research_child_runtime import LazyResearchChildRuntime
+from backend.research.graphs.task_plan import ResearchAnalysisTaskPlanStageWorker
 from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
     RESEARCH_MINERU_PROFILE_ID,
@@ -553,13 +555,17 @@ def test_valid_settings_compose_full_durable_production_graph(
                 "candidate-object-graph"
             ),
         )
-        with pytest.raises(ResearchRuntimeUnavailableError) as error:
-            runtime.dynamic_task_plan_runner_factory(
-                workspace=candidate_workspace,
-                dependencies=object(),
-            )
-        assert error.value.capabilities == ("research.task_plan.child_execution",)
-        assert child_runtime.started is False
+        dynamic_worker = runtime.dynamic_task_plan_runner_factory(
+            workspace=candidate_workspace,
+            dependencies=object(),
+        )
+        assert isinstance(dynamic_worker, ResearchAnalysisTaskPlanStageWorker)
+        assert child_runtime.started is True
+        assert isinstance(
+            dynamic_worker._runner.worker_executor,
+            HarnessSubAgentTaskExecutor,
+        )
+        assert dynamic_worker._runner.worker_executor.execution_service is not None
         publish_worker = runtime._worker_registry(candidate_workspace)[
             "publish_artifacts"
         ]
@@ -770,12 +776,11 @@ def test_enforce_mode_composes_real_graph_result_runtime(
             context_assembler=ContextAssembler(),
             graph_transition_port=event_port,
         )
-        with pytest.raises(ResearchRuntimeUnavailableError) as error:
-            runtime.dynamic_task_plan_runner_factory(
-                workspace=workspace,
-                dependencies=object(),
-            )
-        assert error.value.capabilities == ("research.task_plan.child_execution",)
+        dynamic_worker = runtime.dynamic_task_plan_runner_factory(
+            workspace=workspace,
+            dependencies=object(),
+        )
+        assert isinstance(dynamic_worker, ResearchAnalysisTaskPlanStageWorker)
     finally:
         composition.close()
 

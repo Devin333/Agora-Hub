@@ -24,7 +24,7 @@ from framework.harness.subagents.tool_evidence import ChildToolEvidenceScope
 from framework.llm.budget import GlobalBudgetTracker
 from framework.llm.models import LLMClient
 from framework.shared.graph_identity import GraphExecutionIdentity
-from framework.tool import ToolRegistry
+from framework.tool.registry.registry import ToolRegistry
 from framework.tool.runtime.evidence import ToolExecutionEvidencePort
 
 
