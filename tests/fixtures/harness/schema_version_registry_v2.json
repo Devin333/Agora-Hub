@@ -1,7 +1,7 @@
 {
   "schema": "newsroom.harness-graph-schema-version-registry/v1",
   "registry_status": "locked-for-initial-implementation",
-  "source_contract": "harness-workflow-graph-runtime:1.5",
+  "source_contract": "harness-graph:canonical",
   "runtime_generation": "newsroom.harness-graph-runtime/v2",
   "contract_schemas": {
     "graph_dsl": "newsroom.harness-graph-dsl/v1",

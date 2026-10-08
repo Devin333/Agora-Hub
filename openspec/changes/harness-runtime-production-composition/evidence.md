@@ -21,7 +21,7 @@ An evidence row is honest only when it records the exact commit, command, enviro
 | Baseline commit | `6bbf3eed` |
 | `harness-runtime-execution-safety` | 23/28 at baseline; reused execution contracts, pending predecessor qualification not claimed here |
 | `durable-event-runtime` | 53/55 at baseline; remains its own owner |
-| `harness-workflow-graph-runtime` | 99/100 at baseline; Graph authority unchanged |
+| `harness-graph` | Canonical Graph authority; the historical 99/100 baseline was reported by the retired Workflow-era proposal |
 | `source-policy-contract-convergence` | 41/41 complete at baseline |
 | Docker daemon on authoring host | unavailable |
 

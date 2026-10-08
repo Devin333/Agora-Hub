@@ -47,9 +47,11 @@ Each row maps an unchecked task in the frozen source to its current owner. No ro
 
 ## Retained dependency blockers
 
-The source runtime checklist also recorded `durable-event-runtime` 9.5 and `harness-workflow-graph-runtime` 1.1 as external production qualification blockers. Both remain unchecked in the current tree. The former requires real deployment, rollback, and independent governance evidence; local tests cannot generate those facts. The latter requires canonical event/replay, attempt termination/idempotency/fencing, and side-effect authority contracts.
+The source runtime checklist also recorded `durable-event-runtime` 9.5 and a Graph production qualification as external blockers. Both requirements remain unchecked in the current tree. The former requires real deployment, rollback, and independent governance evidence; local tests cannot generate those facts. The latter is now owned by this change's task 7.2 under the canonical `harness-graph` contract and requires exact event/replay, attempt termination/idempotency/fencing, and side-effect authority contracts.
 
 `model-aware-llm-context-preflight` 7.1-7.6 are also currently unchecked. This merged change retains that dependency instead of copying or completing its task list. Release task 7.2 requires checking these outstanding prerequisites as well as running local validation.
+
+**Migration note (2026-10-08):** `harness-workflow-graph-runtime` was removed as an obsolete Workflow-era change. Its still-useful dependency qualification is now owned by this change's task 7.2 under the canonical `harness-graph` contract; the preceding reference is historical provenance, not a live prerequisite directory.
 
 ## Production caller inventory
 

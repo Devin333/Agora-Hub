@@ -84,7 +84,7 @@ Child 只能获得已接受的 document/evidence refs、role objective、policy-
 
 ## 7. 验收门
 
-合并迁移的逐项对应关系与冻结基线见 `evidence/merged-traceability-20260923.md`。旧 runtime change 的 context preflight 验收以及 `durable-event-runtime` 9.5、`harness-workflow-graph-runtime` 1.1 依赖仍由原 change 跟踪，当前均未验收；删除旧目录不会解除这些发布前置条件。
+合并迁移的逐项对应关系与冻结基线见 `evidence/merged-traceability-20260923.md`。context preflight 验收和 `durable-event-runtime` 9.5 仍由各自 active change 跟踪，当前均未验收。原 `harness-workflow-graph-runtime` 1.1 的有价值部分已迁入本 change 的 7.2：必须核验 canonical Graph 的精确 event/replay、attempt termination/idempotency/fencing 和 side-effect decision/outcome 合同，并阻断 unsafe fallback；删除旧目录不会解除这些发布前置条件。
 
 | Gate | 验收内容 |
 | --- | --- |

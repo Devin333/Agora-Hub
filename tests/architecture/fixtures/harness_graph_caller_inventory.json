@@ -1,7 +1,7 @@
 {
   "schema": "newsroom.harness-graph-caller-inventory/v1",
   "captured_at": "2026-08-17",
-  "task": "harness-workflow-graph-runtime:1.2",
+  "task": "harness-graph:canonical",
   "search_roots": [
     "backend",
     "framework",

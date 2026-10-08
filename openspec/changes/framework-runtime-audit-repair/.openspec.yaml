@@ -1,5 +1,0 @@
-schema: spec-driven
-created: 2026-09-02
-depends_on:
-  - harness-runtime-execution-safety
-  - harness-runtime-production-composition

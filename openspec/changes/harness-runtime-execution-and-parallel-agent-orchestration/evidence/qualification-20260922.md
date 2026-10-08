@@ -11,7 +11,7 @@ python -m pytest tests/framework/harness/task_plan tests/framework/harness/agent
 1394 passed, 6 warnings
 ```
 
-此前的 execution-environment / child-supervisor / tool-runtime / runtime composition 范围为 `171 passed, 2 skipped`；两个跳过项是 Windows 无法创建符号链接的测试环境限制。Research claim review 首片另有 [stage1-contracts.md](../../research-evidence-review-resolution/evidence/stage1-contracts.md)。
+此前的 execution-environment / child-supervisor / tool-runtime / runtime composition 范围为 `171 passed, 2 skipped`；两个跳过项是 Windows 无法创建符号链接的测试环境限制。Research claim review 的原首片提案已合并至 `research-evidence-context-quality-foundation`；被替代的旧证据目录不再作为活跃依赖。
 
 静态 production-caller 扫描只找到 `subprocess.Popen`/`subprocess.run` 位于 `infrastructure/execution_environment/docker.py`；已定位的业务入口使用 `RuntimeExecutionComposition`、`ChildAgentSupervisor`、`SubAgentRuntime` 和 `ToolExecutor`。`backend/research/document/pdf_compiler.py` 的注释明确拒绝 host subprocess fallback。这份文本扫描不证明全部动态调用链、隔离策略或生产恢复接线均已验收。
 
