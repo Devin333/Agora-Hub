@@ -71,10 +71,12 @@ P0 包含评测、输入和高价值 claim 的资格链。P1 的查询候选试�
 
 ## Rollback
 
-本次是文档和元数据迁移，不改变生产运行时。若新的收敛边界不成立，使用版本控制恢复已删除的本地 OpenSpec 文档，并以新的 OpenSpec 变更记录修订原因。未来 P0/P1/P2 的每个运行时开关均须独立具备默认关闭和确定性回退行为，不能依赖文档迁移本身回滚。
+文档迁移可通过版本控制追溯；P0/P1 实现使用独立的默认关闭配置和精确 Graph/gate 身份。关闭新请求的 `research_input_quality_enabled`、将 `RetrievalCandidateExperimentConfig.enabled` 恢复为 `False`，即可使用现有未启用路径；运行中的请求保持原始 Graph、来源修订和资格记录，不跨版本静默恢复。回退代码时使用已验证仓库版本，并保留现有 Harness transcript/event/artifact 供重放。P2 尚未满足触发条件，无连续性运行时可回滚。具体配置、阈值和步骤见 `evidence/release-controls-20261008.md`。
 
-## Open Questions
+## Implementation Decisions (2026-10-08)
 
-- V1 高价值 claim 的第一种具体业务类别由哪个现有案例覆盖最完整：数值结果、对比结论还是实验条件？
-- 固定对照集的通过阈值和比较窗口应由当前 baseline 的哪一次可重复运行冻结？
-- 是否已有可复用的生产轨迹指标足以判断“重复读取成本”或“条件漂移”，否则先补观察字段后再决定 P2？
+- V1 的生产提取范围为 accuracy 百分比：自动路径要求恰好两行 `Method`（一个 `baseline`、一个非 baseline）与相同非空 `Dataset`/`Split`。允许 `Accuracy (%)`/`Accuracy(%)` 的空格和大小写变体，或 `Accuracy` 加真实 `Unit=percent` 与共同 `Scale=percent|fraction`；显式 table selector metadata 也必须绑定两个不同对象、实际 accuracy 列和条件单元格。百分号列不能与 Unit/Scale 冲突，裸数值按声明 scale 解释，不按大小猜测。其它指标、无声明单位、模糊多表比较、跨 dataset/split 比较和一般文本/NLP 关系抽取不在 V1 支持范围内。
+- V1 选择 `numeric_comparison_result_v1`：同一来源表格、相同条件和单位下的两项数值结果比较。资格记录绑定指标、比较对象、数值、差值、单位、条件和精确来源修订；没有可确定性核对的来源时，不将模型意见提升为已核验结论。
+- 固定对照案例扩展现有 `ci_eval_gate`，沿用现有离线 fixture 和 CI 入口。质量合同阈值要求固定案例中无受保护约束、来源资格或回退错误；查询候选推广还必须另行证明成对收益和无退化，合同测试通过本身不代表推广已获批准。
+- 现有动态路径为 Research TaskPlan -> `ChildAgentRunnerAdapter` -> AgentLoop -> Research candidate adapter。输入投影在 application 层准备，通用框架仅检查不透明投影的完整性，真实 provider dispatch 仍需验证投影未被丢弃。
+- 本地上下文触发审计未发现足够证据，详见 `evidence/context-trigger-audit-20261008.md`。任务 6.6–6.12 的连续性实现保持未启动；本轮完成观察与证据核查后继续 P0/P1 集成验证，不以新增状态系统代替缺失的触发证据。

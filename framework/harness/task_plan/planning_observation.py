@@ -379,9 +379,12 @@ class InMemoryPlanningObservationStore:
         self._lock = RLock()
 
     def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None:
-        intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
         with self._lock:
-            intent = admit_planning_call(intent, tuple(self._intents.values()), self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id))
+            intents = tuple(self._intents.values())
+            receipts = self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id)
+            # Timestamp only after the prior admissions have been read under the lock.
+            intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
+            intent = admit_planning_call(intent, intents, receipts)
             if intent is None:
                 return None
             self._intents[request.request_checksum] = intent
@@ -456,10 +459,13 @@ class JsonlPlanningObservationStore(InMemoryPlanningObservationStore):
                         super().save(PlanningObservationReceipt.from_dict(payload))
 
     def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None:
-        intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
         with self._lock:
             self._reload()
-            intent = admit_planning_call(intent, tuple(self._intents.values()), self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id))
+            intents = tuple(self._intents.values())
+            receipts = self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id)
+            # Reload can wait on I/O; admission time belongs after that wait as well.
+            intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
+            intent = admit_planning_call(intent, intents, receipts)
             if intent is None:
                 return None
             encoded = json.dumps(intent.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"

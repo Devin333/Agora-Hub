@@ -27,11 +27,11 @@ jobs:
       - name: Compile modules
         run: python -m scripts.dev compile
 
-      - name: Run workflow runtime contract tests
-        run: python -m scripts.dev test-workflow-runtime-contracts
+      - name: Run Graph runtime contract tests
+        run: python -m scripts.dev test-graph-runtime-contracts
 
-      - name: Run workflow domain tests
-        run: python -m scripts.dev test-workflow-domain
+      - name: Run Graph domain tests
+        run: python -m scripts.dev test-graph-domain
 
       - name: Run service tests
         run: python -m scripts.dev test-services

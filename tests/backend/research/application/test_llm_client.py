@@ -38,9 +38,14 @@ def test_build_unity_llm_call_binds_graph_execution_identity(monkeypatch) -> Non
     )
 
     call = llm_client.build_unity_llm_call(max_tokens=42, temperature=0.0)
-    result = asyncio.run(call("answer this", execution_identity=identity))
+    result = asyncio.run(call(
+        "answer this", execution_identity=identity,
+        timeout_seconds=1.25, max_transport_attempts=1,
+    ))
 
     assert result == "answer"
     assert len(captured) == 1
     assert captured[0].execution_identity == identity
     assert captured[0].max_tokens == 42
+    assert captured[0].timeout_seconds == 1.25
+    assert captured[0].max_transport_attempts == 1

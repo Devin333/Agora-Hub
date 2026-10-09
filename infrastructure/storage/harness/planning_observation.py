@@ -103,7 +103,6 @@ class FilesystemPlanningObservationStore:
 
     def reserve_call(self, request: PlanningObservationRequest, tool_call_id: str, max_calls: int, timeout_ms: int = 30000) -> PlanningCallIntent | None:
         self._require_request_scope(request)
-        intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
         intent_path = self._paths(request.request_checksum)[0].with_suffix(".intent")
         lock_path = self._storage_root / "planning-admission.lock"
         try:
@@ -113,6 +112,8 @@ class FilesystemPlanningObservationStore:
                     raise _store_error("planning_observation_query_limit_exceeded", "planning intent count exceeds its bound")
                 intents = tuple(self._read_intent(path) for path in paths)
                 receipts = self.receipts_for_scope(request.run_id, request.stage_id, request.planner_turn_id)
+                # Timestamp the serialized admission, not a caller waiting for the lock.
+                intent = PlanningCallIntent(request, tool_call_id, max_calls, timeout_ms)
                 intent = admit_planning_call(intent, intents, receipts)
                 if intent is None:
                     return None

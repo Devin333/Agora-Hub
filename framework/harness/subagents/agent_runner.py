@@ -9,6 +9,7 @@ from hashlib import sha256
 from typing import Any, Protocol, runtime_checkable
 
 from framework.agent.loop import AgentRunner
+from framework.agent.loop.prompt import PreparedInputProjection
 from framework.agent.models import AgentLoopResult, AgentSpec
 from framework.governance.budget import BudgetScopeType
 from framework.harness.control_plane.activity_execution import (
@@ -49,6 +50,7 @@ class ChildAgentRunnerAdapter:
         require_explicit_execution_profile: bool = True,
         worker_id: str | None = None,
         worker_version: str = "1",
+        prepared_input_projection: PreparedInputProjection | None = None,
     ) -> None:
         if not isinstance(registered_agent, AgentSpec):
             raise TypeError("registered_agent must be AgentSpec")
@@ -80,6 +82,11 @@ class ChildAgentRunnerAdapter:
         self._conversation_store = conversation_store
         self._execution_environment = execution_environment
         self._require_explicit_execution_profile = require_explicit_execution_profile
+        if prepared_input_projection is not None and not isinstance(
+            prepared_input_projection, PreparedInputProjection
+        ):
+            raise TypeError("prepared_input_projection must be PreparedInputProjection")
+        self._prepared_input_projection = prepared_input_projection
 
     def execute(self, _task: Mapping[str, Any], **_kwargs: Any) -> Any:
         """Reject legacy worker dispatch outside the trusted execution service."""
@@ -199,6 +206,7 @@ class ChildAgentRunnerAdapter:
             standalone=False,
             memory_recall=memory_recall,
             tool_execution_evidence=tool_execution_evidence,
+            prepared_input_projection=self._prepared_input_projection,
         )
 
     @staticmethod

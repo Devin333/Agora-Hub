@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import importlib
 from concurrent.futures import ThreadPoolExecutor
@@ -365,3 +366,75 @@ def test_concurrent_conflicting_writes_reject_one_candidate(tmp_path: Path) -> N
 
     assert sum(isinstance(item, SubAgentTranscriptConflictError) for item in results) == 1
     assert sum(not isinstance(item, Exception) for item in results) == 1
+
+
+def test_long_child_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A legal durable target must not overflow the staging path on Windows."""
+
+    fs_safety = importlib.import_module("framework.agent.artifacts.stores.fs_safety")
+    insufficient_run = "research-input-quality-insufficient"
+    parent = tmp_path / insufficient_run / "_harness" / "subagents"
+    padding = max(1, 175 - len(str(parent)) - 1)
+    root = tmp_path / ("d" * padding)
+    parent = root / insufficient_run / "_harness" / "subagents"
+    # Match the observed 249-char target / 263-char old staging path while
+    # also keeping this boundary test portable to longer custom temp roots.
+    path_limit = len(str(parent)) + 85
+    real_mkstemp = fs_safety.tempfile.mkstemp
+    temporary_paths = []
+
+    def bounded_mkstemp(*, dir, prefix, suffix):
+        candidate = Path(dir) / (prefix + "abcdefgh" + suffix)
+        if len(str(candidate)) >= path_limit:
+            raise FileNotFoundError(errno.ENOENT, "staging path exceeds platform limit", str(candidate))
+        descriptor, temporary_path = real_mkstemp(dir=dir, prefix=prefix, suffix=suffix)
+        temporary_paths.append(Path(temporary_path))
+        return descriptor, temporary_path
+
+    monkeypatch.setattr(fs_safety.tempfile, "mkstemp", bounded_mkstemp)
+    store = FilesystemSubAgentTranscriptStore(root, clock=lambda: FIXED_TIME)
+    identity = _identity(parent_run_id=insufficient_run)
+    bundle_path = store._bundle_path(identity.parent_run_id, identity.transcript_id)
+    assert len(str(bundle_path)) < path_limit
+    assert len(str(store._lock_path(identity.parent_run_id, identity.transcript_id))) < path_limit
+    with pytest.raises(FileNotFoundError, match="staging path exceeds"):
+        bounded_mkstemp(dir=bundle_path.parent, prefix=f".{bundle_path.name}.", suffix=".tmp")
+
+    # Preserve parallel children, and exercise success then insufficient run
+    # scopes on the same store exactly as the dynamic integration cases do.
+    for run_id in ("research-input-quality-success", insufficient_run):
+        documents = tuple(_documents(_identity(parent_run_id=run_id, attempt=attempt)) for attempt in (1, 2))
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            receipts = tuple(executor.map(lambda bundle: store.write(*bundle), documents))
+        reopened = FilesystemSubAgentTranscriptStore(root, clock=lambda: FIXED_TIME)
+        for bundle, receipt in zip(documents, receipts, strict=True):
+            assert reopened.verify(receipt) == receipt
+            assert reopened.read(receipt.transcript_ref) == bundle[2]
+            assert reopened.describe_attempt(bundle[0].identity).receipt == receipt
+    assert len(temporary_paths) == 8
+    assert all(len(str(path)) < path_limit for path in temporary_paths)
+    assert not any(path.exists() for path in temporary_paths)
+
+
+def test_commit_failure_retains_os_cause_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage_module = importlib.import_module("infrastructure.storage.harness.subagent_transcript")
+    fs_safety = importlib.import_module("framework.agent.artifacts.stores.fs_safety")
+    store = FilesystemSubAgentTranscriptStore(tmp_path, clock=lambda: FIXED_TIME)
+    documents = _documents(_identity())
+
+    def fail_publication(source, target):
+        raise OSError(errno.ENOSPC, "no space for immutable publication", str(target))
+
+    monkeypatch.setattr(fs_safety.os, "link", fail_publication)
+    with pytest.raises(SubAgentTranscriptStoreError) as error:
+        store.write(*documents)
+    assert error.value.code == "subagent_transcript_store_unavailable"
+    causes = error.value.details["cause_chain"]
+    assert [cause["exception_type"] for cause in causes] == ["ArtifactStoreMetadataError", "OSError"]
+    assert causes[-1]["errno"] == errno.ENOSPC
+    assert causes[-1]["filename"].endswith(".meta")
+    assert isinstance(error.value.__cause__, fs_safety.ArtifactStoreMetadataError)
+    assert not tuple(tmp_path.rglob("sat_*.meta"))
+    assert not tuple(tmp_path.rglob("sat_*.json"))
+    assert not tuple(tmp_path.rglob(".artifact-*.tmp"))
+    assert storage_module._failure_cause_chain(error.value.__cause__) == causes

@@ -6,6 +6,23 @@ from backend.research.application.analyze_paper import (
     ResearchAnalysisResult,
     ResearchDynamicTaskPlanUnavailableError,
 )
+from backend.research.application.claim_evidence_eligibility import (
+    ClaimEvidenceEligibilityService,
+    RESEARCH_CLAIM_ELIGIBILITY_GATE_REF,
+    RESEARCH_CLAIM_ELIGIBILITY_RESOLVER_REF,
+    numeric_comparison_claim_id,
+    numeric_comparison_table_locator,
+    render_numeric_comparison_claim_text,
+    trusted_claim_evidence_binding_values,
+    trusted_numeric_comparison_contracts,
+)
+from backend.research.application.research_input_contract import (
+    PreparedResearchInputContext,
+    ResearchInputContractError,
+    ResearchInputContractService,
+    ResearchVerifiedConclusionQualificationPort,
+    research_input_quality_enabled,
+)
 from backend.research.application.catalog import (
     CatalogError,
     CatalogLeaderboardResult,
@@ -61,7 +78,13 @@ from backend.research.application.reader_repair_runtime import (
 )
 
 __all__ = [
+    "PreparedResearchInputContext",
+    "ResearchInputContractError",
+    "ResearchInputContractService",
+    "ResearchVerifiedConclusionQualificationPort",
+    "research_input_quality_enabled",
     "CatalogError",
+    "ClaimEvidenceEligibilityService",
     "CatalogLeaderboardResult",
     "AnalyzePaperUseCase",
     "AnalyzePaperRequest",
@@ -71,6 +94,13 @@ __all__ = [
     "BuildPaperCardUseCase",
     "BuildReaderUseCase",
     "GenerateReadingNoteUseCase",
+    "RESEARCH_CLAIM_ELIGIBILITY_GATE_REF",
+    "RESEARCH_CLAIM_ELIGIBILITY_RESOLVER_REF",
+    "numeric_comparison_claim_id",
+    "numeric_comparison_table_locator",
+    "render_numeric_comparison_claim_text",
+    "trusted_claim_evidence_binding_values",
+    "trusted_numeric_comparison_contracts",
     "RESEARCH_NODE_RESULT_POLICIES",
     "RESEARCH_WORKER_CANDIDATE_SCHEMA",
     "ResearchAnalysisResult",

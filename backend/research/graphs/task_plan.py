@@ -75,6 +75,7 @@ from backend.research.graphs.contracts import (
     RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY,
     RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS,
     RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID,
+    RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID,
     RESEARCH_DYNAMIC_POLICY_REF,
     RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION,
     RESEARCH_DYNAMIC_RESULT_STORE_REF,
@@ -87,10 +88,16 @@ from backend.research.graphs.contracts import (
 )
 
 
-_RESEARCH_DYNAMIC_GRAPH_REF = (
-    f"{RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID}@"
-    f"{RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION}"
-)
+_RESEARCH_DYNAMIC_GRAPH_REFS = frozenset({
+    (
+        f"{RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID}@"
+        f"{RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION}"
+    ),
+    (
+        f"{RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID}@"
+        f"{RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION}"
+    ),
+})
 _RESEARCH_PLANNING_STAGE_FIELDS = (
     "run_id",
     "stage_id",
@@ -528,7 +535,7 @@ class ResearchAnalysisTaskPlanStageWorker:
             or actual_policy.policy_checksum != canonical_policy.policy_checksum
             or stage_binding.policy_ref != actual_policy.exact_ref
             or stage_binding.graph.identity_ref.exact_ref
-            != _RESEARCH_DYNAMIC_GRAPH_REF
+            not in _RESEARCH_DYNAMIC_GRAPH_REFS
             or stage_binding.stage_id != RESEARCH_DYNAMIC_STAGE_ID
             or stage_binding.required_output_roles
             != actual_policy.required_output_roles

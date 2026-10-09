@@ -13,6 +13,7 @@ from backend.research.graphs import (
     RESEARCH_PAPER_ANALYSIS_GRAPH_ID,
     build_dynamic_paper_analysis_graph_definition,
     build_paper_analysis_graph_definition,
+    build_quality_dynamic_paper_analysis_graph_definition,
 )
 from framework.events.canonical import checksum_for
 from framework.harness.control_plane.errors import HarnessValidationError
@@ -200,6 +201,7 @@ def test_research_node_policy_inventory_matches_compiled_graphs() -> None:
         for builder in (
             build_paper_analysis_graph_definition,
             build_dynamic_paper_analysis_graph_definition,
+            build_quality_dynamic_paper_analysis_graph_definition,
         )
     )
     request_factory = ResearchGraphResultRequestFactory()

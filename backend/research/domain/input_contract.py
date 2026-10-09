@@ -8,6 +8,7 @@ All derived identifiers are deterministic so a prepared request can be
 replayed without calling a model or a live source.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -50,7 +51,7 @@ def _text(value: Any, name: str) -> str:
 def _refs(value: Any, name: str) -> tuple[str, ...]:
     if value is None:
         return ()
-    if isinstance(value, (str, bytes)):
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise TypeError(f"{name} must be a sequence of references")
     result = tuple(_text(item, name) for item in value)
     if len(set(result)) != len(result):
@@ -61,12 +62,34 @@ def _refs(value: Any, name: str) -> tuple[str, ...]:
 def _scope(value: Mapping[str, Any] | None) -> Mapping[str, str]:
     if value is None:
         return MappingProxyType({})
+    if not isinstance(value, Mapping):
+        raise TypeError("scope must be a mapping")
     normalized = {str(key): _text(item, f"scope[{key}]") for key, item in value.items()}
     return MappingProxyType(normalized)
 
 
 def _freeze_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return MappingProxyType(dict(value or {}))
+    if value is not None and not isinstance(value, Mapping):
+        raise TypeError("metadata must be a mapping")
+    return _freeze_json(value or {})
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_json(item) for key, item in value.items()}
+        )
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,15 +121,37 @@ class ResearchInputItem:
         object.__setattr__(self, "qualification_ref", _text(self.qualification_ref, "qualification_ref") if self.qualification_ref is not None else None)
         object.__setattr__(self, "content_checksum", _text(self.content_checksum, "content_checksum") if self.content_checksum is not None else None)
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
-        if self.category is ResearchInputCategory.CURRENT_TASK and self.status is not ResearchInputStatus.RAW:
-            raise ValueError("current_task input must remain a task contract, not a conclusion")
+        allowed_statuses = {
+            ResearchInputCategory.CURRENT_TASK: {ResearchInputStatus.RAW},
+            ResearchInputCategory.PAPER_MATERIAL: {
+                ResearchInputStatus.RAW,
+                ResearchInputStatus.AUTHOR_CLAIM,
+                ResearchInputStatus.UNAVAILABLE,
+            },
+            ResearchInputCategory.EXISTING_CONCLUSION: set(ResearchInputStatus),
+            ResearchInputCategory.TOOL_OBSERVATION: {
+                ResearchInputStatus.RAW,
+                ResearchInputStatus.MODEL_CANDIDATE,
+                ResearchInputStatus.UNAVAILABLE,
+            },
+            ResearchInputCategory.NECESSARY_HISTORY: {
+                ResearchInputStatus.RAW,
+                ResearchInputStatus.AUTHOR_CLAIM,
+                ResearchInputStatus.MODEL_CANDIDATE,
+                ResearchInputStatus.UNAVAILABLE,
+            },
+        }
+        if self.status not in allowed_statuses[self.category]:
+            raise ValueError(
+                f"{self.status.value} status is not valid for {self.category.value}"
+            )
         if self.status is ResearchInputStatus.VERIFIED_CONCLUSION:
             if self.category is not ResearchInputCategory.EXISTING_CONCLUSION:
                 raise ValueError("verified_conclusion status is only valid for existing_conclusion")
             if self.qualification_ref is None:
                 raise ValueError("verified_conclusion requires qualification_ref")
-        if self.category is ResearchInputCategory.EXISTING_CONCLUSION and self.status is ResearchInputStatus.MODEL_CANDIDATE and self.qualification_ref is not None:
-            raise ValueError("model_candidate cannot carry a qualification_ref")
+        if self.status is not ResearchInputStatus.VERIFIED_CONCLUSION and self.qualification_ref is not None:
+            raise ValueError("only verified_conclusion may carry a qualification_ref")
         object.__setattr__(self, "checksum", checksum_for(self.identity_projection()))
 
     def identity_projection(self) -> dict[str, Any]:
@@ -122,10 +167,25 @@ class ResearchInputItem:
             "scope": dict(self.scope),
             "qualification_ref": self.qualification_ref,
             "content_checksum": self.content_checksum,
+            "metadata": _thaw_json(self.metadata),
         }
 
     def to_dict(self) -> dict[str, Any]:
-        return {**self.identity_projection(), "checksum": self.checksum, "metadata": dict(self.metadata)}
+        return {**self.identity_projection(), "checksum": self.checksum}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ResearchInputItem":
+        if not isinstance(value, Mapping):
+            raise TypeError("ResearchInputItem payload must be a mapping")
+        payload = dict(value)
+        schema = payload.pop("schema", INPUT_CONTRACT_SCHEMA)
+        if schema != INPUT_CONTRACT_SCHEMA:
+            raise ValueError("Research input contract schema mismatch")
+        supplied_checksum = payload.pop("checksum", None)
+        item = cls(**payload)
+        if supplied_checksum is not None and supplied_checksum != item.checksum:
+            raise ValueError("ResearchInputItem checksum mismatch")
+        return item
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +211,8 @@ class ResearchInputProfile:
     def __post_init__(self) -> None:
         for name in ("profile_id", "profile_revision", "tenant_id", "paper_id", "task_id", "task_revision", "objective", "template_ref", "template_revision", "output_schema_ref"):
             object.__setattr__(self, name, _text(getattr(self, name), name))
+        if self.constraints is None:
+            raise TypeError("constraints must be a sequence of references")
         constraints = _refs(self.constraints, "constraints")
         items = tuple(self.items)
         if not items:
@@ -166,6 +228,8 @@ class ResearchInputProfile:
             raise ValueError("input profile requires exactly one current_task item")
         if current_tasks[0].content_ref != self.objective:
             raise ValueError("objective must match the current_task content_ref")
+        if current_tasks[0].source_revision != self.task_revision:
+            raise ValueError("task_revision must match the current_task source_revision")
         if isinstance(self.budget_input_tokens, bool) or not isinstance(self.budget_input_tokens, int) or self.budget_input_tokens <= 0:
             raise ValueError("budget_input_tokens must be positive")
         if isinstance(self.budget_output_tokens, bool) or not isinstance(self.budget_output_tokens, int) or self.budget_output_tokens <= 0:
@@ -196,6 +260,30 @@ class ResearchInputProfile:
     def to_dict(self) -> dict[str, Any]:
         return {**self.identity_projection(), "checksum": self.checksum}
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ResearchInputProfile":
+        if not isinstance(value, Mapping):
+            raise TypeError("ResearchInputProfile payload must be a mapping")
+        payload = dict(value)
+        schema = payload.pop("schema", INPUT_CONTRACT_SCHEMA)
+        if schema != INPUT_CONTRACT_SCHEMA:
+            raise ValueError("Research input contract schema mismatch")
+        supplied_checksum = payload.pop("checksum", None)
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, (list, tuple)):
+            raise TypeError("ResearchInputProfile items must be a sequence")
+        payload["items"] = tuple(
+            item if isinstance(item, ResearchInputItem) else ResearchInputItem.from_dict(item)
+            for item in raw_items
+        )
+        raw_constraints = payload.get("constraints", ())
+        if isinstance(raw_constraints, list):
+            payload["constraints"] = tuple(raw_constraints)
+        profile = cls(**payload)
+        if supplied_checksum is not None and supplied_checksum != profile.checksum:
+            raise ValueError("ResearchInputProfile checksum mismatch")
+        return profile
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedResearchInput:
@@ -221,7 +309,7 @@ class PreparedResearchInput:
         required = {item.value for item in ResearchInputCategory}
         if set(payload) != required:
             raise ValueError("user_payload must contain exactly the five Research input categories")
-        object.__setattr__(self, "user_payload", MappingProxyType(payload))
+        object.__setattr__(self, "user_payload", _freeze_json(payload))
         object.__setattr__(self, "prepared_request_checksum", checksum_for(self.identity_projection()))
 
     def identity_projection(self) -> dict[str, Any]:
@@ -231,10 +319,30 @@ class PreparedResearchInput:
             "selected_item_ids": list(self.selected_item_ids),
             "context_group_refs": list(self.context_group_refs),
             "system_prompt_ref": self.system_prompt_ref,
-            "user_payload": dict(self.user_payload),
+            "user_payload": _thaw_json(self.user_payload),
             "tools_ref": self.tools_ref,
             "output_schema_ref": self.output_schema_ref,
         }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self.identity_projection(),
+            "prepared_request_checksum": self.prepared_request_checksum,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "PreparedResearchInput":
+        if not isinstance(value, Mapping):
+            raise TypeError("PreparedResearchInput payload must be a mapping")
+        payload = dict(value)
+        schema = payload.pop("schema", INPUT_CONTRACT_SCHEMA)
+        if schema != INPUT_CONTRACT_SCHEMA:
+            raise ValueError("Research input contract schema mismatch")
+        supplied_checksum = payload.pop("prepared_request_checksum", None)
+        prepared = cls(**payload)
+        if supplied_checksum is not None and supplied_checksum != prepared.prepared_request_checksum:
+            raise ValueError("PreparedResearchInput checksum mismatch")
+        return prepared
 
 
 @dataclass(frozen=True, slots=True)

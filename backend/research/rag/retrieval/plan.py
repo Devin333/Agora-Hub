@@ -81,6 +81,7 @@ class RetrievalPlan:
     fusion: FusionSpec = field(default_factory=FusionSpec)
     rerank: RerankSpec = field(default_factory=RerankSpec)
     expanders: tuple[ExpanderSpec, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def intent(self) -> str:
@@ -109,6 +110,7 @@ class RetrievalPlan:
             "fusion": self.fusion.to_dict(),
             "rerank": self.rerank.to_dict(),
             "expanders": [item.to_dict() for item in self.expanders],
+            "metadata": dict(self.metadata),
         }
 
 

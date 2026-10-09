@@ -78,8 +78,19 @@ from framework.shared.json import to_jsonable
 from framework.shared.time import utc_now
 
 from backend.research.application.ask_paper import AskPaperUseCase, ResearchActorScope
+from backend.research.application.claim_evidence_eligibility import (
+    ClaimEvidenceEligibilityService,
+    RESEARCH_CLAIM_ELIGIBILITY_GATE_REF,
+)
 from backend.research.application.rag_memory_admission import (
     ResearchRAGMemoryAdmissionPort,
+)
+from backend.research.application.research_input_contract import (
+    PreparedResearchInputContext,
+    ResearchInputContractError,
+    RESEARCH_ELIGIBILITY_GATE_VERSION_OPTION,
+    ResearchInputContractService,
+    research_input_quality_enabled,
 )
 from backend.research.benchmark.models import ResearchScore
 from backend.research.domain import (
@@ -94,6 +105,7 @@ from backend.research.domain import (
     ResearchPaper,
     ResearchQualityResult,
     ResearchReaderPayload,
+    ResearchInputProfile,
     ThreeMinuteRead,
     research_event_tenant_id,
     research_identity_scope_ref,
@@ -103,6 +115,7 @@ from backend.research.domain import (
 from backend.research.paper_card import PaperCardBuilder, ResearchPaperCard
 from backend.research.rag import ResearchRAGContext, ResearchRetrievalGoal
 from backend.research.reader import ReaderPayloadBuilder
+from backend.research.services.claim_evidence_eligibility import build_qualified_claim_projection
 from backend.research.services import (
     CitationVerifier,
     ReaderIssueDetector,
@@ -112,12 +125,14 @@ from backend.research.services import (
 )
 from backend.research.taxonomy import TaxonomyAssignment, TaxonomyAssignmentBuilder, TaxonomyCandidate, TaxonomyRegistry
 from backend.research.graphs import (
+    CLAIM_ELIGIBILITY_OUTPUT_KEY,
     RESEARCH_DYNAMIC_OUTPUT_ROLES,
     build_dynamic_paper_analysis_graph_definition,
     build_paper_analysis_context_graph_identity,
     build_paper_analysis_gate_registry,
     build_paper_analysis_graph_definition,
     build_paper_analysis_runtime_binding_authority,
+    build_quality_dynamic_paper_analysis_graph_definition,
 )
 from backend.research.ports.artifact_publication import (
     RESEARCH_ARTIFACT_EFFECT_KIND,
@@ -166,11 +181,7 @@ def build_research_harness_run_spec(
     identity_scope_ref = research_identity_scope_ref(actor_metadata)
     return HarnessRunSpec(
         run_id=request.run_id,
-        graph=(
-            build_dynamic_paper_analysis_graph_definition()
-            if _dynamic_task_plan_requested(request.options)
-            else build_paper_analysis_graph_definition()
-        ),
+        graph=_research_graph_definition_for_request(request),
         inputs={
             "paper_id": request.paper_id,
             "source_ref": request.source_ref,
@@ -184,10 +195,21 @@ def build_research_harness_run_spec(
             "tenant_scope_ref": identity_scope_ref,
             "identity_scope_ref": identity_scope_ref,
             "subject_scope_ref": research_subject_scope_ref(request.paper_id),
+            **_research_input_run_metadata(request.options),
             **actor_metadata,
         },
         created_at=created_at,
     )
+
+
+def _research_graph_definition_for_request(
+    request: AnalyzePaperRequest,
+):
+    if research_input_quality_enabled(request.options):
+        return build_quality_dynamic_paper_analysis_graph_definition()
+    if _dynamic_task_plan_requested(request.options):
+        return build_dynamic_paper_analysis_graph_definition()
+    return build_paper_analysis_graph_definition()
 
 
 def _research_graph_identity_for_request(
@@ -195,11 +217,7 @@ def _research_graph_identity_for_request(
 ) -> tuple[str, str]:
     """Resolve the immutable Research Graph identity for result projection."""
 
-    definition = (
-        build_dynamic_paper_analysis_graph_definition()
-        if _dynamic_task_plan_requested(request.options)
-        else build_paper_analysis_graph_definition()
-    )
+    definition = _research_graph_definition_for_request(request)
     return definition.graph_id, definition.graph_version
 
 
@@ -214,6 +232,7 @@ def _context_graph_identity_for_request(
         run_id=request.run_id,
         stage_id=stage_id,
         dynamic_task_plan=_dynamic_task_plan_requested(request.options),
+        input_quality_foundation=research_input_quality_enabled(request.options),
     )
 
 
@@ -378,6 +397,10 @@ class ResearchAnalysisResult:
             ],
         )
         graph_id, graph_version = _research_graph_identity_for_request(request)
+        run_evidence_metadata = {
+            **actor_metadata,
+            **_research_input_run_metadata(request.options),
+        }
         return cls(
             run_id=request.run_id,
             graph_id=graph_id,
@@ -393,12 +416,12 @@ class ResearchAnalysisResult:
             trace=HarnessTrace(
                 run_id=request.run_id,
                 events=events,
-                metadata={"paper_id": request.paper_id, **actor_metadata},
+                metadata={"paper_id": request.paper_id, **run_evidence_metadata},
             ),
             transcript=_transcript_from_events(
                 request.run_id,
                 events,
-                metadata=actor_metadata,
+                metadata=run_evidence_metadata,
                 research_rag_context=None,
                 rag_context_pack=None,
             ),
@@ -807,6 +830,7 @@ class _ResearchWorkerDependencies:
     taxonomy_registry: TaxonomyRegistry
     quality_gate: ResearchQualityGate
     evidence_builder: ResearchEvidenceBuilder
+    claim_evidence_eligibility_service: ClaimEvidenceEligibilityService
     reader_builder: ReaderPayloadBuilder
     paper_card_builder: PaperCardBuilder
     reader_issue_detector: ReaderIssueDetector
@@ -851,6 +875,18 @@ def _generate_research_candidate(
     )
 
 
+def _candidate_payload_with_prepared_input(
+    workspace: "_ResearchRunWorkspace",
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    prepared = (
+        {"prepared_input": workspace.input_context.candidate_projection()}
+        if workspace.input_context is not None
+        else {}
+    )
+    return {**prepared, **dict(payload)}
+
+
 class ResearchSinglePaperRuntime:
     def __init__(
         self,
@@ -883,6 +919,8 @@ class ResearchSinglePaperRuntime:
         node_output_resource_factory: Callable[[str], HarnessNodeOutputResourcePort]
         | None = None,
         runtime_binding_registrar: HarnessWaitRuntimeRegistrationPort | None = None,
+        input_contract_service: ResearchInputContractService | None = None,
+        claim_evidence_eligibility_service: ClaimEvidenceEligibilityService | None = None,
     ) -> None:
         self.source_provider = source_provider
         self.document_compiler = document_compiler
@@ -930,6 +968,28 @@ class ResearchSinglePaperRuntime:
                 "HarnessWaitRuntimeRegistrationPort"
             )
         self.runtime_binding_registrar = runtime_binding_registrar
+        if input_contract_service is not None and not isinstance(
+            input_contract_service, ResearchInputContractService
+        ):
+            raise TypeError("input_contract_service must be ResearchInputContractService")
+        self.input_contract_service = (
+            input_contract_service or ResearchInputContractService()
+        )
+        if (
+            claim_evidence_eligibility_service is not None
+            and not isinstance(
+                claim_evidence_eligibility_service,
+                ClaimEvidenceEligibilityService,
+            )
+        ):
+            raise TypeError(
+                "claim_evidence_eligibility_service must be "
+                "ClaimEvidenceEligibilityService"
+            )
+        self.claim_evidence_eligibility_service = (
+            claim_evidence_eligibility_service
+            or ClaimEvidenceEligibilityService()
+        )
         if not callable(event_port_factory):
             raise TypeError("event_port_factory must be callable")
         if scoped_event_port_factory is not None and not callable(
@@ -997,18 +1057,68 @@ class ResearchSinglePaperRuntime:
             user_id=actor_scope.user_id,
             memory_namespace=actor_scope.memory_namespace,
         )
+        input_context: PreparedResearchInputContext | None = None
+        if research_input_quality_enabled(request.options):
+            if not _dynamic_task_plan_requested(request.options):
+                raise ResearchInputContractError(
+                    "Research input quality requires the dynamic single-paper path"
+                )
+            gate_version = request.options.get(
+                RESEARCH_ELIGIBILITY_GATE_VERSION_OPTION
+            )
+            if gate_version != RESEARCH_CLAIM_ELIGIBILITY_GATE_REF:
+                raise ResearchInputContractError(
+                    "configured Research eligibility gate version must match "
+                    f"{RESEARCH_CLAIM_ELIGIBILITY_GATE_REF}"
+                )
+            try:
+                binding = self.gate_registry.resolve(gate_version)
+                if (
+                    binding.gate.gate_name != "ResearchClaimEvidenceEligibilityGate"
+                    or binding.gate.gate_version != "1"
+                ):
+                    raise ValueError("eligibility gate identity mismatch")
+            except Exception as exc:
+                raise ResearchInputContractError(
+                    "configured Research eligibility gate version is unavailable"
+                ) from exc
+            input_context = self.input_contract_service.prepare_from_options(
+                request.options,
+                tenant_id=research_event_tenant_id(
+                    _request_actor_metadata(request)
+                ),
+                paper_id=request.paper_id,
+                source_ref=request.source_ref,
+                actor_scope=_accepted_research_actor_metadata(request),
+            )
+            request = replace(
+                request,
+                options={
+                    **request.options,
+                    "research_input_profile": input_context.profile.to_dict(),
+                    "research_input_source_revision": dict(
+                        input_context.projection.payload
+                    )["source_revision"],
+                },
+            )
         run_id = validate_artifact_path_segment(request.run_id, field="run_id")
         if not isinstance(self.artifact_port, RunBoundArtifactPort):
             raise TypeError("artifact_port must implement RunBoundArtifactPort")
         with self.artifact_port.bind_run(run_id):
-            return self._run_bound(request, run_id)
+            return self._run_bound(request, run_id, input_context=input_context)
 
     def _run_bound(
         self,
         request: AnalyzePaperRequest,
         run_id: str,
+        *,
+        input_context: PreparedResearchInputContext | None = None,
     ) -> ResearchAnalysisResult:
         actor_metadata = _request_actor_metadata(request)
+        run_evidence_metadata = {
+            **actor_metadata,
+            **_research_input_run_metadata(request.options),
+        }
         event_port = (
             self.event_port_factory(run_id)
             if self.scoped_event_port_factory is None
@@ -1029,6 +1139,7 @@ class ResearchSinglePaperRuntime:
             context_max_input_tokens=self.context_max_input_tokens,
             context_max_output_tokens=self.context_max_output_tokens,
             graph_transition_port=event_port,
+            input_context=input_context,
         )
         identity_scope_ref = research_identity_scope_ref(actor_metadata)
         subject_scope_ref = research_subject_scope_ref(request.paper_id)
@@ -1262,12 +1373,12 @@ class ResearchSinglePaperRuntime:
         trace = HarnessTrace(
             run_id=run_id,
             events=harness_result.events,
-            metadata={"paper_id": request.paper_id, **actor_metadata},
+            metadata={"paper_id": request.paper_id, **run_evidence_metadata},
         )
         transcript = _transcript_from_events(
             run_id,
             harness_result.events,
-            metadata=actor_metadata,
+            metadata=run_evidence_metadata,
             research_rag_context=workspace.research_rag_context,
             rag_context_pack=workspace.rag_context_pack,
             expected_graph_identity=workspace.rag_graph_identity
@@ -1422,15 +1533,19 @@ class ResearchSinglePaperRuntime:
 
         analysis = payload("research-analysis", required=True)
         quality = payload("research-quality-result", required=True)
+        run_evidence_metadata = {
+            **dict(actor_metadata),
+            **_research_input_run_metadata(request.options),
+        }
         trace = HarnessTrace(
             run_id=request.run_id,
             events=events,
-            metadata={"paper_id": request.paper_id, **dict(actor_metadata)},
+            metadata={"paper_id": request.paper_id, **run_evidence_metadata},
         )
         transcript = _transcript_from_events(
             request.run_id,
             events,
-            metadata=actor_metadata,
+            metadata=run_evidence_metadata,
             research_rag_context=None,
             rag_context_pack=None,
         )
@@ -1510,15 +1625,22 @@ class ResearchSinglePaperRuntime:
                     "terminal artifact history cutoff is not present in committed history"
                 )
             events = events[: indexes[0] + 1]
+        run_evidence_metadata = {
+            **dict(actor_metadata),
+            **_research_input_run_metadata(workspace.request.options),
+        }
         trace = HarnessTrace(
             run_id=run_id,
             events=events,
-            metadata={"paper_id": workspace.request.paper_id, **dict(actor_metadata)},
+            metadata={
+                "paper_id": workspace.request.paper_id,
+                **run_evidence_metadata,
+            },
         )
         transcript = _transcript_from_events(
             run_id,
             events,
-            metadata=actor_metadata,
+            metadata=run_evidence_metadata,
             research_rag_context=workspace.research_rag_context,
             rag_context_pack=workspace.rag_context_pack,
             expected_graph_identity=workspace.rag_graph_identity
@@ -1617,6 +1739,9 @@ class ResearchSinglePaperRuntime:
             taxonomy_registry=self.taxonomy_registry,
             quality_gate=self.quality_gate,
             evidence_builder=self.evidence_builder,
+            claim_evidence_eligibility_service=(
+                self.claim_evidence_eligibility_service
+            ),
             reader_builder=self.reader_builder,
             paper_card_builder=self.paper_card_builder,
             reader_issue_detector=self.reader_issue_detector,
@@ -1674,6 +1799,27 @@ class ResearchSinglePaperRuntime:
     def _load_paper_source(self, task: dict[str, Any], workspace: "_ResearchRunWorkspace") -> HarnessWorkerResult:
         paper = self.source_provider.fetch_paper(workspace.request.source_ref)
         source_record = self.source_provider.fetch_source_record(paper.paper_id)
+        source_record = PaperSourceRecord.model_validate(
+            source_record.model_copy(
+                update={
+                    "actor_scope": _accepted_research_actor_metadata(
+                        workspace.request
+                    )
+                }
+            ).model_dump(mode="json")
+        )
+        if workspace.input_context is not None:
+            expected_revision = dict(workspace.input_context.projection.payload)[
+                "source_revision"
+            ]
+            if source_record.source_url != workspace.request.source_ref:
+                raise ResearchInputContractError(
+                    "accepted Research source does not match the input profile"
+                )
+            if source_record.source_hash != expected_revision:
+                raise ResearchInputContractError(
+                    "accepted Research source revision does not match the input profile"
+                )
         workspace.paper = paper
         workspace.source_record = source_record
         return _ok(
@@ -1703,6 +1849,15 @@ class ResearchSinglePaperRuntime:
             # the original one-argument application port. Inspect before
             # calling so compatibility does not execute a side effect twice.
             document = compile_method(workspace.source_record)
+        document = ResearchDocument.model_validate(
+            document.model_copy(
+                update={
+                    "actor_scope": _accepted_research_actor_metadata(
+                        workspace.request
+                    )
+                }
+            ).model_dump(mode="json")
+        )
         workspace.document = document
         return _ok({"document": document.to_dict(), "source_refs": document.lineage.source_refs})
 
@@ -1754,7 +1909,12 @@ class ResearchSinglePaperRuntime:
                     memory_namespace=str(workspace.request.memory_namespace),
                 ),
                 graph_identity=rag_graph_identity,
-                dynamic_task_plan=_dynamic_task_plan_requested(workspace.request.options),
+                dynamic_task_plan=_dynamic_task_plan_requested(
+                    workspace.request.options
+                ),
+                input_quality_foundation=research_input_quality_enabled(
+                    workspace.request.options
+                ),
             )
         rag_context = self.rag_runtime.run(
             session_spec=session_spec,
@@ -1780,7 +1940,12 @@ class ResearchSinglePaperRuntime:
     def _build_evidence_pack(self, task: dict[str, Any], workspace: "_ResearchRunWorkspace") -> HarnessWorkerResult:
         if workspace.document is None:
             return _failed("document is required before evidence pack")
-        pack = self.evidence_builder.build_from_document(document=workspace.document)
+        pack = self.evidence_builder.build_from_document(
+            document=workspace.document,
+            include_numeric_comparison_tables=research_input_quality_enabled(
+                workspace.request.options
+            ),
+        )
         if workspace.research_rag_context is not None:
             existing = {item.evidence_id for item in pack.items}
             merged = list(pack.items)
@@ -1800,6 +1965,8 @@ class ResearchSinglePaperRuntime:
                 },
                 missing_information=workspace.research_rag_context.gap_report.missing_information,
                 lineage=pack.lineage,
+                actor_scope=pack.actor_scope,
+                metadata=pack.metadata,
             )
         workspace.evidence_pack = pack
         return _ok({"evidence_pack": pack.to_dict(), "source_refs": pack.lineage.source_refs})
@@ -1814,11 +1981,22 @@ class ResearchSinglePaperRuntime:
         candidate = _generate_research_candidate(
             self.llm_worker,
             task="candidate_three_minute_read",
-            payload={
-                **({"dependency_outputs": task["dependency_outputs"]} if task.get("dependency_outputs") else {}),
-                "paper": workspace.paper.to_dict() if workspace.paper else {},
-                "evidence_pack": workspace.evidence_pack.to_dict() if workspace.evidence_pack else {},
-            },
+            payload=_candidate_payload_with_prepared_input(
+                workspace,
+                {
+                    **(
+                        {"dependency_outputs": task["dependency_outputs"]}
+                        if task.get("dependency_outputs")
+                        else {}
+                    ),
+                    "paper": workspace.paper.to_dict() if workspace.paper else {},
+                    "evidence_pack": (
+                        workspace.evidence_pack.to_dict()
+                        if workspace.evidence_pack
+                        else {}
+                    ),
+                },
+            ),
             execution_identity=execution_identity,
         )
         workspace.llm_candidate_warnings.extend(_forbidden_candidate_keys(candidate))
@@ -1891,15 +2069,22 @@ class ResearchSinglePaperRuntime:
             for item in _generate_research_candidate(
                 self.llm_worker,
                 task="candidate_taxonomy",
-                payload={
-                    **({"dependency_outputs": task["dependency_outputs"]} if task.get("dependency_outputs") else {}),
-                    "paper": workspace.paper.to_dict() if workspace.paper else {},
-                    "evidence_pack": (
-                        workspace.evidence_pack.to_dict()
-                        if workspace.evidence_pack
-                        else {}
-                    ),
-                },
+                payload=_candidate_payload_with_prepared_input(
+                    workspace,
+                    {
+                        **(
+                            {"dependency_outputs": task["dependency_outputs"]}
+                            if task.get("dependency_outputs")
+                            else {}
+                        ),
+                        "paper": workspace.paper.to_dict() if workspace.paper else {},
+                        "evidence_pack": (
+                            workspace.evidence_pack.to_dict()
+                            if workspace.evidence_pack
+                            else {}
+                        ),
+                    },
+                ),
                 execution_identity=execution_identity,
             ).get("taxonomy_candidates", [])
         ]
@@ -1934,12 +2119,21 @@ class ResearchSinglePaperRuntime:
         candidate = _generate_research_candidate(
             self.llm_worker,
             task="candidate_experiment_claims",
-            payload={
-                **({"dependency_outputs": task["dependency_outputs"]} if task.get("dependency_outputs") else {}),
-                "evidence_pack": workspace.evidence_pack.to_dict()
-                if workspace.evidence_pack
-                else {}
-            },
+            payload=_candidate_payload_with_prepared_input(
+                workspace,
+                {
+                    **(
+                        {"dependency_outputs": task["dependency_outputs"]}
+                        if task.get("dependency_outputs")
+                        else {}
+                    ),
+                    "evidence_pack": (
+                        workspace.evidence_pack.to_dict()
+                        if workspace.evidence_pack
+                        else {}
+                    ),
+                },
+            ),
             execution_identity=execution_identity,
         )
         claims: list[ResearchClaim] = []
@@ -2040,18 +2234,72 @@ class ResearchSinglePaperRuntime:
         if workspace.summary is None:
             return _failed("summary candidate is required before claim verification")
         workspace.contributions = list(workspace.summary.key_contributions)
+        output: dict[str, Any] = {
+            "analysis_branch_refs": [dict(item) for item in branch_refs],
+        }
+        if research_input_quality_enabled(workspace.request.options):
+            if (
+                workspace.source_record is None
+                or workspace.document is None
+                or workspace.input_context is None
+            ):
+                return _failed(
+                    "accepted source, document, and input profile are required "
+                    "for claim evidence eligibility"
+                )
+            try:
+                bundle, decision = (
+                    self.claim_evidence_eligibility_service.collect_and_evaluate(
+                        tenant_id=research_event_tenant_id(
+                            _request_actor_metadata(workspace.request)
+                        ),
+                        actor_scope=_accepted_research_actor_metadata(
+                            workspace.request
+                        ),
+                        run_id=workspace.request.run_id,
+                        source=workspace.source_record,
+                        document=workspace.document,
+                        evidence_pack=workspace.evidence_pack,
+                        objective_revision=(
+                            workspace.input_context.profile.task_revision
+                        ),
+                        producer_id="research-table-parser",
+                    )
+                )
+            except ValueError as exc:
+                output["claim_evidence_eligibility_collection"] = {
+                    "status": "insufficient_evidence",
+                    "reason": str(exc),
+                }
+            else:
+                output[CLAIM_ELIGIBILITY_OUTPUT_KEY] = {
+                    "bundle": bundle.to_dict(),
+                    "decision": decision.to_dict(),
+                }
+                if decision.eligible:
+                    controlled_claim = ResearchClaim.model_validate(
+                        build_qualified_claim_projection(
+                            bundle,
+                            decision,
+                            workspace.evidence_pack,
+                        )
+                    )
+                    workspace.claims = [
+                        claim
+                        for claim in workspace.claims
+                        if claim.claim_id != controlled_claim.claim_id
+                    ]
+                    workspace.claims.append(controlled_claim)
         gate_results = self.citation_verifier.verify_claims(
             workspace.claims, workspace.evidence_pack
         )
         workspace.claim_gate_results = gate_results
-        return _ok(
-            {
-                "analysis_branch_refs": [dict(item) for item in branch_refs],
-                "claim_gate_results": [result.to_dict() for result in gate_results],
-                "claim_models": [claim.to_dict() for claim in workspace.claims],
-                "evidence_pack": workspace.evidence_pack.to_dict(),
-            }
-        )
+        output.update({
+            "claim_gate_results": [result.to_dict() for result in gate_results],
+            "claim_models": [claim.to_dict() for claim in workspace.claims],
+            "evidence_pack": workspace.evidence_pack.to_dict(),
+        })
+        return _ok(output)
 
     def _quality_gate(
         self, task: dict[str, Any], workspace: "_ResearchRunWorkspace"
@@ -2401,6 +2649,7 @@ class _ResearchRunWorkspace:
     context_max_input_tokens: int = 4_096
     context_max_output_tokens: int = 1_024
     graph_transition_port: HarnessTransitionPort | None = None
+    input_context: PreparedResearchInputContext | None = None
     paper: ResearchPaper | None = None
     source_record: PaperSourceRecord | None = None
     document: ResearchDocument | None = None
@@ -2754,6 +3003,26 @@ def _unpublished_terminal_gate_evidence_refs(
         if isinstance(fallback, str) and fallback not in refs:
             refs.append(fallback)
     return tuple(refs)
+
+
+def _research_input_run_metadata(options: Mapping[str, Any]) -> dict[str, Any]:
+    if not research_input_quality_enabled(options):
+        return {}
+    raw_profile = options.get("research_input_profile")
+    profile = (
+        raw_profile
+        if isinstance(raw_profile, ResearchInputProfile)
+        else ResearchInputProfile.from_dict(raw_profile)
+    )
+    return {
+        "research_input_profile_id": profile.profile_id,
+        "research_input_profile_revision": profile.profile_revision,
+        "research_input_profile_checksum": profile.checksum,
+        "research_input_tenant_id": profile.tenant_id,
+        "research_eligibility_gate_version": options.get(
+            RESEARCH_ELIGIBILITY_GATE_VERSION_OPTION
+        ),
+    }
 
 
 def _budget_from_options(options: dict[str, Any]) -> HarnessBudget:
@@ -3190,6 +3459,18 @@ def _rag_ref_matches_session(
 ) -> bool:
     expected = f"{scheme}://{session_id}"
     return ref == expected or ref.startswith(f"{expected}/")
+
+
+def _accepted_research_actor_metadata(
+    request: AnalyzePaperRequest,
+) -> dict[str, str]:
+    metadata = _request_actor_metadata(request)
+    if not research_input_quality_enabled(request.options):
+        return metadata
+    return {
+        **metadata,
+        "tenant_id": research_event_tenant_id(metadata),
+    }
 
 
 def _request_actor_metadata(request: AnalyzePaperRequest) -> dict[str, str]:

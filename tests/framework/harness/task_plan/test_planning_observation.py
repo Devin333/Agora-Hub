@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event, current_thread
 
 import pytest
 
@@ -331,6 +332,130 @@ def test_jsonl_instances_atomically_reserve_shared_budget(tmp_path) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(reserve, range(2)))
     assert sorted(results) == [False, True]
+
+
+@pytest.mark.parametrize("store_kind", ("memory", "jsonl"))
+@pytest.mark.parametrize("max_calls", (1, 2))
+def test_planning_reservation_timestamps_follow_lock_admission_order(
+    monkeypatch, tmp_path, store_kind: str, max_calls: int,
+) -> None:
+    if store_kind == "memory":
+        store = InMemoryPlanningObservationStore()
+        stores = (store, store)
+    else:
+        path = tmp_path / "ordered-reservations.jsonl"
+        stores = tuple(JsonlPlanningObservationStore(path) for _ in range(2))
+    actual_lock = stores[0]._lock
+    waiting = Event()
+    release = Event()
+    # Tick order follows sampling, while events reverse caller/lock order.
+    ticks = iter((100000, 100001))
+    monkeypatch.setattr(planning_module, "time_ns", lambda: next(ticks) * 1_000_000)
+
+    class ReorderedLock:
+        def __enter__(self):
+            if current_thread().name.startswith("delayed-reservation"):
+                waiting.set()
+                assert release.wait(10), "later reservation did not release the first caller"
+            actual_lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            actual_lock.release()
+
+    reordered_lock = ReorderedLock()
+    for store in stores:
+        store._lock = reordered_lock
+    request = _request("sha256:" + "1" * 64)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="delayed-reservation") as pool:
+        delayed = pool.submit(
+            stores[0].reserve_call,
+            replace(request, request_id="started-first"),
+            "call-started-first",
+            max_calls,
+            2000,
+        )
+        try:
+            assert waiting.wait(10), "first caller did not reach admission lock"
+            admitted_first = stores[1].reserve_call(
+                replace(request, request_id="admitted-first"),
+                "call-admitted-first",
+                max_calls,
+                2000,
+            )
+        finally:
+            release.set()
+        admitted_second = delayed.result(timeout=10)
+
+    assert admitted_first is not None
+    assert admitted_first.admitted_at_ms == 100000
+    assert admitted_first.turn_deadline_ms == 102000
+    if max_calls == 1:
+        assert admitted_second is None
+    else:
+        assert admitted_second is not None
+        assert admitted_second.admitted_at_ms == 100001
+        assert admitted_second.turn_deadline_ms == admitted_first.turn_deadline_ms
+    assert len(stores[0]._intents) == max_calls
+
+
+@pytest.mark.parametrize("store_kind", ("memory", "jsonl"))
+def test_planning_reservation_samples_time_after_history_read(
+    monkeypatch, tmp_path, store_kind: str,
+) -> None:
+    store = (
+        InMemoryPlanningObservationStore()
+        if store_kind == "memory"
+        else JsonlPlanningObservationStore(tmp_path / "expired-during-read.jsonl")
+    )
+    request = _request("sha256:" + "1" * 64)
+    clock = {"ms": 100000}
+    monkeypatch.setattr(planning_module, "time_ns", lambda: clock["ms"] * 1_000_000)
+    assert store.reserve_call(request, "call-1", 3, timeout_ms=2000)
+    clock["ms"] = 101000
+    original_read = store.receipts_for_scope
+
+    def read_at_deadline(*args):
+        receipts = original_read(*args)
+        clock["ms"] = 102000
+        return receipts
+
+    monkeypatch.setattr(store, "receipts_for_scope", read_at_deadline)
+    with pytest.raises(HarnessValidationError) as error:
+        store.reserve_call(
+            replace(request, request_id="expired-during-read"),
+            "call-2",
+            3,
+            timeout_ms=2000,
+        )
+    assert error.value.code == "planning_turn_timeout"
+    assert len(store._intents) == 1
+
+
+@pytest.mark.parametrize("store_kind", ("memory", "jsonl"))
+def test_planning_reservation_still_rejects_actual_backward_clock(
+    monkeypatch, tmp_path, store_kind: str,
+) -> None:
+    store = (
+        InMemoryPlanningObservationStore()
+        if store_kind == "memory"
+        else JsonlPlanningObservationStore(tmp_path / "backward-clock.jsonl")
+    )
+    request = _request("sha256:" + "1" * 64)
+    clock = {"ms": 100000}
+    monkeypatch.setattr(planning_module, "time_ns", lambda: clock["ms"] * 1_000_000)
+    assert store.reserve_call(request, "call-1", 3, timeout_ms=2000)
+    clock["ms"] = 99999
+
+    with pytest.raises(HarnessValidationError) as error:
+        store.reserve_call(
+            replace(request, request_id="clock-regressed"),
+            "call-2",
+            3,
+            timeout_ms=2000,
+        )
+    assert error.value.code == "planning_turn_timeout"
+    assert len(store._intents) == 1
 
 
 def test_same_planner_turn_shares_deadline_across_calls_and_restart(monkeypatch, tmp_path):

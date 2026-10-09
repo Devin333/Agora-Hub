@@ -58,6 +58,7 @@ class QueryPlanner:
                     "field_intents": tuple(self._policy.field_reranking_intents),
                 },
             ),
+            metadata=dict(getattr(request, "metadata", {}) or {}),
             expanders=(
                 ExpanderSpec("parent", options={
                     "max_chunks": self._policy.max_parent_chunks,

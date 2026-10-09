@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from backend.research.graphs.claim_evidence_eligibility_gate import (
+    CLAIM_ELIGIBILITY_OUTPUT_KEY,
+    ResearchClaimEvidenceEligibilityGate,
+    build_claim_evidence_eligibility_payload,
+    claim_evidence_eligibility_gate_registration,
+    numeric_comparison_table_locator,
+    trusted_claim_evidence_binding_values,
+)
 from backend.research.graphs.contracts import (
     RESEARCH_ARTIFACT_NOT_REQUIRED_EVIDENCE_REF,
     RESEARCH_ARTIFACT_TERMINAL_POLICY_ID,
@@ -16,6 +24,7 @@ from backend.research.graphs.contracts import (
     RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY,
     RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS,
     RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID,
+    RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID,
     RESEARCH_DYNAMIC_POLICY_REF,
     RESEARCH_DYNAMIC_RESULT_STORE_REF,
     RESEARCH_DYNAMIC_STAGE_ID,
@@ -28,13 +37,16 @@ from backend.research.graphs.contracts import (
     build_research_artifact_terminal_policy,
 )
 from backend.research.graphs.gates import (
+    PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES,
     PAPER_ANALYSIS_GATE_REFERENCES,
+    PAPER_ANALYSIS_QUALITY_GATE_REFERENCES,
     build_paper_analysis_gate_registry,
 )
 from backend.research.graphs.paper_analysis import (
     build_dynamic_paper_analysis_graph_definition,
     build_paper_analysis_context_graph_identity,
     build_paper_analysis_graph_definition,
+    build_quality_dynamic_paper_analysis_graph_definition,
 )
 from backend.research.graphs.paper_analysis_runtime import (
     build_paper_analysis_runtime_binding_authority,
@@ -101,10 +113,13 @@ from backend.research.graphs.task_plan import (
 
 
 __all__ = [
+    "CLAIM_ELIGIBILITY_OUTPUT_KEY",
     "RESEARCH_ARTIFACT_NOT_REQUIRED_EVIDENCE_REF",
     "RESEARCH_ARTIFACT_TERMINAL_POLICY_ID",
     "RESEARCH_ARTIFACT_TERMINAL_POLICY_VERSION",
+    "PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES",
     "PAPER_ANALYSIS_GATE_REFERENCES",
+    "PAPER_ANALYSIS_QUALITY_GATE_REFERENCES",
     "RESEARCH_DYNAMIC_AGGREGATOR_REF",
     "RESEARCH_DYNAMIC_CAPABILITIES",
     "RESEARCH_DYNAMIC_CAPABILITY_REGISTRY_REF",
@@ -117,6 +132,7 @@ __all__ = [
     "RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY",
     "RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS",
     "RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID",
+    "RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID",
     "RESEARCH_DYNAMIC_POLICY_REF",
     "RESEARCH_DYNAMIC_RESULT_STORE_REF",
     "RESEARCH_DYNAMIC_STAGE_ID",
@@ -152,12 +168,18 @@ __all__ = [
     "READER_REPAIR_SUBAGENT_IDS",
     "READER_REPAIR_SUBAGENT_WORKER_REFS",
     "ResearchAnalysisPlanCandidateBuilder",
+    "ResearchClaimEvidenceEligibilityGate",
     "ResearchAnalysisTaskPlanAggregator",
     "ResearchAnalysisTaskPlanStageWorker",
+    "build_claim_evidence_eligibility_payload",
     "build_dynamic_paper_analysis_graph_definition",
     "build_paper_analysis_gate_registry",
+    "claim_evidence_eligibility_gate_registration",
+    "numeric_comparison_table_locator",
+    "trusted_claim_evidence_binding_values",
     "build_paper_analysis_context_graph_identity",
     "build_paper_analysis_graph_definition",
+    "build_quality_dynamic_paper_analysis_graph_definition",
     "build_paper_analysis_runtime_binding_authority",
     "build_reader_repair_gate_registry",
     "build_reader_repair_execution_gate_registry",

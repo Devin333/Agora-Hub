@@ -20,6 +20,9 @@ from backend.research.application.single_paper_runtime import (
     ResearchSinglePaperRuntime,
     _validated_analysis_branch_refs_from_input,
 )
+from backend.research.application.research_input_contract import (
+    research_input_quality_enabled,
+)
 from backend.research.graphs import (
     RESEARCH_DYNAMIC_CAPABILITIES,
     RESEARCH_DYNAMIC_STAGE_ID,
@@ -31,6 +34,7 @@ from backend.research.graphs import (
     build_research_analysis_task_plan_policy,
     build_paper_analysis_gate_registry,
     build_dynamic_paper_analysis_graph_definition,
+    build_quality_dynamic_paper_analysis_graph_definition,
 )
 from framework.harness import (
     ContextEnvelope,
@@ -98,6 +102,25 @@ from tests.backend.research.fakes import (
     FakeResearchSourceProvider,
     in_memory_node_output_resource_factory,
 )
+
+
+def _exception_cause_chain(exc: BaseException) -> list[dict[str, Any]]:
+    chain: list[dict[str, Any]] = []
+    visited: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in visited and len(chain) < 8:
+        visited.add(id(current))
+        chain.append({
+            "exception_type": type(current).__name__,
+            "message": str(current),
+            "errno": getattr(current, "errno", None),
+            "winerror": getattr(current, "winerror", None),
+            "filename": getattr(current, "filename", None),
+        })
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return chain
 
 
 class _WorkspaceAnalysisSubAgent:
@@ -230,6 +253,7 @@ class _DynamicTaskPlanFactory:
         self.stage_workers: list[ResearchAnalysisTaskPlanStageWorker] = []
         self.parallel_coordinators: list[ParallelAgentCoordinator] = []
         self.child_supervisors: list[ChildAgentSupervisor] = []
+        self.execution_errors: list[dict[str, Any]] = []
 
     def __call__(self, *, workspace: Any, dependencies: Any):
         policy = self.policy_override or build_research_analysis_task_plan_policy()
@@ -412,13 +436,23 @@ class _DynamicTaskPlanFactory:
             )
 
         def execute(resolved_binding, task_instance, execution_identity):
-            result = worker_result(
-                invoke_child(
+            try:
+                child_result = invoke_child(
                     resolved_binding,
                     task_instance,
                     execution_identity,
                 )
-            )
+            except Exception as exc:
+                self.execution_errors.append({
+                    "task_instance_id": task_instance.task_instance_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "error_code": getattr(exc, "code", None),
+                    "error_details": getattr(exc, "details", None),
+                    "cause_chain": _exception_cause_chain(exc),
+                })
+                raise
+            result = worker_result(child_result)
             assert result is not None
             if self.crash_after_receipt_once and not self._crashed_after_receipt:
                 self._crashed_after_receipt = True
@@ -436,9 +470,12 @@ class _DynamicTaskPlanFactory:
                 recovered=True,
             )
 
-        graph = HarnessGraphCompiler().compile(
-            build_dynamic_paper_analysis_graph_definition()
-        ).graph
+        graph_definition = (
+            build_quality_dynamic_paper_analysis_graph_definition()
+            if research_input_quality_enabled(workspace.request.options)
+            else build_dynamic_paper_analysis_graph_definition()
+        )
+        graph = HarnessGraphCompiler().compile(graph_definition).graph
         child_supervisor = ChildAgentSupervisor(
             max_children=policy.max_parallelism,
         )
@@ -1397,10 +1434,14 @@ def test_research_policy_rejects_explicit_serial_fallback_override(tmp_path: Pat
     with pytest.raises(HarnessValidationError) as exc_info:
         factory(
             workspace=SimpleNamespace(
-                request=SimpleNamespace(
+                request=AnalyzePaperRequest(
+                    run_id="research-policy-serial-fallback",
+                    paper_id="paper-harness-001",
+                    source_ref="https://arxiv.org/abs/2606.00123",
                     tenant_id="tenant",
                     user_id="user",
                     memory_namespace="research",
+                    options={"dynamic_analysis": True},
                 )
             ),
             dependencies=SimpleNamespace(llm_worker=FakeResearchLLMWorker()),

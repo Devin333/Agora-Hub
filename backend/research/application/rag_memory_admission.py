@@ -11,6 +11,7 @@ from backend.research.graphs import (
     build_dynamic_paper_analysis_graph_definition,
     build_paper_analysis_context_graph_identity,
     build_paper_analysis_graph_definition,
+    build_quality_dynamic_paper_analysis_graph_definition,
 )
 from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.control_plane.activity_execution import (
@@ -37,6 +38,7 @@ class ResearchRAGMemoryAdmissionPort(Protocol):
         actor_scope: ResearchActorScope,
         graph_identity: ContextGraphIdentity,
         dynamic_task_plan: bool,
+        input_quality_foundation: bool = False,
     ) -> ExecutionMemoryRecallPort:
         """Issue one read-only capability for the current physical RAG activity."""
 
@@ -79,15 +81,21 @@ class HarnessResearchRAGMemoryAdmission:
         self._ref_admission = ref_admission
         self._namespace_refs = refs
         self._bindings = {
-            False: PhysicalGraphRefAdmissionBinding(
+            (False, False): PhysicalGraphRefAdmissionBinding(
                 HarnessGraphCompiler().compile(
                     build_paper_analysis_graph_definition()
                 ).graph,
                 "run_research_rag",
             ),
-            True: PhysicalGraphRefAdmissionBinding(
+            (True, False): PhysicalGraphRefAdmissionBinding(
                 HarnessGraphCompiler().compile(
                     build_dynamic_paper_analysis_graph_definition()
+                ).graph,
+                "run_research_rag",
+            ),
+            (True, True): PhysicalGraphRefAdmissionBinding(
+                HarnessGraphCompiler().compile(
+                    build_quality_dynamic_paper_analysis_graph_definition()
                 ).graph,
                 "run_research_rag",
             ),
@@ -100,9 +108,15 @@ class HarnessResearchRAGMemoryAdmission:
         actor_scope: ResearchActorScope,
         graph_identity: ContextGraphIdentity,
         dynamic_task_plan: bool,
+        input_quality_foundation: bool = False,
     ) -> ExecutionMemoryRecallPort:
         if not isinstance(actor_scope, ResearchActorScope):
             raise TypeError("actor_scope must be ResearchActorScope")
+        if input_quality_foundation and not dynamic_task_plan:
+            raise HarnessValidationError(
+                "Research input quality foundation requires dynamic TaskPlan memory admission",
+                code="REF_POLICY_SCOPE_MISMATCH",
+            )
         if not isinstance(graph_identity, ContextGraphIdentity):
             raise TypeError("graph_identity must be ContextGraphIdentity")
         if not graph_identity.has_physical_activity:
@@ -142,6 +156,7 @@ class HarnessResearchRAGMemoryAdmission:
             run_id=graph_identity.run_id,
             stage_id="run_research_rag",
             dynamic_task_plan=dynamic_task_plan,
+            input_quality_foundation=input_quality_foundation,
         ).with_physical_activity(
             node_id=graph_identity.node_id or "",
             node_instance_id=graph_identity.node_instance_id or "",
@@ -156,7 +171,10 @@ class HarnessResearchRAGMemoryAdmission:
         identity_scope_ref = research_identity_scope_ref(actor_scope.to_metadata())
         snapshot = self._ref_admission.admit_physical_graph_inputs(
             task,
-            binding=self._bindings[bool(dynamic_task_plan)],
+            binding=self._bindings[(
+                bool(dynamic_task_plan),
+                bool(input_quality_foundation),
+            )],
             tenant_scope_ref=identity_scope_ref,
             identity_scope_ref=identity_scope_ref,
             tenant_id=actor_scope.tenant_id,

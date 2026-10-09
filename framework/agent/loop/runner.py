@@ -13,7 +13,7 @@ from framework.agent.models import (
     AgentSpec,
 )
 from framework.agent.loop.parser import AgentActionParser
-from framework.agent.loop.prompt import PromptBuilder
+from framework.agent.loop.prompt import PreparedInputProjection, PromptBuilder
 from framework.agent.loop.judge import OutputJudge
 from framework.agent.subagents import SubAgentExecutor
 from framework.llm.budget import GlobalBudgetTracker
@@ -197,9 +197,16 @@ class AgentRunner:
         standalone: bool = False,
         memory_recall: ExecutionMemoryRecallPort | None = None,
         tool_execution_evidence: ToolExecutionEvidencePort | None = None,
+        prepared_input_projection: PreparedInputProjection | None = None,
     ) -> AgentLoopResult:
         if not isinstance(standalone, bool):
             raise TypeError("standalone must be boolean")
+        if prepared_input_projection is not None and not isinstance(
+            prepared_input_projection, PreparedInputProjection
+        ):
+            raise TypeError(
+                "prepared_input_projection must be PreparedInputProjection"
+            )
         _validate_graph_identity_arguments(
             run_id=run_id,
             node_instance_id=node_instance_id,
@@ -347,14 +354,19 @@ class AgentRunner:
             runtime_event_sink=self._runtime_event_sink,
             tool_execution_evidence=tool_execution_evidence,
         )
+        loop_run_options: dict[str, Any] = {
+            "run_id": run_id,
+            "execution_identity": graph_identity,
+            "graph_checkpoint_ref": graph_checkpoint_ref,
+            "standalone": standalone,
+        }
+        if prepared_input_projection is not None:
+            loop_run_options["prepared_input_projection"] = prepared_input_projection
         result = loop.run(
             agent,
             loop_inputs,
             tools,
-            run_id=run_id,
-            execution_identity=graph_identity,
-            graph_checkpoint_ref=graph_checkpoint_ref,
-            standalone=standalone,
+            **loop_run_options,
         )
         self._append_conversation_events(
             conversation_id,

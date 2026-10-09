@@ -19,6 +19,9 @@ from backend.research.application.paper_rag_session import PaperRAGSession
 from backend.research.application.rag_memory_admission import (
     HarnessResearchRAGMemoryAdmission,
 )
+from backend.research.application.research_input_contract import (
+    research_input_quality_enabled,
+)
 from backend.research.application.run_disposition import (
     ResearchRunDispositionReconciler,
     classify_research_run_record,
@@ -31,6 +34,7 @@ from backend.research.application.single_paper_runtime import (
 )
 from backend.research.graphs import (
     build_dynamic_paper_analysis_graph_definition,
+    build_quality_dynamic_paper_analysis_graph_definition,
 )
 from backend.research.application.graph_result_committer import (
     ResearchGraphResultCommitter,
@@ -361,6 +365,23 @@ class _ProductionResearchAnalysisWorker:
                 code="research_dynamic_child_input_refs_invalid",
                 details={"required": list(RESEARCH_DYNAMIC_INPUT_REFS)},
             )
+        expected_input_context = getattr(self._workspace, "input_context", None)
+        supplied_prepared_input = task.get("prepared_input")
+        if expected_input_context is None:
+            if supplied_prepared_input is not None:
+                raise HarnessValidationError(
+                    "dynamic child supplied an unconfigured prepared input",
+                    code="research_input_projection_unexpected",
+                )
+        elif (
+            not isinstance(supplied_prepared_input, Mapping)
+            or dict(supplied_prepared_input)
+            != expected_input_context.candidate_projection()
+        ):
+            raise HarnessValidationError(
+                "dynamic child prepared input differs from the accepted profile",
+                code="research_input_projection_mismatch",
+            )
         forbidden_context_fields = {
             "parent_messages",
             "raw_parent_messages",
@@ -450,6 +471,31 @@ class _ResearchDynamicInputReader(AuthorizedChildInputReaderPort):
         return values
 
 
+class _PreparedResearchCandidateWorker:
+    """Inject one application-validated projection into real provider requests."""
+
+    def __init__(self, worker: Any, *, workspace: Any) -> None:
+        self._worker = worker
+        self._workspace = workspace
+
+    def generate_candidate(
+        self,
+        *,
+        task: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        context = self._workspace.input_context
+        prepared_payload = dict(payload)
+        if context is not None:
+            prepared_payload["prepared_input"] = context.candidate_projection()
+        return self._worker.generate_candidate(
+            task=task,
+            payload=prepared_payload,
+            **kwargs,
+        )
+
+
 class _ResearchCandidateLLMClient:
     """Adapt the existing Research candidate worker to the AgentRunner port.
 
@@ -471,7 +517,12 @@ class _ResearchCandidateLLMClient:
                 code="subagent_runner_input_resolution_invalid",
             )
         try:
-            encoded = user_message.split("Inputs:", 1)[1].split("\nMemory context:", 1)[0].strip()
+            encoded = (
+                user_message.split("Inputs:", 1)[1]
+                .split("\nPrepared input projection JSON:", 1)[0]
+                .split("\nMemory context:", 1)[0]
+                .strip()
+            )
             inputs = json.loads(encoded)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise HarnessValidationError(
@@ -492,7 +543,13 @@ class _ResearchCandidateLLMClient:
         dependency_outputs = {
             key: value
             for key, value in inputs.items()
-            if key not in {"objective", "input_refs", "resolved_inputs"}
+            if key
+            not in {
+                "objective",
+                "input_refs",
+                "resolved_inputs",
+                "research_input",
+            }
         }
         resolved = inputs.get("resolved_inputs")
         if isinstance(resolved, Mapping):
@@ -517,6 +574,14 @@ class _ResearchCandidateLLMClient:
                     )
                 dependency_outputs[logical_ref] = value["output"]
         task: dict[str, Any] = {"input_refs": list(input_refs)}
+        prepared_input = inputs.get("research_input")
+        if prepared_input is not None:
+            if not isinstance(prepared_input, Mapping):
+                raise HarnessValidationError(
+                    "dynamic child prepared input envelope is invalid",
+                    code="research_input_projection_invalid",
+                )
+            task["prepared_input"] = dict(prepared_input)
         if dependency_outputs:
             task["dependency_outputs"] = dependency_outputs
         result = self._worker.execute(
@@ -2017,9 +2082,12 @@ def _build_configured_composition(
                 run_id=request.run_id,
                 tenant_id=tenant_id,
             )
-            graph = HarnessGraphCompiler().compile(
-                build_dynamic_paper_analysis_graph_definition()
-            ).graph
+            graph_definition = (
+                build_quality_dynamic_paper_analysis_graph_definition()
+                if research_input_quality_enabled(request.options)
+                else build_dynamic_paper_analysis_graph_definition()
+            )
+            graph = HarnessGraphCompiler().compile(graph_definition).graph
             stage_binding = TaskPlanStageBinding(
                 graph,
                 RESEARCH_DYNAMIC_STAGE_ID,
@@ -2078,6 +2146,11 @@ def _build_configured_composition(
                     require_explicit_execution_profile=True,
                     worker_id=worker_id,
                     worker_version=worker_version,
+                    prepared_input_projection=(
+                        workspace.input_context.projection
+                        if workspace.input_context is not None
+                        else None
+                    ),
                 )
                 workers[child_spec.subagent_id] = runner
                 worker_bindings[capability] = HarnessWorkerBinding(
@@ -2147,7 +2220,10 @@ def _build_configured_composition(
                 stage_binding=stage_binding,
                 accepted_at=utc_now().isoformat(),
                 candidate_builder=ResearchAnalysisPlanCandidateBuilder(
-                    candidate_worker,
+                    _PreparedResearchCandidateWorker(
+                        candidate_worker,
+                        workspace=workspace,
+                    ),
                 ),
                 capability_registry=capability_registry,
                 store=dynamic_task_plan_store,

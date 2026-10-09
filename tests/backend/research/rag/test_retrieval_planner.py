@@ -85,3 +85,37 @@ def test_route_candidate_filter_groups_are_deduplicated_and_serializable() -> No
     ]
     assert payload["channels"][0]["name"] == "dense_text"
     assert payload["fusion"]["rrf_k"] == policy.rrf_k
+
+
+def test_candidate_lineage_remains_serializable_in_research_retrieval_plan() -> None:
+    plan = QueryPlanner(RetrievalPolicy()).build(
+        RetrievalRequest(
+            paper_id="p1",
+            question="What do the reported experiments suggest overall? experiment",
+            limit=2,
+            metadata={
+                "candidate_experiment": {
+                    "accepted": True,
+                    "original_query": "What do the reported experiments suggest overall?",
+                    "reason": "candidate_accepted",
+                },
+                "candidate_experiment_config": {
+                    "config_version": "research-retrieval-candidate-config-v1",
+                    "enabled": True,
+                    "max_candidate_queries": 2,
+                },
+                "original_query": "What do the reported experiments suggest overall?",
+            },
+        )
+    )
+
+    payload = plan.to_dict()
+
+    assert payload["metadata"]["candidate_experiment"]["accepted"] is True
+    assert payload["metadata"]["candidate_experiment"]["reason"] == "candidate_accepted"
+    assert payload["metadata"]["original_query"] == "What do the reported experiments suggest overall?"
+    assert payload["metadata"]["candidate_experiment_config"] == {
+        "config_version": "research-retrieval-candidate-config-v1",
+        "enabled": True,
+        "max_candidate_queries": 2,
+    }

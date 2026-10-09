@@ -1469,9 +1469,9 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
                 ResearchRunStoreReason.IDENTITY_MISMATCH
             )
         if os.name == "nt":
-            if opened.st_size == 0:
-                os.write(descriptor, b"\0")
-                os.fsync(descriptor)
+            # Windows byte-range locks may extend past EOF. Keeping the lock
+            # file empty avoids initialization writes racing an existing lock
+            # held by another process after our pre-acquisition fstat snapshot.
             _acquire_windows_file_lock(descriptor)
         else:
             import fcntl

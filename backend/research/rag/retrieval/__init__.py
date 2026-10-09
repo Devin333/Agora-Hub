@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from backend.research.rag.retrieval.candidate_experiment import (
+    CANDIDATE_EXPERIMENT_VERSION,
+    CandidatePlanEvaluation,
+    ResearchCandidatePlanner,
+    RetrievalCandidateExperimentConfig,
+    evaluate_retrieval_candidate,
+)
 from backend.research.rag.retrieval.paper_answer_generator import (
     AnswerContextAssembler,
     AnswerContextSelection,
@@ -73,6 +80,7 @@ from backend.research.rag.retrieval.trace import RetrievalDegradation, Retrieval
 
 __all__ = [
     "AnswerContextAssembler",
+    "CANDIDATE_EXPERIMENT_VERSION",
     "AnswerContextSelection",
     "AnswerGenerator",
     "ChannelSpec",
@@ -136,5 +144,9 @@ __all__ = [
     "policy_config_hash",
     "stable_policy_config",
     "visual_fusion_score",
+    "CandidatePlanEvaluation",
+    "ResearchCandidatePlanner",
+    "RetrievalCandidateExperimentConfig",
+    "evaluate_retrieval_candidate",
     "with_retrieval_scores",
 ]

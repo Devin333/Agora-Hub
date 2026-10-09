@@ -50,7 +50,7 @@ from framework.agent.skill_context import (
 from framework.agent.skill_observation import SkillObservation
 from framework.agent.skill_selection import SkillSelectionPolicy
 from framework.agent.loop.parser import AgentActionParser
-from framework.agent.loop.prompt import PromptBuilder
+from framework.agent.loop.prompt import PreparedInputProjection, PromptBuilder
 from framework.agent.subagents import (
     SubAgentExecutor,
     SubAgentResult,
@@ -191,9 +191,14 @@ class AgentLoop:
         execution_identity: GraphExecutionIdentity | None = None,
         graph_checkpoint_ref: str | None = None,
         standalone: bool = False,
+        prepared_input_projection: PreparedInputProjection | None = None,
     ) -> AgentLoopResult:
         if not isinstance(standalone, bool):
             raise TypeError("standalone must be boolean")
+        if prepared_input_projection is not None and not isinstance(
+            prepared_input_projection, PreparedInputProjection
+        ):
+            raise TypeError("prepared_input_projection must be PreparedInputProjection")
         if execution_identity is not None and not isinstance(
             execution_identity,
             GraphExecutionIdentity,
@@ -297,9 +302,12 @@ class AgentLoop:
                 tools=tools,
                 memory_context=memory_context,
                 skill_prompt_section=skill_prompt_section,
+                prepared_input_projection=prepared_input_projection,
             )
             if execution_identity is not None:
                 request = request.clone(execution_identity=execution_identity)
+            if prepared_input_projection is not None:
+                prepared_input_projection.validate_request(request, inputs=prompt_inputs)
             trace.record_prompt(iteration_trace, request)
             try:
                 self._reserve_global_budget_before_llm_call(

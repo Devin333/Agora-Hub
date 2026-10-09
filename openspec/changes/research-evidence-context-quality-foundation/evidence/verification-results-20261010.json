@@ -1,0 +1,97 @@
+{
+  "schema_version": "newsroom.quality-foundation-verification/v1",
+  "date": "2026-10-10",
+  "python": "3.14.4 (tags/v3.14.4:23116f9, Apr  7 2026, 14:10:54) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "parent_git_revision": "3f86249c355aab369f2e8590dc9772b1618fde3b",
+  "full_tests": {
+    "command": "python -m scripts.dev test",
+    "exit_code": 0,
+    "passed": 8966,
+    "skipped": 115,
+    "deselected": 24,
+    "warnings": 561,
+    "duration_seconds": 5550.24,
+    "junit_duration_seconds": 5548.183,
+    "junit_sha256": "524681425433965c85361faf6d6db792857cc083dc25235d461f4cbb379c1806",
+    "skip_categories": {
+      "windows_symlink_unavailable": 29,
+      "docker_integration_opt_in": 10,
+      "postgres_integration_opt_in": 73,
+      "redis_integration_opt_in": 3
+    }
+  },
+  "smoke": {
+    "command": "python -m scripts.dev smoke",
+    "exit_code": 0,
+    "passed": 4188,
+    "skipped": 0,
+    "deselected": 23,
+    "warnings": 31,
+    "pytest_duration_seconds": 4269.66,
+    "junit_sha256": "85c6825f5bd85b69cd2d37840632bd3a9d7fd435be282076467a0a1910d6d70f",
+    "offline_agent_loop_succeeded": true,
+    "offline_network_calls": 0,
+    "source_validation_errors": 0,
+    "source_validation_warnings": 0
+  },
+  "initial_full_tests": {
+    "passed": 8949,
+    "failed": 2,
+    "skipped": 115,
+    "deselected": 24,
+    "duration_seconds": 4857.19
+  },
+  "original_failed_tests_final_results": [
+    {
+      "test": "tests.infrastructure.research.test_filesystem_run_store::test_concurrent_processes_serialize_latest_index_updates",
+      "passed": true,
+      "duration_seconds": 2.287
+    },
+    {
+      "test": "tests.infrastructure.storage.harness.test_planning_observation_store::test_parallel_store_instances_share_one_planning_budget",
+      "passed": true,
+      "duration_seconds": 0.015
+    }
+  ],
+  "fixed_eval": {
+    "command": "python -m scripts.dev test-rag-eval-gate",
+    "exit_code": 0,
+    "cases": 54,
+    "passed": true,
+    "rollout_eligible": false,
+    "rollout_blockers": [
+      "hit_rate_gain_below_threshold"
+    ],
+    "core_source_files": 58,
+    "source_checksum_sha256": "60f163424056c14e2b27eb0024f7dac51390cf9027fde0579b3307f402b03a21",
+    "report_checksum_sha256": "d528c8f3016c5df1bb04ec327e0aeaad688bf5fe724d5efa424b8662415e4853",
+    "saved_report_line_endings": "LF; JSON content exactly matches CLI output"
+  },
+  "compile": {
+    "command": "python -m scripts.dev compile",
+    "exit_code": 0
+  },
+  "unconditional_tasks": 90,
+  "conditional_pending_tasks": [
+    "6.6",
+    "6.7",
+    "6.8",
+    "6.9",
+    "6.10",
+    "6.11",
+    "6.12"
+  ],
+  "eof_normalization_recheck": {
+    "scope": "extra EOF blank lines only; no statements or assertions changed",
+    "passed": 47,
+    "failures": 0,
+    "duration_seconds": 2.209,
+    "compile_passed": true,
+    "fixed_eval_passed": true
+  },
+  "openspec_strict": {
+    "command": "openspec validate research-evidence-context-quality-foundation --strict",
+    "exit_code": 0
+  }
+}

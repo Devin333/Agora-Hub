@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from threading import Event, current_thread
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -22,6 +24,7 @@ from framework.harness.task_plan.planning_metadata import (
     PlanningObservationIncompleteError,
     PlanningObservationStorageError,
 )
+from framework.harness.task_plan import planning_observation as planning_module
 from framework.harness.task_plan.planning_observation import (
     PlanningObservationReceipt,
     PlanningObservationRequest,
@@ -57,6 +60,112 @@ def test_parallel_store_instances_share_one_planning_budget(tmp_path) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(reserve, range(2)))
     assert sorted(results) == [False, True]
+
+
+@pytest.mark.parametrize("max_calls", (1, 2))
+def test_reservation_timestamp_follows_serialized_admission_order(
+    monkeypatch, tmp_path, max_calls: int,
+) -> None:
+    snapshot = _snapshot()
+    stores = tuple(
+        FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+        for _ in range(2)
+    )
+    waiting = Event()
+    release = Event()
+    actual_lock = storage_module.verified_exclusive_file_lock
+    # Distinct ticks make reversed sampling observable without a timing sleep.
+    ticks = iter((100000, 100001))
+    monkeypatch.setattr(planning_module, "time_ns", lambda: next(ticks) * 1_000_000)
+
+    @contextmanager
+    def reordered_lock(*args, **kwargs):
+        if current_thread().name.startswith("delayed-reservation"):
+            waiting.set()
+            assert release.wait(10), "later reservation did not release the first caller"
+        with actual_lock(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(storage_module, "verified_exclusive_file_lock", reordered_lock)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="delayed-reservation") as pool:
+        delayed = pool.submit(
+            stores[0].reserve_call,
+            _request(snapshot, request_id="started-first"),
+            "call-started-first",
+            max_calls,
+            2000,
+        )
+        try:
+            assert waiting.wait(10), "first caller did not reach admission lock"
+            admitted_first = stores[1].reserve_call(
+                _request(snapshot, request_id="admitted-first"),
+                "call-admitted-first",
+                max_calls,
+                2000,
+            )
+        finally:
+            release.set()
+        admitted_second = delayed.result(timeout=10)
+
+    assert admitted_first is not None
+    assert admitted_first.admitted_at_ms == 100000
+    assert admitted_first.turn_deadline_ms == 102000
+    if max_calls == 1:
+        assert admitted_second is None
+    else:
+        assert admitted_second is not None
+        assert admitted_second.admitted_at_ms == 100001
+        assert admitted_second.turn_deadline_ms == admitted_first.turn_deadline_ms
+    assert len(tuple(tmp_path.rglob("po_*.intent"))) == max_calls
+
+
+def test_filesystem_reservation_samples_time_after_history_read(
+    monkeypatch, tmp_path,
+) -> None:
+    snapshot = _snapshot()
+    store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    clock = {"ms": 100000}
+    monkeypatch.setattr(planning_module, "time_ns", lambda: clock["ms"] * 1_000_000)
+    assert store.reserve_call(_request(snapshot), "call-1", 3, timeout_ms=2000)
+    clock["ms"] = 101000
+    original_read = store.receipts_for_scope
+
+    def read_at_deadline(*args):
+        receipts = original_read(*args)
+        clock["ms"] = 102000
+        return receipts
+
+    monkeypatch.setattr(store, "receipts_for_scope", read_at_deadline)
+    with pytest.raises(HarnessValidationError) as error:
+        store.reserve_call(
+            _request(snapshot, request_id="expired-during-read"),
+            "call-2",
+            3,
+            timeout_ms=2000,
+        )
+    assert error.value.code == "planning_turn_timeout"
+    assert len(tuple(tmp_path.rglob("po_*.intent"))) == 1
+
+
+def test_filesystem_reservation_still_rejects_actual_backward_clock(
+    monkeypatch, tmp_path,
+) -> None:
+    snapshot = _snapshot()
+    store = FilesystemPlanningObservationStore(tmp_path, input_snapshot=snapshot)
+    clock = {"ms": 100000}
+    monkeypatch.setattr(planning_module, "time_ns", lambda: clock["ms"] * 1_000_000)
+    assert store.reserve_call(_request(snapshot), "call-1", 3, timeout_ms=2000)
+    clock["ms"] = 99999
+
+    with pytest.raises(HarnessValidationError) as error:
+        store.reserve_call(
+            _request(snapshot, request_id="clock-regressed"),
+            "call-2",
+            3,
+            timeout_ms=2000,
+        )
+    assert error.value.code == "planning_turn_timeout"
+    assert len(tuple(tmp_path.rglob("po_*.intent"))) == 1
 
 
 def test_receipt_must_match_persisted_call_identity(tmp_path) -> None:

@@ -114,3 +114,48 @@ def test_conflicting_reviews_remain_disputed_without_vote_count() -> None:
     )
     assert result.status is ClaimConclusionStatus.DISPUTED
     assert "support_and_refutation_for_same_binding" in result.unresolved_items
+
+
+
+def test_identical_duplicate_observations_do_not_create_vote_authority() -> None:
+    binding = make_binding(binding_claim_for_interpretation())
+    observation = human(binding)
+
+    result = ClaimReviewResolver().resolve(
+        binding,
+        checks=[check(binding)],
+        requirements=[
+            EvidenceRequirement(
+                "metric",
+                "metric",
+                RequirementStatus.PRESENT,
+                evidence_refs=("evidence-1",),
+            )
+        ],
+        observations=[observation, observation],
+    )
+
+    assert result.status is ClaimConclusionStatus.SUPPORTED_WITHIN_SCOPE
+    assert result.observation_ids == (observation.observation_id,)
+
+
+def test_conflicting_duplicate_observation_identity_is_rejected() -> None:
+    binding = make_binding(binding_claim_for_interpretation())
+    supporting = human(binding, observation_id="review-same")
+    refuting = human(
+        binding,
+        observation_id="review-same",
+        reviewer_id="human-2",
+        conclusion=ReviewConclusion.REFUTES,
+    )
+
+    try:
+        ClaimReviewResolver().resolve(
+            binding,
+            checks=[check(binding)],
+            observations=[supporting, refuting],
+        )
+    except ValueError as exc:
+        assert "conflicting duplicate observation_id" in str(exc)
+    else:  # pragma: no cover - explicit replay integrity assertion
+        raise AssertionError("conflicting duplicate observation identity was accepted")

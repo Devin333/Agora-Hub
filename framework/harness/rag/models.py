@@ -12,7 +12,30 @@ from framework.shared.time import format_datetime, utc_now
 
 
 FORBIDDEN_RAG_PLAN_KEYS = frozenset(
-    {"next_step", "quality_passed", "write_memory", "publish_artifact", "halt_graph", "promote_skill"}
+    {
+        "allowed_tools",
+        "eligible",
+        "eligibility",
+        "eligibility_decision",
+        "halt_graph",
+        "memory_write",
+        "next_step",
+        "passed",
+        "promote_skill",
+        "publication",
+        "qualification",
+        "qualification_ref",
+        "qualification_status",
+        "publish",
+        "publish_artifact",
+        "quality_decision",
+        "quality_passed",
+        "route",
+        "routing",
+        "skill_promotion",
+        "tool_authorization",
+        "write_memory",
+    }
 )
 
 

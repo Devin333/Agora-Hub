@@ -4,6 +4,7 @@ from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.rag.models import RAGBudget, RAGSessionSpec, RetrievalGoal
 
 from backend.research.rag.models import ResearchRetrievalGoal
+from backend.research.rag.retrieval.candidate_experiment import RetrievalCandidateExperimentConfig
 
 
 DEFAULT_MIN_RELEVANCE = 0.30
@@ -37,6 +38,7 @@ class ResearchRAGPolicyBuilder:
         allowed_tools: tuple[str, ...] = ("retrieval.search", "retrieval.read_source"),
         budget: RAGBudget | None = None,
         generation_policy: dict[str, object] | None = None,
+        candidate_experiment: RetrievalCandidateExperimentConfig | None = None,
     ) -> RAGSessionSpec:
         scope_metadata = _scope_metadata(goal)
         return RAGSessionSpec(
@@ -77,6 +79,9 @@ class ResearchRAGPolicyBuilder:
                 "graph_ref": graph_identity.graph_ref,
                 "graph_checksum": graph_identity.graph_checksum,
                 "stage_id": graph_identity.stage_id,
+                "candidate_experiment": (
+                    candidate_experiment or RetrievalCandidateExperimentConfig()
+                ).to_dict(),
                 **scope_metadata,
             },
         )

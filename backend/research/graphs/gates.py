@@ -45,6 +45,9 @@ from backend.research.reader.gates import (
 )
 from backend.research.services.citation_verifier import CitationVerifier
 from backend.research.services.quality_gate import ResearchQualityGate
+from backend.research.graphs.claim_evidence_eligibility_gate import (
+    ResearchClaimEvidenceEligibilityGate,
+)
 
 
 class PaperSourceLineageGateAdapter(DeterministicGate):
@@ -719,7 +722,7 @@ class ResearchPaperCardGateAdapter(DeterministicGate):
         return _from_domain_results(self.gate_name, results)
 
 
-_PAPER_ANALYSIS_GATE_TYPES = (
+_PAPER_ANALYSIS_BASE_GATE_TYPES = (
     PaperSourceLineageGateAdapter,
     ResearchDocumentSchemaGateAdapter,
     ResearchRAGContextProjectionGateAdapter,
@@ -733,18 +736,42 @@ _PAPER_ANALYSIS_GATE_TYPES = (
     ResearchPaperCardGateAdapter,
 )
 
+# The default/static and ordinary dynamic Graphs execute this exact inventory.
+# Keep this public name scoped to that long-standing contract.
 PAPER_ANALYSIS_GATE_REFERENCES = tuple(
     f"{gate_type.gate_name}@{gate_type.gate_version}"
-    for gate_type in _PAPER_ANALYSIS_GATE_TYPES
+    for gate_type in _PAPER_ANALYSIS_BASE_GATE_TYPES
+)
+
+# The opt-in quality Graph executes the base inventory plus the exact V1 claim
+# eligibility gate. The registry exposes the union so either selected Graph can
+# resolve every declared gate without making the opt-in gate a default runtime
+# requirement.
+PAPER_ANALYSIS_QUALITY_GATE_REFERENCES = (
+    *PAPER_ANALYSIS_GATE_REFERENCES,
+    "ResearchClaimEvidenceEligibilityGate@1",
+)
+PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES = (
+    PAPER_ANALYSIS_QUALITY_GATE_REFERENCES
+)
+_PAPER_ANALYSIS_AVAILABLE_GATE_TYPES = (
+    *_PAPER_ANALYSIS_BASE_GATE_TYPES,
+    ResearchClaimEvidenceEligibilityGate,
 )
 
 
 def build_paper_analysis_gate_registry() -> DeterministicGateRegistry:
-    gates = tuple(gate_type() for gate_type in _PAPER_ANALYSIS_GATE_TYPES)
+    gates = tuple(
+        gate_type() for gate_type in _PAPER_ANALYSIS_AVAILABLE_GATE_TYPES
+    )
     return DeterministicGateRegistry(
         GateRegistration(
             reference=GateReference(gate_id=gate.gate_name, version=gate.gate_version),
             gate=gate,
+            dependencies=tuple(
+                GateReference.parse(reference)
+                for reference in getattr(gate, "gate_dependencies", ())
+            ),
         )
         for gate in gates
     )
@@ -991,10 +1018,13 @@ def _from_domain_results(
 __all__ = [
     "BenchmarkEvidenceLineageGateAdapter",
     "ClaimEvidenceGateAdapter",
+    "PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES",
     "PAPER_ANALYSIS_GATE_REFERENCES",
+    "PAPER_ANALYSIS_QUALITY_GATE_REFERENCES",
     "PaperSourceLineageGateAdapter",
     "ReaderPayloadSchemaGateAdapter",
     "ResearchDocumentSchemaGateAdapter",
+    "ResearchClaimEvidenceEligibilityGate",
     "ResearchEvidenceCoverageGateAdapter",
     "ResearchPaperCardGateAdapter",
     "ResearchQualityGateAdapter",

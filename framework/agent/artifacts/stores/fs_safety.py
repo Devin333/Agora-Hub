@@ -103,10 +103,9 @@ def _lock_descriptor(descriptor: int) -> None:
         if os.name == "nt":
             import msvcrt
 
-            info = os.fstat(descriptor)
-            if info.st_size == 0:
-                os.write(descriptor, b"\0")
-                os.fsync(descriptor)
+            # Windows may lock byte zero beyond EOF. Do not initialize the
+            # file before acquisition: another process may already own that
+            # byte after an empty-file stat snapshot.
             os.lseek(descriptor, 0, os.SEEK_SET)
             msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
         else:
@@ -288,7 +287,9 @@ def verified_atomic_create(
 
     descriptor, raw_path = tempfile.mkstemp(
         dir=target.parent,
-        prefix=f".{target.name}.",
+        # Keep staging names bounded: repeating a long target basename can
+        # exceed Windows MAX_PATH even when the committed target fits.
+        prefix=".artifact-",
         suffix=".tmp",
     )
     temporary_path = Path(raw_path)

@@ -9,7 +9,6 @@ from framework.harness.memory.ports import MemoryPort
 from framework.harness.rag.context_pack_assembler import RAGContextPackAssembler
 from framework.harness.rag.session import BoundedRAGSessionController, RAGSessionResult
 from framework.harness.rag.models import RAGBudget, RAGSessionSpec
-from framework.harness.rag.planner import WorkerRAGPlanner
 from framework.harness.rag.relevance import RelevanceScorerPort
 from framework.harness.rag.source_verifier import SourceVerifier
 
@@ -17,6 +16,10 @@ from backend.research.rag.models import ResearchRetrievalGoal
 from backend.research.rag.adapters import ResearchRAGPlanWorker
 from backend.research.rag.retrieval_port import PaperChunkRetrievalPort
 from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
+from backend.research.rag.retrieval.candidate_experiment import (
+    ResearchCandidatePlanner,
+    RetrievalCandidateExperimentConfig,
+)
 from backend.research.rag.retrieval.policies import RetrievalPolicy
 from backend.research.services.rag_policy import ResearchRAGPolicyBuilder
 from backend.research.ports.chunk_store import ChunkStorePort
@@ -51,6 +54,7 @@ class PaperRAGSession:
         retrieval_policy: RetrievalPolicy | None = None,
         plan_worker: "ResearchCandidateWorkerPort | None" = None,
         worker_planner_min_round_index: int = 1,
+        candidate_experiment: RetrievalCandidateExperimentConfig | None = None,
         answer_worker: "AnswerWorkerPort | None" = None,
         generation_policy: dict[str, object] | None = None,
         relevance_scorer: RelevanceScorerPort | None = None,
@@ -72,6 +76,7 @@ class PaperRAGSession:
         self._visual_store = visual_store
         self._retrieval_policy = retrieval_policy
         self._plan_worker = plan_worker
+        self._candidate_experiment = candidate_experiment or RetrievalCandidateExperimentConfig()
         self._worker_planner_min_round_index = max(0, worker_planner_min_round_index)
         self._answer_worker = answer_worker
         self._generation_policy = dict(generation_policy or {})
@@ -93,6 +98,7 @@ class PaperRAGSession:
             session_id=session_id,
             budget=self._budget,
             generation_policy=self._generation_policy,
+            candidate_experiment=self._candidate_experiment,
         )
         return self.run_spec(spec, current_section_index=current_section_index)
 
@@ -118,9 +124,10 @@ class PaperRAGSession:
             retriever, default_section_index=current_section_index
         )
         planner = None
-        if self._plan_worker is not None:
-            planner = WorkerRAGPlanner(
-                ResearchRAGPlanWorker(self._plan_worker),
+        if self._candidate_experiment.enabled:
+            planner = ResearchCandidatePlanner(
+                ResearchRAGPlanWorker(self._plan_worker) if self._plan_worker is not None else None,
+                config=self._candidate_experiment,
                 min_round_index=self._worker_planner_min_round_index,
             )
         controller_kwargs = {"retrieval": retrieval_port, "planner": planner, "memory": self._memory}

@@ -102,6 +102,7 @@ class PaperKernelRAGRetriever:
             current_section_index=section_index,
             limit=query.limit,
             filters=_research_filters_from_rag_query(query),
+            metadata=dict(query.metadata),
         ))
         chunks = _dedupe_chunks((*result.child_chunks, *result.ref_chunks, *result.parent_chunks))
         self.last_metadata = {

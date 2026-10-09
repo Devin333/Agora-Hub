@@ -10,7 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, dataclass
 from hashlib import sha256
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread, current_thread
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -904,6 +905,128 @@ def test_concurrent_processes_serialize_latest_index_updates(tmp_path: Path) -> 
         _read_json(_index_path(reopened, "paper-1"))["commit_generation"]
         == process_count
     )
+
+
+def test_windows_file_lock_handles_competitor_after_empty_file_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force a competing owner between the empty-file stat and acquisition."""
+
+    lock_path = tmp_path / "windows-empty-lock"
+    lock_path.touch()
+    original_identity = lock_path.stat()
+    empty_observed = Event()
+    competitor_entered = Event()
+    release_competitor = Event()
+    competitor_finished = Event()
+    contended = Event()
+    state_guard = Lock()
+    owner: int | None = None
+    acquisition_order: list[str] = []
+    unlocks: list[int] = []
+    writes: list[int] = []
+    errors: list[Exception] = []
+
+    class FakeMsvcrt:
+        LK_NBLCK = 2
+        LK_UNLCK = 0
+
+        @staticmethod
+        def locking(descriptor: int, mode: int, size: int) -> None:
+            nonlocal owner
+            assert size == 1
+            assert os.lseek(descriptor, 0, os.SEEK_CUR) == 0
+            with state_guard:
+                if mode == FakeMsvcrt.LK_UNLCK:
+                    assert owner == descriptor
+                    owner = None
+                    unlocks.append(descriptor)
+                    return
+                assert mode == FakeMsvcrt.LK_NBLCK
+                if owner is not None:
+                    contended.set()
+                    raise PermissionError("competing process owns byte zero")
+                owner = descriptor
+
+    def observed_fstat(descriptor: int) -> os.stat_result:
+        opened = os.fstat(descriptor)
+        if current_thread() is primary:
+            assert opened.st_size == 0
+            empty_observed.set()
+            assert competitor_entered.wait(timeout=5)
+        return opened
+
+    def checked_write(descriptor: int, data: bytes) -> int:
+        with state_guard:
+            writes.append(descriptor)
+            if owner is not None and owner != descriptor:
+                raise PermissionError("initialization write crosses a locked byte")
+        return os.write(descriptor, data)
+
+    def contention_poll(seconds: float) -> None:
+        assert 0 < seconds <= run_store_module._WINDOWS_LOCK_POLL_SECONDS
+        assert contended.is_set()
+        release_competitor.set()
+        assert competitor_finished.wait(timeout=5)
+
+    def enter_primary() -> None:
+        try:
+            with run_store_module._exclusive_file_lock(lock_path):
+                acquisition_order.append("primary")
+        except Exception as exc:
+            errors.append(exc)
+
+    def enter_competitor() -> None:
+        try:
+            assert empty_observed.wait(timeout=5)
+            with run_store_module._exclusive_file_lock(lock_path):
+                acquisition_order.append("competitor")
+                competitor_entered.set()
+                assert release_competitor.wait(timeout=5)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            competitor_finished.set()
+
+    # Replace only the adapter's OS view so the Windows path is exercised on
+    # every platform while pathlib and real descriptors retain their native OS.
+    monkeypatch.setattr(
+        run_store_module,
+        "os",
+        SimpleNamespace(
+            **{**vars(os), "name": "nt", "fstat": observed_fstat, "write": checked_write}
+        ),
+    )
+    monkeypatch.setattr(
+        run_store_module,
+        "time",
+        SimpleNamespace(monotonic=time.monotonic, sleep=contention_poll),
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeMsvcrt)
+    primary = Thread(target=enter_primary, name="empty-lock-primary")
+    competitor = Thread(target=enter_competitor, name="empty-lock-competitor")
+    primary.start()
+    competitor.start()
+    try:
+        primary.join(timeout=5)
+    finally:
+        release_competitor.set()
+        primary.join(timeout=5)
+        competitor.join(timeout=5)
+
+    assert not primary.is_alive()
+    assert not competitor.is_alive()
+    assert errors == []
+    assert empty_observed.is_set()
+    assert contended.is_set()
+    assert acquisition_order == ["competitor", "primary"]
+    assert len(unlocks) == 2
+    assert len(set(unlocks)) == 2
+    assert writes == []
+    assert owner is None
+    assert lock_path.stat().st_size == 0
+    assert os.path.samestat(original_identity, lock_path.stat())
 
 
 def test_windows_file_lock_retries_transient_contention(

@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.research.rag.evaluation.candidate_experiment_eval import (
+    CandidateExperimentQualityResult,
+    evaluate_candidate_experiment_quality,
+)
 from backend.research.rag.evaluation.evidence_eval_runner import (
     EvidenceEvalOptions,
     run_evidence_eval_core,
@@ -57,12 +61,19 @@ class CIEvalGateResult:
     promotion_markdown_path: Path
     golden_set_path: Path
     fixture_papers_dir: Path
+    candidate_quality_report_path: Path
+    candidate_quality_markdown_path: Path
+    candidate_quality: CandidateExperimentQualityResult
     evidence_exit_code: int
     promotion_checklist: PolicyPromotionChecklist
 
     @property
     def passed(self) -> bool:
-        return self.evidence_exit_code == 0 and self.promotion_checklist.ready_for_promotion
+        return (
+            self.evidence_exit_code == 0
+            and self.promotion_checklist.ready_for_promotion
+            and self.candidate_quality.passed
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +84,8 @@ class CIEvalGateResult:
             "promotion_report_path": str(self.promotion_report_path),
             "golden_set_path": str(self.golden_set_path),
             "fixture_papers_dir": str(self.fixture_papers_dir),
+            "candidate_quality_report_path": str(self.candidate_quality_report_path),
+            "candidate_quality": self.candidate_quality.report,
             "promotion_checklist": self.promotion_checklist.to_dict(),
         }
 
@@ -83,6 +96,7 @@ def run_ci_eval_gate(
     retrieval_policy: str = DEFAULT_RETRIEVAL_POLICY,
     retrieval_thresholds: Mapping[str, float] | None = None,
     promotion_thresholds: Mapping[str, float] | None = None,
+    candidate_quality_thresholds: Mapping[str, float] | None = None,
 ) -> CIEvalGateResult:
     output = Path(output_dir)
     fixture_papers_dir = output / "fixtures" / "papers"
@@ -92,6 +106,8 @@ def run_ci_eval_gate(
     evidence_markdown_path = evidence_output_dir / "evidence_regression_report.md"
     promotion_report_path = output / "promotion_gate_report.json"
     promotion_markdown_path = output / "promotion_gate_report.md"
+    candidate_quality_report_path = output / "candidate_experiment_quality_report.json"
+    candidate_quality_markdown_path = output / "candidate_experiment_quality_report.md"
 
     thresholds = dict(DEFAULT_RETRIEVAL_THRESHOLDS)
     thresholds.update(dict(retrieval_thresholds or {}))
@@ -107,6 +123,18 @@ def run_ci_eval_gate(
         thresholds=thresholds,
     ))
     evidence_report = _read_json(evidence_report_path)
+    candidate_quality = evaluate_candidate_experiment_quality(
+        evidence_report,
+        papers_dir=fixture_papers_dir,
+        golden_set_path=golden_set_path,
+        retrieval_policy=retrieval_policy,
+        thresholds=candidate_quality_thresholds,
+    )
+    _write_candidate_quality_artifacts(
+        candidate_quality,
+        json_path=candidate_quality_report_path,
+        markdown_path=candidate_quality_markdown_path,
+    )
     checklist = build_ci_promotion_checklist(
         evidence_report,
         evidence_report_path=evidence_report_path,
@@ -126,6 +154,9 @@ def run_ci_eval_gate(
         promotion_markdown_path=promotion_markdown_path,
         golden_set_path=golden_set_path,
         fixture_papers_dir=fixture_papers_dir,
+        candidate_quality_report_path=candidate_quality_report_path,
+        candidate_quality_markdown_path=candidate_quality_markdown_path,
+        candidate_quality=candidate_quality,
         evidence_exit_code=evidence_exit_code,
         promotion_checklist=checklist,
     )
@@ -505,6 +536,62 @@ def _promotion_markdown(payload: Mapping[str, Any]) -> str:
     thresholds = payload.get("thresholds") or {}
     for key in sorted(thresholds):
         lines.append(f"- `{key}`: `{thresholds[key]}`")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _write_candidate_quality_artifacts(
+    result: CandidateExperimentQualityResult,
+    *,
+    json_path: Path,
+    markdown_path: Path,
+) -> None:
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(
+        json.dumps(result.report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    markdown_path.write_text(_candidate_quality_markdown(result.report), encoding="utf-8")
+
+
+def _candidate_quality_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# Retrieval Candidate Experiment Quality Gate",
+        "",
+        f"- Passed: `{bool(report.get('passed'))}`",
+        f"- Rollout eligible: `{bool(report.get('rollout_eligible'))}`",
+        f"- Case set: `{report.get('case_set_version')}`",
+        f"- Code version: `{report.get('code_version')}`",
+        f"- Config version: `{report.get('config_version')}`",
+        "",
+        "## Aggregate contract",
+        "",
+    ]
+    for metric, value in sorted((report.get("aggregate") or {}).items()):
+        threshold = (report.get("thresholds") or {}).get(metric)
+        lines.append(f"- `{metric}`: actual=`{value}`, threshold=`{threshold}`")
+    lines.extend([
+        "",
+        "## Cases",
+        "",
+        "| Case | Passed | Accepted | Fallback | Expected reason | Actual reason | Fallback reason |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ])
+    for case in report.get("cases") or []:
+        lines.append(
+            f"| `{case.get('case_id')}` | `{case.get('passed')}` | "
+            f"`{case.get('actual_accept')}` | `{case.get('actual_fallback')}` | "
+            f"`{case.get('expected_reason')}` | `{case.get('actual_reason')}` | "
+            f"`{case.get('actual_fallback_reason')}` |"
+        )
+    lines.extend(["", "## Paired quality", ""])
+    for metric, values in sorted((report.get("paired_quality") or {}).items()):
+        lines.append(
+            f"- `{metric}`: baseline=`{values.get('baseline')}`, "
+            f"candidate=`{values.get('candidate')}`, delta=`{values.get('delta')}`"
+        )
+    lines.extend(["", "## Diagnostics", ""])
+    for diagnostic in report.get("diagnostics") or []:
+        lines.append(f"- `{diagnostic.get('code')}`: `{json.dumps(diagnostic, sort_keys=True)}`")
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -21,6 +21,7 @@ from backend.research.ports.reader_repair_candidate import (
     READER_REPAIR_PATCH_CANDIDATE_TASK,
     reader_repair_candidate_task_schemas,
 )
+from framework.agent.loop.prompt import PreparedInputProjection
 from framework.llm.clients.openai_compatible import (
     LLMConfigurationError,
     LLMProviderError,
@@ -91,6 +92,22 @@ class ResearchCandidateProviderError(ResearchCandidateError):
     """Raised for a sanitized provider/configuration failure."""
 
     error_code = "research_candidate_provider_error"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        task: str | None = None,
+        retryable: bool = False,
+        failure_code: str = "worker_failed",
+    ) -> None:
+        super().__init__(message, task=task, retryable=retryable)
+        if failure_code not in {"worker_failed", "worker_timeout"}:
+            raise ValueError("unsupported Research candidate failure code")
+        self.failure_code = failure_code
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**super().to_dict(), "failure_code": self.failure_code}
 
 
 SUPPORTED_CANDIDATE_TASKS = frozenset(
@@ -533,6 +550,7 @@ class StructuredResearchCandidateWorker:
             )
 
         try:
+            prepared_input = _prepared_input_projection(payload.get("prepared_input"))
             messages, projection = self._build_prompt(
                 task,
                 payload,
@@ -551,7 +569,15 @@ class StructuredResearchCandidateWorker:
             messages=messages,
             execution_identity=execution_identity,
         )
-        request = request.clone(timeout_seconds=timeout_seconds, max_transport_attempts=max_transport_attempts)
+        request = request.clone(
+            timeout_seconds=timeout_seconds,
+            max_transport_attempts=max_transport_attempts,
+        )
+        if prepared_input is not None:
+            request = request.clone(
+                metadata={**request.metadata, **prepared_input.request_metadata()}
+            )
+            _validate_prepared_input_request(request, prepared_input)
 
         try:
             response = self._client.complete(request)
@@ -562,6 +588,9 @@ class StructuredResearchCandidateWorker:
                 "Research candidate provider request failed",
                 task=task,
                 retryable=bool(getattr(exc, "retryable", False)),
+                failure_code=(
+                    "worker_timeout" if isinstance(exc, TimeoutError) else "worker_failed"
+                ),
             ) from exc
 
         try:
@@ -661,6 +690,11 @@ class StructuredResearchCandidateWorker:
             "Research candidate provider is unavailable",
             task=task,
             retryable=bool(getattr(exc, "retryable", False)),
+            failure_code=(
+                "worker_timeout"
+                if isinstance(exc, LLMProviderError) and exc.error_type == "timeout"
+                else "worker_failed"
+            ),
         )
 
     @staticmethod
@@ -741,11 +775,12 @@ def _project_payload(
     payload: dict[str, Any],
     limits: _ProjectionLimits,
 ) -> _Projection:
+    prepared_input = _project_prepared_input(payload.get("prepared_input"))
     if task == "candidate_three_minute_read":
         paper, paper_refs = _project_paper(payload.get("paper"), limits)
         evidence, scope = _project_evidence_pack(payload.get("evidence_pack"), limits)
         return _Projection(
-            payload={"paper": paper, "evidence_pack": evidence},
+            payload=_with_prepared_input({"paper": paper, "evidence_pack": evidence}, prepared_input),
             scope=_EvidenceScope(
                 evidence_to_source=scope.evidence_to_source,
                 source_refs=frozenset(set(scope.source_refs) | set(paper_refs)),
@@ -760,11 +795,11 @@ def _project_payload(
             set(paper_refs) | set(evidence_scope.source_refs)
         )
         return _Projection(
-            payload={
+            payload=_with_prepared_input({
                 "paper": paper,
                 "evidence_pack": evidence,
                 "allowed_source_refs": sorted(source_refs),
-            },
+            }, prepared_input),
             scope=_EvidenceScope(
                 evidence_to_source=evidence_scope.evidence_to_source,
                 source_refs=source_refs,
@@ -772,16 +807,107 @@ def _project_payload(
         )
     if task == "candidate_experiment_claims":
         evidence, scope = _project_evidence_pack(payload.get("evidence_pack"), limits)
-        return _Projection(payload={"evidence_pack": evidence}, scope=scope)
+        return _Projection(payload=_with_prepared_input({"evidence_pack": evidence}, prepared_input), scope=scope)
     if task == "rag_plan_candidate":
-        return _project_rag_request(payload, limits)
+        return _projection_with_prepared_input(_project_rag_request(payload, limits), prepared_input)
     if task == "candidate_task_plan":
-        return _project_task_plan_request(payload, limits)
+        return _projection_with_prepared_input(_project_task_plan_request(payload, limits), prepared_input)
     if task == READER_REPAIR_PATCH_CANDIDATE_TASK:
-        return _project_reader_repair_patch_request(payload, limits)
+        return _projection_with_prepared_input(_project_reader_repair_patch_request(payload, limits), prepared_input)
     if task == READER_REPAIR_APPLICATION_OBSERVATION_TASK:
-        return _project_reader_repair_observation_request(payload, limits)
+        return _projection_with_prepared_input(_project_reader_repair_observation_request(payload, limits), prepared_input)
     raise ResearchCandidateContractError("unsupported Research candidate task")
+
+
+def _prepared_input_projection(value: Any) -> PreparedInputProjection | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {
+        "projection_id",
+        "projection_revision",
+        "projection_checksum",
+        "payload",
+    }:
+        raise ResearchCandidateContractError(
+            "Research prepared input projection is invalid"
+        )
+    try:
+        projection = PreparedInputProjection(
+            projection_id=value["projection_id"],
+            projection_revision=value["projection_revision"],
+            payload=value["payload"],
+            input_key="research_input",
+        )
+    except (TypeError, ValueError) as exc:
+        raise ResearchCandidateContractError(
+            "Research prepared input projection is invalid"
+        ) from exc
+    if value["projection_checksum"] != projection.checksum:
+        raise ResearchCandidateContractError(
+            "Research prepared input projection checksum mismatch"
+        )
+    return projection
+
+
+def _project_prepared_input(value: Any) -> dict[str, Any] | None:
+    projection = _prepared_input_projection(value)
+    return None if projection is None else projection.envelope()
+
+
+def _validate_prepared_input_request(
+    request: LLMRequest,
+    projection: PreparedInputProjection,
+) -> None:
+    """Check the actual candidate request after all prompt/request transformations."""
+
+    if any(
+        request.metadata.get(key) != value
+        for key, value in projection.request_metadata().items()
+    ):
+        raise ResearchCandidateContractError(
+            "Research candidate request dropped prepared input identity"
+        )
+    blocks: list[Any] = []
+    for message in request.messages:
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        for encoded in content.split("Request JSON:\n")[1:]:
+            try:
+                blocks.append(json.loads(encoded))
+            except (TypeError, ValueError) as exc:
+                raise ResearchCandidateContractError(
+                    "Research candidate request has invalid prepared input JSON"
+                ) from exc
+    if (
+        len(blocks) != 1
+        or not isinstance(blocks[0], dict)
+        or blocks[0].get("prepared_input") != projection.envelope()
+    ):
+        raise ResearchCandidateContractError(
+            "Research candidate request dropped or altered the prepared input projection"
+        )
+
+
+def _with_prepared_input(
+    payload: dict[str, Any],
+    prepared_input: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if prepared_input is None:
+        return payload
+    return {**payload, "prepared_input": prepared_input}
+
+
+def _projection_with_prepared_input(
+    projection: _Projection,
+    prepared_input: dict[str, Any] | None,
+) -> _Projection:
+    if prepared_input is None:
+        return projection
+    return _Projection(
+        payload=_with_prepared_input(dict(projection.payload), prepared_input),
+        scope=projection.scope,
+    )
 
 
 _READER_REPAIR_PROMPT_OMITTED_FIELDS = frozenset(

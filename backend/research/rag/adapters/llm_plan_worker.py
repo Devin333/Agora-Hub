@@ -7,6 +7,7 @@ from collections.abc import Callable
 from threading import Thread
 from typing import Any
 
+from framework.harness.rag.models import FORBIDDEN_RAG_PLAN_KEYS
 from framework.shared.json import stable_json_dumps, to_jsonable
 from framework.shared.graph_identity import GraphExecutionIdentity
 
@@ -23,17 +24,27 @@ class LLMResearchRAGPlanCandidateWorker:
         task: str,
         payload: dict[str, Any],
         execution_identity: GraphExecutionIdentity | None = None,
+        timeout_seconds: float | None = None,
+        max_transport_attempts: int | None = None,
     ) -> dict[str, Any]:
         if task != "rag_plan_candidate":
             raise ValueError(f"unsupported RAG planner task: {task}")
         prompt = _planner_prompt(payload)
-        if execution_identity is None:
-            response = _run_maybe_async(self._llm_call(prompt))
-        else:
-            response = _run_maybe_async(
-                self._llm_call(prompt, execution_identity=execution_identity)
-            )
+        kwargs: dict[str, Any] = {}
+        if execution_identity is not None:
+            kwargs["execution_identity"] = execution_identity
+        if timeout_seconds is not None:
+            kwargs["timeout_seconds"] = timeout_seconds
+        if max_transport_attempts is not None:
+            kwargs["max_transport_attempts"] = max_transport_attempts
+        response = _run_maybe_async(self._llm_call(prompt, **kwargs))
         parsed = _extract_json_object(str(response or ""))
+        forbidden = _find_forbidden_fields(parsed)
+        if forbidden:
+            raise ValueError(
+                "RAG planner LLM response contains forbidden control fields: "
+                + ", ".join(forbidden)
+            )
         candidate = parsed.get("candidate") or parsed.get("retrieval_plan_candidate")
         if not isinstance(candidate, dict):
             raise ValueError("RAG planner LLM response must contain a candidate object")
@@ -91,6 +102,21 @@ def _slice_json_object(text: str) -> str:
     if start < 0 or end <= start:
         return ""
     return text[start:end + 1]
+
+
+def _find_forbidden_fields(value: Any, *, path: str = "") -> tuple[str, ...]:
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key)
+            item_path = f"{path}.{key_text}" if path else key_text
+            if key_text in FORBIDDEN_RAG_PLAN_KEYS:
+                found.append(item_path)
+            found.extend(_find_forbidden_fields(item, path=item_path))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found.extend(_find_forbidden_fields(item, path=f"{path}[{index}]"))
+    return tuple(found)
 
 
 def _run_maybe_async(value: Any) -> Any:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import json
+
 import pytest
 
 from backend.research.domain import (
@@ -27,7 +30,7 @@ def _item(
         category=category,
         content_ref=content_ref,
         source_ref=f"source://{item_id}",
-        source_revision="snapshot-1",
+        source_revision=("task-revision-1" if category is ResearchInputCategory.CURRENT_TASK else "snapshot-1"),
         paper_id="paper-1",
         status=status,
         qualification_ref=qualification_ref,
@@ -148,3 +151,93 @@ def test_rollover_requires_durable_next_state_and_reconciled_tool_transactions()
     with pytest.raises(ValueError, match="policy"):
         validate_rollover(current, _manifest(window_sequence=1, state_revision="state-2", policy_revision="policy-2"))
 
+
+
+def test_input_metadata_is_deeply_immutable_and_checksum_bound() -> None:
+    metadata = {"reader": {"conditions": ["test split"], "revision": "v1"}}
+    task = replace(
+        _item("task", ResearchInputCategory.CURRENT_TASK, "Explain the method"),
+        metadata=metadata,
+    )
+    profile = _profile(task)
+    original_checksum = profile.checksum
+    serialized = profile.to_dict()
+
+    metadata["reader"]["conditions"].append("training split")
+    metadata["reader"]["revision"] = "v2"
+    assert task.metadata["reader"]["conditions"] == ("test split",)
+    assert task.metadata["reader"]["revision"] == "v1"
+    assert profile.checksum == original_checksum
+    assert profile.to_dict() == serialized
+    with pytest.raises(TypeError):
+        task.metadata["reader"]["revision"] = "v3"
+    with pytest.raises(AttributeError):
+        task.metadata["reader"]["conditions"].append("forged")
+
+    restored = ResearchInputProfile.from_dict(json.loads(json.dumps(serialized)))
+    assert restored.to_dict() == serialized
+    serialized["items"][0]["metadata"]["reader"]["conditions"].append("forged")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        ResearchInputProfile.from_dict(serialized)
+
+
+def test_current_task_revision_and_uniqueness_are_authoritative() -> None:
+    task = _item("task", ResearchInputCategory.CURRENT_TASK, "Explain the method")
+    with pytest.raises(ValueError, match="task_revision must match"):
+        _profile(replace(task, source_revision="obsolete-task-revision"))
+    with pytest.raises(ValueError, match="exactly one current_task"):
+        _profile(_item("paper", ResearchInputCategory.PAPER_MATERIAL, "source://paper"))
+    with pytest.raises(ValueError, match="exactly one current_task"):
+        _profile(task, replace(task, item_id="duplicate-task"))
+
+
+@pytest.mark.parametrize("category", list(ResearchInputCategory))
+@pytest.mark.parametrize("status", list(ResearchInputStatus))
+def test_category_status_matrix_prevents_trust_upgrade(category, status) -> None:
+    allowed = {
+        ResearchInputCategory.CURRENT_TASK: {ResearchInputStatus.RAW},
+        ResearchInputCategory.PAPER_MATERIAL: {
+            ResearchInputStatus.RAW, ResearchInputStatus.AUTHOR_CLAIM, ResearchInputStatus.UNAVAILABLE,
+        },
+        ResearchInputCategory.EXISTING_CONCLUSION: set(ResearchInputStatus),
+        ResearchInputCategory.TOOL_OBSERVATION: {
+            ResearchInputStatus.RAW, ResearchInputStatus.MODEL_CANDIDATE, ResearchInputStatus.UNAVAILABLE,
+        },
+        ResearchInputCategory.NECESSARY_HISTORY: {
+            ResearchInputStatus.RAW, ResearchInputStatus.AUTHOR_CLAIM,
+            ResearchInputStatus.MODEL_CANDIDATE, ResearchInputStatus.UNAVAILABLE,
+        },
+    }
+    qualification_ref = "qualification://trusted" if status is ResearchInputStatus.VERIFIED_CONCLUSION else None
+    if status in allowed[category]:
+        assert _item("item", category, "content://item", status=status, qualification_ref=qualification_ref).status is status
+    else:
+        with pytest.raises(ValueError, match="status is not valid"):
+            _item("item", category, "content://item", status=status, qualification_ref=qualification_ref)
+
+
+@pytest.mark.parametrize("constraints", [{"use source": True}, {"use source"}, "use source", None])
+def test_explicit_profile_constraints_require_an_ordered_sequence(constraints) -> None:
+    profile = _profile(_item("task", ResearchInputCategory.CURRENT_TASK, "Explain the method")).to_dict()
+    profile["constraints"] = constraints
+    with pytest.raises(TypeError, match="constraints must be a sequence"):
+        ResearchInputProfile.from_dict(profile)
+
+
+def test_prepared_input_round_trip_detects_nested_payload_tampering() -> None:
+    payload = {category.value: [] for category in ResearchInputCategory}
+    payload["current_task"] = [{"conditions": ["test split"]}]
+    prepared = PreparedResearchInput(
+        profile_checksum="sha256:" + "a" * 64, selected_item_ids=("task",),
+        context_group_refs=("context://task",), system_prompt_ref="prompt://system/v1",
+        user_payload=payload, tools_ref="tools://research/v1", output_schema_ref="schema://answer/v1",
+    )
+    payload["current_task"][0]["conditions"].append("untrusted mutation")
+    assert prepared.user_payload["current_task"][0]["conditions"] == ("test split",)
+    serialized = json.loads(json.dumps(prepared.to_dict()))
+    assert PreparedResearchInput.from_dict(serialized).to_dict() == prepared.to_dict()
+    with pytest.raises(ValueError, match="schema mismatch"):
+        PreparedResearchInput.from_dict({**serialized, "schema": "newsroom.research-input-contract/v999"})
+    serialized["user_payload"]["current_task"][0]["conditions"].append("forged")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        PreparedResearchInput.from_dict(serialized)

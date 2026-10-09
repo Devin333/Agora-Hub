@@ -1,8 +1,9 @@
 # Research 证据可信性与上下文质量基础 PRD
 
 - **变更**：`research-evidence-context-quality-foundation`
-- **状态**：Proposed
-- **日期**：2026-10-08
+- **状态**：本轮 P0/P1 与进度观察已实现并验收；P2 上下文连续性未触发
+- **建立日期**：2026-10-08
+- **验收更新**：2026-10-10
 - **产品范围**：单篇论文 Research 的显式启用路径
 
 ## 1. 背景与问题
@@ -135,3 +136,13 @@ Research 已有输入分类、claim review、确定性 RAG 计划、worker 候�
 - `workflow-runtime-p2-window01-contract-closure`
 
 仍在执行或仍有独立价值的 `harness-runtime-execution-and-parallel-agent-orchestration`、`durable-event-runtime`、`model-aware-llm-context-preflight` 和 `research-workspace-efficiency` 不在本次删除范围。历史版本控制记录继续是删除文档的审计来源。
+
+## 10. 实施与验收状态
+
+本轮详细任务共 97 项，90 项无条件交付已验收，7 项（6.6–6.12）等待真实窗口丢失、条件漂移或重复读取成本证据。清单将原 27 项按实现边界、失败处理、测试与交付拆分，保留七份旧 PRD 的需求去向；未恢复合并时明确暂缓的完整平台。
+
+已交付受控输入投影及实际 provider 边界校验、`numeric_comparison_result_v1` 的真实表格来源绑定与确定性资格 gate、默认关闭的有界候选检索试验、固定 CI 对照及无控制权的进度观察。V1 当前限定同表、相同 Dataset/Split 下两个对象的 accuracy 百分比比较，单位与缩放须明确。默认开关保持关闭，适用显式启用的动态单篇论文路径。
+
+最终全量 **8,966 通过、115 既有跳过、24 deselected、0 失败**；提交前 smoke **4,188 通过**，离线 AgentLoop 和 source validation 通过。固定 **54 案例全部通过**，58 个核心源码文件可逐一追溯；六项成对指标增量为 0，未达到 0.01 收益门槛，`rollout_eligible=False`，不扩大候选启用。首轮全量的两处并发失败已做根因修复，并保留诊断和复验记录。
+
+本轮完成的是限定范围的实现与本地验收，没有执行部署或修改外部配置。P2 连续性没有合格触发，仍未实现。实际范围、检查、跳过条件、源码/报告身份和回滚边界见 `evidence/final-verification-20261010.md`、`evidence/verification-results-20261010.json` 和 `evidence/release-controls-20261008.md`。

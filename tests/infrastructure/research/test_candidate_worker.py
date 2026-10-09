@@ -28,6 +28,7 @@ from tests.framework.llm._structured_output_release import (
 )
 from framework.llm.clients.openai_compatible import (
     LLMProviderError,
+    LLMRetryPolicy,
     OpenAICompatibleClient,
     OpenAICompatibleConfig,
 )
@@ -575,6 +576,7 @@ def test_provider_error_preserves_only_retryability_and_stable_code() -> None:
         "error_code": "research_candidate_provider_error",
         "retryable": True,
         "task": "candidate_taxonomy",
+        "failure_code": "worker_failed",
     }
     assert secret not in str(mapped)
     assert "recorded" not in str(mapped)
@@ -669,18 +671,144 @@ def test_rag_candidate_is_accepted_by_the_real_worker_planner_consumer(
     assert candidate.metadata == {"planner": "llm"}
 
 
+def test_provider_timeout_obeys_request_deadline_and_transport_attempt_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_RESEARCH_LLM_KEY", "recorded-key")
+    physical_timeouts: list[float] = []
+    sleeps: list[float] = []
+
+    def transport(_request, timeout: float) -> bytes:
+        physical_timeouts.append(timeout)
+        raise TimeoutError("recorded provider timeout")
+
+    client = OpenAICompatibleClient(
+        OpenAICompatibleConfig(
+            provider="recorded",
+            base_url="https://llm.example/v1",
+            model="recorded-model",
+            api_key_env="TEST_RESEARCH_LLM_KEY",
+            timeout_seconds=30.0,
+        ),
+        transport=transport,
+        retry_policy=LLMRetryPolicy(max_attempts=3, retry_delay_seconds=(0.1, 0.1)),
+        sleep=sleeps.append,
+        structured_output_capability=_recorded_structured_output_capability(),
+    )
+    worker = StructuredResearchCandidateWorker(client)
+    planner = WorkerRAGPlanner(
+        ResearchRAGPlanWorker(worker),
+        max_worker_calls=1,
+        timeout_seconds=0.25,
+        max_transport_attempts=1,
+    )
+    candidate = planner.plan(_transport_rag_spec(), round_index=1, gap_report={})
+
+    assert candidate.metadata["candidate_fallback"]["reason"] == "worker_timeout"
+    assert planner.worker_calls == 1
+    assert len(physical_timeouts) == 1
+    assert 0 < physical_timeouts[0] <= 0.25
+    assert sleeps == []
+
+
+def test_provider_network_failure_never_exceeds_transport_attempt_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_RESEARCH_LLM_KEY", "recorded-key")
+    physical_timeouts: list[float] = []
+    sleeps: list[float] = []
+
+    def transport(_request, timeout: float) -> bytes:
+        physical_timeouts.append(timeout)
+        raise OSError("recorded transient network failure")
+
+    worker = StructuredResearchCandidateWorker(
+        OpenAICompatibleClient(
+            OpenAICompatibleConfig(
+                provider="recorded",
+                base_url="https://llm.example/v1",
+                model="recorded-model",
+                api_key_env="TEST_RESEARCH_LLM_KEY",
+                timeout_seconds=30.0,
+            ),
+            transport=transport,
+            retry_policy=LLMRetryPolicy(max_attempts=4, retry_delay_seconds=(0.0,)),
+            sleep=sleeps.append,
+            structured_output_capability=_recorded_structured_output_capability(),
+        )
+    )
+    planner = WorkerRAGPlanner(
+        ResearchRAGPlanWorker(worker),
+        max_worker_calls=1,
+        timeout_seconds=2.0,
+        max_transport_attempts=2,
+    )
+    candidate = planner.plan(_transport_rag_spec(), round_index=1, gap_report={})
+
+    assert candidate.metadata["candidate_fallback"]["reason"] == "worker_failed"
+    assert planner.worker_calls == 1
+    assert len(physical_timeouts) == 2
+    assert all(0 < timeout <= 2.0 for timeout in physical_timeouts)
+    assert sleeps == [0.0]
+
+
+def test_worker_budget_exhaustion_does_not_dispatch_another_provider_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, requests = _recorded_worker(
+        monkeypatch,
+        _valid_output("rag_plan_candidate"),
+        expected_timeout=0.5,
+    )
+    planner = WorkerRAGPlanner(
+        ResearchRAGPlanWorker(worker),
+        max_worker_calls=1,
+        timeout_seconds=0.5,
+        max_transport_attempts=1,
+    )
+    spec = _transport_rag_spec()
+    first = planner.plan(spec, round_index=1, gap_report={})
+    second = planner.plan(spec, round_index=2, gap_report={})
+
+    assert first.candidate_id == "rag-plan-1"
+    assert second.metadata["candidate_fallback"]["reason"] == "worker_budget_exhausted"
+    assert planner.worker_calls == 1
+    assert len(requests) == 1
+
+
+def _transport_rag_spec() -> RAGSessionSpec:
+    return RAGSessionSpec(
+        session_id="rag-budget-session",
+        graph_identity=build_paper_analysis_context_graph_identity(
+            run_id="rag-budget-run",
+            stage_id="run_research_rag",
+        ),
+        goal=RetrievalGoal(
+            goal_id="rag-budget-goal",
+            question="What supports the method?",
+            required_evidence_types=("method",),
+            target_entities=("Harness",),
+        ),
+        allowed_corpora=("research-papers",),
+        allowed_memory_namespaces=("research:user:anonymous",),
+        allowed_tools=("search_corpus",),
+        budget=RAGBudget.safe_default(),
+    )
+
+
 def _recorded_worker(
     monkeypatch: pytest.MonkeyPatch,
     output: Any,
     *,
     encode_json: bool = True,
     max_input_tokens: int = 8_192,
+    expected_timeout: float = 10.0,
 ) -> tuple[StructuredResearchCandidateWorker, list[dict[str, Any]]]:
     monkeypatch.setenv("TEST_RESEARCH_LLM_KEY", "api-key-PROMPT-TOPSECRET")
     requests: list[dict[str, Any]] = []
 
     def transport(request, timeout: float) -> bytes:
-        assert timeout == 10.0
+        assert 0 < timeout <= expected_timeout
         requests.append(json.loads(request.data.decode("utf-8")))
         content = json.dumps(output) if encode_json else str(output)
         return json.dumps(

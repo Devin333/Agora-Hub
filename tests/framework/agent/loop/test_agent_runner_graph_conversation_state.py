@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from framework.agent.loop.prompt import PreparedInputProjection
 from framework.agent.loop.runner import AgentRunner
 from framework.agent.models import (
     AgentLoopMetrics,
@@ -92,6 +93,78 @@ def test_agent_runner_passes_execution_environment_to_tool_executor(
     runner.run(agent, {"query": "inspect"}, standalone=True)
 
     assert captured["execution_environment"] is environment
+
+
+def test_agent_runner_passes_opted_in_prepared_projection_to_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _ProjectionAwareLoop(_AcceptedLoop):
+        def run(
+            self,
+            agent: AgentSpec,
+            inputs: dict[str, Any],
+            tools: list[dict[str, Any]],
+            *,
+            run_id: str | None = None,
+            execution_identity: Any | None = None,
+            graph_checkpoint_ref: str | None = None,
+            standalone: bool = False,
+            prepared_input_projection: PreparedInputProjection | None = None,
+        ) -> AgentLoopResult:
+            captured["prepared_input_projection"] = prepared_input_projection
+            return super().run(
+                agent,
+                inputs,
+                tools,
+                run_id=run_id,
+                execution_identity=execution_identity,
+                graph_checkpoint_ref=graph_checkpoint_ref,
+                standalone=standalone,
+            )
+
+    monkeypatch.setattr(runner_module, "AgentLoop", _ProjectionAwareLoop)
+    projection = PreparedInputProjection(
+        projection_id="test.prepared-input",
+        projection_revision="1",
+        payload={"objective": "Inspect the accepted source"},
+    )
+    runner = AgentRunner(llm_client=object(), tool_registry=ToolRegistry())
+    agent = AgentSpec(
+        agent_id="analyst",
+        name="Analyst",
+        instructions="Return a bounded answer.",
+    )
+
+    runner.run(
+        agent,
+        {"query": "inspect"},
+        standalone=True,
+        prepared_input_projection=projection,
+    )
+
+    assert captured["prepared_input_projection"] is projection
+
+
+def test_agent_runner_rejects_invalid_prepared_projection_before_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner_module, "AgentLoop", _AcceptedLoop)
+    runner = AgentRunner(llm_client=object(), tool_registry=ToolRegistry())
+    agent = AgentSpec(
+        agent_id="analyst",
+        name="Analyst",
+        instructions="Return a bounded answer.",
+    )
+
+    with pytest.raises(TypeError, match="PreparedInputProjection"):
+        runner.run(
+            agent,
+            {"query": "inspect"},
+            standalone=True,
+            prepared_input_projection=object(),  # type: ignore[arg-type]
+        )
 
 
 def test_agent_runner_injects_orchestration_port_into_loop(

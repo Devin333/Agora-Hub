@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.research.application import paper_rag_session
 from backend.research.application.paper_rag_session import PaperRAGSession
+from backend.research.rag.retrieval.candidate_experiment import RetrievalCandidateExperimentConfig
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from backend.research.rag.models import ResearchRetrievalGoal
 from framework.harness.context.assembler import ContextAssembler
@@ -82,14 +83,49 @@ def test_paper_rag_session_passes_retrieval_policy_to_inner_retriever(monkeypatc
     assert _FakeController.last_planner is None
 
 
+def test_paper_rag_session_does_not_wire_worker_when_candidate_experiment_is_disabled(monkeypatch):
+    monkeypatch.setattr(paper_rag_session, "ResearchRetriever", _FakeRetriever)
+    monkeypatch.setattr(paper_rag_session, "PaperChunkRetrievalPort", _FakeRetrievalPort)
+    monkeypatch.setattr(paper_rag_session, "BoundedRAGSessionController", _FakeController)
+
+    PaperRAGSession(object(), plan_worker=object()).run(
+        ResearchRetrievalGoal(
+            goal_id="g1",
+            paper_id="p1",
+            question="What does the figure show?",
+            required_evidence_types=["figure"],
+            allowed_source_refs=["paper://p1"],
+            allowed_memory_namespaces=["research"],
+        ),
+        graph_identity=build_paper_analysis_context_graph_identity(run_id="run-disabled", stage_id="run_research_rag"),
+        session_id="session-disabled",
+    )
+
+    assert _FakeController.last_planner is None
+
+
 def test_paper_rag_session_wires_optional_worker_planner(monkeypatch):
     monkeypatch.setattr(paper_rag_session, "ResearchRetriever", _FakeRetriever)
     monkeypatch.setattr(paper_rag_session, "PaperChunkRetrievalPort", _FakeRetrievalPort)
     monkeypatch.setattr(paper_rag_session, "BoundedRAGSessionController", _FakeController)
     worker = object()
 
-    session = PaperRAGSession(object(), plan_worker=worker, worker_planner_min_round_index=2)
-    session.run(
+    config = RetrievalCandidateExperimentConfig(
+        enabled=True,
+        max_candidate_queries=3,
+        max_worker_calls=2,
+        timeout_seconds=4.5,
+        max_transport_attempts=2,
+        allowed_expansion_terms=("figure",),
+        configured_hard_constraints={"language": ("English",)},
+    )
+    session = PaperRAGSession(
+        object(),
+        plan_worker=worker,
+        worker_planner_min_round_index=2,
+        candidate_experiment=config,
+    )
+    result = session.run(
         ResearchRetrievalGoal(
             goal_id="g1",
             paper_id="p1",
@@ -105,6 +141,14 @@ def test_paper_rag_session_wires_optional_worker_planner(monkeypatch):
     assert _FakeController.last_planner is not None
     assert _FakeController.last_planner.min_round_index == 2
     assert _FakeController.last_planner.worker._worker is worker
+    worker_planner = _FakeController.last_planner._worker_planner
+    assert worker_planner.max_candidate_queries == 3
+    assert worker_planner.max_worker_calls == 2
+    assert worker_planner.timeout_seconds == 4.5
+    assert worker_planner.max_transport_attempts == 2
+    assert result["spec"].metadata["candidate_experiment"]["enabled"] is True
+    assert result["spec"].metadata["candidate_experiment"]["config_version"] == "research-retrieval-candidate-config-v1"
+    assert result["spec"].metadata["candidate_experiment"] == config.to_dict()
 
 
 def test_paper_rag_session_wires_optional_answer_worker_and_generation_policy(monkeypatch):

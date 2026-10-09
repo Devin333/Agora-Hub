@@ -1,0 +1,2891 @@
+{
+  "aggregate": {
+    "case_count": 54,
+    "case_pass_rate": 1.0,
+    "claim_qualification_rate": 1.0,
+    "constraint_preservation_rate": 1.0,
+    "control_field_rejection_rate": 1.0,
+    "fallback_accuracy": 1.0,
+    "input_integrity_rate": 1.0
+  },
+  "baseline": {
+    "ci_evidence_report_passed": true,
+    "metrics": {
+      "retrieval.citation_accuracy": 1.0,
+      "retrieval.evidence_coverage": 1.0,
+      "retrieval.hit_rate": 1.0,
+      "retrieval.mrr": 1.0,
+      "retrieval.required_type_coverage": 1.0,
+      "retrieval.source_locator_coverage": 1.0
+    },
+    "source": "separate_fixed_corpus_baseline_run"
+  },
+  "candidate": {
+    "metrics": {
+      "retrieval.citation_accuracy": 1.0,
+      "retrieval.evidence_coverage": 1.0,
+      "retrieval.hit_rate": 1.0,
+      "retrieval.mrr": 1.0,
+      "retrieval.required_type_coverage": 1.0,
+      "retrieval.source_locator_coverage": 1.0
+    },
+    "source": "separate_fixed_corpus_candidate_run"
+  },
+  "candidate_configuration": {
+    "allowed_expansion_terms": [],
+    "config_version": "research-retrieval-candidate-config-v1",
+    "configured_hard_constraints": {},
+    "enabled": true,
+    "experiment_version": "research-retrieval-candidate-v1",
+    "max_candidate_queries": 2,
+    "max_transport_attempts": 1,
+    "max_worker_calls": 1,
+    "timeout_seconds": 8.0
+  },
+  "case_set_version": "research-candidate-cases-v2",
+  "cases": [
+    {
+      "actual_accept": true,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "candidate_accepted",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-preserves-protected-query",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": true,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "candidate_accepted",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-preserves-protected-query",
+        "candidate_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "entity_constraint_missing",
+      "actual_reason": "entity_constraint_missing",
+      "actual_violation_codes": [
+        "entity_constraint_missing",
+        "unbounded_candidate_expansion"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-drops-entity",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "entity_constraint_missing",
+            "expected": "Atlas",
+            "message": "candidate omitted a protected hard constraint"
+          },
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "entity_constraint_missing",
+      "expected_reason": "entity_constraint_missing",
+      "expected_violation": "entity_constraint_missing",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-drops-entity",
+        "candidate_queries": [
+          "From paper://atlas-paper in English, which Beacon v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "time_constraint_missing",
+      "actual_reason": "time_constraint_missing",
+      "actual_violation_codes": [
+        "time_constraint_missing",
+        "unbounded_candidate_expansion"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-changes-time",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "time_constraint_missing",
+            "expected": "2024",
+            "message": "candidate omitted a protected hard constraint"
+          },
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "time_constraint_missing",
+      "expected_reason": "time_constraint_missing",
+      "expected_violation": "time_constraint_missing",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-changes-time",
+        "candidate_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2025 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "source_constraint_missing",
+      "actual_reason": "source_constraint_missing",
+      "actual_violation_codes": [
+        "source_constraint_missing",
+        "unbounded_candidate_expansion"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-changes-source",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "source_constraint_missing",
+            "expected": "paper://atlas-paper",
+            "message": "candidate omitted a protected hard constraint"
+          },
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "source_constraint_missing",
+      "expected_reason": "source_constraint_missing",
+      "expected_violation": "source_constraint_missing",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-changes-source",
+        "candidate_queries": [
+          "From paper://beacon-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "language_constraint_missing",
+      "actual_reason": "language_constraint_missing",
+      "actual_violation_codes": [
+        "language_constraint_missing",
+        "unbounded_candidate_expansion"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-changes-language",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "language_constraint_missing",
+            "expected": "English",
+            "message": "candidate omitted a protected hard constraint"
+          },
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "language_constraint_missing",
+      "expected_reason": "language_constraint_missing",
+      "expected_violation": "language_constraint_missing",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-changes-language",
+        "candidate_queries": [
+          "From paper://atlas-paper in French, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "version_constraint_missing",
+      "actual_reason": "version_constraint_missing",
+      "actual_violation_codes": [
+        "version_constraint_missing",
+        "unbounded_candidate_expansion"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-changes-version",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "version_constraint_missing",
+            "expected": "v1",
+            "message": "candidate omitted a protected hard constraint"
+          },
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "version_constraint_missing",
+      "expected_reason": "version_constraint_missing",
+      "expected_violation": "version_constraint_missing",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-changes-version",
+        "candidate_queries": [
+          "From paper://atlas-paper in English, which Atlas v2 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "metric_constraint_missing",
+      "actual_reason": "metric_constraint_missing",
+      "actual_violation_codes": [
+        "metric_constraint_missing",
+        "unbounded_candidate_expansion"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-changes-metric",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "metric_constraint_missing",
+            "expected": "accuracy",
+            "message": "candidate omitted a protected hard constraint"
+          },
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "metric_constraint_missing",
+      "expected_reason": "metric_constraint_missing",
+      "expected_violation": "metric_constraint_missing",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-changes-metric",
+        "candidate_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show recall, are not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "unbounded_candidate_expansion",
+      "actual_reason": "unbounded_candidate_expansion",
+      "actual_violation_codes": [
+        "unbounded_candidate_expansion",
+        "negation_constraint_changed"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-reverses-negation",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          },
+          {
+            "actual": [
+              "0:evaluated and use the"
+            ],
+            "code": "negation_constraint_changed",
+            "expected": [
+              "1:evaluated and use the"
+            ],
+            "message": "candidate changed, omitted, or introduced a protected negation"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "unbounded_candidate_expansion",
+      "expected_reason": "unbounded_candidate_expansion",
+      "expected_violation": "negation_constraint_changed",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-reverses-negation",
+        "candidate_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not not evaluated, and use the reported test split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "configured_constraint_missing",
+      "actual_reason": "configured_constraint_missing",
+      "actual_violation_codes": [
+        "configured_constraint_missing",
+        "unbounded_candidate_expansion"
+      ],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-drops-configured-constraint",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "constraint",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": [
+          {
+            "code": "configured_constraint_missing",
+            "expected": "reported test split",
+            "message": "candidate omitted a protected hard constraint"
+          },
+          {
+            "code": "unbounded_candidate_expansion",
+            "expected": [
+              "experiment"
+            ],
+            "message": "V1 candidates must preserve the original query verbatim and append only configured expansion terms"
+          }
+        ]
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "configured_constraint_missing",
+      "expected_reason": "configured_constraint_missing",
+      "expected_violation": "configured_constraint_missing",
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": "candidate-drops-configured-constraint",
+        "candidate_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the validation split?"
+        ],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-attempts-routing-control",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "control",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-attempts-quality-control",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "control",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-attempts-memory-control",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "control",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-attempts-tool-control",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "control",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-attempts-publication-control",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "control",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-attempts-qualification-control",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "control",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-attempts-skill-promotion-control",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "control",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "candidate_invalid",
+      "actual_reason": "candidate_invalid",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-invalid-payload",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "fallback",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "candidate_invalid",
+      "expected_reason": "candidate_invalid",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "worker_failed",
+      "actual_reason": "worker_failed",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-worker-failure",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "fallback",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "worker_failed",
+      "expected_reason": "worker_failed",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "worker_timeout",
+      "actual_reason": "worker_timeout",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-worker-timeout",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "fallback",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "worker_timeout",
+      "expected_reason": "worker_timeout",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": false,
+      "actual_fallback": true,
+      "actual_fallback_reason": "worker_budget_exhausted",
+      "actual_reason": "worker_budget_exhausted",
+      "actual_violation_codes": [],
+      "candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {
+          "configured": [
+            "reported test split"
+          ],
+          "language": [
+            "English"
+          ],
+          "source": [
+            "paper://atlas-paper"
+          ]
+        },
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 0,
+        "timeout_seconds": 8.0
+      },
+      "case_id": "candidate-worker-budget-exhausted",
+      "case_set_version": "research-candidate-cases-v2",
+      "category": "fallback",
+      "diagnostics": {
+        "query_matches_expected_plan": true,
+        "violations": []
+      },
+      "expected_accept": false,
+      "expected_fallback": true,
+      "expected_fallback_reason": "worker_budget_exhausted",
+      "expected_reason": "worker_budget_exhausted",
+      "expected_violation": null,
+      "lineage": {
+        "baseline_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "candidate_id": null,
+        "candidate_queries": [],
+        "executed_queries": [
+          "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+        ],
+        "original_query": "From paper://atlas-paper in English, which Atlas v1 results in 2024 show accuracy, are not evaluated, and use the reported test split?"
+      },
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "constraints_source_and_gate_preserved",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "input-final-projection-preserves-contract",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "input_integrity",
+      "diagnostics": {
+        "actual": "constraints_source_and_gate_preserved",
+        "expected": "constraints_source_and_gate_preserved",
+        "qualification_ref": null,
+        "reason_code": "constraints_source_and_gate_preserved",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "constraints_source_and_gate_preserved",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "input-final-request-constraint-loss-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "input_integrity",
+      "diagnostics": {
+        "actual": "rejected",
+        "expected": "rejected",
+        "qualification_ref": null,
+        "reason_code": "rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "input-final-request-objective-loss-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "input_integrity",
+      "diagnostics": {
+        "actual": "rejected",
+        "expected": "rejected",
+        "qualification_ref": null,
+        "reason_code": "rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "input-final-request-objective-tamper-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "input_integrity",
+      "diagnostics": {
+        "actual": "rejected",
+        "expected": "rejected",
+        "qualification_ref": null,
+        "reason_code": "rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "input-final-request-source-loss-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "input_integrity",
+      "diagnostics": {
+        "actual": "rejected",
+        "expected": "rejected",
+        "qualification_ref": null,
+        "reason_code": "rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "input-final-request-source-revision-change-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "input_integrity",
+      "diagnostics": {
+        "actual": "rejected",
+        "expected": "rejected",
+        "qualification_ref": null,
+        "reason_code": "rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "supported_within_scope",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-supported",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "supported_within_scope",
+        "eligible": true,
+        "expected": "supported_within_scope",
+        "qualification_ref": "claim-qualification:sha256:974f75d3ecfa82dde53baf6d4baa252a6894269ed91af4fe7bff68f3a22e2e15",
+        "reason_code": "supported_within_scope",
+        "reason_codes": [
+          "frozen_contract_requirements_satisfied"
+        ],
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "supported_within_scope",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": "claim-qualification:sha256:974f75d3ecfa82dde53baf6d4baa252a6894269ed91af4fe7bff68f3a22e2e15",
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "contradicted",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-contradicted",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "contradicted",
+        "eligible": false,
+        "expected": "contradicted",
+        "qualification_ref": null,
+        "reason_code": "contradicted",
+        "reason_codes": [
+          "typed_observation_contract_mismatch",
+          "required_check_failed"
+        ],
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "contradicted",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "insufficient_evidence",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-insufficient",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "insufficient_evidence",
+        "eligible": false,
+        "expected": "insufficient_evidence",
+        "qualification_ref": null,
+        "reason_code": "insufficient_evidence",
+        "reason_codes": [
+          "required_evidence_missing"
+        ],
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "insufficient_evidence",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "verification_unavailable",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-unavailable",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "verification_unavailable",
+        "eligible": false,
+        "expected": "verification_unavailable",
+        "qualification_ref": null,
+        "reason_code": "verification_unavailable",
+        "reason_codes": [
+          "observation_source_unavailable",
+          "source_unavailable",
+          "check_execution_incomplete",
+          "required_evidence_missing"
+        ],
+        "source_locator_checksums": [
+          "sha256:9612322a5f5fd57f3356ab08fe7fcf29790d469537e9962b9ea6d25bca0b0b3c"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "verification_unavailable",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:9612322a5f5fd57f3356ab08fe7fcf29790d469537e9962b9ea6d25bca0b0b3c"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "one_supported_observation",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-duplicate-observation-deduplicated",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "one_supported_observation",
+        "expected": "one_supported_observation",
+        "qualification_ref": null,
+        "reason_code": "one_supported_observation",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "one_supported_observation",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_eligibility_supported",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-trusted-source-gate-positive",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_eligibility_supported",
+        "expected": "claim_eligibility_supported",
+        "qualification_ref": "claim-qualification:sha256:974f75d3ecfa82dde53baf6d4baa252a6894269ed91af4fe7bff68f3a22e2e15",
+        "reason_code": "claim_eligibility_supported",
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_eligibility_supported",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": "claim-qualification:sha256:974f75d3ecfa82dde53baf6d4baa252a6894269ed91af4fe7bff68f3a22e2e15",
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_eligibility_insufficient_evidence",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-missing-v1-result-is-insufficient",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_eligibility_insufficient_evidence",
+        "expected": "claim_eligibility_insufficient_evidence",
+        "qualification_ref": null,
+        "reason_code": "claim_eligibility_insufficient_evidence",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_eligibility_insufficient_evidence",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "candidate_control_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-candidate-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "candidate_control_field_rejected",
+        "expected": "candidate_control_field_rejected",
+        "qualification_ref": null,
+        "reason_code": "candidate_control_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "candidate_control_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_source_locator_mismatch",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-forged-source-binding-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_source_locator_mismatch",
+        "expected": "claim_source_locator_mismatch",
+        "qualification_ref": null,
+        "reason_code": "claim_source_locator_mismatch",
+        "source_locator_checksums": [
+          "sha256:4f00c0cd7390c29f33d15325fd002b758718ab794cd4eb8dd7526c5bdccaf68b"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_source_locator_mismatch",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:4f00c0cd7390c29f33d15325fd002b758718ab794cd4eb8dd7526c5bdccaf68b"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "trusted_research_lineage_mismatch",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-source-lineage-drift-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "trusted_research_lineage_mismatch",
+        "expected": "trusted_research_lineage_mismatch",
+        "qualification_ref": null,
+        "reason_code": "trusted_research_lineage_mismatch",
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "trusted_research_lineage_mismatch",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_evidence_revision_mismatch",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-source-revision-change-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_evidence_revision_mismatch",
+        "expected": "claim_evidence_revision_mismatch",
+        "qualification_ref": null,
+        "reason_code": "claim_evidence_revision_mismatch",
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_evidence_revision_mismatch",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_evidence_revision_mismatch",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-evidence-checksum-change-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_evidence_revision_mismatch",
+        "expected": "claim_evidence_revision_mismatch",
+        "qualification_ref": null,
+        "reason_code": "claim_evidence_revision_mismatch",
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_evidence_revision_mismatch",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_source_locator_mismatch",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-locator-wrong-cells-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_source_locator_mismatch",
+        "expected": "claim_source_locator_mismatch",
+        "qualification_ref": null,
+        "reason_code": "claim_source_locator_mismatch",
+        "source_locator_checksums": [
+          "sha256:e9ef2b7d092bdd8f12dbd1de74eadea554b1c15da53eefbbd6290f44151db009"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_source_locator_mismatch",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:e9ef2b7d092bdd8f12dbd1de74eadea554b1c15da53eefbbd6290f44151db009"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_projection_mismatch",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-tampered-report-text-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_projection_mismatch",
+        "expected": "claim_projection_mismatch",
+        "qualification_ref": null,
+        "reason_code": "claim_projection_mismatch",
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_projection_mismatch",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-cross-condition-table-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "rejected",
+        "expected": "rejected",
+        "qualification_ref": null,
+        "reason_code": "rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "source_table_condition_conflict",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "claim-source-table-condition-conflict-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "source_table_condition_conflict",
+        "expected": "source_table_condition_conflict",
+        "qualification_ref": null,
+        "reason_code": "source_table_condition_conflict",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "source_table_condition_conflict",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-direct-routing-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "route",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.route"
+        ],
+        "placement": "direct",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-nested-routing-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "route",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.metadata.route"
+        ],
+        "placement": "nested",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-direct-quality-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "quality_passed",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.quality_passed"
+        ],
+        "placement": "direct",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-nested-quality-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "quality_passed",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.metadata.quality_passed"
+        ],
+        "placement": "nested",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-direct-memory-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "memory_write",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.memory_write"
+        ],
+        "placement": "direct",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-nested-memory-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "memory_write",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.metadata.memory_write"
+        ],
+        "placement": "nested",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-direct-tool-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "tool_authorization",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.tool_authorization"
+        ],
+        "placement": "direct",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-nested-tool-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "tool_authorization",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.metadata.tool_authorization"
+        ],
+        "placement": "nested",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-direct-publication-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "publish",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.publish"
+        ],
+        "placement": "direct",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "worker_decision_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-nested-publication-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "worker_decision_field_rejected",
+        "control_field": "publish",
+        "expected": "worker_decision_field_rejected",
+        "forbidden_paths": [
+          "output.metadata.publish"
+        ],
+        "placement": "nested",
+        "qualification_ref": null,
+        "reason_code": "worker_decision_field_rejected",
+        "source_locator_checksums": []
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "worker_decision_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": []
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "candidate_control_field_rejected",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-direct-qualification-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "candidate_control_field_rejected",
+        "expected": "candidate_control_field_rejected",
+        "qualification_ref": null,
+        "reason_code": "candidate_control_field_rejected",
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "candidate_control_field_rejected",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    },
+    {
+      "actual_accept": null,
+      "actual_fallback": false,
+      "actual_fallback_reason": null,
+      "actual_reason": "claim_projection_mismatch",
+      "actual_violation_codes": [],
+      "candidate_configuration": null,
+      "case_id": "worker-nested-qualification-control-rejected",
+      "case_set_version": "research-quality-foundation-cases-v2",
+      "category": "claim_qualification",
+      "diagnostics": {
+        "actual": "claim_projection_mismatch",
+        "expected": "claim_projection_mismatch",
+        "qualification_ref": null,
+        "reason_code": "claim_projection_mismatch",
+        "source_locator_checksums": [
+          "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+        ]
+      },
+      "expected_accept": null,
+      "expected_fallback": false,
+      "expected_fallback_reason": null,
+      "expected_reason": "claim_projection_mismatch",
+      "expected_violation": null,
+      "passed": true,
+      "qualification_ref": null,
+      "source_locator_checksums": [
+        "sha256:23d165274d559c4f48d908f2843da5bc5909bfbf2d8209875840d9874cbef483"
+      ]
+    }
+  ],
+  "code_version": "research-retrieval-candidate-v1",
+  "config_version": "research-candidate-thresholds-v2",
+  "decision_owner": "research_rag_ci_gate",
+  "diagnostics": [
+    {
+      "actual": 0.0,
+      "code": "rollout_gain_threshold_not_met",
+      "threshold": 0.01
+    }
+  ],
+  "paired_candidate_configuration": {
+    "allowed_expansion_terms": [],
+    "config_version": "research-retrieval-candidate-config-v1",
+    "configured_hard_constraints": {},
+    "enabled": true,
+    "experiment_version": "research-retrieval-candidate-v1",
+    "max_candidate_queries": 2,
+    "max_transport_attempts": 1,
+    "max_worker_calls": 1,
+    "timeout_seconds": 8.0
+  },
+  "paired_quality": {
+    "retrieval.citation_accuracy": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0,
+      "measurement": "separate_fixed_corpus_retrieval_runs"
+    },
+    "retrieval.evidence_coverage": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0,
+      "measurement": "separate_fixed_corpus_retrieval_runs"
+    },
+    "retrieval.hit_rate": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0,
+      "measurement": "separate_fixed_corpus_retrieval_runs"
+    },
+    "retrieval.mrr": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0,
+      "measurement": "separate_fixed_corpus_retrieval_runs"
+    },
+    "retrieval.required_type_coverage": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0,
+      "measurement": "separate_fixed_corpus_retrieval_runs"
+    },
+    "retrieval.source_locator_coverage": {
+      "baseline": 1.0,
+      "candidate": 1.0,
+      "delta": 0.0,
+      "measurement": "separate_fixed_corpus_retrieval_runs"
+    }
+  },
+  "passed": true,
+  "provenance": {
+    "case_checksum_sha256": "a6f3c68fc4942fdd5f971cb74e374b31b554b99e55ba7fda3e0e5bacd2b0897c",
+    "config_checksum_sha256": "6b7538301d37a41ed6f4b034c6394a44e830a10eb931417dfffb8b39e64879e1",
+    "configuration_identity": {
+      "case_candidate_configurations": {
+        "candidate-attempts-memory-control": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-attempts-publication-control": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-attempts-qualification-control": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-attempts-quality-control": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-attempts-routing-control": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-attempts-skill-promotion-control": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-attempts-tool-control": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-changes-language": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-changes-metric": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-changes-source": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-changes-time": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-changes-version": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-drops-configured-constraint": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-drops-entity": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-invalid-payload": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-preserves-protected-query": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-reverses-negation": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-worker-budget-exhausted": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 0,
+          "timeout_seconds": 8.0
+        },
+        "candidate-worker-failure": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        },
+        "candidate-worker-timeout": {
+          "allowed_expansion_terms": [],
+          "config_version": "research-retrieval-candidate-config-v1",
+          "configured_hard_constraints": {
+            "configured": [
+              "reported test split"
+            ],
+            "language": [
+              "English"
+            ],
+            "source": [
+              "paper://atlas-paper"
+            ]
+          },
+          "enabled": true,
+          "experiment_version": "research-retrieval-candidate-v1",
+          "max_candidate_queries": 2,
+          "max_transport_attempts": 1,
+          "max_worker_calls": 1,
+          "timeout_seconds": 8.0
+        }
+      },
+      "config_version": "research-candidate-thresholds-v2",
+      "paired_candidate_configuration": {
+        "allowed_expansion_terms": [],
+        "config_version": "research-retrieval-candidate-config-v1",
+        "configured_hard_constraints": {},
+        "enabled": true,
+        "experiment_version": "research-retrieval-candidate-v1",
+        "max_candidate_queries": 2,
+        "max_transport_attempts": 1,
+        "max_worker_calls": 1,
+        "timeout_seconds": 8.0
+      },
+      "retrieval_policy": "paper_blind_semantic_rag_v1",
+      "thresholds": {
+        "case_pass_rate": 1.0,
+        "claim_qualification_rate": 1.0,
+        "constraint_preservation_rate": 1.0,
+        "control_field_rejection_rate": 1.0,
+        "fallback_accuracy": 1.0,
+        "input_integrity_rate": 1.0,
+        "max_quality_regression": 0.0,
+        "min_rollout_hit_rate_delta": 0.01
+      }
+    },
+    "fixture_checksum_sha256": "876b807e14de19bc4cda146351e75476efae55394a62128fe4e229ed8e4885f2",
+    "fixture_inputs": {
+      "golden_set": {
+        "exists": true,
+        "path": ".newsroom\\eval\\ci\\golden_set.json",
+        "sha256": "f9b1d88bf958ee71ee66d309b95b37925daf40b8a538bdf2fe0a73fecfe73a40"
+      },
+      "papers": {
+        "exists": true,
+        "files_sha256": {
+          "ci_atlas_retrieval/research_document.json": "29af06ecd05fdbecc262f01d7b4d4af7e3705836fe31db9c6e349603c7ecef8b",
+          "ci_beacon_tables/research_document.json": "19ccec35b4a7248bb7922ff5abf4e5120c4b0adad1d0ded4f42fa2e0ec2d9d9e",
+          "ci_cedar_formulas/research_document.json": "ab4d42a47b01cec79edf3b34634e9607715783a403790e197fa48573e938ce98"
+        },
+        "path": ".newsroom\\eval\\ci\\fixtures\\papers",
+        "sha256": "cfaba16653dbc1af2777bda5fd17fc083bf5696f7d10e6592c02b446fe592229"
+      }
+    },
+    "git_revision": "3f86249c355aab369f2e8590dc9772b1618fde3b",
+    "source_checksum_sha256": "60f163424056c14e2b27eb0024f7dac51390cf9027fde0579b3307f402b03a21",
+    "source_checksums_sha256": {
+      ".github/workflows/ci.yml": "d12ffc0295de77e33a58b5fc35a5fbfdf877e45348daa7c4b5966407a0a189d2",
+      "backend/research/application/__init__.py": "f04725ff58d2a8b64fc6c6cf7e8df528bbe53c7135d4c36da279909c8deb725f",
+      "backend/research/application/claim_evidence_eligibility.py": "76076d956ff1c0ac70e305314082f6c3c5a0d218423e20491cd46c869aac7470",
+      "backend/research/application/graph_result_committer.py": "abcd65aa19f9b5ee5c0580278f57ff9aa9488dd534f2f9a24253f7da9b3daf5a",
+      "backend/research/application/llm_client.py": "36fb022215979a2e686910349782530f22a77ee3d998a56824afb8ca00e3ba4a",
+      "backend/research/application/paper_rag_session.py": "8540fe48b9238e120ccc9979d72127a533de8ba562291a1a73a9e13787815515",
+      "backend/research/application/rag_memory_admission.py": "8faf124afb378cc2a95cbedde6a9c96fa83caf2e995c201380bb19f3010ae182",
+      "backend/research/application/research_input_contract.py": "c7c345093207d8c2ceeaf94ae03e4b3ae64c50dff225e27702f41a3fc6ba7a56",
+      "backend/research/application/single_paper_runtime.py": "266f4e7a35a9d8b976c941a7264e9cb531be3de76ddcf0354a880ad2848222c6",
+      "backend/research/domain/__init__.py": "f4732d6ada28a0208cf673a9555401ff9258f770822ba62e7c296c234e79609e",
+      "backend/research/domain/claim_review.py": "363805067180e741fc8503d18075e101c498521e25be1d4cd610a11e7904fd5c",
+      "backend/research/domain/input_contract.py": "aeb057900001e6bcce0bfd0637ad9b86bc5404ed6963806adff4766a01f9c357",
+      "backend/research/graphs/__init__.py": "7a454c2acf25fe98ab7153ed2b24d91c960751ed40de4b5d1b6bc591d7dc7116",
+      "backend/research/graphs/claim_evidence_eligibility_gate.py": "597fe79d79623eb02fde9b044fbe39b2e9a02cc366e9090771b1706525800f7f",
+      "backend/research/graphs/contracts.py": "be61a45090519861766161a5461ec4936da43991d23128849cee6d739b698467",
+      "backend/research/graphs/gates.py": "850043538d15ccfc364a1195c54dbc846c57be511c928a323f50d47c309fde2b",
+      "backend/research/graphs/paper_analysis.py": "d65f1ba75caff1a99a5db4df75982066e107b4d0e2286e23ff57281ac368c142",
+      "backend/research/graphs/task_plan.py": "f8f9fd1b709f9f3f1ea1d6e35509d6398e312dab2f49bef66b28e2600919841a",
+      "backend/research/rag/adapters/llm_plan_worker.py": "7e9d710c19599cc7e44a92808e308a902662274d59d195971b6066727ce05c1e",
+      "backend/research/rag/adapters/plan_worker.py": "150d1b9d3ce6def730b874d847449d01fbdaf13aca907d634ce0013cdd725f70",
+      "backend/research/rag/cli/run_ci_eval_gate.py": "4282f02630ecf1fdb20bb3367f144c74d74884d6ffff81479b194c633dd1de8d",
+      "backend/research/rag/evaluation/candidate_experiment_eval.py": "3c1370bddd5c77d00ac0aadfe18e85f754125286c272ac114073e8748420de45",
+      "backend/research/rag/evaluation/ci_eval_gate.py": "1b61b8b860e1fa7fbf9c8b944aa9bd458eb8a4aa47d0c3d1f6419ad2203f8b45",
+      "backend/research/rag/evaluation/evidence_eval_runner.py": "c8cc8b98b3dce90d6ee0861d78b5185c942e770f52ae5861c22e92353eff71aa",
+      "backend/research/rag/evaluation/paper_evidence_eval.py": "30a8b67f0978fd9cee407ab11d86aa4565ecd9aeadf2d9995d0a33f7ff94c844",
+      "backend/research/rag/evaluation/quality_foundation_cases.py": "d904e5081fb58f38248e9db764b1c28dd6d309f187cd29d2c5021246c8523b01",
+      "backend/research/rag/retrieval/__init__.py": "c5907535a728a335dbd65f8799a74e723d0f7499fe9d503f654948338d42c126",
+      "backend/research/rag/retrieval/candidate_experiment.py": "384c6dc28d612eb6510d64af53777cd4dc0a839f9fb77949efcc9ec0007244bc",
+      "backend/research/rag/retrieval/contracts.py": "545f4ae45f350d620c11c58b0cef399062120607c823b293f23e5a86a3d93c0a",
+      "backend/research/rag/retrieval/plan.py": "6dfd5ccd1a1b7d5e2235244507993ef475eb134ab5ab9a3e461010282ded99f4",
+      "backend/research/rag/retrieval/planner.py": "b8928f6e2ba8bef32136be89f52f5563b5a805005eb53aa49acd9bd71caca12a",
+      "backend/research/rag/retrieval_port.py": "7ac0baad465c793a6422e3a9629cf24eb853bce019fdf21cea174abd984c20a8",
+      "backend/research/services/__init__.py": "12467ad2e60f7343f08aae43ffd9df98c99822536470f76040d843b8ad5595ea",
+      "backend/research/services/claim_evidence_eligibility.py": "b5d1eb94c852edb9a86fa0ef197ed7ef4a1a28ab732f8eaa75066b6b0dea78af",
+      "backend/research/services/claim_review_resolver.py": "f826a14e667443eade84aad351e4a847c504e8ae30af62c7627d531c21b71d46",
+      "backend/research/services/evidence_builder.py": "ba805d6a7d47f34c521ce2a414fce2be39e5361291fb7676cf3c1d2ad7816b37",
+      "backend/research/services/rag_policy.py": "f4b237436706707159f2c277bf4ff65d84af33a0e25bc47be6ecf3dc7fa000bf",
+      "framework/agent/artifacts/stores/fs_safety.py": "d443678afbe99e779694f893603393b64e363d4efe07a980ab7a13a84cec9953",
+      "framework/agent/loop/__init__.py": "71580e65b9c0d8906d68f209a1dbad0301bddbecab682418821fd0044cf2752f",
+      "framework/agent/loop/loop.py": "067cd9fb5a6bdd77de10cbd0e11ab83b6c299f0ae122273cac8705a2c911e73f",
+      "framework/agent/loop/prompt.py": "6c8c17bef1deb2eac8b22b802e5deb7be244d4f4b29e9164eb08eb5cdb2650ca",
+      "framework/agent/loop/runner.py": "0c9f263b7a365b01522e31337c70cddb9c6061fcc6558f6a7559319d183d5f49",
+      "framework/harness/rag/models.py": "3af8ecde68f8494e0ba76aaf6bf0cf8003474d44b7e756e46a7fffb108b122b7",
+      "framework/harness/rag/planner.py": "5cdd7cdda24022d73dc358896a8d3378c26fc5875fee0d5dc1c3ae80054806ee",
+      "framework/harness/subagents/agent_runner.py": "adf921fa5ca14b04b5a4c41a4ad7e509b1666fe1d61d86e286ebb9123ff04298",
+      "framework/harness/subagents/execution.py": "32df47cad4a8a1922af6213342fe2d1c158e885b96ef28064f20eda6ed064dff",
+      "framework/harness/subagents/runtime.py": "769df43273167b39e640d09eaff77cdfe507551d20be89b741134855c9f89b48",
+      "framework/harness/subagents/supervisor.py": "53e42e13fea1eb996d7371b47e0973c305e383f4738fbb660b0c78d1c08c82b2",
+      "framework/harness/task_plan/parallel.py": "f5be26727b24688587a0c36a25f0afa03e5a62c26f897ceda741625037b1c951",
+      "framework/harness/task_plan/planning_observation.py": "ca40de9f0e216c07b9923d55bd7835009758158b37b3483d4741068f88ea157f",
+      "framework/llm/clients/openai_compatible.py": "d23932f5fc118c8c646e11686272e7d5d05189f302d07eb996199f508cf75487",
+      "framework/llm/models/request.py": "985f3642ba6b46292ecfa95d1073f612bc53c0e3ee1e006bce84507ee24b4860",
+      "infrastructure/research/candidate_worker.py": "0d89c84c233047494c20dde98f4943d6091df197f1ccfe132c1d5fc21e1674ea",
+      "infrastructure/research/filesystem_run_store.py": "c6b8f5ef3b8e215c0457348fe2a59a274fae8cb2564a2a8211bc17383e048670",
+      "infrastructure/storage/harness/planning_observation.py": "4e2e33e3da961cf90cc66e25e85fbac14a192477b4ac5f31db8cacff89c7b52f",
+      "infrastructure/storage/harness/subagent_transcript.py": "541b4495cb352da27ae7b92e6ae4067785fdecf2983b37968f189b693f20139a",
+      "interfaces/composition/research.py": "12a93ce15309d052c36c5712f62240a8a85eaeb38ba420bcdd3d89252efbb946",
+      "scripts/dev.py": "e7a28a402f170191125cdf3b5d557f6f152d575ae602040e0f69f758a21f45a9"
+    },
+    "worktree_dirty": null
+  },
+  "rollout_blockers": [
+    "hit_rate_gain_below_threshold"
+  ],
+  "rollout_eligible": false,
+  "thresholds": {
+    "case_pass_rate": 1.0,
+    "claim_qualification_rate": 1.0,
+    "constraint_preservation_rate": 1.0,
+    "control_field_rejection_rate": 1.0,
+    "fallback_accuracy": 1.0,
+    "input_integrity_rate": 1.0,
+    "max_quality_regression": 0.0,
+    "min_rollout_hit_rate_delta": 0.01
+  }
+}

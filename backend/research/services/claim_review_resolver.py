@@ -30,10 +30,10 @@ class ClaimReviewResolver:
         observations: Iterable[ReviewObservation] = (),
         disputes: Iterable[DisputeCase] = (),
     ) -> ResolutionRecord:
-        requirements = tuple(requirements)
-        checks = tuple(checks)
-        observations = tuple(observations)
-        disputes = tuple(disputes)
+        requirements = _deduplicate(requirements, identity="requirement_id")
+        checks = _deduplicate(checks, identity="check_id")
+        observations = _deduplicate(observations, identity="observation_id")
+        disputes = _deduplicate(disputes, identity="case_id")
         for check in checks:
             self._require_binding(check.binding_checksum, binding.checksum, "check")
         for observation in observations:
@@ -113,6 +113,18 @@ class ClaimReviewResolver:
     def _require_binding(actual: str, expected: str, kind: str) -> None:
         if actual != expected:
             raise ValueError(f"{kind} is bound to a different review contract")
+
+
+def _deduplicate(values: Iterable[object], *, identity: str) -> tuple:
+    unique: dict[str, object] = {}
+    for value in values:
+        key = str(getattr(value, identity))
+        existing = unique.get(key)
+        if existing is None:
+            unique[key] = value
+        elif existing != value:
+            raise ValueError(f"conflicting duplicate {identity}: {key}")
+    return tuple(unique.values())
 
 
 __all__ = ["ClaimReviewResolver"]

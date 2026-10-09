@@ -7,7 +7,9 @@ resolver can therefore replay them from a durable record without calling a model
 """
 
 from dataclasses import dataclass, field, fields, is_dataclass
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+import math
 from types import MappingProxyType, UnionType
 from enum import Enum
 from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
@@ -67,6 +69,38 @@ class DisputeLifecycle(StrEnum):
     CLOSED = "closed"
 
 
+class EvidenceAvailability(StrEnum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+class ObservationProducer(StrEnum):
+    WORKER = "worker"
+    PARSER = "parser"
+    HUMAN = "human"
+
+
+class ResearchProgressScope(StrEnum):
+    RUN = "run"
+    CLAIM = "claim"
+
+
+class ResearchProgressReasonCode(StrEnum):
+    INSUFFICIENT_VERIFIED_PROGRESS = "insufficient_verified_progress"
+
+
+class NumericComparator(StrEnum):
+    GREATER_THAN = "greater_than"
+    GREATER_THAN_OR_EQUAL = "greater_than_or_equal"
+    LESS_THAN = "less_than"
+    LESS_THAN_OR_EQUAL = "less_than_or_equal"
+    EQUAL = "equal"
+
+
+V1_NUMERIC_COMPARISON_CLAIM_TYPE = "numeric_comparison_result_v1"
+INSUFFICIENT_VERIFIED_PROGRESS = ResearchProgressReasonCode.INSUFFICIENT_VERIFIED_PROGRESS.value
+
+
 def _text(value: str, name: str) -> str:
     value = str(value).strip()
     if not value:
@@ -83,6 +117,29 @@ def _scope(value: Mapping[str, str] | None) -> Mapping[str, str]:
 
 def _tuple_text(values: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
     return tuple(_text(v, "reference") for v in (values or ()))
+
+
+def _sha256_ref(value: str, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.startswith("sha256:")
+        or len(value) != 71
+        or any(character not in "0123456789abcdef" for character in value[7:])
+    ):
+        raise ValueError(f"{name} must be a canonical sha256 reference")
+    return value
+
+
+def _decimal_text(value: str, name: str) -> str:
+    normalized = _text(value, name)
+    try:
+        number = Decimal(normalized)
+    except InvalidOperation as exc:
+        raise ValueError(f"{name} must be a finite decimal") from exc
+    if not number.is_finite():
+        raise ValueError(f"{name} must be a finite decimal")
+    canonical = format(number.normalize(), "f")
+    return "0" if canonical in {"-0", ""} else canonical
 
 
 def _serialize(value: Any) -> Any:
@@ -146,6 +203,302 @@ def _deserialize(annotation: Any, value: Any) -> Any:
     if isinstance(annotation, type) and is_dataclass(annotation) and isinstance(value, Mapping):
         return annotation.from_dict(value)
     return value
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceSourceLocator(_ContractMixin):
+    source_id: str
+    source_revision: str
+    source_checksum: str
+    locator_type: str
+    locator: str
+    availability: EvidenceAvailability = EvidenceAvailability.AVAILABLE
+    unavailable_reason: str | None = None
+    checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        for name in ("source_id", "source_revision", "locator_type", "locator"):
+            object.__setattr__(self, name, _text(getattr(self, name), name))
+        object.__setattr__(self, "source_checksum", _sha256_ref(self.source_checksum, "source_checksum"))
+        object.__setattr__(self, "availability", EvidenceAvailability(self.availability))
+        if self.availability is EvidenceAvailability.UNAVAILABLE:
+            object.__setattr__(self, "unavailable_reason", _text(self.unavailable_reason or "", "unavailable_reason"))
+        elif self.unavailable_reason is not None:
+            raise ValueError("available source locator cannot carry unavailable_reason")
+        object.__setattr__(self, "checksum", checksum_for({
+            "source_id": self.source_id,
+            "source_revision": self.source_revision,
+            "source_checksum": self.source_checksum,
+            "locator_type": self.locator_type,
+            "locator": self.locator,
+            "availability": self.availability.value,
+            "unavailable_reason": self.unavailable_reason,
+        }))
+
+
+@dataclass(frozen=True, slots=True)
+class NumericComparisonClaim(_ContractMixin):
+    metric_id: str
+    subject_label: str
+    comparator_label: str
+    subject_value: str
+    comparator_value: str
+    unit: str
+    comparator: NumericComparator
+    difference_value: str
+    difference_unit: str
+    conditions: Mapping[str, str]
+    checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        for name in ("metric_id", "subject_label", "comparator_label", "unit", "difference_unit"):
+            object.__setattr__(self, name, _text(getattr(self, name), name))
+        for name in ("subject_value", "comparator_value", "difference_value"):
+            object.__setattr__(self, name, _decimal_text(getattr(self, name), name))
+        object.__setattr__(self, "comparator", NumericComparator(self.comparator))
+        conditions = _scope(self.conditions)
+        if not conditions:
+            raise ValueError("numeric comparison claim requires applicable conditions")
+        object.__setattr__(self, "conditions", conditions)
+        actual_difference = Decimal(self.subject_value) - Decimal(self.comparator_value)
+        if actual_difference != Decimal(self.difference_value):
+            raise ValueError("difference_value must equal subject_value minus comparator_value")
+        object.__setattr__(self, "checksum", checksum_for(self._projection()))
+
+    def _projection(self) -> dict[str, Any]:
+        return {
+            "metric_id": self.metric_id,
+            "subject_label": self.subject_label,
+            "comparator_label": self.comparator_label,
+            "subject_value": self.subject_value,
+            "comparator_value": self.comparator_value,
+            "unit": self.unit,
+            "comparator": self.comparator.value,
+            "difference_value": self.difference_value,
+            "difference_unit": self.difference_unit,
+            "conditions": dict(self.conditions),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class NumericComparisonObservation(_ContractMixin):
+    observation_id: str
+    claim_checksum: str
+    source_locator_checksum: str
+    producer_id: str
+    producer_type: ObservationProducer
+    metric_id: str
+    subject_label: str
+    comparator_label: str
+    subject_value: str
+    comparator_value: str
+    unit: str
+    comparator: NumericComparator
+    difference_value: str
+    difference_unit: str
+    conditions: Mapping[str, str]
+    checksum: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "observation_id", "producer_id", "metric_id", "subject_label",
+            "comparator_label", "unit", "difference_unit",
+        ):
+            object.__setattr__(self, name, _text(getattr(self, name), name))
+        object.__setattr__(self, "claim_checksum", _sha256_ref(self.claim_checksum, "claim_checksum"))
+        object.__setattr__(self, "source_locator_checksum", _sha256_ref(self.source_locator_checksum, "source_locator_checksum"))
+        object.__setattr__(self, "producer_type", ObservationProducer(self.producer_type))
+        object.__setattr__(self, "comparator", NumericComparator(self.comparator))
+        for name in ("subject_value", "comparator_value", "difference_value"):
+            object.__setattr__(self, name, _decimal_text(getattr(self, name), name))
+        object.__setattr__(self, "conditions", _scope(self.conditions))
+        actual_difference = Decimal(self.subject_value) - Decimal(self.comparator_value)
+        if actual_difference != Decimal(self.difference_value):
+            raise ValueError("difference_value must equal subject_value minus comparator_value")
+        object.__setattr__(self, "checksum", checksum_for({
+            "observation_id": self.observation_id,
+            "claim_checksum": self.claim_checksum,
+            "source_locator_checksum": self.source_locator_checksum,
+            "producer_id": self.producer_id,
+            "producer_type": self.producer_type.value,
+            "metric_id": self.metric_id,
+            "subject_label": self.subject_label,
+            "comparator_label": self.comparator_label,
+            "subject_value": self.subject_value,
+            "comparator_value": self.comparator_value,
+            "unit": self.unit,
+            "comparator": self.comparator.value,
+            "difference_value": self.difference_value,
+            "difference_unit": self.difference_unit,
+            "conditions": dict(self.conditions),
+        }))
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchProgressObservation(_ContractMixin):
+    run_id: str
+    paper_id: str
+    observation_scope: ResearchProgressScope
+    reason_code: ResearchProgressReasonCode
+    metrics: Mapping[str, int | float]
+    evidence_context_refs: Mapping[str, str]
+    claim_id: str | None = None
+    resolver_status: ClaimConclusionStatus | None = None
+    observation_only: bool = True
+    checksum: str = field(init=False)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> ResearchProgressObservation:
+        if not isinstance(payload, Mapping):
+            raise TypeError("progress observation payload must be a mapping")
+        if "checksum" not in payload:
+            raise ValueError("persisted progress observation requires checksum")
+        return super(ResearchProgressObservation, cls).from_dict(payload)
+
+    @classmethod
+    def insufficient_verified_progress(
+        cls,
+        *,
+        run_id: str,
+        paper_id: str,
+        evidence_context_refs: Mapping[str, str],
+        claim_id: str | None = None,
+        resolver_status: ClaimConclusionStatus | None = None,
+    ) -> ResearchProgressObservation:
+        return cls(
+            run_id=run_id,
+            paper_id=paper_id,
+            observation_scope=(
+                ResearchProgressScope.CLAIM
+                if claim_id is not None
+                else ResearchProgressScope.RUN
+            ),
+            claim_id=claim_id,
+            reason_code=ResearchProgressReasonCode.INSUFFICIENT_VERIFIED_PROGRESS,
+            resolver_status=resolver_status,
+            metrics={
+                "eligible_claims": 0,
+                "required_claims": 1,
+                "verified_progress_ratio": 0.0,
+            },
+            evidence_context_refs=evidence_context_refs,
+        )
+
+    def __post_init__(self) -> None:
+        for name in ("run_id", "paper_id"):
+            object.__setattr__(self, name, _text(getattr(self, name), name))
+        object.__setattr__(
+            self,
+            "observation_scope",
+            ResearchProgressScope(self.observation_scope),
+        )
+        object.__setattr__(
+            self,
+            "reason_code",
+            ResearchProgressReasonCode(self.reason_code),
+        )
+        claim_id = None if self.claim_id is None else _text(self.claim_id, "claim_id")
+        object.__setattr__(self, "claim_id", claim_id)
+        if self.observation_scope is ResearchProgressScope.CLAIM:
+            if claim_id is None:
+                raise ValueError("claim-scoped progress observation requires claim_id")
+        elif claim_id is not None:
+            raise ValueError("run-scoped progress observation cannot carry claim_id")
+
+        resolver_status = (
+            None
+            if self.resolver_status is None
+            else ClaimConclusionStatus(self.resolver_status)
+        )
+        object.__setattr__(self, "resolver_status", resolver_status)
+        if self.observation_scope is ResearchProgressScope.CLAIM and resolver_status is None:
+            raise ValueError(
+                "claim-scoped progress observation requires resolver_status"
+            )
+        if self.observation_scope is ResearchProgressScope.RUN and resolver_status is not None:
+            raise ValueError(
+                "run-scoped progress observation cannot carry resolver_status"
+            )
+
+        if not isinstance(self.metrics, Mapping):
+            raise TypeError("progress observation metrics must be a mapping")
+        expected_metric_names = {
+            "eligible_claims",
+            "required_claims",
+            "verified_progress_ratio",
+        }
+        if set(self.metrics) != expected_metric_names:
+            raise ValueError("progress observation metrics do not match the stable schema")
+        eligible_claims = self.metrics["eligible_claims"]
+        required_claims = self.metrics["required_claims"]
+        for name, value in (
+            ("eligible_claims", eligible_claims),
+            ("required_claims", required_claims),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer count")
+            if value < 0:
+                raise ValueError(f"{name} cannot be negative")
+        if required_claims < 1:
+            raise ValueError("required_claims must be positive")
+        if eligible_claims > required_claims:
+            raise ValueError("eligible_claims cannot exceed required_claims")
+        ratio = self.metrics["verified_progress_ratio"]
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+            raise TypeError("verified_progress_ratio must be numeric")
+        if isinstance(ratio, float) and not math.isfinite(ratio):
+            raise ValueError("verified_progress_ratio must be finite")
+        if not 0.0 <= ratio <= 1.0:
+            raise ValueError("verified_progress_ratio must be between zero and one")
+        ratio = float(ratio)
+        if ratio != eligible_claims / required_claims:
+            raise ValueError(
+                "verified_progress_ratio must equal eligible_claims / required_claims"
+            )
+        object.__setattr__(
+            self,
+            "metrics",
+            MappingProxyType({
+                "eligible_claims": eligible_claims,
+                "required_claims": required_claims,
+                "verified_progress_ratio": ratio,
+            }),
+        )
+
+        if not isinstance(self.evidence_context_refs, Mapping):
+            raise TypeError("evidence_context_refs must be a mapping")
+        evidence_context_refs: dict[str, str] = {}
+        for key, value in self.evidence_context_refs.items():
+            if not isinstance(key, str) or not key or key != key.strip():
+                raise ValueError("evidence context names must be nonblank canonical strings")
+            evidence_context_refs[key] = _sha256_ref(
+                value,
+                f"evidence_context_refs[{key}]",
+            )
+        if not evidence_context_refs:
+            raise ValueError("progress observation requires evidence context")
+        object.__setattr__(
+            self,
+            "evidence_context_refs",
+            MappingProxyType(evidence_context_refs),
+        )
+        if self.observation_only is not True:
+            raise ValueError("Research progress signals must remain observation-only")
+        object.__setattr__(self, "checksum", checksum_for({
+            "run_id": self.run_id,
+            "paper_id": self.paper_id,
+            "observation_scope": self.observation_scope.value,
+            "claim_id": self.claim_id,
+            "reason_code": self.reason_code.value,
+            "resolver_status": (
+                self.resolver_status.value
+                if self.resolver_status is not None
+                else None
+            ),
+            "metrics": dict(self.metrics),
+            "evidence_context_refs": dict(self.evidence_context_refs),
+            "observation_only": True,
+        }))
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +601,8 @@ class ReviewBinding(_ContractMixin):
     claim: ClaimRevision
     rule_version: str
     strategy_version: str
+    evidence_locators: tuple[EvidenceSourceLocator, ...] = ()
+    applicable_conditions: Mapping[str, str] = field(default_factory=dict)
     requires_independent_human_review: bool | None = None
     checksum: str = field(init=False)
 
@@ -263,6 +618,11 @@ class ReviewBinding(_ContractMixin):
             raise ValueError("actor_scope tenant_id does not match tenant_id")
         scope["tenant_id"] = self.tenant_id
         object.__setattr__(self, "actor_scope", MappingProxyType(scope))
+        locators = tuple(self.evidence_locators)
+        if any(not isinstance(locator, EvidenceSourceLocator) for locator in locators):
+            raise TypeError("evidence_locators must contain EvidenceSourceLocator values")
+        object.__setattr__(self, "evidence_locators", locators)
+        object.__setattr__(self, "applicable_conditions", _scope(self.applicable_conditions))
         if self.requires_independent_human_review is None:
             object.__setattr__(self, "requires_independent_human_review", self._review_policy())
         elif self.requires_independent_human_review is not self._review_policy():
@@ -286,6 +646,8 @@ class ReviewBinding(_ContractMixin):
             "claim_checksum": self.claim.checksum,
             "rule_version": self.rule_version,
             "strategy_version": self.strategy_version,
+            "evidence_locator_checksums": tuple(locator.checksum for locator in self.evidence_locators),
+            "applicable_conditions": dict(self.applicable_conditions),
             "requires_independent_human_review": self.requires_independent_human_review,
         }
 
@@ -368,6 +730,28 @@ class DisputeCase(_ContractMixin):
 
 
 @dataclass(frozen=True, slots=True)
+class NumericComparisonEligibilityBundle(_ContractMixin):
+    binding: ReviewBinding
+    claim_contract: NumericComparisonClaim
+    observations: tuple[NumericComparisonObservation, ...]
+    reviews: tuple[ReviewObservation, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.binding, ReviewBinding):
+            raise TypeError("binding must be a ReviewBinding")
+        if not isinstance(self.claim_contract, NumericComparisonClaim):
+            raise TypeError("claim_contract must be a NumericComparisonClaim")
+        observations = tuple(self.observations)
+        reviews = tuple(self.reviews)
+        if any(not isinstance(item, NumericComparisonObservation) for item in observations):
+            raise TypeError("observations must contain NumericComparisonObservation values")
+        if any(not isinstance(item, ReviewObservation) for item in reviews):
+            raise TypeError("reviews must contain ReviewObservation values")
+        object.__setattr__(self, "observations", observations)
+        object.__setattr__(self, "reviews", reviews)
+
+
+@dataclass(frozen=True, slots=True)
 class ResolutionRecord(_ContractMixin):
     binding_checksum: str
     claim_id: str
@@ -401,9 +785,84 @@ class ResolutionRecord(_ContractMixin):
         }))
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimEligibilityDecision(_ContractMixin):
+    binding_checksum: str
+    claim_id: str
+    claim_revision: int
+    claim_contract_checksum: str
+    resolution: ResolutionRecord
+    resolver_ref: str
+    gate_ref: str
+    source_locator_checksums: tuple[str, ...]
+    typed_observation_checksums: tuple[str, ...]
+    eligible: bool
+    reason_codes: tuple[str, ...] = ()
+    progress_observations: tuple[ResearchProgressObservation, ...] = ()
+    checksum: str = field(init=False)
+    qualification_ref: str | None = field(init=False)
+
+    def __post_init__(self) -> None:
+        for name in ("binding_checksum", "claim_id", "claim_contract_checksum", "resolver_ref", "gate_ref"):
+            object.__setattr__(self, name, _text(getattr(self, name), name))
+        if "@" not in self.resolver_ref or "@" not in self.gate_ref:
+            raise ValueError("resolver_ref and gate_ref must include exact versions")
+        if self.claim_revision < 1:
+            raise ValueError("claim_revision must be positive")
+        if not isinstance(self.resolution, ResolutionRecord):
+            raise TypeError("resolution must be a ResolutionRecord")
+        if not isinstance(self.eligible, bool):
+            raise TypeError("eligible must be a bool")
+        for name in ("source_locator_checksums", "typed_observation_checksums", "reason_codes"):
+            object.__setattr__(self, name, _tuple_text(getattr(self, name)))
+        progress = tuple(self.progress_observations)
+        if any(not isinstance(item, ResearchProgressObservation) for item in progress):
+            raise TypeError("progress_observations must contain ResearchProgressObservation values")
+        object.__setattr__(self, "progress_observations", progress)
+        if self.eligible and progress:
+            raise ValueError("eligible decision cannot carry insufficient progress")
+        for observation in progress:
+            if observation.observation_scope is not ResearchProgressScope.CLAIM:
+                raise ValueError("eligibility decision progress must be claim-scoped")
+            if observation.claim_id != self.claim_id:
+                raise ValueError("progress observation belongs to a different claim")
+            if observation.resolver_status is not self.resolution.status:
+                raise ValueError("progress resolver status does not match resolution")
+        if self.binding_checksum != self.resolution.binding_checksum:
+            raise ValueError("resolution belongs to a different review binding")
+        if self.claim_id != self.resolution.claim_id or self.claim_revision != self.resolution.claim_revision:
+            raise ValueError("resolution belongs to a different claim revision")
+        if self.eligible is not (self.resolution.status is ClaimConclusionStatus.SUPPORTED_WITHIN_SCOPE):
+            raise ValueError("eligible must be derived from the resolver status")
+        checksum = checksum_for({
+            "binding_checksum": self.binding_checksum,
+            "claim_id": self.claim_id,
+            "claim_revision": self.claim_revision,
+            "claim_contract_checksum": self.claim_contract_checksum,
+            "resolution_checksum": self.resolution.checksum,
+            "resolver_ref": self.resolver_ref,
+            "gate_ref": self.gate_ref,
+            "source_locator_checksums": self.source_locator_checksums,
+            "typed_observation_checksums": self.typed_observation_checksums,
+            "eligible": self.eligible,
+            "reason_codes": self.reason_codes,
+            "progress_observation_checksums": tuple(item.checksum for item in progress),
+        })
+        object.__setattr__(self, "checksum", checksum)
+        object.__setattr__(
+            self,
+            "qualification_ref",
+            f"claim-qualification:{checksum}" if self.eligible else None,
+        )
+
+
 __all__ = [
     "AssertionKind", "CheckExecutionStatus", "CheckResult", "ClaimConclusionStatus",
-    "ClaimRevision", "DisputeCase", "DisputeLifecycle", "EvidenceRequirement",
-    "RequirementStatus", "ResolutionRecord", "ReviewBinding", "ReviewConclusion",
-    "ReviewObservation", "ReviewerType", "CheckObservation",
+    "ClaimEligibilityDecision", "ClaimRevision", "DisputeCase", "DisputeLifecycle", "EvidenceAvailability",
+    "EvidenceRequirement", "EvidenceSourceLocator", "INSUFFICIENT_VERIFIED_PROGRESS",
+    "NumericComparator", "NumericComparisonClaim", "NumericComparisonEligibilityBundle", "NumericComparisonObservation",
+    "ObservationProducer", "RequirementStatus", "ResearchProgressObservation",
+    "ResearchProgressReasonCode", "ResearchProgressScope",
+    "ResolutionRecord", "ReviewBinding", "ReviewConclusion", "ReviewObservation",
+    "ReviewerType", "CheckObservation", "V1_NUMERIC_COMPARISON_CLAIM_TYPE",
 ]

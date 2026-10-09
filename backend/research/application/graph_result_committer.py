@@ -49,6 +49,12 @@ from framework.harness.graph.model import (
     HarnessExecutableNode,
     NormalizedHarnessGraph,
 )
+from backend.research.graphs.contracts import (
+    RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID,
+    RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID,
+    RESEARCH_PAPER_ANALYSIS_GRAPH_ID,
+)
+
 from framework.harness.workers.result import (
     HarnessWorkerResult,
     HarnessWorkerStatus,
@@ -58,12 +64,11 @@ from framework.harness.workers.result import (
 RESEARCH_GRAPH_RESULT_ADAPTER_REF = "research.graph-result-adapter@1"
 RESEARCH_GRAPH_RESULT_SCHEMA = "research.graph-node-result@1"
 RESEARCH_WORKER_CANDIDATE_SCHEMA = "newsroom.research-worker-candidate@1"
-_RESEARCH_GRAPH_IDS = frozenset(
-    {
-        "research.paper_analysis.graph",
-        "research.paper_analysis.dynamic.graph",
-    }
-)
+_RESEARCH_GRAPH_IDS = frozenset({
+    RESEARCH_PAPER_ANALYSIS_GRAPH_ID,
+    RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID,
+    RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID,
+})
 _RESEARCH_RESULT_AUTHORITY_FIELDS = frozenset(
     {
         "artifact_class",

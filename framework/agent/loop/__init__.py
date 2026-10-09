@@ -25,7 +25,11 @@ from framework.agent.loop.output_budget import (
 )
 from framework.agent.loop.parser import AgentActionParser, AgentActionParserError, parse_skill_call
 from framework.agent.loop.planner import AgentPlanner
-from framework.agent.loop.prompt import PromptBuilder
+from framework.agent.loop.prompt import (
+    PreparedInputProjection,
+    PreparedInputProjectionError,
+    PromptBuilder,
+)
 from framework.agent.loop.runner import AgentRunner
 from framework.agent.loop.termination import TerminationController
 

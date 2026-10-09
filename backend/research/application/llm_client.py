@@ -49,12 +49,16 @@ def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = 
         prompt: str,
         *,
         execution_identity: GraphExecutionIdentity | None = None,
+        timeout_seconds: float | None = None,
+        max_transport_attempts: int | None = None,
     ) -> str:
         request = LLMRequest(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=temperature,
             execution_identity=execution_identity,
+            timeout_seconds=timeout_seconds,
+            max_transport_attempts=max_transport_attempts,
         )
         response = await asyncio.to_thread(client.complete, request)
         return response.content or ""

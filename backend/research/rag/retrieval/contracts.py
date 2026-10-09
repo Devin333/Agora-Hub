@@ -16,6 +16,7 @@ class RetrievalRequest:
     current_section_index: int = 0
     limit: int = 10
     filters: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

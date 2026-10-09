@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -133,6 +134,109 @@ def test_verified_atomic_write_preserves_extended_windows_long_path_namespace(
     )
 
     assert extended_target.read_bytes() == b'{"status":"ok"}'
+
+
+def test_windows_artifact_lock_waits_for_empty_file_owner_without_initialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = tmp_path / "entry.lock"
+    lock_path.touch()
+    original_identity = lock_path.stat()
+    events: list[str] = []
+    competing_owner = True
+    acquired_descriptor: int | None = None
+
+    class FakeMsvcrt:
+        LK_LOCK = 1
+        LK_UNLCK = 0
+
+        @staticmethod
+        def locking(descriptor: int, mode: int, size: int) -> None:
+            nonlocal competing_owner, acquired_descriptor
+            assert size == 1
+            assert os.lseek(descriptor, 0, os.SEEK_CUR) == 0
+            assert os.fstat(descriptor).st_size == 0
+            if mode == FakeMsvcrt.LK_UNLCK:
+                assert acquired_descriptor == descriptor
+                events.append("release")
+                acquired_descriptor = None
+                return
+            assert mode == FakeMsvcrt.LK_LOCK
+            assert competing_owner
+            # Model the existing blocking CRT call waiting for the current
+            # byte-range owner to release before granting this descriptor.
+            events.append("wait_for_competitor")
+            competing_owner = False
+            acquired_descriptor = descriptor
+            events.append("acquire")
+
+    def conflicting_initialization(_descriptor: int, _content: bytes) -> int:
+        raise PermissionError("competing process owns initialization byte")
+
+    monkeypatch.setattr(
+        fs_safety_module,
+        "os",
+        SimpleNamespace(
+            **{**vars(os), "name": "nt", "write": conflicting_initialization}
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeMsvcrt)
+
+    with verified_exclusive_file_lock(lock_path, root=tmp_path, identity="entry"):
+        assert acquired_descriptor is not None
+        assert not competing_owner
+        events.append("critical_section")
+
+    assert events == ["wait_for_competitor", "acquire", "critical_section", "release"]
+    assert acquired_descriptor is None
+    assert lock_path.stat().st_size == 0
+    assert os.path.samestat(original_identity, lock_path.stat())
+
+
+def test_windows_artifact_lock_preserves_acquisition_error_and_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = tmp_path / "unavailable.lock"
+    lock_path.touch()
+    acquisition_error = PermissionError("byte-range lock unavailable")
+    closed: list[int] = []
+    attempted: list[int] = []
+
+    class FakeMsvcrt:
+        LK_LOCK = 1
+        LK_UNLCK = 0
+
+        @staticmethod
+        def locking(descriptor: int, mode: int, size: int) -> None:
+            assert mode == FakeMsvcrt.LK_LOCK
+            assert size == 1
+            assert os.lseek(descriptor, 0, os.SEEK_CUR) == 0
+            attempted.append(descriptor)
+            raise acquisition_error
+
+    def close_descriptor(descriptor: int) -> None:
+        closed.append(descriptor)
+        os.close(descriptor)
+
+    monkeypatch.setattr(
+        fs_safety_module,
+        "os",
+        SimpleNamespace(**{**vars(os), "name": "nt", "close": close_descriptor}),
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeMsvcrt)
+
+    with pytest.raises(
+        ArtifactStoreMetadataError, match="artifact lock acquisition failed"
+    ) as exc_info:
+        with verified_exclusive_file_lock(lock_path, root=tmp_path, identity="entry"):
+            pytest.fail("critical section entered without acquiring the byte-range lock")
+
+    assert exc_info.value.__cause__ is acquisition_error
+    assert len(attempted) == 1
+    assert closed == attempted
+    assert lock_path.stat().st_size == 0
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires Windows path namespaces")

@@ -61,6 +61,7 @@ from framework.harness.subagents.transcript_metadata import (
     descriptor_for_bundle,
 )
 from framework.shared.json import json_loads, stable_json_dumps
+from framework.shared.redaction import redact_sensitive_values
 from framework.shared.time import utc_now
 
 
@@ -218,6 +219,7 @@ class FilesystemSubAgentTranscriptStore:
                     "subagent_transcript_store_unavailable",
                     "commit subagent transcript bundle failed",
                     transcript_id=identity.transcript_id,
+                    cause_chain=_failure_cause_chain(exc),
                 ) from exc
         except Exception as exc:
             reason_code = _reason_code(exc)
@@ -847,6 +849,29 @@ def _is_corrupt_reason(reason_code: str) -> bool:
         "subagent_transcript_store_unavailable",
         "subagent_transcript_size_exceeded",
     }
+
+
+def _failure_cause_chain(exc: BaseException) -> list[dict[str, Any]]:
+    """Preserve bounded OS failure details without exposing evidence contents."""
+
+    causes: list[dict[str, Any]] = []
+    visited: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in visited and len(causes) < 8:
+        visited.add(id(current))
+        cause: dict[str, Any] = {
+            "exception_type": type(current).__name__,
+            "message": str(current),
+        }
+        for name in ("errno", "winerror", "filename", "filename2"):
+            value = getattr(current, name, None)
+            if isinstance(value, (int, str)):
+                cause[name] = value
+        causes.append(redact_sensitive_values(cause))
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return causes
 
 
 def _store_error(code: str, message: str, **details: Any) -> SubAgentTranscriptStoreError:
