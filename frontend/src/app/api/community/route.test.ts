@@ -70,7 +70,7 @@ describe("community BFF routes", () => {
     })
 
     const response = await getCommunityTopicRoute(new NextRequest("http://localhost/api/community/topics/agent-memory"), {
-      params: { slug: "agent-memory" }
+      params: Promise.resolve({ slug: "agent-memory" })
     })
     const payload = await response.json()
 
@@ -153,7 +153,7 @@ describe("community BFF routes", () => {
     })
 
     const response = await getCommunitySignalRoute(new NextRequest("http://localhost/api/community/signals/signal-1"), {
-      params: { id: "signal-1" }
+      params: Promise.resolve({ id: "signal-1" })
     })
     const payload = await response.json()
 
@@ -166,7 +166,7 @@ describe("community BFF routes", () => {
     vi.mocked(getCommunitySignal).mockResolvedValueOnce(undefined)
 
     const response = await getCommunitySignalRoute(new NextRequest("http://localhost/api/community/signals/missing"), {
-      params: { id: "missing" }
+      params: Promise.resolve({ id: "missing" })
     })
     const payload = await response.json()
 
@@ -179,7 +179,7 @@ describe("community BFF routes", () => {
     vi.mocked(getCommunityTopic).mockResolvedValueOnce(undefined)
 
     const response = await getCommunityTopicRoute(new NextRequest("http://localhost/api/community/topics/missing"), {
-      params: { slug: "missing" }
+      params: Promise.resolve({ slug: "missing" })
     })
     const payload = await response.json()
 

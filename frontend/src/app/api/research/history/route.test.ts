@@ -5,7 +5,7 @@ import { safeApiGet, safeApiPut } from "@/lib/api/server"
 import { isSameOrigin } from "@/lib/auth/portal-server"
 
 vi.mock("next/headers", () => ({
-  cookies: () => ({ get: () => ({ value: "session-token" }) })
+  cookies: async () => ({ get: () => ({ value: "session-token" }) })
 }))
 
 vi.mock("@/lib/auth/portal-server", () => ({

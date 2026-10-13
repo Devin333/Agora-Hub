@@ -43,13 +43,14 @@ export function OpenReaderPage({ reader, locale, backHref = "/papers", visualLay
     [paragraphs, toc, visualsBySection],
   )
   const { settings, patchSettings, storageError: settingsStorageError } = useOpenReaderSettings(paper.id)
-  const { selections, events, createTempSelection, discardAllTemp, updateNote, confirmExplain, confirmExample, toggleConfused, mergeRemoteMaterials, storageError: selectionStorageError } = useOpenReaderSelections(paper.id)
+  const { selections, events, createTempSelection, discardAllTemp, updateNote, confirmExplain, confirmExample, toggleConfused, mergeRemoteMaterials, legacyAvailable, importLegacy, storageError: selectionStorageError } = useOpenReaderSelections(paper.id, workspace?.sourceRevision)
   const materials = useMemo(() => makeMaterialSummary(paper.id, selections, events), [paper.id, selections, events])
   const selectionsByParagraph = useMemo(() => mapSelectionsByParagraph(selections), [selections])
 
   const contentRef = useRef<HTMLElement | null>(null)
   const paragraphRefs = useRef(new Map<string, HTMLParagraphElement>())
   const sectionRefs = useRef(new Map<string, HTMLElement>())
+  const appliedSelectionAnswer = useRef("")
 
   const [sectionRenderWindow, setSectionRenderWindow] = useState<SectionRenderWindow>(() => createInitialSectionWindow(paper.id, toc.length))
   const renderedSectionCount = getRenderedSectionCount(sectionRenderWindow, paper.id, toc.length)
@@ -74,6 +75,33 @@ export function OpenReaderPage({ reader, locale, backHref = "/papers", visualLay
   const noteSelection = note ? selections.find((item) => item.id === note.selectionId) : undefined
   const drawerSelection = drawer?.selectionId ? selections.find((item) => item.id === drawer.selectionId) : undefined
   const isWorkspace = Boolean(workspace)
+
+  useEffect(() => {
+    const result = workspace?.selectionAnswer
+    const workspaceRevision = workspace?.sourceRevision
+    if (
+      !result ||
+      !workspaceRevision ||
+      result.sourceRevision !== workspaceRevision ||
+      appliedSelectionAnswer.current === result.requestKey
+    ) return
+    const selection = selections.find(item =>
+      result.selectionId
+        ? item.id === result.selectionId
+        : item.sectionId === result.selection.sectionId &&
+          item.selectedText === result.selection.selectedText &&
+          (result.selection.page === undefined || item.pageNumber === result.selection.page),
+    )
+    if (!selection) return
+    appliedSelectionAnswer.current = result.requestKey
+    if (result.mode === "explain") {
+      confirmExplain(selection.id, result.question, result.answer)
+    } else {
+      confirmExample(selection.id, result.question, result.answer)
+    }
+    workspace.onSelectionAnswerApplied?.(result.requestKey)
+    setDrawer(null)
+  }, [confirmExample, confirmExplain, selections, workspace])
 
   useEffect(() => {
     if (isWorkspace) return
@@ -108,7 +136,7 @@ export function OpenReaderPage({ reader, locale, backHref = "/papers", visualLay
 
   const requestedSectionId = workspace?.sectionRequest?.id
   const requestedSequence = workspace?.sectionRequest?.sequence
-  const completedRequest = useRef<string>()
+  const completedRequest = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!requestedSectionId) return
     const requestKey = `${paper.id}:${requestedSequence}:${requestedSectionId}`
@@ -326,6 +354,7 @@ export function OpenReaderPage({ reader, locale, backHref = "/papers", visualLay
 
       <article className={styles.readerLayout}>
         {(settingsStorageError || selectionStorageError) && <p role="alert" className={styles.storageWarning}>{locale === "zh" ? "浏览器未能保存阅读设置或划词批注，请复制重要内容后再离开。" : "Reading settings or annotations could not be saved. Copy important notes before leaving."}</p>}
+        {workspace && legacyAvailable && <button type="button" className={styles.smallButton} onClick={() => importLegacy()}>{locale === "zh" ? "导入此浏览器的旧划词批注" : "Import legacy browser annotations"}</button>}
         {!workspace && <section className={styles.titleBlock}>
           <div className={styles.kicker}>Open Reader</div>
           <h1>{title}</h1>
@@ -384,6 +413,7 @@ export function OpenReaderPage({ reader, locale, backHref = "/papers", visualLay
       {drawer ? (
         <ReaderAssistDrawer
           localOnly={Boolean(workspace)}
+          onGroundedAsk={workspace?.onSelectionAsk}
           drawer={drawer}
           selection={drawerSelection}
           materialSummary={materials}
@@ -588,7 +618,7 @@ function buildSectionItems(paragraphs: ReaderParagraph[], visuals: OpenReaderVis
 
 function SectionHeading({ section }: { section: ReaderTocItem }) {
   const level = normalizeTocLevel(section.level)
-  const HeadingTag = (`h${Math.min(6, Math.max(2, level + 1))}` as keyof JSX.IntrinsicElements)
+  const HeadingTag = `h${Math.min(6, Math.max(2, level + 1))}` as "h2" | "h3" | "h4" | "h5" | "h6"
   return (
     <HeadingTag className={styles.sectionHeading}>
       {section.sectionNumber ? <span className={styles.sectionNumber}>{section.sectionNumber}</span> : null}
@@ -1127,6 +1157,7 @@ function ReaderNotePopover({ selection, x, y, locale, onChange }: { selection: R
       <textarea
         autoFocus
         value={value}
+        maxLength={10000}
         placeholder={copy.notePlaceholder}
         onChange={(event) => {
           const nextValue = event.target.value
@@ -1141,10 +1172,11 @@ function ReaderNotePopover({ selection, x, y, locale, onChange }: { selection: R
 type AssistAnswerState =
   | { status: "idle" }
   | { status: "loading" }
+  | { status: "queued"; message: string }
   | { status: "ready"; answer: PaperReaderAnswer; syncWarning?: string }
   | { status: "error"; message: string }
 
-function ReaderAssistDrawer({ drawer, selection, materialSummary, locale, drawerWidth, onWidthChange, onClose, onConfirmExplain, onConfirmExample, localOnly = false }: { drawer: DrawerState; selection?: ReaderSelection; materialSummary: ReturnType<typeof makeMaterialSummary>; locale: Locale; drawerWidth: number; onWidthChange: (width: number) => void; onClose: () => void; onConfirmExplain: (id: string, question: string, answer: string) => void; onConfirmExample: (id: string, question: string, answer: string) => void; localOnly?: boolean }) {
+function ReaderAssistDrawer({ drawer, selection, materialSummary, locale, drawerWidth, onWidthChange, onClose, onConfirmExplain, onConfirmExample, onGroundedAsk, localOnly = false }: { drawer: DrawerState; selection?: ReaderSelection; materialSummary: ReturnType<typeof makeMaterialSummary>; locale: Locale; drawerWidth: number; onWidthChange: (width: number) => void; onClose: () => void; onConfirmExplain: (id: string, question: string, answer: string) => void; onConfirmExample: (id: string, question: string, answer: string) => void; onGroundedAsk?: NonNullable<OpenReaderPageProps["workspace"]>["onSelectionAsk"]; localOnly?: boolean }) {
   const [question, setQuestion] = useState("")
   const [answerState, setAnswerState] = useState<AssistAnswerState>({ status: "idle" })
   const resizingRef = useRef(false)
@@ -1159,6 +1191,26 @@ function ReaderAssistDrawer({ drawer, selection, materialSummary, locale, drawer
   const title = drawer.mode === "materials" ? copy.materialSummary : drawer.mode === "example" ? copy.exampleSelection : copy.explainSelection
   async function confirm(useDefault: boolean) {
     if (!selection) return
+    if (localOnly) {
+      if (!onGroundedAsk || drawer.mode === "materials") return
+      onGroundedAsk({
+        selectionId: selection.id,
+        mode: drawer.mode,
+        question: buildAssistQuestion(selection, useDefault ? "" : question, drawer.mode, locale),
+        selection: {
+          sectionId: selection.sectionId,
+          ...(selection.pageNumber ? { page: selection.pageNumber } : {}),
+          selectedText: selection.selectedText,
+        },
+      })
+      setAnswerState({
+        status: "queued",
+        message: locale === "zh"
+          ? "问题和所选原文已填入右侧“问论文”。确认后点击发送；本窗口会保留到回答写回。"
+          : "The grounded question is ready in Ask Paper. Review it and send explicitly.",
+      })
+      return
+    }
     const q = useDefault ? "" : question.trim()
     const mode = drawer.mode
     if (mode !== "explain" && mode !== "example") return
@@ -1227,6 +1279,9 @@ function buildAssistQuestion(selection: ReaderSelection, question: string, mode:
 function AssistAnswerCard({ state, mode, locale }: { state: AssistAnswerState; mode: ReaderAssistMode; locale: Locale }) {
   const copy = readerCopy(locale)
   const heading = mode === "example" ? copy.exampleSelection : copy.explanation
+  if (state.status === "queued") {
+    return <div className={styles.drawerCard}><h3>{heading}</h3><p>{state.message}</p></div>
+  }
   if (state.status === "loading") {
     return <div className={styles.drawerCard}><h3>{copy.generatingTitle}</h3><p>{copy.generatingDescription}</p></div>
   }

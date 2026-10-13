@@ -3,7 +3,8 @@ import { loadPaperDocumentPayload } from "@/lib/paper-reader/server-loader"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: NextRequest, { params }: { params: { paperId: string } }) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ paperId: string }> }) {
+  const params = await props.params;
   const payload = await loadPaperDocumentPayload(params.paperId)
   if (payload) {
     return NextResponse.json({ success: true, data: payload })

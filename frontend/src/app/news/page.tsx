@@ -3,11 +3,12 @@ import { redirect } from "next/navigation"
 import { PageSkeleton } from "@/components/common/loading-skeleton"
 import { NewsPageClient } from "@/app/news/news-page-client"
 
-export default function NewsPage({
-  searchParams
-}: {
-  searchParams?: Record<string, string | string[] | undefined>
-}) {
+export default async function NewsPage(
+  props: {
+    searchParams?: Promise<Record<string, string | string[] | undefined>>
+  }
+) {
+  const searchParams = await props.searchParams;
   if (firstParam(searchParams?.source) === "community") {
     const params = new URLSearchParams()
     for (const key of ["q", "topic", "sentiment", "period", "sort", "limit", "cursor"]) {

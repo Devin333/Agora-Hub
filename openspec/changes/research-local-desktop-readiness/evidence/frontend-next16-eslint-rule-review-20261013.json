@@ -1,0 +1,331 @@
+{
+  "generatedUtc": "2026-10-12T18:38:40.492Z",
+  "baseline": "Next 14 core-web-vitals/typescript lint did not enable React Compiler diagnostics",
+  "scope": "eslint src retains the previous Next source lint surface",
+  "effectiveRules": {
+    "react-hooks/rules-of-hooks": "error",
+    "react-hooks/exhaustive-deps": "warn",
+    "@next/next/no-html-link-for-pages": "error",
+    "@next/next/no-img-element": "warn",
+    "react-hooks/set-state-in-effect": "off (new Next 16 React Compiler diagnostic)",
+    "react-hooks/refs": "off (new Next 16 React Compiler diagnostic)",
+    "react-hooks/purity": "off (new Next 16 React Compiler diagnostic)"
+  },
+  "rules": {
+    "react-hooks/set-state-in-effect": {
+      "count": 52,
+      "locations": [
+        {
+          "file": "src\\app\\reports\\desktop-report-detail.tsx",
+          "line": 40
+        },
+        {
+          "file": "src\\app\\reports\\desktop-report-detail.tsx",
+          "line": 104
+        },
+        {
+          "file": "src\\app\\reports\\desktop-reports-page.tsx",
+          "line": 32
+        },
+        {
+          "file": "src\\components\\auth\\portal-login-dialog.tsx",
+          "line": 53
+        },
+        {
+          "file": "src\\components\\layout\\research-header.tsx",
+          "line": 35
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-page.tsx",
+          "line": 103
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-page.tsx",
+          "line": 123
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-page.tsx",
+          "line": 147
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-page.tsx",
+          "line": 158
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-page.tsx",
+          "line": 1078
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-page.tsx",
+          "line": 1151
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-page.tsx",
+          "line": 1183
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-state.ts",
+          "line": 66
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-state.ts",
+          "line": 75
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-state.ts",
+          "line": 112
+        },
+        {
+          "file": "src\\components\\papers\\open-reader\\open-reader-state.ts",
+          "line": 163
+        },
+        {
+          "file": "src\\components\\papers\\paper-reader\\paper-document-reader-page.tsx",
+          "line": 21
+        },
+        {
+          "file": "src\\components\\papers\\pdf-page-thumbnail.tsx",
+          "line": 27
+        },
+        {
+          "file": "src\\components\\papers\\shared\\paper-detail-content.tsx",
+          "line": 49
+        },
+        {
+          "file": "src\\components\\papers\\shared\\paper-detail-drawer.tsx",
+          "line": 37
+        },
+        {
+          "file": "src\\components\\papers\\shared\\paper-detail-drawer.tsx",
+          "line": 62
+        },
+        {
+          "file": "src\\components\\papers\\shared\\paper-pdf-viewer.tsx",
+          "line": 154
+        },
+        {
+          "file": "src\\components\\papers\\shared\\paper-pdf-viewer.tsx",
+          "line": 225
+        },
+        {
+          "file": "src\\components\\papers\\shared\\paper-pdf-viewer.tsx",
+          "line": 299
+        },
+        {
+          "file": "src\\components\\papers\\shared\\paper-pdf-viewer.tsx",
+          "line": 392
+        },
+        {
+          "file": "src\\components\\papers\\trending-papers-page.tsx",
+          "line": 137
+        },
+        {
+          "file": "src\\components\\papers\\trending-papers-page.tsx",
+          "line": 142
+        },
+        {
+          "file": "src\\features\\community\\components\\community-pulse-page.tsx",
+          "line": 60
+        },
+        {
+          "file": "src\\features\\portal\\components\\design-demo-page.tsx",
+          "line": 40
+        },
+        {
+          "file": "src\\features\\portal\\components\\paper-taxonomy-directory.tsx",
+          "line": 54
+        },
+        {
+          "file": "src\\features\\portal\\components\\paper-workspace-view.tsx",
+          "line": 30
+        },
+        {
+          "file": "src\\features\\portal\\components\\papers-design-demo-page.tsx",
+          "line": 54
+        },
+        {
+          "file": "src\\features\\portal\\components\\papers-design-demo-page.tsx",
+          "line": 112
+        },
+        {
+          "file": "src\\features\\portal\\components\\research-command-palette.tsx",
+          "line": 55
+        },
+        {
+          "file": "src\\features\\portal\\components\\research-sidebar.tsx",
+          "line": 51
+        },
+        {
+          "file": "src\\features\\portal\\components\\research-sidebar.tsx",
+          "line": 52
+        },
+        {
+          "file": "src\\features\\portal\\components\\research-source-entry.tsx",
+          "line": 81
+        },
+        {
+          "file": "src\\features\\portal\\reader\\desktop-reader-page.tsx",
+          "line": 83
+        },
+        {
+          "file": "src\\features\\portal\\reader\\paper-reader-workspace.tsx",
+          "line": 88
+        },
+        {
+          "file": "src\\features\\portal\\reader\\paper-reader-workspace.tsx",
+          "line": 122
+        },
+        {
+          "file": "src\\features\\portal\\reader\\paper-reader-workspace.tsx",
+          "line": 169
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-analysis-control.tsx",
+          "line": 54
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 230
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 291
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-preparation-control.tsx",
+          "line": 97
+        },
+        {
+          "file": "src\\features\\portal\\reader\\use-reader-notebook.ts",
+          "line": 68
+        },
+        {
+          "file": "src\\features\\projects\\components\\project-detail-drawer.tsx",
+          "line": 40
+        },
+        {
+          "file": "src\\features\\projects\\components\\project-radar-page.tsx",
+          "line": 54
+        },
+        {
+          "file": "src\\features\\projects\\components\\project-toolbar.tsx",
+          "line": 21
+        },
+        {
+          "file": "src\\features\\projects\\components\\projects-product-page.tsx",
+          "line": 78
+        },
+        {
+          "file": "src\\features\\reports\\hooks\\use-report-detail.ts",
+          "line": 34
+        },
+        {
+          "file": "src\\features\\sources\\hooks\\use-sources.ts",
+          "line": 31
+        }
+      ]
+    },
+    "react-hooks/refs": {
+      "count": 19,
+      "locations": [
+        {
+          "file": "src\\features\\portal\\reader\\paper-reader-workspace.tsx",
+          "line": 55
+        },
+        {
+          "file": "src\\features\\portal\\reader\\paper-reader-workspace.tsx",
+          "line": 57
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-analysis-control.tsx",
+          "line": 45
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-analysis-control.tsx",
+          "line": 46
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 123
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 124
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 125
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 126
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 127
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 128
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-assistant.tsx",
+          "line": 129
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-preparation-control.tsx",
+          "line": 44
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-preparation-control.tsx",
+          "line": 45
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-preparation-control.tsx",
+          "line": 46
+        },
+        {
+          "file": "src\\features\\portal\\reader\\reader-preparation-control.tsx",
+          "line": 47
+        },
+        {
+          "file": "src\\features\\portal\\reader\\use-reader-notebook.ts",
+          "line": 57
+        },
+        {
+          "file": "src\\lib\\auth\\research-return-context.ts",
+          "line": 16
+        },
+        {
+          "file": "src\\lib\\auth\\research-return-context.ts",
+          "line": 17
+        },
+        {
+          "file": "src\\lib\\research\\use-research-draft.ts",
+          "line": 17
+        }
+      ]
+    },
+    "react-hooks/purity": {
+      "count": 3,
+      "locations": [
+        {
+          "file": "src\\components\\auth\\portal-login-dialog.tsx",
+          "line": 33
+        },
+        {
+          "file": "src\\components\\auth\\portal-login-dialog.tsx",
+          "line": 144
+        },
+        {
+          "file": "src\\features\\portal\\components\\papers-design-demo-page.tsx",
+          "line": 60
+        }
+      ]
+    }
+  },
+  "desktopReview": {
+    "assessment": "No confirmed behavior defect. refs locations hold latest owner/source/request identities for stale async-result rejection; effect state changes reset owner/source/load scopes or apply external storage/network results. Existing owner-switch, receipt-mismatch, selection, notebook, and report tests passed.",
+    "action": "Do not expand the RCE framework upgrade into repository-wide React Compiler adoption; keep diagnostics documented for a separately planned refactor."
+  }
+}

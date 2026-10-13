@@ -66,7 +66,12 @@ def test_real_rag_controller_persists_and_replays_pinned_memory_without_live_rea
     assert hit["execution_identity"] == fixture.root.execution_identity.to_dict()
     assert "Prior paper ask" in hit["summary"]
     store = PaperRagTranscriptFileStore(tmp_path / "transcripts")
-    artifact = store.persist(result.transcript)
+    actor_scope = {
+        "tenant_id": fixture.root.policy.tenant_id,
+        "user_id": fixture.root.policy.owner_id,
+        "memory_namespace": fixture.metadata.namespace,
+    }
+    artifact = store.persist(result.transcript, actor_scope=actor_scope)
     fixture.publisher.publish((replace(fixture.records[0], content="new current ablation evidence"),))
     high_watermark = fixture.events.get_stream_high_watermark("run:rag-grant-run", tenant_id="control")
     for target, names in (
@@ -78,7 +83,9 @@ def test_real_rag_controller_persists_and_replays_pinned_memory_without_live_rea
     ):
         for name in names:
             monkeypatch.setattr(target, name, lambda *args, **kwargs: pytest.fail("offline replay performed live IO"))
-    replay = replay_rag_session(store.transcript_payload(artifact.path))
+    replay = replay_rag_session(
+        store.transcript_payload(artifact.transcript_id, actor_scope=actor_scope)
+    )
     assert replay.replayable
     assert replay.context_pack["memory_context"] == [hit]
     assert "new current ablation evidence" not in str(replay.to_dict())

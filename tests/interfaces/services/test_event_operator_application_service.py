@@ -405,6 +405,7 @@ def test_concurrent_application_retry_has_no_read_before_write_dependency(
     tmp_path,
 ) -> None:
     store = _Store()
+    event_storage = _storage(store)
     barrier = Barrier(8)
 
     def cancel(index: int):
@@ -416,7 +417,7 @@ def test_concurrent_application_retry_has_no_read_before_write_dependency(
             ),
             tenant_id="tenant-a",
             artifact_root=tmp_path,
-            event_storage=_storage(store),
+            event_storage=event_storage,
             clock=lambda: NOW + timedelta(seconds=index),
         )
         barrier.wait(timeout=15)

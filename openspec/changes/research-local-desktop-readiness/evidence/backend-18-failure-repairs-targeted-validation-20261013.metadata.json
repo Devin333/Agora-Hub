@@ -1,0 +1,14 @@
+{
+  "stage": "final18-targeted-rerun",
+  "cwd": "F:\\github\\NewsRoom",
+  "command": ".venv/Scripts/python.exe -m pytest tests/backend/research/rag/test_execution_memory.py tests/contracts/test_rag_replay_command.py tests/infrastructure/storage/test_graph_artifact_catalog.py::test_two_processes_serialize_dedup_registration tests/interfaces/api/test_research_api.py tests/interfaces/services/test_paper_rag_service.py tests/interfaces/services/test_paper_rag_transcript_store.py tests/interfaces/services/test_research_import_service.py tests/interfaces/services/test_research_service.py -q",
+  "environment": {
+    "PYTHONFAULTHANDLER": "1",
+    "PYTHONUNBUFFERED": "1"
+  },
+  "utcStart": "2026-10-12T21:10:12.6127186Z",
+  "utcEnd": "2026-10-12T21:10:58.5120520Z",
+  "exitCode": 0,
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-final18-targeted-rerun-20261013-051012-604.log",
+  "logSha256": "503745016b601f68ac32c6fc11234db488a39cd8ddc8fd6a8afd122a016e069d"
+}

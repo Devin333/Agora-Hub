@@ -6,6 +6,7 @@ import { ResearchHeader } from "@/components/layout/research-header"
 import type { FrontendSurface } from "@/lib/frontend-surface"
 import { useUiStore } from "@/stores/ui-store"
 import { cn } from "@/lib/utils"
+import { isLocalDesktopProfile } from "@/lib/deployment-profile"
 
 export function AppShell({ children, surface = "portal" }: { children: ReactNode; surface?: FrontendSurface }) {
   const pathname = usePathname()
@@ -23,6 +24,7 @@ export function AppShell({ children, surface = "portal" }: { children: ReactNode
   }
 
   const isPortalHomeRoute = pathname === "/"
+  const isDesktopResearchRoute = isLocalDesktopProfile() && (pathname === "/" || pathname === "/papers" || pathname === "/reports" || pathname.startsWith("/reports/") || pathname.startsWith("/research/groups/"))
   const isReaderRoute = isPaperReaderRoute(pathname)
   const isDesignDemoRoute = pathname.startsWith("/design-demo")
   const isTaxonomyDirectory = pathname === "/papers/methods" || pathname === "/papers/tasks"
@@ -32,7 +34,7 @@ export function AppShell({ children, surface = "portal" }: { children: ReactNode
     return <div className="min-h-screen bg-background text-foreground">{children}</div>
   }
 
-  if (isDesignDemoRoute || isTaxonomyDirectory) {
+  if (isDesignDemoRoute || isTaxonomyDirectory || isDesktopResearchRoute) {
     return <div className="min-h-screen bg-[#f5f6f3] text-[#18231f]">{children}</div>
   }
 

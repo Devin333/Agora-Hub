@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic"
 
 const answerSchema = z.object({ answer: z.string(), evidenceRefs: z.array(z.string()).default([]), confidence: z.number().min(0).max(1), metadata: z.record(z.string(), z.unknown()).optional() })
 
-export async function POST(request: NextRequest, { params }: { params: { paperId: string } }) {
+export async function POST(request: NextRequest, props: { params: Promise<{ paperId: string }> }) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response

@@ -37,6 +37,19 @@ from framework.shared.json import to_jsonable
 
 
 @runtime_checkable
+class RAGEventRecorder(Protocol):
+    def record_event(
+        self,
+        *,
+        spec: RAGSessionSpec,
+        sequence: int,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        ...
+
+
+@runtime_checkable
 class RAGSessionController(Protocol):
     def run(self, spec: RAGSessionSpec) -> "RAGSessionResult":
         ...
@@ -101,6 +114,7 @@ class BoundedRAGSessionController(RAGSessionController):
         answer_gate: RAGAnswerGate | None = None,
         gates: RAGGateSuite | None = None,
         telemetry: RAGTelemetry | None = None,
+        event_recorder: RAGEventRecorder | None = None,
     ) -> None:
         self.retrieval = retrieval
         self.memory = memory
@@ -112,6 +126,7 @@ class BoundedRAGSessionController(RAGSessionController):
         self.answer_gate = answer_gate or RAGAnswerGate()
         self.gates = gates or RAGGateSuite()
         self.telemetry = telemetry or RAGTelemetry()
+        self.event_recorder = event_recorder
 
     def run(self, spec: RAGSessionSpec) -> RAGSessionResult:
         self._validate_memory_execution(spec)
@@ -190,8 +205,6 @@ class BoundedRAGSessionController(RAGSessionController):
 
             step_results = self._execute_plan(plan, state, policy)
             state.artifact_refs.extend(_dedupe_texts(ref for result in step_results for ref in result.artifact_refs))
-            for step_result in step_results:
-                self._event(state, "rag_step_executed", step_result.to_dict())
             verification = self.source_verifier.verify(
                 tuple(_result_evidence(step_results)),
                 policy=policy,
@@ -338,6 +351,14 @@ class BoundedRAGSessionController(RAGSessionController):
             else None
         )
         for attempt_index in range(max_attempts):
+            self._event(
+                state,
+                "rag_answer_generation_started",
+                {
+                    "generation_attempt": attempt_index + 1,
+                    "max_generation_attempts": max_attempts,
+                },
+            )
             if execution_identity is None:
                 candidate = self.answer_worker.generate_answer(
                     question=spec.goal.question,
@@ -603,6 +624,11 @@ class BoundedRAGSessionController(RAGSessionController):
     ) -> tuple[RetrievalStepResult, ...]:
         results: list[RetrievalStepResult] = []
         for step in plan.steps:
+            self._event(
+                state,
+                "rag_step_execution_started",
+                {"step_id": step.step_id, "operation": step.operation.value},
+            )
             with self.telemetry.start_step(step, state.spec) as step_span:
                 if step.operation == RetrievalOperation.SEARCH_CORPUS:
                     result = self._execute_search(step, state)
@@ -629,6 +655,7 @@ class BoundedRAGSessionController(RAGSessionController):
                 budget_result = self.gates.budget.evaluate(state.budget_snapshot, policy)
                 step_span.finish_step(result)
             results.append(result)
+            self._event(state, "rag_step_executed", result.to_dict())
             if not budget_result.passed:
                 self._event(state, "rag_gate_failed", budget_result.to_dict())
                 break
@@ -785,7 +812,15 @@ class BoundedRAGSessionController(RAGSessionController):
 
     def _event(self, state: RAGSessionState, event_type: str, payload: dict[str, Any]) -> None:
         json_payload = to_jsonable(payload)
-        state.events.append({"event_type": event_type, "payload": json_payload})
+        event = {"event_type": event_type, "payload": json_payload}
+        if self.event_recorder is not None:
+            self.event_recorder.record_event(
+                spec=state.spec,
+                sequence=len(state.events),
+                event_type=event_type,
+                payload=json_payload,
+            )
+        state.events.append(event)
         if state.telemetry is not None:
             state.telemetry.add_event(event_type, json_payload)
 

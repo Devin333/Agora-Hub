@@ -1,0 +1,166 @@
+{
+  "generatedAtUtc": "2026-10-12T20:57:00.1784883Z",
+  "frontendNextOwnership": "returned-to-root",
+  "residual": [],
+  "changes": [
+    {
+      "path": "frontend/vitest.config.ts",
+      "summary": "Vitest cache moved outside frontend/node_modules and frontend release tree to repository-root .tmp/vitest/frontend."
+    },
+    {
+      "path": "frontend/src/components/providers.tsx",
+      "summary": "Formal paper readers keep the global command palette mounted while hiding its fixed trigger."
+    },
+    {
+      "path": "frontend/src/features/portal/components/research-command-palette.tsx",
+      "summary": "showTrigger controls only the floating trigger; Ctrl/Cmd+K dialog and focus restoration remain mounted."
+    },
+    {
+      "path": "frontend/src/features/portal/components/__tests__/research-command-palette.test.tsx",
+      "summary": "Hidden-trigger shortcut/focus contract."
+    },
+    {
+      "path": "frontend/tests/e2e/desktop-research-readiness.spec.ts",
+      "summary": "Ctrl+K opens search and Escape returns focus to notes across all required viewports."
+    },
+    {
+      "path": "frontend/tests/e2e/reader-workspace.spec.ts",
+      "summary": "Citation assertion uses visible [33] identity rather than opaque LaTeXML id, while retaining uniqueness and viewport requirements."
+    }
+  ],
+  "dependencyRootCause": {
+    "npmCiInstallsOptionalTransitives": true,
+    "vitestDidNotInstallPackages": true,
+    "detail": "npm ci installs lockfile-declared optional descendants. node_modules/.vite made node_modules newer than hidden node_modules/.package-lock.json; npm 11.6.1 then rebuilt the physical tree and misclassified hoisted children whose platform parents are absent on Windows. Moving Vitest cache to ../.tmp/vitest/frontend prevents test tooling from invalidating the hidden-lock classification. No unused production dependency was added.",
+    "sharpLineage": "next -> sharp -> platform optional wasm parents -> @img/sharp-wasm32 -> @emnapi/runtime",
+    "toolingLineage": "vite/rolldown and eslint-config-next/unrs-resolver optional bindings -> @napi-rs/wasm-runtime -> @tybys/wasm-util"
+  },
+  "readerCitationRootCause": "Displayed citation 33 scrolls to opaque id bib.bib28, whose visible label is [33]; bib.bib33 visibly labels [28]. Production navigation was correct; the old test coupled display order to an opaque source id.",
+  "validation": {
+    "npmCi": {
+      "command": "npm.cmd ci",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:52:43.159074Z",
+      "endedAtUtc": "2026-10-12T20:52:54.9959902Z",
+      "exitCode": 0,
+      "packageJsonSha256": "dac22cc2033fc52b35bd3505308091adc9ee60f4cacd63e52fc888bd39cbac5d",
+      "packageLockSha256": "4b154d77d0dbed69de006b4062faf46dfe92dd568d4a676f6d377e803243f3bd",
+      "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-npm-ci-20261013.log"
+    },
+    "unit": {
+      "metadata": {
+        "command": "npm.cmd test",
+        "cwd": "F:\\github\\NewsRoom\\frontend",
+        "startedAtUtc": "2026-10-12T20:53:18.3643416Z",
+        "endedAtUtc": "2026-10-12T20:53:32.8217553Z",
+        "exitCode": 0,
+        "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-test-20261013.log",
+        "nodeModulesViteExists": false,
+        "rootTmpVitestExists": true
+      },
+      "result": "140 files / 729 tests passed"
+    },
+    "typecheck": {
+      "command": "npm.cmd run typecheck",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:53:54.4019679Z",
+      "endedAtUtc": "2026-10-12T20:53:56.0378876Z",
+      "exitCode": 0,
+      "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-typecheck-20261013.log"
+    },
+    "lint": {
+      "command": "npm.cmd run lint",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:54:11.6800275Z",
+      "endedAtUtc": "2026-10-12T20:54:22.4768144Z",
+      "exitCode": 0,
+      "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-lint-20261013.log"
+    },
+    "desktopBrowser": {
+      "metadata": {
+        "command": "npx.cmd playwright test tests/e2e/desktop-research-readiness.spec.ts --reporter=list,json",
+        "cwd": "F:\\github\\NewsRoom\\frontend",
+        "profile": "local-desktop",
+        "surface": "portal",
+        "baseUrl": "http://127.0.0.1:3400",
+        "apiBaseUrl": "http://127.0.0.1:8000",
+        "mocks": false,
+        "frontendAuth": true,
+        "reuseExistingServer": false,
+        "releaseId": "e2e-fixture",
+        "startedAtUtc": "2026-10-12T20:29:02.7848386Z",
+        "endedAtUtc": "2026-10-12T20:29:17.9760142Z",
+        "exitCode": 0,
+        "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-desktop-local-palette-final-20261013.log",
+        "json": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-desktop-local-palette-final-20261013.json",
+        "evidenceBoundary": "route fixtures only; not Chapter 12 live service evidence"
+      },
+      "result": "4 passed",
+      "boundary": "route fixtures only; not Chapter 12 live service evidence"
+    },
+    "portalBrowser": {
+      "metadata": {
+        "command": "npx.cmd playwright test --grep-invert \"/studio|/admin|admin console|Operations Studio\" --reporter=list,json",
+        "cwd": "F:\\github\\NewsRoom\\frontend",
+        "profile": "default",
+        "surface": "portal",
+        "baseUrl": "http://127.0.0.1:3300",
+        "mocks": true,
+        "frontendAuth": false,
+        "reuseExistingServer": false,
+        "startedAtUtc": "2026-10-12T20:45:18.3529327Z",
+        "endedAtUtc": "2026-10-12T20:47:02.9033374Z",
+        "exitCode": 0,
+        "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-portal-final-after-palette-20261013.log",
+        "json": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-portal-final-after-palette-20261013.json"
+      },
+      "result": "50 passed / 4 local-desktop-profile skips"
+    },
+    "adminBrowser": "Prior final candidate 21 passed / 6 pre-existing Studio test.fixme skips; default showTrigger output and admin routes are unchanged.",
+    "productionBuild": {
+      "command": "npm.cmd run build",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "profile": "local-desktop",
+      "canonicalOrigin": "http://127.0.0.1:3400",
+      "apiBaseUrl": "http://127.0.0.1:8000",
+      "mocks": false,
+      "frontendAuth": true,
+      "releaseId": "chapter11-final-sequence",
+      "startedAtUtc": "2026-10-12T20:54:53.9445785Z",
+      "endedAtUtc": "2026-10-12T20:55:09.691177Z",
+      "exitCode": 0,
+      "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-localdesktop-build-20261013.log"
+    },
+    "dependencyTree": {
+      "command": "npm.cmd ls --json --all + recursive scan + Sharp/SWC",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:55:45.3918507Z",
+      "endedAtUtc": "2026-10-12T20:55:48.7225613Z",
+      "exitCode": 0,
+      "recursiveProblemCount": 0,
+      "problems": [],
+      "tree": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-tree-20261013.json",
+      "diffCheckExitCode": 0,
+      "nodeModulesViteExists": false,
+      "rootTmpVitestExists": true,
+      "sharp": {
+        "version": "0.35.5",
+        "vips": "8.18.7",
+        "pngOutput": {
+          "file": true,
+          "buffer": true,
+          "stream": true
+        }
+      },
+      "swc": {
+        "version": "16.4.0",
+        "path": "F:\\github\\NewsRoom\\frontend\\node_modules\\@next\\swc-win32-x64-msvc\\next-swc.win32-x64-msvc.node",
+        "transformBytes": 11
+      },
+      "packageJsonSha256": "dac22cc2033fc52b35bd3505308091adc9ee60f4cacd63e52fc888bd39cbac5d",
+      "packageLockSha256": "4b154d77d0dbed69de006b4062faf46dfe92dd568d4a676f6d377e803243f3bd",
+      "vitestConfigSha256": "27cb267d5eab01511e28fa77078152171522d62c9a0f131d0a43acfc321d5b49",
+      "listenerCount": 0
+    }
+  }
+}

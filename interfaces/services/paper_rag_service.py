@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import logging
 from contextlib import contextmanager
 from threading import Condition, Lock
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from backend.research.application import AskPaperUseCase
 from backend.research.domain import stable_research_id
@@ -12,12 +11,36 @@ from backend.research.rag.retrieval.paper_retriever import RetrievalRequest
 from backend.research.services.tenant_visibility import chunk_visible_to_tenant, public_metrics
 from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.rag.visibility import evidence_visible_to_tenant
+from framework.harness.rag.replay import replay_rag_session
 from framework.memory.recall_port import ExecutionMemoryRecallPort
 from interfaces.services.paper_rag_factory import PaperRagRuntimeResources
-from interfaces.services.paper_rag_transcript_store import SCHEMA_VERSION, PaperRagTranscriptFileStore
+from interfaces.services.json_file_store import JsonFileInvalidError
+from interfaces.services.paper_rag_transcript_store import PaperRagTranscriptFileStore
 
 
-LOGGER = logging.getLogger(__name__)
+
+
+
+class _BoundPaperRagEventRecorder:
+    def __init__(self, store: Any, actor_scope: Mapping[str, str]) -> None:
+        self._store = store
+        self._actor_scope = dict(actor_scope)
+
+    def record_event(
+        self,
+        *,
+        spec: Any,
+        sequence: int,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> None:
+        self._store.record_event(
+            spec=spec,
+            sequence=sequence,
+            event_type=event_type,
+            payload=payload,
+            actor_scope=self._actor_scope,
+        )
 
 
 class PaperRagApplicationService:
@@ -115,6 +138,123 @@ class PaperRagApplicationService:
                 self._closing = False
                 self._lifecycle.notify_all()
 
+    def recover_gated_answer(
+        self,
+        *,
+        session_id: str,
+        paper_id: str,
+        question: str,
+        tenant_id: str | None,
+        user_id: str | None,
+        memory_namespace: str | None,
+        include_interrupted: bool = False,
+    ) -> dict[str, Any] | None:
+        actor_scope = _transcript_actor_scope(tenant_id, user_id, memory_namespace)
+        envelope = self._transcript_store.find_by_session_id(
+            session_id,
+            actor_scope=actor_scope,
+        )
+        if not isinstance(envelope, Mapping):
+            if not include_interrupted:
+                return None
+            try:
+                journal = self._transcript_store.load_journal(
+                    session_id,
+                    actor_scope=actor_scope,
+                )
+            except PermissionError:
+                raise
+            except (JsonFileInvalidError, OSError, TypeError, ValueError):
+                return {
+                    "paper_id": paper_id,
+                    "question": question,
+                    "status": "interrupted",
+                    "recovery_state": "needs_action",
+                    "error_code": "rag_transcript_corrupt",
+                    "recovered": True,
+                }
+            if not isinstance(journal, Mapping):
+                return None
+            events = journal.get("events") if isinstance(journal.get("events"), list) else []
+            return {
+                "paper_id": paper_id,
+                "question": question,
+                "status": "interrupted",
+                "recovery_state": "needs_action",
+                "error_code": (
+                    "rag_transcript_unavailable" if journal.get("finalized") is True
+                    else "rag_execution_interrupted"
+                ),
+                "journal_event_count": len(events),
+                "last_event_type": (
+                    events[-1].get("event_type") if events and isinstance(events[-1], Mapping) else None
+                ),
+                "recovered": True,
+            }
+        transcript = envelope.get("transcript")
+        if not isinstance(transcript, Mapping):
+            return {
+                "paper_id": paper_id,
+                "question": question,
+                "status": "interrupted",
+                "recovery_state": "needs_action",
+                "error_code": "rag_transcript_corrupt",
+                "recovered": True,
+            }
+        try:
+            replay = replay_rag_session(transcript)
+        except (TypeError, ValueError, KeyError):
+            return {
+                "paper_id": paper_id,
+                "question": question,
+                "status": "interrupted",
+                "recovery_state": "needs_action",
+                "error_code": "rag_transcript_corrupt",
+                "recovered": True,
+            }
+        if not replay.replayable or replay.answer is None:
+            return {
+                "paper_id": paper_id,
+                "question": question,
+                "status": "interrupted",
+                "recovery_state": "needs_action",
+                "error_code": "rag_transcript_corrupt",
+                "recovered": True,
+            }
+        answer = dict(replay.answer)
+        context_pack = replay.context_pack if isinstance(replay.context_pack, Mapping) else {}
+        accepted = context_pack.get("accepted_evidence")
+        evidence_by_id = {
+            str(item.get("evidence_id")): item
+            for item in accepted
+            if isinstance(accepted, list) and isinstance(item, Mapping) and item.get("evidence_id")
+        } if isinstance(accepted, list) else {}
+        cited = [str(item) for item in answer.get("cited_evidence_ids") or () if str(item)]
+        citations = [
+            {
+                "evidence_id": evidence_id,
+                "source_ref": evidence_by_id[evidence_id].get("source_ref"),
+                "span_refs": list(evidence_by_id[evidence_id].get("span_refs") or ()),
+            }
+            for evidence_id in cited
+            if evidence_id in evidence_by_id
+        ]
+        decisions = list(replay.decisions)
+        decision_payload = decisions[-1].get("payload") if decisions and isinstance(decisions[-1], Mapping) else {}
+        return {
+            "paper_id": paper_id,
+            "question": question,
+            "status": replay.status.value,
+            "generation_mode": "gated_harness_replay",
+            "answer": answer.get("answer_text") if answer.get("abstained") is not True else None,
+            "answer_candidate": answer,
+            "claims": list(answer.get("claims") or ()),
+            "citations": citations,
+            "decision": dict(decision_payload) if isinstance(decision_payload, Mapping) else {},
+            "transcript_id": replay.transcript_id,
+            "recovered": True,
+        }
+
     def rag_ask(
         self,
         paper_id: str,
@@ -127,6 +267,9 @@ class PaperRagApplicationService:
         tenant_id: str | None = None,
         user_id: str | None = None,
         memory_namespace: str | None = None,
+        run_id: str | None = None,
+        allowed_source_refs: list[str] | tuple[str, ...] | None = None,
+        target_sections: list[str] | tuple[str, ...] | None = None,
         graph_identity: ContextGraphIdentity | None = None,
         memory_recall: ExecutionMemoryRecallPort | None = None,
     ) -> dict[str, Any]:
@@ -141,6 +284,9 @@ class PaperRagApplicationService:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 memory_namespace=memory_namespace,
+                run_id=run_id,
+                allowed_source_refs=allowed_source_refs,
+                target_sections=target_sections,
                 graph_identity=graph_identity,
                 memory_recall=memory_recall,
             )
@@ -157,6 +303,9 @@ class PaperRagApplicationService:
         tenant_id: str | None,
         user_id: str | None,
         memory_namespace: str | None,
+        run_id: str | None,
+        allowed_source_refs: list[str] | tuple[str, ...] | None,
+        target_sections: list[str] | tuple[str, ...] | None,
         graph_identity: ContextGraphIdentity | None,
         memory_recall: ExecutionMemoryRecallPort | None,
     ) -> dict[str, Any]:
@@ -174,6 +323,9 @@ class PaperRagApplicationService:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 memory_namespace=memory_namespace,
+                run_id=run_id,
+                allowed_source_refs=allowed_source_refs,
+                target_sections=target_sections,
                 graph_identity=graph_identity,
                 memory_recall=memory_recall,
             )
@@ -226,6 +378,9 @@ class PaperRagApplicationService:
         tenant_id: str | None,
         user_id: str | None,
         memory_namespace: str | None,
+        run_id: str | None,
+        allowed_source_refs: list[str] | tuple[str, ...] | None,
+        target_sections: list[str] | tuple[str, ...] | None,
         graph_identity: ContextGraphIdentity | None,
         memory_recall: ExecutionMemoryRecallPort | None,
     ) -> dict[str, Any]:
@@ -237,9 +392,18 @@ class PaperRagApplicationService:
             raise ValueError(
                 "Graph-bound paper RAG generation requires a physical activity identity"
             )
+        actor_scope = _transcript_actor_scope(tenant_id, user_id, memory_namespace)
+        session_id = stable_research_id(
+            "paper_rag_session",
+            graph_identity.run_id,
+            graph_identity.activity_id,
+            paper_id,
+            question,
+        )
         session_kwargs: dict[str, Any] = {
             "with_reranker": self._with_reranker,
             "with_answer_worker": True,
+            "event_recorder": _BoundPaperRagEventRecorder(self._transcript_store, actor_scope),
         }
         if memory_recall is not None:
             if not isinstance(memory_recall, ExecutionMemoryRecallPort):
@@ -260,23 +424,20 @@ class PaperRagApplicationService:
             tenant_id=tenant_id,
             user_id=user_id,
             memory_namespace=memory_namespace,
+            run_id=run_id,
+            allowed_source_refs=allowed_source_refs,
+            target_sections=target_sections,
         )
         result = session.run(
             goal,
             graph_identity=graph_identity,
-            session_id=stable_research_id(
-                "paper_rag_session",
-                graph_identity.run_id,
-                graph_identity.activity_id,
-                paper_id,
-                question,
-            ),
+            session_id=session_id,
             current_section_index=section_index,
         )
-        transcript_artifact = _persist_transcript_best_effort(
-            self._transcript_store,
+        transcript_artifact = self._transcript_store.persist(
             result.transcript,
-        )
+            actor_scope=actor_scope,
+        ).to_dict()
         return _gated_payload(
             paper_id=paper_id,
             question=question,
@@ -332,6 +493,25 @@ def _tenant_filters(tenant_id: str | None) -> dict[str, Any]:
     return {"tenant_id": tenant} if tenant else {}
 
 
+def _transcript_actor_scope(
+    tenant_id: str | None,
+    user_id: str | None,
+    memory_namespace: str | None,
+) -> dict[str, str]:
+    scope = {
+        key: value
+        for key, value in {
+            "tenant_id": str(tenant_id or "").strip(),
+            "user_id": str(user_id or "").strip(),
+            "memory_namespace": str(memory_namespace or "").strip(),
+        }.items()
+        if value
+    }
+    if not scope:
+        scope["memory_namespace"] = "research.public"
+    return scope
+
+
 def _gated_payload(
     *,
     paper_id: str,
@@ -373,28 +553,6 @@ def _gated_payload(
         "transcript_artifact": transcript_artifact,
         "context_pack": _context_pack_summary(pack, tenant_id=tenant_id),
     }
-
-
-def _persist_transcript_best_effort(store: Any, transcript: Any) -> dict[str, Any]:
-    try:
-        return store.persist(transcript).to_dict()
-    except Exception as exc:
-        transcript_id = str(getattr(transcript, "transcript_id", "") or "")
-        LOGGER.warning(
-            "failed to persist Paper RAG transcript",
-            extra={"transcript_id": transcript_id},
-            exc_info=True,
-        )
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "transcript_id": transcript_id,
-            "path": None,
-            "persisted": False,
-            "error": {
-                "type": exc.__class__.__name__,
-                "message": str(exc),
-            },
-        }
 
 
 def _gated_metrics(

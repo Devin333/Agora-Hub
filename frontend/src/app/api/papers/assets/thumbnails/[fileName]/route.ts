@@ -5,10 +5,8 @@ export const runtime = "nodejs"
 
 const DEFAULT_API_BASE_URL = "http://localhost:8000"
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: { fileName: string } }
-) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ fileName: string }> }) {
+  const params = await props.params;
   const { fileName } = params
   const response = await fetch(backendUrl(`/api/v1/papers/assets/thumbnails/${encodeURIComponent(fileName)}`), {
     headers: requestHeaders(),
@@ -40,7 +38,7 @@ export async function GET(
 function backendUrl(path: string): string {
   const baseUrl = process.env.NEWSROOM_API_BASE_URL ?? DEFAULT_API_BASE_URL
   const suffix = path.startsWith("/") ? path : `/${path}`
-  return `${baseUrl.replace(/\/$/, "")}${suffix}`
+  return `${baseUrl.replace(/\/$/, "")}${suffix}`;
 }
 
 function requestHeaders(): HeadersInit {

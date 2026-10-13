@@ -1,0 +1,150 @@
+{
+  "schema": "newsroom.desktop-frontend-validation/v1",
+  "recordedAt": "2026-10-12T18:43:51.387Z",
+  "framework": {
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "reactDom": "19.3.0",
+    "eslintConfigNext": "16.4.0",
+    "eslint": "9.39.5",
+    "bundler": "webpack"
+  },
+  "registryIdentity": "frontend-next16-registry-identity-20261013.json",
+  "checks": [
+    {
+      "command": "npm.cmd ci",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T18:26:00.6138877Z",
+      "endUtc": "2026-10-12T18:26:12.1689743Z",
+      "exitCode": 0,
+      "output": {
+        "path": "frontend-next16-npm-ci-20261013.log.gz",
+        "bytes": 316,
+        "sha256": "2758c1fff2cafca58db21721ba445ac175bf7fe386eeffd4b6113e3dd14550dd",
+        "encoding": "gzip",
+        "decompressedSha256": "b1c745a55d7cfa3d5bc7ac57679f621778a64af07db7494b1af490eeca5ab93e",
+        "decompressedBytes": 505
+      },
+      "liveAcceptance": false
+    },
+    {
+      "command": "npm.cmd ls --json --all",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T18:26:58.5614943Z",
+      "endUtc": "2026-10-12T18:26:59.2210801Z",
+      "exitCode": 0,
+      "output": {
+        "path": "frontend-next16-npm-ls-20261013.json",
+        "bytes": 336055,
+        "sha256": "55da43ed6406fb7c1b9e135821d2fd0d822703765698bf4e072b32e7ad674323"
+      },
+      "liveAcceptance": false
+    },
+    {
+      "command": "npm.cmd audit --json",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T18:27:24.0260574Z",
+      "endUtc": "2026-10-12T18:27:25.9847518Z",
+      "exitCode": 1,
+      "output": {
+        "path": "frontend-next16-npm-audit-20261013.json",
+        "bytes": 28180,
+        "sha256": "6e02067bd076cdcb0d9a3d590877b78d1082c8ff96dd46c5e8b77e3d486668d8"
+      },
+      "liveAcceptance": false
+    },
+    {
+      "command": "npm.cmd test",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T18:28:32.8432271Z",
+      "endUtc": "2026-10-12T18:28:46.8995014Z",
+      "exitCode": 0,
+      "output": {
+        "path": "frontend-next16-unit-20261013.log.gz",
+        "bytes": 230,
+        "sha256": "71b6b0af89dc133532099bd3118e5559c235d01d3a83b7e34ab2ef7b00617885",
+        "encoding": "gzip",
+        "decompressedSha256": "f97ceecb536e2c697be0c78763f37b507a2cec6bb6d5c065fb504559ec47e5f6",
+        "decompressedBytes": 295
+      },
+      "liveAcceptance": false
+    },
+    {
+      "command": "npm.cmd run typecheck",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T18:29:06.3736391Z",
+      "endUtc": "2026-10-12T18:29:07.9529918Z",
+      "exitCode": 0,
+      "output": {
+        "path": "frontend-next16-typecheck-20261013.log.gz",
+        "bytes": 82,
+        "sha256": "594414b79fdf440c4686a9d09ddb3856d2f6f97ed07ba92422dcd99db277f193",
+        "encoding": "gzip",
+        "decompressedSha256": "864361950cf7b78936326aa7697d83e87b9fe86c103a11a5673064b38b4f4792",
+        "decompressedBytes": 63
+      },
+      "liveAcceptance": false
+    },
+    {
+      "command": "npm.cmd run lint",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T18:29:28.0518897Z",
+      "endUtc": "2026-10-12T18:29:39.0703751Z",
+      "exitCode": 0,
+      "output": {
+        "path": "frontend-next16-lint-20261013.log.gz",
+        "bytes": 72,
+        "sha256": "8e44c491977a7487ec3b8fc725dd5f8abf57f7d7f84cea8df2ed05c33a2dee12",
+        "encoding": "gzip",
+        "decompressedSha256": "3fa8424452a42955aadbb4d916edc682c754818142cfb1f782203e0ecc2c3a96",
+        "decompressedBytes": 56
+      },
+      "liveAcceptance": false
+    },
+    {
+      "command": "npm.cmd run build",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "deploymentProfile": "local-desktop",
+      "mockDataEnabled": false,
+      "startUtc": "2026-10-12T18:36:51.0276308Z",
+      "endUtc": "2026-10-12T18:37:09.0971258Z",
+      "exitCode": 0,
+      "output": {
+        "path": "frontend-next16-build-before-browser-20261013.log.gz",
+        "bytes": 1312,
+        "sha256": "cfa7030cd1378c8417efd7aa6de678e0403d103803e4056e63053f1d1df69cdc",
+        "encoding": "gzip",
+        "decompressedSha256": "e0527871d4b6235789846a0d4bf0ee87a0301db9a8c2c6ee76199331a39bb633",
+        "decompressedBytes": 5435
+      },
+      "liveAcceptance": false,
+      "note": "Production build completed before browser runs; final production build must be regenerated after dev browser verification."
+    }
+  ],
+  "unitResult": {
+    "filesPassed": 140,
+    "filesTotal": 140,
+    "testsPassed": 726,
+    "testsTotal": 726
+  },
+  "auditResult": {
+    "exitCode": 1,
+    "critical": 0,
+    "high": 12,
+    "moderate": 4,
+    "low": 1,
+    "total": 17,
+    "nextFinding": null
+  },
+  "compilerMigrationReview": "frontend-next16-eslint-rule-review-20261013.json",
+  "residualAuditScope": {
+    "developmentAndBuildTools": "ESLint, Tailwind, glob, Browserslist, Vite/Vitest, jsdom/undici and source-map tooling do not have an application-request input path in the reviewed production runtime.",
+    "katex": "Direct low-severity runtime dependency; formulas rendered with trust:false, advisory requires prior prototype pollution; residual finding retained for separate dependency upgrade."
+  },
+  "notExecutedAtThisRecord": {
+    "browser": true,
+    "liveAcceptance": true,
+    "deployment": true
+  },
+  "supersedes": "frontend-validation-next14-history-20261013.json"
+}

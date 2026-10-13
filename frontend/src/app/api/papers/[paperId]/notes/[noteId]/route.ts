@@ -6,13 +6,17 @@ import { paperRouteErrorStatus, requirePublicPaper } from "@/lib/papers/public-r
 
 export const dynamic = "force-dynamic"
 
-export async function PATCH(request: NextRequest, { params }: { params: { paperId: string; noteId: string } }) {
+export async function PATCH(
+  request: NextRequest,
+  props: { params: Promise<{ paperId: string; noteId: string }> }
+) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response
   }
 
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const body = await request.json().catch(() => ({}))
   const result = await safeApiPatch(
     `/api/v1/papers/${encodeURIComponent(guard.paper.id)}/notes/${encodeURIComponent(params.noteId)}`,
@@ -24,13 +28,17 @@ export async function PATCH(request: NextRequest, { params }: { params: { paperI
   return noteResponse(result)
 }
 
-export async function DELETE(_request: NextRequest, { params }: { params: { paperId: string; noteId: string } }) {
+export async function DELETE(
+  _request: NextRequest,
+  props: { params: Promise<{ paperId: string; noteId: string }> }
+) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response
   }
 
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiDelete(
     `/api/v1/papers/${encodeURIComponent(guard.paper.id)}/notes/${encodeURIComponent(params.noteId)}`,
     {

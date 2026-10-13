@@ -152,21 +152,53 @@ def test_research_service_reads_catalog_artifact_with_metadata_default() -> None
     assert reader.calls[0][2] is False
 
 
-def test_research_service_ask_returns_grounded_evidence_refs() -> None:
+def test_research_service_reader_ask_uses_gated_grounded_generation() -> None:
+    rag = _CapturingRagAskUseCase(
+        response={
+            "answer": "The verified method answer.",
+            "citations": [{
+                "evidence_id": "evidence-1",
+                "source_ref": "paper://paper-1/sec-intro",
+                "span_refs": ["section=sec-intro"],
+            }],
+            "claims": [{"claim_id": "claim-1"}],
+            "decision": {"decision_type": "return_answer"},
+            "generation_mode": "gated_harness",
+            "status": "completed",
+            "transcript_id": "rag-transcript-1",
+        }
+    )
+    store = InMemoryResearchRunStore()
     service = ResearchApplicationService(
         analyze_use_case=FakeAnalyzeUseCase(),
-        run_store=InMemoryResearchRunStore(),
+        rag_ask_use_case=rag,
+        run_store=store,
     )
-    service.analyze_paper(ResearchAnalyzeInput(paper_id="paper-1", source_url="https://arxiv.org/abs/2606.00001"))
+    service.analyze_paper(
+        ResearchAnalyzeInput(
+            paper_id="paper-1",
+            source_url="https://arxiv.org/abs/2606.00001",
+            run_id="research-run-1",
+        )
+    )
 
     answer = service.ask_paper(
         "paper-1",
-        ResearchAskInput(question="What is the method?", selection={"sourceRefs": ["paper://paper-1/sec-intro"]}),
+        ResearchAskInput(
+            question="What is the method?",
+            selection={"sectionId": "sec-intro"},
+            run_id="research-run-1",
+        ),
     )
 
-    assert answer["answer"] == "A controlled PLAN EXECUTE VERIFY runtime."
-    assert "paper://paper-1/sec-intro" in answer["evidenceRefs"]
-    assert answer["traceRef"] == "harness-trace://research-run-1"
+    assert answer["answer"] == "The verified method answer."
+    assert answer["evidenceRefs"] == ["evidence-1"]
+    assert answer["transcriptId"] == "rag-transcript-1"
+    assert rag.calls[0][2]["generate"] is True
+    assert rag.calls[0][2]["gated"] is True
+    assert rag.calls[0][2]["run_id"] == "research-run-1"
+    assert rag.calls[0][2]["target_sections"] == ["sec-intro"]
+    assert "attacker://forged" not in rag.calls[0][2]["allowed_source_refs"]
 
 
 def test_research_service_dispatches_chunk_rag_mode_without_run_store_lookup() -> None:
@@ -200,6 +232,9 @@ def test_research_service_dispatches_chunk_rag_mode_without_run_store_lookup() -
                 "tenant_id": "tenant-a",
                 "user_id": "user-1",
                 "memory_namespace": "research:tenant:tenant-a:user:user-1",
+                "run_id": None,
+                "allowed_source_refs": None,
+                "target_sections": None,
             },
         )
     ]
@@ -233,10 +268,10 @@ def test_research_service_rejects_invalid_ask_mode_or_chunk_bounds(
 
 
 def test_research_service_ask_propagates_canonical_actor_scope() -> None:
-    ask_use_case = _CapturingAskPaperUseCase()
+    rag = _CapturingRagAskUseCase(response=_grounded_rag_response())
     service = ResearchApplicationService(
         analyze_use_case=FakeAnalyzeUseCase(),
-        ask_use_case=ask_use_case,
+        rag_ask_use_case=rag,
         run_store=InMemoryResearchRunStore(),
     )
     service.analyze_paper(
@@ -256,13 +291,10 @@ def test_research_service_ask_propagates_canonical_actor_scope() -> None:
         ),
     )
 
-    goal = ask_use_case.goals[0]
-    assert goal.allowed_memory_namespaces == [
-        "research:tenant:tenant-a:user:user-1"
-    ]
-    assert goal.metadata["tenant_id"] == "tenant-a"
-    assert goal.metadata["user_id"] == "user-1"
-    assert goal.metadata["memory_namespace"] == goal.allowed_memory_namespaces[0]
+    kwargs = rag.calls[0][2]
+    assert kwargs["tenant_id"] == "tenant-a"
+    assert kwargs["user_id"] == "user-1"
+    assert kwargs["memory_namespace"] == "research:tenant:tenant-a:user:user-1"
 
 
 def test_research_service_rejects_tenant_namespace_without_tenant_actor() -> None:
@@ -362,10 +394,10 @@ def test_authenticated_actor_scope_overrides_or_rejects_requested_scope() -> Non
 
 
 def test_research_service_ask_preserves_options_user_id_compatibility() -> None:
-    ask_use_case = _CapturingAskPaperUseCase()
+    rag = _CapturingRagAskUseCase(response=_grounded_rag_response())
     service = ResearchApplicationService(
         analyze_use_case=FakeAnalyzeUseCase(),
-        ask_use_case=ask_use_case,
+        rag_ask_use_case=rag,
         run_store=InMemoryResearchRunStore(),
     )
     service.analyze_paper(
@@ -383,9 +415,8 @@ def test_research_service_ask_preserves_options_user_id_compatibility() -> None:
         ),
     )
 
-    assert ask_use_case.goals[0].allowed_memory_namespaces == [
-        "research:user:legacy-user"
-    ]
+    assert rag.calls[0][2]["user_id"] == "legacy-user"
+    assert rag.calls[0][2]["memory_namespace"] == "research:user:legacy-user"
 
 
 def test_research_service_does_not_expose_tenant_run_without_tenant_actor() -> None:
@@ -397,6 +428,7 @@ def test_research_service_does_not_expose_tenant_run_without_tenant_actor() -> N
     }
     service = ResearchApplicationService(
         analyze_use_case=FakeAnalyzeUseCase(result),
+        rag_ask_use_case=_CapturingRagAskUseCase(response=_grounded_rag_response()),
         run_store=InMemoryResearchRunStore(),
     )
     service.analyze_paper(
@@ -490,14 +522,109 @@ class _CapturingAskPaperUseCase(AskPaperUseCase):
         return super().build_retrieval_goal(goal)
 
 
+def _grounded_rag_response() -> dict:
+    return {
+        "answer": "The verified method answer.",
+        "citations": [
+            {
+                "evidence_id": "evidence-1",
+                "span_refs": ["section=sec-intro"],
+            }
+        ],
+        "claims": [{"claim_id": "claim-1"}],
+        "decision": {"decision_type": "return_answer"},
+        "generation_mode": "gated_harness",
+        "status": "answered",
+        "transcript_id": "rag-transcript-test",
+    }
+
+
 class _CapturingRagAskUseCase:
-    def __init__(self) -> None:
+    def __init__(self, response=None) -> None:
         self.calls = []
+        self.response = response
 
     def rag_ask(self, paper_id, question, **kwargs):
         self.calls.append((paper_id, question, kwargs))
-        return {"mode": "chunk_rag", "paper_id": paper_id}
+        if self.response is None:
+            return {"mode": "chunk_rag", "paper_id": paper_id}
+        response = dict(self.response)
+        response["citations"] = [
+            {
+                **dict(citation),
+                "source_ref": citation.get("source_ref")
+                or f"paper://{paper_id}/sec-intro",
+            }
+            for citation in response.get("citations", [])
+        ]
+        return response
 
+
+def test_exact_run_report_projection_rejects_wrong_artifact_identity() -> None:
+    result = make_research_result(
+        run_id="report-run-1",
+        paper_id="paper-harness-001",
+    )
+    store = InMemoryResearchRunStore()
+    store.save(
+        ResearchRunRecord(
+            run_id="report-run-1",
+            paper_id="paper-harness-001",
+            result=result,
+        )
+    )
+
+    class ArtifactReader:
+        def __init__(self, *, mode: str = "valid") -> None:
+            self.mode = mode
+
+        def read(self, ref, *, actor_scope, include_payload=False, max_chars=200_000):
+            del actor_scope, max_chars
+            expected_type = (
+                "research-analysis"
+                if str(ref).endswith("/analysis")
+                else "research-quality-result"
+            )
+            artifact_type = (
+                "research-quality-result"
+                if self.mode == "same-kind" or self.mode == "wrong-type"
+                else expected_type
+            )
+            payload = (
+                result.analysis.to_dict()
+                if expected_type == "research-analysis"
+                else result.quality.to_dict()
+            )
+            paper_id = "different-paper" if self.mode == "wrong-paper" else "paper-harness-001"
+            if self.mode == "wrong-paper" and expected_type == "research-analysis":
+                payload = {**payload, "paper_id": paper_id}
+            return {
+                "artifactRef": ref,
+                "artifactType": artifact_type,
+                "contentChecksum": "sha256:" + "a" * 64,
+                "metadata": {
+                    "run_id": "report-run-1",
+                    "paper_id": paper_id,
+                    "artifact_type": artifact_type,
+                    "actor_scope": result.actor_scope,
+                },
+                **({"payload": payload} if include_payload else {}),
+            }
+
+    valid = ResearchApplicationService(
+        run_store=store, artifact_reader=ArtifactReader()
+    ).get_run_projection("report-run-1")
+    assert valid["artifactStatus"] == "valid"
+    assert valid["eligibleForAcceptedExport"] is True
+
+    for mode in ("wrong-type", "same-kind", "wrong-paper"):
+        mismatched = ResearchApplicationService(
+            run_store=store,
+            artifact_reader=ArtifactReader(mode=mode),
+        ).get_run_projection("report-run-1")
+        assert mismatched["artifactStatus"] == "corrupt"
+        assert mismatched["artifactReason"] == "artifact_identity_mismatch"
+        assert mismatched["eligibleForAcceptedExport"] is False
 
 def test_research_service_standardizes_missing_and_quality_errors() -> None:
     service = ResearchApplicationService(
@@ -649,6 +776,7 @@ def test_research_service_queries_survive_durable_store_reconstruction(
     )
     service_a = ResearchApplicationService(
         analyze_use_case=FakeAnalyzeUseCase(result),
+        rag_ask_use_case=_CapturingRagAskUseCase(response=_grounded_rag_response()),
         run_store=store_a,
     )
     service_a.analyze_paper(
@@ -681,7 +809,10 @@ def test_research_service_queries_survive_durable_store_reconstruction(
         tmp_path,
         result_decoder=ResearchAnalysisResult.from_dict,
     )
-    service_b = ResearchApplicationService(run_store=store_b)
+    service_b = ResearchApplicationService(
+        rag_ask_use_case=_CapturingRagAskUseCase(response=_grounded_rag_response()),
+        run_store=store_b,
+    )
 
     actual = {
         "analysis": service_b.get_analysis(paper_id, actor=actor),
@@ -774,7 +905,10 @@ def test_accepted_then_failed_runs_do_not_shadow_normal_queries(
             tmp_path,
             result_decoder=FakeResearchAnalysisResult.from_dict,
         )
-    service = ResearchApplicationService(run_store=store)
+    service = ResearchApplicationService(
+        rag_ask_use_case=_CapturingRagAskUseCase(response=_grounded_rag_response()),
+        run_store=store,
+    )
     actor = ResearchActorInput(user_id="user-1")
     assert store.get_latest_by_paper_id("paper-disposition-service").run_id == accepted.run_id
     assert [
@@ -1208,7 +1342,10 @@ def test_post_creation_failure_recovers_scoped_quarantine_after_restart_without_
         tmp_path,
         result_decoder=FakeResearchAnalysisResult.from_dict,
     )
-    reopened = ResearchApplicationService(run_store=reopened_store)
+    reopened = ResearchApplicationService(
+        rag_ask_use_case=_CapturingRagAskUseCase(response=_grounded_rag_response()),
+        run_store=reopened_store,
+    )
     assert reopened.get_analysis(paper_id, actor=actor)["runId"] == accepted_run_id
     assert reopened.get_reader(paper_id, actor=actor)["metadata"]["runId"] == accepted_run_id
     assert reopened.ask_paper(

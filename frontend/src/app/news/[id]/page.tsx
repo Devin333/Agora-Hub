@@ -1,4 +1,5 @@
-"use client"
+"use client";
+import { use } from "react";
 
 import Link from "next/link"
 import { Badge } from "@/components/common/badge"
@@ -14,7 +15,8 @@ import { NewsInsightPanel } from "@/features/news/components/news-insight-panel"
 import { NewsRelationsPanel } from "@/features/news/components/news-relations-panel"
 import { useNewsDetail } from "@/features/news/hooks/use-news-detail"
 
-export default function NewsDetailPage({ params }: { params: { id: string } }) {
+export default function NewsDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { data, isLoading, isError, error, refetch } = useNewsDetail(params.id)
 
   if (isLoading) {

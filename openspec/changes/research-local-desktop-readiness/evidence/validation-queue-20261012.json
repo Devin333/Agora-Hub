@@ -1,0 +1,462 @@
+{
+  "schema": "newsroom.desktop-validation-queue/v1",
+  "preparedDate": "2026-10-12",
+  "phase": "final-automated-gates-passed-real-acceptance-not-executed",
+  "applicationChecksExecuted": true,
+  "commands": [
+    {
+      "id": "frontend-test",
+      "cwd": "F:/github/NewsRoom/frontend",
+      "executable": "npm.cmd",
+      "args": [
+        "run",
+        "test"
+      ],
+      "kind": "offline-regression"
+    },
+    {
+      "id": "frontend-typecheck",
+      "cwd": "F:/github/NewsRoom/frontend",
+      "executable": "npm.cmd",
+      "args": [
+        "run",
+        "typecheck"
+      ],
+      "kind": "static-tool-execution"
+    },
+    {
+      "id": "frontend-lint",
+      "cwd": "F:/github/NewsRoom/frontend",
+      "executable": "npm.cmd",
+      "args": [
+        "run",
+        "lint"
+      ],
+      "kind": "static-tool-execution"
+    },
+    {
+      "id": "frontend-build",
+      "cwd": "F:/github/NewsRoom/frontend",
+      "executable": "npm.cmd",
+      "args": [
+        "run",
+        "build"
+      ],
+      "profile": "local-desktop",
+      "kind": "production-build"
+    },
+    {
+      "id": "backend-compile",
+      "cwd": "F:/github/NewsRoom",
+      "executable": "F:/github/NewsRoom/.venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "scripts.dev",
+        "compile"
+      ],
+      "kind": "compile"
+    },
+    {
+      "id": "backend-test",
+      "cwd": "F:/github/NewsRoom",
+      "executable": "F:/github/NewsRoom/.venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "scripts.dev",
+        "test"
+      ],
+      "kind": "offline-full-regression",
+      "markerBoundary": "not live_research_e2e"
+    },
+    {
+      "id": "backend-smoke",
+      "cwd": "F:/github/NewsRoom",
+      "executable": "F:/github/NewsRoom/.venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "scripts.dev",
+        "smoke"
+      ],
+      "kind": "required-precommit-gate"
+    },
+    {
+      "id": "frontend-browser-default",
+      "cwd": "F:/github/NewsRoom/frontend",
+      "executable": "npm.cmd",
+      "args": [
+        "run",
+        "test:e2e"
+      ],
+      "profile": "default",
+      "kind": "browser-fixture-regression",
+      "serverRule": "owned isolated server; do not reuse an unrelated listener"
+    },
+    {
+      "id": "frontend-browser-desktop",
+      "cwd": "F:/github/NewsRoom/frontend",
+      "executable": "npm.cmd",
+      "args": [
+        "run",
+        "test:e2e"
+      ],
+      "profile": "local-desktop",
+      "kind": "browser-fixture-regression",
+      "serverRule": "owned isolated server with exact profile/identity; automatic route fixtures are not real provider evidence"
+    },
+    {
+      "id": "openspec-validate",
+      "cwd": "F:/github/NewsRoom",
+      "executable": "openspec",
+      "args": [
+        "validate",
+        "research-local-desktop-readiness",
+        "--strict"
+      ],
+      "kind": "specification-validation"
+    }
+  ],
+  "runRecords": [
+    {
+      "id": "frontend-test",
+      "attempt": 1,
+      "status": "failed",
+      "exitCode": 1,
+      "summary": "18 failed / 122 passed files; 8 failed / 651 passed executed tests; failed suites also prevented test collection",
+      "logPath": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-test-20261013.log",
+      "logCreatedAt": "2026-10-12T16:53:53.028Z",
+      "logUpdatedAt": "2026-10-12T16:54:10.566Z",
+      "timeEvidence": "filesystem log timestamps; command start/end not separately captured",
+      "candidateFreeze": "candidate-freeze-before-validation-20261013.json",
+      "profile": "default"
+    },
+    {
+      "id": "frontend-typecheck",
+      "attempt": 1,
+      "status": "failed",
+      "exitCode": 2,
+      "summary": "Type errors in request bytes, event union, owner notebook merge and missing declarations",
+      "logPath": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-typecheck-20261013.log",
+      "logCreatedAt": "2026-10-12T16:54:33.725Z",
+      "logUpdatedAt": "2026-10-12T16:54:39.633Z",
+      "timeEvidence": "filesystem log timestamps; command start/end not separately captured",
+      "candidateFreeze": "candidate-freeze-before-validation-20261013.json",
+      "profile": "default"
+    },
+    {
+      "id": "frontend-lint",
+      "attempt": 1,
+      "status": "failed",
+      "exitCode": 1,
+      "summary": "Conditional Hook and unused bindings; hook dependencies warnings",
+      "logPath": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-lint-20261013.log",
+      "logCreatedAt": "2026-10-12T16:54:54.672Z",
+      "logUpdatedAt": "2026-10-12T16:54:57.442Z",
+      "timeEvidence": "filesystem log timestamps; command start/end not separately captured",
+      "candidateFreeze": "candidate-freeze-before-validation-20261013.json",
+      "profile": "default"
+    },
+    {
+      "id": "frontend-build",
+      "attempt": 1,
+      "status": "failed",
+      "exitCode": 1,
+      "summary": "local-desktop compiled; lint/types gate rejected candidate",
+      "logPath": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-build-20261013.log",
+      "logCreatedAt": "2026-10-12T16:57:52.398Z",
+      "logUpdatedAt": "2026-10-12T16:58:16.082Z",
+      "timeEvidence": "filesystem log timestamps; command start/end not separately captured",
+      "candidateFreeze": "candidate-freeze-before-validation-20261013.json",
+      "profile": "local-desktop"
+    },
+    {
+      "id": "openspec-validate",
+      "attempt": 1,
+      "status": "passed",
+      "exitCode": 0,
+      "summary": "Change 'research-local-desktop-readiness' is valid",
+      "recordedAt": "2026-10-12T17:06:01.778Z",
+      "candidateFreeze": "candidate-freeze-before-validation-20261013.json"
+    },
+    {
+      "schema": "research-desktop-validation-run-v1",
+      "id": "runtime-config-release-targeted",
+      "attempt": 2,
+      "status": "passed-with-environment-skips",
+      "command": [
+        "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/scripts/test_local_desktop_config.py",
+        "tests/scripts/test_local_desktop_release.py",
+        "-q",
+        "-rs"
+      ],
+      "workingDirectory": "F:\\github\\NewsRoom",
+      "startedAt": "2026-10-12T17:32:55.4247864Z",
+      "endedAt": "2026-10-12T17:32:58.5308807Z",
+      "exitCode": 0,
+      "summary": "21 passed, 2 skipped",
+      "skipped": [
+        {
+          "test": "test_release_copy_rejects_source_symlink_escape",
+          "reason": "test environment cannot create symlinks"
+        },
+        {
+          "test": "test_release_verify_rejects_manifested_resource_replaced_by_symlink",
+          "reason": "test environment cannot create symlinks"
+        }
+      ],
+      "logSha256": "sha256:112245d20fe926b90fae4e063023a440f2fa5a59cc8bab1090eb2e0f05401e39",
+      "logFile": "runtime-config-release-validation-20261013.log.gz",
+      "liveAcceptanceExecuted": false,
+      "sourceCoverage": "runtime mock guard and installed Node dependency tree repair; final full suite pending",
+      "record": "runtime-config-release-validation-20261013.json"
+    },
+    {
+      "id": "rag-durable-journal-targeted",
+      "attempt": 1,
+      "status": "failed",
+      "command": [
+        "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/framework/harness/rag/test_rag_session_controller.py::test_durable_step_result_stops_before_next_retrieval_side_effect",
+        "-q",
+        "-rs"
+      ],
+      "workingDirectory": "F:\\github\\NewsRoom",
+      "startedAt": "2026-10-12T17:52:05.5600639Z",
+      "endedAt": "2026-10-12T17:52:06.7711479Z",
+      "exitCode": 1,
+      "summary": "1 failed: expected durable-journal error was not raised; gate/fixture route must be examined before final smoke",
+      "logSha256": "sha256:4f4131605d78a78679d87cb90c9d84c28f3f211614553608f0bf43ebe55e14b1",
+      "logPath": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-rag-journal-diagnostic-20261013-015205.log",
+      "liveAcceptanceExecuted": false
+    },
+    {
+      "id": "runtime-all-contracts",
+      "attempt": 1,
+      "status": "failed",
+      "command": [
+        "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests/framework/shared/test_local_desktop.py",
+        "tests/framework/shared/test_process_identity.py",
+        "tests/scripts/test_local_desktop_autostart.py",
+        "tests/scripts/test_local_desktop_cli.py",
+        "tests/scripts/test_local_desktop_config.py",
+        "tests/scripts/test_local_desktop_control.py",
+        "tests/scripts/test_local_desktop_desktop_entry.py",
+        "tests/scripts/test_local_desktop_doctor.py",
+        "tests/scripts/test_local_desktop_log_collector.py",
+        "tests/scripts/test_local_desktop_processes.py",
+        "tests/scripts/test_local_desktop_recovery.py",
+        "tests/scripts/test_local_desktop_release.py",
+        "-q",
+        "-rs"
+      ],
+      "workingDirectory": "F:\\github\\NewsRoom",
+      "startedAt": "2026-10-12T17:46:39.5265842Z",
+      "endedAt": "2026-10-12T17:46:48.6809850Z",
+      "exitCode": 1,
+      "summary": "32 failed, 68 passed, 2 skipped",
+      "logPath": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-local-desktop-contracts-20261013-014639-523.log",
+      "logSha256": "sha256:6b28e5ea0341e650256b4eca43f69b9ef73fe8384400e92d94450d32a586a342",
+      "skipReasons": [
+        "test environment cannot create symlinks"
+      ],
+      "liveAcceptanceExecuted": false
+    },
+    {
+      "schema": "newsroom.desktop-validation-run/v1",
+      "id": "runtime-all-contracts",
+      "attempt": 2,
+      "status": "passed-with-environment-skips",
+      "command": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe -m pytest tests/framework/shared/test_local_desktop.py tests/framework/shared/test_process_identity.py tests/scripts/test_local_desktop_autostart.py tests/scripts/test_local_desktop_cli.py tests/scripts/test_local_desktop_config.py tests/scripts/test_local_desktop_control.py tests/scripts/test_local_desktop_desktop_entry.py tests/scripts/test_local_desktop_doctor.py tests/scripts/test_local_desktop_log_collector.py tests/scripts/test_local_desktop_processes.py tests/scripts/test_local_desktop_recovery.py tests/scripts/test_local_desktop_release.py -q -rs",
+      "workingDirectory": "F:\\github\\NewsRoom",
+      "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+      "startedAt": "2026-10-12T18:10:11.2856694Z",
+      "endedAt": "2026-10-12T18:10:23.0372477Z",
+      "exitCode": 0,
+      "summary": "101 passed, 2 skipped in 11.22s",
+      "skipped": [
+        {
+          "test": "test_release_copy_rejects_source_symlink_escape",
+          "reason": "test environment cannot create symlinks"
+        },
+        {
+          "test": "test_release_verify_rejects_manifested_resource_replaced_by_symlink",
+          "reason": "test environment cannot create symlinks"
+        }
+      ],
+      "logSha256": "sha256:5f58c32db6dc7adc965ef69f25f63ba5f57d9e9b7432421f7b580b953327869c",
+      "logFile": "runtime-all-contracts-validation-20261013.log.gz",
+      "liveAcceptanceExecuted": false,
+      "sourceStatus": "runtime owner final handoff; full suite integration pending",
+      "record": "runtime-all-contracts-validation-20261013.json"
+    },
+    {
+      "name": "runtime-contracts-final-audit-repairs",
+      "record": "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+      "status": "passed-with-skips",
+      "exitCode": 0,
+      "passed": 138,
+      "skipped": 2,
+      "finalFullSuitePending": true
+    },
+    {
+      "name": "backend-full-test-first-diagnostic",
+      "record": "backend-full-test-interrupted-20261013.json",
+      "status": "interrupted-for-root-cause-repair",
+      "exitCode": 1,
+      "completed": false,
+      "observedFailures": 11,
+      "finalFullSuitePending": true
+    },
+    {
+      "name": "frontend-next16-checks-before-browser",
+      "record": "frontend-next16-validation-before-browser-20261013.json",
+      "status": "unit-typecheck-lint-build-passed-audit-residual-findings",
+      "unitPassed": 726,
+      "browserPending": true,
+      "finalBuildPending": true
+    },
+    {
+      "name": "frontend-browser-portal-first-diagnostic",
+      "record": "frontend-browser-portal-first-diagnostic-20261013.json",
+      "status": "failed-root-cause-investigation",
+      "exitCode": 1,
+      "passed": 36,
+      "skipped": 4,
+      "failed": 14,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "frontend-browser-portal-default",
+      "record": "frontend-browser-portal-validation-20261013.json",
+      "status": "passed-with-skips-final-candidate-binding-pending",
+      "exitCode": 0,
+      "passed": 50,
+      "skipped": 4,
+      "failed": 0,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "frontend-browser-admin-default",
+      "record": "frontend-browser-admin-validation-20261013.json",
+      "status": "passed-with-skips-final-candidate-binding-pending",
+      "exitCode": 0,
+      "passed": 21,
+      "skipped": 6,
+      "failed": 0,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "post-build-node-tree-final-identity",
+      "record": "frontend-node-identity-root-cause-20261013.json",
+      "status": "installed-tree-contract-failed",
+      "commandExitCode": 0,
+      "recursiveExtraneousCount": 4,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "backend-full-validation-completed-failed-attempt",
+      "record": "backend-full-validation-failed-attempt-20261013.json",
+      "status": "failed-root-cause-repair-required",
+      "exitCode": 1,
+      "passed": 9167,
+      "failed": 18,
+      "skipped": 117,
+      "deselected": 24,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "frontend-final-clean-source-and-production-build",
+      "record": "frontend-release-candidate-validation-20261013.json",
+      "status": "passed-existing-skips-and-residual-audit-findings-explicit",
+      "unitPassed": 729,
+      "browserPassed": 75,
+      "browserSkipped": 6,
+      "recursiveNodeProblemCount": 0,
+      "finalCandidateEvidence": true
+    },
+    {
+      "name": "backend-18-observed-failure-repairs-targeted",
+      "record": "backend-18-failure-repairs-targeted-validation-20261013.json",
+      "status": "passed-fresh-full-pending",
+      "exitCode": 0,
+      "passed": 89,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "backend-repaired-candidate-compile",
+      "record": "backend-repaired-candidate-compile-20261013.json",
+      "status": "passed-fresh-full-and-smoke-pending",
+      "exitCode": 0,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "backend-second-full-failed",
+      "record": "backend-full-validation-second-failed-attempt-20261013.json",
+      "status": "failed-root-cause-repair-required",
+      "exitCode": 1,
+      "failed": 2,
+      "passed": 9184,
+      "skipped": 117,
+      "deselected": 24,
+      "warnings": 579,
+      "seconds": 5577.99,
+      "finalCandidateEvidence": false
+    },
+    {
+      "name": "runtime-sqlite-checkpoint-repair-targeted",
+      "record": "runtime-sqlite-checkpoint-repair-targeted-20261013.json",
+      "status": "passed-final-full-and-smoke-pending",
+      "exitCode": 0,
+      "finalCandidateEvidence": true
+    },
+    {
+      "name": "runtime-recovery-final-contracts",
+      "record": "runtime-recovery-final-contracts-20261013.json",
+      "status": "passed-final-full-and-smoke-pending",
+      "exitCode": 0,
+      "finalCandidateEvidence": true
+    },
+    {
+      "name": "backend-release-candidate-compile",
+      "record": "backend-release-candidate-compile-20261013.json",
+      "status": "passed-final-full-and-smoke-pending",
+      "exitCode": 0,
+      "finalCandidateEvidence": true
+    },
+    {
+      "name": "backend-final-full",
+      "record": "backend-release-candidate-full-tests-20261013.json",
+      "exitCode": 0,
+      "status": "passed-with-explicit-environment-skips",
+      "finalCandidateEvidence": true,
+      "passed": 9187,
+      "skipped": 117,
+      "deselected": 24,
+      "warnings": 579,
+      "seconds": 5529.14,
+      "failed": 0
+    },
+    {
+      "name": "backend-required-precommit-smoke",
+      "record": "backend-release-candidate-mandatory-smoke-20261013.json",
+      "exitCode": 0,
+      "status": "passed",
+      "finalCandidateEvidence": true
+    }
+  ],
+  "liveAcceptanceExecuted": false,
+  "candidateFreeze": "candidate-freeze-before-validation-20261013.json",
+  "recordedAt": "2026-10-13T01:42:14.458507+00:00",
+  "realAcceptance": "not-executed",
+  "finalCandidateRecords": {
+    "frontend": "frontend-release-candidate-identity-20261013.json",
+    "backend": "backend-release-candidate-identity-20261013.json"
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "schema": "newsroom.local-desktop.browser-validation.v1",
+  "recordedAt": "2026-10-12T19:33:11.222Z",
+  "kind": "browser-fixture-regression",
+  "group": "admin-default",
+  "metadata": {
+    "command": "npx.cmd playwright test --grep \"/studio|/admin|admin console|Operations Studio\" --reporter=list,json",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "profile": "default",
+    "surface": "admin",
+    "baseUrl": "http://127.0.0.1:3301",
+    "mocks": true,
+    "frontendAuth": false,
+    "reuseExistingServer": false,
+    "startUtc": "2026-10-12T19:19:30.0026257Z",
+    "endUtc": "2026-10-12T19:19:59.7204134Z",
+    "exitCode": 0,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-admin-default-final2-20261013.log",
+    "json": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-admin-default-final2-20261013.json"
+  },
+  "stats": {
+    "startTime": "2026-10-12T19:19:30.664Z",
+    "duration": 29029.337,
+    "expected": 21,
+    "skipped": 6,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "skipped": [
+    {
+      "group": "admin",
+      "title": "/studio/boards acceptance remains pending until its module task lands",
+      "file": "studio-acceptance.spec.ts",
+      "annotations": [
+        {
+          "type": "fixme",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\studio-acceptance.spec.ts",
+            "line": 106,
+            "column": 10
+          }
+        }
+      ]
+    },
+    {
+      "group": "admin",
+      "title": "/studio/evidence acceptance remains pending until its module task lands",
+      "file": "studio-acceptance.spec.ts",
+      "annotations": [
+        {
+          "type": "fixme",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\studio-acceptance.spec.ts",
+            "line": 106,
+            "column": 10
+          }
+        }
+      ]
+    },
+    {
+      "group": "admin",
+      "title": "/studio/review acceptance remains pending until its module task lands",
+      "file": "studio-acceptance.spec.ts",
+      "annotations": [
+        {
+          "type": "fixme",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\studio-acceptance.spec.ts",
+            "line": 106,
+            "column": 10
+          }
+        }
+      ]
+    },
+    {
+      "group": "admin",
+      "title": "Board Center shows five boards and cross_board insight area",
+      "file": "studio-acceptance.spec.ts",
+      "annotations": [
+        {
+          "type": "fixme",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\studio-acceptance.spec.ts",
+            "line": 112,
+            "column": 8
+          }
+        }
+      ]
+    },
+    {
+      "group": "admin",
+      "title": "Evidence Center shows unsupported claims and run claim-support table",
+      "file": "studio-acceptance.spec.ts",
+      "annotations": [
+        {
+          "type": "fixme",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\studio-acceptance.spec.ts",
+            "line": 123,
+            "column": 8
+          }
+        }
+      ]
+    },
+    {
+      "group": "admin",
+      "title": "Human Review validates approve, reject, and modify required fields",
+      "file": "studio-acceptance.spec.ts",
+      "annotations": [
+        {
+          "type": "fixme",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\studio-acceptance.spec.ts",
+            "line": 130,
+            "column": 8
+          }
+        }
+      ]
+    }
+  ],
+  "log": {
+    "path": "frontend-browser-admin-validation-20261013.log.gz",
+    "sha256": "b2a77f2d9d197cb70c6abb8d6b3b7583b3e6d9f86e49b5dd1ae8b22734f8b984",
+    "encoding": "gzip",
+    "bytes": 1564,
+    "decompressedSha256": "6771a9de6c570c5c83ed40e03a1d822ee6160e6aeaca9f0b55af360b01db8ec4",
+    "decompressedBytes": 9675
+  },
+  "report": {
+    "path": "frontend-browser-admin-validation-20261013-report.json",
+    "sha256": "0bb58173f6803a9f8b6c9a8a108ce8e2b73b31b00705e99a1606f2a735de17cb"
+  },
+  "finalCandidateEvidence": false,
+  "candidateStatus": "observed-pass-source-freeze-and-affected-browser-rerun-pending",
+  "liveAcceptanceExecuted": false,
+  "evidenceBoundary": "Own isolated Next development server and explicit route fixtures; no Chapter 12 release/provider/account/reboot acceptance."
+}

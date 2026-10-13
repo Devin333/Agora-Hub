@@ -10,6 +10,7 @@ import { PortalAccountProvider, usePortalAccount } from "@/components/auth/porta
 import { startHistorySync } from "@/lib/research/history-sync"
 import { setHistoryStatus } from "@/lib/research/history"
 import { ResearchCommandPalette } from "@/features/portal/components/research-command-palette"
+import { researchHomeHref } from "@/lib/research/routes"
 
 function ResearchHistoryRuntime() {
   const account = usePortalAccount()
@@ -39,8 +40,9 @@ function ThemeBridge() {
 
 function GlobalResearchCommands() {
   const pathname = usePathname()
-  // The homepage owns an inline header trigger so search never covers its composer.
-  return pathname === "/design-demo" ? null : <ResearchCommandPalette />
+  const isPaperReader = /^\/papers\/[^/]+\/read\/?$/.test(pathname)
+  if (pathname === researchHomeHref()) return null
+  return <ResearchCommandPalette showTrigger={!isPaperReader} />
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {

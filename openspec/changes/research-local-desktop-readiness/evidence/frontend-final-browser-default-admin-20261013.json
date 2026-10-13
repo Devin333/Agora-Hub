@@ -1,0 +1,42 @@
+{
+  "schema": "newsroom.local-desktop.browser-validation.v1",
+  "recordedAt": "2026-10-12T19:44:11.062Z",
+  "name": "default-admin",
+  "stats": {
+    "startTime": "2026-10-12T19:19:30.664Z",
+    "duration": 29029.337,
+    "expected": 21,
+    "skipped": 6,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "metadata": {
+    "command": "npx.cmd playwright test --grep \"/studio|/admin|admin console|Operations Studio\" --reporter=list,json",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "profile": "default",
+    "surface": "admin",
+    "baseUrl": "http://127.0.0.1:3301",
+    "mocks": true,
+    "frontendAuth": false,
+    "reuseExistingServer": false,
+    "startUtc": "2026-10-12T19:19:30.0026257Z",
+    "endUtc": "2026-10-12T19:19:59.7204134Z",
+    "exitCode": 0,
+    "log": "frontend-final-browser-default-admin-20261013.log.gz",
+    "json": "frontend-final-browser-default-admin-20261013-report.json",
+    "logArchiveIdentity": {
+      "path": "frontend-final-browser-default-admin-20261013.log.gz",
+      "encoding": "gzip",
+      "sha256": "b2a77f2d9d197cb70c6abb8d6b3b7583b3e6d9f86e49b5dd1ae8b22734f8b984",
+      "bytes": 1564,
+      "decompressedSha256": "6771a9de6c570c5c83ed40e03a1d822ee6160e6aeaca9f0b55af360b01db8ec4",
+      "decompressedBytes": 9675
+    }
+  },
+  "skipReason": "six pre-existing Operations Studio future-module test.fixme cases",
+  "logSha256": "6771a9de6c570c5c83ed40e03a1d822ee6160e6aeaca9f0b55af360b01db8ec4",
+  "reportSha256": "0bb58173f6803a9f8b6c9a8a108ce8e2b73b31b00705e99a1606f2a735de17cb",
+  "liveAcceptanceExecuted": false,
+  "finalSourceBinding": "pending consolidated final candidate digest",
+  "evidenceBoundary": "isolated development server and route fixtures; not Chapter 12 real deployment/provider proof"
+}

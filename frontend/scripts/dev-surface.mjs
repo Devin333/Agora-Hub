@@ -16,7 +16,7 @@ const nextBinary = path.join(
   process.platform === "win32" ? "next.cmd" : "next"
 )
 
-const child = spawn(nextBinary, ["dev", ...args], {
+const child = spawn(nextBinary, ["dev", "--webpack", ...args], {
   env: {
     ...process.env,
     NEWSROOM_FRONTEND_SURFACE: surface

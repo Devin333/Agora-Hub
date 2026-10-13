@@ -4,7 +4,8 @@ import { ProjectToolDetailPage } from "@/features/projects/components/projects-d
 
 export const dynamic = "force-dynamic"
 
-export default function ProjectsToolDetailRoute({ params }: { params: { projectId: string } }) {
+export default async function ProjectsToolDetailRoute(props: { params: Promise<{ projectId: string }> }) {
+  const params = await props.params;
   return (
     <Suspense fallback={<PageSkeleton />}>
       <ProjectToolDetailPage projectId={params.projectId} />

@@ -1,0 +1,209 @@
+{
+  "schema": "newsroom-local-desktop-final-automated-validation/v1",
+  "recordedAt": "2026-10-13T01:53:48.708Z",
+  "status": "implementation-and-final-automated-checks-passed-real-acceptance-pending",
+  "change": "research-local-desktop-readiness",
+  "changeState": "active",
+  "executionOrder": "Chapters 1-10 production code, tools and test code were implemented before concentrated Chapter 11 suites; observed failures were repaired and the final frozen candidate passed full tests and required smoke.",
+  "tasks": {
+    "implementation": {
+      "chapters": "1-10",
+      "completed": 101,
+      "pending": 0
+    },
+    "concentratedValidation": {
+      "chapter": 11,
+      "completed": 9,
+      "pending": 0
+    },
+    "realAcceptance": {
+      "chapter": 12,
+      "completed": 0,
+      "pending": 14
+    }
+  },
+  "specification": {
+    "capabilities": 5,
+    "requirements": 34,
+    "scenarios": 68,
+    "implementationMapping": "implementation-coverage-20261012.json",
+    "strictValidation": "spec-validation-final-20261013.json",
+    "individualLiveScenariosCountedAsPassed": false
+  },
+  "backend": {
+    "candidateRecord": "backend-release-candidate-identity-20261013.json",
+    "sourceDigest": "sha256:06893c3fbe0890a90124263120b28ddef957665e04bcc12a8f438f0cddb081bf",
+    "sourceFiles": 2770,
+    "compile": {
+      "record": "backend-release-candidate-compile-20261013.json",
+      "command": ".venv/Scripts/python.exe -m scripts.dev compile",
+      "exitCode": 0
+    },
+    "fullTests": {
+      "record": "backend-release-candidate-full-tests-20261013.json",
+      "stage": "full-test-final3",
+      "cwd": "F:\\github\\NewsRoom",
+      "command": ".venv/Scripts/python.exe -m scripts.dev test",
+      "environment": {
+        "PYTHONFAULTHANDLER": "1",
+        "PYTHONUNBUFFERED": "1",
+        "PYTEST_ADDOPTS": "-rs"
+      },
+      "utcStart": "2026-10-12T22:55:12.8926366Z",
+      "utcEnd": "2026-10-13T00:27:24.0875325Z",
+      "exitCode": 0,
+      "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-test-final3-20261013-065512-890.log",
+      "logSha256": "22807ad8098db33a23f29da3a868aa4c93ad639f72a4ea2fb4ba64d14d7ea875",
+      "results": {
+        "passed": 9187,
+        "skipped": 117,
+        "deselected": 24,
+        "warnings": 579,
+        "seconds": 5529.14,
+        "failed": 0
+      },
+      "skipCategories": {
+        "Windows symlink privilege unavailable": 31,
+        "Docker integration opt-in": 10,
+        "Isolated PostgreSQL DSN absent": 34,
+        "PostgreSQL integration opt-in": 39,
+        "Redis integration opt-in": 3
+      },
+      "skipRecordsCount": 114,
+      "deselectionPolicy": "Existing pyproject default not live_research_e2e selection; opt-in live service tests are not executed or counted as passed."
+    },
+    "requiredSmoke": {
+      "record": "backend-release-candidate-mandatory-smoke-20261013.json",
+      "stage": "full-smoke-final3",
+      "cwd": "F:\\github\\NewsRoom",
+      "command": ".venv/Scripts/python.exe -m scripts.dev smoke",
+      "environment": {
+        "PYTHONFAULTHANDLER": "1",
+        "PYTHONUNBUFFERED": "1",
+        "PYTEST_ADDOPTS": "-rs"
+      },
+      "utcStart": "2026-10-13T00:27:38.0139020Z",
+      "utcEnd": "2026-10-13T01:41:20.3106734Z",
+      "exitCode": 0,
+      "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-smoke-final3-20261013-082738-010.log",
+      "logSha256": "97804131acf3cb6877e0233ebf4087bae64692c6e6397308aced196df568ac07",
+      "pytest": {
+        "passed": 4192,
+        "deselected": 23,
+        "warnings": 31,
+        "seconds": 4411.11,
+        "failed": 0
+      },
+      "skipped": 0,
+      "agentLoop": {
+        "status": "succeeded",
+        "networkCalls": 0,
+        "deterministicLlmCalls": 3,
+        "toolCalls": 1,
+        "runId": "test-agent-loop-5c17cd2a77234d138e05b4866ffa0797",
+        "manifestHash": "sha256:ed63c043b1460d4a5aeeee580f140c00b050d13082b85d2a8025c3c186d7fb6f",
+        "verifyEvidenceRef": "sha256:f8e55c01880e008cf8810fcfaf14b1e80366a73e9b5bf96be05976bb029fd416",
+        "evidenceAuthority": "Parsed from exact archived original smoke stdout; deterministic offline worker, no real provider invocation."
+      },
+      "sourceValidation": {
+        "isValid": true,
+        "errorCount": 0,
+        "warningCount": 0,
+        "evidenceAuthority": "Parsed from the sources validate result in the exact archived smoke stdout."
+      }
+    },
+    "sourceTimingAudit": {
+      "runLogCreationUtc": "2026-10-12T22:55:12.965122+00:00",
+      "authoritativeExecutionStart": "Bound to exact runner execution metadata",
+      "filesModifiedAfterRunLogCreated": [],
+      "policy": "Snapshot immutable source bytes while run is active, then verify exact bytes after full and smoke",
+      "backendFullTestStartUtc": "2026-10-12T22:55:12.8926366Z",
+      "backendFullTestEndUtc": "2026-10-13T00:27:24.0875325Z",
+      "filesModifiedAfterRunStarted": [],
+      "sourceBytesReverifiedAfterFullAt": "2026-10-13T00:30:21.546349+00:00",
+      "mandatorySmokeStartUtc": "2026-10-13T00:27:38.0139020Z",
+      "mandatorySmokeEndUtc": "2026-10-13T01:41:20.3106734Z",
+      "sourceBytesReverifiedAfterAllGatesAt": "2026-10-13T01:42:14.458507+00:00",
+      "pythonDependenciesAndExecutableBytesReverified": true,
+      "frontendSourceBuildAndNodeExecutableBytesReverified": true
+    }
+  },
+  "frontend": {
+    "validationRecord": "frontend-release-candidate-validation-20261013.json",
+    "candidateRecord": "frontend-release-candidate-identity-20261013.json",
+    "sourceDigest": "sha256:ef1ee7f6b5fb34590d3da54e3d97b82f518a687d8ad766e198c40fcc2984e15e",
+    "productionBuildDigest": "sha256:cfe9a1e1fe3b8280e43bd3f2cb23ecb84964b40fbf07b4fd5ce08d8ea9369c0d",
+    "buildId": "5pE9_EwkFaZJTsDS36lm5",
+    "cleanInstall": {
+      "command": "npm.cmd ci",
+      "exitCode": 0
+    },
+    "unit": {
+      "filesPassed": 140,
+      "testsPassed": 729
+    },
+    "browsers": {
+      "passed": 75,
+      "skipped": 6,
+      "failed": 0,
+      "profileSpecificSkippedThenExecuted": 4
+    },
+    "checks": {
+      "typecheck": {
+        "command": "npm.cmd run typecheck",
+        "exitCode": 0
+      },
+      "lint": {
+        "command": "npm.cmd run lint",
+        "exitCode": 0
+      },
+      "productionBuild": {
+        "command": "npm.cmd run build",
+        "exitCode": 0
+      }
+    },
+    "productionProfile": "local-desktop",
+    "productionMocks": false,
+    "authEnabled": true,
+    "dependencyTree": {
+      "command": "npm.cmd ls --json --all + recursive scan + Sharp/SWC",
+      "exitCode": 0,
+      "recursiveProblemCount": 0
+    },
+    "residualDependencyAudit": {
+      "total": 17,
+      "low": 1,
+      "moderate": 4,
+      "high": 12,
+      "critical": 0,
+      "status": "known residual audit findings; no force upgrade or audit gate suppression"
+    },
+    "browserEvidenceBoundary": "Route fixture regressions; this is not Chapter 12 real-service deployment evidence.",
+    "runtimeIdentityRecord": "frontend-node-runtime-identity-final-20261013.json"
+  },
+  "review": {
+    "staticIntegration": "static-integration-review-20261012.md",
+    "finalIntegrationAudit": "final-validation-integration-audit-20261013.json",
+    "repairHistory": "validation-root-cause-repairs-20261013.json",
+    "executionHistory": "validation-queue-20261012.json",
+    "logArchiveManifest": "validation-log-archives-20261013.json",
+    "originalFailureResultsRetained": true,
+    "assertionsWeakenedOrTestsSkippedToMakeChecksPass": false
+  },
+  "deliveryBoundary": {
+    "realAcceptanceExecuted": false,
+    "actualReleaseActivated": false,
+    "actualAccountBootstrapExecuted": false,
+    "realProviderInvoked": false,
+    "realBusinessDataBackupOrRestoreExecuted": false,
+    "computerRebootExecuted": false,
+    "autostartEnabled": false,
+    "remainingTasks": "Chapter 12 tasks 12.1-12.14",
+    "usageDocument": "../../../../docs/local-desktop-usage.md",
+    "otherActiveChangesAutomaticallyCompleted": false
+  },
+  "commitBinding": {
+    "policy": "Bound to the Git commit containing this evidence and implementation; no self-referential commit hash is fabricated.",
+    "parentCommit": "4d867043d060b30ebf14bc12f738a90a9a574fa4"
+  }
+}

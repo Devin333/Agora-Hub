@@ -1,0 +1,21 @@
+{
+  "stage": "compile",
+  "cwd": "F:\\github\\NewsRoom",
+  "command": ".venv/Scripts/python.exe -m scripts.dev compile",
+  "utcStart": "2026-10-12T18:21:48.1136555Z",
+  "utcEnd": "2026-10-12T18:21:48.3197660Z",
+  "exitCode": 0,
+  "log": "backend-compile-before-runtime-final-repair-20261013.log.gz",
+  "logSha256": "914ed4639569ecc832c9224623ea37d8d7ae68dbe3ef95e7de8befec2f78ef50",
+  "liveAcceptance": false,
+  "supersededBy": "runtime configuration/timeout/ACL root-cause repairs; final compile required",
+  "rawLogSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69",
+  "logArchiveIdentity": {
+    "path": "backend-compile-before-runtime-final-repair-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "914ed4639569ecc832c9224623ea37d8d7ae68dbe3ef95e7de8befec2f78ef50",
+    "bytes": 125,
+    "decompressedSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69",
+    "decompressedBytes": 116
+  }
+}

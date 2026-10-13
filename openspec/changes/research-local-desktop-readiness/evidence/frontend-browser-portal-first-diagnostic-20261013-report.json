@@ -1,0 +1,2448 @@
+{
+  "config": {
+    "configFile": "F:\\github\\NewsRoom\\frontend\\playwright.config.ts",
+    "rootDir": "F:/github/NewsRoom/frontend/tests/e2e",
+    "forbidOnly": false,
+    "fullyParallel": true,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "F:/github/NewsRoom/frontend/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "F:/github/NewsRoom/frontend/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.60.0",
+    "workers": 1,
+    "webServer": {
+      "command": "npm run dev:portal -- --hostname 127.0.0.1 --port 3300",
+      "url": "http://127.0.0.1:3300",
+      "reuseExistingServer": false
+    }
+  },
+  "suites": [
+    {
+      "title": "desktop-research-readiness.spec.ts",
+      "file": "desktop-research-readiness.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "local desktop research regression",
+          "file": "desktop-research-readiness.spec.ts",
+          "line": 15,
+          "column": 6,
+          "specs": [
+            {
+              "title": "migrates legacy reader URLs and preserves query location",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "description": "requires the local-desktop profile",
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                        "line": 16,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": -1,
+                      "parallelIndex": -1,
+                      "status": "skipped",
+                      "duration": 0,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-12T18:44:30.910Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "description": "requires the local-desktop profile",
+                          "location": {
+                            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                            "line": 16,
+                            "column": 8
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "6905d600f37d840fd3b5-b6ba22d198f911d0cb91",
+              "file": "desktop-research-readiness.spec.ts",
+              "line": 21,
+              "column": 7
+            },
+            {
+              "title": "recovers a lost first receipt by querying the durable identity without resubmitting",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "description": "requires the local-desktop profile",
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                        "line": 16,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": -1,
+                      "parallelIndex": -1,
+                      "status": "skipped",
+                      "duration": 0,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-12T18:44:30.910Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "description": "requires the local-desktop profile",
+                          "location": {
+                            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                            "line": 16,
+                            "column": 8
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "6905d600f37d840fd3b5-d050e423514be3f8d841",
+              "file": "desktop-research-readiness.spec.ts",
+              "line": 33,
+              "column": 7
+            },
+            {
+              "title": "clears owner-scoped reader data after account change",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "description": "requires the local-desktop profile",
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                        "line": 16,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": -1,
+                      "parallelIndex": -1,
+                      "status": "skipped",
+                      "duration": 0,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-12T18:44:30.910Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "description": "requires the local-desktop profile",
+                          "location": {
+                            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                            "line": 16,
+                            "column": 8
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "6905d600f37d840fd3b5-de9e39c9175d1a867aaa",
+              "file": "desktop-research-readiness.spec.ts",
+              "line": 52,
+              "column": 7
+            },
+            {
+              "title": "keeps primary desktop reader actions visible and keyboard reachable",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "description": "requires the local-desktop profile",
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                        "line": 16,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "expectedStatus": "skipped",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [
+                    {
+                      "workerIndex": -1,
+                      "parallelIndex": -1,
+                      "status": "skipped",
+                      "duration": 0,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-12T18:44:30.910Z",
+                      "annotations": [
+                        {
+                          "type": "skip",
+                          "description": "requires the local-desktop profile",
+                          "location": {
+                            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+                            "line": 16,
+                            "column": 8
+                          }
+                        }
+                      ],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "skipped"
+                }
+              ],
+              "id": "6905d600f37d840fd3b5-212c4183e2d4545d0937",
+              "file": "desktop-research-readiness.spec.ts",
+              "line": 69,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "homepage-research-entry.spec.ts",
+      "file": "homepage-research-entry.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "desktop composer is centered beside the sidebar and keeps the 2x2 modules",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30027,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\homepage-research-entry.spec.ts",
+                        "column": 67,
+                        "line": 46
+                      },
+                      "message": "Error: locator.click: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: '登录同步研究', exact: true })\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" title=\"登录同步研究\" aria-label=\"登录同步研究\" class=\"research-sidebar_login__Z_ovI\">…</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <nextjs-portal></nextjs-portal> from <script data-nextjs-dev-overlay=\"true\">…</script> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <nextjs-portal></nextjs-portal> from <script data-nextjs-dev-overlay=\"true\">…</script> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    48 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <nextjs-portal></nextjs-portal> from <script data-nextjs-dev-overlay=\"true\">…</script> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\n\n  44 |   await expect(input).toHaveValue(\"找 Agent 的相关研究\")\n  45 |   await page.getByRole(\"button\", { name: \"收起研究侧栏\" }).click()\n> 46 |   await page.getByRole(\"button\", { name: \"登录同步研究\", exact: true }).click()\n     |                                                                   ^\n  47 |   await expect(page.getByRole(\"dialog\")).toBeVisible(); await page.keyboard.press(\"Escape\")\n  48 |   await expect(input).toHaveValue(\"找 Agent 的相关研究\")\n  49 | })\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\homepage-research-entry.spec.ts:46:67"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:44:31.184Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\homepage-research-entry-de-931ee-r-and-keeps-the-2x2-modules-chromium\\error-context.md"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "d1379500398046700e5f-6de3c8e868b14bf2513f",
+          "file": "homepage-research-entry.spec.ts",
+          "line": 8,
+          "column": 5
+        },
+        {
+          "title": "account actions stay in the sidebar when expanded or collapsed",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30027,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\homepage-research-entry.spec.ts",
+                        "column": 21,
+                        "line": 69
+                      },
+                      "message": "Error: locator.click: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('complementary', { name: '研究历史侧栏' }).getByRole('button', { name: '账户菜单' })\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" id=\"radix-_r_a_\" aria-label=\"账户菜单\" title=\"Researcher\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" class=\"portal-login_accountTrigger__K1SV_\">…</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <nextjs-portal></nextjs-portal> from <script data-nextjs-dev-overlay=\"true\">…</script> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <nextjs-portal></nextjs-portal> from <script data-nextjs-dev-overlay=\"true\">…</script> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    56 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <nextjs-portal></nextjs-portal> from <script data-nextjs-dev-overlay=\"true\">…</script> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\n\n  67 |   await page.getByRole(\"button\", { name: \"收起研究侧栏\" }).click()\n  68 |   await expect(accountMenu).toBeVisible()\n> 69 |   await accountMenu.click()\n     |                     ^\n  70 |   await page.getByRole(\"menuitem\", { name: \"退出登录\" }).click()\n  71 |   await expect(sidebar.getByRole(\"button\", { name: \"登录同步研究\" })).toBeVisible()\n  72 |   expect(logoutCalls).toBe(1)\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\homepage-research-entry.spec.ts:69:21"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:01.751Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\homepage-research-entry-ac-a04f0--when-expanded-or-collapsed-chromium\\error-context.md"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "d1379500398046700e5f-7e65e1b306e89c5804cd",
+          "file": "homepage-research-entry.spec.ts",
+          "line": 51,
+          "column": 5
+        },
+        {
+          "title": "plan choices, partial-source recovery, continuation and reload work in a browser",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1842,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:32.150Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d1379500398046700e5f-d0635724da7f231ba397",
+          "file": "homepage-research-entry.spec.ts",
+          "line": 75,
+          "column": 5
+        },
+        {
+          "title": "follow-up composer stays at the workspace bottom while research scrolls above it",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2405,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:34.050Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d1379500398046700e5f-706fa553301a01afae72",
+          "file": "homepage-research-entry.spec.ts",
+          "line": 108,
+          "column": 5
+        },
+        {
+          "title": "report preparation retains the existing editable workflow",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 4689,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:36.463Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d1379500398046700e5f-1efffc56193360cf700a",
+          "file": "homepage-research-entry.spec.ts",
+          "line": 189,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "navigation.spec.ts",
+      "file": "navigation.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "/ is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1139,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:41.164Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-15344eff2b2cfe4504c6",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/news is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1148,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:42.310Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-1008db20475d7f2f28b4",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/news/news-1-a is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1339,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:43.466Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-ec642034ca0ae694fe51",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/papers is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1665,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:44.814Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-e1830dcd7a4d4b9fe435",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/papers/tasks is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1113,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:46.487Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-0637d72df215bdd78923",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/papers/tasks/agents is reachable",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 1503,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeTruthy\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mfalse\u001b[39m",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeTruthy\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mfalse\u001b[39m\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:51:28",
+                    "location": {
+                      "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                      "column": 28,
+                      "line": 51
+                    },
+                    "snippet": "  49 |\n  50 |     const response = await page.goto(route)\n> 51 |     expect(response?.ok()).toBeTruthy()\n     |                            ^\n  52 |     await expect(page.locator(\"body\")).toBeVisible()\n  53 |   })\n  54 | }"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 28,
+                        "line": 51
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeTruthy\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mfalse\u001b[39m\n\n  49 |\n  50 |     const response = await page.goto(route)\n> 51 |     expect(response?.ok()).toBeTruthy()\n     |                            ^\n  52 |     await expect(page.locator(\"body\")).toBeVisible()\n  53 |   })\n  54 | }\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:51:28"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:47.608Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--papers-tasks-agents-is-reachable-chromium\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                    "column": 28,
+                    "line": 51
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-f57ff7d1a82d09e5cb00",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/papers/methods is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 3,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1114,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:49.422Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-3e6261bb24189c1fada9",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/papers/methods/react is reachable",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 3,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 1531,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeTruthy\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mfalse\u001b[39m",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeTruthy\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mfalse\u001b[39m\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:51:28",
+                    "location": {
+                      "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                      "column": 28,
+                      "line": 51
+                    },
+                    "snippet": "  49 |\n  50 |     const response = await page.goto(route)\n> 51 |     expect(response?.ok()).toBeTruthy()\n     |                            ^\n  52 |     await expect(page.locator(\"body\")).toBeVisible()\n  53 |   })\n  54 | }"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 28,
+                        "line": 51
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeTruthy\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mfalse\u001b[39m\n\n  49 |\n  50 |     const response = await page.goto(route)\n> 51 |     expect(response?.ok()).toBeTruthy()\n     |                            ^\n  52 |     await expect(page.locator(\"body\")).toBeVisible()\n  53 |   })\n  54 | }\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:51:28"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:50.594Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--papers-methods-react-is-reachable-chromium\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                    "column": 28,
+                    "line": 51
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-6d1bd5a96566195ff3ce",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1167,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:52.445Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-25b4cf8fabda821c1d1d",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects/hot is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1048,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:53.669Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-6fb92cb43810dbd09609",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects/rising is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1041,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:54.725Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-f3b2f4ba5288816d4cf0",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects/tools is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1049,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:55.775Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-58cb626303e368bd6006",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects/cases is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1137,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:56.833Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-2a1ee96bd85c180307e4",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects/lab is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1107,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:57.978Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-8e7c8efb22c5959d5612",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects/collections is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1096,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:45:59.092Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-62b28308b14e8383662f",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/projects/watchlist is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1128,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:00.197Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-3ef01e1be1201ae9949e",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/topics is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1364,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:01.335Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-0257f55fe6e17db7475f",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/topics/agent-runtime-observability is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1565,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:02.707Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-529d8887c55cccd3b8ff",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/tech is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1181,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:04.281Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-742cfead8635bc52f93c",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/tech/papers is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1165,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:05.475Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-8aefc2559292be902361",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/tech/repos is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1249,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:06.649Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-8893945d636822ca004c",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/tech/frameworks is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1147,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:07.907Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-32c36f018f6174f11045",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/community is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1270,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:09.061Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-6c17c181cd72f115d701",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/topics?view=evidence-graph is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1117,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:10.339Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-9be0395ad5b1141e73fe",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/reports is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 538,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:11.464Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-f4efc5e4f037d6b29901",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/reports/report-daily-ai-runtime is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3605,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:12.010Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-dbdd7082423ce2500e56",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/search?q=agent&type=topic is reachable",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1318,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:15.624Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-95e93123a368c4ed0212",
+          "file": "navigation.spec.ts",
+          "line": 45,
+          "column": 7
+        },
+        {
+          "title": "/ renders the Portal homepage modules",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 795,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:16.951Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-f1ce8e56b8fde2778d0e",
+          "file": "navigation.spec.ts",
+          "line": 56,
+          "column": 5
+        },
+        {
+          "title": "Research header opens the Projects product navigation",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 4,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30017,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 59,
+                        "line": 80
+                      },
+                      "message": "Error: locator.hover: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('navigation', { name: 'Portal modules' }).getByRole('button', { name: 'Projects' })\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" aria-expanded=\"false\" aria-controls=\"research-header-projects-menu\" class=\"inline-flex h-9 items-center gap-1 rounded-full px-3.5 text-sm font-medium text-[#334155]/75 transition-colors hover:bg-[#eef2ec] hover:text-[#172033] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-foreground dark:hover:bg-secondary\">…</button>\u001b[22m\n\u001b[2m  - attempting hover action\u001b[22m\n\u001b[2m    - waiting for element to be visible and stable\u001b[22m\n\u001b[2m  - element was detached from the DOM, retrying\u001b[22m\n\n\n  78 |\n  79 |   const modules = page.getByRole(\"navigation\", { name: \"Portal modules\" })\n> 80 |   await modules.getByRole(\"button\", { name: \"Projects\" }).hover()\n     |                                                           ^\n  81 |\n  82 |   await expect(modules.getByRole(\"link\", { name: /^Projects\\b/i })).toHaveAttribute(\"href\", \"/projects\")\n  83 |   await expect(modules.getByRole(\"link\", { name: /^Hot Projects\\b/i })).toHaveAttribute(\"href\", \"/projects/hot\")\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:80:59"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:17.755Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation-Research-header-9e79b-Projects-product-navigation-chromium\\error-context.md"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-e9ce5804f371260d4e5a",
+          "file": "navigation.spec.ts",
+          "line": 75,
+          "column": 5
+        },
+        {
+          "title": "/projects renders the Projects product home without API failure state",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 5,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 5559,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Projects' })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Projects' })\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Projects' })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Projects' })\u001b[22m\n\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:95:65",
+                    "location": {
+                      "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                      "column": 65,
+                      "line": 95
+                    },
+                    "snippet": "  93 |   await page.goto(\"/projects\")\n  94 |\n> 95 |   await expect(page.getByRole(\"heading\", { name: \"Projects\" })).toBeVisible()\n     |                                                                 ^\n  96 |   await expect(page.getByText(\"Projects API v1\")).toBeVisible()\n  97 |   await expect(page.locator(\"body\")).not.toContainText(\"Projects failed to load\")\n  98 |   await expect(page.locator(\"body\")).not.toContainText(\"Internal Server Error\")"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 65,
+                        "line": 95
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Projects' })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Projects' })\u001b[22m\n\n\n  93 |   await page.goto(\"/projects\")\n  94 |\n> 95 |   await expect(page.getByRole(\"heading\", { name: \"Projects\" })).toBeVisible()\n     |                                                                 ^\n  96 |   await expect(page.getByText(\"Projects API v1\")).toBeVisible()\n  97 |   await expect(page.locator(\"body\")).not.toContainText(\"Projects failed to load\")\n  98 |   await expect(page.locator(\"body\")).not.toContainText(\"Internal Server Error\")\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:95:65"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:48.083Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--projects-rende-a8dc0-e-without-API-failure-state-chromium\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                    "column": 65,
+                    "line": 95
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-5606d2c8de5aeca7ee2e",
+          "file": "navigation.spec.ts",
+          "line": 91,
+          "column": 5
+        },
+        {
+          "title": "/community renders the Community Pulse board",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 6,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 5540,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: /Community Pulse Board/i })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: /Community Pulse Board/i })\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: /Community Pulse Board/i })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: /Community Pulse Board/i })\u001b[22m\n\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:107:79",
+                    "location": {
+                      "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                      "column": 79,
+                      "line": 107
+                    },
+                    "snippet": "  105 |   await page.goto(\"/community\")\n  106 |\n> 107 |   await expect(page.getByRole(\"heading\", { name: /Community Pulse Board/i })).toBeVisible()\n      |                                                                               ^\n  108 |   await expect(page.getByText(\"Hot Discussion\")).toBeVisible()\n  109 |   await expect(page.getByText(\"Agent memory debate\").first()).toBeVisible()\n  110 | })"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 79,
+                        "line": 107
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: /Community Pulse Board/i })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: /Community Pulse Board/i })\u001b[22m\n\n\n  105 |   await page.goto(\"/community\")\n  106 |\n> 107 |   await expect(page.getByRole(\"heading\", { name: /Community Pulse Board/i })).toBeVisible()\n      |                                                                               ^\n  108 |   await expect(page.getByText(\"Hot Discussion\")).toBeVisible()\n  109 |   await expect(page.getByText(\"Agent memory debate\").first()).toBeVisible()\n  110 | })\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:107:79"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:54.005Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--community-renders-the-Community-Pulse-board-chromium\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                    "column": 79,
+                    "line": 107
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-28f9a53cea044aa63f37",
+          "file": "navigation.spec.ts",
+          "line": 101,
+          "column": 5
+        },
+        {
+          "title": "/ home Community Pulse card opens /community",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 7,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30014,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 115,
+                        "line": 117
+                      },
+                      "message": "Error: locator.click: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('region', { name: 'Portal modules' }).getByRole('link', { name: /View Community Pulse/i })\u001b[22m\n\u001b[2m    - locator resolved to <a href=\"/community\" class=\"mt-5 inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800\">…</a>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m  - element was detached from the DOM, retrying\u001b[22m\n\n\n  115 |   await page.goto(\"/\")\n  116 |\n> 117 |   await page.getByRole(\"region\", { name: \"Portal modules\" }).getByRole(\"link\", { name: /View Community Pulse/i }).click()\n      |                                                                                                                   ^\n  118 |\n  119 |   await expect(page).toHaveURL(/\\/community$/)\n  120 |   await expect(page.getByRole(\"heading\", { name: /Community Pulse Board/i })).toBeVisible()\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:117:115"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:46:59.916Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--home-Community-Pulse-card-opens-community-chromium\\error-context.md"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-3a563f55712c43c78aff",
+          "file": "navigation.spec.ts",
+          "line": 112,
+          "column": 5
+        },
+        {
+          "title": "/news?source=community redirects to /community with mapped filters",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 8,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 599,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:47:30.298Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-a476c61992c095494547",
+          "file": "navigation.spec.ts",
+          "line": 123,
+          "column": 5
+        },
+        {
+          "title": "/papers uses one breadcrumb and real paper actions",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 8,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 793,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:47:30.955Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-84406a6b60d788db6d3b",
+          "file": "navigation.spec.ts",
+          "line": 130,
+          "column": 5
+        },
+        {
+          "title": "/papers period tabs and drawer deep-link work",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 8,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30031,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 29,
+                        "line": 150
+                      },
+                      "message": "Error: page.waitForResponse: Test timeout of 30000ms exceeded.\n\n  148 | test(\"/papers period tabs and drawer deep-link work\", async ({ page, baseURL }) => {\n  149 |   await authenticate(page, baseURL)\n> 150 |   const papersLoaded = page.waitForResponse((response) => response.url().includes(\"/api/papers?\") && response.request().method() === \"GET\")\n      |                             ^\n  151 |   await page.goto(\"/papers\")\n  152 |   await papersLoaded\n  153 |\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:150:29"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:47:31.757Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--papers-period-tabs-and-drawer-deep-link-work-chromium\\error-context.md"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-547eb633af2d4b345a12",
+          "file": "navigation.spec.ts",
+          "line": 148,
+          "column": 5
+        },
+        {
+          "title": "/papers domain links open task detail view",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 9,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30037,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 29,
+                        "line": 171
+                      },
+                      "message": "Error: page.waitForResponse: Test timeout of 30000ms exceeded.\n\n  169 | test(\"/papers domain links open task detail view\", async ({ page, baseURL }) => {\n  170 |   await authenticate(page, baseURL)\n> 171 |   const papersLoaded = page.waitForResponse((response) => response.url().includes(\"/api/papers?\") && response.request().method() === \"GET\")\n      |                             ^\n  172 |   await page.goto(\"/papers\")\n  173 |   await papersLoaded\n  174 |\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:171:29"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:48:02.098Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--papers-domain-links-open-task-detail-view-chromium\\error-context.md"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-5823abd0c83cf594be73",
+          "file": "navigation.spec.ts",
+          "line": 169,
+          "column": 5
+        },
+        {
+          "title": "/tech/repos opens a Project Radar detail drawer from URL",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 10,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 5582,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: /Project Radar Board/i })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: /Project Radar Board/i })\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: /Project Radar Board/i })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: /Project Radar Board/i })\u001b[22m\n\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:197:77",
+                    "location": {
+                      "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                      "column": 77,
+                      "line": 197
+                    },
+                    "snippet": "  195 |   await page.goto(\"/tech/repos?project=openai-codex\")\n  196 |\n> 197 |   await expect(page.getByRole(\"heading\", { name: /Project Radar Board/i })).toBeVisible()\n      |                                                                             ^\n  198 |   const drawer = page.getByRole(\"dialog\", { name: /project detail/i })\n  199 |   await expect(drawer).toBeVisible()\n  200 |   await expect(drawer.getByRole(\"heading\", { name: \"codex\" })).toBeVisible()"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 77,
+                        "line": 197
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: /Project Radar Board/i })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: /Project Radar Board/i })\u001b[22m\n\n\n  195 |   await page.goto(\"/tech/repos?project=openai-codex\")\n  196 |\n> 197 |   await expect(page.getByRole(\"heading\", { name: /Project Radar Board/i })).toBeVisible()\n      |                                                                             ^\n  198 |   const drawer = page.getByRole(\"dialog\", { name: /project detail/i })\n  199 |   await expect(drawer).toBeVisible()\n  200 |   await expect(drawer.getByRole(\"heading\", { name: \"codex\" })).toBeVisible()\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:197:77"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:48:32.496Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--tech-repos-ope-13bff-adar-detail-drawer-from-URL-chromium\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                    "column": 77,
+                    "line": 197
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-80144bc1387af5c29aaf",
+          "file": "navigation.spec.ts",
+          "line": 191,
+          "column": 5
+        },
+        {
+          "title": "/topics evidence graph renders the structured PRD-07 surface",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 11,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 5812,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('Evidence Chain')\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByText('Evidence Chain')\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('Evidence Chain')\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByText('Evidence Chain')\u001b[22m\n\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:215:50",
+                    "location": {
+                      "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                      "column": 50,
+                      "line": 215
+                    },
+                    "snippet": "  213 |   await expect(page.getByText(\"Graph Summary\")).toBeVisible()\n  214 |   await expect(page.getByText(\"Signal Mix\")).toBeVisible()\n> 215 |   await expect(page.getByText(\"Evidence Chain\")).toBeVisible()\n      |                                                  ^\n  216 |   await expect(page.getByText(\"Timeline\")).toBeVisible()\n  217 |   await expect(page.getByText(\"Evidence Inspector\")).toBeVisible()\n  218 |   await expect(page.getByText(\"Related Reports\")).toBeVisible()"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                        "column": 50,
+                        "line": 215
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('Evidence Chain')\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByText('Evidence Chain')\u001b[22m\n\n\n  213 |   await expect(page.getByText(\"Graph Summary\")).toBeVisible()\n  214 |   await expect(page.getByText(\"Signal Mix\")).toBeVisible()\n> 215 |   await expect(page.getByText(\"Evidence Chain\")).toBeVisible()\n      |                                                  ^\n  216 |   await expect(page.getByText(\"Timeline\")).toBeVisible()\n  217 |   await expect(page.getByText(\"Evidence Inspector\")).toBeVisible()\n  218 |   await expect(page.getByText(\"Related Reports\")).toBeVisible()\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts:215:50"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:48:38.454Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\navigation--topics-evidenc-baceb-e-structured-PRD-07-surface-chromium\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\navigation.spec.ts",
+                    "column": 50,
+                    "line": 215
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "5d2868f7d23420c27cca-145d9cb76a4c03c53502",
+          "file": "navigation.spec.ts",
+          "line": 207,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "projects-lab-responsive.spec.ts",
+      "file": "projects-lab-responsive.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "Projects Lab remains usable without horizontal overflow across supported viewports",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 12,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 5550,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Lab', exact: true })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Lab', exact: true })\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Lab', exact: true })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Lab', exact: true })\u001b[22m\n\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:14:77\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:10:5",
+                    "location": {
+                      "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts",
+                      "column": 77,
+                      "line": 14
+                    },
+                    "snippet": "  12 |       await page.goto(\"/projects/lab\")\n  13 |\n> 14 |       await expect(page.getByRole(\"heading\", { name: \"Lab\", exact: true })).toBeVisible()\n     |                                                                             ^\n  15 |       await expect(page.getByLabel(\"Projects Lab workspace\")).toBeVisible()\n  16 |       await expect(page.getByRole(\"heading\", { name: \"Start Lab Session\" })).toBeVisible()\n  17 |       if (width < 1280) {"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts",
+                        "column": 77,
+                        "line": 14
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Lab', exact: true })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Lab', exact: true })\u001b[22m\n\n\n  12 |       await page.goto(\"/projects/lab\")\n  13 |\n> 14 |       await expect(page.getByRole(\"heading\", { name: \"Lab\", exact: true })).toBeVisible()\n     |                                                                             ^\n  15 |       await expect(page.getByLabel(\"Projects Lab workspace\")).toBeVisible()\n  16 |       await expect(page.getByRole(\"heading\", { name: \"Start Lab Session\" })).toBeVisible()\n  17 |       if (width < 1280) {\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:14:77\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:10:5"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "steps": [
+                    {
+                      "title": "320px",
+                      "duration": 5507,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Lab', exact: true })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Lab', exact: true })\u001b[22m\n",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByRole('heading', { name: 'Lab', exact: true })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByRole('heading', { name: 'Lab', exact: true })\u001b[22m\n\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:14:77\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:10:5",
+                        "location": {
+                          "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts",
+                          "column": 77,
+                          "line": 14
+                        },
+                        "snippet": "  12 |       await page.goto(\"/projects/lab\")\n  13 |\n> 14 |       await expect(page.getByRole(\"heading\", { name: \"Lab\", exact: true })).toBeVisible()\n     |                                                                             ^\n  15 |       await expect(page.getByLabel(\"Projects Lab workspace\")).toBeVisible()\n  16 |       await expect(page.getByRole(\"heading\", { name: \"Start Lab Session\" })).toBeVisible()\n  17 |       if (width < 1280) {"
+                      }
+                    }
+                  ],
+                  "startTime": "2026-10-12T18:48:44.634Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\projects-lab-responsive-Pr-ff1a7--across-supported-viewports-chromium\\error-context.md"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts",
+                    "column": 77,
+                    "line": 14
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "31c2488465738389fac4-03537cdad9627f317b3f",
+          "file": "projects-lab-responsive.spec.ts",
+          "line": 5,
+          "column": 5
+        },
+        {
+          "title": "Projects Lab wraps long English and Chinese answers at mobile and desktop widths",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 13,
+                  "parallelIndex": 0,
+                  "status": "timedOut",
+                  "duration": 30015,
+                  "error": {
+                    "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m",
+                    "stack": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                  },
+                  "errors": [
+                    {
+                      "message": "\u001b[31mTest timeout of 30000ms exceeded.\u001b[39m"
+                    },
+                    {
+                      "location": {
+                        "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts",
+                        "column": 77,
+                        "line": 50
+                      },
+                      "message": "Error: locator.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByPlaceholder('Describe the module or product problem')\u001b[22m\n\n\n  48 |       await page.goto(\"/projects/lab\")\n  49 |       const problem = \"跨团队研究工作流需要可审计的证据链与发布门禁；This deliberately long brief checks wrapping without horizontal overflow.\"\n> 50 |       await page.getByPlaceholder(\"Describe the module or product problem\").fill(problem)\n     |                                                                             ^\n  51 |       await page.getByRole(\"button\", { name: \"Start Session\" }).click()\n  52 |       await expect(page.getByText(/跨团队研究工作流需要可审计/)).toBeVisible()\n  53 |\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:50:77\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:46:5"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "steps": [
+                    {
+                      "title": "320px long text",
+                      "duration": 29980,
+                      "error": {
+                        "message": "Error: locator.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByPlaceholder('Describe the module or product problem')\u001b[22m\n",
+                        "stack": "Error: locator.fill: Test timeout of 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByPlaceholder('Describe the module or product problem')\u001b[22m\n\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:50:77\n    at F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts:46:5",
+                        "location": {
+                          "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\projects-lab-responsive.spec.ts",
+                          "column": 77,
+                          "line": 50
+                        },
+                        "snippet": "  48 |       await page.goto(\"/projects/lab\")\n  49 |       const problem = \"跨团队研究工作流需要可审计的证据链与发布门禁；This deliberately long brief checks wrapping without horizontal overflow.\"\n> 50 |       await page.getByPlaceholder(\"Describe the module or product problem\").fill(problem)\n     |                                                                             ^\n  51 |       await page.getByRole(\"button\", { name: \"Start Session\" }).click()\n  52 |       await expect(page.getByText(/跨团队研究工作流需要可审计/)).toBeVisible()\n  53 |"
+                      }
+                    }
+                  ],
+                  "startTime": "2026-10-12T18:48:50.552Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "F:\\github\\NewsRoom\\frontend\\test-results\\projects-lab-responsive-Pr-3653c-t-mobile-and-desktop-widths-chromium\\error-context.md"
+                    }
+                  ]
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "31c2488465738389fac4-507cefb85ec23dddc0be",
+          "file": "projects-lab-responsive.spec.ts",
+          "line": 41,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "reader-workspace.spec.ts",
+      "file": "reader-workspace.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "chapter reading reconstructs the real paper through its final appendix, figures and references",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 14,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 10555,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:49:20.927Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d2ccd86514e24f617e5d-b1c4d3cecc4b35b4ab78",
+          "file": "reader-workspace.spec.ts",
+          "line": 6,
+          "column": 5
+        },
+        {
+          "title": "PDF stays an optional comparison view and remembers its page without replacing chapter reading",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 14,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 5267,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:49:31.539Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "d2ccd86514e24f617e5d-1e10cfa64701efd30b1d",
+          "file": "reader-workspace.spec.ts",
+          "line": 56,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "research-composer-appearance.spec.ts",
+      "file": "research-composer-appearance.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "research composer has one rounded focus surface, grows with drafts and keeps accessible controls",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 14,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2169,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:49:36.817Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "11dccff5c01ada4ad050-e2f00a07fde3899e3959",
+          "file": "research-composer-appearance.spec.ts",
+          "line": 3,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "research-conversation-navigation.spec.ts",
+      "file": "research-conversation-navigation.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "message index previews and jumps through questions and answers without changing the research",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 14,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 5767,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:49:38.997Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "996571de9e27884ada6d-f75b727aa2993d8d3837",
+          "file": "research-conversation-navigation.spec.ts",
+          "line": 38,
+          "column": 5
+        },
+        {
+          "title": "a full conversation index supports long previews and keyboard navigation with reduced motion",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "chromium",
+              "projectName": "chromium",
+              "results": [
+                {
+                  "workerIndex": 14,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 949,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-12T18:49:44.773Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "996571de9e27884ada6d-87f94b039f19d90d4264",
+          "file": "research-conversation-navigation.spec.ts",
+          "line": 121,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-12T18:44:23.612Z",
+    "duration": 322283.14,
+    "expected": 36,
+    "skipped": 4,
+    "unexpected": 14,
+    "flaky": 0
+  }
+}

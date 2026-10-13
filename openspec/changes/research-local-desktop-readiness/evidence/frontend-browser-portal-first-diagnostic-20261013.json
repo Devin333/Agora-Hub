@@ -1,0 +1,196 @@
+{
+  "command": "npx.cmd playwright test --grep-invert \"/studio|/admin|admin console|Operations Studio\" --reporter=list,json",
+  "cwd": "F:\\github\\NewsRoom\\frontend",
+  "profile": "default",
+  "surface": "portal",
+  "baseURL": "http://127.0.0.1:3300",
+  "webServerCommand": "npm run dev:portal -- --hostname 127.0.0.1 --port 3300",
+  "reuseExistingServer": false,
+  "mockData": true,
+  "frontendAuth": false,
+  "startUtc": "2026-10-12T18:44:22.9551069Z",
+  "endUtc": "2026-10-12T18:49:45.9249298Z",
+  "exitCode": 1,
+  "log": "frontend-browser-portal-first-diagnostic-20261013.log.gz",
+  "json": "frontend-browser-portal-first-diagnostic-20261013-report.json",
+  "logSha256": "8c914f686c6fc786167829d3fad7c28f07ff4ba551a98c1330b1ae8e040bf533",
+  "reportSha256": "abdf9483a36272a990faccd0aff0d1cf39fb3fce1e3cc82797bc5601e7dab792",
+  "stats": {
+    "startTime": "2026-10-12T18:44:23.612Z",
+    "duration": 322283.14,
+    "expected": 36,
+    "skipped": 4,
+    "unexpected": 14,
+    "flaky": 0
+  },
+  "completed": true,
+  "passed": false,
+  "finalCandidateEvidence": false,
+  "failures": [
+    {
+      "file": "homepage-research-entry.spec.ts",
+      "title": "desktop composer is centered beside the sidebar and keeps the 2x2 modules",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "timedOut",
+          "duration": 30027
+        }
+      ]
+    },
+    {
+      "file": "homepage-research-entry.spec.ts",
+      "title": "account actions stay in the sidebar when expanded or collapsed",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "timedOut",
+          "duration": 30027
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/papers/tasks/agents is reachable",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "failed",
+          "duration": 1503
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/papers/methods/react is reachable",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "failed",
+          "duration": 1531
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "Research header opens the Projects product navigation",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "timedOut",
+          "duration": 30017
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/projects renders the Projects product home without API failure state",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "failed",
+          "duration": 5559
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/community renders the Community Pulse board",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "failed",
+          "duration": 5540
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/ home Community Pulse card opens /community",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "timedOut",
+          "duration": 30014
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/papers period tabs and drawer deep-link work",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "timedOut",
+          "duration": 30031
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/papers domain links open task detail view",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "timedOut",
+          "duration": 30037
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/tech/repos opens a Project Radar detail drawer from URL",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "failed",
+          "duration": 5582
+        }
+      ]
+    },
+    {
+      "file": "navigation.spec.ts",
+      "title": "/topics evidence graph renders the structured PRD-07 surface",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "failed",
+          "duration": 5812
+        }
+      ]
+    },
+    {
+      "file": "projects-lab-responsive.spec.ts",
+      "title": "Projects Lab remains usable without horizontal overflow across supported viewports",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "failed",
+          "duration": 5550
+        }
+      ]
+    },
+    {
+      "file": "projects-lab-responsive.spec.ts",
+      "title": "Projects Lab wraps long English and Chinese answers at mobile and desktop widths",
+      "status": "unexpected",
+      "results": [
+        {
+          "status": "timedOut",
+          "duration": 30015
+        }
+      ]
+    }
+  ],
+  "liveAcceptance": false,
+  "fixtureMode": "explicit default-profile mock data; not local-desktop real-service acceptance",
+  "rawLogSha256": "ebbe42a761b5c49a8bd38764ad456b31f4b32bd80bcd3379a68f1a16609422e0",
+  "logArchiveIdentity": {
+    "path": "frontend-browser-portal-first-diagnostic-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "8c914f686c6fc786167829d3fad7c28f07ff4ba551a98c1330b1ae8e040bf533",
+    "bytes": 6136,
+    "decompressedSha256": "ebbe42a761b5c49a8bd38764ad456b31f4b32bd80bcd3379a68f1a16609422e0",
+    "decompressedBytes": 48136
+  }
+}

@@ -110,3 +110,151 @@ def test_history_rejects_unknown_owner_field_and_group_reference(tmp_path: Path)
     visit["groupId"] = "missing"
     with pytest.raises(ResearchHistoryError):
         service.replace(user_id="user-a", revision=0, visits=[visit], groups=[])
+
+def test_reader_activity_round_trips_exact_version_and_safe_opaque_identity(tmp_path: Path) -> None:
+    path = tmp_path / "history.json"
+    service = ResearchHistoryService(path)
+    visit = _visit(module="papers")
+    revision = "sha256:" + "a" * 64
+    visit["activity"] = {
+        "kind": "reader",
+        "paperId": "doi:10.1000/research-v2",
+        "sourceRevision": revision,
+        "title": "A paper",
+        "href": (
+            "/papers/doi%3A10.1000%2Fresearch-v2/read"
+            f"?sourceRevision={revision.replace(':', '%3A')}"
+            "&resumeSection=methods&resumePage=3"
+        ),
+        "sectionId": "methods",
+        "sectionTitle": "Methods",
+        "pdfPage": 3,
+        "updatedAt": 2,
+    }
+
+    saved = service.replace(user_id="user-a", revision=0, visits=[visit], groups=[])
+    reopened = ResearchHistoryService(path)
+    activity = reopened.read(user_id="user-a").visits[0]["activity"]
+
+    assert activity["paperId"] == "doi:10.1000/research-v2"
+    assert activity["sourceRevision"] == revision
+    assert activity["sectionId"] == "methods"
+    assert activity["pdfPage"] == 3
+
+    visit["activity"]["updatedAt"] = 3
+    updated = reopened.replace(
+        user_id="user-a", revision=saved.revision, visits=[visit], groups=[]
+    )
+    assert updated.revision == saved.revision + 1
+    assert updated.visits[0]["activity"]["href"] == visit["activity"]["href"]
+
+
+def test_legacy_reader_activity_without_version_degrades_to_non_precise_resume(tmp_path: Path) -> None:
+    service = ResearchHistoryService(tmp_path / "history.json")
+    visit = _visit(module="papers")
+    visit["activity"] = {
+        "kind": "reader", "paperId": "2601.01234", "title": "A paper",
+        "href": (
+            "/papers/2601.01234/read?sourceRevision=untrusted-old-value"
+            "&resumeSection=methods&resumePage=3&returnTo=%2Fpapers%3Fq%3Dbounded"
+        ),
+        "sectionId": "methods", "sectionTitle": "Methods", "pdfPage": 3, "updatedAt": 2,
+    }
+
+    saved = service.replace(user_id="user-a", revision=0, visits=[visit], groups=[])
+    activity = saved.visits[0]["activity"]
+
+    assert "sourceRevision" not in activity
+    assert "sectionId" not in activity
+    assert "sectionTitle" not in activity
+    assert "pdfPage" not in activity
+    assert "sourceRevision=" not in activity["href"]
+    assert "resumeSection=" not in activity["href"]
+    assert "resumePage=" not in activity["href"]
+    assert "returnTo=" in activity["href"]
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "https://evil.example/papers/2601.01234/read",
+        "//evil.example/papers/2601.01234/read",
+        "/papers/../read",
+        "/papers/%2e%2e/read",
+        "/papers/%2e%2e%2Fsecret/read",
+        "/papers/%252e%252e/read",
+        "/papers/%00paper/read",
+        "/papers/paper%5Cescape/read",
+        "/papers/%GG/read",
+        "/papers/other-paper/read",
+        "/papers/2601.01234/read?sourceRevision=wrong",
+        "/papers/2601.01234/read?sourceRevision=" + "sha256%3A" + "a" * 64 + "&sourceRevision=duplicate",
+        "/papers/2601.01234/read?owner=forged",
+        "/papers/2601.01234/read?returnTo=https%3A%2F%2Fevil.example%2Fpapers",
+        "/papers/2601.01234/read?resumePage=10001",
+        "/papers/2601.01234/read#fragment",
+    ],
+)
+def test_reader_activity_rejects_unsafe_or_mismatched_targets(tmp_path: Path, href: str) -> None:
+    service = ResearchHistoryService(tmp_path / "history.json")
+    visit = _visit(module="papers")
+    visit["activity"] = {
+        "kind": "reader", "paperId": "2601.01234",
+        "sourceRevision": "sha256:" + "a" * 64, "title": "A paper",
+        "href": href, "updatedAt": 2,
+    }
+
+    with pytest.raises(ResearchHistoryError, match="activity is invalid"):
+        service.replace(user_id="user-a", revision=0, visits=[visit], groups=[])
+
+def test_legacy_reader_activity_cannot_normalize_an_external_target(tmp_path: Path) -> None:
+    service = ResearchHistoryService(tmp_path / "history.json")
+    visit = _visit(module="papers")
+    visit["activity"] = {
+        "kind": "reader", "paperId": "2601.01234", "title": "A paper",
+        "href": "https://evil.example/papers/2601.01234/read", "updatedAt": 2,
+    }
+    with pytest.raises(ResearchHistoryError, match="activity is invalid"):
+        service.replace(user_id="user-a", revision=0, visits=[visit], groups=[])
+
+
+@pytest.mark.parametrize("paper_id", ["2601.01234", "doi:10.1000/paper-1", "p" * 256])
+def test_reader_identity_boundary_round_trips_through_cas(tmp_path: Path, paper_id: str) -> None:
+    from urllib.parse import quote
+
+    service = ResearchHistoryService(tmp_path / "history.json")
+    visit = _visit()
+    visit["activity"] = {
+        "kind": "reader", "paperId": paper_id, "title": "A paper",
+        "href": f"/papers/{quote(paper_id, safe='')}/read", "updatedAt": 2,
+    }
+
+    saved = service.replace(user_id="alice", revision=0, visits=[visit], groups=[])
+
+    assert saved.visits[0]["activity"]["paperId"] == paper_id
+    assert service.read(user_id="alice").visits == saved.visits
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"sourceRevision": ""},
+        {"sourceRevision": "r" * 513},
+        {"sourceRevision": "rev\x00"},
+        {"href": "/papers/2601.01234/read?resumeSection=other"},
+        {"href": "/papers/2601.01234/read?resumePage=4"},
+    ],
+)
+def test_reader_exact_resume_rejects_unbounded_revision_and_mismatched_locator(
+    tmp_path: Path, patch: dict,
+) -> None:
+    service = ResearchHistoryService(tmp_path / "history.json")
+    visit = _visit()
+    visit["activity"] = {
+        "kind": "reader", "paperId": "2601.01234", "title": "A paper",
+        "href": "/papers/2601.01234/read", "sourceRevision": "revision-1",
+        "sectionId": "methods", "pdfPage": 3, "updatedAt": 2, **patch,
+    }
+
+    with pytest.raises(ResearchHistoryError, match="activity is invalid"):
+        service.replace(user_id="alice", revision=0, visits=[visit], groups=[])

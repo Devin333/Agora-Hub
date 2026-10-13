@@ -1,0 +1,43 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-12T22:59:34.662894+00:00",
+  "status": "passed-final-full-and-required-smoke-also-passed",
+  "metadata": {
+    "command": ".venv\\\\Scripts\\\\python.exe -m pytest tests/scripts/test_local_desktop_recovery.py -q -rs",
+    "cwd": "F:\\github\\NewsRoom",
+    "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+    "utc_start": "2026-10-12T22:53:17.5796940Z",
+    "utc_end": "2026-10-12T22:53:28.9246715Z",
+    "exit_code": 0,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-recovery-contracts-final-20261013-065317-571.log"
+  },
+  "metadataRecord": "runtime-recovery-final-contracts-20261013.metadata.json",
+  "log": "runtime-recovery-final-contracts-20261013.log.gz",
+  "logSha256": "3b821be088614faf6b7f7eaaaf6b65317d3b932b5460402d6f09ba4779471348",
+  "rawLogSha256": "f2dfb6327353d76335ab591cf10b734efc90dbb6033b9986328f4d318a4eb1d5",
+  "logArchiveIdentity": {
+    "path": "runtime-recovery-final-contracts-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "3b821be088614faf6b7f7eaaaf6b65317d3b932b5460402d6f09ba4779471348",
+    "bytes": 55,
+    "decompressedSha256": "f2dfb6327353d76335ab591cf10b734efc90dbb6033b9986328f4d318a4eb1d5",
+    "decompressedBytes": 102
+  },
+  "scope": "Entire Windows backup/recovery module; fixture data only, no actual business backup",
+  "candidateRecord": "backend-release-candidate-identity-20261013.json",
+  "candidateSourceDigest": "sha256:06893c3fbe0890a90124263120b28ddef957665e04bcc12a8f438f0cddb081bf",
+  "liveAcceptanceExecuted": false,
+  "originalMetadataContainedLogChecksum": false,
+  "results": {
+    "passed": 29,
+    "seconds": 10.81
+  },
+  "statusAtCreation": "passed-full-and-mandatory-smoke-pending",
+  "finalGateClosure": {
+    "recordedAt": "2026-10-13T01:53:48.708Z",
+    "fullTests": "backend-release-candidate-full-tests-20261013.json",
+    "requiredSmoke": "backend-release-candidate-mandatory-smoke-20261013.json",
+    "candidate": "backend-release-candidate-identity-20261013.json",
+    "executionMetadataPreserved": true
+  }
+}

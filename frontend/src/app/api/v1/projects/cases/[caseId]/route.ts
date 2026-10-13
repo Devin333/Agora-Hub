@@ -5,7 +5,8 @@ import type { ProjectsApiCase } from "@/types/projects"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(request: NextRequest, { params }: { params: { caseId: string } }) {
+export async function GET(request: NextRequest, props: { params: Promise<{ caseId: string }> }) {
+  const params = await props.params;
   const path = `/api/v1/projects/cases/${encodeURIComponent(params.caseId)}`
   const backend = await backendGet<ProjectsApiCase>(backendPath(path, request.nextUrl.searchParams))
   if (backend.ok) return success(backend.data)

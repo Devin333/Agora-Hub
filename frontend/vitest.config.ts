@@ -8,6 +8,7 @@ const configDir = process.cwd()
 loadRootEnv(configDir)
 
 export default defineConfig({
+  cacheDir: path.resolve(configDir, "../.tmp/vitest/frontend"),
   plugins: [react()],
   test: {
     environment: "jsdom",

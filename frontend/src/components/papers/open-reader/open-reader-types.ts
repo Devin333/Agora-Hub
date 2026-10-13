@@ -134,6 +134,34 @@ export interface ReaderMaterialSummary {
   }
 }
 
+export type ReaderSelectionAskDraft = {
+  selectionId: string
+  mode: "explain" | "example"
+  question: string
+  selection: {
+    sectionId: string
+    page?: number
+    selectedText: string
+  }
+}
+
+export type ReaderSelectionAskRequest = ReaderSelectionAskDraft & {
+  requestKey: string
+  owner: string
+  sourceRevision: string
+}
+
+export type ReaderSelectionAskAnswer = {
+  requestKey: string
+  selectionId?: string
+  mode: "explain" | "example"
+  question: string
+  answer: string
+  selection: ReaderSelectionAskDraft["selection"]
+  owner: string
+  sourceRevision: string
+}
+
 export interface OpenReaderPageProps {
   reader: PaperReaderPayload
   locale: Locale
@@ -141,8 +169,12 @@ export interface OpenReaderPageProps {
   visualLayer?: OpenReaderVisualLayer
   workspace?: {
     fontSize: number
+    sourceRevision?: string
     sectionRequest?: { id: string; sequence: number }
     onSectionChange?: (id: string) => void
+    onSelectionAsk?: (request: ReaderSelectionAskDraft) => void
+    selectionAnswer?: ReaderSelectionAskAnswer
+    onSelectionAnswerApplied?: (requestKey: string) => void
   }
 }
 

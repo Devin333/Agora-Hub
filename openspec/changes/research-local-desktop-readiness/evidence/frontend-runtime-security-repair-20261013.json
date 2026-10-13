@@ -1,0 +1,64 @@
+{
+  "schema": "newsroom.desktop-security-root-cause/v1",
+  "recordedAt": "2026-10-12T18:43:51.387Z",
+  "phase": "concentrated-validation-root-cause-repair",
+  "installedVersion": "next@14.2.35",
+  "auditCounts": {
+    "info": 0,
+    "low": 1,
+    "moderate": 4,
+    "high": 16,
+    "critical": 1,
+    "total": 22
+  },
+  "targetPlatform": "Windows",
+  "advisories": [
+    {
+      "id": "GHSA-p293-qw3h-jr36",
+      "url": "https://github.com/vercel/next.js/security/advisories/GHSA-p293-qw3h-jr36",
+      "publishedDate": "2026-08-25",
+      "affected": [
+        ">=13.4 <15.5.24",
+        ">=16.0 <16.3.3"
+      ],
+      "patched": [
+        "15.5.24",
+        "16.3.3"
+      ],
+      "workaround": "none documented for Windows-hosted applications",
+      "status": "repair-required-before-deployment"
+    },
+    {
+      "id": "GHSA-2xp9-vwfh-vxw4",
+      "url": "https://github.com/vercel/next.js/security/advisories/GHSA-2xp9-vwfh-vxw4",
+      "status": "included-in-patched-Next16-candidate-check"
+    }
+  ],
+  "primaryReferences": [
+    "https://nextjs.org/support-policy",
+    "https://nextjs.org/docs/app/guides/upgrading/version-16"
+  ],
+  "plannedTarget": "Next.js 16 stable patched baseline; verify registry and peer versions before lock update",
+  "assignedOwner": "desktop_frontend_workflows",
+  "historicalChecks": "Next14 unit/typecheck/lint/build success is not final candidate evidence",
+  "liveAcceptanceExecuted": false,
+  "status": "patched-Next16-installed-and-validated; browser/final-build-pending",
+  "installedFinalFramework": {
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "reactDom": "19.3.0",
+    "eslintConfigNext": "16.4.0",
+    "eslint": "9.39.5",
+    "bundler": "webpack"
+  },
+  "auditAfterMigration": {
+    "exitCode": 1,
+    "critical": 0,
+    "high": 12,
+    "moderate": 4,
+    "low": 1,
+    "total": 17,
+    "nextFinding": null
+  },
+  "validationRecord": "frontend-next16-validation-before-browser-20261013.json"
+}

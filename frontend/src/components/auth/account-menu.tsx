@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { LogOut, UserCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { fetchAuthSession, logout } from "@/lib/auth/api"
@@ -9,6 +10,7 @@ import type { CurrentUser } from "@/lib/papers/types"
 
 export function AccountMenu() {
   const { t } = useI18n()
+  const router = useRouter()
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -35,7 +37,8 @@ export function AccountMenu() {
     try {
       await logout()
     } finally {
-      window.location.href = "/login"
+      router.replace("/login")
+      router.refresh()
     }
   }
 

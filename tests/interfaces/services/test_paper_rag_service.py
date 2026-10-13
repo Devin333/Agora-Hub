@@ -68,7 +68,7 @@ class _RecordingTranscriptStore:
     def __init__(self) -> None:
         self.transcripts = []
 
-    def persist(self, transcript):
+    def persist(self, transcript, *, actor_scope):
         self.transcripts.append(transcript)
         return PaperRagTranscriptArtifact(
             transcript_id=transcript.transcript_id,
@@ -77,12 +77,12 @@ class _RecordingTranscriptStore:
 
 
 class _FailingTranscriptStore:
-    def persist(self, transcript):
+    def persist(self, transcript, *, actor_scope):
         raise AssertionError("retrieve-only requests must not persist transcripts")
 
 
 class _BrokenTranscriptStore:
-    def persist(self, transcript):
+    def persist(self, transcript, *, actor_scope):
         raise OSError("transcript volume is read-only")
 
 
@@ -284,12 +284,14 @@ def test_rag_ask_gated_generation_returns_answered_payload(tmp_path) -> None:
     assert payload["metrics"]["budget_snapshot"]["rounds_used"] == 1
     assert payload["transcript_artifact"]["transcript_id"] == "transcript-1"
     assert transcript_store.resolve("transcript-1").exists()
-    assert transcript_store.transcript_payload("transcript-1")["transcript_id"] == "transcript-1"
+    assert transcript_store.transcript_payload(
+        "transcript-1", actor_scope={"memory_namespace": "research.public"}
+    )["transcript_id"] == "transcript-1"
     assert session.calls[0][0].required_evidence_types == ["method"]
     assert session.calls[0][1]["current_section_index"] == 0
 
 
-def test_rag_ask_gated_generation_returns_answer_when_transcript_persist_fails() -> None:
+def test_rag_ask_gated_generation_fails_when_transcript_persist_fails() -> None:
     result = _session_result(
         status=RAGSessionStatus.ANSWERED,
         decision_type=RAGDecisionType.RETURN_ANSWER,
@@ -301,23 +303,13 @@ def test_rag_ask_gated_generation_returns_answer_when_transcript_persist_fails()
         transcript_store=_BrokenTranscriptStore(),
     )
 
-    payload = service.rag_ask(
-        "p1",
-        "How does it work?",
-        generate=True,
-        graph_identity=_graph_identity(),
-    )
-
-    assert payload["status"] == "answered"
-    assert payload["answer"] == "The method retrieves evidence."
-    assert payload["transcript_id"] == "transcript-1"
-    assert payload["transcript_artifact"]["transcript_id"] == "transcript-1"
-    assert payload["transcript_artifact"]["persisted"] is False
-    assert payload["transcript_artifact"]["error"] == {
-        "type": "OSError",
-        "message": "transcript volume is read-only",
-    }
-
+    with pytest.raises(OSError, match="read-only"):
+        service.rag_ask(
+            "p1",
+            "How does it work?",
+            generate=True,
+            graph_identity=_graph_identity(),
+        )
 
 def test_rag_ask_gated_generation_returns_abstained_payload_without_answer_text() -> None:
     result = _session_result(
@@ -480,6 +472,66 @@ def test_rag_ask_graph_generation_requires_harness_activity_identity() -> None:
 
     with pytest.raises(ValueError, match="exact Graph activity identity"):
         service.rag_ask("p1", "How does it work?", generate=True)
+
+
+def test_recovery_does_not_misclassify_live_journal_and_projects_dead_execution(
+    tmp_path: Path,
+) -> None:
+    store = PaperRagTranscriptFileStore(tmp_path / "transcripts")
+    store.record_event(
+        spec=type("Spec", (), {"session_id": "session-live"})(),
+        sequence=0,
+        event_type="rag_session_started",
+        payload={"phase": "plan"},
+        actor_scope={"user_id": "alice"},
+    )
+    service = PaperRagApplicationService(
+        retriever=_Retriever(),
+        session_factory=lambda **_: pytest.fail("recovery must not create a session"),
+        transcript_store=store,
+    )
+
+    assert service.recover_gated_answer(
+        session_id="session-live", paper_id="paper-1", question="Why?",
+        tenant_id=None, user_id="alice", memory_namespace=None,
+        include_interrupted=False,
+    ) is None
+
+    interrupted = service.recover_gated_answer(
+        session_id="session-live", paper_id="paper-1", question="Why?",
+        tenant_id=None, user_id="alice", memory_namespace=None,
+        include_interrupted=True,
+    )
+    assert interrupted["recovery_state"] == "needs_action"
+    assert interrupted["error_code"] == "rag_execution_interrupted"
+    assert interrupted["journal_event_count"] == 1
+
+
+def test_recovery_projects_corrupt_journal_without_replaying_worker(
+    tmp_path: Path,
+) -> None:
+    store = PaperRagTranscriptFileStore(tmp_path / "transcripts")
+    store.record_event(
+        spec=type("Spec", (), {"session_id": "session-corrupt"})(),
+        sequence=0,
+        event_type="rag_session_started",
+        payload={"phase": "plan"},
+        actor_scope={"user_id": "alice"},
+    )
+    store.journal_path_for("session-corrupt").write_text("{corrupt", encoding="utf-8")
+    service = PaperRagApplicationService(
+        retriever=_Retriever(),
+        session_factory=lambda **_: pytest.fail("corrupt recovery must not create a session"),
+        transcript_store=store,
+    )
+
+    recovered = service.recover_gated_answer(
+        session_id="session-corrupt", paper_id="paper-1", question="Why?",
+        tenant_id=None, user_id="alice", memory_namespace=None,
+        include_interrupted=True,
+    )
+    assert recovered["recovery_state"] == "needs_action"
+    assert recovered["error_code"] == "rag_transcript_corrupt"
 
 
 def _session_result(

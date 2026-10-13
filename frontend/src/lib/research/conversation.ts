@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { researchHomeHref } from "@/lib/research/routes"
 
 const text = (max: number) => z.string().max(max).refine(value => !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value))
 const nonblank = (max: number) => text(max).refine(value => Boolean(value.trim()))
@@ -66,7 +67,7 @@ export type ResearchConversation = z.infer<typeof researchConversationSchema>
 export const validResearchConversation = (value: unknown): value is ResearchConversation => researchConversationSchema.safeParse(value).success
 
 export function conversationHref(sessionId: string) {
-  return `/design-demo?researchSession=${encodeURIComponent(sessionId)}`
+  return `${researchHomeHref()}?researchSession=${encodeURIComponent(sessionId)}`
 }
 
 export function transitionResearchTurn(turn: ResearchTurn, phase: ConversationPhase, patch: Partial<ResearchTurn> = {}): ResearchTurn {

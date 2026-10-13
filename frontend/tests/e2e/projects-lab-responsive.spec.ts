@@ -75,39 +75,51 @@ async function authenticate(page: Page, baseURL: string | undefined) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ success: true, data: { session: { userId: "e2e-user", username: "e2e", role: "admin" } } }),
+      body: JSON.stringify({
+        success: true,
+        data: {
+          session: {
+            sessionId: "e2e-session",
+            expiresAt: "2099-12-31T00:00:00Z",
+            user: { userId: "e2e-user", username: "e2e", role: "admin" },
+          },
+        },
+      }),
     })
   })
   await page.context().addCookies([{ name: "newsroom_session", value: "session-token", url: baseURL ?? "http://127.0.0.1:3000" }])
 }
 
 async function mockProjectsLab(page: Page, options: { longText?: boolean } = {}) {
-  await page.route(/\/api\/v1\/projects(?:\?.*)?$/, async (route) => {
-    if (route.request().method() === "POST") {
-      const longQuestion = options.longText
-        ? "请说明在多团队协作、审计证据保留和离线部署限制下，哪个需求优先级最高；Which requirement must remain stable across every release?"
-        : "Which requirement needs the most attention?"
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: true,
-          data: {
-            session: {
-              id: "lab-session-e2e",
-              user_problem: "Long Lab brief",
-              selected_case_ids: ["case-1"],
-              current_stage: "clarifying_requirements",
-              next_action: "answer_question",
-              can_generate_solution: false,
-              unanswered_question_ids: ["question-long"],
-              questions: [{ id: "question-long", question: longQuestion, required: true }],
-            },
+  await page.route("**/api/v1/projects/lab/sessions", async (route) => {
+    const request = route.request().postDataJSON() as { user_problem?: string }
+    const longQuestion = options.longText
+      ? "请说明在多团队协作、审计证据保留和离线部署限制下，哪个需求优先级最高；Which requirement must remain stable across every release?"
+      : "Which requirement needs the most attention?"
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        success: true,
+        data: {
+          session: {
+            id: "lab-session-e2e",
+            user_problem: request.user_problem ?? "Lab brief",
+            selected_case_ids: ["case-1"],
+            current_stage: "clarifying_requirements",
+            next_action: "answer_question",
+            can_generate_solution: false,
+            unanswered_question_ids: ["question-long"],
+            questions: [{ id: "question-long", question: longQuestion, required: true }],
           },
-        }),
-      })
-      return
-    }
+        },
+      }),
+    })
+  })
+  await page.route("**/api/v1/projects/interactions", route =>
+    route.fulfill({ json: { success: true, data: { recorded: true } } })
+  )
+  await page.route(/\/api\/v1\/projects(?:\?.*)?$/, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",

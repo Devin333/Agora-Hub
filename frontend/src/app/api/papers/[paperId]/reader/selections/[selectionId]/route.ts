@@ -8,14 +8,15 @@ export const dynamic = "force-dynamic"
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { paperId: string; selectionId: string } }
+  props: { params: Promise<{ paperId: string; selectionId: string }> }
 ) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response
   }
 
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const body = await request.json().catch(() => ({}))
   const result = await safeApiPatch(
     `/api/v1/papers/${encodeURIComponent(guard.paper.id)}/reader/selections/${encodeURIComponent(params.selectionId)}`,

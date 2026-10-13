@@ -1,0 +1,112 @@
+{
+  "schema": "newsroom.local-desktop.browser-validation.v1",
+  "recordedAt": "2026-10-12T19:33:11.221Z",
+  "kind": "browser-fixture-regression",
+  "group": "portal-default",
+  "metadata": {
+    "command": "npx.cmd playwright test --grep-invert \"/studio|/admin|admin console|Operations Studio\" --reporter=list,json",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "profile": "default",
+    "surface": "portal",
+    "baseURL": "http://127.0.0.1:3300",
+    "webServerCommand": "npm run dev:portal -- --hostname 127.0.0.1 --port 3300",
+    "reuseExistingServer": false,
+    "mockData": true,
+    "frontendAuth": false,
+    "startUtc": "2026-10-12T19:11:25.7593219Z",
+    "endUtc": "2026-10-12T19:13:11.3960580Z",
+    "exitCode": 0,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-portal-default-final-20261013.log",
+    "json": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-portal-default-final-20261013.json"
+  },
+  "stats": {
+    "startTime": "2026-10-12T19:11:26.415Z",
+    "duration": 104954.695,
+    "expected": 50,
+    "skipped": 4,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "skipped": [
+    {
+      "group": "portal",
+      "title": "migrates legacy reader URLs and preserves query location",
+      "file": "desktop-research-readiness.spec.ts",
+      "annotations": [
+        {
+          "type": "skip",
+          "description": "requires the local-desktop profile",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+            "line": 16,
+            "column": 8
+          }
+        }
+      ]
+    },
+    {
+      "group": "portal",
+      "title": "recovers a lost first receipt by querying the durable identity without resubmitting",
+      "file": "desktop-research-readiness.spec.ts",
+      "annotations": [
+        {
+          "type": "skip",
+          "description": "requires the local-desktop profile",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+            "line": 16,
+            "column": 8
+          }
+        }
+      ]
+    },
+    {
+      "group": "portal",
+      "title": "clears owner-scoped reader data after account change",
+      "file": "desktop-research-readiness.spec.ts",
+      "annotations": [
+        {
+          "type": "skip",
+          "description": "requires the local-desktop profile",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+            "line": 16,
+            "column": 8
+          }
+        }
+      ]
+    },
+    {
+      "group": "portal",
+      "title": "keeps primary desktop reader actions visible and keyboard reachable",
+      "file": "desktop-research-readiness.spec.ts",
+      "annotations": [
+        {
+          "type": "skip",
+          "description": "requires the local-desktop profile",
+          "location": {
+            "file": "F:\\github\\NewsRoom\\frontend\\tests\\e2e\\desktop-research-readiness.spec.ts",
+            "line": 16,
+            "column": 8
+          }
+        }
+      ]
+    }
+  ],
+  "log": {
+    "path": "frontend-browser-portal-validation-20261013.log.gz",
+    "sha256": "e92660c5b58d46f05c105131e4bfba4d09c40212c192f5f51359467a2c56b249",
+    "encoding": "gzip",
+    "bytes": 2386,
+    "decompressedSha256": "ae1508efb7d1ad43f89c1040b7c3fb80936306565ab489899c47c80a7d7f6cc3",
+    "decompressedBytes": 12111
+  },
+  "report": {
+    "path": "frontend-browser-portal-validation-20261013-report.json",
+    "sha256": "1a48245565a354baa8ce2edcd2ce85f2d52683bc0de677cf083c92e28f874334"
+  },
+  "finalCandidateEvidence": false,
+  "candidateStatus": "observed-pass-source-freeze-and-affected-browser-rerun-pending",
+  "liveAcceptanceExecuted": false,
+  "evidenceBoundary": "Own isolated Next development server and explicit route fixtures; no Chapter 12 release/provider/account/reboot acceptance."
+}

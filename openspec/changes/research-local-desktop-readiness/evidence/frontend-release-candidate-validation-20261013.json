@@ -1,0 +1,269 @@
+{
+  "schema": "newsroom-frontend-final-validation/v1",
+  "recordedAt": "2026-10-12T21:07:49.810048+00:00",
+  "status": "passed-with-explicit-existing-browser-skips-and-residual-audit-findings",
+  "handoffArtifact": {
+    "path": "frontend-release-candidate-owner-handoff-20261013.json",
+    "sha256": "369c8a3c78985aa9f6af583831ca2c173269222a8e993beb842832fc9153b88b",
+    "bytes": 8288
+  },
+  "candidateRecord": "frontend-release-candidate-identity-20261013.json",
+  "sourceDigest": "sha256:ef1ee7f6b5fb34590d3da54e3d97b82f518a687d8ad766e198c40fcc2984e15e",
+  "productionBuildDigest": "sha256:cfe9a1e1fe3b8280e43bd3f2cb23ecb84964b40fbf07b4fd5ce08d8ea9369c0d",
+  "checks": {
+    "npmCi": {
+      "command": "npm.cmd ci",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:52:43.159074Z",
+      "endedAtUtc": "2026-10-12T20:52:54.9959902Z",
+      "exitCode": 0,
+      "packageJsonSha256": "dac22cc2033fc52b35bd3505308091adc9ee60f4cacd63e52fc888bd39cbac5d",
+      "packageLockSha256": "4b154d77d0dbed69de006b4062faf46dfe92dd568d4a676f6d377e803243f3bd",
+      "log": "frontend-release-candidate-npmCi-20261013.log.gz",
+      "originalLog": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-npm-ci-20261013.log",
+      "logSha256": "0b3149fb8314e542a5ffc88e5d52fc73e7442f8fc7f17d734a09124ea91849d4",
+      "rawLogSha256": "68e076a9e0e2cadac47e4f8034a514f152d31854e639e00c7b203728c406f65f",
+      "logArchiveIdentity": {
+        "path": "frontend-release-candidate-npmCi-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "0b3149fb8314e542a5ffc88e5d52fc73e7442f8fc7f17d734a09124ea91849d4",
+        "bytes": 316,
+        "decompressedSha256": "68e076a9e0e2cadac47e4f8034a514f152d31854e639e00c7b203728c406f65f",
+        "decompressedBytes": 505
+      }
+    },
+    "unit": {
+      "command": "npm.cmd test",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:53:18.3643416Z",
+      "endedAtUtc": "2026-10-12T20:53:32.8217553Z",
+      "exitCode": 0,
+      "log": "frontend-release-candidate-unit-20261013.log.gz",
+      "nodeModulesViteExists": false,
+      "rootTmpVitestExists": true,
+      "originalLog": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-test-20261013.log",
+      "logSha256": "c883a4b5df0a01bde5a2b4e6830765c619eb5884bab4af40ff86ac06f9c99a23",
+      "rawLogSha256": "0994c08410a6da699287e9b0473a20f62036d9b83f21681f610b69cbefe887a5",
+      "logArchiveIdentity": {
+        "path": "frontend-release-candidate-unit-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "c883a4b5df0a01bde5a2b4e6830765c619eb5884bab4af40ff86ac06f9c99a23",
+        "bytes": 234,
+        "decompressedSha256": "0994c08410a6da699287e9b0473a20f62036d9b83f21681f610b69cbefe887a5",
+        "decompressedBytes": 294
+      }
+    },
+    "typecheck": {
+      "command": "npm.cmd run typecheck",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:53:54.4019679Z",
+      "endedAtUtc": "2026-10-12T20:53:56.0378876Z",
+      "exitCode": 0,
+      "log": "frontend-release-candidate-typecheck-20261013.log.gz",
+      "originalLog": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-typecheck-20261013.log",
+      "logSha256": "594414b79fdf440c4686a9d09ddb3856d2f6f97ed07ba92422dcd99db277f193",
+      "rawLogSha256": "864361950cf7b78936326aa7697d83e87b9fe86c103a11a5673064b38b4f4792",
+      "logArchiveIdentity": {
+        "path": "frontend-release-candidate-typecheck-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "594414b79fdf440c4686a9d09ddb3856d2f6f97ed07ba92422dcd99db277f193",
+        "bytes": 82,
+        "decompressedSha256": "864361950cf7b78936326aa7697d83e87b9fe86c103a11a5673064b38b4f4792",
+        "decompressedBytes": 63
+      }
+    },
+    "lint": {
+      "command": "npm.cmd run lint",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startedAtUtc": "2026-10-12T20:54:11.6800275Z",
+      "endedAtUtc": "2026-10-12T20:54:22.4768144Z",
+      "exitCode": 0,
+      "log": "frontend-release-candidate-lint-20261013.log.gz",
+      "originalLog": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-lint-20261013.log",
+      "logSha256": "8e44c491977a7487ec3b8fc725dd5f8abf57f7d7f84cea8df2ed05c33a2dee12",
+      "rawLogSha256": "3fa8424452a42955aadbb4d916edc682c754818142cfb1f782203e0ecc2c3a96",
+      "logArchiveIdentity": {
+        "path": "frontend-release-candidate-lint-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "8e44c491977a7487ec3b8fc725dd5f8abf57f7d7f84cea8df2ed05c33a2dee12",
+        "bytes": 72,
+        "decompressedSha256": "3fa8424452a42955aadbb4d916edc682c754818142cfb1f782203e0ecc2c3a96",
+        "decompressedBytes": 56
+      }
+    },
+    "productionBuild": {
+      "command": "npm.cmd run build",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "profile": "local-desktop",
+      "canonicalOrigin": "http://127.0.0.1:3400",
+      "apiBaseUrl": "http://127.0.0.1:8000",
+      "mocks": false,
+      "frontendAuth": true,
+      "releaseId": "chapter11-final-sequence",
+      "startedAtUtc": "2026-10-12T20:54:53.9445785Z",
+      "endedAtUtc": "2026-10-12T20:55:09.691177Z",
+      "exitCode": 0,
+      "log": "frontend-release-candidate-productionBuild-20261013.log.gz",
+      "originalLog": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-localdesktop-build-20261013.log",
+      "logSha256": "5450da9fba41d6d8d2654d4e19bea8ca888a2b9a2a04f235fb60fc7ebdd5cb96",
+      "rawLogSha256": "9c1cbb7d1cc595c29a9167f90ba9a4fa700acda365dd9a02beacdffc348f9269",
+      "logArchiveIdentity": {
+        "path": "frontend-release-candidate-productionBuild-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "5450da9fba41d6d8d2654d4e19bea8ca888a2b9a2a04f235fb60fc7ebdd5cb96",
+        "bytes": 1313,
+        "decompressedSha256": "9c1cbb7d1cc595c29a9167f90ba9a4fa700acda365dd9a02beacdffc348f9269",
+        "decompressedBytes": 5435
+      }
+    }
+  },
+  "unit": {
+    "filesPassed": 140,
+    "testsPassed": 729
+  },
+  "browsers": [
+    {
+      "name": "default-portal",
+      "record": "frontend-release-candidate-browser-default-portal-20261013.json",
+      "stats": {
+        "startTime": "2026-10-12T20:45:19.012Z",
+        "duration": 103863.739,
+        "expected": 50,
+        "skipped": 4,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "exitCode": 0
+    },
+    {
+      "name": "local-desktop-portal",
+      "record": "frontend-release-candidate-browser-local-desktop-portal-20261013.json",
+      "stats": {
+        "startTime": "2026-10-12T20:29:03.434Z",
+        "duration": 14516.456,
+        "expected": 4,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "exitCode": 0
+    },
+    {
+      "name": "default-admin",
+      "record": "frontend-final-browser-default-admin-20261013.json",
+      "stats": {
+        "startTime": "2026-10-12T19:19:30.664Z",
+        "duration": 29029.337,
+        "expected": 21,
+        "skipped": 6,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "exitCode": 0
+    }
+  ],
+  "partition": {
+    "allCount": 81,
+    "portalCount": 54,
+    "adminCount": 27,
+    "desktopCount": 4,
+    "portalAdminIntersectionCount": 0,
+    "portalAdminUnionCount": 81,
+    "profileSkippedCasesAllExecutedInDesktopBatch": true,
+    "completeComplement": true,
+    "basis": "actual final portal/desktop reports plus unchanged admin report; full suite listing preserved in earlier partition record",
+    "listingEvidence": {
+      "all": "frontend-final-browser-list-all-20261013.log.gz",
+      "portal": "frontend-final-browser-list-portal-20261013.log.gz",
+      "admin": "frontend-final-browser-list-admin-20261013.log.gz",
+      "desktop": "frontend-final-browser-list-desktop-20261013.log.gz"
+    }
+  },
+  "uniqueBrowserResult": {
+    "passed": 75,
+    "skipped": 6,
+    "failed": 0,
+    "profileSpecificSkippedThenExecuted": 4
+  },
+  "adminReuseJustification": "Prior final candidate 21 passed / 6 pre-existing Studio test.fixme skips; default showTrigger output and admin routes are unchanged.",
+  "dependencyIdentity": {
+    "command": "npm.cmd ls --json --all + recursive scan + Sharp/SWC",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "startedAtUtc": "2026-10-12T20:55:45.3918507Z",
+    "endedAtUtc": "2026-10-12T20:55:48.7225613Z",
+    "exitCode": 0,
+    "recursiveProblemCount": 0,
+    "problems": [],
+    "tree": "frontend-release-candidate-installed-tree-20261013.json",
+    "diffCheckExitCode": 0,
+    "nodeModulesViteExists": false,
+    "rootTmpVitestExists": true,
+    "sharp": {
+      "version": "0.35.5",
+      "vips": "8.18.7",
+      "pngOutput": {
+        "file": true,
+        "buffer": true,
+        "stream": true
+      }
+    },
+    "swc": {
+      "version": "16.4.0",
+      "path": "F:\\github\\NewsRoom\\frontend\\node_modules\\@next\\swc-win32-x64-msvc\\next-swc.win32-x64-msvc.node",
+      "transformBytes": 11
+    },
+    "packageJsonSha256": "dac22cc2033fc52b35bd3505308091adc9ee60f4cacd63e52fc888bd39cbac5d",
+    "packageLockSha256": "4b154d77d0dbed69de006b4062faf46dfe92dd568d4a676f6d377e803243f3bd",
+    "vitestConfigSha256": "27cb267d5eab01511e28fa77078152171522d62c9a0f131d0a43acfc321d5b49",
+    "listenerCount": 0,
+    "originalTree": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-final-sequence-tree-20261013.json",
+    "treeSha256": "cab4f46ff09bb167b498fbc8ade14f05435a14ca645a006abaa78d22caa3829e",
+    "independentRecursiveProblemCount": 0
+  },
+  "dependencyRootCause": {
+    "npmCiInstallsOptionalTransitives": true,
+    "vitestDidNotInstallPackages": true,
+    "detail": "npm ci installs lockfile-declared optional descendants. node_modules/.vite made node_modules newer than hidden node_modules/.package-lock.json; npm 11.6.1 then rebuilt the physical tree and misclassified hoisted children whose platform parents are absent on Windows. Moving Vitest cache to ../.tmp/vitest/frontend prevents test tooling from invalidating the hidden-lock classification. No unused production dependency was added.",
+    "sharpLineage": "next -> sharp -> platform optional wasm parents -> @img/sharp-wasm32 -> @emnapi/runtime",
+    "toolingLineage": "vite/rolldown and eslint-config-next/unrs-resolver optional bindings -> @napi-rs/wasm-runtime -> @tybys/wasm-util"
+  },
+  "readerCitationRootCause": "Displayed citation 33 scrolls to opaque id bib.bib28, whose visible label is [33]; bib.bib33 visibly labels [28]. Production navigation was correct; the old test coupled display order to an opaque source id.",
+  "sourceChanges": [
+    {
+      "path": "frontend/vitest.config.ts",
+      "summary": "Vitest cache moved outside frontend/node_modules and frontend release tree to repository-root .tmp/vitest/frontend."
+    },
+    {
+      "path": "frontend/src/components/providers.tsx",
+      "summary": "Formal paper readers keep the global command palette mounted while hiding its fixed trigger."
+    },
+    {
+      "path": "frontend/src/features/portal/components/research-command-palette.tsx",
+      "summary": "showTrigger controls only the floating trigger; Ctrl/Cmd+K dialog and focus restoration remain mounted."
+    },
+    {
+      "path": "frontend/src/features/portal/components/__tests__/research-command-palette.test.tsx",
+      "summary": "Hidden-trigger shortcut/focus contract."
+    },
+    {
+      "path": "frontend/tests/e2e/desktop-research-readiness.spec.ts",
+      "summary": "Ctrl+K opens search and Escape returns focus to notes across all required viewports."
+    },
+    {
+      "path": "frontend/tests/e2e/reader-workspace.spec.ts",
+      "summary": "Citation assertion uses visible [33] identity rather than opaque LaTeXML id, while retaining uniqueness and viewport requirements."
+    }
+  ],
+  "dependencyAuditRecord": "frontend-next16-npm-audit-20261013.json",
+  "dependencyAudit": {
+    "total": 17,
+    "low": 1,
+    "moderate": 4,
+    "high": 12,
+    "critical": 0,
+    "status": "known residual audit findings; no force upgrade or audit gate suppression"
+  },
+  "browserEvidenceBoundary": "Route fixture regressions; this is not Chapter 12 real-service deployment evidence.",
+  "liveAcceptanceExecuted": false,
+  "runtimeIdentityRecord": "frontend-node-runtime-identity-final-20261013.json"
+}

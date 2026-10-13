@@ -147,7 +147,6 @@ class ResearchParserSettings:
             not backends
             or len(backends) != len(set(backends))
             or any(backend not in _PARSER_BACKENDS for backend in backends)
-            or not any(backend in {"marker", "mineru"} for backend in backends)
         ):
             _invalid("research.parser.backends")
         if not isinstance(self.allow_abstract_fallback, bool):
@@ -177,6 +176,7 @@ class ResearchRAGSettings:
     max_context_items: int
     max_context_tokens: int
     max_worker_calls: int
+    transcript_root: Path | None = None
     memory_enabled: bool = False
     memory_namespace_refs: tuple[str, ...] = ()
 
@@ -186,6 +186,9 @@ class ResearchRAGSettings:
             _invalid("research.rag.backend")
         object.__setattr__(self, "backend", backend)
         _directory_root(self.local_root, "research.rag.local_root")
+        transcript_root = self.transcript_root or (self.local_root.parent / "rag" / "transcripts")
+        _directory_root(transcript_root, "research.rag.transcript_root")
+        object.__setattr__(self, "transcript_root", transcript_root)
         if backend == "qdrant":
             if self.qdrant_url is None:
                 _invalid("research.rag.vector_backend")
@@ -293,6 +296,70 @@ class ResearchRunStoreSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ResearchStoragePaths:
+    artifact_root: Path
+    research_root: Path
+    run_store_root: Path
+    rag_local_root: Path
+    rag_transcript_root: Path
+
+    def __post_init__(self) -> None:
+        _directory_root(self.artifact_root, "research.storage.artifact_root")
+        _directory_root(self.research_root, "research.storage.root")
+        _directory_root(self.run_store_root, "research.storage.run_store_root")
+        _directory_root(self.rag_local_root, "research.rag.local_root")
+        _directory_root(self.rag_transcript_root, "research.rag.transcript_root")
+
+
+def research_storage_paths_from_env(
+    env: Mapping[str, str] | None = None,
+    *,
+    cwd: str | os.PathLike[str] | None = None,
+) -> ResearchStoragePaths:
+    values = os.environ if env is None else env
+    base = _base_path(cwd)
+    artifact_root = _root_from_env(
+        values,
+        ("NEWS_RESEARCH_ARTIFACT_ROOT", "NEWS_ARTIFACT_ROOT"),
+        base / ".newsroom" / "runs",
+        base=base,
+        capability="research.storage.artifact_root",
+    )
+    research_root = _root_from_env(
+        values,
+        ("NEWS_RESEARCH_ROOT",),
+        artifact_root.parent / "research",
+        base=base,
+        capability="research.storage.root",
+    )
+    return ResearchStoragePaths(
+        artifact_root=artifact_root,
+        research_root=research_root,
+        run_store_root=_root_from_env(
+            values,
+            ("NEWS_RESEARCH_RUN_STORE_ROOT",),
+            research_root / "runs",
+            base=base,
+            capability="research.storage.run_store_root",
+        ),
+        rag_local_root=_root_from_env(
+            values,
+            ("NEWS_RESEARCH_RAG_LOCAL_ROOT",),
+            research_root / "chunks",
+            base=base,
+            capability="research.rag.local_root",
+        ),
+        rag_transcript_root=_root_from_env(
+            values,
+            ("NEWS_RESEARCH_RAG_TRANSCRIPT_ROOT",),
+            research_root / "rag" / "transcripts",
+            base=base,
+            capability="research.rag.transcript_root",
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchRuntimeSettings:
     research_root: Path
     source: ResearchSourceSettings
@@ -331,34 +398,11 @@ class ResearchRuntimeSettings:
     ) -> "ResearchRuntimeSettings":
         values = os.environ if env is None else env
         base = _base_path(cwd)
-        artifact_root = _root_from_env(
-            values,
-            ("NEWS_RESEARCH_ARTIFACT_ROOT", "NEWS_ARTIFACT_ROOT"),
-            base / ".newsroom" / "runs",
-            base=base,
-            capability="research.storage.artifact_root",
-        )
-        research_root = _root_from_env(
-            values,
-            ("NEWS_RESEARCH_ROOT",),
-            artifact_root.parent / "research",
-            base=base,
-            capability="research.storage.root",
-        )
-        run_store_root = _root_from_env(
-            values,
-            ("NEWS_RESEARCH_RUN_STORE_ROOT",),
-            research_root / "runs",
-            base=base,
-            capability="research.storage.run_store_root",
-        )
-        rag_local_root = _root_from_env(
-            values,
-            ("NEWS_RESEARCH_RAG_LOCAL_ROOT",),
-            research_root / "chunks",
-            base=base,
-            capability="research.rag.local_root",
-        )
+        storage = research_storage_paths_from_env(values, cwd=base)
+        artifact_root = storage.artifact_root
+        research_root = storage.research_root
+        run_store_root = storage.run_store_root
+        rag_local_root = storage.rag_local_root
 
         llm = ResearchLLMSettings(
             route_id=_first_text(
@@ -518,6 +562,7 @@ class ResearchRuntimeSettings:
             rag=ResearchRAGSettings(
                 backend=rag_backend,
                 local_root=rag_local_root,
+                transcript_root=storage.rag_transcript_root,
                 qdrant_url=qdrant_url,
                 collection=_first_text(
                     values,

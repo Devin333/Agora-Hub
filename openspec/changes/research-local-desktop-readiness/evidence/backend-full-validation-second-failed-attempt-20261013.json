@@ -1,0 +1,744 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-12T22:48:54.426580+00:00",
+  "status": "failed-second-full-attempt-two-observed-root-causes-under-repair",
+  "metadata": {
+    "stage": "test-final2",
+    "cwd": "F:\\github\\NewsRoom",
+    "command": ".venv/Scripts/python.exe -m scripts.dev test",
+    "environment": {
+      "PYTHONFAULTHANDLER": "1",
+      "PYTHONUNBUFFERED": "1",
+      "PYTEST_ADDOPTS": "-rs"
+    },
+    "utcStart": "2026-10-12T21:13:15.0849904Z",
+    "utcEnd": "2026-10-12T22:46:15.1283494Z",
+    "exitCode": 1,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-test-final2-20261013-051315-075.log",
+    "logSha256": "ea1d7c75b5ddc8aad1c52bbe8faf8b23dd02f96859401f8abbdf482d4a87353f"
+  },
+  "logArtifact": {
+    "path": "backend-full-validation-second-failed-attempt-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "756c52ea08b94aa19eda3f0544ee8946502743eb208c1aef72b14ff4cda387b7",
+    "bytes": 5815,
+    "decompressedSha256": "ea1d7c75b5ddc8aad1c52bbe8faf8b23dd02f96859401f8abbdf482d4a87353f",
+    "decompressedBytes": 50847
+  },
+  "results": {
+    "failed": 2,
+    "passed": 9184,
+    "skipped": 117,
+    "deselected": 24,
+    "warnings": 579,
+    "seconds": 5577.99
+  },
+  "failedTests": [
+    "tests/interfaces/services/test_event_operator_application_service.py::test_concurrent_application_retry_has_no_read_before_write_dependency",
+    "tests/scripts/test_local_desktop_recovery.py::test_rollback_rejects_incompatible_backup_before_release_activation"
+  ],
+  "failureSummary": [
+    {
+      "test": "test_concurrent_application_retry_has_no_read_before_write_dependency",
+      "observedError": "threading.BrokenBarrierError at Barrier.wait(timeout=15) after per-thread service construction",
+      "owner": "desktop_backend_validation_repair"
+    },
+    {
+      "test": "test_rollback_rejects_incompatible_backup_before_release_activation",
+      "observedError": "desktop_backup_writer_detected: runtime_artifacts tree signature changed during copy",
+      "owner": "desktop_runtime_recovery"
+    }
+  ],
+  "skipRecords": [
+    {
+      "count": 1,
+      "path": "tests/backend/layers/signal/test_source_indexing.py",
+      "line": 107,
+      "reason": "symlinks are unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_source_artifact_ref_extra1\\\\outside' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_source_artifact_ref_extra1\\\\run-1\\\\linked'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/backend/layers/signal/test_source_indexing.py",
+      "line": 107,
+      "reason": "symlinks are unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_source_artifact_ref_extra2\\\\outside' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_source_artifact_ref_extra2\\\\run-1\\\\linked'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/framework/artifacts/test_paths.py",
+      "line": 107,
+      "reason": "symlinks are unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_resolve_artifact_descenda1\\\\outside' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_resolve_artifact_descenda1\\\\root\\\\linked'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/framework/artifacts/test_store_manager.py",
+      "line": 384,
+      "reason": "symlink creation unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_filesystem_store_rejects_0\\\\run-1\\\\objects\\\\target.bin' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_filesystem_store_rejects_0\\\\run-1\\\\objects\\\\293724347c3ccc4982da1b6eb81c43aa0b6c70d5f8aa66fc9badbf1ef2ccf4c0.bin'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/framework/artifacts/test_store_manager.py",
+      "line": 405,
+      "reason": "symlink creation unavailable: [WinError 3] ϵͳ�Ҳ���ָ����·����: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_filesystem_store_rejects_1\\\\outside' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_filesystem_store_rejects_1\\\\runs\\\\run-1'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/framework/execution_environment/test_execution_environment_contract.py",
+      "line": 367,
+      "reason": "symlink creation is unavailable on this platform\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/framework/execution_environment/test_execution_environment_contract.py",
+      "line": 387,
+      "reason": "symlink creation is unavailable on this platform\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/framework/tool/test_builtin_artifact_tools.py",
+      "line": 99,
+      "reason": "symlink creation is not available\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/framework/tool/test_builtin_artifact_tools.py",
+      "line": 118,
+      "reason": "symlink creation is not available\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 130,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 168,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 190,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 215,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 290,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 315,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 2,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 386,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/execution_environment/test_docker_provider_integration.py",
+      "line": 436,
+      "reason": "real Docker execution integration is explicit; set NEWSROOM_DOCKER_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/harness/test_child_docker_process_recovery.py",
+      "line": 43,
+      "reason": "set NEWSROOM_DOCKER_INTEGRATION=1 for real Docker process recovery\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/research/test_artifact_port.py",
+      "line": 470,
+      "reason": "symlink creation unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_symlinked_terminal_manife0\\\\run-1\\\\manifest-target.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_symlinked_terminal_manife0\\\\run-1\\\\manifest.json'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/research/test_artifact_port.py",
+      "line": 488,
+      "reason": "symlink creation unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_symlinked_artifact_write_0\\\\run-1\\\\artifacts\\\\a-09e7d4fff3f03575ec417f10bef3ea7ea83055537fb0cceebfcb526efb10472c.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_symlinked_artifact_write_0\\\\run-1\\\\artifacts\\\\a-a5de0492f5f5e4dbbd926e74e29bbe91fdbe6297b0c13b7ea1265f93f1252762.json'\r"
+    },
+    {
+      "count": 1,
+      "path": "../Agora-Hub/tests/infrastructure/research/test_graph_artifact_lifecycle.py",
+      "line": 413,
+      "reason": "symlink creation unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_lifecycle_rejects_symlink0\\\\victim.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_lifecycle_rejects_symlink0\\\\runs\\\\run-1\\\\artifacts\\\\a-4253f47800acc00950339fcaef56c10f0b038369735d3b0dcea1083608ab0d15.json'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1629,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy0\\\\compatibility-policy.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy0\\\\policy.link'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1629,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy1\\\\trust-activation.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy1\\\\authority_activation.link'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1629,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy2\\\\trust-activation.sig' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy2\\\\authority_activation_signature.link'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1629,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy3\\\\compatibility-observation.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy3\\\\observation.link'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1629,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy4\\\\consumer-signoff.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy4\\\\consumer_signoff.link'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1629,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy5\\\\deletion-attestation.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy5\\\\deletion_attestation.link'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1629,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy6\\\\deletion-attestation.sig' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_sy6\\\\deletion_attestation_signature.link'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_durable_event_compatibility_release.py",
+      "line": 1647,
+      "reason": "directory symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_a_0\\\\real' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_protocol_inputs_reject_a_0\\\\linked'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 226,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 256,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 276,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 320,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 364,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 418,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 502,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 618,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 786,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 837,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 933,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 3,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1014,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1075,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1131,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1164,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1196,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1249,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1292,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1335,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1417,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1498,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1609,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1650,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1704,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1834,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 1919,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 2000,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 2053,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_event_store_conformance.py",
+      "line": 2166,
+      "reason": "PostgreSQL event-store conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_activity_store_integration.py",
+      "line": 73,
+      "reason": "real PostgreSQL recorded-activity integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_activity_store_integration.py",
+      "line": 132,
+      "reason": "real PostgreSQL recorded-activity integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_activity_store_integration.py",
+      "line": 190,
+      "reason": "real PostgreSQL recorded-activity integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_activity_store_integration.py",
+      "line": 224,
+      "reason": "real PostgreSQL recorded-activity integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 68,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 130,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 147,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 182,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 211,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 245,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 307,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 380,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 451,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 513,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 570,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 682,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 779,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 836,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 943,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1074,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1186,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1325,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1450,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1589,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1678,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1758,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1835,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 1917,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2015,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2114,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2311,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2394,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2438,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2470,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2694,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2808,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 2967,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_durable_event_store_integration.py",
+      "line": 3056,
+      "reason": "real PostgreSQL durable-event integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_postgres_replay_checkpoint_integration.py",
+      "line": 60,
+      "reason": "real PostgreSQL replay-checkpoint integration is an explicit gate; set NEWSROOM_RUN_POSTGRES_EVENT_INTEGRATION=1\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_replay_checkpoint_store.py",
+      "line": 170,
+      "reason": "PostgreSQL replay-checkpoint conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_replay_checkpoint_store.py",
+      "line": 201,
+      "reason": "PostgreSQL replay-checkpoint conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/events/test_replay_checkpoint_store.py",
+      "line": 251,
+      "reason": "PostgreSQL replay-checkpoint conformance requires NEWS_TEST_POSTGRES_DSN\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/local_json/test_repository.py",
+      "line": 114,
+      "reason": "symlinks are unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_local_json_repository_rej4\\\\outside' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_local_json_repository_rej4\\\\run-1\\\\linked'\r"
+    },
+    {
+      "count": 1,
+      "path": "../Agora-Hub/tests/infrastructure/storage/test_artifact_store.py",
+      "line": 251,
+      "reason": "symlink creation is not available: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_filesystem_artifact_store4\\\\outside' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_filesystem_artifact_store4\\\\runs\\\\run-1\\\\linked'\r"
+    },
+    {
+      "count": 1,
+      "path": "../Agora-Hub/tests/infrastructure/storage/test_artifact_store.py",
+      "line": 448,
+      "reason": "symlink creation is not available: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_local_json_artifact_index12\\\\external.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_local_json_artifact_index12\\\\index\\\\4e65d3fbe8ad\\\\a-0877976765698ee692f84556a193e67455dac1d88fe9279dcc1433cd88e62089.json'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/test_graph_artifact_catalog.py",
+      "line": 922,
+      "reason": "symlink creation is unavailable: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_catalog_state_symlink_is_0\\\\catalog-real.json' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_catalog_state_symlink_is_0\\\\catalog.json'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/test_graph_terminal_artifact_reader.py",
+      "line": 189,
+      "reason": "symlink creation is not available\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/test_graph_terminal_artifact_reader.py",
+      "line": 212,
+      "reason": "symlink creation is not available\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/test_redis_llm_cache.py",
+      "line": 419,
+      "reason": "set NEWS_LLM_CACHE_REAL_REDIS_TESTS=1 for the isolated Redis test\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/test_redis_worker_queue_real_redis.py",
+      "line": 35,
+      "reason": "set NEWS_TEST_REDIS_URL to run real Redis worker lease coverage\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/test_redis_worker_queue_real_redis.py",
+      "line": 70,
+      "reason": "set NEWS_TEST_REDIS_URL to run real Redis worker lease coverage\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/infrastructure/storage/test_storage_metrics.py",
+      "line": 142,
+      "reason": "symlink creation is not available: [WinError 1314] �ͻ���û���������Ȩ��: 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_local_storage_metrics_col2\\\\outside\\\\external-run' -> 'C:\\\\Users\\\\Administrator\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-Administrator\\\\pytest-749\\\\test_local_storage_metrics_col2\\\\runs\\\\linked-run'\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/interfaces/services/test_artifact_inspection_service.py",
+      "line": 207,
+      "reason": "symlink creation is not available\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/interfaces/services/test_storage_service.py",
+      "line": 274,
+      "reason": "symlink creation is not available\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/scripts/test_local_desktop_release.py",
+      "line": 164,
+      "reason": "test environment cannot create symlinks\r"
+    },
+    {
+      "count": 1,
+      "path": "tests/scripts/test_local_desktop_release.py",
+      "line": 259,
+      "reason": "test environment cannot create symlinks\r"
+    }
+  ],
+  "skipReasonTextBoundary": "Exact decoded log text; Windows localized WinError output contains original stream encoding replacement characters. Original raw bytes retained in gzip.",
+  "deselectionPolicy": "Default pyproject pytest marker selection excludes opt-in live_research_e2e; not treated as live-service proof.",
+  "candidateSourceDigest": "sha256:ea013dcd56f4182504f40a74360aa0eee708d2426958da3cc4ab28df81eff10e",
+  "candidateRecord": "backend-repaired-candidate-final-validation-20261013.json",
+  "finalCandidateEvidence": false,
+  "liveAcceptanceExecuted": false
+}

@@ -27,7 +27,8 @@ export class ApiRequestError extends Error {
 
 export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
   if (shouldUseMock()) {
-    return resolveMockPath(path) as T
+    const mock = resolveMockPath(path)
+    if (mock !== undefined) return mock as T
   }
 
   const response = await fetch(apiUrl(path), {
@@ -44,7 +45,8 @@ export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function apiPost<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
   if (shouldUseMock()) {
-    return resolveMockPath(path) as T
+    const mock = resolveMockPath(path)
+    if (mock !== undefined) return mock as T
   }
 
   const response = await fetch(apiUrl(path), {
@@ -63,7 +65,8 @@ export async function apiPost<T>(path: string, body?: unknown, init?: RequestIni
 
 export async function apiPatch<T>(path: string, body?: unknown, init?: RequestInit): Promise<T> {
   if (shouldUseMock()) {
-    return resolveMockPath(path) as T
+    const mock = resolveMockPath(path)
+    if (mock !== undefined) return mock as T
   }
 
   const response = await fetch(apiUrl(path), {
@@ -82,7 +85,8 @@ export async function apiPatch<T>(path: string, body?: unknown, init?: RequestIn
 
 export async function apiDelete<T>(path: string, init?: RequestInit): Promise<T> {
   if (shouldUseMock()) {
-    return resolveMockPath(path) as T
+    const mock = resolveMockPath(path)
+    if (mock !== undefined) return mock as T
   }
 
   const response = await fetch(apiUrl(path), {
@@ -140,6 +144,9 @@ function apiUrl(path: string): string {
   return `${baseUrl.replace(/\/$/, "")}${suffix}`
 }
 
-function shouldUseMock(): boolean {
-  return process.env.NEXT_PUBLIC_NEWSROOM_USE_MOCKS === "true"
+export function shouldUseMock(): boolean {
+  return (
+    process.env.NEXT_PUBLIC_NEWSROOM_USE_MOCKS === "true" &&
+    process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE !== "local-desktop"
+  )
 }

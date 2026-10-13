@@ -1,0 +1,40 @@
+{
+  "schema": "newsroom-browser-validation/v1",
+  "metadata": {
+    "command": "npx.cmd playwright test --grep-invert \"/studio|/admin|admin console|Operations Studio\" --reporter=list,json",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "profile": "default",
+    "surface": "portal",
+    "baseUrl": "http://127.0.0.1:3300",
+    "mocks": true,
+    "frontendAuth": false,
+    "reuseExistingServer": false,
+    "startedAtUtc": "2026-10-12T20:45:18.3529327Z",
+    "endedAtUtc": "2026-10-12T20:47:02.9033374Z",
+    "exitCode": 0,
+    "log": "frontend-release-candidate-browser-default-portal-20261013.log.gz",
+    "originalLog": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-portal-final-after-palette-20261013.log",
+    "originalJson": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-portal-final-after-palette-20261013.json",
+    "logSha256": "3d395df29e673b39031e9a30b5f4c31ab34186b4521038bb5952ef82a45fab16",
+    "report": "frontend-release-candidate-browser-default-portal-20261013-report.json",
+    "reportSha256": "b32b5987e67ed5d4f2335fe2a9d93521282eef1d7c40b0fdcaa0644bcd1e8a49",
+    "rawLogSha256": "922863a4038873d6777c5301d42fd0295615b11c654b43084f96b967f90237c0",
+    "logArchiveIdentity": {
+      "path": "frontend-release-candidate-browser-default-portal-20261013.log.gz",
+      "encoding": "gzip",
+      "sha256": "3d395df29e673b39031e9a30b5f4c31ab34186b4521038bb5952ef82a45fab16",
+      "bytes": 2393,
+      "decompressedSha256": "922863a4038873d6777c5301d42fd0295615b11c654b43084f96b967f90237c0",
+      "decompressedBytes": 12744
+    }
+  },
+  "stats": {
+    "startTime": "2026-10-12T20:45:19.012Z",
+    "duration": 103863.739,
+    "expected": 50,
+    "skipped": 4,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "liveAcceptanceExecuted": false
+}

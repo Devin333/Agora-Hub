@@ -86,6 +86,22 @@ describe("reader workspace experience", () => {
     expect(screen.getByLabelText("我的阅读笔记")).toHaveValue("")
   })
 
+  it("preserves an oversized legacy notebook note and explains how to make it saveable", async () => {
+    const oversized = "旧".repeat(20001)
+    localStorage.setItem(
+      `agora:reader-notebook:v1:${paper.id}`,
+      JSON.stringify({ note: oversized, question: "", fontSize: 18, updatedAt: 1 }),
+    )
+
+    open()
+    fireEvent.click(screen.getByRole("button", { name: /阅读笔记/ }))
+    const note = screen.getByLabelText("我的阅读笔记")
+    await waitFor(() => expect(note).toHaveValue(oversized))
+    expect(screen.getByText(/内容已完整保留/)).toBeVisible()
+    expect(screen.getByText(/当前内容不会被覆盖/)).toBeVisible()
+    expect(note).toHaveAttribute("maxlength", "20000")
+  })
+
   it("keeps the question on failure and allows a grounded retry with evidence", async () => {
     vi.mocked(askPaper).mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ paperId: paper.id, question: "What changed?", locale: "zh", answer: "The method changes the evaluation.", citations: [{ id: "evidence:1", label: "Method", sectionId: "method", sourceType: "section", textExcerpt: "Original method with verifiable evidence." }], confidence: .8, cached: false, generatedAt: "2026-09-08" })
     open()

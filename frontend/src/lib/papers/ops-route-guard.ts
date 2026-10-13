@@ -14,7 +14,7 @@ type AuthSessionStatus = {
 const PAPER_OPS_ROLES = new Set(["admin", "operator"])
 
 export async function requirePaperOpsSession() {
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   if (!token) {
     return forbiddenOpsResponse("auth_session_required", "valid user session required", 401)
   }

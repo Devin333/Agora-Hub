@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Header
 
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
+from interfaces.services.research_desktop_auth import (
+    ResearchDesktopAuthError,
+    local_desktop_runtime_identity,
+)
 from interfaces.services.auth_service import (
     AuthAlreadyInitializedError,
     AuthInvalidCredentialsError,
@@ -168,14 +172,23 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
 
     @router.get("/api/v1/auth/session")
     def session(x_newsroom_session: str | None = Header(default=None)):
+        try:
+            desktop_identity = local_desktop_runtime_identity()
+        except ResearchDesktopAuthError as exc:
+            return helpers.error(status_code=exc.status_code, code=exc.code, message=str(exc))
         auth_service = services.auth_service_factory()
         if not x_newsroom_session:
-            return helpers.success({"initialized": auth_service.is_initialized(), "session": None})
-        try:
-            result = auth_service.get_session(x_newsroom_session)
-        except AuthSessionInvalidError:
-            return helpers.success({"initialized": auth_service.is_initialized(), "session": None})
-        return helpers.success({"initialized": True, "session": result.to_dict()})
+            payload = {"initialized": auth_service.is_initialized(), "session": None}
+        else:
+            try:
+                result = auth_service.get_session(x_newsroom_session)
+            except AuthSessionInvalidError:
+                payload = {"initialized": auth_service.is_initialized(), "session": None}
+            else:
+                payload = {"initialized": True, "session": result.to_dict()}
+        if desktop_identity is not None:
+            payload["local_desktop"] = desktop_identity
+        return helpers.success(payload)
 
     return router
 

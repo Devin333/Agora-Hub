@@ -6,11 +6,12 @@ import { evidenceGraphQueryFromRecord, getEvidenceGraphData } from "@/features/e
 
 export const dynamic = "force-dynamic";
 
-export default async function TopicsPage({
-  searchParams,
-}: {
-  searchParams?: Record<string, string | string[] | undefined>;
-}) {
+export default async function TopicsPage(
+  props: {
+    searchParams?: Promise<Record<string, string | string[] | undefined>>;
+  }
+) {
+  const searchParams = await props.searchParams;
   if (searchParams?.view === "evidence-graph") {
     const data = await getEvidenceGraphData(evidenceGraphQueryFromRecord(searchParams));
     return <EvidenceGraphPage data={data} />;

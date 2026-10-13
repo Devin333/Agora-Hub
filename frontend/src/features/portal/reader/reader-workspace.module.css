@@ -96,8 +96,8 @@
 .readNext p { font-size: 12px; line-height: 1.8; color: var(--muted); margin: 5px 0 0; }
 .readNext > a, .readNext > button { display: grid; place-items: center; width: 34px; height: 34px; background: var(--soft); border-radius: 50%; }
 .articleFooter { text-align: center; color: var(--muted); font-size: 11px; margin: 20px 0; }
-.assistantColumn { position: sticky; top: 100px; min-width: 0; }
-.assistant { display: flex; flex-direction: column; max-height: calc(100vh - 128px); min-height: 600px; border: 1px solid #e8def5; border-radius: 20px; box-shadow: 0 8px 36px #65419006, inset 0 1px 0 #fff; background: #ffffffb8; backdrop-filter: blur(20px); overflow: hidden; }
+.assistantColumn { position: sticky; top: 100px; display: flex; height: calc(100vh - 128px); min-width: 0; flex-direction: column; }
+.assistant { display: flex; min-height: 0; flex: 1; flex-direction: column; border: 1px solid #e8def5; border-radius: 20px; box-shadow: 0 8px 36px #65419006, inset 0 1px 0 #fff; background: #ffffffb8; backdrop-filter: blur(20px); overflow: hidden; }
 .assistantHeading { padding: 23px 22px 18px; display: flex; align-items: center; gap: 11px; }
 .assistantHeading strong { font-size: 15px; }
 .assistantHeading p { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
@@ -146,7 +146,7 @@
 .notesPanel { padding: 24px 21px; flex: 1; overflow: auto; min-height: 0; }
 .notesPanel > label { font-size: 15px; font-weight: 600; }
 .notesPanel > p:not(.footnote):not(.error) { color: var(--muted); font-size: 12px; line-height: 1.8; margin: 10px 0 18px; }
-.notesPanel textarea { width: 100%; min-height: 260px; padding: 15px; border: 1px solid #e2d7ef; border-radius: 12px; background: #fff; resize: vertical; font-size: 13px; line-height: 2; }
+.notesPanel textarea { width: 100%; min-height: clamp(120px, 24vh, 260px); padding: 15px; border: 1px solid #e2d7ef; border-radius: 12px; background: #fff; resize: vertical; font-size: 13px; line-height: 2; }
 .exportButton { display: flex; gap: 8px; align-items: center; justify-content: center; border: 1px solid #dfd0f2; background: #fff; border-radius: 10px; color: #713bb3; padding: 10px; width: 100%; margin-top: 17px; font-size: 12px; }
 .focusLayout { grid-template-columns: minmax(0, 880px); justify-content: center; }
 .pdfLayout { grid-template-columns: minmax(0, 1fr) 330px; }

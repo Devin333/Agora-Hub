@@ -29,7 +29,7 @@ describe("project detail API route", () => {
       notices: [],
     })
 
-    const response = await GET(new NextRequest("http://localhost/api/projects/openai-codex"), { params: { slug: "openai-codex" } })
+    const response = await GET(new NextRequest("http://localhost/api/projects/openai-codex"), { params: Promise.resolve({ slug: "openai-codex" }) })
     const payload = await response.json()
 
     expect(response.status).toBe(200)
@@ -39,7 +39,7 @@ describe("project detail API route", () => {
   it("returns 404 when the slug is not present", async () => {
     vi.mocked(getProjectDetail).mockResolvedValueOnce(null)
 
-    const response = await GET(new NextRequest("http://localhost/api/projects/missing"), { params: { slug: "missing" } })
+    const response = await GET(new NextRequest("http://localhost/api/projects/missing"), { params: Promise.resolve({ slug: "missing" }) })
     const payload = await response.json()
 
     expect(response.status).toBe(404)

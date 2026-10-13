@@ -28,6 +28,7 @@ from framework.llm import (
 from infrastructure.research import (
     ArxivResearchSourceProvider,
     CANDIDATE_TASK_SCHEMAS,
+    CatalogBoundResearchSourceProvider,
     FilesystemHarnessArtifactPort,
     FilesystemResearchRunStore,
     StructuredResearchCandidateWorker,
@@ -109,10 +110,18 @@ def _recorded_environment(tmp_path: Path) -> dict[str, str]:
         "NEWS_RESEARCH_LLM_ROUTE_ID": "recorded-research",
         "NEWS_RESEARCH_LLM_MAX_ATTEMPTS": "1",
         "NEWS_MODELS_CONFIG": str(models_config),
+        "NEWS_RESEARCH_MODELS_CONFIG": str(models_config),
+        "NEWS_RESEARCH_SOURCE_PROVIDER": "arxiv",
+        "NEWS_RESEARCH_PARSER_BACKENDS": "mineru,marker",
+        "NEWS_RESEARCH_ALLOW_ABSTRACT_FALLBACK": "1",
+        "NEWS_RESEARCH_RAG_BACKEND": "local",
         "NEWS_RESEARCH_ROOT": str(tmp_path / "research"),
         "NEWS_RESEARCH_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
         "NEWS_RESEARCH_RUN_STORE_ROOT": str(tmp_path / "run-store"),
         "NEWS_RESEARCH_RAG_LOCAL_ROOT": str(tmp_path / "chunks"),
+        "NEWS_RESEARCH_RAG_TRANSCRIPT_ROOT": str(
+            tmp_path / "research" / "rag" / "transcripts"
+        ),
     }
 
 
@@ -389,7 +398,8 @@ def test_recorded_transports_execute_full_production_research_analysis(
         assert resolved_service_ids == [id(service)] * 8
         runtime = service._analyze_use_case._runtime
         assert isinstance(runtime, ResearchSinglePaperRuntime)
-        assert isinstance(runtime.source_provider, ArxivResearchSourceProvider)
+        assert isinstance(runtime.source_provider, CatalogBoundResearchSourceProvider)
+        assert isinstance(runtime.source_provider._fallback, ArxivResearchSourceProvider)
         assert isinstance(runtime.llm_worker, StructuredResearchCandidateWorker)
         assert isinstance(runtime.artifact_port, FilesystemHarnessArtifactPort)
         assert isinstance(service._run_store, FilesystemResearchRunStore)

@@ -1,0 +1,384 @@
+{
+  "schema": "newsroom.desktop-validation-repairs/v1",
+  "recordedAt": "2026-10-13T01:42:14.458507+00:00",
+  "phase": "all-observed-roots-repaired-final-automated-gates-passed",
+  "issues": [
+    {
+      "id": "frontend-schema-and-route-imports",
+      "evidence": "frontend first-pass test/typecheck/lint/build",
+      "rootCause": "Missing strict public URL validator and route helper imports",
+      "assignedOwner": "desktop_frontend_workflows",
+      "status": "repaired-final-automated-gates-passed",
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "repaired-final-frontend-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "frontend-request-bytes-and-reader-types",
+      "evidence": "frontend first-pass typecheck",
+      "rootCause": "ArrayBuffer ownership, reader event union and notebook collection key mismatch",
+      "assignedOwner": "desktop_frontend_workflows",
+      "status": "repaired-final-automated-gates-passed",
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "repaired-final-frontend-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "local-desktop-real-data-guard",
+      "evidence": "root static API client/runtime environment audit",
+      "rootCause": "legacy mock switch could be inherited by production desktop profile",
+      "assignedOwners": [
+        "desktop_frontend_workflows",
+        "desktop_runtime_recovery"
+      ],
+      "status": "repaired-final-automated-gates-passed",
+      "statusBeforeFinalGates": "runtime-repaired-final-regression-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "reader-workspace-semantic-shapes",
+      "evidence": "root static cross-layer workspace serialization comparison",
+      "rootCause": "Frontend emitted optional nulls rejected by owned WorkspaceModel and selection notes used a different size limit",
+      "assignedOwners": [
+        "desktop_frontend_workflows",
+        "desktop_backend_contracts"
+      ],
+      "status": "repaired-final-automated-gates-passed",
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "repaired-final-frontend-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "reader-activity-version-and-identifiers",
+      "evidence": "root static activity_adapter / href comparison",
+      "rootCause": "Original ReaderActivity lacked sourceRevision and reader href regex rejected actual arxiv identifiers",
+      "assignedOwners": [
+        "desktop_frontend_workflows",
+        "desktop_backend_contracts"
+      ],
+      "status": "repaired-final-automated-gates-passed",
+      "resolution": "ReaderActivity now stores and validates sourceRevision, same paper identity and revision-bound resume href; unversioned legacy locator degrades instead of granting a precise jump. ReaderHref parses safe encoded paper identities including arXiv ids without relaxing same-origin or query limits.",
+      "sourceEvidence": [
+        "interfaces/services/research_workspace_model.py:35",
+        "interfaces/services/research_workspace_model.py:356",
+        "frontend/src/lib/research/history-model.ts:196"
+      ],
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "statusBeforeFinalGates": "repaired-final-full-and-frontend-passed-smoke-running"
+    },
+    {
+      "id": "node-installed-tree",
+      "evidence": "npm ls --json metadata audit",
+      "rootCause": "Actual dependency tree had an extraneous package; release must verify clean topology",
+      "assignedOwners": [
+        "desktop_runtime_recovery",
+        "desktop_frontend_workflows"
+      ],
+      "status": "repaired-final-automated-gates-passed",
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "repaired-final-frontend-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "runtime-windows-recovery-contracts",
+      "evidence": "newsroom-local-desktop-contracts-20261013-014639-523.log",
+      "rootCause": "Offline doctor throws for missing credentials; Windows ACL and fixture/process contract failures require diagnosis",
+      "assignedOwner": "desktop_runtime_recovery",
+      "status": "repaired-final-automated-gates-passed",
+      "statusBeforeFinalGates": "repaired-runtime-contract-suite-passed-full-integration-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "rag-durable-second-step",
+      "evidence": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-rag-journal-diagnostic-20261013-015205.log",
+      "rootCause": "Expected journal failure path was not reached in the new two-step test; real gate/controller and valid fixture must be checked",
+      "assignedOwner": "desktop_backend_validation_repair",
+      "status": "repaired-final-automated-gates-passed",
+      "resolution": "The two-step fixture supplies required evidence_type and scope_ref so the deterministic plan gate actually admits it. Recorder failure on second step start propagates before second retrieval; exact assertion requires only one retrieval and first step result recorded.",
+      "sourceEvidence": [
+        "framework/harness/rag/session.py:629",
+        "framework/harness/rag/session.py:658",
+        "tests/framework/harness/rag/test_rag_session_controller.py:322"
+      ],
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "statusBeforeFinalGates": "repaired-final-full-passed-smoke-running"
+    },
+    {
+      "id": "windows-next-runtime-critical",
+      "evidence": "frontend-runtime-security-repair-20261013.json",
+      "rootCause": "Actual next@14.2.35 is affected by published Windows RCE and lacks a documented Windows workaround",
+      "assignedOwner": "desktop_frontend_workflows",
+      "status": "repaired-final-automated-gates-passed",
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "repaired-final-frontend-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "windows-atomic-json-acl-failure-descriptor",
+      "severity": "P1",
+      "owner": "desktop_runtime_recovery",
+      "status": "repaired-final-automated-gates-passed",
+      "finding": "mkstemp descriptor is not closed if ACL protection fails before fdopen; Windows cleanup may mask the ACL error",
+      "evidence": [
+        "scripts/local_desktop/common.py:56",
+        "scripts/local_desktop/common.py:59",
+        "scripts/local_desktop/common.py:67"
+      ],
+      "validation": "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+      "statusBeforeFinalGates": "implemented-targeted-validated-final-full-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "research-model-config-release-identity",
+      "severity": "P1",
+      "owner": "desktop_runtime_recovery",
+      "status": "repaired-final-automated-gates-passed",
+      "finding": "NEWS_RESEARCH_MODELS_CONFIG has precedence in Research composition but is missing from desktop absolute path and release config identity/rebinding lists",
+      "evidence": [
+        "interfaces/composition/research_settings.py:413",
+        "scripts/local_desktop/config.py:28",
+        "scripts/local_desktop/release.py:29"
+      ],
+      "validation": "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+      "statusBeforeFinalGates": "implemented-targeted-validated-final-full-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "lifecycle-infinite-timeout",
+      "severity": "P1",
+      "owner": "desktop_runtime_recovery",
+      "status": "repaired-final-automated-gates-passed",
+      "finding": "float lifecycle CLI timeouts accept inf, violating bounded readiness and process termination",
+      "evidence": [
+        "scripts/local_desktop/cli.py:37",
+        "scripts/local_desktop/cli.py:39",
+        "scripts/local_desktop/processes.py:194"
+      ],
+      "validation": "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+      "statusBeforeFinalGates": "implemented-targeted-validated-final-full-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "cli-config-priority-layer",
+      "severity": "P2",
+      "owner": "desktop_runtime_recovery",
+      "status": "repaired-final-automated-gates-passed",
+      "task": "2.1",
+      "finding": "resolver cli_overrides exists but production CLI exposes no supported config fields and never passes overrides",
+      "evidence": [
+        "framework/shared/local_desktop.py:220",
+        "scripts/local_desktop/cli.py:69"
+      ],
+      "validation": "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+      "statusBeforeFinalGates": "implemented-targeted-validated-final-full-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "browser-portal-legacy-contract-and-runtime-diagnostics",
+      "owner": "desktop_frontend_workflows",
+      "status": "repaired-final-automated-gates-passed",
+      "evidence": "frontend-browser-portal-first-diagnostic-20261013.json",
+      "results": {
+        "passed": 36,
+        "skipped": 4,
+        "unexpected": 14
+      },
+      "policy": "retain equivalent behavioral assertions; no skips or gate weakening; distinguish framework regression from obsolete data/copy test assumptions",
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "repaired-final-frontend-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "backend-begin-drain-nan-loop",
+      "owner": "desktop_backend_validation_repair",
+      "status": "repaired-final-automated-gates-passed",
+      "finding": "NaN deadline cannot expire while a writer is active; store must apply shared finite positive upper-bound validator before I/O",
+      "evidence": [
+        "interfaces/services/research_desktop_control.py:72",
+        "runtime final read-only audit handoff"
+      ],
+      "validationPending": true,
+      "statusBeforeFinalGates": "implemented-targeted-validated-final-full-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "post-next-build-wasm-extraneous-dependency-tree",
+      "status": "repaired-final-automated-gates-passed",
+      "cause": "npm ci installs lockfile-declared optional descendants. node_modules/.vite made node_modules newer than hidden node_modules/.package-lock.json; npm 11.6.1 then rebuilt the physical tree and misclassified hoisted children whose platform parents are absent on Windows. Moving Vitest cache to ../.tmp/vitest/frontend prevents test tooling from invalidating the hidden-lock classification. No unused production dependency was added.",
+      "affectedFiles": [
+        "frontend/vitest.config.ts"
+      ],
+      "evidence": "frontend-node-identity-root-cause-20261013.json",
+      "requiredVerification": "Establish actual installation origin, then clean npm ci -> local-desktop mock=false production build and affected browsers -> recursive npm ls JSON has zero problems/invalid/missing/extraneous. Re-run required frontend checks if production dependencies or runtime code change.",
+      "owner": "desktop_frontend_workflows",
+      "attributionPolicy": "Do not attribute installation to Next or add unused production dependencies without reproducible evidence; isolate diagnostic tooling if it polluted the application tree.",
+      "dependencyDeclarationReview": {
+        "source": "C:/Users/Administrator/AppData/Local/Temp/newsroom-next16-cache-fix-tree-after-checks-20261013.metadata.json",
+        "finding": "npm explain maps the observed packages to existing locked optional Sharp/Rolldown/unrs transitive dependencies. Their mere directory presence is not an undeclared-dependency proof.",
+        "candidateFix": "Isolate Vite/Vitest cache from node_modules and from the production release copy roots; preserve recursive npm flags checks.",
+        "status": "existing-locked-optional-lineages-confirmed-no-unused-root-dependencies-added"
+      },
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "root-cause-repaired-clean-final-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "reader-search-shortcut-removed-with-floating-trigger",
+      "status": "repaired-final-automated-gates-passed",
+      "cause": "Providers removes the entire ResearchCommandPalette on paper readers; this also removes its sole Ctrl/Cmd+K listener, while only the obstructing floating trigger should be hidden.",
+      "affectedFiles": [
+        "frontend/src/components/providers.tsx",
+        "frontend/src/features/portal/components/research-command-palette.tsx",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ],
+      "requiredVerification": "Preserve shortcut/dialog ownership, hide the floating trigger only, assert Ctrl+K opens search and Escape restores note input focus, retain all unobscured control assertions, and rerun affected final frontend checks.",
+      "owner": "desktop_frontend_workflows",
+      "finalValidation": "frontend-release-candidate-validation-20261013.json",
+      "statusBeforeFinalGates": "repaired-final-frontend-validation-passed",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "backend-completed-full-suite-18-failures",
+      "owner": "desktop_backend_validation_repair",
+      "status": "repaired-final-automated-gates-passed",
+      "evidence": "backend-full-validation-failed-attempt-20261013.json",
+      "observedResults": {
+        "failed": 18,
+        "passed": 9167,
+        "skipped": 117,
+        "deselected": 24,
+        "warnings": 579,
+        "seconds": 5617.41
+      },
+      "requiredVerification": "Repair all observed failures and shared callers, then freeze sources and rerun compile, full scripts.dev test, and mandatory scripts.dev smoke. No skip/weakening/scoped-access fallback.",
+      "targetedValidation": "backend-18-failure-repairs-targeted-validation-20261013.json",
+      "sourceCandidate": "backend-repaired-candidate-final-validation-20261013.json",
+      "intermediateFailedAttempt": "backend-18-failure-repairs-intermediate-attempt-20261013.json",
+      "reviewedRepairGroups": [
+        {
+          "cause": "Scoped transcript callers and replay CLI had not adopted required actor_scope",
+          "resolution": "Persist/read/replay with explicit scope, require CLI actor selectors, retain scope mismatch rejection."
+        },
+        {
+          "cause": "Strict JSON helper raises JsonFileInvalidError outside former OSError/ValueError handling",
+          "resolution": "Typed corrupt-journal recovery and safe scoped latest-envelope scanning handle this error; PermissionError is still enforced."
+        },
+        {
+          "cause": "Reader answer projection omitted canonical run/paper/source metadata and collected citation id instead of evidenceId; re import was missing",
+          "resolution": "Repair production projection fields and import; maintain citation grounding validation."
+        },
+        {
+          "cause": "Several fixtures did not satisfy current content digest/paper identity or required gated RAG use-case contracts",
+          "resolution": "Use real fixture content hash and matching model identity, inject deterministic grounded RAG test doubles; do not reintroduce an ungated production fallback."
+        },
+        {
+          "cause": "Directly running multiprocess helper by file gives its test subdirectory as sys.path root",
+          "resolution": "Use Python -m module invocation from repository cwd, preserving actual two-process dedup/lock assertions."
+        }
+      ],
+      "subsequentFullAttempt": "backend-full-validation-second-failed-attempt-20261013.json",
+      "statusBeforeFinalGates": "original-18-repaired-targeted-and-second-full-passed-those-paths",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "event-operator-concurrent-setup-barrier",
+      "owner": "desktop_backend_validation_repair",
+      "status": "repaired-final-automated-gates-passed",
+      "evidence": "backend-full-validation-second-failed-attempt-20261013.json",
+      "requiredVerification": "Fix actual service construction/concurrency failure; do not weaken the concurrent operation assertions or merely inflate synchronization timeout.",
+      "cause": "Eight concurrent services each built the costly default event schema catalog before the unchanged 15-second barrier; production composes one long-lived storage.",
+      "resolution": "Compose one shared storage before launching threads. Same 8-way barrier, timeout, concurrency and idempotency assertions remain.",
+      "affectedFile": "tests/interfaces/services/test_event_operator_application_service.py",
+      "affectedFileSha256": "ddfa651333332ac54604eb75a7c3899e94e3121ef785eec13f52ec6e18f78805",
+      "ownerReportedModuleResults": {
+        "passed": 17,
+        "seconds": 59.04
+      },
+      "rawEvidence": "Final complete suite and mandatory smoke artifacts; targeted 17/1 results were owner reported, without an invented execution timestamp or log checksum.",
+      "statusBeforeFinalGates": "fixture-root-repaired-owner-module-17-passed-final-full-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    },
+    {
+      "id": "backup-runtime-artifact-self-change",
+      "owner": "desktop_runtime_recovery",
+      "status": "repaired-final-automated-gates-passed",
+      "evidence": "backend-full-validation-second-failed-attempt-20261013.json",
+      "requiredVerification": "Distinguish own snapshot/SQLite/lock changes from real writer mutation; preserve strict writer/link/identity guard and rollback rejection.",
+      "cause": "SQLite connection context manager did not close fixture connection; nondeterministic GC closed it and checkpointed WAL between tree signatures. Writer guard correctly detected mutation.",
+      "resolution": "Commit and close fixture connection explicitly. Test GC leaves database bytes unchanged; separate WAL snapshot test explicitly holds connection and verifies main and committed WAL rows. Production recovery writer guard unchanged.",
+      "affectedFile": "tests/scripts/test_local_desktop_recovery.py",
+      "affectedFileSha256": "5bf55dec743ca9922f9271860b707954eb8a92570dffcd8c0e48078ab0e93424",
+      "targetedValidation": "runtime-sqlite-checkpoint-repair-targeted-20261013.json",
+      "moduleValidation": "runtime-recovery-final-contracts-20261013.json",
+      "statusBeforeFinalGates": "fixture-root-repaired-29-recovery-contracts-passed-final-full-pending",
+      "finalAutomatedEvidence": [
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ]
+    }
+  ],
+  "verificationPolicy": "根因修复后重跑对应合同与最终全量检查；不关闭严格 schema、不削弱测试、不伪造 live 成功。",
+  "liveAcceptanceExecuted": false,
+  "finalCandidate": {
+    "frontend": "frozen and independently bound to final passing clean sequence",
+    "backend": "backend-release-candidate-identity-20261013.json: full and mandatory smoke passed for exact source bytes",
+    "liveAcceptance": "not executed"
+  }
+}

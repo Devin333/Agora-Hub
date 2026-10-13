@@ -2,7 +2,7 @@ import { researchModuleForPath, safeResearchHref } from "./entry"
 import { conversationHref, validResearchConversation, type ResearchConversation } from "./conversation"
 import { researchQuestionHref } from "./entry"
 import { emptyWorkspace, legacyHistoryId, migrateLegacyHistory, sessionParameter, validateVisit, validateWorkspace, validHistoryId, type ResearchVisit, type ResearchWorkspace } from "./history-model"
-import { validMaterial, validReportDraft, validPrompt, validActivity, type ResearchMaterial, type ResearchReportDraft, type ResearchPrompt, type ResearchComposerDraft, type ResearchActivity } from "./workspace-items"
+import { validMaterial, validReportDraft, validPrompt, validActivity, type ResearchMaterial, type ResearchReportDraft, type ResearchPrompt, type ResearchComposerDraft, type ResearchActivity, type ResearchReaderNotebook, type ResearchReaderSelectionState, type ResearchPendingOperation, type ResearchSavedReport } from "./workspace-items"
 export type { ResearchVisit, ResearchGroup, ResearchWorkspace } from "./history-model"
 
 export const researchHistoryKey = "agora-research-history:v2"
@@ -89,7 +89,7 @@ export function recordResearchVisit(href: string, scrollY = 0): void {
   const now = Date.now()
   const requestedGroup = url.searchParams.get("researchGroup")
   const groupId = existing ? existing.groupId : workspace.groups.some(g => g.id === requestedGroup) ? requestedGroup : null
-  const visit = validateVisit({ ...existing, id, module: researchModule, question, href: safeHref, scrollY, title: existing?.title ?? question.slice(0, 40), groupId, isFavorite: existing?.isFavorite ?? false, createdAt: existing?.createdAt ?? now, updatedAt: now, deletedAt: null })
+  const visit = validateVisit({ ...existing, id, module: researchModule, question, href: safeHref, scrollY, title: existing?.title ?? question.slice(0, 40), activity: existing?.activity ?? null, groupId, isFavorite: existing?.isFavorite ?? false, createdAt: existing?.createdAt ?? now, updatedAt: now, deletedAt: null })
   if (!visit) return
   // Clear only the draft handed off to this exact session, never a later edit.
   const acceptedDraft = workspace.composerDraft?.submittedSessionId === id && workspace.composerDraft.question.trim() === question
@@ -127,12 +127,43 @@ export function importGuestHistory(): boolean {
   if (!owner) return false
   const guest = readGuestHistory(), workspace = readResearchWorkspace()
   const groups = [...workspace.groups, ...guest.groups.filter(g => !workspace.groups.some(item => item.id === g.id))]
-  const merge = <T extends { id: string }>(owned: T[] = [], local: T[] = []) => [...owned, ...local.filter(item => !owned.some(existing => existing.id === item.id))]
+  const merge = <T extends { id: string }>(owned: T[] = [], local: T[] = []) => [
+    ...owned,
+    ...local.filter(item => !owned.some(existing => existing.id === item.id)),
+  ]
+  const notebooks = [
+    ...(workspace.readerNotebooks ?? []),
+    ...(guest.readerNotebooks ?? []).filter(
+      notebook => !(workspace.readerNotebooks ?? []).some(existing => existing.paperId === notebook.paperId),
+    ),
+  ]
   const reportDrafts = merge(workspace.reportDrafts, guest.reportDrafts)
   const visits = merge(workspace.visits, guest.visits.map(v => v.activity?.kind === "report" && workspace.reportDrafts?.some(d => d.id === (v.activity as Extract<ResearchActivity, { kind: "report" }>).draftId) ? { ...v, activity: null } : v))
-  return saveWorkspace({ ...workspace, groups, visits, materials: merge(workspace.materials, guest.materials), reportDrafts, prompts: merge(workspace.prompts, guest.prompts) })
+  return saveWorkspace({ ...workspace, groups, visits, materials: merge(workspace.materials, guest.materials), reportDrafts, prompts: merge(workspace.prompts, guest.prompts), readerNotebooks: notebooks, readerSelections: merge(workspace.readerSelections, guest.readerSelections), readerEvents: merge(workspace.readerEvents, guest.readerEvents) })
 }
 
+export function saveReaderNotebook(notebook: ResearchReaderNotebook, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({ ...workspace, readerNotebooks: [notebook, ...(workspace.readerNotebooks ?? []).filter(item => item.paperId !== notebook.paperId)] }), expectedOwner)
+}
+export function saveReaderSelectionState(selectionState: ResearchReaderSelectionState, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({
+    ...workspace,
+    readerSelections: [
+      ...selectionState.selections,
+      ...(workspace.readerSelections ?? []).filter(item => item.paperId !== selectionState.paperId || item.sourceRevision !== selectionState.sourceRevision),
+    ].slice(0, 5000),
+    readerEvents: [
+      ...selectionState.events,
+      ...(workspace.readerEvents ?? []).filter(item => item.paperId !== selectionState.paperId || item.sourceRevision !== selectionState.sourceRevision),
+    ].slice(0, 10000),
+  }), expectedOwner)
+}
+export function savePendingOperation(operation: ResearchPendingOperation, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({ ...workspace, pendingOperations: [operation, ...(workspace.pendingOperations ?? []).filter(item => item.requestId !== operation.requestId)].slice(0, 500) }), expectedOwner)
+}
+export function saveResearchReportReference(report: ResearchSavedReport, expectedOwner = owner): boolean {
+  return updateResearchWorkspace(workspace => ({ ...workspace, savedReports: [report, ...(workspace.savedReports ?? []).filter(item => item.id !== report.id)].slice(0, 500) }), expectedOwner)
+}
 export function saveResearchMaterial(material: ResearchMaterial, expectedOwner = owner): boolean {
   if (!validMaterial(material)) return false
   return updateResearchWorkspace(workspace => ({ ...workspace, materials: [material, ...(workspace.materials ?? []).filter(m => m.id !== material.id)] }), expectedOwner)
@@ -161,6 +192,11 @@ export function saveComposerDraft(draft: ResearchComposerDraft | null, expectedO
 }
 export function rememberResearchActivity(sessionId: string, activity: ResearchActivity, expectedOwner = owner): boolean {
   if (!validActivity(activity)) return false
+  if (
+    activity.kind === "reader" &&
+    !activity.sourceRevision &&
+    (activity.sectionId !== undefined || activity.pdfPage !== undefined)
+  ) return false
   const visit = readResearchWorkspace().visits.find(v => v.id === sessionId && !v.deletedAt)
   if (!visit || (activity.kind === "reader" ? visit.module !== "papers" : visit.module !== "reports")) return false
   return updateResearchWorkspace(workspace => ({ ...workspace, visits: workspace.visits.map(v => v.id === sessionId ? { ...v, activity, updatedAt: Math.max(v.updatedAt, activity.updatedAt) } : v) }), expectedOwner)
@@ -177,8 +213,11 @@ export function researchResumeHref(visit: ResearchVisit): string {
   }
   const url = new URL(activity.href, "https://agora.invalid")
   url.searchParams.set("returnTo", visit.href)
-  if (activity.sectionId) url.searchParams.set("resumeSection", activity.sectionId)
-  if (activity.pdfPage) url.searchParams.set("resumePage", String(activity.pdfPage))
+  if (activity.sourceRevision) {
+    url.searchParams.set("sourceRevision", activity.sourceRevision)
+    if (activity.sectionId) url.searchParams.set("resumeSection", activity.sectionId)
+    if (activity.pdfPage) url.searchParams.set("resumePage", String(activity.pdfPage))
+  }
   return url.pathname + url.search
 }
 

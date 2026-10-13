@@ -9,12 +9,13 @@ import { historyState, removeResearchMaterial, saveResearchMaterial } from "@/li
 import { materialKindLabel, prepareMaterialReport, reportDraftHref } from "@/lib/research/materials"
 import type { ResearchMaterial } from "@/lib/research/workspace-items"
 import styles from "./research-workspace.module.css"
+import { researchHomeHref } from "@/lib/research/routes"
 
 const icons = { paper: BookOpen, project: Github, discussion: Quote, note: FileText, pdf: FileText }
 
 export function ResearchGroupPage({ groupId }: { groupId: string | null }) {
   const state = useOwnedResearchWorkspace()
-  if (!state.ready) return <div className={styles.page}><main className={styles.main}><a href="/design-demo">返回首页</a><p className={styles.empty} role="status">{state.status === "error" ? "研究资料暂时无法读取，请重新登录或稍后重试。" : "正在读取研究资料…"}</p></main></div>
+  if (!state.ready) return <div className={styles.page}><main className={styles.main}><a href={researchHomeHref()}>返回首页</a><p className={styles.empty} role="status">{state.status === "error" ? "研究资料暂时无法读取，请重新登录或稍后重试。" : "正在读取研究资料…"}</p></main></div>
   return <GroupEditor key={state.owner ?? "guest"} groupId={groupId} state={state} />
 }
 
@@ -56,12 +57,12 @@ function GroupEditor({ groupId, state }: { groupId: string | null; state: Return
     const params = new URLSearchParams()
     if (groupId) params.set("researchGroup", groupId)
     chosen.forEach(m => params.append("material", m.id))
-    router.push(`/design-demo?${params}`)
+    router.push(`${researchHomeHref()}?${params}`)
   }
-  if (!title) return <div className={styles.page}><main className={styles.main}><a href="/design-demo">返回首页</a><p className={styles.empty}>当前账号下找不到这个分组。</p></main></div>
+  if (!title) return <div className={styles.page}><main className={styles.main}><a href={researchHomeHref()}>返回首页</a><p className={styles.empty}>当前账号下找不到这个分组。</p></main></div>
 
   return <div className={styles.page}>
-    <header className={styles.header}><a href="/design-demo"><ArrowLeft size={19} />我的研究</a><small>{state.owner ? state.status === "synced" ? "已同步到账号" : state.status === "saving" ? "正在同步…" : "尚未同步" : "资料保存在本机"}</small></header>
+    <header className={styles.header}><a href={researchHomeHref()}><ArrowLeft size={19} />我的研究</a><small>{state.owner ? state.status === "synced" ? "已同步到账号" : state.status === "saving" ? "正在同步…" : "尚未同步" : "资料保存在本机"}</small></header>
     <main className={styles.main}>
       <div className={styles.titleRow}><div><h1>{title}</h1><p>{materials.length} 项资料 · {drafts.length} 份报告准备稿</p></div><button type="button" className={styles.primary} onClick={() => edit()}><Plus size={17} />添加资料</button></div>
       <div className={styles.toolbar}><label className={styles.search}><Search size={17} /><input aria-label="搜索分组资料" placeholder="搜索标题、笔记" value={search} onChange={e => setSearch(e.target.value)} /></label><select className={styles.select} aria-label="资料类型" value={kind} onChange={e => setKind(e.target.value)}><option value="all">全部类型</option>{Object.entries(materialKindLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>

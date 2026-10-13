@@ -3,7 +3,8 @@ import { loadPaperCompileStatus } from "@/lib/paper-reader/server-loader"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: NextRequest, { params }: { params: { paperId: string } }) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ paperId: string }> }) {
+  const params = await props.params;
   const status = await loadPaperCompileStatus(params.paperId)
   if (status) {
     return NextResponse.json({ success: true, data: { status } })

@@ -4,14 +4,18 @@ import { validateWorkspace, type ResearchSnapshot } from "./history-model"
 export const retryHistoryEvent = "agora-research-history-retry"
 export const reloadHistoryEvent = "agora-research-history-reload"
 class HistoryRequestError extends Error { constructor(public status: number) { super("history request failed") } }
-async function requestHistory(signal: AbortSignal, snapshot?: ResearchSnapshot): Promise<ResearchSnapshot> {
+async function requestHistory(signal: AbortSignal, snapshot?: ResearchSnapshot): Promise<ResearchSnapshot & { migrated?: boolean }> {
   const response = await fetch("/api/research/history", { method: snapshot ? "PUT" : "GET", signal, credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, ...(snapshot ? { body: JSON.stringify(snapshot) } : {}) })
   const result = await response.json()
   if (!response.ok || !result.success) throw new HistoryRequestError(response.status)
   const value = result.data
   const workspace = validateWorkspace(value)
   if (!workspace || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new Error("invalid history response")
-  return { ...workspace, revision: value.revision }
+  const rawWorkspace = Object.fromEntries(
+    Object.entries(value as ResearchSnapshot).filter(([key]) => key !== "revision"),
+  )
+  const migrated = !snapshot && JSON.stringify(workspace) !== JSON.stringify(rawWorkspace)
+  return { ...workspace, revision: value.revision, ...(migrated ? { migrated: true } : {}) }
 }
 
 /** One owner and one write in flight; stale async completions cannot reach a new account. */
@@ -36,10 +40,13 @@ export function startHistorySync(userId: string | null | undefined): () => void 
       let pending: ResearchSnapshot | null = null
       try {
         const value = JSON.parse(sessionStorage.getItem(pendingHistoryKey(userId!)) ?? "null")
-        if (!discard && validateWorkspace(value) && Number.isSafeInteger(value.revision)) pending = value
+        const validated = validateWorkspace(value)
+        if (!discard && validated && Number.isSafeInteger(value.revision)) pending = { ...validated, revision: value.revision }
         if (discard) sessionStorage.removeItem(pendingHistoryKey(userId!))
       } catch { /* A malformed local draft never replaces server data. */ }
-      acceptAccountHistory(result, result.revision)
+      const { revision: nextRevision, migrated, ...workspace } = result
+      acceptAccountHistory(workspace, nextRevision)
+      if (migrated && !pending) restorePendingHistory(workspace, nextRevision)
       if (pending) {
         restorePendingHistory(pending, pending.revision)
         if (pending.revision !== result.revision) fail(new HistoryRequestError(409))

@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   if (!isSameOrigin(request)) return authFailure("auth_invalid_origin", 403)
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiPost(
     "/api/v1/auth/logout",
     {},

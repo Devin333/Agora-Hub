@@ -7,7 +7,11 @@ from framework.harness.context.assembler import ContextAssembler
 from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.memory.ports import MemoryPort
 from framework.harness.rag.context_pack_assembler import RAGContextPackAssembler
-from framework.harness.rag.session import BoundedRAGSessionController, RAGSessionResult
+from framework.harness.rag.session import (
+    BoundedRAGSessionController,
+    RAGEventRecorder,
+    RAGSessionResult,
+)
 from framework.harness.rag.models import RAGBudget, RAGSessionSpec
 from framework.harness.rag.relevance import RelevanceScorerPort
 from framework.harness.rag.source_verifier import SourceVerifier
@@ -62,6 +66,7 @@ class PaperRAGSession:
         context_assembler_factory: (
             Callable[[RAGSessionSpec], ContextAssembler] | None
         ) = None,
+        event_recorder: RAGEventRecorder | None = None,
     ) -> None:
         if context_assembler_factory is not None and not callable(
             context_assembler_factory
@@ -83,6 +88,7 @@ class PaperRAGSession:
         self._relevance_scorer = relevance_scorer
         self._memory = memory
         self._context_assembler_factory = context_assembler_factory
+        self._event_recorder = event_recorder
 
     def run(
         self,
@@ -130,7 +136,12 @@ class PaperRAGSession:
                 config=self._candidate_experiment,
                 min_round_index=self._worker_planner_min_round_index,
             )
-        controller_kwargs = {"retrieval": retrieval_port, "planner": planner, "memory": self._memory}
+        controller_kwargs = {
+            "retrieval": retrieval_port,
+            "planner": planner,
+            "memory": self._memory,
+            "event_recorder": self._event_recorder,
+        }
         if self._relevance_scorer is not None:
             controller_kwargs["source_verifier"] = SourceVerifier(
                 relevance_scorer=self._relevance_scorer

@@ -1,0 +1,92 @@
+{
+  "schema": "newsroom-final-validation-integration-audit/v1",
+  "recordedAt": "2026-10-13T01:56:57.853Z",
+  "status": "passed-before-commit",
+  "change": "research-local-desktop-readiness",
+  "indexScope": {
+    "auditedPathsBeforeThisRecord": 413,
+    "presentBlobsBeforeThisRecord": 410,
+    "totalAuditedBlobBytes": 9595840,
+    "deletedPaths": [
+      "frontend/.eslintrc.json",
+      "frontend/src/middleware.auth.test.ts",
+      "frontend/src/middleware.ts"
+    ],
+    "rawLogFilesStaged": 0,
+    "actualEnvironmentFilesStaged": 0,
+    "generatedRuntimeOrDependencyDirectoriesStaged": 0,
+    "otherOpenSpecChangesModified": [],
+    "unstagedTrackedPaths": [],
+    "policy": "Source paths are staged normally; only this change Markdown/JSON/exact gzip log artifacts and the usage document are force-added. Ignored local data and raw logs remain outside Git."
+  },
+  "secrets": {
+    "source": "Changed Git index blobs, including decompression of every staged .log.gz",
+    "patternFamilies": [
+      "private-key-pem-header",
+      "OpenAI-style-key-with-long-payload",
+      "GitHub-token-with-long-payload"
+    ],
+    "findingCount": 0,
+    "actualEnvironmentContentsRead": false,
+    "scopeBoundary": "This is a high-confidence token/private-key pattern audit and filename boundary check, not a guarantee that every possible secret format is detectable."
+  },
+  "structuredEvidence": {
+    "jsonFilesParsed": 83,
+    "invalidJsonFiles": [],
+    "exactLogArchiveCount": 44,
+    "archiveBytesRawBytesSha256AndZeroGzipTimestampVerified": true,
+    "manifest": "validation-log-archives-20261013.json"
+  },
+  "documentLinks": {
+    "documents": 15,
+    "links": 21,
+    "missingTargets": [],
+    "scope": "Local Markdown file targets exist; remote URLs and in-page anchor semantics are outside this static link check."
+  },
+  "architectureAndSafety": {
+    "staticReviewRecord": "static-integration-review-20261012.md",
+    "staticReviewSha256": "ec147e29056efe466263f32290414ded4a69345913f5e152b3a1acf3a628739f",
+    "coverageRecord": "implementation-coverage-20261012.json",
+    "requiredSmokeRecord": "backend-release-candidate-mandatory-smoke-20261013.json",
+    "reviewedBoundaries": [
+      "interface -> application service ownership",
+      "fail-closed authentication/owner/operator admission",
+      "loopback configuration and frontend BFF authority",
+      "Windows PID + creation/executable process ownership",
+      "backup/recovery path scope and release/config identity fences"
+    ],
+    "realBusinessMutationsPerformed": false
+  },
+  "diffCheck": {
+    "executable": "git",
+    "args": [
+      "diff",
+      "--cached",
+      "--check"
+    ],
+    "cwd": "F:/github/NewsRoom",
+    "utcStart": "2026-10-13T01:54:56.024Z",
+    "utcEnd": "2026-10-13T01:54:56.135Z",
+    "exitCode": 0,
+    "signal": null,
+    "stdout": "",
+    "stderr": ""
+  },
+  "strictOpenSpecValidation": "spec-validation-final-20261013.json",
+  "candidateIdentityVerification": "backend-release-candidate-identity-20261013.json#sourceTimingAudit",
+  "liveAcceptanceExecuted": false,
+  "actualReleaseActivated": false,
+  "preCommitSourceRecheck": {
+    "recordedAt": "2026-10-13T01:59:07.587Z",
+    "backendSourceFiles": 2770,
+    "frontendSourceFiles": 813,
+    "frontendProductionBuildFiles": 1004,
+    "pythonExecutableBytesMatch": true,
+    "allSourceAndBuildBytesMatchFrozenCandidates": true
+  },
+  "finalIndexScope": {
+    "paths": 414,
+    "presentBlobs": 411,
+    "auditRecordAdditionallyScanned": true
+  }
+}

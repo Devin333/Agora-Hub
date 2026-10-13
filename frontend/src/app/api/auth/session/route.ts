@@ -1,19 +1,43 @@
 import { cookies } from "next/headers"
-import { NextResponse } from "next/server"
 import { safeApiGet } from "@/lib/api/server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
-import { authResponse } from "@/lib/auth/portal-server"
+import { authFailure, authResponse } from "@/lib/auth/portal-server"
+import { attachFrontendRuntimeIdentity } from "@/lib/runtime-identity"
 
 export const dynamic = "force-dynamic"
 
 export async function GET() {
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
-  if (!token) return NextResponse.json({ success: true, data: { session: null } }, { headers: { "Cache-Control": "no-store" } })
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
+  if (!token) {
+    try {
+      return authResponse(
+        { ok: true, data: attachFrontendRuntimeIdentity({ session: null }) },
+        { issueSession: false },
+      )
+    } catch {
+      return authFailure("desktop_runtime_identity_invalid", 503)
+    }
+  }
   const result = await safeApiGet("/api/v1/auth/session", {
     headers: token ? { "x-newsroom-session": token } : undefined,
     signal: AbortSignal.timeout(10000),
   })
-  const response = authResponse(result, { issueSession: false })
+  let response
+  if (result.ok) {
+    try {
+      const data = result.data && typeof result.data === "object"
+        ? result.data as Record<string, unknown>
+        : {}
+      response = authResponse(
+        { ...result, data: attachFrontendRuntimeIdentity(data) },
+        { issueSession: false },
+      )
+    } catch {
+      return authFailure("desktop_runtime_identity_invalid", 503)
+    }
+  } else {
+    response = authResponse(result, { issueSession: false })
+  }
   if (result.ok) {
     const data = result.data as { session?: unknown } | undefined
     if (token && !data?.session) {

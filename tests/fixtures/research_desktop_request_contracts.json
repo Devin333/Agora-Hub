@@ -1,0 +1,82 @@
+{
+  "schema": "newsroom.desktop-request-semantics-fixtures/v1",
+  "fingerprintVersion": "sha256-canonical-json-v1",
+  "cases": [
+    {
+      "id": "unicode-arxiv-analysis",
+      "semantic": {
+        "kind": "analyze",
+        "paperId": "2401.01234",
+        "sourceRevision": "source-revision-1",
+        "sourceFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceUrl": "https://arxiv.org/abs/2401.01234",
+        "pdfUrl": "https://arxiv.org/pdf/2401.01234",
+        "objective": "分析这篇论文的方法与适用条件",
+        "constraints": [
+          "仅使用论文已核验的证据",
+          "明确报告局限性"
+        ]
+      },
+      "canonicalJson": "{\"constraints\":[\"仅使用论文已核验的证据\",\"明确报告局限性\"],\"kind\":\"analyze\",\"objective\":\"分析这篇论文的方法与适用条件\",\"paperId\":\"2401.01234\",\"pdfUrl\":\"https://arxiv.org/pdf/2401.01234\",\"sourceFingerprint\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceRevision\":\"source-revision-1\",\"sourceUrl\":\"https://arxiv.org/abs/2401.01234\"}",
+      "fingerprint": "sha256:c9084ccc97afad6adf3f8193cbad5b213255d1fcb5343226dd8a329c01c9d74f"
+    },
+    {
+      "id": "section-grounded-ask",
+      "semantic": {
+        "kind": "ask",
+        "runId": "research-run-example",
+        "paperId": "2401.01234",
+        "sourceRevision": "source-revision-1",
+        "sourceFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "question": "该方法在什么条件下有效？",
+        "selection": {
+          "sectionId": "section-2",
+          "page": 3
+        },
+        "locale": "zh"
+      },
+      "canonicalJson": "{\"kind\":\"ask\",\"locale\":\"zh\",\"paperId\":\"2401.01234\",\"question\":\"该方法在什么条件下有效？\",\"runId\":\"research-run-example\",\"selection\":{\"page\":3,\"sectionId\":\"section-2\"},\"sourceFingerprint\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceRevision\":\"source-revision-1\"}",
+      "fingerprint": "sha256:65b861205fe67cfd7d11119c9ec63aab3c7be9c2a62a2996935c1c5fd20d4f3d"
+    },
+    {
+      "id": "unicode-pdf-import",
+      "semantic": {
+        "kind": "import",
+        "filename": "论文 方法与实验.pdf",
+        "sizeBytes": 12345,
+        "sourceRevision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sourceFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "canonicalJson": "{\"filename\":\"论文 方法与实验.pdf\",\"kind\":\"import\",\"sizeBytes\":12345,\"sourceFingerprint\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"sourceRevision\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+      "fingerprint": "sha256:381f3adcb039ef4bcbf3263a81d15b631ece47182af0d2afb6dc518e08c19413"
+    },
+    {
+      "id": "private-pdf-analysis-null-transport",
+      "semantic": {
+        "kind": "analyze",
+        "paperId": "imported-paper-001",
+        "sourceRevision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "sourceFingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "sourceUrl": null,
+        "pdfUrl": null,
+        "objective": null,
+        "constraints": [
+          "保留原质量门与真实证据范围"
+        ]
+      },
+      "canonicalJson": "{\"constraints\":[\"保留原质量门与真实证据范围\"],\"kind\":\"analyze\",\"objective\":null,\"paperId\":\"imported-paper-001\",\"pdfUrl\":null,\"sourceFingerprint\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"sourceRevision\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"sourceUrl\":null}",
+      "fingerprint": "sha256:027f4702454aa2ca1b9e09b85cc88bf4bdbc39a9bc46266c0934dc0e54debf63"
+    },
+    {
+      "id": "unicode-public-source-prepare",
+      "semantic": {
+        "kind": "prepare",
+        "paperId": "2401.01234",
+        "sourceUrl": "https://example.test/论文.pdf",
+        "sourceType": null
+      },
+      "canonicalJson": "{\"kind\":\"prepare\",\"paperId\":\"2401.01234\",\"sourceType\":null,\"sourceUrl\":\"https://example.test/论文.pdf\"}",
+      "fingerprint": "sha256:bf26de5186f9a1c4cdfc830145334a4d5daeca1b4c54f5152ecb84c9a83095c2"
+    }
+  ]
+}

@@ -22,7 +22,9 @@ test("chapter reading reconstructs the real paper through its final appendix, fi
   await expect(page.locator('[id="bib"] [data-paragraph-id]')).toHaveCount(39)
   await nav.getByRole("button", { name: "1 Introduction", exact: true }).click()
   await page.locator('[id="S1"] button').filter({ hasText: /^33$/ }).first().click()
-  await expect(page.locator('[id="bib.bib33"]')).toBeInViewport()
+  const reference33 = page.locator('[id="bib"] [data-paragraph-id]').filter({ hasText: /^\[33\]/ })
+  await expect(reference33).toHaveCount(1)
+  await expect(reference33).toBeInViewport()
   for (const id of ["S1.F1", "S6.F2", "S6.F3", "A1.F4", "A1.F5", "A3.F6", "A4.F7"]) {
     const figure = body.locator(`[id="${id}"]`)
     await figure.scrollIntoViewIfNeeded()

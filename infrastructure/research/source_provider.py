@@ -4,10 +4,12 @@ import re
 from collections import OrderedDict
 from hashlib import sha256
 from threading import RLock
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlsplit
 
+from infrastructure.external.sources.url_utils import canonicalize_url
 from backend.research.domain.paper import PaperSourceRecord, ResearchPaper
+from backend.research.ports.source_provider import BoundPaperSource
 from framework.shared.json import stable_json_dumps
 from infrastructure.external.sources.arxiv import (
     ARXIV_API_URL,
@@ -110,6 +112,128 @@ class ArxivResearchSourceProvider:
             while len(self._records) > self._cache_size:
                 self._records.popitem(last=False)
 
+
+
+class CatalogBoundResearchSourceProvider:
+    """Resolve an actor-visible parsed document before falling back to a live source."""
+
+    def __init__(self, fallback: ArxivResearchSourceProvider, document_repository: Any) -> None:
+        self._fallback = fallback
+        self._documents = document_repository
+
+    def fetch_paper(self, source_url: str) -> ResearchPaper:
+        return self._fallback.fetch_paper(source_url)
+
+    def fetch_source_record(self, paper_id: str) -> PaperSourceRecord:
+        return self._fallback.fetch_source_record(paper_id)
+
+    def fetch_bound_source(
+        self,
+        *,
+        source_ref: str,
+        paper_id: str,
+        source_revision: str,
+        actor_scope: Mapping[str, str],
+    ) -> BoundPaperSource | None:
+        document = self._documents.get(paper_id, actor_scope=actor_scope)
+        if document is None:
+            if urlsplit(source_ref).scheme == "file":
+                raise ResearchSourceError(
+                    "local Research source is not bound to an actor-visible parsed document"
+                )
+            return None
+        document_scope = {
+            str(key): str(value)
+            for key, value in dict(getattr(document, "actor_scope", {}) or {}).items()
+            if value not in (None, "")
+        }
+        requested_scope = {
+            str(key): str(value)
+            for key, value in dict(actor_scope or {}).items()
+            if value not in (None, "")
+        }
+        if document_scope and any(
+            requested_scope.get(key) != value for key, value in document_scope.items()
+        ):
+            raise ResearchSourceError(
+                "parsed Research document is not visible to the requested actor scope"
+            )
+        if _normalized_revision(document.source_hash) != _normalized_revision(source_revision):
+            raise ResearchSourceError("parsed Research document revision does not match the accepted input")
+        accepted_locators = {
+            _normalized_locator(value)
+            for value in [*document.source_locators, *document.lineage.source_refs]
+            if str(value or "").strip()
+        }
+        normalized_source = _normalized_locator(source_ref)
+        parsed = urlsplit(source_ref)
+        source_type = "local" if parsed.scheme == "file" else ("arxiv" if parsed.hostname in _ARXIV_HOSTS else "other")
+        if normalized_source not in accepted_locators:
+            raise ResearchSourceError("Research source locator is not bound to the parsed document")
+        public_source_url = (
+            f"source://local/{_stable_suffix(normalized_source)}"
+            if source_type == "local"
+            else source_ref
+        )
+        source_metadata = {
+            "bound_document_id": document.document_id or "",
+            "source_revision": source_revision,
+        }
+        if source_type == "local":
+            source_metadata["source_locator"] = source_ref
+        paper = ResearchPaper(
+            paper_id=document.paper_id,
+            title=document.title or document.paper_id,
+            authors=list(document.authors),
+            abstract=document.abstract or "",
+            source=source_type,
+            source_url=public_source_url,
+            pdf_url=(
+                public_source_url
+                if source_ref.casefold().endswith(".pdf") or parsed.scheme == "file"
+                else None
+            ),
+            actor_scope=dict(actor_scope),
+            metadata=source_metadata,
+        )
+        record_metadata = {
+            "bound_document_id": document.document_id or "",
+            "content_revision": document.source_hash,
+            "metadata_revision": str(
+                document.metadata.get("source_revision")
+                or document.source_snapshot_id
+                or ""
+            ),
+            "transport_relocated": False,
+        }
+        if source_type == "local":
+            record_metadata["source_locator"] = source_ref
+        record = PaperSourceRecord(
+            source_id=f"research-bound-{_stable_suffix(document.paper_id + source_revision)}",
+            paper_id=document.paper_id,
+            source_type=source_type,
+            source_url=public_source_url,
+            fetched_at=document.observed_at or document.created_at,
+            source_hash=source_revision,
+            actor_scope=dict(actor_scope),
+            metadata=record_metadata,
+        )
+        return BoundPaperSource(paper=paper, source_record=record, document=document)
+
+
+def _normalized_revision(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    return text.removeprefix("sha256:")
+
+
+def _normalized_locator(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlsplit(text)
+    if parsed.scheme.casefold() == "file":
+        return parsed._replace(scheme="file").geturl()
+    return canonicalize_url(text)
 
 def require_arxiv_id(value: str) -> str:
     text = str(value or "").strip()
@@ -265,4 +389,4 @@ def _arxiv_id_matches(
     return _arxiv_base_id(normalized) == requested_base
 
 
-__all__ = ["ArxivResearchSourceProvider", "require_arxiv_id"]
+__all__ = ["ArxivResearchSourceProvider", "CatalogBoundResearchSourceProvider", "require_arxiv_id"]

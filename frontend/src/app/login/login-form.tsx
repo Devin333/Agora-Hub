@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { bootstrapAccount, fetchAuthSession, login } from "@/lib/auth/api"
 import { useI18n } from "@/lib/i18n/use-i18n"
+import { safeLocalNavigation } from "@/lib/research/routes"
 
 export function LoginForm({ defaultNextPath = "/papers" }: { defaultNextPath?: string }) {
   const router = useRouter()
@@ -118,7 +119,7 @@ export function LoginForm({ defaultNextPath = "/papers" }: { defaultNextPath?: s
 }
 
 function safeNextPath(value: string | null, fallback: string) {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/login")) {
+  if (!value || !safeLocalNavigation(value) || value.startsWith("/login") || value.startsWith("/api/")) {
     return fallback
   }
   return value

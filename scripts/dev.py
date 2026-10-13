@@ -203,6 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     replay_rag_parser = subparsers.add_parser("replay-rag", help="Replay a persisted Paper RAG transcript")
     replay_rag_parser.add_argument("transcript", help="Transcript id or transcript artifact path")
     replay_rag_parser.add_argument("--transcript-root", default=".newsroom/rag/transcripts")
+    replay_rag_parser.add_argument("--tenant-id", default=None)
+    replay_rag_parser.add_argument("--user-id", default=None)
+    replay_rag_parser.add_argument("--memory-namespace", default=None)
     subparsers.add_parser("test-rag-live-e2e", help="Run the opt-in live Paper RAG Qdrant/Postgres e2e")
     subparsers.add_parser("test-interfaces", help="Run interface acceptance tests")
     subparsers.add_parser("test-api", help="Run HTTP API interface tests")
@@ -397,7 +400,18 @@ def _replay_rag(args: argparse.Namespace) -> int:
     from interfaces.services.paper_rag_transcript_store import PaperRagTranscriptFileStore
 
     store = PaperRagTranscriptFileStore(args.transcript_root)
-    transcript = store.transcript_payload(args.transcript)
+    actor_scope = {
+        key: value
+        for key, value in {
+            "tenant_id": args.tenant_id,
+            "user_id": args.user_id,
+            "memory_namespace": args.memory_namespace,
+        }.items()
+        if value is not None and str(value).strip()
+    }
+    if not actor_scope:
+        raise ValueError("replay-rag requires an explicit actor scope")
+    transcript = store.transcript_payload(args.transcript, actor_scope=actor_scope)
     replay = replay_rag_session(transcript)
     print(json.dumps(replay.to_dict(), ensure_ascii=False, sort_keys=True))
     return 0 if replay.replayable else 1

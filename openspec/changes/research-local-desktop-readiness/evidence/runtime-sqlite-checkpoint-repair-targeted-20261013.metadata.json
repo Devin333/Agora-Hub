@@ -1,0 +1,9 @@
+{
+  "command": ".venv\\\\Scripts\\\\python.exe -m pytest tests/scripts/test_local_desktop_recovery.py::test_owner_fixture_closes_sqlite_before_declaring_storage_quiescent tests/scripts/test_local_desktop_recovery.py::test_backup_uses_native_sqlite_snapshot_including_wal_state tests/scripts/test_local_desktop_recovery.py::test_rollback_rejects_incompatible_backup_before_release_activation -q -rs",
+  "cwd": "F:\\github\\NewsRoom",
+  "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+  "utc_start": "2026-10-12T22:52:56.0961087Z",
+  "utc_end": "2026-10-12T22:53:00.6515841Z",
+  "exit_code": 0,
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-recovery-sqlite-targeted-20261013-065256-087.log"
+}

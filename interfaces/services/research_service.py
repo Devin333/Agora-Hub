@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+import re
 import base64
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass, replace
 from threading import RLock
 from typing import Any, Protocol
 from uuid import uuid4
@@ -29,6 +30,9 @@ from backend.research.application.parse_paper import (
     ParsePaperUseCase,
 )
 from backend.research.domain import stable_research_id
+from backend.research.graphs.paper_analysis import (
+    build_paper_analysis_context_graph_identity,
+)
 from backend.research.ports.artifact_publication import (
     ResearchArtifactDiagnosticReader,
 )
@@ -73,6 +77,8 @@ class ResearchAskInput:
     user_id: str | None = None
     memory_namespace: str | None = None
     mode: str = "summary"
+    run_id: str | None = None
+    request_id: str | None = None
     section_index: int = 0
     limit: int = 5
     generate: bool = False
@@ -160,6 +166,9 @@ class ResearchRagAskUseCase(Protocol):
         tenant_id: str | None,
         user_id: str | None,
         memory_namespace: str,
+        run_id: str | None = None,
+        allowed_source_refs: list[str] | tuple[str, ...] | None = None,
+        target_sections: list[str] | tuple[str, ...] | None = None,
         graph_identity: ContextGraphIdentity | None = None,
     ) -> dict[str, Any]:
         ...
@@ -263,6 +272,7 @@ class ResearchApplicationService:
         artifact_reader: ResearchArtifactReadPort | None = None,
         parse_use_case: ParsePaperUseCase | None = None,
         catalog_service: ResearchPaperCatalogService | None = None,
+        runtime_config_identity: str | None = None,
     ) -> None:
         self._analyze_use_case = analyze_use_case or _UnconfiguredAnalyzeUseCase()
         self._ask_use_case = ask_use_case or AskPaperUseCase()
@@ -283,8 +293,32 @@ class ResearchApplicationService:
         self._artifact_reader = artifact_reader
         self._parse_use_case = parse_use_case
         self._catalog_service = catalog_service
+        self._runtime_config_identity = str(runtime_config_identity or "unconfigured").strip()
         if self._run_reconciler is not None:
             self._run_reconciler.reconcile_pending()
+
+    def capability_projection(self) -> dict[str, bool]:
+        return {
+            "parse": self._parse_use_case is not None,
+            "analyze": not isinstance(self._analyze_use_case, _UnconfiguredAnalyzeUseCase),
+            "ask": self._ask_use_case is not None,
+            "ragAsk": not isinstance(self._rag_ask_use_case, _UnconfiguredRagAskUseCase),
+            "artifactRead": self._artifact_reader is not None,
+            "catalog": self._catalog_service is not None,
+        }
+
+    def capability_runtime_identity(self) -> str:
+        components = {
+            "analyze": _qualified_type(self._analyze_use_case),
+            "ask": _qualified_type(self._ask_use_case),
+            "ragAsk": _qualified_type(self._rag_ask_use_case),
+            "parse": _qualified_type(self._parse_use_case),
+            "catalog": _qualified_type(self._catalog_service),
+            "artifactRead": _qualified_type(self._artifact_reader),
+            "runtimeConfigIdentity": self._runtime_config_identity,
+        }
+        encoded = json.dumps(components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
     def parse_paper(self, command: ResearchParseInput) -> dict[str, Any]:
         if not isinstance(command, ResearchParseInput):
@@ -383,6 +417,120 @@ class ResearchApplicationService:
         except CatalogError as exc:
             raise ResearchServiceError(exc.code, exc.message, status_code=exc.status_code, details=exc.details, user_action_required=exc.status_code < 500) from exc
         return {"paperId": paper_id, "catalog": _to_dict(entry), "provenance": {"actorScope": actor_scope.to_metadata()}}
+
+    def recover_prepared_source(
+        self, command: ResearchParseInput,
+    ) -> dict[str, Any] | None:
+        use_case = self._parse_use_case
+        if use_case is None:
+            return None
+        actor_scope = _resolve_actor_scope(
+            self._ask_use_case, tenant_id=command.tenant_id,
+            user_id=command.user_id, memory_namespace=command.memory_namespace,
+        )
+        try:
+            result = use_case.recover_completed(ParsePaperRequest(
+                source=command.source, source_url=command.source_url,
+                source_type=command.source_type, content_ref=command.content_ref,
+                run_id=command.run_id, tenant_id=actor_scope.tenant_id,
+                user_id=actor_scope.user_id, memory_namespace=actor_scope.memory_namespace,
+                actor_scope=actor_scope.to_metadata(), options=dict(command.options),
+                metadata=dict(command.metadata),
+            ))
+        except ParsePaperError as exc:
+            raise ResearchServiceError(
+                exc.code, exc.message, status_code=exc.status_code,
+                retryable=False, user_action_required=True,
+            ) from exc
+        if result is None:
+            return None
+        actual = _normalized_sha256_identity(getattr(result.document, "source_hash", None))
+        if actual is None:
+            raise ResearchServiceError(
+                "source_identity_unavailable", "Prepared source has no verified content identity",
+                status_code=422, user_action_required=True,
+            )
+        return {
+            "status": "ready", "paperId": result.paper_id,
+            "sourceRevision": f"sha256:{actual}",
+            "sourceFingerprint": f"sha256:{actual}",
+        }
+
+    def get_document_identity(
+        self,
+        paper_id: str,
+        *,
+        actor: ResearchActorInput | None = None,
+    ) -> dict[str, str]:
+        payload = self.get_document(paper_id, actor=actor)
+        document = payload.get("document")
+        actual = _normalized_sha256_identity(
+            document.get("source_hash") if isinstance(document, Mapping) else None
+        )
+        if actual is None:
+            raise ResearchServiceError(
+                "source_identity_unavailable",
+                "Parsed document does not expose a SHA-256 content identity",
+                status_code=422,
+                user_action_required=True,
+            )
+        fingerprint = f"sha256:{actual}"
+        return {
+            "paperId": paper_id,
+            "sourceRevision": fingerprint,
+            "sourceFingerprint": fingerprint,
+        }
+
+    def resolve_analyze_source(
+        self,
+        paper_id: str,
+        *,
+        source_revision: str,
+        source_fingerprint: str,
+        actor: ResearchActorInput | None = None,
+    ) -> str:
+        """Resolve an immutable actor-visible source locator for an existing parsed document."""
+
+        service = self._require_catalog_service()
+        actor_scope = _resolve_actor_input(self._ask_use_case, actor)
+        document = service.get_document(paper_id, actor_scope=actor_scope.to_metadata())
+        if document is None or document.paper_id != paper_id:
+            raise ResearchServiceError(
+                "document_not_found",
+                "The exact actor-visible parsed document was not found",
+                status_code=404,
+                user_action_required=True,
+            )
+        actual_revision = _normalized_sha256_identity(document.source_hash)
+        requested_revision = _normalized_sha256_identity(source_revision)
+        requested_fingerprint = _normalized_sha256_identity(source_fingerprint)
+        if (
+            actual_revision is None
+            or requested_revision is None
+            or requested_fingerprint is None
+            or actual_revision != requested_revision
+            or actual_revision != requested_fingerprint
+        ):
+            raise ResearchServiceError(
+                "source_identity_mismatch",
+                "The parsed document does not match the requested source identity",
+                status_code=409,
+                user_action_required=True,
+            )
+        candidates = [
+            str(value).strip()
+            for value in [*document.source_locators, *document.lineage.source_refs]
+            if str(value or "").strip()
+        ]
+        if not candidates:
+            raise ResearchServiceError(
+                "source_identity_unavailable",
+                "The parsed document has no immutable source locator",
+                status_code=422,
+                user_action_required=True,
+            )
+        return candidates[0]
+
 
     def get_code(self, paper_id: str, *, actor: ResearchActorInput | None = None) -> dict[str, Any]:
         service = self._require_catalog_service()
@@ -739,6 +887,7 @@ class ResearchApplicationService:
                 raise service_error from recovery_error
             raise service_error from exc
 
+        result = _bind_result_source_identity(result, command.metadata)
         record = ResearchRunRecord(run_id=run_id, paper_id=paper_id, result=result)
         execution_error_type = _result_execution_error_type(result)
         if execution_error_type is not None:
@@ -799,6 +948,122 @@ class ResearchApplicationService:
             "traceRef": _trace_ref(record.result, record.run_id),
             "metadata": {"artifactRefs": _artifact_refs(record.result)},
         }
+
+    def get_run_projection(
+        self,
+        run_id: str,
+        *,
+        actor: ResearchActorInput | None = None,
+    ) -> dict[str, Any]:
+        """Project one exact Research run without substituting the latest paper result."""
+
+        normalized_run_id = _require_text(run_id, "runId")
+        actor_scope = _resolve_actor_input(self._ask_use_case, actor)
+        try:
+            record = self._run_store.get_by_run_id(normalized_run_id)
+        except ResearchRunStoreError as exc:
+            raise _run_store_service_error(exc, operation="get_by_run_id") from None
+        if record is None and isinstance(self._run_store, ResearchRunDiagnosticStore):
+            try:
+                record = self._run_store.get_diagnostic_by_run_id(
+                    normalized_run_id,
+                    identity_scope_ref=research_identity_scope_ref(actor_scope.to_metadata()),
+                )
+            except ResearchRunStoreError as exc:
+                raise _run_store_service_error(exc, operation="get_diagnostic_by_run_id") from None
+        if record is None:
+            raise ResearchServiceError(
+                "research_run_not_found",
+                "Research run was not found",
+                status_code=404,
+                user_action_required=True,
+            )
+        _ensure_record_visible_to_actor(record, actor_scope)
+        result = record.result
+        quality = getattr(result, "quality", None)
+        quality_passed = getattr(quality, "passed", None) is True
+        succeeded = _result_status(result) == "succeeded" and getattr(result, "analysis", None) is not None
+        accepted = record.disposition is ResearchRunDisposition.ACCEPTED
+        artifact_status, artifact_reason = self._validate_report_artifacts(
+            record,
+            actor_scope=actor_scope,
+        )
+        return {
+            "runId": record.run_id,
+            "paperId": record.paper_id,
+            "status": _result_status(result),
+            "disposition": record.disposition.value if record.disposition is not None else "quarantine",
+            "accepted": accepted,
+            "qualityPassed": quality_passed,
+            "eligibleForAcceptedExport": bool(
+                succeeded
+                and quality_passed
+                and accepted
+                and artifact_status == "valid"
+            ),
+            "artifactStatus": artifact_status,
+            "artifactReason": artifact_reason,
+            "sourceRevision": _run_source_revision(result),
+            "sourceFingerprint": _run_source_fingerprint(result),
+            "analysis": _to_dict(getattr(result, "analysis", None)),
+            "quality": _to_dict(quality),
+            "paper": _to_dict(getattr(result, "paper_card", None)),
+            "reader": _to_dict(getattr(result, "reader_payload", None)),
+            "artifactRefs": _artifact_refs(result),
+            "traceRef": _trace_ref(result, record.run_id),
+            "diagnostics": _safe_run_diagnostics(result),
+        }
+    def _validate_report_artifacts(
+        self,
+        record: ResearchRunRecord,
+        *,
+        actor_scope: ResearchActorScope,
+    ) -> tuple[str, str | None]:
+        result = record.result
+        required = (
+            ("research-analysis", _artifact_ref(result, "research-analysis"), _to_dict(getattr(result, "analysis", None))),
+            ("research-quality-result", _artifact_ref(result, "research-quality-result"), _to_dict(getattr(result, "quality", None))),
+        )
+        if any(ref is None for _, ref, _ in required):
+            return "missing", "required_report_artifact_missing"
+        reader = self._artifact_reader
+        if reader is None:
+            return "missing", "research_artifact_reader_unavailable"
+        for expected_type, ref, expected_payload in required:
+            try:
+                envelope = reader.read(
+                    str(ref),
+                    actor_scope=actor_scope.to_metadata(),
+                    include_payload=True,
+                    max_chars=1_000_000,
+                )
+            except FileNotFoundError:
+                return "missing", "artifact_not_found"
+            except PermissionError:
+                return "unauthorized", "artifact_forbidden"
+            except Exception:
+                return "corrupt", "artifact_corrupt"
+            artifact_type = str(envelope.get("artifactType") or "") if isinstance(envelope, Mapping) else ""
+            metadata = envelope.get("metadata") if isinstance(envelope, Mapping) else None
+            payload = envelope.get("payload") if isinstance(envelope, Mapping) else None
+            if (
+                artifact_type != expected_type
+                or not isinstance(metadata, Mapping)
+                or metadata.get("run_id") != record.run_id
+                or metadata.get("paper_id") != record.paper_id
+                or metadata.get("artifact_type") != expected_type
+                or payload != expected_payload
+            ):
+                return "corrupt", "artifact_identity_mismatch"
+            if expected_type == "research-analysis" and (
+                not isinstance(payload, Mapping) or payload.get("paper_id") != record.paper_id
+            ):
+                return "corrupt", "artifact_identity_mismatch"
+            if expected_type == "research-quality-result" and (
+                not isinstance(payload, Mapping) or payload.get("target_id") != record.paper_id
+            ):
+                return "corrupt", "artifact_identity_mismatch"
+        return "valid", None
 
     def get_reader(
         self,
@@ -863,7 +1128,11 @@ class ResearchApplicationService:
                 graph_identity=graph_identity,
             )
 
-        record = self._record_for_paper(paper_id, actor_scope=actor_scope)
+        record = (
+            self._record_by_run_id(request.run_id, actor_scope=actor_scope, paper_id=paper_id)
+            if request.run_id
+            else self._record_for_paper(paper_id, actor_scope=actor_scope)
+        )
         _ensure_record_visible_to_actor(record, actor_scope)
         self._ensure_run_succeeded(record)
         self._ensure_quality_passed(record)
@@ -876,32 +1145,103 @@ class ResearchApplicationService:
                 status_code=404,
                 user_action_required=True,
             )
-        goal = self._ask_use_case.build_retrieval_goal(
-            ResearchRetrievalGoal(
-                goal_id=stable_research_id("research_ask", record.run_id, question),
-                paper_id=record.paper_id,
-                question=question,
-                required_evidence_types=["claim_support"],
-                target_sections=_selection_targets(request.selection),
-                allowed_source_refs=_reader_source_refs(reader_payload),
-                allowed_memory_namespaces=[actor_scope.memory_namespace],
-                constraints={"locale": request.locale or "en", "paper_only": True},
-                metadata={"run_id": record.run_id, **actor_scope.to_metadata()},
+        source_refs = _reader_source_refs(reader_payload)
+        question_identity = stable_research_id(
+            "research_reader_question",
+            record.run_id,
+            question,
+            json.dumps(request.selection, ensure_ascii=False, sort_keys=True),
+            request.request_id or "",
+        )
+        actual_graph_identity = (
+            graph_identity
+            or build_paper_analysis_context_graph_identity(
+                run_id=record.run_id,
+                stage_id="run_research_rag",
+            ).with_physical_activity(
+                node_id="run_research_rag",
+                node_instance_id=stable_research_id(
+                    "research_reader_question_node",
+                    record.run_id,
+                    question_identity,
+                ),
+                activity_id=question_identity,
+                activity_attempt=1,
             )
         )
-        evidence_refs = _answer_evidence_refs(analysis, reader_payload, request.selection)
-        return {
-            "answer": _answer_from_analysis(question, analysis),
-            "evidenceRefs": evidence_refs,
-            "confidence": _answer_confidence(analysis),
-            "traceRef": _trace_ref(record.result, record.run_id),
-            "metadata": {
-                "runId": record.run_id,
-                "paperId": record.paper_id,
-                "retrievalGoalId": goal.goal_id,
-                "sourceRefs": goal.allowed_source_refs,
-            },
-        }
+        generated = self._ask_paper_chunks(
+            record.paper_id,
+            question,
+            request=replace(request, generate=True, gated=True),
+            actor_scope=actor_scope,
+            graph_identity=actual_graph_identity,
+            run_id=record.run_id,
+            allowed_source_refs=source_refs,
+            target_sections=_selection_targets(request.selection, reader_payload=reader_payload),
+        )
+        return _reader_answer_projection(
+            generated,
+            run_id=record.run_id,
+            paper_id=record.paper_id,
+            question=question,
+            source_refs=source_refs,
+            reader_payload=reader_payload,
+        )
+
+    def recover_paper_answer(
+        self,
+        paper_id: str,
+        request: ResearchAskInput,
+        *,
+        include_interrupted: bool = False,
+    ) -> dict[str, Any] | None:
+        question = _require_text(request.question, "question")
+        actor_scope = _resolve_actor_scope(
+            self._ask_use_case,
+            tenant_id=request.tenant_id,
+            user_id=request.user_id,
+            memory_namespace=request.memory_namespace,
+        )
+        record = self._record_by_run_id(request.run_id, actor_scope=actor_scope, paper_id=paper_id) if request.run_id else None
+        if record is None:
+            return None
+        self._ensure_run_succeeded(record)
+        self._ensure_quality_passed(record)
+        reader_payload = getattr(record.result, "reader_payload", None)
+        if reader_payload is None:
+            return None
+        question_identity = stable_research_id(
+            "research_reader_question",
+            record.run_id,
+            question,
+            json.dumps(request.selection, ensure_ascii=False, sort_keys=True),
+            request.request_id or "",
+        )
+        recover = getattr(self._rag_ask_use_case, "recover_gated_answer", None)
+        if not callable(recover):
+            return None
+        generated = recover(
+            session_id=stable_research_id(
+                "paper_rag_session", record.run_id, question_identity, record.paper_id, question
+            ),
+            paper_id=record.paper_id,
+            question=question,
+            tenant_id=actor_scope.tenant_id,
+            user_id=actor_scope.user_id,
+            memory_namespace=actor_scope.memory_namespace,
+            include_interrupted=include_interrupted,
+        )
+        if not isinstance(generated, Mapping):
+            return None
+        source_refs = _reader_source_refs(reader_payload)
+        return _reader_answer_projection(
+            generated,
+            run_id=record.run_id,
+            paper_id=record.paper_id,
+            question=question,
+            source_refs=source_refs,
+            reader_payload=reader_payload,
+        )
 
     def _ask_paper_chunks(
         self,
@@ -911,6 +1251,9 @@ class ResearchApplicationService:
         request: ResearchAskInput,
         actor_scope: ResearchActorScope,
         graph_identity: ContextGraphIdentity | None,
+        run_id: str | None = None,
+        allowed_source_refs: list[str] | tuple[str, ...] | None = None,
+        target_sections: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         normalized_paper_id = _require_text(paper_id, "paperId")
         section_index = _bounded_int(
@@ -933,6 +1276,9 @@ class ResearchApplicationService:
                 "tenant_id": actor_scope.tenant_id,
                 "user_id": actor_scope.user_id,
                 "memory_namespace": actor_scope.memory_namespace,
+                "run_id": run_id,
+                "allowed_source_refs": allowed_source_refs,
+                "target_sections": target_sections,
             }
             if graph_identity is not None:
                 rag_kwargs["graph_identity"] = graph_identity
@@ -1095,6 +1441,35 @@ class ResearchApplicationService:
                 retryable=False,
             )
         return dict(payload)
+
+    def _record_by_run_id(
+        self,
+        run_id: str,
+        *,
+        actor_scope: ResearchActorScope,
+        paper_id: str | None = None,
+    ) -> ResearchRunRecord:
+        normalized_run_id = _require_text(run_id, "runId")
+        try:
+            record = self._run_store.get_by_run_id(normalized_run_id)
+        except ResearchRunStoreError as exc:
+            raise _run_store_service_error(exc, operation="get_by_run_id") from None
+        if record is None:
+            raise ResearchServiceError(
+                "research_run_not_found",
+                "Research run was not found",
+                status_code=404,
+                user_action_required=True,
+            )
+        _ensure_record_visible_to_actor(record, actor_scope)
+        if paper_id is not None and record.paper_id != _require_text(paper_id, "paperId"):
+            raise ResearchServiceError(
+                "research_run_conflict",
+                "Research run does not belong to the selected paper",
+                status_code=409,
+                user_action_required=True,
+            )
+        return record
 
     def _record_for_paper(
         self,
@@ -1403,6 +1778,95 @@ def _record_visible_to_actor(
     return record_user is None or actor_scope.user_id == record_user
 
 
+def _bind_result_source_identity(result: Any, metadata: Mapping[str, Any]) -> Any:
+    declared_revision = _optional_text(metadata.get("source_revision"))
+    declared_fingerprint = _optional_text(metadata.get("source_fingerprint"))
+    if declared_revision is None and declared_fingerprint is None:
+        return result
+    reader_payload = getattr(result, "reader_payload", None)
+    document = getattr(reader_payload, "document", None)
+    actual = _normalized_sha256_identity(getattr(document, "source_hash", None))
+    if actual is None:
+        return result
+    if (
+        declared_revision is not None
+        and _normalized_sha256_identity(declared_revision) != actual
+    ) or (
+        declared_fingerprint is not None
+        and _normalized_sha256_identity(declared_fingerprint) != actual
+    ):
+        raise ResearchServiceError(
+            "source_identity_mismatch",
+            "Accepted Research document does not match the declared source identity",
+            status_code=409,
+            user_action_required=True,
+        )
+    diagnostics = getattr(result, "diagnostics", None)
+    if not is_dataclass(result) or not isinstance(diagnostics, Mapping):
+        return result
+    bound = dict(diagnostics)
+    verified = f"sha256:{actual}"
+    bound["desktop_source_revision"] = verified
+    bound["desktop_source_fingerprint"] = verified
+    return replace(result, diagnostics=bound)
+
+def _accepted_artifacts_present(result: Any) -> bool:
+    refs = set(_artifact_refs(result))
+    return any("research-analysis" in ref for ref in refs) and any(
+        "research-quality-result" in ref for ref in refs
+    )
+
+
+def _run_source_revision(result: Any) -> str | None:
+    candidates = (
+        getattr(getattr(result, "analysis", None), "metadata", None),
+        getattr(getattr(result, "paper_card", None), "metadata", None),
+        getattr(getattr(result, "reader_payload", None), "metadata", None),
+        getattr(getattr(result, "trace", None), "metadata", None),
+        getattr(result, "diagnostics", None),
+    )
+    for candidate in candidates:
+        found = _find_source_revision(candidate, depth=0)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_source_revision(value: Any, *, depth: int) -> str | None:
+    if depth > 4:
+        return None
+    if isinstance(value, Mapping):
+        for key in ("sourceRevision", "source_revision", "desktop_source_revision", "research_input_source_revision"):
+            found = _optional_text(value.get(key))
+            if found is not None:
+                return found
+        for key in ("research_input", "metadata", "profile", "prepared_input", "payload"):
+            found = _find_source_revision(value.get(key), depth=depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def _run_source_fingerprint(result: Any) -> str | None:
+    diagnostics = getattr(result, "diagnostics", None)
+    if isinstance(diagnostics, Mapping):
+        value = _optional_text(diagnostics.get("desktop_source_fingerprint"))
+        if value is not None:
+            return value
+    return None
+
+
+def _safe_run_diagnostics(result: Any) -> dict[str, Any]:
+    diagnostics = getattr(result, "diagnostics", None)
+    if not isinstance(diagnostics, Mapping):
+        return {}
+    allowed: dict[str, Any] = {}
+    for key in ("reason", "reason_code", "error_code", "error_type", "stage", "retryable"):
+        value = diagnostics.get(key)
+        if isinstance(value, (str, bool, int, float)) and len(str(value)) <= 256:
+            allowed[key] = value
+    return allowed
+
 def _require_text(value: Any, field_name: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -1585,12 +2049,37 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _selection_targets(selection: dict[str, Any]) -> list[str]:
-    raw = selection.get("sectionIds") or selection.get("section_ids") or selection.get("targetRefs") or []
-    if isinstance(raw, str):
-        raw = [raw]
-    return [str(item).strip() for item in raw if str(item).strip()]
-
+def _selection_targets(selection: dict[str, Any], *, reader_payload: Any) -> list[str]:
+    document = getattr(reader_payload, "document", None)
+    sections = list(getattr(document, "sections", []) or [])
+    by_id = {str(getattr(section, "section_id", "")): section for section in sections if str(getattr(section, "section_id", ""))}
+    requested: list[str] = []
+    section_id = str(selection.get("sectionId") or "").strip()
+    if section_id:
+        if section_id not in by_id:
+            raise ResearchServiceError("invalid_selection", "Selected section is not part of the accepted document", status_code=422, user_action_required=True)
+        requested.append(section_id)
+    page = selection.get("page") if selection.get("page") is not None else selection.get("pdfPage")
+    if page is not None:
+        if isinstance(page, bool) or not isinstance(page, int):
+            raise ResearchServiceError("invalid_selection", "Selected page is invalid", status_code=422, user_action_required=True)
+        page_matches = [
+            section_id
+            for section_id, section in by_id.items()
+            if getattr(section, "page_start", None) is not None
+            and int(getattr(section, "page_start")) <= page
+            and page <= int(getattr(section, "page_end", None) or getattr(section, "page_start"))
+        ]
+        if not page_matches:
+            raise ResearchServiceError("invalid_selection", "Selected page is not mapped to the accepted document", status_code=422, user_action_required=True)
+        requested.extend(page_matches)
+    selected_text = str(selection.get("selectedText") or "").strip()
+    if selected_text:
+        text_matches = [section_id for section_id, section in by_id.items() if selected_text in str(getattr(section, "text", ""))]
+        if len(text_matches) != 1:
+            raise ResearchServiceError("invalid_selection", "Selected text must map to exactly one accepted section", status_code=422, user_action_required=True)
+        requested.extend(text_matches)
+    return _unique_texts(requested)
 
 def _reader_source_refs(reader_payload: Any) -> list[str]:
     lineage = getattr(reader_payload, "source_lineage", None)
@@ -1603,47 +2092,126 @@ def _reader_source_refs(reader_payload: Any) -> list[str]:
     return [str(ref) for ref in refs] or ["paper://unknown/source"]
 
 
-def _answer_from_analysis(question: str, analysis: Any) -> str:
-    summary = getattr(analysis, "summary", None)
-    lowered = question.casefold()
-    if summary is None:
-        return "No grounded research summary is available for this paper."
-    if any(token in lowered for token in ("method", "方法", "approach")):
-        return str(getattr(summary, "method_summary", None) or getattr(summary, "core_idea", ""))
-    if any(token in lowered for token in ("experiment", "实验", "benchmark")):
-        return str(getattr(summary, "experiment_summary", None) or "No experiment summary is available.")
-    if any(token in lowered for token in ("limitation", "局限", "risk")):
-        limitations = list(getattr(summary, "limitations", []) or [])
-        return "; ".join(str(item) for item in limitations) or "No limitations were recorded."
-    return str(getattr(summary, "core_idea", None) or getattr(summary, "problem", ""))
+def _reader_answer_projection(
+    generated: Mapping[str, Any],
+    *,
+    run_id: str,
+    paper_id: str,
+    question: str,
+    source_refs: list[str],
+    reader_payload: Any,
+) -> dict[str, Any]:
+    if generated.get("recovery_state") == "needs_action":
+        return {
+            "status": "interrupted",
+            "recoveryState": "needs_action",
+            "errorCode": str(generated.get("error_code") or "rag_execution_interrupted"),
+            "journalEventCount": int(generated.get("journal_event_count") or 0),
+            "lastEventType": generated.get("last_event_type"),
+            "runId": run_id,
+            "paperId": paper_id,
+        }
+    answer = generated.get("answer")
+    decision = generated.get("decision") if isinstance(generated.get("decision"), Mapping) else {}
+    citations = _grounded_answer_citations(
+        generated.get("citations"),
+        paper_id=paper_id,
+        source_revision=_reader_content_revision(reader_payload),
+        source_refs=set(source_refs),
+        reader_payload=reader_payload,
+    )
+    evidence_refs = _unique_texts([
+        str(citation.get("evidenceId") or "")
+        for citation in citations
+        if citation.get("valid") is True
+    ])
+    decision_type = decision.get("decision_type") or decision.get("decisionType")
+    abstained = not isinstance(answer, str) or not answer.strip()
+    return {
+        "answer": answer.strip() if isinstance(answer, str) and answer.strip() else None,
+        "evidenceRefs": evidence_refs,
+        "claims": list(generated.get("claims") or ()),
+        "citations": citations,
+        "confidence": 1.0 if not abstained and decision_type in {"return_answer", None} else 0.0,
+        "abstained": abstained,
+        "transcriptId": generated.get("transcript_id"),
+        "status": str(generated.get("status") or ("abstained" if abstained else "answered")),
+        "runId": run_id,
+        "paperId": paper_id,
+        "metadata": {
+            "runId": run_id,
+            "paperId": paper_id,
+            "retrievalGoalId": stable_research_id("research_ask", run_id, question),
+            "sourceRefs": list(source_refs),
+            "generationMode": generated.get("generation_mode"),
+            "recovered": generated.get("recovered") is True,
+        },
+    }
 
 
-def _answer_evidence_refs(analysis: Any, reader_payload: Any, selection: dict[str, Any]) -> list[str]:
-    refs: list[str] = []
-    summary = getattr(analysis, "summary", None)
-    for item in getattr(summary, "evidence_refs", []) or []:
-        evidence_id = getattr(item, "evidence_id", None)
-        source_ref = getattr(item, "source_ref", None)
-        refs.append(str(evidence_id or source_ref))
-    evidence = getattr(reader_payload, "evidence", None)
-    for item in getattr(evidence, "items", []) or []:
-        refs.append(str(getattr(item, "evidence_id", "") or getattr(item, "source_ref", "")))
-    selected_refs = selection.get("sourceRefs") or selection.get("source_refs")
-    if isinstance(selected_refs, str):
-        selected_refs = [selected_refs]
-    if selected_refs:
-        refs.extend(str(item) for item in selected_refs)
-    return _unique_texts(refs)
+def _reader_content_revision(reader_payload: Any) -> str:
+    document = getattr(reader_payload, "document", None)
+    return str(getattr(document, "source_hash", "") or "")
 
 
-def _answer_confidence(analysis: Any) -> float:
-    summary = getattr(analysis, "summary", None)
-    confidence = getattr(summary, "confidence", None)
-    try:
-        return max(0.0, min(float(confidence), 1.0))
-    except (TypeError, ValueError):
-        return 0.0
+def _grounded_answer_citations(
+    raw: Any,
+    *,
+    paper_id: str,
+    source_revision: str,
+    source_refs: set[str],
+    reader_payload: Any,
+) -> list[dict[str, Any]]:
+    document = getattr(reader_payload, "document", None)
+    sections = list(getattr(document, "sections", []) or [])
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(raw if isinstance(raw, list) else []):
+        if not isinstance(item, Mapping):
+            continue
+        source_ref = str(item.get("source_ref") or "").strip()
+        span_refs = [str(value) for value in item.get("span_refs") or () if str(value).strip()]
+        section = _section_for_grounded_spans(sections, source_ref=source_ref, span_refs=span_refs)
+        evidence_id = str(item.get("evidence_id") or f"evidence-{index + 1}")
+        citation = {
+            "id": f"citation:{hashlib.sha256(evidence_id.encode('utf-8')).hexdigest()[:24]}",
+            "label": str(getattr(section, "title", "") or evidence_id)[:500],
+            "evidenceId": evidence_id[:256],
+            "paperId": paper_id,
+            "sourceRevision": source_revision,
+            "valid": bool(source_ref in source_refs and section is not None),
+        }
+        if section is not None:
+            citation["sectionId"] = str(getattr(section, "section_id"))
+            page = getattr(section, "page_start", None)
+            if isinstance(page, int) and not isinstance(page, bool):
+                citation["page"] = page
+        if not citation["valid"]:
+            citation["reasonCode"] = "source_span_not_verified"
+        result.append(citation)
+    return result
 
+
+def _section_for_grounded_spans(sections: list[Any], *, source_ref: str, span_refs: list[str]) -> Any | None:
+    for section in sections:
+        section_id = str(getattr(section, "section_id", "") or "")
+        section_ref = str(getattr(section, "source_ref", "") or "")
+        page_start = getattr(section, "page_start", None)
+        page_end = getattr(section, "page_end", None) or page_start
+        for span in span_refs:
+            section_match = re.search(r"(?:section|section_id)=([^&#]+)", span)
+            page_match = re.search(r"page=(\d+)", span)
+            if section_match and section_match.group(1) == section_id and source_ref == section_ref:
+                return section
+            if page_match and isinstance(page_start, int) and isinstance(page_end, int):
+                page = int(page_match.group(1))
+                if page_start <= page <= page_end and source_ref == section_ref:
+                    return section
+    return None
+
+
+def _normalized_sha256_identity(value: Any) -> str | None:
+    text = str(value or "").strip().lower().removeprefix("sha256:")
+    return text if re.fullmatch(r"[0-9a-f]{64}", text) else None
 
 def _quality_gate_failures(quality: Any) -> list[dict[str, Any]]:
     failures = []
@@ -1745,6 +2313,13 @@ def _unique_texts(values: list[str]) -> list[str]:
 
 _DEFAULT_RESEARCH_RUN_STORE = InMemoryResearchRunStore()
 
+
+
+def _qualified_type(value: Any) -> str | None:
+    if value is None:
+        return None
+    value_type = type(value)
+    return f"{value_type.__module__}.{value_type.__qualname__}"
 
 __all__ = [
     "InMemoryResearchRunStore",

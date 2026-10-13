@@ -6,26 +6,28 @@ import { paperRouteErrorStatus, requirePublicPaper } from "@/lib/papers/public-r
 
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: NextRequest, { params }: { params: { paperId: string } }) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ paperId: string }> }) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response
   }
 
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiGet(`/api/v1/papers/${encodeURIComponent(guard.paper.id)}/state`, {
     headers: token ? { "x-newsroom-session": token } : undefined,
   })
   return stateResponse(result)
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { paperId: string } }) {
+export async function PATCH(request: NextRequest, props: { params: Promise<{ paperId: string }> }) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response
   }
 
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const body = await request.json().catch(() => ({}))
   const result = await safeApiPatch(`/api/v1/papers/${encodeURIComponent(guard.paper.id)}/state`, body, {
     headers: token ? { "x-newsroom-session": token } : undefined,

@@ -1,4 +1,5 @@
-"use client";
+"use client";;
+import { use } from "react";
 
 import Link from "next/link";
 import { EmptyState } from "@/components/common/empty-state";
@@ -7,7 +8,8 @@ import { TopicHeader } from "@/features/topics/components/topic-header";
 import { TopicTrendChart } from "@/features/topics/components/topic-trend-chart";
 import { useTopicDetail } from "@/features/topics/hooks/use-topic-detail";
 
-export default function TopicDetailPage({ params }: { params: { id: string } }) {
+export default function TopicDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const { data } = useTopicDetail(params.id);
 
   if (!data.topic) {

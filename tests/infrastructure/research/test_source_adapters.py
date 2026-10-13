@@ -23,6 +23,7 @@ from framework.execution_environment import ExecutionEnvironmentUnavailableError
 from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.research import (
     ArxivResearchSourceProvider,
+    CatalogBoundResearchSourceProvider,
     ResearchDocumentCompileError,
     ResearchDocumentCompilerAdapter,
     ResearchSourceError,
@@ -731,3 +732,105 @@ class _ExecutionDeniedPdfParser:
         del paper_id, content
         self.identities.append(execution_identity)
         raise self.error
+
+
+class _DocumentRepository:
+    def __init__(self, document: ResearchDocument | None) -> None:
+        self.document = document
+        self.scopes = []
+
+    def get(self, paper_id, *, actor_scope=None):
+        self.scopes.append((paper_id, dict(actor_scope or {})))
+        return self.document if self.document is not None and self.document.paper_id == paper_id else None
+
+
+def test_catalog_bound_source_uses_exact_actor_visible_parsed_document() -> None:
+    locator = "file:///owned/import.pdf"
+    document = ResearchDocument(
+        paper_id="paper-private",
+        source_hash="a" * 64,
+        title="Private paper",
+        sections=[],
+        lineage=SourceLineage(source_refs=[locator], source_hash="a" * 64),
+        source_locators=[locator],
+        actor_scope={"user_id": "alice"},
+    )
+    repository = _DocumentRepository(document)
+    provider = CatalogBoundResearchSourceProvider(
+        ArxivResearchSourceProvider(_RecordedArxivConnector([])),
+        repository,
+    )
+
+    bound = provider.fetch_bound_source(
+        source_ref=locator,
+        paper_id="paper-private",
+        source_revision="sha256:" + "a" * 64,
+        actor_scope={"user_id": "alice"},
+    )
+
+    assert bound is not None
+    assert bound.document is document
+    assert bound.paper.source_url is not None
+    assert bound.paper.source_url.startswith("source://local/")
+    assert bound.paper.metadata["source_locator"] == locator
+    assert bound.source_record.source_hash == "sha256:" + "a" * 64
+    assert bound.source_record.source_type == "local"
+    assert bound.source_record.source_url.startswith("source://local/")
+    assert bound.source_record.metadata["source_locator"] == locator
+    assert repository.scopes == [("paper-private", {"user_id": "alice"})]
+
+
+def test_catalog_bound_source_rejects_wrong_revision_or_locator() -> None:
+    locator = "https://example.test/paper.pdf"
+    document = ResearchDocument(
+        paper_id="paper-external",
+        source_hash="b" * 64,
+        title="External paper",
+        sections=[],
+        lineage=SourceLineage(source_refs=[locator], source_hash="b" * 64),
+        source_locators=[locator],
+    )
+    provider = CatalogBoundResearchSourceProvider(
+        ArxivResearchSourceProvider(_RecordedArxivConnector([])),
+        _DocumentRepository(document),
+    )
+
+    with pytest.raises(ResearchSourceError, match="revision"):
+        provider.fetch_bound_source(
+            source_ref=locator,
+            paper_id="paper-external",
+            source_revision="c" * 64,
+            actor_scope={"user_id": "alice"},
+        )
+    with pytest.raises(ResearchSourceError, match="locator"):
+        provider.fetch_bound_source(
+            source_ref="https://example.test/other.pdf",
+            paper_id="paper-external",
+            source_revision="b" * 64,
+            actor_scope={"user_id": "alice"},
+        )
+
+
+def test_catalog_bound_source_rejects_document_from_another_actor_scope() -> None:
+    locator = "file:///restored/immutable-source.pdf"
+    document = ResearchDocument(
+        paper_id="paper-private",
+        source_hash="d" * 64,
+        title="Private paper",
+        sections=[],
+        lineage=SourceLineage(source_refs=[locator], source_hash="d" * 64),
+        source_locators=[locator],
+        actor_scope={"user_id": "alice"},
+    )
+    provider = CatalogBoundResearchSourceProvider(
+        ArxivResearchSourceProvider(_RecordedArxivConnector([])),
+        _DocumentRepository(document),
+    )
+
+    with pytest.raises(ResearchSourceError, match="actor scope"):
+        provider.fetch_bound_source(
+            source_ref=locator,
+            paper_id="paper-private",
+            source_revision="sha256:" + "d" * 64,
+            actor_scope={"user_id": "bob"},
+        )

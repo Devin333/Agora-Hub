@@ -1,0 +1,73 @@
+{
+  "schema": "newsroom.local-desktop.node-identity-validation.v1",
+  "recordedAt": "2026-10-12T19:50:57.725Z",
+  "command": {
+    "command": "npm.cmd ls --json --all",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "startedAtUtc": "2026-10-12T19:46:39.6219102Z",
+    "endedAtUtc": "2026-10-12T19:46:40.4160478Z",
+    "exitCode": 0,
+    "nodeExecutable": "E:\\Anaconda3\\node.exe",
+    "npmCommand": "E:\\Anaconda3\\npm.cmd",
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-final-node-dependency-identity-20261013.json"
+  },
+  "status": "installed-tree-contract-failed-after-next-build",
+  "exitCode": 0,
+  "note": "npm ls returned exit 0 but recursive JSON contains extraneous entries; exit status alone is insufficient",
+  "tree": {
+    "path": "frontend-node-tree-after-build-failure-20261013.json",
+    "sha256": "9c8996cd4f598095651083a435b91d1afdff333e74d71118b822c97ee058c674"
+  },
+  "problems": [
+    {
+      "name": "agora-hub-reader-portal",
+      "parents": [],
+      "problems": [
+        "extraneous: @img/sharp-wasm32@0.35.5 F:\\github\\NewsRoom\\frontend\\node_modules\\@img\\sharp-wasm32",
+        "extraneous: @napi-rs/wasm-runtime@1.1.4 F:\\github\\NewsRoom\\frontend\\node_modules\\@napi-rs\\wasm-runtime",
+        "extraneous: @tybys/wasm-util@0.10.2 F:\\github\\NewsRoom\\frontend\\node_modules\\@tybys\\wasm-util",
+        "extraneous: @emnapi/runtime@1.11.3 F:\\github\\NewsRoom\\frontend\\node_modules\\@img\\sharp-wasm32\\node_modules\\@emnapi\\runtime"
+      ]
+    },
+    {
+      "parents": [
+        "@img/sharp-wasm32"
+      ],
+      "extraneous": true,
+      "problems": [
+        "extraneous: @img/sharp-wasm32@0.35.5 F:\\github\\NewsRoom\\frontend\\node_modules\\@img\\sharp-wasm32"
+      ]
+    },
+    {
+      "parents": [
+        "@img/sharp-wasm32",
+        "@emnapi/runtime"
+      ],
+      "extraneous": true,
+      "problems": [
+        "extraneous: @emnapi/runtime@1.11.3 F:\\github\\NewsRoom\\frontend\\node_modules\\@img\\sharp-wasm32\\node_modules\\@emnapi\\runtime"
+      ]
+    },
+    {
+      "parents": [
+        "@napi-rs/wasm-runtime"
+      ],
+      "extraneous": true,
+      "problems": [
+        "extraneous: @napi-rs/wasm-runtime@1.1.4 F:\\github\\NewsRoom\\frontend\\node_modules\\@napi-rs\\wasm-runtime"
+      ]
+    },
+    {
+      "parents": [
+        "@tybys/wasm-util"
+      ],
+      "extraneous": true,
+      "problems": [
+        "extraneous: @tybys/wasm-util@0.10.2 F:\\github\\NewsRoom\\frontend\\node_modules\\@tybys\\wasm-util"
+      ]
+    }
+  ],
+  "owner": "desktop_frontend_workflows",
+  "finalCandidateValidated": false,
+  "liveAcceptanceExecuted": false
+}

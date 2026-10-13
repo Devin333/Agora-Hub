@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from framework.harness import FakeMemoryPort, RAGBudget, RAGDecisionType, RAGSessionStatus, fake_rag_session_spec
 from framework.harness.rag.fake import FakeRAGPlanner, fake_reader_repair_memory, fake_research_evidence_packs
 from framework.harness.rag.models import AnswerClaim, GroundedAnswerCandidate, RAGContextPack
@@ -361,3 +363,26 @@ class _SequentialRetrievalPort:
             request_ref=f"retrieval://sequential/{len(self.requests)}",
             metadata={"query": request.query, "scope": request.scope},
         )
+
+
+class _FailBeforeGenerationRecorder:
+    def record_event(self, *, spec, sequence, event_type, payload) -> None:
+        del spec, sequence, payload
+        if event_type == "rag_answer_generation_started":
+            raise RuntimeError("durable generation intent unavailable")
+
+
+def test_generation_worker_is_not_called_when_durable_intent_fails() -> None:
+    worker = _AnswerWorker(_grounded_answer())
+    controller = BoundedRAGSessionController(
+        retrieval=FakeRetrievalPort(fake_research_evidence_packs()[:1]),
+        planner=FakeRAGPlanner(),
+        memory=FakeMemoryPort(fake_reader_repair_memory()),
+        answer_worker=worker,
+        event_recorder=_FailBeforeGenerationRecorder(),
+    )
+
+    with pytest.raises(RuntimeError, match="durable generation intent unavailable"):
+        controller.run(_generation_spec())
+
+    assert worker.calls == []

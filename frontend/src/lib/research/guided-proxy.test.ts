@@ -6,7 +6,7 @@ import { guidedResearchProxy } from "./guided-proxy"
 
 vi.mock("@/lib/api/server", () => ({ safeApiPost: vi.fn() }))
 vi.mock("@/features/portal/reader/reader-source-server", () => ({ cachedReaderReady: vi.fn() }))
-vi.mock("next/headers", () => ({ cookies: () => ({ get: () => ({ value: "owned-session" }) }) }))
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: "owned-session" }) }) }))
 const origin = "http://localhost:3000"
 const post = (body: unknown, requestOrigin = origin) => new NextRequest(`${origin}/api/research/search`, { method: "POST", headers: { Origin: requestOrigin }, body: JSON.stringify(body) })
 const result = { source: "papers", results: [{ id: "paper-1", kind: "papers", title: "Paper", description: "Source-backed abstract", source: "arXiv", url: "https://arxiv.org/abs/2605.22343", href: "/design-demo/papers/paper-1/read" }], total: 1, moreHref: "/design-demo/papers?q=agent&has=code" }

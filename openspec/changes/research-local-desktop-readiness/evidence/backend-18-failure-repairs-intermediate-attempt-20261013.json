@@ -1,0 +1,51 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-12T21:35:23.475070+00:00",
+  "status": "failed-intermediate-repair-attempt-superseded-by-targeted-rerun",
+  "metadata": {
+    "stage": "final18-targeted",
+    "cwd": "F:\\github\\NewsRoom",
+    "command": ".venv/Scripts/python.exe -m pytest tests/backend/research/rag/test_execution_memory.py tests/contracts/test_rag_replay_command.py tests/infrastructure/storage/test_graph_artifact_catalog.py::test_two_processes_serialize_dedup_registration tests/interfaces/api/test_research_api.py tests/interfaces/services/test_paper_rag_service.py tests/interfaces/services/test_paper_rag_transcript_store.py tests/interfaces/services/test_research_import_service.py tests/interfaces/services/test_research_service.py -q",
+    "environment": {
+      "PYTHONFAULTHANDLER": "1",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "utcStart": "2026-10-12T21:08:45.8840725Z",
+    "utcEnd": "2026-10-12T21:09:32.0263624Z",
+    "exitCode": 1,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-final18-targeted-20261013-050845-874.log",
+    "logSha256": "aca62067bc84ad893a31cffb62c1d199231ab17234f8eb4d1b39f5ffc1306c5d"
+  },
+  "logArtifact": {
+    "path": "backend-18-failure-repairs-intermediate-attempt-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "5d21e3c13661802a480665c260f8514b4c97dd42f7734bd48847d0206fdb639c",
+    "bytes": 5903,
+    "decompressedSha256": "aca62067bc84ad893a31cffb62c1d199231ab17234f8eb4d1b39f5ffc1306c5d",
+    "decompressedBytes": 60879
+  },
+  "results": {
+    "failed": 12,
+    "passed": 77,
+    "warnings": 27,
+    "seconds": 45.38
+  },
+  "failedTests": [
+    "tests/interfaces/api/test_research_api.py::test_research_reader_analysis_ask_and_trace_endpoints_return_research_payloads\r",
+    "tests/interfaces/api/test_research_api.py::test_research_http_mcp_sdk_shapes_survive_filesystem_reconstruction\r",
+    "tests/interfaces/services/test_research_service.py::test_research_service_reader_ask_uses_gated_grounded_generation\r",
+    "tests/interfaces/services/test_research_service.py::test_research_service_ask_propagates_canonical_actor_scope\r",
+    "tests/interfaces/services/test_research_service.py::test_research_service_ask_preserves_options_user_id_compatibility\r",
+    "tests/interfaces/services/test_research_service.py::test_research_service_does_not_expose_tenant_run_without_tenant_actor\r",
+    "tests/interfaces/services/test_research_service.py::test_research_service_queries_survive_durable_store_reconstruction\r",
+    "tests/interfaces/services/test_research_service.py::test_accepted_then_failed_runs_do_not_shadow_normal_queries[memory]\r",
+    "tests/interfaces/services/test_research_service.py::test_accepted_then_failed_runs_do_not_shadow_normal_queries[filesystem]\r",
+    "tests/interfaces/services/test_research_service.py::test_post_creation_failure_recovers_scoped_quarantine_after_restart_without_shadowing_accepted[worker-<lambda>-halted]\r",
+    "tests/interfaces/services/test_research_service.py::test_post_creation_failure_recovers_scoped_quarantine_after_restart_without_shadowing_accepted[handler-<lambda>-failed]\r",
+    "tests/interfaces/services/test_research_service.py::test_post_creation_failure_recovers_scoped_quarantine_after_restart_without_shadowing_accepted[terminal-<lambda>-halted]\r"
+  ],
+  "sourceSnapshotAtExecution": "not recorded; do not attribute this attempt to the later frozen passing candidate",
+  "supersededBy": "backend-18-failure-repairs-targeted-validation-20261013.json",
+  "finalCandidateEvidence": false,
+  "liveAcceptanceExecuted": false
+}

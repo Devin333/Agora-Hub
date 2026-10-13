@@ -127,6 +127,19 @@ describe("research command palette", () => {
     expect(trigger).toBeInTheDocument()
   })
 
+  it("keeps the shortcut and focus restoration when the floating trigger is hidden", async () => {
+    render(<><textarea aria-label="我的阅读笔记" /><ResearchCommandPalette showTrigger={false} /></>)
+    const notes = screen.getByRole("textbox", { name: "我的阅读笔记" })
+    notes.focus()
+
+    expect(screen.queryByRole("button", { name: "搜索研究和模块" })).not.toBeInTheDocument()
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true })
+    expect(screen.getByRole("combobox", { name: "搜索研究、资料或模块" })).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument())
+    await waitFor(() => expect(notes).toHaveFocus())
+  })
   it("does not enable the global shortcut below the desktop breakpoint", () => {
     window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })
     render(<ResearchCommandPalette />)

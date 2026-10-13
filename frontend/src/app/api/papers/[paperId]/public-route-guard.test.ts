@@ -22,7 +22,7 @@ vi.mock("@/lib/papers/real-data", () => ({
 }))
 
 vi.mock("next/headers", () => ({
-  cookies: () => ({
+  cookies: async () => ({
     get: () => ({ value: "session-token" }),
   }),
 }))
@@ -55,7 +55,7 @@ describe("paper public route guard", () => {
     vi.mocked(getPaperById).mockResolvedValueOnce(null)
 
     const response = await summarizePaper(request("/api/papers/draft-paper/summary?locale=en"), {
-      params: { paperId: "draft-paper" },
+      params: Promise.resolve({ paperId: "draft-paper" }),
     })
 
     expect(response.status).toBe(404)
@@ -78,7 +78,7 @@ describe("paper public route guard", () => {
         method: "POST",
         body: JSON.stringify({ question: "What changed?", locale: "en" }),
       }),
-      { params: { paperId: "public-paper" } },
+      { params: Promise.resolve({ paperId: "public-paper" }) },
     )
 
     expect(response.status).toBe(200)
@@ -93,7 +93,7 @@ describe("paper public route guard", () => {
     vi.mocked(getPaperById).mockResolvedValueOnce(null)
 
     const response = await readPaper(request("/api/papers/draft-paper/reader?locale=en"), {
-      params: { paperId: "draft-paper" },
+      params: Promise.resolve({ paperId: "draft-paper" }),
     })
 
     expect(response.status).toBe(404)
@@ -102,11 +102,11 @@ describe("paper public route guard", () => {
 
   it("rejects blank questions before running Research and malformed answers after it", async () => {
     vi.mocked(getPaperById).mockResolvedValue(paper)
-    const blank = await askPaper(request("/api/papers/public-paper/ask", { method: "POST", body: JSON.stringify({ question: "  " }) }), { params: { paperId: "public-paper" } })
+    const blank = await askPaper(request("/api/papers/public-paper/ask", { method: "POST", body: JSON.stringify({ question: "  " }) }), { params: Promise.resolve({ paperId: "public-paper" }) })
     expect(blank.status).toBe(400)
     expect(safeApiPost).not.toHaveBeenCalled()
     vi.mocked(safeApiPost).mockResolvedValueOnce({ ok: true, data: { answer: { invented: "wrong" } } })
-    const malformed = await askPaper(request("/api/papers/public-paper/ask", { method: "POST", body: JSON.stringify({ question: "Explain" }) }), { params: { paperId: "public-paper" } })
+    const malformed = await askPaper(request("/api/papers/public-paper/ask", { method: "POST", body: JSON.stringify({ question: "Explain" }) }), { params: Promise.resolve({ paperId: "public-paper" }) })
     expect(malformed.status).toBe(502)
     expect(await malformed.json()).toMatchObject({ error: { code: "reader_answer_invalid" } })
   })
@@ -148,7 +148,7 @@ describe("paper public route guard", () => {
         method: "POST",
         body: JSON.stringify({ type: "reader_progress_sampled" }),
       }),
-      { params: { paperId: "public-paper" } },
+      { params: Promise.resolve({ paperId: "public-paper" }) },
     )
 
     expect(response.status).toBe(404)
@@ -171,7 +171,7 @@ describe("paper public route guard", () => {
         method: "PATCH",
         body: JSON.stringify({ progressPercent: 200 }),
       }),
-      { params: { paperId: "public-paper" } },
+      { params: Promise.resolve({ paperId: "public-paper" }) },
     )
 
     expect(response.status).toBe(400)

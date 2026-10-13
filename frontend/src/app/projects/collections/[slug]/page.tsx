@@ -4,7 +4,8 @@ import { ProjectCollectionDetailPage } from "@/features/projects/components/proj
 
 export const dynamic = "force-dynamic"
 
-export default function ProjectsCollectionDetailRoute({ params }: { params: { slug: string } }) {
+export default async function ProjectsCollectionDetailRoute(props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   return (
     <Suspense fallback={<PageSkeleton />}>
       <ProjectCollectionDetailPage slug={params.slug} />

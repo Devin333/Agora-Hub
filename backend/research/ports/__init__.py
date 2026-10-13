@@ -87,7 +87,11 @@ from backend.research.ports.run_store import (
     ResearchRunStoreUnavailableError,
     ResearchRunStoreValidationError,
 )
-from backend.research.ports.source_provider import PaperSourceProvider
+from backend.research.ports.source_provider import (
+    BoundPaperSource,
+    BoundPaperSourceProvider,
+    PaperSourceProvider,
+)
 
 __all__ = [
     "DocumentCompilerPort",
@@ -114,6 +118,8 @@ __all__ = [
     "FieldEmbeddingSearchPort",
     "GithubRepositoryPort",
     "PaperCardRepository",
+    "BoundPaperSource",
+    "BoundPaperSourceProvider",
     "PaperSourceProvider",
     "READER_REPAIR_FAILURE_DIAGNOSTIC_EFFECT_KIND",
     "READER_REPAIR_FAILURE_DIAGNOSTIC_HANDLER_ID",

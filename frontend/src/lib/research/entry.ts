@@ -1,9 +1,11 @@
+import { researchPapersHref } from "@/lib/research/routes"
+
 export const researchModules = ["papers", "projects", "community", "reports"] as const
 export type ResearchModule = typeof researchModules[number]
 export type ResearchMode = "auto" | "plan" | ResearchModule
 
 export const moduleInfo: Record<ResearchModule, { name: string; command: string; description: string; path: string; examples: string[] }> = {
-  papers: { name: "论文研究", command: "找论文", description: "查找论文，阅读原文与证据", path: "/design-demo/papers", examples: ["找 Agent 相关论文", "查找 RAG 评测论文", "了解长上下文研究"] },
+  papers: { name: "论文研究", command: "找论文", description: "查找论文，阅读原文与证据", path: researchPapersHref(), examples: ["找 Agent 相关论文", "查找 RAG 评测论文", "了解长上下文研究"] },
   projects: { name: "项目雷达", command: "找项目", description: "发现开源项目，了解实现与活跃度", path: "/projects", examples: ["找可本地运行的开源项目", "找 Agent 开源框架", "看看最近活跃的 RAG 项目"] },
   community: { name: "社区信号", command: "看社区", description: "追踪研究讨论与最新动态", path: "/community", examples: ["了解近期 AI 社区讨论", "看看 Agent 的最新动态", "关注开源社区的讨论"] },
   reports: { name: "研究报告", command: "写报告", description: "整理资料，比较观点，形成报告", path: "/reports", examples: ["整理 Agent 研究报告", "比较 RAG 方法并写报告", "总结长上下文研究进展"] },

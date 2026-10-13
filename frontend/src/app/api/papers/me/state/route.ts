@@ -8,7 +8,7 @@ import type { PaperUserState } from "@/lib/papers/types"
 export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const paperIds = request.nextUrl.searchParams.get("paperIds")
   const publicPaperIds = await resolvePublicPaperIds(paperIds)
   if (paperIds && !publicPaperIds.length) {

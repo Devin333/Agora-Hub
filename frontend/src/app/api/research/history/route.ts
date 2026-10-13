@@ -10,7 +10,7 @@ const MAX_BODY_BYTES = 4 * 1024 * 1024
 const PRIVATE_HEADERS = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" }
 
 export async function GET() {
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiGet("/api/v1/research/history", {
     headers: token ? { "x-newsroom-session": token } : undefined,
     signal: AbortSignal.timeout(10000)
@@ -31,7 +31,7 @@ export async function PUT(request: NextRequest) {
     return historyFailure("invalid_request", 400)
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return historyFailure("invalid_request", 400)
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiPut("/api/v1/research/history", body, {
     headers: {
       ...(token ? { "x-newsroom-session": token } : {}),

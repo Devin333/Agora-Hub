@@ -27,6 +27,6 @@ export default defineConfig({
   webServer: {
     command: webServerCommand,
     url: baseURL,
-    reuseExistingServer: true
+    reuseExistingServer: process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true"
   }
 })

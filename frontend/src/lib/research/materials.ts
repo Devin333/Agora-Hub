@@ -1,8 +1,9 @@
+import { researchGroupHref } from "./routes"
 import { historyState, readResearchWorkspace, saveWorkspaceReport } from "./history"
 import type { ResearchMaterial, ResearchReportDraft } from "./workspace-items"
 
 export const materialKindLabel = { paper: "论文", project: "项目", discussion: "讨论", note: "笔记", pdf: "PDF" }
-export function groupHref(id: string | null) { return `/design-demo/groups/${encodeURIComponent(id ?? "ungrouped")}` }
+export function groupHref(id: string | null) { return researchGroupHref(id) }
 
 export function prepareMaterialReport(title: string, groupId: string | null, ids: string[], expectedOwner = historyState().owner): ResearchReportDraft | null {
   if (expectedOwner !== historyState().owner || !historyState().ready || !title.trim()) return null

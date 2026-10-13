@@ -37,6 +37,9 @@ class AskPaperUseCase:
         memory_namespace: str | None = None,
         tenant_id: str | None = None,
         user_id: str | None = None,
+        run_id: str | None = None,
+        allowed_source_refs: list[str] | tuple[str, ...] | None = None,
+        target_sections: list[str] | tuple[str, ...] | None = None,
     ) -> ResearchRetrievalGoal:
         intent = classify_query_intent(question)
         scope = self.resolve_actor_scope(
@@ -49,9 +52,14 @@ class AskPaperUseCase:
             paper_id=paper_id,
             question=question,
             required_evidence_types=_required_evidence_types(intent),
-            allowed_source_refs=[f"arxiv://{paper_id}", paper_id],
+            target_sections=_source_refs(target_sections, paper_id="") if target_sections else [],
+            allowed_source_refs=_source_refs(allowed_source_refs, paper_id=paper_id),
             allowed_memory_namespaces=[scope.memory_namespace],
-            metadata={"intent": intent, **scope.to_metadata()},
+            metadata={
+                "intent": intent,
+                **({"run_id": _required_scope_text(run_id, "run_id")} if run_id else {}),
+                **scope.to_metadata(),
+            },
         )
 
     def resolve_actor_scope(
@@ -73,6 +81,20 @@ class AskPaperUseCase:
             user_id=user or None,
             memory_namespace=namespace,
         )
+
+
+def _source_refs(values: list[str] | tuple[str, ...] | None, *, paper_id: str) -> list[str]:
+    refs = [str(value).strip() for value in (values or ()) if str(value).strip()]
+    if not refs:
+        refs = [f"arxiv://{paper_id}", paper_id]
+    return list(dict.fromkeys(refs))
+
+
+def _required_scope_text(value: str | None, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name} is required")
+    return text
 
 
 def _required_evidence_types(intent: str) -> list[str]:

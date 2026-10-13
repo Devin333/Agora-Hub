@@ -4,7 +4,8 @@ import { ProjectLabSessionPage } from "@/features/projects/components/projects-d
 
 export const dynamic = "force-dynamic"
 
-export default function ProjectsLabSessionRoute({ params }: { params: { sessionId: string } }) {
+export default async function ProjectsLabSessionRoute(props: { params: Promise<{ sessionId: string }> }) {
+  const params = await props.params;
   return (
     <Suspense fallback={<PageSkeleton />}>
       <ProjectLabSessionPage sessionId={params.sessionId} />

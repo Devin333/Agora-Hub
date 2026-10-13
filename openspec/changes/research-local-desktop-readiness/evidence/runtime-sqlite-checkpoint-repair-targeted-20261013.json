@@ -1,0 +1,43 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-12T22:59:34.662894+00:00",
+  "status": "passed-final-full-and-required-smoke-also-passed",
+  "metadata": {
+    "command": ".venv\\\\Scripts\\\\python.exe -m pytest tests/scripts/test_local_desktop_recovery.py::test_owner_fixture_closes_sqlite_before_declaring_storage_quiescent tests/scripts/test_local_desktop_recovery.py::test_backup_uses_native_sqlite_snapshot_including_wal_state tests/scripts/test_local_desktop_recovery.py::test_rollback_rejects_incompatible_backup_before_release_activation -q -rs",
+    "cwd": "F:\\github\\NewsRoom",
+    "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+    "utc_start": "2026-10-12T22:52:56.0961087Z",
+    "utc_end": "2026-10-12T22:53:00.6515841Z",
+    "exit_code": 0,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-recovery-sqlite-targeted-20261013-065256-087.log"
+  },
+  "metadataRecord": "runtime-sqlite-checkpoint-repair-targeted-20261013.metadata.json",
+  "log": "runtime-sqlite-checkpoint-repair-targeted-20261013.log.gz",
+  "logSha256": "374c45f59028ef7f02d6700e3e7a8998eae579c9d41ecb975e2d2db6302d6c15",
+  "rawLogSha256": "1b3056fefd60ee649b8c84d8f7688f8602cb69be0280d812dd2e7b7352287df0",
+  "logArchiveIdentity": {
+    "path": "runtime-sqlite-checkpoint-repair-targeted-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "374c45f59028ef7f02d6700e3e7a8998eae579c9d41ecb975e2d2db6302d6c15",
+    "bytes": 53,
+    "decompressedSha256": "1b3056fefd60ee649b8c84d8f7688f8602cb69be0280d812dd2e7b7352287df0",
+    "decompressedBytes": 100
+  },
+  "scope": "Actual SQLite fixture closure, held WAL snapshot and rollback preflight regressions",
+  "candidateRecord": "backend-release-candidate-identity-20261013.json",
+  "candidateSourceDigest": "sha256:06893c3fbe0890a90124263120b28ddef957665e04bcc12a8f438f0cddb081bf",
+  "liveAcceptanceExecuted": false,
+  "originalMetadataContainedLogChecksum": false,
+  "results": {
+    "passed": 3,
+    "seconds": 4.04
+  },
+  "statusAtCreation": "passed-full-and-mandatory-smoke-pending",
+  "finalGateClosure": {
+    "recordedAt": "2026-10-13T01:53:48.707Z",
+    "fullTests": "backend-release-candidate-full-tests-20261013.json",
+    "requiredSmoke": "backend-release-candidate-mandatory-smoke-20261013.json",
+    "candidate": "backend-release-candidate-identity-20261013.json",
+    "executionMetadataPreserved": true
+  }
+}

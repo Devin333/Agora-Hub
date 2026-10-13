@@ -9,7 +9,7 @@ export type ConversationIndexEntry = { id: string; label: string }
 
 type ResearchConversationIndexProps = {
   entries: ConversationIndexEntry[]
-  transcriptRef: RefObject<HTMLDivElement>
+  transcriptRef: RefObject<HTMLDivElement | null>
 }
 
 const PREVIEW_LENGTH = 160

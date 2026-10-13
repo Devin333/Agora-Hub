@@ -1,0 +1,25 @@
+{
+  "kind": "offline-contract-validation",
+  "recordedAt": "2026-10-12T18:22:16.786Z",
+  "cwd": "F:/github/NewsRoom",
+  "command": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe -m pytest tests/interfaces/services/test_research_desktop_auth.py tests/interfaces/services/test_research_desktop_control.py tests/interfaces/services/test_research_desktop_operations.py tests/interfaces/services/test_research_desktop_service.py tests/interfaces/services/test_research_desktop_workflow_contracts.py tests/interfaces/api/test_research_desktop_api_boundary.py tests/interfaces/services/test_research_history_service.py tests/interfaces/services/test_research_workspace_items.py tests/framework/harness/rag -q",
+  "timeProvenance": "owner execution report, log metadata retained",
+  "utcStart": "2026-10-12T18:15:24.4277933Z",
+  "utcEnd": "2026-10-12T18:15:29.4554620Z",
+  "exitCode": 0,
+  "results": {
+    "passed": 177,
+    "failed": 0,
+    "warnings": 21,
+    "warningDescription": "existing FastAPI/Starlette deprecation warnings"
+  },
+  "log": {
+    "path": "backend-final-targeted-validation-20261013.log.gz",
+    "sha256": "4b443541d071b7ebcf05f038fb2230d349667ae1f2484515434a311414e63a4c",
+    "bytes": 560,
+    "encoding": "gzip",
+    "decompressedSha256": "9d1aec105c7a2d380508745d11edd759de8dceedda614e4691a4a3cdf80ce2ab",
+    "decompressedBytes": 1693
+  },
+  "liveAcceptance": false
+}

@@ -1,0 +1,42 @@
+{
+  "schema": "newsroom.local-desktop.browser-validation.v1",
+  "recordedAt": "2026-10-12T19:44:11.061Z",
+  "name": "default-portal",
+  "stats": {
+    "startTime": "2026-10-12T19:31:30.861Z",
+    "duration": 104109.702,
+    "expected": 50,
+    "skipped": 4,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "metadata": {
+    "command": "npx.cmd playwright test --grep-invert \"/studio|/admin|admin console|Operations Studio\" --reporter=list,json",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "profile": "default",
+    "surface": "portal",
+    "baseUrl": "http://127.0.0.1:3300",
+    "mocks": true,
+    "frontendAuth": false,
+    "reuseExistingServer": false,
+    "startUtc": "2026-10-12T19:31:30.2067373Z",
+    "endUtc": "2026-10-12T19:33:14.9990201Z",
+    "exitCode": 0,
+    "log": "frontend-final-browser-default-portal-20261013.log.gz",
+    "json": "frontend-final-browser-default-portal-20261013-report.json",
+    "logArchiveIdentity": {
+      "path": "frontend-final-browser-default-portal-20261013.log.gz",
+      "encoding": "gzip",
+      "sha256": "17b0c301c3b31e0018a4ca533a21ddda14adbcc11e72f685eec1973a2a065de4",
+      "bytes": 2390,
+      "decompressedSha256": "5d106ed63facbe0066d70289b8436cf1fb0ef32b968a25169d46c20dfdf77e7d",
+      "decompressedBytes": 12743
+    }
+  },
+  "skipReason": "four local-desktop-only tests explicitly skip under default profile",
+  "logSha256": "5d106ed63facbe0066d70289b8436cf1fb0ef32b968a25169d46c20dfdf77e7d",
+  "reportSha256": "314d5d385ce7541369681a5faafb63f475533afb91c1a07c3cd48f985576e7d9",
+  "liveAcceptanceExecuted": false,
+  "finalSourceBinding": "pending consolidated final candidate digest",
+  "evidenceBoundary": "isolated development server and route fixtures; not Chapter 12 real deployment/provider proof"
+}

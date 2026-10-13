@@ -1,0 +1,17 @@
+{
+  "schema": "newsroom-openspec-validation/v1",
+  "recordedAt": "2026-10-13T01:52:17.337Z",
+  "status": "passed",
+  "change": "research-local-desktop-readiness",
+  "strict": true,
+  "execution": {
+    "command": "openspec validate research-local-desktop-readiness --strict",
+    "cwd": "F:\\github\\NewsRoom",
+    "tool": "functions.exec_command",
+    "exitCode": 0,
+    "stdout": "Change 'research-local-desktop-readiness' is valid\n",
+    "wallTimeSeconds": 1.0558,
+    "executionTimestampPolicy": "The execution tool returned elapsed time, output and exit code; recordedAt is the time this evidence was written, not an invented command start/end."
+  },
+  "liveAcceptanceExecuted": false
+}

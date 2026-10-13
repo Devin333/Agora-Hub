@@ -444,7 +444,6 @@ def test_from_env_rejects_unsafe_endpoint_or_secret_indirection_without_echo(
     ("name", "value", "capability"),
     [
         ("NEWS_RESEARCH_SOURCE_PROVIDER", "rss", "research.source.provider"),
-        ("NEWS_RESEARCH_PARSER_BACKENDS", "pymupdf", "research.parser.backends"),
         ("NEWS_RESEARCH_PARSER_BACKENDS", "marker,marker", "research.parser.backends"),
         ("NEWS_RESEARCH_ALLOW_ABSTRACT_FALLBACK", "sometimes", "research.parser.abstract_fallback"),
         ("NEWS_RESEARCH_RAG_BACKEND", "memory", "research.rag.backend"),
@@ -547,3 +546,24 @@ def test_local_rag_does_not_validate_unused_qdrant_endpoint(tmp_path: Path) -> N
 
     assert settings.rag.backend == "local"
     assert settings.rag.qdrant_url is None
+
+
+def test_storage_paths_resolve_without_llm_credentials(tmp_path: Path) -> None:
+    from interfaces.composition.research_settings import research_storage_paths_from_env
+
+    paths = research_storage_paths_from_env(
+        {
+            "NEWS_RESEARCH_ARTIFACT_ROOT": "data/artifacts",
+            "NEWS_RESEARCH_ROOT": "data/research",
+            "NEWS_RESEARCH_RUN_STORE_ROOT": "data/runs",
+            "NEWS_RESEARCH_RAG_LOCAL_ROOT": "data/chunks",
+            "NEWS_RESEARCH_RAG_TRANSCRIPT_ROOT": "data/transcripts",
+        },
+        cwd=tmp_path,
+    )
+
+    assert paths.artifact_root == (tmp_path / "data/artifacts").resolve()
+    assert paths.research_root == (tmp_path / "data/research").resolve()
+    assert paths.run_store_root == (tmp_path / "data/runs").resolve()
+    assert paths.rag_local_root == (tmp_path / "data/chunks").resolve()
+    assert paths.rag_transcript_root == (tmp_path / "data/transcripts").resolve()

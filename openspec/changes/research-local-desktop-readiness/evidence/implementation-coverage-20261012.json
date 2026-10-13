@@ -1,0 +1,996 @@
+{
+  "schema": "newsroom.desktop-implementation-coverage/v1",
+  "recordedDate": "2026-10-13",
+  "phase": "implementation-and-final-automated-gates-completed-real-acceptance-pending",
+  "testExecutionStarted": true,
+  "completionPolicy": "第1–10章生产代码与必要测试代码静态核销后进入第11章；文件存在不代表实现完成或检查通过。",
+  "chapters": [
+    {
+      "chapter": 1,
+      "owner": "root",
+      "sourceRoots": [
+        "openspec/changes/research-local-desktop-readiness/evidence"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 2,
+      "owners": [
+        "desktop_runtime_recovery",
+        "desktop_backend_contracts",
+        "desktop_frontend_workflows"
+      ],
+      "sourceRoots": [
+        "framework/shared/local_desktop.py",
+        "scripts/local_desktop/config.py",
+        "scripts/local_desktop/doctor.py",
+        "scripts/local_desktop/probe.py",
+        "interfaces/services/research_desktop_service.py",
+        "frontend/src/lib/deployment-profile.ts",
+        "frontend/src/features/portal/components/research-capability-notice.tsx"
+      ],
+      "testRoots": [
+        "tests/framework/shared/test_local_desktop.py",
+        "tests/scripts/test_local_desktop_config.py",
+        "tests/scripts/test_local_desktop_doctor.py",
+        "frontend/src/lib/deployment-profile.test.ts"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 3,
+      "owners": [
+        "desktop_backend_contracts",
+        "desktop_frontend_workflows"
+      ],
+      "sourceRoots": [
+        "interfaces/services/research_desktop_auth.py",
+        "interfaces/api/app.py",
+        "interfaces/api/routers/auth.py",
+        "frontend/src/lib/auth",
+        "frontend/src/app/api/auth",
+        "frontend/src/proxy.ts"
+      ],
+      "testRoots": [
+        "tests/interfaces/api/test_research_desktop_api_boundary.py",
+        "tests/interfaces/services/test_research_desktop_auth.py",
+        "frontend/src/proxy.auth.test.ts",
+        "frontend/src/lib/runtime-identity.test.ts"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 4,
+      "owner": "desktop_frontend_workflows",
+      "sourceRoots": [
+        "frontend/src/lib/research/routes.ts",
+        "frontend/src/proxy.ts",
+        "frontend/src/app/page.tsx",
+        "frontend/src/app/papers",
+        "frontend/src/app/research",
+        "frontend/src/app/reports",
+        "frontend/src/features/portal/components"
+      ],
+      "testRoots": [
+        "frontend/src/lib/research/routes.test.ts",
+        "frontend/src/lib/research/history-profile.test.ts",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 5,
+      "owners": [
+        "desktop_frontend_workflows",
+        "desktop_backend_contracts"
+      ],
+      "sourceRoots": [
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/lib/research/history-sync.ts",
+        "frontend/src/lib/research/workspace-items.ts",
+        "frontend/src/features/portal/reader/use-reader-notebook.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.ts",
+        "interfaces/services/research_workspace_model.py"
+      ],
+      "testRoots": [
+        "frontend/src/lib/research/desktop-workspace.test.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.test.ts",
+        "tests/interfaces/services/test_research_workspace_items.py"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 6,
+      "owners": [
+        "desktop_frontend_workflows",
+        "desktop_backend_contracts"
+      ],
+      "sourceRoots": [
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/app/api/research/desktop",
+        "interfaces/services/research_import_service.py",
+        "interfaces/services/research_import_application.py",
+        "interfaces/services/research_desktop_service.py"
+      ],
+      "testRoots": [
+        "tests/interfaces/services/test_research_import_service.py",
+        "tests/interfaces/services/test_research_desktop_service.py",
+        "frontend/src/app/api/research/desktop/operations/operation-routes.test.ts"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 7,
+      "owners": [
+        "desktop_backend_contracts",
+        "desktop_frontend_workflows"
+      ],
+      "sourceRoots": [
+        "backend/research/ports/request_admission.py",
+        "backend/research/ports/source_provider.py",
+        "backend/research/application/single_paper_runtime.py",
+        "backend/research/application/paper_rag_session.py",
+        "framework/harness/rag/session.py",
+        "interfaces/services/research_desktop_control.py",
+        "interfaces/services/research_service.py",
+        "interfaces/services/paper_rag_transcript_store.py",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx",
+        "frontend/src/lib/research/pending-operations.ts"
+      ],
+      "testRoots": [
+        "tests/interfaces/services/test_research_desktop_control.py",
+        "tests/interfaces/services/test_research_desktop_service.py",
+        "tests/interfaces/services/test_paper_rag_transcript_store.py",
+        "tests/framework/harness/rag/test_rag_session_controller.py",
+        "frontend/src/features/portal/reader/reader-assistant.test.ts",
+        "tests/fixtures/research_desktop_request_contracts.json"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 8,
+      "owners": [
+        "desktop_backend_contracts",
+        "desktop_frontend_workflows"
+      ],
+      "sourceRoots": [
+        "interfaces/services/research_service.py",
+        "interfaces/services/research_desktop_service.py",
+        "interfaces/api/routers/research_desktop.py",
+        "frontend/src/lib/research/desktop/contracts.ts",
+        "frontend/src/app/reports/desktop-report-detail.tsx",
+        "frontend/src/app/reports/desktop-reports-page.tsx"
+      ],
+      "testRoots": [
+        "tests/interfaces/services/test_research_desktop_service.py",
+        "tests/interfaces/services/test_research_service.py",
+        "frontend/src/lib/research/desktop/contracts.test.ts",
+        "frontend/src/app/reports/desktop-report-detail.test.tsx"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    },
+    {
+      "chapter": 9,
+      "owners": [
+        "desktop_runtime_recovery",
+        "desktop_backend_contracts",
+        "desktop_frontend_workflows"
+      ],
+      "sourceRoots": [
+        "scripts/local-desktop.ps1",
+        "scripts/local_desktop/cli.py",
+        "scripts/local_desktop/release.py",
+        "scripts/local_desktop/processes.py",
+        "scripts/local_desktop/log_collector.py",
+        "scripts/local_desktop/desktop_entry.py",
+        "scripts/local_desktop/autostart.py",
+        "docs/local-desktop-usage.md"
+      ],
+      "testRoots": [
+        "tests/scripts/test_local_desktop_cli.py",
+        "tests/scripts/test_local_desktop_release.py",
+        "tests/scripts/test_local_desktop_processes.py",
+        "tests/scripts/test_local_desktop_log_collector.py",
+        "tests/scripts/test_local_desktop_desktop_entry.py",
+        "tests/scripts/test_local_desktop_autostart.py"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending",
+      "ownerHandoff": {
+        "date": "2026-10-12",
+        "acceptedBy": "root",
+        "testExecution": false,
+        "realAcceptance": false
+      }
+    },
+    {
+      "chapter": 10,
+      "owner": "desktop_runtime_recovery",
+      "sourceRoots": [
+        "scripts/local_desktop/storage_contract.py",
+        "scripts/local_desktop/control.py",
+        "scripts/local_desktop/recovery.py",
+        "interfaces/composition/local_desktop_control.py",
+        "interfaces/services/research_desktop_control.py"
+      ],
+      "testRoots": [
+        "tests/scripts/test_local_desktop_recovery.py",
+        "tests/scripts/test_local_desktop_control.py"
+      ],
+      "remaining": [],
+      "reviewStatus": "implementation-static-reviewed-final-automated-gates-passed-real-acceptance-pending"
+    }
+  ],
+  "specRequirements": [
+    {
+      "capability": "research-desktop-release-acceptance",
+      "requirement": "Implementation precedes execution checks",
+      "scenarios": [
+        "A feature group finishes before the remaining code"
+      ],
+      "implementationChapters": [
+        1
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "validation-queue-20261012.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-release-acceptance",
+      "requirement": "Complete final candidate validation",
+      "scenarios": [
+        "A defect changes shared runtime code",
+        "Required validation cannot execute"
+      ],
+      "implementationChapters": [
+        11
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "validation-queue-20261012.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-release-acceptance",
+      "requirement": "Real desktop and recovery acceptance",
+      "scenarios": [
+        "Real research flow succeeds",
+        "Only mocked UI tests pass",
+        "Machine restart has not been performed"
+      ],
+      "implementationChapters": [
+        12
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "validation-queue-20261012.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-release-acceptance",
+      "requirement": "Candidate bound redacted evidence",
+      "scenarios": [
+        "Evidence belongs to a different build"
+      ],
+      "implementationChapters": [
+        1,
+        11,
+        12
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "validation-queue-20261012.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-release-acceptance",
+      "requirement": "Owned checklist closure and usable handoff",
+      "scenarios": [
+        "Desktop acceptance also satisfies workspace checks",
+        "Local use works while experimental prerequisites remain open"
+      ],
+      "implementationChapters": [
+        1,
+        11,
+        12
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "validation-queue-20261012.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Authorized bounded single paper submissions",
+      "scenarios": [
+        "Submit a selected paper analysis",
+        "Client attempts to weaken verification"
+      ],
+      "implementationChapters": [
+        3,
+        7
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Durable admission and duplicate protection",
+      "scenarios": [
+        "Concurrent duplicate submission",
+        "Same identity with different content",
+        "First acknowledgement is completely lost"
+      ],
+      "implementationChapters": [
+        6,
+        7
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Truthful run state and uncertain outcome recovery",
+      "scenarios": [
+        "Response is lost after execution",
+        "Outcome cannot yet be confirmed",
+        "Stop waiting without server cancellation"
+      ],
+      "implementationChapters": [
+        6,
+        7
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Existing Harness authority is preserved",
+      "scenarios": [
+        "Verification rejects candidate content"
+      ],
+      "implementationChapters": [
+        7
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Real single paper analysis and grounded question answering",
+      "scenarios": [
+        "Analyze and ask about a real paper",
+        "Required model capability is absent"
+      ],
+      "implementationChapters": [
+        6,
+        7
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Research report projections retain source and quality identity",
+      "scenarios": [
+        "View an accepted analysis report",
+        "Open a multi-material draft",
+        "Source or artifact no longer validates"
+      ],
+      "implementationChapters": [
+        7,
+        8
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Owner scoped report saving and export",
+      "scenarios": [
+        "Export and reopen an accepted result",
+        "Unauthorized or rejected export"
+      ],
+      "implementationChapters": [
+        3,
+        5,
+        8
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-run-report-flow",
+      "requirement": "Safe content rendering and bounded diagnostics",
+      "scenarios": [
+        "Untrusted paper content includes active markup"
+      ],
+      "implementationChapters": [
+        7,
+        8,
+        9
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Canonical desktop research routes",
+      "scenarios": [
+        "Open the local desktop entry",
+        "Resume through an old deep link"
+      ],
+      "implementationChapters": [
+        4
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Local account lifecycle",
+      "scenarios": [
+        "Initialize the first account",
+        "Expired session with unsaved edits"
+      ],
+      "implementationChapters": [
+        3
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Profile constrained session cookies",
+      "scenarios": [
+        "Production build on the configured local origin",
+        "Non-loopback configuration requests the exception"
+      ],
+      "implementationChapters": [
+        2,
+        3
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Server enforced research ownership",
+      "scenarios": [
+        "Access another owner through the API",
+        "Bypass the page guard",
+        "Cross-origin mutation"
+      ],
+      "implementationChapters": [
+        3,
+        5,
+        6,
+        7,
+        8
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Revisioned workspace persistence and explicit imports",
+      "scenarios": [
+        "Two tabs edit the same workspace",
+        "Import guest material into an account"
+      ],
+      "implementationChapters": [
+        5
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Revision aware reading continuity",
+      "scenarios": [
+        "Resume after restarting the services",
+        "Source revision invalidates the locator"
+      ],
+      "implementationChapters": [
+        5,
+        6
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Real source entry and import recovery",
+      "scenarios": [
+        "Import and read a real PDF",
+        "Required parser is unavailable"
+      ],
+      "implementationChapters": [
+        6
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-desktop-workspace",
+      "requirement": "Accessible and truthful desktop interaction",
+      "scenarios": [
+        "Keyboard use while a request fails",
+        "No matching source data"
+      ],
+      "implementationChapters": [
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-data-recovery",
+      "requirement": "Complete owned storage inventory",
+      "scenarios": [
+        "A storage owner uses a custom path"
+      ],
+      "implementationChapters": [
+        1,
+        10
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-data-recovery",
+      "requirement": "Consistent bounded backup snapshots",
+      "scenarios": [
+        "Back up a quiescent local instance",
+        "Another writer or disk exhaustion is detected"
+      ],
+      "implementationChapters": [
+        10
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-data-recovery",
+      "requirement": "Sensitive backup handling and explicit exclusions",
+      "scenarios": [
+        "Restore requires an external credential",
+        "Session token exists before restore",
+        "Old request is retried after restoring an earlier snapshot"
+      ],
+      "implementationChapters": [
+        9,
+        10
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-data-recovery",
+      "requirement": "Verified staged restoration and safe activation",
+      "scenarios": [
+        "Restore valid data to an isolated destination",
+        "Malicious path or corrupt artifact",
+        "Activation fails after partial switching"
+      ],
+      "implementationChapters": [
+        10
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-data-recovery",
+      "requirement": "Compatible release rollback",
+      "scenarios": [
+        "Previous release can read current data",
+        "Previous release is incompatible or incomplete"
+      ],
+      "implementationChapters": [
+        9,
+        10
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Explicit loopback deployment profile",
+      "scenarios": [
+        "Start with the default desktop configuration",
+        "Conflicting or non-loopback settings"
+      ],
+      "implementationChapters": [
+        2,
+        3
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Reproducible production release identity",
+      "scenarios": [
+        "Activate a verified build",
+        "Dependency drift or incomplete release"
+      ],
+      "implementationChapters": [
+        2,
+        9
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Bounded capability diagnosis",
+      "scenarios": [
+        "Offline diagnosis finds unavailable Docker",
+        "Explicit live probe exceeds its budget"
+      ],
+      "implementationChapters": [
+        2
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Owned and idempotent process lifecycle",
+      "scenarios": [
+        "Start an already running owned instance",
+        "Port belongs to an unrelated process"
+      ],
+      "implementationChapters": [
+        9
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Real readiness and bounded startup recovery",
+      "scenarios": [
+        "A process listens but the required API is unhealthy",
+        "One child fails during startup"
+      ],
+      "implementationChapters": [
+        2,
+        9
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Controlled shutdown preserves run semantics",
+      "scenarios": [
+        "Stop while analysis is active"
+      ],
+      "implementationChapters": [
+        7,
+        9,
+        10
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Redacted bounded operational logs",
+      "scenarios": [
+        "Authentication or provider request fails"
+      ],
+      "implementationChapters": [
+        9
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    },
+    {
+      "capability": "research-local-runtime-management",
+      "requirement": "Explicit desktop entry and optional logon startup",
+      "scenarios": [
+        "Open a stopped instance",
+        "Enable and then disable logon startup"
+      ],
+      "implementationChapters": [
+        9
+      ],
+      "reviewStatus": "implementation-mapped-static-reviewed-automated-evidence-recorded-real-acceptance-pending",
+      "executionEvidence": [
+        "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+        "frontend-release-candidate-validation-20261013.json",
+        "backend-release-candidate-full-tests-20261013.json",
+        "backend-release-candidate-mandatory-smoke-20261013.json"
+      ],
+      "executionStatus": "mapped-automated-contract-suites-passed-with-explicit-skips-real-acceptance-pending",
+      "executionEvidenceBoundary": "Evidence is from mapped automated suites with retained environment skips, not blanket success of every scenario. Real provider, deployment, restore and reboot acceptance in Chapter 12 was not executed."
+    }
+  ],
+  "requirementCount": 34,
+  "scenarioCount": 68,
+  "ownerHandoffs": {
+    "backend": "backend-owner-handoff-20261013.json",
+    "runtime": "runtime-owner-handoff-20261012.json",
+    "frontend": "frontend-owner-handoff-20261013.json"
+  },
+  "candidateFreeze": "candidate-freeze-before-validation-20261013.json",
+  "executionResults": "validation-queue-20261012.json",
+  "reopenedTasks": [
+    {
+      "task": "2.1",
+      "reason": "production CLI override layer missing",
+      "status": "implemented-and-targeted-validated-final-full-pending",
+      "owner": "desktop_runtime_recovery",
+      "validation": "runtime-all-contracts-after-final-audit-repairs-20261013.json"
+    }
+  ],
+  "pathAudit": {
+    "recordedAt": "2026-10-12T18:46:19.260Z",
+    "mappedPaths": 89,
+    "missingPaths": [],
+    "renamed": [
+      {
+        "from": "frontend/src/middleware.ts",
+        "to": "frontend/src/proxy.ts",
+        "reason": "Next16 supported proxy convention"
+      },
+      {
+        "from": "frontend/src/middleware.auth.test.ts",
+        "to": "frontend/src/proxy.auth.test.ts",
+        "reason": "proxy behavioral test ownership"
+      }
+    ]
+  },
+  "updatedAt": "2026-10-13T01:42:14.458507+00:00",
+  "candidateFreezeStatus": "Historical pre-validation snapshot; final source and build identities bound separately and reverified after automated gates.",
+  "finalFrontendCandidate": "frontend-release-candidate-identity-20261013.json",
+  "finalBackendCandidate": "backend-release-candidate-identity-20261013.json",
+  "concentratedValidation": {
+    "frontend": {
+      "record": "frontend-release-candidate-validation-20261013.json",
+      "unitPassed": 729,
+      "browserPassed": 75,
+      "browserExistingSkipped": 6,
+      "nodeDependencyProblems": 0
+    },
+    "runtime": {
+      "record": "runtime-all-contracts-after-final-audit-repairs-20261013.json",
+      "passed": 138,
+      "environmentSymlinkSkipped": 2,
+      "recordBoundary": "Historical all-contract run before final SQLite fixture repair; final whole backend suite includes runtime contracts for current candidate.",
+      "finalRecoveryModule": "runtime-recovery-final-contracts-20261013.json",
+      "finalCompleteSuite": "backend-release-candidate-full-tests-20261013.json"
+    },
+    "backend": {
+      "record": "backend-release-candidate-full-tests-20261013.json",
+      "candidateRecord": "backend-release-candidate-identity-20261013.json",
+      "passed": 9187,
+      "skipped": 117,
+      "deselected": 24,
+      "warnings": 579,
+      "seconds": 5529.14,
+      "failed": 0
+    },
+    "mandatorySmoke": {
+      "record": "backend-release-candidate-mandatory-smoke-20261013.json",
+      "exitCode": 0
+    },
+    "realAcceptanceExecuted": false
+  }
+}

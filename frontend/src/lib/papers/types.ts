@@ -506,6 +506,10 @@ export interface PaperReaderCitation {
   label: string
   sourceType: "section" | "evidence" | "source" | string
   sectionId?: string
+  page?: number
+  sourceRevision?: string
+  valid?: boolean
+  reasonCode?: string
   evidenceId?: string
   sourceId?: string
   textExcerpt?: string

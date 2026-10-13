@@ -13,6 +13,8 @@ type AccountContext = {
   openLogin: (trigger?: HTMLElement) => void
   signOut: () => Promise<void>
 }
+export const portalSessionChangedEvent = "newsroom:portal-session-changed"
+
 const Context = createContext<AccountContext | null>(null)
 
 export function PortalAccountProvider({ children }: { children: ReactNode }) {
@@ -30,6 +32,31 @@ export function PortalAccountProvider({ children }: { children: ReactNode }) {
       if (!controller.signal.aborted) { setSession(result.session); setResolved(true) }
     }).catch(() => { if (!controller.signal.aborted) setError("账号状态暂时无法读取，请重新登录。") })
     return () => controller.abort()
+  }, [])
+  useEffect(() => {
+    const refreshSession = () => {
+      initialSession.current?.abort()
+      const controller = new AbortController()
+      initialSession.current = controller
+      setResolved(false)
+      setError(null)
+      fetchPortalSession(controller.signal)
+        .then(result => {
+          if (!controller.signal.aborted) {
+            setSession(result.session)
+            setResolved(true)
+          }
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setSession(null)
+            setResolved(true)
+            setError("账号状态暂时无法读取，请重新登录。")
+          }
+        })
+    }
+    window.addEventListener(portalSessionChangedEvent, refreshSession)
+    return () => window.removeEventListener(portalSessionChangedEvent, refreshSession)
   }, [])
   const openLogin = useCallback((element?: HTMLElement) => {
     trigger.current = element ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)

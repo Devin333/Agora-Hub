@@ -2,7 +2,8 @@ import { NextRequest } from "next/server"
 import { AUTH_CALLBACK_COOKIE, AUTH_RETURN_COOKIE, authFailure, bindingOptions, proxyAuthPost, safeReturnPath, validProvider } from "@/lib/auth/portal-server"
 
 export const dynamic = "force-dynamic"
-export async function POST(request: NextRequest, { params }: { params: { provider: string } }) {
+export async function POST(request: NextRequest, props: { params: Promise<{ provider: string }> }) {
+  const params = await props.params;
   if (!validProvider(params.provider)) return authFailure("auth_method_unavailable", 404)
   let returnTo = "/design-demo"
   const response = await proxyAuthPost(request, `/api/v1/auth/oauth/${params.provider}/authorize`, (body) => {

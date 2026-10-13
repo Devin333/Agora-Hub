@@ -1,0 +1,13 @@
+{
+  "stage": "compile-final",
+  "cwd": "F:\\github\\NewsRoom",
+  "command": ".venv/Scripts/python.exe -m scripts.dev compile",
+  "environment": {
+    "PYTHONFAULTHANDLER": "1"
+  },
+  "utcStart": "2026-10-12T19:16:40.7315313Z",
+  "utcEnd": "2026-10-12T19:16:40.9486525Z",
+  "exitCode": 0,
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-compile-final-20261013-031640-722.log",
+  "logSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69"
+}

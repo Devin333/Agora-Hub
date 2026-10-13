@@ -3,7 +3,8 @@ import { evidenceGraphQueryFromSearchParams, getEvidenceGraphTimeline } from "@/
 
 export const dynamic = "force-dynamic"
 
-export async function GET(request: NextRequest, { params }: { params: { topicId: string } }) {
+export async function GET(request: NextRequest, props: { params: Promise<{ topicId: string }> }) {
+  const params = await props.params;
   try {
     const query = evidenceGraphQueryFromSearchParams(request.nextUrl.searchParams)
     const data = await getEvidenceGraphTimeline(decodeURIComponent(params.topicId), query)

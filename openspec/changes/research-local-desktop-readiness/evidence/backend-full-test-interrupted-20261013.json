@@ -1,0 +1,29 @@
+{
+  "stage": "test-diagnostic-interrupted",
+  "completed": false,
+  "cwd": "F:\\github\\NewsRoom",
+  "command": ".venv/Scripts/python.exe -m scripts.dev test",
+  "utcStartEvidence": "2026-10-12T18:22:04.9724737Z",
+  "utcStopObserved": "2026-10-12T18:37:16.5579690Z",
+  "exitCode": 1,
+  "stopMechanism": "PTY Ctrl+C sent only to owned unified exec session 72545",
+  "stopReason": "Initial run already contained 11 failures; parent requested diagnosis before runtime candidate changes and final full rerun.",
+  "progressEvents": 1440,
+  "mappedSelectedTests": 9258,
+  "observedFailures": 11,
+  "observedSkips": 2,
+  "lastCompletedProgress": "15%",
+  "log": "backend-full-test-interrupted-20261013.log.gz",
+  "logSha256": "a56f8dfec6bce02f2f252f76a36cb0e5f43a5a56debc387df426b9a24a633bab",
+  "ownedProcessTreeExited": true,
+  "liveAcceptance": false,
+  "rawLogSha256": "9cfd6cdda200fb7e3f056cd5c6d823f9c390a074eb8238b58758636afc9b9ab8",
+  "logArchiveIdentity": {
+    "path": "backend-full-test-interrupted-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "a56f8dfec6bce02f2f252f76a36cb0e5f43a5a56debc387df426b9a24a633bab",
+    "bytes": 166,
+    "decompressedSha256": "9cfd6cdda200fb7e3f056cd5c6d823f9c390a074eb8238b58758636afc9b9ab8",
+    "decompressedBytes": 1680
+  }
+}

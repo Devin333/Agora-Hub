@@ -6,7 +6,8 @@ import { NEWSROOM_SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/sessio
 
 export const dynamic = "force-dynamic"
 
-export async function GET(request: NextRequest, { params }: { params: { provider: string } }) {
+export async function GET(request: NextRequest, props: { params: Promise<{ provider: string }> }) {
+  const params = await props.params;
   const state = request.nextUrl.searchParams.get("state") ?? ""
   const code = request.nextUrl.searchParams.get("code") ?? ""
   const rejected = request.nextUrl.searchParams.has("error")
@@ -25,7 +26,8 @@ export async function GET(request: NextRequest, { params }: { params: { provider
   return completeCallback(request, params.provider, code, state, rejected)
 }
 
-export async function POST(request: NextRequest, { params }: { params: { provider: string } }) {
+export async function POST(request: NextRequest, props: { params: Promise<{ provider: string }> }) {
+  const params = await props.params;
   if (params.provider !== "wechat" || !isSameOrigin(request)) return authFailure("auth_invalid_origin", 403)
   const form = await request.formData().catch(() => null)
   const code = form?.get("code")

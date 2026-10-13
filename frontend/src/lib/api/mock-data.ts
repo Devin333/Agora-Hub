@@ -86,5 +86,5 @@ export function resolveMockPath(path: string): unknown {
   if (normalizedPath.startsWith("/studio/runs/")) return { data: mockAgentRuns.find((item) => item.id === normalizedPath.split("/").pop()) ?? mockAgentRuns[0] }
   if (normalizedPath === "/studio/sources") return { items: mockSources, total: mockSources.length, page: 1, pageSize: 20, hasNext: false }
   if (normalizedPath === "/studio/quality") return mockQualityResult
-  return {}
+  return undefined
 }

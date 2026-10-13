@@ -6,9 +6,7 @@ const routes = [
   "/news/news-1-a",
   "/papers",
   "/papers/tasks",
-  "/papers/tasks/agents",
   "/papers/methods",
-  "/papers/methods/react",
   "/projects",
   "/projects/hot",
   "/projects/rising",
@@ -50,6 +48,17 @@ for (const route of routes) {
     const response = await page.goto(route)
     expect(response?.ok()).toBeTruthy()
     await expect(page.locator("body")).toBeVisible()
+  })
+}
+
+for (const route of ["/papers/tasks/agents", "/papers/methods/react"]) {
+  test(`${route} returns not found without real taxonomy evidence`, async ({ page, baseURL }) => {
+    await authenticate(page, baseURL)
+
+    const response = await page.goto(route)
+
+    expect(response?.status()).toBe(404)
+    await expect(page.getByRole("heading", { name: "This page could not be found." })).toBeVisible()
   })
 }
 
@@ -166,26 +175,17 @@ test("/papers period tabs and drawer deep-link work", async ({ page, baseURL }) 
   await expect(page).toHaveURL(/\/papers$/)
 })
 
-test("/papers domain links open task detail view", async ({ page, baseURL }) => {
+test("/papers does not fabricate taxonomy links without real taxonomy evidence", async ({ page, baseURL }) => {
   await authenticate(page, baseURL)
   const papersLoaded = page.waitForResponse((response) => response.url().includes("/api/papers?") && response.request().method() === "GET")
   await page.goto("/papers")
   await papersLoaded
 
-  const taskLink = page.locator("aside a[href^='/papers/tasks/']").first()
-  await expect(taskLink).toBeVisible()
-  const taskHref = await taskLink.getAttribute("href")
-  if (!taskHref) {
-    throw new Error("Expected a task href in the papers domain sidebar")
-  }
-  expect(taskHref).toMatch(/^\/papers\/tasks\/[^/]+$/)
-  await taskLink.click()
-
-  await expect(page).toHaveURL(new RegExp(`${taskHref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`))
-  await expect(page.locator("nav[aria-label='Research breadcrumb']")).toContainText("Tasks")
-  await expect(page.locator("h1")).toBeVisible()
-  await expect(page.locator("aside a[href^='/papers/tasks/']").first()).toBeVisible()
-  await expect(page.locator("aside a[href^='/papers/methods/']").first()).toBeVisible()
+  const sidebar = page.locator("main aside").last()
+  await expect(sidebar.getByRole("heading", { name: "Methods" })).toBeVisible()
+  await expect(sidebar.getByRole("heading", { name: "Tasks" })).toBeVisible()
+  await expect(sidebar.locator("a[href^='/papers/tasks/']")).toHaveCount(0)
+  await expect(sidebar.locator("a[href^='/papers/methods/']")).toHaveCount(0)
 })
 
 test("/tech/repos opens a Project Radar detail drawer from URL", async ({ page, baseURL }) => {
@@ -228,9 +228,13 @@ async function authenticate(page: Page, baseURL: string | undefined) {
         success: true,
         data: {
           session: {
-            userId: "e2e-user",
-            username: "e2e",
-            role: "admin"
+            sessionId: "e2e-session",
+            expiresAt: "2099-12-31T00:00:00Z",
+            user: {
+              userId: "e2e-user",
+              username: "e2e",
+              role: "admin",
+            },
           }
         }
       })

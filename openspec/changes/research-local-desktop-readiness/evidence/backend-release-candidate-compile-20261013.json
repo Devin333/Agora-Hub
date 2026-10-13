@@ -1,0 +1,45 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-12T22:59:34.662894+00:00",
+  "status": "passed-final-full-and-required-smoke-also-passed",
+  "metadata": {
+    "stage": "full-compile-final3",
+    "cwd": "F:\\github\\NewsRoom",
+    "command": ".venv/Scripts/python.exe -m scripts.dev compile",
+    "environment": {
+      "PYTHONFAULTHANDLER": "1",
+      "PYTHONUNBUFFERED": "1",
+      "PYTEST_ADDOPTS": "-rs"
+    },
+    "utcStart": "2026-10-12T22:55:04.0809687Z",
+    "utcEnd": "2026-10-12T22:55:04.2839788Z",
+    "exitCode": 0,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-compile-final3-20261013-065504-078.log",
+    "logSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69"
+  },
+  "metadataRecord": "backend-release-candidate-compile-20261013.metadata.json",
+  "log": "backend-release-candidate-compile-20261013.log.gz",
+  "logSha256": "914ed4639569ecc832c9224623ea37d8d7ae68dbe3ef95e7de8befec2f78ef50",
+  "rawLogSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69",
+  "logArchiveIdentity": {
+    "path": "backend-release-candidate-compile-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "914ed4639569ecc832c9224623ea37d8d7ae68dbe3ef95e7de8befec2f78ef50",
+    "bytes": 125,
+    "decompressedSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69",
+    "decompressedBytes": 116
+  },
+  "scope": "Project scripts.dev compile before third whole-suite run",
+  "candidateRecord": "backend-release-candidate-identity-20261013.json",
+  "candidateSourceDigest": "sha256:06893c3fbe0890a90124263120b28ddef957665e04bcc12a8f438f0cddb081bf",
+  "liveAcceptanceExecuted": false,
+  "originalMetadataContainedLogChecksum": true,
+  "statusAtCreation": "passed-full-and-mandatory-smoke-pending",
+  "finalGateClosure": {
+    "recordedAt": "2026-10-13T01:53:48.707Z",
+    "fullTests": "backend-release-candidate-full-tests-20261013.json",
+    "requiredSmoke": "backend-release-candidate-mandatory-smoke-20261013.json",
+    "candidate": "backend-release-candidate-identity-20261013.json",
+    "executionMetadataPreserved": true
+  }
+}

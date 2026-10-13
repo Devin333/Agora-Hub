@@ -59,6 +59,7 @@ ALLOWED_BUSINESS_IMPORTS = {
     },
     "infrastructure/research/source_provider.py": {
         "backend.research.domain.paper",
+        "backend.research.ports.source_provider",
     },
     "infrastructure/research/catalog_store.py": {
         "backend.research.domain.catalog",
@@ -127,6 +128,7 @@ RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
     },
     "infrastructure/research/source_provider.py": {
         "backend.research.domain.paper",
+        "backend.research.ports.source_provider",
     },
     "infrastructure/research/catalog_store.py": {
         "backend.research.domain.catalog",

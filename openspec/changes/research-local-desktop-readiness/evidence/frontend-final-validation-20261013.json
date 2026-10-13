@@ -1,0 +1,263 @@
+{
+  "schema": "newsroom.local-desktop.frontend-final-validation.v1",
+  "recordedAt": "2026-10-12T19:44:11.063Z",
+  "checks": [
+    {
+      "command": "npm.cmd test",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T19:34:24.0221268Z",
+      "endUtc": "2026-10-12T19:34:38.9881398Z",
+      "exitCode": 0,
+      "log": "frontend-final-unit-20261013.log.gz",
+      "logSha256": "bb4322346cae0079b0cff2fe08182c61044ea5b581388903699119b38b0d82d3",
+      "rawLogSha256": "85361f384919170df893e64f9a558016649b1314d513cae1d6519c571ca3b733",
+      "logArchiveIdentity": {
+        "path": "frontend-final-unit-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "bb4322346cae0079b0cff2fe08182c61044ea5b581388903699119b38b0d82d3",
+        "bytes": 231,
+        "decompressedSha256": "85361f384919170df893e64f9a558016649b1314d513cae1d6519c571ca3b733",
+        "decompressedBytes": 295
+      }
+    },
+    {
+      "command": "npm.cmd run typecheck",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T19:35:00.5063531Z",
+      "endUtc": "2026-10-12T19:35:02.300508Z",
+      "exitCode": 0,
+      "log": "frontend-final-typecheck-20261013.log.gz",
+      "logSha256": "594414b79fdf440c4686a9d09ddb3856d2f6f97ed07ba92422dcd99db277f193",
+      "rawLogSha256": "864361950cf7b78936326aa7697d83e87b9fe86c103a11a5673064b38b4f4792",
+      "logArchiveIdentity": {
+        "path": "frontend-final-typecheck-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "594414b79fdf440c4686a9d09ddb3856d2f6f97ed07ba92422dcd99db277f193",
+        "bytes": 82,
+        "decompressedSha256": "864361950cf7b78936326aa7697d83e87b9fe86c103a11a5673064b38b4f4792",
+        "decompressedBytes": 63
+      }
+    },
+    {
+      "command": "npm.cmd run lint",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "startUtc": "2026-10-12T19:35:16.7673818Z",
+      "endUtc": "2026-10-12T19:35:27.6565902Z",
+      "exitCode": 0,
+      "log": "frontend-final-lint-20261013.log.gz",
+      "logSha256": "8e44c491977a7487ec3b8fc725dd5f8abf57f7d7f84cea8df2ed05c33a2dee12",
+      "rawLogSha256": "3fa8424452a42955aadbb4d916edc682c754818142cfb1f782203e0ecc2c3a96",
+      "logArchiveIdentity": {
+        "path": "frontend-final-lint-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "8e44c491977a7487ec3b8fc725dd5f8abf57f7d7f84cea8df2ed05c33a2dee12",
+        "bytes": 72,
+        "decompressedSha256": "3fa8424452a42955aadbb4d916edc682c754818142cfb1f782203e0ecc2c3a96",
+        "decompressedBytes": 56
+      }
+    },
+    {
+      "command": "npm.cmd run build",
+      "cwd": "F:\\github\\NewsRoom\\frontend",
+      "profile": "local-desktop",
+      "surface": "portal",
+      "canonicalOrigin": "http://127.0.0.1:3000",
+      "apiBaseUrl": "http://127.0.0.1:8000",
+      "mocks": false,
+      "frontendAuth": true,
+      "releaseId": "chapter11-browser-final",
+      "startUtc": "2026-10-12T19:36:15.1299782Z",
+      "endUtc": "2026-10-12T19:36:44.4573059Z",
+      "exitCode": 0,
+      "log": "frontend-final-build-20261013.log.gz",
+      "logSha256": "043700630adb0d0fe74ccb42306b5ed41a8ead55a49524b1fce0b70e5363c441",
+      "rawLogSha256": "a4427e4c7ecfde3ad59aa67a253c4a69c4844a3361a5155f9870ace7ac0ff49e",
+      "logArchiveIdentity": {
+        "path": "frontend-final-build-20261013.log.gz",
+        "encoding": "gzip",
+        "sha256": "043700630adb0d0fe74ccb42306b5ed41a8ead55a49524b1fce0b70e5363c441",
+        "bytes": 1310,
+        "decompressedSha256": "a4427e4c7ecfde3ad59aa67a253c4a69c4844a3361a5155f9870ace7ac0ff49e",
+        "decompressedBytes": 5434
+      }
+    }
+  ],
+  "unit": {
+    "filesPassed": 140,
+    "testsPassed": 728
+  },
+  "browsers": [
+    {
+      "name": "default-portal",
+      "record": "frontend-final-browser-default-portal-20261013.json",
+      "stats": {
+        "startTime": "2026-10-12T19:31:30.861Z",
+        "duration": 104109.702,
+        "expected": 50,
+        "skipped": 4,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "exitCode": 0
+    },
+    {
+      "name": "default-admin",
+      "record": "frontend-final-browser-default-admin-20261013.json",
+      "stats": {
+        "startTime": "2026-10-12T19:19:30.664Z",
+        "duration": 29029.337,
+        "expected": 21,
+        "skipped": 6,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "exitCode": 0
+    },
+    {
+      "name": "local-desktop-portal",
+      "record": "frontend-final-browser-local-desktop-portal-20261013.json",
+      "stats": {
+        "startTime": "2026-10-12T19:28:53.49Z",
+        "duration": 13663.342,
+        "expected": 4,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "exitCode": 0
+    }
+  ],
+  "partition": {
+    "generatedAtUtc": "2026-10-12T19:30:38.9220527Z",
+    "allCount": 81,
+    "portalCount": 54,
+    "adminCount": 27,
+    "desktopCount": 4,
+    "portalAdminIntersectionCount": 0,
+    "portalAdminUnionCount": 81,
+    "missingFromPartition": [],
+    "extraInPartition": [],
+    "completeComplement": true,
+    "logs": {
+      "all": "frontend-final-browser-list-all-20261013.log.gz",
+      "portal": "frontend-final-browser-list-portal-20261013.log.gz",
+      "admin": "frontend-final-browser-list-admin-20261013.log.gz",
+      "desktop": "frontend-final-browser-list-desktop-20261013.log.gz"
+    }
+  },
+  "uniqueBrowserResult": {
+    "passed": 75,
+    "skipped": 6,
+    "failed": 0,
+    "profileSpecificSkippedThenExecuted": 4
+  },
+  "browserSourceChanges": [
+    {
+      "path": "frontend/next.config.mjs",
+      "change": "modified",
+      "beforeSha256": "2629e88f4bb2f41e959e03493682683fb7aebd6953e7fdbde8c1d684a2579d35",
+      "afterSha256": "de595af8f50da31dfd93931ad5704fe862b90422a98c92776264e28327d0e1a7"
+    },
+    {
+      "path": "frontend/src/components/layout/research-header.tsx",
+      "change": "modified",
+      "beforeSha256": "53e368223d64b263943a8e491e4ac810079a634c28038f0b5fd81442fd87b4fd",
+      "afterSha256": "061a01b0b85bb98739db81c3f66f5d31865b35475e6b72c989a5944776a87ca5"
+    },
+    {
+      "path": "frontend/src/components/providers.tsx",
+      "change": "modified",
+      "beforeSha256": "ae06b13488dba6e39434cfa1892835a9e6416d6f62f81eab89db4e0292ddbafb",
+      "afterSha256": "686150713d64ac59c7906662786e3214d7c8416c39255d9bc14eb1a50b73fe30"
+    },
+    {
+      "path": "frontend/src/features/portal/reader/reader-workspace.module.css",
+      "change": "modified",
+      "beforeSha256": "8ecdc3819456a98f8cd7f4c95f5588f46fa24502c2e59ce0e79e7b03fc81eb95",
+      "afterSha256": "125f24fcd43842db391a91b24687fa3a4fb29f7a23490c014a5c1b120a2f116a"
+    },
+    {
+      "path": "frontend/src/lib/api/__tests__/client.test.ts",
+      "change": "modified",
+      "beforeSha256": "62d9794c88f70766a9d9a71501817afde283156accd64b9dd45d5d52d6a988b9",
+      "afterSha256": "fe88f5227b62fa6c5fade1cba5ee8d14ac30dbd002ecb2fc6fa5b576099863a2"
+    },
+    {
+      "path": "frontend/src/lib/api/client.ts",
+      "change": "modified",
+      "beforeSha256": "4476a82939296bc09ac61f3aea4bbaee77e3e1ac4ff6eb103c39d18cfd5c269a",
+      "afterSha256": "995c45af14c5f32332e8889e88334fcbb6c29c1f1cccebb8f6f4c78068787968"
+    },
+    {
+      "path": "frontend/src/lib/api/mock-data.ts",
+      "change": "modified",
+      "beforeSha256": "f2191de9abdd95fb5f460bbbf03b143b574e31757648cad59b783996a425e97c",
+      "afterSha256": "dce912f8e48438255c9e10d8ad1017bf57c2070859dc2aefaee16a13231fa588"
+    },
+    {
+      "path": "frontend/tests/e2e/admin-console.spec.ts",
+      "change": "modified",
+      "beforeSha256": "b7bc0eb0873368e704a8e121ce9e96fa5d281aca87a0e1cc1a100e940d706bd2",
+      "afterSha256": "a782c1a2ced1221a30b5c354e834d67db6402b5ad224a747ad1065080726c72c"
+    },
+    {
+      "path": "frontend/tests/e2e/desktop-research-readiness.spec.ts",
+      "change": "modified",
+      "beforeSha256": "7621de267ffa2e8fa0a8db90b2521cb6d8f318d9bf9e03dea1f33fe7c22c9083",
+      "afterSha256": "e4b5b8b50b8a1865d52e98a43e1257f934e2982e1d27e1c2558bedd8ee47ab2d"
+    },
+    {
+      "path": "frontend/tests/e2e/navigation.spec.ts",
+      "change": "modified",
+      "beforeSha256": "9f9987f53fdc41cf4445f2fda69c75d701f3d3c0edcb9d5252133d651a0e8560",
+      "afterSha256": "59f255ee7e23a53ae2d07751745a3a4781fb6a24e3e58ad791f19ddf070df4d6"
+    },
+    {
+      "path": "frontend/tests/e2e/projects-lab-responsive.spec.ts",
+      "change": "modified",
+      "beforeSha256": "4fee38b7627c9b640379a3b33e918999f782c4b4de1e296b86843dcf61053e3e",
+      "afterSha256": "822828ad55bc7413039463650ea5e003afb01061c8c4b37051846daf66ba721d"
+    },
+    {
+      "path": "frontend/tests/e2e/studio-acceptance.spec.ts",
+      "change": "modified",
+      "beforeSha256": "fa72fb17fa260a0bd10ffac01b19eeb2c220a95d676cd77ef9293928c2975ebd",
+      "afterSha256": "085d1972255002db31f99e0dc75f1e43bdebf056b7dc3d33f0f6f1ea3ac1afc6"
+    }
+  ],
+  "taxonomyCoverage": {
+    "browserNegative": "tests/e2e/navigation.spec.ts verifies no fabricated taxonomy links and honest 404 without evidence",
+    "positiveUnit": "src/app/papers/__tests__/taxonomy-detail-routes.test.tsx verifies valid task/method routes from real model/repository fixtures"
+  },
+  "buildIdentity": {
+    "next": "16.4.0",
+    "profile": "local-desktop",
+    "mocks": false,
+    "releaseId": "chapter11-browser-final"
+  },
+  "portsAfterChecks": [
+    {
+      "port": 3300,
+      "listening": false
+    },
+    {
+      "port": 3301,
+      "listening": false
+    },
+    {
+      "port": 3400,
+      "listening": false
+    }
+  ],
+  "dependencyIdentityRecord": "frontend-next16-validation-before-browser-20261013.json",
+  "dependencyAuditRecord": "frontend-next16-npm-audit-20261013.json",
+  "dependencyAuditStatus": "17 residual findings; do not interpret test/build passes as a zero-vulnerability audit",
+  "diffCheck": {
+    "command": "git diff HEAD --check -- frontend",
+    "exitCode": 0
+  },
+  "liveAcceptanceExecuted": false,
+  "status": "superseded-by-later-source-repairs-and-complete-clean-frontend-validation",
+  "postBuildDependencyIssue": "frontend-node-identity-root-cause-20261013.json",
+  "supersededBy": "frontend-release-candidate-validation-20261013.json"
+}

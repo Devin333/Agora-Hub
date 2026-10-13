@@ -75,7 +75,7 @@ describe("paper taxonomy detail routes", () => {
     })
     vi.mocked(getPublishedPapers).mockResolvedValueOnce(papers)
 
-    const element = await PapersTaskDetailPageRoute({ params: { slug: "backend-task" } }) as ReactElement<{
+    const element = await PapersTaskDetailPageRoute({ params: Promise.resolve({ slug: "backend-task" }) }) as ReactElement<{
       fallbackNotice?: string | null
       papers: Paper[]
       task: PaperTask
@@ -95,7 +95,7 @@ describe("paper taxonomy detail routes", () => {
     })
     vi.mocked(getPublishedPapers).mockResolvedValueOnce(papers)
 
-    const element = await PapersMethodDetailPageRoute({ params: { slug: "backend-method" } }) as ReactElement<{
+    const element = await PapersMethodDetailPageRoute({ params: Promise.resolve({ slug: "backend-method" }) }) as ReactElement<{
       fallbackNotice?: string | null
       method: PaperMethod
       papers: Paper[]
@@ -114,7 +114,7 @@ describe("paper taxonomy detail routes", () => {
       notices: ["No public papers are available."]
     })
 
-    await expect(PapersTaskDetailPageRoute({ params: { slug: "coding-agents" } })).rejects.toThrow("NEXT_NOT_FOUND")
+    await expect(PapersTaskDetailPageRoute({ params: Promise.resolve({ slug: "coding-agents" }) })).rejects.toThrow("NEXT_NOT_FOUND")
     expect(notFound).toHaveBeenCalled()
     expect(getPublishedPapers).not.toHaveBeenCalled()
   })
@@ -127,7 +127,7 @@ describe("paper taxonomy detail routes", () => {
       notices: []
     })
 
-    await expect(PapersTaskDetailPageRoute({ params: { slug: "backend-task" } })).rejects.toThrow("NEXT_NOT_FOUND")
+    await expect(PapersTaskDetailPageRoute({ params: Promise.resolve({ slug: "backend-task" }) })).rejects.toThrow("NEXT_NOT_FOUND")
     expect(notFound).toHaveBeenCalled()
     expect(getPublishedPapers).not.toHaveBeenCalled()
   })
@@ -140,7 +140,7 @@ describe("paper taxonomy detail routes", () => {
       notices: []
     })
 
-    await expect(PapersMethodDetailPageRoute({ params: { slug: "large-language-model" } })).rejects.toThrow("NEXT_NOT_FOUND")
+    await expect(PapersMethodDetailPageRoute({ params: Promise.resolve({ slug: "large-language-model" }) })).rejects.toThrow("NEXT_NOT_FOUND")
     expect(notFound).toHaveBeenCalled()
     expect(getPublishedPapers).not.toHaveBeenCalled()
   })
@@ -153,7 +153,7 @@ describe("paper taxonomy detail routes", () => {
       notices: []
     })
 
-    await expect(PapersMethodDetailPageRoute({ params: { slug: "backend-method" } })).rejects.toThrow("NEXT_NOT_FOUND")
+    await expect(PapersMethodDetailPageRoute({ params: Promise.resolve({ slug: "backend-method" }) })).rejects.toThrow("NEXT_NOT_FOUND")
     expect(notFound).toHaveBeenCalled()
     expect(getPublishedPapers).not.toHaveBeenCalled()
   })

@@ -5,7 +5,8 @@ import type { ProjectsApiCollection } from "@/types/projects"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(request: NextRequest, { params }: { params: { slug: string } }) {
+export async function GET(request: NextRequest, props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   const path = `/api/v1/projects/collections/${encodeURIComponent(params.slug)}`
   const backend = await backendGet<ProjectsApiCollection>(backendPath(path, request.nextUrl.searchParams))
   if (backend.ok) return success(backend.data)

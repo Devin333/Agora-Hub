@@ -4,7 +4,8 @@ import { ProjectV1DetailPage } from "@/features/projects/components/projects-det
 
 export const dynamic = "force-dynamic"
 
-export default function ProjectDetailPage({ params }: { params: { slug: string } }) {
+export default async function ProjectDetailPage(props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   return (
     <Suspense fallback={<PageSkeleton />}>
       <ProjectV1DetailPage projectId={params.slug} />

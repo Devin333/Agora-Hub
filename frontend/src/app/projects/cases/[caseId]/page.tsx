@@ -4,7 +4,8 @@ import { ProjectCaseDetailPage } from "@/features/projects/components/projects-d
 
 export const dynamic = "force-dynamic"
 
-export default function ProjectsCaseDetailRoute({ params }: { params: { caseId: string } }) {
+export default async function ProjectsCaseDetailRoute(props: { params: Promise<{ caseId: string }> }) {
+  const params = await props.params;
   return (
     <Suspense fallback={<PageSkeleton />}>
       <ProjectCaseDetailPage caseId={params.caseId} />

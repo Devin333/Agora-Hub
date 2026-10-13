@@ -1,0 +1,43 @@
+{
+  "schema": "newsroom-browser-validation/v1",
+  "metadata": {
+    "command": "npx.cmd playwright test tests/e2e/desktop-research-readiness.spec.ts --reporter=list,json",
+    "cwd": "F:\\github\\NewsRoom\\frontend",
+    "profile": "local-desktop",
+    "surface": "portal",
+    "baseUrl": "http://127.0.0.1:3400",
+    "apiBaseUrl": "http://127.0.0.1:8000",
+    "mocks": false,
+    "frontendAuth": true,
+    "reuseExistingServer": false,
+    "releaseId": "e2e-fixture",
+    "startedAtUtc": "2026-10-12T20:29:02.7848386Z",
+    "endedAtUtc": "2026-10-12T20:29:17.9760142Z",
+    "exitCode": 0,
+    "log": "frontend-release-candidate-browser-local-desktop-portal-20261013.log.gz",
+    "evidenceBoundary": "route fixtures only; not Chapter 12 live service evidence",
+    "originalLog": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-desktop-local-palette-final-20261013.log",
+    "originalJson": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-next16-browser-desktop-local-palette-final-20261013.json",
+    "logSha256": "344fdb6caa36a1267e28a8fa2e77a663be3b137a42a954aa1ffd7f851967530c",
+    "report": "frontend-release-candidate-browser-local-desktop-portal-20261013-report.json",
+    "reportSha256": "56fe59debd18395d1efd60de9f9c4c25cf44001fc059b31fa8ac116cc650cc93",
+    "rawLogSha256": "7fe3a97bb06f5bfd2e4bdb03f800b8442e99322003c6491009d75bebfb6fb62f",
+    "logArchiveIdentity": {
+      "path": "frontend-release-candidate-browser-local-desktop-portal-20261013.log.gz",
+      "encoding": "gzip",
+      "sha256": "344fdb6caa36a1267e28a8fa2e77a663be3b137a42a954aa1ffd7f851967530c",
+      "bytes": 680,
+      "decompressedSha256": "7fe3a97bb06f5bfd2e4bdb03f800b8442e99322003c6491009d75bebfb6fb62f",
+      "decompressedBytes": 3246
+    }
+  },
+  "stats": {
+    "startTime": "2026-10-12T20:29:03.434Z",
+    "duration": 14516.456,
+    "expected": 4,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "liveAcceptanceExecuted": false
+}

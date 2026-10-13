@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest"
-import { acceptAccountHistory, historyState, importGuestHistory, readResearchWorkspace, recordResearchVisit, rememberResearchActivity, removeResearchGroup, removeResearchMaterial, removeWorkspaceReport, researchResumeHref, saveComposerDraft, saveResearchGroup, saveResearchMaterial, saveResearchPrompt, saveWorkspaceReport, selectHistoryOwner } from "./history"
+import { acceptAccountHistory, historyState, importGuestHistory, readResearchWorkspace, recordResearchVisit, rememberResearchActivity, removeResearchGroup, removeResearchMaterial, removeWorkspaceReport, researchResumeHref, saveComposerDraft, saveResearchGroup, saveResearchMaterial, saveResearchPrompt, saveReaderSelectionState, saveWorkspaceReport, selectHistoryOwner } from "./history"
 import { validateWorkspace } from "./history-model"
 import { researchQuestionHref } from "./entry"
 import { validMaterial, type ResearchMaterial, type ResearchReportDraft } from "./workspace-items"
@@ -23,6 +23,63 @@ describe("owned research workspace", () => {
     expect(saveResearchPrompt({ id: "prompt-a", name: "Recent Agent papers", question: "Agent", mode: "papers", constraints: { recentYear: true }, updatedAt: 2 })).toBe(true)
     expect(saveComposerDraft({ question: "Unsent", mode: "papers", groupId: "group-a", constraints: {}, updatedAt: 2 })).toBe(true)
   }
+  it("persists revision-bound reader selections and rejects cross-revision events", () => {
+    selectHistoryOwner("alice")
+    acceptAccountHistory({ visits: [], groups: [] }, 0)
+    const selection = {
+      id: "selection-1",
+      paperId: "2601.01234",
+      sourceRevision: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      sectionId: "methods",
+      paragraphId: "paragraph-1",
+      pageNumber: 3,
+      selectedText: "bounded retrieval",
+      surroundingText: "uses bounded retrieval",
+      startOffset: 5,
+      endOffset: 22,
+      noteText: "note",
+      explainQuestion: "",
+      exampleQuestion: "",
+      explained: false,
+      exampled: false,
+      confused: true,
+      createdAt: 1,
+      updatedAt: 2,
+    }
+    const event = {
+      id: "event-1",
+      type: "selection_created" as const,
+      paperId: selection.paperId,
+      sourceRevision: selection.sourceRevision,
+      selectionId: selection.id,
+      sectionId: selection.sectionId,
+      paragraphId: selection.paragraphId,
+      pageNumber: 3,
+      selectedText: selection.selectedText,
+      surroundingText: selection.surroundingText,
+      createdAt: 2,
+    }
+    expect(saveReaderSelectionState({
+      paperId: selection.paperId,
+      sourceRevision: selection.sourceRevision,
+      selections: [selection],
+      events: [event],
+      updatedAt: 2,
+    }, "alice")).toBe(true)
+    const saved = readResearchWorkspace()
+    expect(validateWorkspace(saved)).toEqual(saved)
+    expect(saved.readerSelections?.[0]).not.toHaveProperty("blockId")
+    expect(saved.readerSelections?.[0]).not.toHaveProperty("explainAnswer")
+    expect(validateWorkspace({
+      ...saved,
+      readerSelections: [{ ...selection, blockId: null }],
+    })).toBeNull()
+    expect(validateWorkspace({
+      ...saved,
+      readerEvents: [{ ...event, sourceRevision: "other-revision" }],
+    })).toBeNull()
+  })
+
   it("restores legacy history and rejects dangling references instead of discarding only part of a snapshot", () => {
     expect(validateWorkspace({ visits: [], groups: [] })).toEqual({ visits: [], groups: [] })
     expect(validateWorkspace({ visits: [], groups: [], materials: [material] })).toBeNull()
@@ -66,12 +123,45 @@ describe("owned research workspace", () => {
   it("resumes an exact source chapter while retaining the discovery query and filters", () => {
     const href = researchQuestionHref("papers", "Agent", "study-a") + "&has=code"
     recordResearchVisit(href)
-    expect(rememberResearchActivity("study-a", { kind: "reader", paperId: "source-a", title: "Source", href: "/design-demo/papers/source-a/read", sectionId: "methods", sectionTitle: "Methods", updatedAt: Date.now() })).toBe(true)
+    expect(rememberResearchActivity("study-a", { kind: "reader", paperId: "source-a", title: "Source", href: "/design-demo/papers/source-a/read", sourceRevision: "revision-1", sectionId: "methods", sectionTitle: "Methods", updatedAt: Date.now() })).toBe(true)
     const url = new URL(researchResumeHref(readResearchWorkspace().visits[0]), "https://agora.invalid")
     expect(url.pathname).toBe("/design-demo/papers/source-a/read")
+    expect(url.searchParams.get("sourceRevision")).toBe("revision-1")
     expect(url.searchParams.get("resumeSection")).toBe("methods")
     expect(url.searchParams.get("returnTo")).toBe(href)
     expect(rememberResearchActivity("study-a", { kind: "report", draftId: "not-owned", title: "Other", updatedAt: 2 })).toBe(false)
+  })
+  it("accepts opaque reader IDs and rejects traversal or unowned reader queries", () => {
+    const now = Date.now()
+    const base = {
+      id: "paper-reader",
+      groupId: null,
+      kind: "paper" as const,
+      title: "Opaque paper",
+      url: "https://example.test/paper",
+      notes: "",
+      createdAt: now,
+      updatedAt: now,
+    }
+    expect(validMaterial({ ...base, readerHref: "/papers/2601.01234/read?sourceRevision=revision-1" })).toBe(true)
+    expect(validMaterial({ ...base, readerHref: "/papers/doi%3A10.1%2Fpaper/read" })).toBe(true)
+    expect(validMaterial({ ...base, readerHref: "/papers/%2E%2E/read" })).toBe(false)
+    expect(validMaterial({ ...base, readerHref: "/papers/paper/read?owner=forged" })).toBe(false)
+    expect(validMaterial({ ...base, readerHref: "//evil.test/papers/paper/read" })).toBe(false)
+  })
+
+  it("rejects new precise resume state without an exact source identity", () => {
+    const href = researchQuestionHref("papers", "Agent", "study-legacy")
+    recordResearchVisit(href)
+    expect(rememberResearchActivity("study-legacy", {
+      kind: "reader",
+      paperId: "source-a",
+      title: "Source",
+      href: "/design-demo/papers/source-a/read",
+      sectionId: "methods",
+      updatedAt: Date.now(),
+    })).toBe(false)
+    expect(readResearchWorkspace().visits[0].activity).toBeNull()
   })
   it("clears only a deleted draft's continuation and keeps original research searchable", () => {
     populate()

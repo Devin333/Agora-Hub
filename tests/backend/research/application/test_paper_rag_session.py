@@ -34,6 +34,7 @@ class _FakeController:
     last_source_verifier = None
     last_memory = None
     last_context_pack_assembler = None
+    last_event_recorder = None
 
     def __init__(
         self,
@@ -44,6 +45,7 @@ class _FakeController:
         source_verifier=None,
         memory=None,
         context_pack_assembler=None,
+        event_recorder=None,
     ) -> None:
         _FakeController.last_retrieval = retrieval
         _FakeController.last_planner = planner
@@ -51,6 +53,7 @@ class _FakeController:
         _FakeController.last_source_verifier = source_verifier
         _FakeController.last_memory = memory
         _FakeController.last_context_pack_assembler = context_pack_assembler
+        _FakeController.last_event_recorder = event_recorder
 
     def run(self, spec):
         return {"spec": spec}
@@ -229,6 +232,30 @@ def test_paper_rag_session_wires_optional_memory_port(monkeypatch):
     )
 
     assert _FakeController.last_memory is memory
+
+
+def test_paper_rag_session_wires_optional_event_recorder(monkeypatch):
+    monkeypatch.setattr(paper_rag_session, "ResearchRetriever", _FakeRetriever)
+    monkeypatch.setattr(paper_rag_session, "PaperChunkRetrievalPort", _FakeRetrievalPort)
+    monkeypatch.setattr(paper_rag_session, "BoundedRAGSessionController", _FakeController)
+    recorder = object()
+
+    PaperRAGSession(object(), event_recorder=recorder).run(
+        ResearchRetrievalGoal(
+            goal_id="g1",
+            paper_id="p1",
+            question="What does the figure show?",
+            required_evidence_types=["figure"],
+            allowed_source_refs=["paper://p1"],
+            allowed_memory_namespaces=["research"],
+        ),
+        graph_identity=build_paper_analysis_context_graph_identity(
+            run_id="run-recorder", stage_id="run_research_rag"
+        ),
+        session_id="session-recorder",
+    )
+
+    assert _FakeController.last_event_recorder is recorder
 
 
 def test_paper_rag_session_builds_run_scoped_context_assembler(monkeypatch):

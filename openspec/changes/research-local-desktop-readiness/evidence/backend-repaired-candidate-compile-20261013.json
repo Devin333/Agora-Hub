@@ -1,0 +1,33 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-12T21:19:47.726539+00:00",
+  "status": "passed-for-repaired-candidate-final-full-and-smoke-pending",
+  "metadata": {
+    "stage": "compile-final2",
+    "cwd": "F:\\github\\NewsRoom",
+    "command": ".venv/Scripts/python.exe -m scripts.dev compile",
+    "environment": {
+      "PYTHONFAULTHANDLER": "1",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "utcStart": "2026-10-12T21:12:52.2461914Z",
+    "utcEnd": "2026-10-12T21:12:52.4826302Z",
+    "exitCode": 0,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-compile-final2-20261013-051252-234.log",
+    "logSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69"
+  },
+  "log": "backend-repaired-candidate-compile-20261013.log.gz",
+  "logSha256": "914ed4639569ecc832c9224623ea37d8d7ae68dbe3ef95e7de8befec2f78ef50",
+  "candidateRecord": "backend-repaired-candidate-final-validation-20261013.json",
+  "candidateSourceDigest": "sha256:ea013dcd56f4182504f40a74360aa0eee708d2426958da3cc4ab28df81eff10e",
+  "liveAcceptanceExecuted": false,
+  "rawLogSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69",
+  "logArchiveIdentity": {
+    "path": "backend-repaired-candidate-compile-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "914ed4639569ecc832c9224623ea37d8d7ae68dbe3ef95e7de8befec2f78ef50",
+    "bytes": 125,
+    "decompressedSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69",
+    "decompressedBytes": 116
+  }
+}

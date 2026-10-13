@@ -1,0 +1,15 @@
+{
+  "stage": "test-final2",
+  "cwd": "F:\\github\\NewsRoom",
+  "command": ".venv/Scripts/python.exe -m scripts.dev test",
+  "environment": {
+    "PYTHONFAULTHANDLER": "1",
+    "PYTHONUNBUFFERED": "1",
+    "PYTEST_ADDOPTS": "-rs"
+  },
+  "utcStart": "2026-10-12T21:13:15.0849904Z",
+  "utcEnd": "2026-10-12T22:46:15.1283494Z",
+  "exitCode": 1,
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-test-final2-20261013-051315-075.log",
+  "logSha256": "ea1d7c75b5ddc8aad1c52bbe8faf8b23dd02f96859401f8abbdf482d4a87353f"
+}

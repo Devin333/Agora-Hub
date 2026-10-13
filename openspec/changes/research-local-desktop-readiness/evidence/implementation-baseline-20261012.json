@@ -1,0 +1,166 @@
+{
+  "schema": "newsroom.desktop_implementation_baseline.v1",
+  "recorded_at": "2026-10-12T10:28:15.454265+00:00",
+  "client_date": "2026-10-12",
+  "client_timezone": "Asia/Shanghai",
+  "git_revision": "4d867043d060b30ebf14bc12f738a90a9a574fa4",
+  "initial_worktree": "clean as observed before implementation dispatch",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "versions": [
+    {
+      "command": [
+        "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+        "--version"
+      ],
+      "exit_code": 0,
+      "version": "Python 3.12.7"
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "exit_code": 0,
+      "version": "v24.10.0"
+    },
+    {
+      "command": [
+        "npm.cmd",
+        "--version"
+      ],
+      "exit_code": 0,
+      "version": "11.6.1"
+    }
+  ],
+  "source_snapshot": [
+    {
+      "path": "frontend/src/app/page.tsx",
+      "sha256": "b3372ed7356bcaf896bf4137e1e44161c4cef03f3a569103e9404378a8bbf624"
+    },
+    {
+      "path": "frontend/src/middleware.ts",
+      "sha256": "a7b877daa385c6ece2ce71537f3a327db85656f78f4d278b6e8edff8c1461011"
+    },
+    {
+      "path": "frontend/src/lib/auth/session.ts",
+      "sha256": "9097c7e503f3dc724e7c4b66b22559536cf510b483159081190301231dd88b80"
+    },
+    {
+      "path": "frontend/src/features/portal/reader/use-reader-notebook.ts",
+      "sha256": "1ca70cda46eccedb90dbd80aceaa258cf2d15be53191a2735f0ca2f4f4282d07"
+    },
+    {
+      "path": "frontend/src/lib/research/history.ts",
+      "sha256": "e82788b98cc0da8d1c6537ff636ab5d872411a070ee109473d52e7b0373c8d91"
+    },
+    {
+      "path": "frontend/src/lib/research/history-sync.ts",
+      "sha256": "f0ca45276d8842ffc576b8770426ad8c50f373115bf4a5cbe0f0e2f4ef856eee"
+    },
+    {
+      "path": "frontend/src/features/reports/components/report-preparation.tsx",
+      "sha256": "50c0cf78808b4d4bf2e1bf50de2e76391ddb902c5076257d6cb460b6e4f90b00"
+    },
+    {
+      "path": "interfaces/services/auth_service.py",
+      "sha256": "6eb7df36a8ef3c817b60d830ee292813f3e4e3eabc0f0a54bbab23952d856ac8"
+    },
+    {
+      "path": "interfaces/services/research_history_service.py",
+      "sha256": "266cdb352106cec0442c1bef0a95064c4c79ef2f849ea15d46f54b5c1c20f447"
+    },
+    {
+      "path": "interfaces/services/research_import_service.py",
+      "sha256": "c6f017decdd3de7742bd4e48fc77817f5699c3374cf53503c351ded9d7f1403e"
+    },
+    {
+      "path": "interfaces/services/research_service.py",
+      "sha256": "5bab27f8c7431ead7c49850f7df59ca9191f33579dfe7a82542bd4b01000ebd8"
+    },
+    {
+      "path": "interfaces/composition/research_settings.py",
+      "sha256": "688d9c23bf3f53ce5d20a0fa38eb279d43f94bb94e40f2a3a4b718a88d6f913a"
+    },
+    {
+      "path": "interfaces/api/routers/research.py",
+      "sha256": "4b12199c9de1d20aaf1ccf4bc864463c51c46b0b0e4222f698010cbd2be33d76"
+    },
+    {
+      "path": "frontend/package-lock.json",
+      "sha256": "2fff00eb717104ac05c8bcc51851e460653445646ae30b31e3b957c59a4769a7"
+    }
+  ],
+  "resolved_storage_inventory": [
+    {
+      "owner": "auth-users",
+      "keys": [
+        "NEWSROOM_AUTH_USERS_PATH"
+      ],
+      "path": "F:\\github\\NewsRoom\\.newsroom\\auth\\users.json",
+      "default_source": "interfaces/services/auth_service.py"
+    },
+    {
+      "owner": "auth-sessions",
+      "keys": [
+        "NEWSROOM_AUTH_SESSIONS_PATH"
+      ],
+      "path": "F:\\github\\NewsRoom\\.newsroom\\auth\\sessions.json",
+      "default_source": "interfaces/services/auth_service.py"
+    },
+    {
+      "owner": "workspace-history",
+      "keys": [
+        "NEWSROOM_RESEARCH_HISTORY_PATH"
+      ],
+      "path": "F:\\github\\NewsRoom\\.newsroom\\research\\history.json",
+      "default_source": "interfaces/services/research_history_service.py"
+    },
+    {
+      "owner": "research-imports",
+      "keys": [
+        "NEWSROOM_RESEARCH_IMPORT_DIR"
+      ],
+      "path": "F:\\github\\NewsRoom\\.newsroom\\research\\imports",
+      "default_source": "interfaces/services/research_import_service.py"
+    },
+    {
+      "owner": "research-artifacts",
+      "keys": [
+        "NEWS_RESEARCH_ARTIFACT_ROOT",
+        "NEWS_ARTIFACT_ROOT"
+      ],
+      "path": "F:\\github\\NewsRoom\\.newsroom\\runs",
+      "default_source": "interfaces/composition/research_settings.py"
+    },
+    {
+      "owner": "research-run-records",
+      "keys": [
+        "NEWS_RESEARCH_RUN_STORE_ROOT"
+      ],
+      "path": "F:\\github\\NewsRoom\\.newsroom\\research\\runs",
+      "default_source": "interfaces/composition/research_settings.py"
+    },
+    {
+      "owner": "research-local-chunks",
+      "keys": [
+        "NEWS_RESEARCH_RAG_LOCAL_ROOT"
+      ],
+      "path": "F:\\github\\NewsRoom\\.newsroom\\research\\chunks",
+      "default_source": "interfaces/composition/research_settings.py"
+    }
+  ],
+  "credential_presence": {
+    "OPENAI_API_KEY": true,
+    "DASHSCOPE_API_KEY": true,
+    "NEWSROOM_API_TOKEN": false,
+    "NEWS_API_TOKEN": false,
+    "NEWSROOM_AUTH_CHALLENGE_SECRET": false
+  },
+  "test_execution": "not_started; implementation first",
+  "notes": [
+    "Storage paths are resolved from audited source defaults and named config keys without importing production composition.",
+    "This inventory is an implementation baseline, not proof of backup consistency or live capability verification.",
+    "Reader notebook is browser-local at baseline and must be integrated into the owned workspace.",
+    "Additional generation/admission metadata and backend-specific owners must be added to the runtime inventory during implementation."
+  ]
+}

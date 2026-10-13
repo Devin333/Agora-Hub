@@ -10,6 +10,29 @@ export type ReaderWorkspacePayload = {
   sourceUrl?: string
   sourceKind?: "arxiv-html"
   aiReady?: boolean
+  sourceRevision?: string
+  sourceFingerprint?: string
+  runId?: string
+  capabilities?: { ask: boolean; analyze: boolean }
+}
+
+export function hasOwnedAnalysisSource(payload: ReaderWorkspacePayload): boolean {
+  return Boolean(
+    payload.sourceRevision &&
+    payload.sourceFingerprint &&
+    payload.capabilities?.analyze === true,
+  )
+}
+
+export function needsOwnedSourcePreparation(
+  payload: ReaderWorkspacePayload,
+  localDesktop: boolean,
+): boolean {
+  return (
+    localDesktop &&
+    payload.capabilities === undefined &&
+    !hasOwnedAnalysisSource(payload)
+  )
 }
 
 export function readerUnavailableMessage(code?: string) {

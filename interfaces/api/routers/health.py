@@ -4,6 +4,10 @@ from fastapi import APIRouter
 
 from framework.execution_environment.errors import ExecutionEnvironmentError
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
+from interfaces.services.research_desktop_auth import (
+    ResearchDesktopAuthError,
+    local_desktop_runtime_identity,
+)
 
 
 def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
@@ -11,7 +15,14 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
 
     @router.get("/health")
     def health() -> dict:
-        return helpers.success({"status": "ok", "service": "agora-hub-api"})
+        try:
+            desktop_identity = local_desktop_runtime_identity()
+        except ResearchDesktopAuthError as exc:
+            return helpers.error(status_code=exc.status_code, code=exc.code, message=str(exc))
+        payload = {"status": "ok", "service": "agora-hub-api"}
+        if desktop_identity is not None:
+            payload["local_desktop"] = desktop_identity
+        return helpers.success(payload)
 
     @router.get("/health/live")
     def live_health() -> dict:
@@ -35,14 +46,19 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
                     details=dict(details),
                     retryable=isinstance(exc, ExecutionEnvironmentError),
                 )
-            return helpers.success(
-                {
-                    "status": "ok",
-                    "service": "agora-hub-api",
-                    "ready": True,
-                    "runtime_composition": diagnostics,
-                }
-            )
+            try:
+                desktop_identity = local_desktop_runtime_identity()
+            except ResearchDesktopAuthError as exc:
+                return helpers.error(status_code=exc.status_code, code=exc.code, message=str(exc))
+            payload = {
+                "status": "ok",
+                "service": "agora-hub-api",
+                "ready": True,
+                "runtime_composition": diagnostics,
+            }
+            if desktop_identity is not None:
+                payload["local_desktop"] = desktop_identity
+            return helpers.success(payload)
         return helpers.error(
             status_code=503,
             code="runtime_composition_missing",

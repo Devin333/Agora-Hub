@@ -1,4 +1,4 @@
-import { papersRoutes } from "./routes"
+import { researchPapersHref } from "@/lib/research/routes"
 
 const returnPaths = new Set(["/design-demo", "/design-demo/papers", "/papers", "/papers/methods", "/papers/tasks"])
 
@@ -15,9 +15,11 @@ export function safePaperReturnTo(value?: string | null): string {
 }
 
 export function paperReaderHref(slug: string, returnTo?: string) {
-  const href = safePaperReturnTo(returnTo).startsWith("/design-demo/papers")
-    ? `/design-demo${papersRoutes.reader(slug)}`
-    : papersRoutes.reader(slug)
+  const base = returnTo && safePaperReturnTo(returnTo).startsWith("/design-demo")
+    ? "/design-demo/papers"
+    : "/papers"
+  const href = `${base}/${encodeURIComponent(slug)}/read`
+
   return returnTo ? `${href}?${new URLSearchParams({ returnTo: safePaperReturnTo(returnTo) })}` : href
 }
 
@@ -49,5 +51,5 @@ export function hasSavedPaperScroll(returnTo: string) {
 }
 
 export function paperQuestionHref(question: string) {
-  return `/design-demo/papers?${new URLSearchParams({ question: question.trim(), q: question.trim() })}`
+  return `${researchPapersHref()}?${new URLSearchParams({ question: question.trim(), q: question.trim() })}`
 }

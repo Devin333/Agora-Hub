@@ -1797,40 +1797,83 @@ class ResearchSinglePaperRuntime:
         return bound_registry
 
     def _load_paper_source(self, task: dict[str, Any], workspace: "_ResearchRunWorkspace") -> HarnessWorkerResult:
-        paper = self.source_provider.fetch_paper(workspace.request.source_ref)
-        source_record = self.source_provider.fetch_source_record(paper.paper_id)
+        expected_revision = None
+        declared_fingerprint = None
+        if workspace.input_context is not None:
+            expected_revision = dict(workspace.input_context.projection.payload)["source_revision"]
+            metadata = workspace.request.options.get("metadata")
+            if isinstance(metadata, Mapping):
+                declared_fingerprint = metadata.get("source_fingerprint")
+        bound_fetch = getattr(self.source_provider, "fetch_bound_source", None)
+        bound = None
+        if callable(bound_fetch) and expected_revision is not None:
+            bound = bound_fetch(
+                source_ref=workspace.request.source_ref,
+                paper_id=workspace.request.paper_id,
+                source_revision=expected_revision,
+                actor_scope=_accepted_research_actor_metadata(workspace.request),
+            )
+        if bound is not None:
+            paper = bound.paper
+            source_record = bound.source_record
+            workspace.document = ResearchDocument.model_validate(
+                bound.document.model_copy(
+                    update={"actor_scope": _accepted_research_actor_metadata(workspace.request)}
+                ).model_dump(mode="json")
+            )
+            if _normalized_source_revision(workspace.document.source_hash) != _normalized_source_revision(expected_revision):
+                raise ResearchInputContractError(
+                    "bound Research document revision does not match the input profile"
+                )
+            if declared_fingerprint is not None and (
+                _normalized_source_revision(workspace.document.source_hash)
+                != _normalized_source_revision(declared_fingerprint)
+            ):
+                raise ResearchInputContractError(
+                    "bound Research document fingerprint does not match the input profile"
+                )
+        else:
+            paper = self.source_provider.fetch_paper(workspace.request.source_ref)
+            source_record = self.source_provider.fetch_source_record(paper.paper_id)
         source_record = PaperSourceRecord.model_validate(
             source_record.model_copy(
-                update={
-                    "actor_scope": _accepted_research_actor_metadata(
-                        workspace.request
-                    )
-                }
+                update={"actor_scope": _accepted_research_actor_metadata(workspace.request)}
             ).model_dump(mode="json")
         )
         if workspace.input_context is not None:
-            expected_revision = dict(workspace.input_context.projection.payload)[
-                "source_revision"
-            ]
             if source_record.source_url != workspace.request.source_ref:
                 raise ResearchInputContractError(
                     "accepted Research source does not match the input profile"
                 )
-            if source_record.source_hash != expected_revision:
+            if _normalized_source_revision(source_record.source_hash) != _normalized_source_revision(expected_revision):
                 raise ResearchInputContractError(
                     "accepted Research source revision does not match the input profile"
                 )
+            if declared_fingerprint is not None and (
+                _normalized_source_revision(source_record.source_hash)
+                != _normalized_source_revision(declared_fingerprint)
+            ):
+                raise ResearchInputContractError(
+                    "accepted Research source fingerprint does not match the input profile"
+                )
+        if paper.paper_id != workspace.request.paper_id:
+            raise ResearchInputContractError(
+                "accepted Research paper does not match the requested paper"
+            )
         workspace.paper = paper
         workspace.source_record = source_record
         return _ok(
             {
                 "paper": paper.to_dict(),
                 "source_record": source_record.to_dict(),
+                "bound_document": workspace.document.to_dict() if workspace.document is not None else None,
                 "source_refs": [workspace.request.source_ref],
             }
         )
 
     def _compile_document(self, task: dict[str, Any], workspace: "_ResearchRunWorkspace") -> HarnessWorkerResult:
+        if workspace.document is not None:
+            return _ok({"document": workspace.document.to_dict(), "source_refs": workspace.document.lineage.source_refs})
         if workspace.paper is None or workspace.source_record is None:
             return _failed("paper source must be loaded before compile_document")
         compile_method = self.document_compiler.compile
@@ -2434,6 +2477,8 @@ class ResearchSinglePaperRuntime:
                     payload=dict(payload),
                     metadata={
                         "run_id": workspace.request.run_id,
+                        "paper_id": workspace.request.paper_id,
+                        "artifact_type": artifact_type,
                         **actor_metadata,
                         **dict(metadata or {}),
                     },
@@ -3504,6 +3549,10 @@ def _harness_result_has_execution_error(harness_result: Any) -> bool:
         for diagnostics in (worker_result.diagnostics,)
     )
 
+
+
+def _normalized_source_revision(value: Any) -> str:
+    return str(value or "").strip().casefold().removeprefix("sha256:")
 
 __all__ = [
     "AnalyzePaperRequest",

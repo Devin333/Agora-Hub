@@ -4,7 +4,11 @@ import { requirePublicPaper } from "@/lib/papers/public-route-guard"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: NextRequest, { params }: { params: { paperId: string; assetId: string } }) {
+export async function GET(
+  _request: NextRequest,
+  props: { params: Promise<{ paperId: string; assetId: string }> }
+) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response

@@ -1,0 +1,66 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-13T01:42:14.458507+00:00",
+  "status": "passed-required-precommit-smoke",
+  "metadata": {
+    "stage": "full-smoke-final3",
+    "cwd": "F:\\github\\NewsRoom",
+    "command": ".venv/Scripts/python.exe -m scripts.dev smoke",
+    "environment": {
+      "PYTHONFAULTHANDLER": "1",
+      "PYTHONUNBUFFERED": "1",
+      "PYTEST_ADDOPTS": "-rs"
+    },
+    "utcStart": "2026-10-13T00:27:38.0139020Z",
+    "utcEnd": "2026-10-13T01:41:20.3106734Z",
+    "exitCode": 0,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-smoke-final3-20261013-082738-010.log",
+    "logSha256": "97804131acf3cb6877e0233ebf4087bae64692c6e6397308aced196df568ac07"
+  },
+  "metadataRecord": "backend-release-candidate-mandatory-smoke-20261013.metadata.json",
+  "logArtifact": {
+    "path": "backend-release-candidate-mandatory-smoke-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "f059f0c6af83a0ed8f0fc1c25d465895b01f64bb0c8cbd6d5f0519c1c599f54c",
+    "bytes": 2078,
+    "decompressedSha256": "97804131acf3cb6877e0233ebf4087bae64692c6e6397308aced196df568ac07",
+    "decompressedBytes": 9966
+  },
+  "candidateRecord": "backend-release-candidate-identity-20261013.json",
+  "candidateSourceDigest": "sha256:06893c3fbe0890a90124263120b28ddef957665e04bcc12a8f438f0cddb081bf",
+  "finalCandidateEvidence": true,
+  "liveAcceptanceExecuted": false,
+  "pytestSummaryBlocks": [
+    {
+      "passed": 4192,
+      "deselected": 23,
+      "warnings": 31,
+      "seconds": 4411.11,
+      "failed": 0
+    }
+  ],
+  "pipeline": [
+    "project compile",
+    "Harness/Research/API/service and tests/architecture pytest",
+    "AgentLoop offline smoke",
+    "sources validation"
+  ],
+  "pipelineAuthority": "scripts/dev.py frozen in candidate; scripts.dev smoke stops at failed commands and returns their code. Composite exit 0 proves all required stages returned 0.",
+  "scope": "Required project precommit gate; not real desktop deployment/provider acceptance.",
+  "agentLoop": {
+    "status": "succeeded",
+    "networkCalls": 0,
+    "deterministicLlmCalls": 3,
+    "toolCalls": 1,
+    "runId": "test-agent-loop-5c17cd2a77234d138e05b4866ffa0797",
+    "manifestHash": "sha256:ed63c043b1460d4a5aeeee580f140c00b050d13082b85d2a8025c3c186d7fb6f",
+    "verifyEvidenceRef": "sha256:f8e55c01880e008cf8810fcfaf14b1e80366a73e9b5bf96be05976bb029fd416",
+    "evidenceAuthority": "Parsed from exact archived original smoke stdout; deterministic offline worker, no real provider invocation."
+  },
+  "sourceValidation": {
+    "isValid": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "evidenceAuthority": "Parsed from the sources validate result in the exact archived smoke stdout."
+  }
+}

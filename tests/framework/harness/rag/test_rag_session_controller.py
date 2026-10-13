@@ -305,3 +305,72 @@ def _tenant_evidence_packs() -> tuple[EvidencePack, ...]:
             metadata=metadata,
         ))
     return tuple(packs)
+
+
+class _FailBeforeSecondStepRecorder:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def record_event(self, *, spec, sequence, event_type, payload) -> None:
+        del spec, sequence
+        if event_type == "rag_step_execution_started" and payload.get("step_id") == "query-2":
+            raise RuntimeError("durable journal unavailable")
+        self.events.append((event_type, dict(payload)))
+
+
+def test_durable_step_result_stops_before_next_retrieval_side_effect() -> None:
+    spec = fake_rag_session_spec(
+        budget=RAGBudget(
+            max_rounds=1,
+            max_replans=0,
+            max_queries=2,
+            max_source_reads=0,
+            max_memory_hits=0,
+            max_context_items=4,
+            max_context_tokens=1024,
+            max_worker_calls=2,
+        )
+    )
+    plan = RetrievalPlanCandidate(
+        candidate_id="two-step-plan",
+        queries=(
+            RetrievalStepSpec(
+                step_id="query-1",
+                operation=RetrievalOperation.SEARCH_CORPUS,
+                query="first",
+                corpus=spec.allowed_corpora[0],
+                max_results=1,
+                metadata={
+                    "evidence_type": spec.goal.required_evidence_types[0],
+                    "scope_ref": spec.source_policy["scope_ref"],
+                },
+            ),
+            RetrievalStepSpec(
+                step_id="query-2",
+                operation=RetrievalOperation.SEARCH_CORPUS,
+                query="second",
+                corpus=spec.allowed_corpora[0],
+                max_results=1,
+                metadata={
+                    "evidence_type": spec.goal.required_evidence_types[0],
+                    "scope_ref": spec.source_policy["scope_ref"],
+                },
+            ),
+        ),
+    )
+    retrieval = FakeRetrievalPort(fake_research_evidence_packs()[:1])
+    recorder = _FailBeforeSecondStepRecorder()
+    controller = BoundedRAGSessionController(
+        retrieval=retrieval,
+        planner=FakeRAGPlanner((plan,)),
+        event_recorder=recorder,
+    )
+
+    with pytest.raises(RuntimeError, match="durable journal unavailable"):
+        controller.run(spec)
+
+    assert len(retrieval.requests) == 1
+    assert any(
+        event_type == "rag_step_executed" and payload.get("step_id") == "query-1"
+        for event_type, payload in recorder.events
+    )

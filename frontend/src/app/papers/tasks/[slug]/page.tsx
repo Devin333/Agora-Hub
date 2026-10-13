@@ -7,7 +7,8 @@ export function generateStaticParams() {
   return []
 }
 
-export default async function PapersTaskDetailPageRoute({ params }: { params: { slug: string } }) {
+export default async function PapersTaskDetailPageRoute(props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   const slug = decodePaperRouteSlug(params.slug)
   const result = await getPaperTasksResult()
   const task = result.items.find((item) => item.slug === slug && item.paperCount > 0)

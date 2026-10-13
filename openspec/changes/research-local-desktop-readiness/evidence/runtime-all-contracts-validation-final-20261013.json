@@ -1,0 +1,37 @@
+{
+  "kind": "offline-contract-validation",
+  "profile": "local-desktop",
+  "recordedAt": "2026-10-12T18:22:16.785Z",
+  "cwd": "F:\\github\\NewsRoom",
+  "command": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe -m pytest tests/framework/shared/test_local_desktop.py tests/framework/shared/test_process_identity.py tests/scripts/test_local_desktop_autostart.py tests/scripts/test_local_desktop_cli.py tests/scripts/test_local_desktop_config.py tests/scripts/test_local_desktop_control.py tests/scripts/test_local_desktop_desktop_entry.py tests/scripts/test_local_desktop_doctor.py tests/scripts/test_local_desktop_log_collector.py tests/scripts/test_local_desktop_processes.py tests/scripts/test_local_desktop_recovery.py tests/scripts/test_local_desktop_release.py -q -rs",
+  "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+  "utcStart": "2026-10-12T18:19:12.2046108Z",
+  "utcEnd": "2026-10-12T18:19:24.1408346Z",
+  "exitCode": 0,
+  "results": {
+    "passed": 103,
+    "failed": 0,
+    "skipped": 2,
+    "skips": [
+      {
+        "test": "test_release_copy_rejects_source_symlink_escape",
+        "reason": "this test environment cannot create symlinks"
+      },
+      {
+        "test": "test_release_verify_rejects_manifested_resource_replaced_by_symlink",
+        "reason": "this test environment cannot create symlinks"
+      }
+    ]
+  },
+  "log": {
+    "path": "runtime-all-contracts-validation-final-20261013.log.gz",
+    "sha256": "4a9a319e5fd24a59afb74362d7558a368b2fc55d25063b54dd3c2f0956b692f1",
+    "bytes": 196,
+    "encoding": "gzip",
+    "decompressedSha256": "8500f5351f311952a4e3b62e1d1edf084b8b16de2043d47df46193f773e40c9f",
+    "decompressedBytes": 480
+  },
+  "liveAcceptance": false,
+  "scope": "Owned temporary fixtures, including real Windows ACL API; no real owner storage, provider, service or deployment acceptance.",
+  "supersedes": "runtime-all-contracts-validation-20261013.json"
+}

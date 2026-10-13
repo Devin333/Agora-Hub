@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { safeApiGet, safeApiPost } from "@/lib/api/server"
 import { GET as methods } from "@/app/api/auth/methods/route"
 import { POST as requestCode } from "@/app/api/auth/otp/challenges/route"
@@ -12,9 +12,17 @@ import { authResponse, isSameOrigin, safeReturnPath } from "./portal-server"
 
 vi.mock("@/lib/api/server", () => ({ safeApiGet: vi.fn(), safeApiPost: vi.fn() }))
 const sessionCookie = vi.hoisted(() => ({ value: "private-session-token" as string | undefined }))
-vi.mock("next/headers", () => ({ cookies: () => ({ get: () => sessionCookie.value ? { value: sessionCookie.value } : undefined }) }))
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => sessionCookie.value ? { value: sessionCookie.value } : undefined }) }))
 const binding = "a".repeat(43)
 const origin = "http://localhost:3000"
+const runtimeEnvKeys = [
+  "NEWSROOM_DEPLOYMENT_PROFILE",
+  "NEWSROOM_DESKTOP_INSTANCE_KEY",
+  "NEWSROOM_DESKTOP_RELEASE_ID",
+  "NEWSROOM_DESKTOP_CONFIG_DIGEST",
+  "NEWSROOM_DESKTOP_BOOT_ID",
+] as const
+const originalRuntimeEnv = Object.fromEntries(runtimeEnvKeys.map(key => [key, process.env[key]]))
 function post(path: string, body: unknown, headers: Record<string, string> = {}) {
   return new NextRequest(`${origin}${path}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json", Cookie: `newsroom_auth_binding=${binding}`, ...headers }, body: JSON.stringify(body) })
 }
@@ -24,6 +32,13 @@ function callbackRequest(query: string, cookies = "newsroom_auth_callback=valid-
 
 describe("public auth BFF", () => {
   beforeEach(() => { vi.mocked(safeApiGet).mockReset(); vi.mocked(safeApiPost).mockReset(); sessionCookie.value = "private-session-token" })
+  afterEach(() => {
+    for (const key of runtimeEnvKeys) {
+      const value = originalRuntimeEnv[key]
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
   it("allows a guest to use local research without waiting on the authentication backend", async () => {
     sessionCookie.value = undefined
     const result = await session()
@@ -60,12 +75,12 @@ describe("public auth BFF", () => {
   it("requires consent and rejects unsafe path components", async () => {
     const response = await requestCode(post("/api/auth/otp/challenges", { channel: "email", destination: "a@example.com" }))
     expect(response.status).toBe(400)
-    expect((await verify(post("/", { code: "123456" }), { params: { challengeId: "../../bootstrap" } })).status).toBe(400)
+    expect((await verify(post("/", { code: "123456" }), { params: Promise.resolve({ challengeId: "../../bootstrap" }) })).status).toBe(400)
     expect(safeApiPost).not.toHaveBeenCalled()
   })
   it("writes verified tokens only into HttpOnly cookies and retains backend error secrecy", async () => {
     vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: { session: { user: { role: "user" }, sessionToken: "secret-token" } } })
-    const response = await verify(post("/", { code: "123456" }), { params: { challengeId: "challenge_0123456789" } })
+    const response = await verify(post("/", { code: "123456" }), { params: Promise.resolve({ challengeId: "challenge_0123456789" }) })
     expect(await response.text()).not.toContain("secret-token")
     expect(response.cookies.get("newsroom_session")?.value).toBe("secret-token")
     expect(response.headers.get("set-cookie")).toContain("HttpOnly")
@@ -76,19 +91,19 @@ describe("public auth BFF", () => {
   })
   it("stores an OAuth transaction state and a validated local return path", async () => {
     vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: { authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth?state=valid-state", expiresAt: "future" } })
-    const response = await authorize(post("/", { consent: true, returnTo: "/design-demo/papers?q=Agent#results" }), { params: { provider: "google" } })
+    const response = await authorize(post("/", { consent: true, returnTo: "/design-demo/papers?q=Agent#results" }), { params: Promise.resolve({ provider: "google" }) })
     expect(response.cookies.get("newsroom_auth_callback")?.value).toBe("valid-state")
     expect(response.cookies.get("newsroom_auth_return")?.value).toBe("/design-demo/papers?q=Agent#results")
   })
   it("refuses callback state mismatch before exchanging code", async () => {
-    const response = await callback(callbackRequest("code=code&state=wrong-state"), { params: { provider: "google" } })
+    const response = await callback(callbackRequest("code=code&state=wrong-state"), { params: Promise.resolve({ provider: "google" }) })
     expect(safeApiPost).not.toHaveBeenCalled()
     expect(response.cookies.get("newsroom_session")).toBeUndefined()
     expect(await response.text()).toContain('"success":false')
   })
   it("completes OAuth with CSP and no token in HTML, and deletes consumed state", async () => {
     vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: { session: { sessionToken: "private-session-token" } } })
-    const response = await callback(callbackRequest("code=code&state=valid-state"), { params: { provider: "google" } })
+    const response = await callback(callbackRequest("code=code&state=valid-state"), { params: Promise.resolve({ provider: "google" }) })
     const html = await response.text()
     expect(html).toContain("agora-auth-complete")
     expect(html).toContain('"success":true')
@@ -99,21 +114,21 @@ describe("public auth BFF", () => {
     expect(response.headers.get("referrer-policy")).toBe("no-referrer")
   })
   it("does not interpolate untrusted callback strings into script markup", async () => {
-    const response = await callback(callbackRequest(`state=${encodeURIComponent('</script><script>alert(1)</script>')}`), { params: { provider: "google" } })
+    const response = await callback(callbackRequest(`state=${encodeURIComponent('</script><script>alert(1)</script>')}`), { params: Promise.resolve({ provider: "google" }) })
     expect(await response.text()).not.toContain("</script><script>alert")
   })
   it("relays a cross-site WeChat frame response before using browser-bound credentials", async () => {
     const request = new NextRequest(`${origin}/api/auth/oauth/wechat/callback?code=wechat-code&state=valid-state`, { headers: { "Sec-Fetch-Dest": "iframe" } })
-    const response = await callback(request, { params: { provider: "wechat" } })
+    const response = await callback(request, { params: Promise.resolve({ provider: "wechat" }) })
     expect(await response.text()).toContain('method="post" action="/api/auth/oauth/wechat/callback"')
     expect(safeApiPost).not.toHaveBeenCalled()
     expect(response.cookies.get("newsroom_session")).toBeUndefined()
     expect(response.headers.get("content-security-policy")).toContain("form-action 'self'")
     const formRequest = (requestOrigin: string) => new NextRequest(`${origin}/api/auth/oauth/wechat/callback`, { method: "POST", headers: { Origin: requestOrigin, Cookie: `newsroom_auth_binding=${binding}; newsroom_auth_callback=valid-state` }, body: new URLSearchParams({ code: "wechat-code", state: "valid-state" }) })
-    expect((await frameCallback(formRequest("https://evil.test"), { params: { provider: "wechat" } })).status).toBe(403)
+    expect((await frameCallback(formRequest("https://evil.test"), { params: Promise.resolve({ provider: "wechat" }) })).status).toBe(403)
     expect(safeApiPost).not.toHaveBeenCalled()
     vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: { session: { sessionToken: "verified-wechat-session" } } })
-    const completed = await frameCallback(formRequest(origin), { params: { provider: "wechat" } })
+    const completed = await frameCallback(formRequest(origin), { params: Promise.resolve({ provider: "wechat" }) })
     expect(completed.cookies.get("newsroom_session")?.value).toBe("verified-wechat-session")
     expect(await completed.text()).not.toContain("verified-wechat-session")
   })
@@ -130,6 +145,29 @@ describe("public auth BFF", () => {
     expect(result.headers.get("cache-control")).toBe("no-store")
     expect(result.cookies.get("newsroom_session")).toBeUndefined()
   })
+  it("echoes the frontend server runtime identity and rejects an incomplete identity", async () => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+    process.env.NEWSROOM_DESKTOP_INSTANCE_KEY = "local-desktop:http://127.0.0.1:3000"
+    process.env.NEWSROOM_DESKTOP_RELEASE_ID = "release-1"
+    process.env.NEWSROOM_DESKTOP_CONFIG_DIGEST = "a".repeat(64)
+    process.env.NEWSROOM_DESKTOP_BOOT_ID = "b".repeat(32)
+    vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { initialized: false, session: null, local_desktop: { boot_id: "spoofed" } } })
+    const ready = await session()
+    expect(await ready.json()).toMatchObject({ data: { local_desktop: {
+      deployment_profile: "local-desktop",
+      instance_key: "local-desktop:http://127.0.0.1:3000",
+      release_id: "release-1",
+      config_digest: "a".repeat(64),
+      boot_id: "b".repeat(32),
+    } } })
+
+    delete process.env.NEWSROOM_DESKTOP_BOOT_ID
+    vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { initialized: false, session: null } })
+    const invalid = await session()
+    expect(invalid.status).toBe(503)
+    expect(await invalid.json()).toEqual({ success: false, error: { code: "desktop_runtime_identity_invalid" } })
+  })
+
   it("clears expired session cookies but retains them on a service outage", async () => {
     vi.mocked(safeApiGet).mockResolvedValueOnce({ ok: true, data: { session: null } }).mockResolvedValueOnce({ ok: false, errorCode: "request_failed", errorMessage: "private host error" })
     expect((await session()).cookies.get("newsroom_session")?.value).toBe("")

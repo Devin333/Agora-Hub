@@ -764,7 +764,6 @@ def test_parallel_registration_has_one_entry_and_no_lost_references(tmp_path) ->
 def test_two_processes_serialize_dedup_registration(tmp_path) -> None:
     store_root = tmp_path / "catalog"
     start_path = tmp_path / "start.signal"
-    helper = Path(__file__).with_name("graph_artifact_catalog_process_worker.py")
     records = (
         _record(run_id="run-process-1", artifact_id="artifact-process-1"),
         _record(run_id="run-process-2", artifact_id="artifact-process-2"),
@@ -777,7 +776,8 @@ def test_two_processes_serialize_dedup_registration(tmp_path) -> None:
         subprocess.Popen(
             (
                 sys.executable,
-                str(helper),
+                "-m",
+                "tests.infrastructure.storage.graph_artifact_catalog_process_worker",
                 str(store_root),
                 str(record_path),
                 str(start_path),

@@ -4,7 +4,11 @@ import { loadReaderSource } from "@/features/portal/reader/reader-source-server"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(request: Request, { params }: { params: { paperId: string; assetId: string } }) {
+export async function GET(
+  request: Request,
+  props: { params: Promise<{ paperId: string; assetId: string }> }
+) {
+  const params = await props.params;
   const paper = await getPaperById(params.paperId)
   if (!paper || paper.isPublished === false) return NextResponse.json({ success: false }, { status: 404 })
   const source = await loadReaderSource(paper)

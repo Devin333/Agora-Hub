@@ -84,7 +84,10 @@ from infrastructure.research.github_repository import (
     GithubResearchRepositoryAdapter,
 )
 from infrastructure.research.local_chunk_store import LocalChunkPayloadStore
-from infrastructure.research.source_provider import ArxivResearchSourceProvider
+from infrastructure.research.source_provider import (
+    ArxivResearchSourceProvider,
+    CatalogBoundResearchSourceProvider,
+)
 from infrastructure.storage.harness import SQLiteHarnessSideEffectStore
 from infrastructure.storage.events.sqlite import SQLiteEventStore
 from infrastructure.storage.artifacts import (
@@ -840,8 +843,9 @@ def test_valid_settings_compose_full_durable_production_graph(
         assert runtime.context_assembler_factory is not None
         assert runtime.context_max_input_tokens == settings.llm.max_input_tokens
         assert runtime.context_max_output_tokens == settings.llm.max_output_tokens
-        assert isinstance(runtime.source_provider, ArxivResearchSourceProvider)
-        assert isinstance(runtime.source_provider._connector, ArxivConnector)
+        assert isinstance(runtime.source_provider, CatalogBoundResearchSourceProvider)
+        assert isinstance(runtime.source_provider._fallback, ArxivResearchSourceProvider)
+        assert isinstance(runtime.source_provider._fallback._connector, ArxivConnector)
         assert isinstance(runtime.document_compiler, ResearchDocumentCompilerAdapter)
         assert isinstance(
             runtime.document_compiler._latex_compiler,
@@ -941,7 +945,7 @@ def test_valid_settings_compose_full_durable_production_graph(
         assert isinstance(package_connector, ArxivSourceConnector)
         assert runtime.document_compiler._source_fetcher is package_connector
         assert runtime.document_compiler._latex_compiler._fetcher is package_connector
-        assert runtime.source_provider._connector._rate_limiter is (
+        assert runtime.source_provider._fallback._connector._rate_limiter is (
             source_runtime.reservation_ledger
         )
         assert package_connector._rate_limiter is source_runtime.reservation_ledger
@@ -960,7 +964,7 @@ def test_valid_settings_compose_full_durable_production_graph(
         assert package_connector.fetch_policy.timeout_seconds == (
             settings.source.timeout_seconds
         )
-        assert runtime.source_provider._connector.fetch_policy.max_bytes == (
+        assert runtime.source_provider._fallback._connector.fetch_policy.max_bytes == (
             settings.source.metadata_max_bytes
         )
         assert runtime.llm_worker._client._retry_policy.max_attempts == (

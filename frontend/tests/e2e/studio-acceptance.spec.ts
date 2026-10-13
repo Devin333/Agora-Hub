@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test"
+import { expect, test, type Page } from "@playwright/test"
 
 const existingStudioRoutes = [
   "/studio",
@@ -13,6 +13,11 @@ const futureStudioRoutes = [
   "/studio/review"
 ]
 
+async function switchStudioToEnglish(page: Page) {
+  await page.getByRole("button", { name: "切换到 English" }).click()
+  await expect(page.getByRole("navigation", { name: "Operations Studio" })).toBeVisible()
+}
+
 test.describe("Operations Studio acceptance smoke", () => {
   test.describe.configure({ mode: "serial" })
 
@@ -21,27 +26,28 @@ test.describe("Operations Studio acceptance smoke", () => {
       const response = await page.goto(route)
 
       expect(response?.ok()).toBeTruthy()
+      await switchStudioToEnglish(page)
       await expect(page.locator("body")).toBeVisible()
-      await expect(page.getByText("Operations Studio").first()).toBeVisible()
+      await expect(page.getByRole("navigation", { name: "Operations Studio" })).toBeVisible()
     })
   }
 
   test("/studio exposes current module entry points", async ({ page }) => {
     await page.goto("/studio")
+    await switchStudioToEnglish(page)
 
-    const entries = page.locator("section[aria-label='Studio module entries']")
-    await expect(entries).toBeVisible()
+    const entries = page.getByRole("navigation", { name: "Operations Studio" })
+    await expect(entries.getByRole("link", { name: /Run Center/ })).toBeVisible()
+    await expect(entries.getByRole("link", { name: /Artifact \/ Replay/ })).toBeVisible()
+    await expect(entries.getByRole("link", { name: /Quality Gate/ })).toBeVisible()
 
-    await expect(entries.locator("a[href='/studio/runs']")).toContainText("Run Center")
-    await expect(entries.locator("a[href='/studio/artifacts']")).toContainText("Artifact / Replay")
-    await expect(entries.locator("a[href='/studio/quality']")).toContainText("Quality Gate")
-
-    await entries.locator("a[href='/studio/runs']").click()
+    await entries.getByRole("link", { name: /Run Center/ }).click()
     await expect(page).toHaveURL(/\/studio\/runs$/)
   })
 
   test("/studio/runs shows the run list and links to failed run detail", async ({ page }) => {
     await page.goto("/studio/runs")
+    await switchStudioToEnglish(page)
 
     await expect(page.getByRole("heading", { name: "Run Center" })).toBeVisible()
     await expect(page.locator("table").first()).toBeVisible()
@@ -58,6 +64,7 @@ test.describe("Operations Studio acceptance smoke", () => {
 
   test("/studio/runs failed run detail shows steps, events, and errors", async ({ page }) => {
     await page.goto("/studio/runs/run-daily-20260522-0800")
+    await switchStudioToEnglish(page)
 
     await expect(page).toHaveURL(/\/studio\/runs\/run-daily-20260522-0800$/)
     await expect(page.locator("body")).toContainText("step-quality")
@@ -69,6 +76,7 @@ test.describe("Operations Studio acceptance smoke", () => {
 
   test("/studio/quality shows failed, warning, and passed quality states", async ({ page }) => {
     await page.goto("/studio/quality")
+    await switchStudioToEnglish(page)
 
     await expect(page.getByRole("heading", { name: "Quality Gate" })).toBeVisible()
     await expect(page.locator("body")).toContainText(/Passed/i)
@@ -80,6 +88,7 @@ test.describe("Operations Studio acceptance smoke", () => {
 
   test("/studio/artifacts shows artifact list and preview metadata", async ({ page }) => {
     await page.goto("/studio/artifacts")
+    await switchStudioToEnglish(page)
 
     await expect(page.locator("body")).toContainText(/manifest/i)
     await expect(page.locator("body")).toContainText(/events/i)

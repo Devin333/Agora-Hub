@@ -1,0 +1,9 @@
+{
+  "command": ".venv\\\\Scripts\\\\python.exe -m pytest tests/scripts/test_local_desktop_recovery.py -q -rs",
+  "cwd": "F:\\github\\NewsRoom",
+  "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+  "utc_start": "2026-10-12T22:53:17.5796940Z",
+  "utc_end": "2026-10-12T22:53:28.9246715Z",
+  "exit_code": 0,
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-recovery-contracts-final-20261013-065317-571.log"
+}

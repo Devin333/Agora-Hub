@@ -8,7 +8,8 @@ const navigationState = vi.hoisted(() => ({
 }))
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => navigationState.pathname
+  usePathname: () => navigationState.pathname,
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() })
 }))
 
 vi.mock("@/components/auth/account-menu", () => ({

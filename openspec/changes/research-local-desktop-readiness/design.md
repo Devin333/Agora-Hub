@@ -7,7 +7,7 @@
 | 责任 | 当前落点 | 设计含义 |
 | --- | --- | --- |
 | 浏览器入口 | `frontend/src/app/page.tsx`, `design-demo/*`, `papers/*` | 正式路径迁移必须覆盖历史与两种 reader 入口 |
-| 登录与 cookie | `frontend/src/app/login`, `lib/auth`, `middleware.ts` | 不以路由 guard 或共享 API token 代替真实 user owner |
+| 登录与 cookie | `frontend/src/app/login`, `lib/auth`, `proxy.ts` | 不以路由 guard 或共享 API token 代替真实 user owner |
 | 前端服务代理 | `frontend/src/lib/api/server.ts`, `app/api/research`, `next.config.mjs` | 同源 proxy 和 `/api/v1` rewrite 都需进入同一授权边界 |
 | Workspace | `frontend/src/lib/research/history*.ts`, `interfaces/services/research_history_service.py` | 复用 revision/CAS；客户端状态不是权威持久化 |
 | 导入 | `interfaces/services/research_import_service.py`, `research_import_application.py` | 保留现有 import 身份、限额、source policy 与真实解析 |
@@ -204,3 +204,13 @@ restore 在受控 staging root 解包，拒绝绝对路径、越界、symlink/ju
 ## Open Questions
 
 没有阻止编写规格的用户决策。以下属于实施核查，不能靠默认猜测关闭：真实 notebook/selection 存储清单，Research operation admission/query 的可复用 port，当前选定 parser/provider 的运行能力，以及现机依赖能否恢复旧 release。分别由任务 1、5、7、9、10 落实；影响已定产品合同的发现须同步规格后再继续。
+
+## 集中验证补充：Windows 前端运行框架安全基线（2026-10-13）
+
+第 11 章对实际安装依赖的审计发现 `next@14.2.35` 位于官方 `GHSA-p293-qw3h-jr36`（Windows 服务端远程代码执行）和 `GHSA-2xp9-vwfh-vxw4`（AVIF image optimization 远程代码执行）的受影响范围。保留该版本无法完成本机可用交付。官方前者声明没有已知 Windows 绕过方法。
+
+本次将修复作为既有发布检查的根因修复：迁移到已确认的稳定 Next.js 16 安全版本，匹配 React/React DOM 19、类型与 ESLint 配套依赖；按真实 async Request API 迁移 `cookies`、`headers`、`params` 和 `searchParams`，保持 auth、owner、Origin、BFF/application 分层和研究流程合同。不能使用 `force`、`legacy-peer-deps`、忽略类型/lint/测试或将已失败检查转换成通过。按实际兼容需要保留明确的 Webpack 构建，不引入无关产品能力。
+
+旧版本下的成功单元测试/构建仅保留为历史检查。安全迁移完成后，重新冻结源码、lockfile 与实际 dependency tree，重新运行前端全量检查、浏览器回归、受影响后端合同与必需 smoke；真实验收和部署只能引用最终候选。Next.js 16 的 production build 不再自动执行 lint，独立 ESLint 检查仍是必需门禁。
+
+依据为官方 advisory、Next.js support policy 和 version 16 upgrade guide；来源、检查时间与实际审计摘要记录在 `evidence/frontend-runtime-security-repair-20261013.json`。

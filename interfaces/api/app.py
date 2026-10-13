@@ -79,6 +79,18 @@ from interfaces.services.memory_service import MemoryApplicationService
 from interfaces.services.mcp_service import MCPApplicationService
 from interfaces.services.project_service import ProjectApplicationService
 from interfaces.services.research_service import ResearchApplicationService
+from interfaces.services.research_desktop_service import ResearchDesktopApplicationService
+from interfaces.services.research_desktop_control import ResearchDesktopControlError
+from interfaces.services.research_desktop_auth import (
+    ResearchDesktopAuthError,
+    authenticate_desktop_actor,
+    desktop_auth_path,
+    desktop_legacy_operation_path,
+    desktop_operator_path_forbidden,
+    desktop_path_requires_session,
+    local_desktop_profile_enabled,
+    require_desktop_origin,
+)
 from interfaces.services.research_history_service import ResearchHistoryService
 from interfaces.services.guided_research_service import GuidedResearchService
 from interfaces.composition.guided_research import build_guided_research_service
@@ -121,6 +133,7 @@ ScheduleServiceFactory = Callable[[], ScheduleApplicationService]
 AuthServiceFactory = Callable[[], AuthApplicationService]
 ProjectServiceFactory = Callable[[], ProjectApplicationService]
 ResearchServiceFactory = Callable[[], ResearchApplicationService]
+ResearchDesktopServiceFactory = Callable[[], ResearchDesktopApplicationService]
 ResearchHistoryServiceFactory = Callable[[], ResearchHistoryService]
 GuidedResearchServiceFactory = Callable[[], GuidedResearchService]
 RuntimeOperatorStatusServiceFactory = Callable[[], RuntimeOperatorStatusService]
@@ -149,6 +162,7 @@ def create_app(
     project_service_factory: ProjectServiceFactory = ProjectApplicationService,
     research_service_factory: ResearchServiceFactory = build_research_application_service,
     research_history_service_factory: ResearchHistoryServiceFactory = ResearchHistoryService,
+    research_desktop_service_factory: ResearchDesktopServiceFactory | None = None,
     guided_research_service_factory: GuidedResearchServiceFactory = build_guided_research_service,
     harness_graph_service_factory: HarnessGraphServiceFactory | None = None,
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None,
@@ -178,6 +192,22 @@ def create_app(
         scope=TelemetryInstrumentationScope(name="interfaces.api", version="1"),
     )
 
+    resolved_research_desktop_service_factory = research_desktop_service_factory
+    if resolved_research_desktop_service_factory is None:
+        resolved_research_desktop_service_factory = lambda: ResearchDesktopApplicationService(
+            research=research_service_factory()
+        )
+    desktop_auth_rate_limiter = (
+        InMemoryRateLimiter(
+            limit=max(1, min(60, int(os.environ.get("NEWSROOM_DESKTOP_AUTH_RATE_LIMIT_PER_MINUTE", "10")))),
+            window_seconds=60,
+            clock=rate_limit_clock,
+        )
+        if local_desktop_profile_enabled()
+        else None
+    )
+
+
     if rate_limiter is not None:
 
         @api.middleware("http")
@@ -205,6 +235,11 @@ def create_app(
         async def bearer_token_rbac(request: Request, call_next):
             if not _requires_api_auth(request.url.path):
                 return await call_next(request)
+            if local_desktop_profile_enabled() and (
+                desktop_path_requires_session(request.url.path)
+                or desktop_auth_path(request.url.path)
+            ):
+                return await call_next(request)
             actor = _authorized_api_actor(request, resolved_api_keys)
             if actor is None:
                 return _error(
@@ -228,6 +263,81 @@ def create_app(
                     user_action_required=True,
                 )
             return await call_next(request)
+
+    if local_desktop_profile_enabled():
+
+        @api.middleware("http")
+        async def local_desktop_session_boundary(request: Request, call_next):
+            path = request.url.path
+            try:
+                if desktop_operator_path_forbidden(path):
+                    return _error(
+                        status_code=403,
+                        code="desktop_operator_api_disabled",
+                        message="This operator API is unavailable in local desktop profile",
+                        user_action_required=True,
+                    )
+                if desktop_path_requires_session(path):
+                    actor = authenticate_desktop_actor(
+                        request,
+                        auth_service_factory(),
+                    )
+                    request.state.actor_context = actor
+                    if desktop_legacy_operation_path(path, request.method):
+                        return _error(
+                            status_code=409,
+                            code="desktop_request_contract_required",
+                            message="Use the durable Research desktop operation endpoint",
+                            user_action_required=True,
+                        )
+                elif desktop_auth_path(path):
+                    require_desktop_origin(request)
+                    if desktop_auth_rate_limiter is not None and request.method.upper() == "POST":
+                        decision = desktop_auth_rate_limiter.check(_client_rate_limit_key(request))
+                        if not decision.allowed:
+                            return _error(
+                                status_code=429,
+                                code="auth_rate_limited",
+                                message="Authentication rate limit exceeded",
+                                details={
+                                    "limit": decision.limit,
+                                    "window_seconds": desktop_auth_rate_limiter.window_seconds,
+                                    "remaining": decision.remaining,
+                                },
+                                retryable=True,
+                                user_action_required=True,
+                                headers={"Retry-After": str(decision.retry_after_seconds)},
+                            )
+            except ResearchDesktopAuthError as exc:
+                return _error(
+                    status_code=exc.status_code,
+                    code=exc.code,
+                    message=str(exc),
+                    user_action_required=True,
+                )
+            lease_id = None
+            desktop_service = None
+            try:
+                is_desktop_writer = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and (
+                    desktop_path_requires_session(path) or desktop_auth_path(path)
+                )
+                if is_desktop_writer:
+                    desktop_service = resolved_research_desktop_service_factory()
+                    lease_id = desktop_service.begin_business_operation(
+                        operation=f"{request.method.upper()} {path}"
+                    )
+                return await call_next(request)
+            except ResearchDesktopControlError as exc:
+                return _error(
+                    status_code=exc.status_code,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                    user_action_required=True,
+                )
+            finally:
+                if lease_id is not None and desktop_service is not None:
+                    desktop_service.end_business_operation(lease_id)
 
     @api.middleware("http")
     async def request_id_middleware(request: Request, call_next):
@@ -419,6 +529,7 @@ def create_app(
         research_service_factory=research_service_factory,
         research_history_service_factory=research_history_service_factory,
         guided_research_service_factory=guided_research_service_factory,
+        research_desktop_service_factory=resolved_research_desktop_service_factory,
         harness_graph_service_factory=harness_graph_service_factory,
         harness_wait_service_factory=harness_wait_service_factory,
         runtime_operator_status_service_factory=runtime_operator_status_service_factory,

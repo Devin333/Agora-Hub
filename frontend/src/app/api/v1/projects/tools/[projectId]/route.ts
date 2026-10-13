@@ -5,7 +5,8 @@ import type { ProjectsApiTool } from "@/types/projects"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(request: NextRequest, { params }: { params: { projectId: string } }) {
+export async function GET(request: NextRequest, props: { params: Promise<{ projectId: string }> }) {
+  const params = await props.params;
   const path = `/api/v1/projects/tools/${encodeURIComponent(params.projectId)}`
   const backend = await backendGet<ProjectsApiTool>(backendPath(path, request.nextUrl.searchParams))
   if (backend.ok) return success(backend.data)

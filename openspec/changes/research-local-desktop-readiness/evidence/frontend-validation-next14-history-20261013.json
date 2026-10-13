@@ -1,0 +1,132 @@
+{
+  "schema": "newsroom.desktop-frontend-validation/v1",
+  "recordedAt": "2026-10-12T18:11:42.252Z",
+  "candidateStatus": "historical-Next14-success-superseded-by-security-migration",
+  "owner": "desktop_frontend_workflows",
+  "profile": "local-desktop-build/default-unit-tests",
+  "commands": [
+    {
+      "id": "frontend-npm-ci",
+      "command": [
+        "npm.cmd",
+        "ci"
+      ],
+      "exitCode": 0
+    },
+    {
+      "id": "frontend-npm-ls",
+      "command": [
+        "npm.cmd",
+        "ls",
+        "--json",
+        "--all"
+      ],
+      "exitCode": 0,
+      "dependencyTreeProblems": []
+    },
+    {
+      "id": "frontend-test",
+      "command": [
+        "npm.cmd",
+        "test",
+        "--",
+        "--run"
+      ],
+      "exitCode": 0,
+      "summary": "140 files / 725 tests passed"
+    },
+    {
+      "id": "frontend-typecheck",
+      "command": [
+        "npm.cmd",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": 0
+    },
+    {
+      "id": "frontend-lint",
+      "command": [
+        "npm.cmd",
+        "run",
+        "lint"
+      ],
+      "exitCode": 0,
+      "summary": "No warnings/errors"
+    },
+    {
+      "id": "frontend-build",
+      "command": [
+        "npm.cmd",
+        "run",
+        "build"
+      ],
+      "exitCode": 0,
+      "summary": "Next14 local-desktop build passed"
+    }
+  ],
+  "logs": [
+    {
+      "name": "newsroom-desktop-frontend-npm-ci-final2-20261013.log",
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-npm-ci-final2-20261013.log",
+      "sha256": "40ca07c25bfbc4277cd246bb1918ee6ecac7c3b34ad1ec20833011081f9ed9c2",
+      "bytes": 1585,
+      "createdAt": "2026-10-12T17:46:23.685Z",
+      "updatedAt": "2026-10-12T17:46:30.738Z",
+      "timeEvidence": "filesystem timestamps; full start/end/exit separately owner-reported, exact process times were not captured"
+    },
+    {
+      "name": "newsroom-desktop-frontend-npm-ls-final2-20261013.log",
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-npm-ls-final2-20261013.log",
+      "sha256": "6615d00c8dd0b4e59ee1e42731e5d4794259b2b715582cdc6552c60a679711ca",
+      "bytes": 310863,
+      "createdAt": "2026-10-12T17:46:41.862Z",
+      "updatedAt": "2026-10-12T17:46:41.984Z",
+      "timeEvidence": "filesystem timestamps; full start/end/exit separately owner-reported, exact process times were not captured"
+    },
+    {
+      "name": "newsroom-desktop-frontend-test-clean-final2-20261013.log",
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-test-clean-final2-20261013.log",
+      "sha256": "9ebcf6919f38e80708fc6a0011183f77a6fc089199fc0b0509b032fab4700fbd",
+      "bytes": 300,
+      "createdAt": "2026-10-12T17:59:13.183Z",
+      "updatedAt": "2026-10-12T17:59:27.344Z",
+      "timeEvidence": "filesystem timestamps; full start/end/exit separately owner-reported, exact process times were not captured"
+    },
+    {
+      "name": "newsroom-desktop-frontend-typecheck-clean-final2-20261013.log",
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-typecheck-clean-final2-20261013.log",
+      "sha256": "864361950cf7b78936326aa7697d83e87b9fe86c103a11a5673064b38b4f4792",
+      "bytes": 63,
+      "createdAt": "2026-10-12T17:59:13.188Z",
+      "updatedAt": "2026-10-12T17:59:13.190Z",
+      "timeEvidence": "filesystem timestamps; full start/end/exit separately owner-reported, exact process times were not captured"
+    },
+    {
+      "name": "newsroom-desktop-frontend-lint-clean-final2-20261013.log",
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-lint-clean-final2-20261013.log",
+      "sha256": "aa1ed559b2b9a3cb605a0fc7aac19f7b02807b5742c664c314cdacd898597b7e",
+      "bytes": 89,
+      "createdAt": "2026-10-12T17:59:13.195Z",
+      "updatedAt": "2026-10-12T17:59:15.802Z",
+      "timeEvidence": "filesystem timestamps; full start/end/exit separately owner-reported, exact process times were not captured"
+    },
+    {
+      "name": "newsroom-desktop-frontend-build-clean-final-20261013.log",
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-desktop-frontend-build-clean-final-20261013.log",
+      "sha256": "29b970074f86b4c14558dbeae01034f829a99dc35845a0950308a4a68a84997c",
+      "bytes": 13134,
+      "createdAt": "2026-10-12T17:59:42.297Z",
+      "updatedAt": "2026-10-12T18:00:10.972Z",
+      "timeEvidence": "filesystem timestamps; full start/end/exit separately owner-reported, exact process times were not captured"
+    }
+  ],
+  "dependencyRepair": {
+    "addedDevDependencies": [
+      "@emnapi/core@1.10.0",
+      "@emnapi/runtime@1.10.0"
+    ],
+    "reason": "Explicit peer availability for shared hoisted optional WASM runtime; lock-only repair still left an invalid installed dependency tree"
+  },
+  "liveAcceptanceExecuted": false
+}

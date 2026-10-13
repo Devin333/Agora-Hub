@@ -50,6 +50,7 @@ from infrastructure.research.filesystem_run_store import (
 )
 from infrastructure.research.source_provider import (
     ArxivResearchSourceProvider,
+    CatalogBoundResearchSourceProvider,
     require_arxiv_id,
 )
 
@@ -63,6 +64,7 @@ __all__ = [
     "RESEARCH_ARTIFACT_MANIFEST_VERSION",
     "RESEARCH_ARTIFACT_SCHEMA_VERSION",
     "ArxivResearchSourceProvider",
+    "CatalogBoundResearchSourceProvider",
     "CANDIDATE_TASK_SCHEMAS",
     "DEFAULT_RESEARCH_RUN_RECORD_MAX_BYTES",
     "DEFAULT_MAX_GRAPH_ARTIFACT_LIFECYCLE_STATE_BYTES",

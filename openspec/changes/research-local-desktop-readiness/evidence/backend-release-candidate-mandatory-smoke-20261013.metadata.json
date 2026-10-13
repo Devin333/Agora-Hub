@@ -1,0 +1,15 @@
+{
+  "stage": "full-smoke-final3",
+  "cwd": "F:\\github\\NewsRoom",
+  "command": ".venv/Scripts/python.exe -m scripts.dev smoke",
+  "environment": {
+    "PYTHONFAULTHANDLER": "1",
+    "PYTHONUNBUFFERED": "1",
+    "PYTEST_ADDOPTS": "-rs"
+  },
+  "utcStart": "2026-10-13T00:27:38.0139020Z",
+  "utcEnd": "2026-10-13T01:41:20.3106734Z",
+  "exitCode": 0,
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-smoke-final3-20261013-082738-010.log",
+  "logSha256": "97804131acf3cb6877e0233ebf4087bae64692c6e6397308aced196df568ac07"
+}

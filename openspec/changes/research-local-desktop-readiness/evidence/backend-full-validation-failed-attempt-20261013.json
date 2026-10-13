@@ -1,0 +1,85 @@
+{
+  "schema": "newsroom-validation-run/v1",
+  "recordedAt": "2026-10-12T21:07:49.810048+00:00",
+  "status": "failed-superseded-candidate-root-cause-repair-required",
+  "metadata": {
+    "stage": "test-final",
+    "cwd": "F:\\github\\NewsRoom",
+    "command": ".venv/Scripts/python.exe -m scripts.dev test",
+    "environment": {
+      "PYTHONFAULTHANDLER": "1"
+    },
+    "utcStart": "2026-10-12T19:19:12.8014371Z",
+    "utcEnd": "2026-10-12T20:52:52.2854690Z",
+    "exitCode": 1,
+    "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-test-final-20261013-031912-793.log",
+    "logSha256": "8b46d55fb2560b0e8acd3bf4a8a3d4962d4eb38d0961d337ade4f3cb25fd4ed2"
+  },
+  "metadataArtifact": {
+    "path": "backend-full-validation-failed-attempt-20261013.metadata.json",
+    "sha256": "ea94a6241e26b0f9b0f2180e6799b4d4de7d33476025ab90b97830e1d173cc4f",
+    "bytes": 488
+  },
+  "logArtifact": {
+    "path": "backend-full-validation-failed-attempt-20261013.log.gz",
+    "sha256": "a087272caaa0e3a7e31c29c4502be803ccc879660a352898fe79f409e28ca12f",
+    "bytes": 11339,
+    "encoding": "gzip",
+    "decompressedSha256": "8b46d55fb2560b0e8acd3bf4a8a3d4962d4eb38d0961d337ade4f3cb25fd4ed2",
+    "decompressedBytes": 79511
+  },
+  "results": {
+    "failed": 18,
+    "passed": 9167,
+    "skipped": 117,
+    "deselected": 24,
+    "warnings": 579,
+    "seconds": 5617.41
+  },
+  "failedTests": [
+    "tests/backend/research/rag/test_execution_memory.py::test_real_rag_controller_persists_and_replays_pinned_memory_without_live_reads",
+    "tests/contracts/test_rag_replay_command.py::test_replay_rag_command_prints_replay_report",
+    "tests/contracts/test_rag_replay_command.py::test_replay_rag_command_returns_nonzero_for_non_replayable_transcript",
+    "tests/infrastructure/storage/test_graph_artifact_catalog.py::test_two_processes_serialize_dedup_registration",
+    "tests/interfaces/api/test_research_api.py::test_research_reader_analysis_ask_and_trace_endpoints_return_research_payloads",
+    "tests/interfaces/api/test_research_api.py::test_research_http_mcp_sdk_shapes_survive_filesystem_reconstruction",
+    "tests/interfaces/services/test_paper_rag_service.py::test_recovery_projects_corrupt_journal_without_replaying_worker",
+    "tests/interfaces/services/test_research_import_service.py::test_completed_import_resolves_only_exact_owner_and_source_identity",
+    "tests/interfaces/services/test_research_service.py::test_research_service_reader_ask_uses_gated_grounded_generation",
+    "tests/interfaces/services/test_research_service.py::test_research_service_dispatches_chunk_rag_mode_without_run_store_lookup",
+    "tests/interfaces/services/test_research_service.py::test_research_service_does_not_expose_tenant_run_without_tenant_actor",
+    "tests/interfaces/services/test_research_service.py::test_exact_run_report_projection_rejects_wrong_artifact_identity",
+    "tests/interfaces/services/test_research_service.py::test_research_service_queries_survive_durable_store_reconstruction",
+    "tests/interfaces/services/test_research_service.py::test_accepted_then_failed_runs_do_not_shadow_normal_queries[memory]",
+    "tests/interfaces/services/test_research_service.py::test_accepted_then_failed_runs_do_not_shadow_normal_queries[filesystem]",
+    "tests/interfaces/services/test_research_service.py::test_post_creation_failure_recovers_scoped_quarantine_after_restart_without_shadowing_accepted[worker-<lambda>-halted]",
+    "tests/interfaces/services/test_research_service.py::test_post_creation_failure_recovers_scoped_quarantine_after_restart_without_shadowing_accepted[handler-<lambda>-failed]",
+    "tests/interfaces/services/test_research_service.py::test_post_creation_failure_recovers_scoped_quarantine_after_restart_without_shadowing_accepted[terminal-<lambda>-halted]"
+  ],
+  "candidateSourceDigest": "sha256:bfe10de115da1db5af9222fbf892a33a100e948bfb055333780b074121541d0c",
+  "candidateRecord": "backend-candidate-during-final-test-20261013.json",
+  "finalCandidateEvidence": false,
+  "policy": "Repair actual failures without adding skips, weakening assertions, or relaxing scoped access; then compile, repeat full suite, and mandatory smoke.",
+  "liveAcceptanceExecuted": false,
+  "precedingCompile": {
+    "exitCode": 0,
+    "utcStart": "2026-10-12T19:16:40.7315313Z",
+    "utcEnd": "2026-10-12T19:16:40.9486525Z",
+    "artifacts": [
+      {
+        "path": "backend-full-validation-failed-attempt-compile-20261013.metadata.json",
+        "sha256": "7bd0886a1d87f91168ee1038d705c76a156a5cfd1cd742294ac89e200b43a467",
+        "bytes": 497
+      },
+      {
+        "path": "backend-full-validation-failed-attempt-compile-20261013.log.gz",
+        "sha256": "914ed4639569ecc832c9224623ea37d8d7ae68dbe3ef95e7de8befec2f78ef50",
+        "bytes": 125,
+        "encoding": "gzip",
+        "decompressedSha256": "077d2b5e2854564e89a626b540f206aa0a0c42d6c73816bc692782dd447efc69",
+        "decompressedBytes": 116
+      }
+    ],
+    "status": "passed-for-the-later-failed-candidate; new compile required after repair"
+  }
+}

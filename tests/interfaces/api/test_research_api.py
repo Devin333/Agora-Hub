@@ -27,7 +27,11 @@ from tests.interfaces.research_fixtures import (
 def _client(*, result=None):
     store = InMemoryResearchRunStore()
     use_case = FakeAnalyzeUseCase(result or make_research_result())
-    service = ResearchApplicationService(analyze_use_case=use_case, run_store=store)
+    service = ResearchApplicationService(
+        analyze_use_case=use_case,
+        rag_ask_use_case=_SurfaceRagAskUseCase(),
+        run_store=store,
+    )
     return TestClient(
         create_app(
             research_service_factory=lambda: service,
@@ -499,7 +503,23 @@ class _CapturingResearchService:
 
 
 class _SurfaceRagAskUseCase:
-    def rag_ask(self, paper_id, _question, **_kwargs):
+    def rag_ask(self, paper_id, _question, **kwargs):
+        if kwargs.get("run_id") is not None:
+            return {
+                "answer": "The verified method answer.",
+                "citations": [
+                    {
+                        "evidence_id": "evidence-1",
+                        "source_ref": f"paper://{paper_id}/sec-intro",
+                        "span_refs": ["section=sec-intro"],
+                    }
+                ],
+                "claims": [{"claim_id": "claim-1"}],
+                "decision": {"decision_type": "return_answer"},
+                "generation_mode": "gated_harness",
+                "status": "answered",
+                "transcript_id": "rag-transcript-surface",
+            }
         return {
             "mode": "chunk_rag",
             "paper_id": paper_id,

@@ -30,7 +30,15 @@ function desktopShortcutEnabled() {
   return typeof window.matchMedia !== "function" || window.matchMedia("(min-width: 1024px)").matches
 }
 
-export function ResearchCommandPalette({ inline = false }: { inline?: boolean }) {
+type ResearchCommandPaletteProps = {
+  inline?: boolean
+  showTrigger?: boolean
+}
+
+export function ResearchCommandPalette({
+  inline = false,
+  showTrigger = true,
+}: ResearchCommandPaletteProps) {
   const router = useRouter()
   const state = useOwnedResearchWorkspace()
   const [open, setOpen] = useState(false)
@@ -87,7 +95,7 @@ export function ResearchCommandPalette({ inline = false }: { inline?: boolean })
   const hasResults = Object.values(results).some(items => items.length > 0)
 
   return <Dialog.Root open={open} onOpenChange={next => { setOpen(next); if (!next) setQuery("") }}>
-      <Dialog.Trigger asChild>
+      {showTrigger && <Dialog.Trigger asChild>
         <button
           type="button"
           className={`${styles.trigger} ${inline ? styles.inlineTrigger : ""}`}
@@ -99,7 +107,7 @@ export function ResearchCommandPalette({ inline = false }: { inline?: boolean })
           <span>搜索研究</span>
           <kbd>Ctrl / Cmd + K</kbd>
         </button>
-      </Dialog.Trigger>
+      </Dialog.Trigger>}
       <Dialog.Portal>
         <Dialog.Overlay className={styles.overlay} />
         <Dialog.Content className={styles.dialog} onCloseAutoFocus={event => {

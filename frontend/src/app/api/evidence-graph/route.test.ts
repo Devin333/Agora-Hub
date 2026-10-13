@@ -101,14 +101,14 @@ describe("evidence graph BFF routes", () => {
     })
 
     const found = await getEvidenceGraphNodeRoute(new NextRequest("http://localhost/api/evidence-graph/nodes/paper%3Aagent-memory"), {
-      params: { id: "paper%3Aagent-memory" },
+      params: Promise.resolve({ id: "paper%3Aagent-memory" }),
     })
     expect(found.status).toBe(200)
     expect((await found.json()).data.node.id).toBe("paper:agent-memory")
 
     vi.mocked(getEvidenceGraphNodeDetail).mockResolvedValueOnce(null)
     const missing = await getEvidenceGraphNodeRoute(new NextRequest("http://localhost/api/evidence-graph/nodes/missing"), {
-      params: { id: "missing" },
+      params: Promise.resolve({ id: "missing" }),
     })
     expect(missing.status).toBe(404)
   })
@@ -117,7 +117,7 @@ describe("evidence graph BFF routes", () => {
     vi.mocked(getEvidenceGraphTimeline).mockResolvedValueOnce({ items: graphResponse.timeline })
 
     const response = await getTopicTimelineRoute(new NextRequest("http://localhost/api/topics/topic%3Aagent-memory/timeline"), {
-      params: { topicId: "topic%3Aagent-memory" },
+      params: Promise.resolve({ topicId: "topic%3Aagent-memory" }),
     })
     const payload = await response.json()
 

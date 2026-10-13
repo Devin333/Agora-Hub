@@ -3,7 +3,8 @@ import { getProjectDetail } from "@/lib/projects/data-source"
 
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: NextRequest, { params }: { params: { slug: string } }) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ slug: string }> }) {
+  const params = await props.params;
   try {
     const result = await getProjectDetail(decodeURIComponent(params.slug))
     if (!result) {

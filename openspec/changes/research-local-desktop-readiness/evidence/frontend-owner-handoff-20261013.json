@@ -1,0 +1,850 @@
+{
+  "schema": "newsroom.desktop-owner-handoff/v1",
+  "date": "2026-10-13",
+  "owner": "desktop_frontend_workflows",
+  "scope": "local-desktop frontend profile, authentication/BFF, canonical routes, owned workspace and reader state, source/import UX, recoverable analysis/ask operations, Research report projection/save/export",
+  "execution": {
+    "tests": false,
+    "typecheck": false,
+    "lint": false,
+    "build": false,
+    "compile": false,
+    "smoke": false,
+    "browserRegression": false,
+    "services": false,
+    "providerCalls": false,
+    "liveAcceptance": false,
+    "commit": false
+  },
+  "staticTaskCoverage": [
+    "2.8",
+    "3.1",
+    "3.3",
+    "3.7",
+    "3.8",
+    "4.1",
+    "4.2",
+    "4.3",
+    "4.4",
+    "4.5",
+    "4.6",
+    "4.7",
+    "4.8",
+    "4.9",
+    "4.10",
+    "5.1",
+    "5.2",
+    "5.3",
+    "5.4",
+    "5.5",
+    "5.6",
+    "5.7",
+    "5.8",
+    "5.9",
+    "5.10",
+    "6.1",
+    "6.2",
+    "6.3",
+    "6.4",
+    "6.5",
+    "6.6",
+    "6.7",
+    "6.8",
+    "6.9",
+    "7.1",
+    "7.2",
+    "7.3",
+    "7.4",
+    "7.5",
+    "7.6",
+    "7.7",
+    "7.8",
+    "7.9",
+    "7.10",
+    "7.11",
+    "7.12",
+    "8.1",
+    "8.2",
+    "8.3",
+    "8.4",
+    "8.5",
+    "8.6",
+    "8.7",
+    "8.8",
+    "8.9"
+  ],
+  "taskEvidence": [
+    {
+      "id": "2.8",
+      "evidence": "能力提示严格消费 configured/reachable/verified/verifiedAt/reasonCode/recovery/provenance，区分未验证、缺配置和真实失败，并按 owner/profile 会话刷新。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/research-capability-notice.tsx",
+        "frontend/src/lib/research/desktop/contracts.ts",
+        "frontend/src/lib/research/desktop/client.ts",
+        "frontend/src/components/providers.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/research-capability-notice.test.ts",
+        "frontend/src/lib/research/desktop/contracts.test.ts"
+      ]
+    },
+    {
+      "id": "3.1",
+      "evidence": "local-desktop 正式入口由 middleware、session/bootstrap/login BFF 和安全 next path 共同保护；session 未决、过期和未登录状态均有明确页面行为。",
+      "productionFiles": [
+        "frontend/src/middleware.ts",
+        "frontend/src/app/api/auth/session/route.ts",
+        "frontend/src/app/api/auth/bootstrap/route.ts",
+        "frontend/src/app/api/auth/login/route.ts",
+        "frontend/src/app/login/login-form.tsx",
+        "frontend/src/lib/auth/portal-server.ts"
+      ],
+      "testFiles": [
+        "frontend/src/middleware.auth.test.ts",
+        "frontend/src/lib/auth/portal-server.test.ts",
+        "frontend/src/components/auth/portal-login-dialog.test.tsx"
+      ]
+    },
+    {
+      "id": "3.3",
+      "evidence": "cookie 属性由服务端 profile/origin helper 生成；仅已验证的 local-desktop loopback HTTP 允许 Secure 例外，其他 profile 保持原安全属性。",
+      "productionFiles": [
+        "frontend/src/lib/auth/portal-server.ts",
+        "frontend/src/app/api/auth/bootstrap/route.ts",
+        "frontend/src/app/api/auth/login/route.ts",
+        "frontend/src/app/api/auth/session/route.ts",
+        "frontend/src/lib/deployment-profile.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/auth/portal-server.test.ts",
+        "frontend/src/lib/deployment-profile.test.ts"
+      ]
+    },
+    {
+      "id": "3.7",
+      "evidence": "退出、会话刷新和同页账号切换会重新读取 session、切换 owned workspace、清空 reader/selection/operation 私有视图，并用 owner/revision/run/request key 丢弃旧异步回执。",
+      "productionFiles": [
+        "frontend/src/components/auth/portal-account-provider.tsx",
+        "frontend/src/lib/research/use-research-history.ts",
+        "frontend/src/features/portal/reader/desktop-reader-page.tsx",
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx",
+        "frontend/src/lib/research/desktop-workspace.test.ts",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "3.8",
+      "evidence": "本地用户名密码 bootstrap/login 接入正式登录 UI；账号 provider 将成功 session 送入 owned workspace，未配置 OTP/OAuth 不阻断本地登录。",
+      "productionFiles": [
+        "frontend/src/app/login/login-form.tsx",
+        "frontend/src/components/auth/portal-account-provider.tsx",
+        "frontend/src/components/auth/portal-login-dialog.tsx",
+        "frontend/src/app/api/auth/bootstrap/route.ts",
+        "frontend/src/app/api/auth/login/route.ts",
+        "frontend/src/app/api/auth/methods/route.ts"
+      ],
+      "testFiles": [
+        "frontend/src/components/auth/portal-login-dialog.test.tsx",
+        "frontend/src/lib/auth/portal-server.test.ts"
+      ]
+    },
+    {
+      "id": "4.1",
+      "evidence": "local-desktop 的 / 使用正式 Research 首页，default profile 保留既有首页语义。",
+      "productionFiles": [
+        "frontend/src/app/page.tsx",
+        "frontend/src/features/portal/components/design-demo-page.tsx",
+        "frontend/src/lib/deployment-profile.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/deployment-profile.test.ts",
+        "frontend/src/features/portal/components/__tests__/design-demo-page.test.tsx"
+      ]
+    },
+    {
+      "id": "4.2",
+      "evidence": "论文、reader、分组和报告统一到 /papers、/papers/[slug]/read、/research/groups/[groupId]、/reports，并共享正式导航。",
+      "productionFiles": [
+        "frontend/src/app/papers/page.tsx",
+        "frontend/src/app/papers/[slug]/read/page.tsx",
+        "frontend/src/app/research/groups/[groupId]/page.tsx",
+        "frontend/src/app/reports/page.tsx",
+        "frontend/src/features/portal/components/research-sidebar.tsx",
+        "frontend/src/features/portal/components/paper-portal-header.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/app/papers/__tests__/paper-reader-routes.test.tsx",
+        "frontend/src/lib/research/routes.test.ts"
+      ]
+    },
+    {
+      "id": "4.3",
+      "evidence": "限定 local-desktop 的旧 /design-demo Research 深链接迁移，保留受控 query、returnTo、section/page 定位并拒绝外部返回地址。",
+      "productionFiles": [
+        "frontend/src/middleware.ts",
+        "frontend/src/lib/research/routes.ts",
+        "frontend/src/lib/papers/discovery-navigation.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/routes.test.ts",
+        "frontend/src/middleware.auth.test.ts",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "4.4",
+      "evidence": "历史、草稿、来源卡、命令面板、taxonomy 和侧栏使用统一 profile-aware URL helper；default profile 不强制迁移旧 bookmark。",
+      "productionFiles": [
+        "frontend/src/lib/research/routes.ts",
+        "frontend/src/lib/research/entry.ts",
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/features/portal/components/research-sidebar.tsx",
+        "frontend/src/features/portal/components/paper-taxonomy-directory.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/routes.test.ts",
+        "frontend/src/lib/research/history-profile.test.ts",
+        "frontend/src/lib/research/entry.test.ts"
+      ]
+    },
+    {
+      "id": "4.5",
+      "evidence": "旧历史与草稿链接在 local-desktop 下幂等规范化，通过 owner-scoped workspace CAS 保存；default profile 保留原链接。",
+      "productionFiles": [
+        "frontend/src/lib/research/history-model.ts",
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/lib/research/history-sync.ts",
+        "frontend/src/lib/research/routes.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/history-profile.test.ts",
+        "frontend/src/lib/research/history-sync.test.ts",
+        "frontend/src/lib/research/desktop-workspace.test.ts"
+      ]
+    },
+    {
+      "id": "4.6",
+      "evidence": "首页、分组、论文、reader 和报告传递 question、group、material、researchSession、returnTo 及 exact source locator。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/design-demo-page.tsx",
+        "frontend/src/features/portal/components/research-group-page.tsx",
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx",
+        "frontend/src/app/reports/desktop-report-detail.tsx",
+        "frontend/src/lib/research/routes.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/routes.test.ts",
+        "frontend/src/lib/research/reader-location.test.ts"
+      ]
+    },
+    {
+      "id": "4.7",
+      "evidence": "关键页面具有 loading/empty/error/retry/expired/unavailable 状态；reader、能力、报告列表和报告详情均可显式重试且保留当前 owned 输入。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/desktop-reader-page.tsx",
+        "frontend/src/features/portal/components/research-capability-notice.tsx",
+        "frontend/src/app/reports/desktop-reports-page.tsx",
+        "frontend/src/app/reports/desktop-report-detail.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/app/reports/desktop-reports-page.test.tsx",
+        "frontend/src/app/reports/desktop-report-detail.test.tsx"
+      ]
+    },
+    {
+      "id": "4.8",
+      "evidence": "reader 与正式 Research 页面沿用响应式布局；浏览器回归代码覆盖 1366x768、1920x1080 和 125% 有效 CSS viewport，并检查关键控件 bounding box 与横向溢出。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/reader-workspace.module.css",
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx",
+        "frontend/src/features/portal/components/research-sidebar.module.css"
+      ],
+      "testFiles": [
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "4.9",
+      "evidence": "关键按钮、表单、dialog、异步状态和错误具有 label/role/focus 恢复；浏览器回归编写完整 Tab、Enter 和文本输入路径。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx",
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/components/auth/portal-login-dialog.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "4.10",
+      "evidence": "正式/旧路由、query/定位、default profile、same-page owner 变化和桌面键盘/viewport 回归代码已编写；属于第 11 章 fixture 回归。",
+      "productionFiles": [
+        "frontend/src/lib/research/routes.ts",
+        "frontend/src/middleware.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/routes.test.ts",
+        "frontend/src/lib/research/history-profile.test.ts",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "5.1",
+      "evidence": "owned workspace 提供分组/材料保存、编辑移组、删除、研究访问归档/恢复及删除分组后的安全 ungroup。",
+      "productionFiles": [
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/features/portal/components/research-group-page.tsx",
+        "frontend/src/lib/research/workspace-items.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/history.test.ts",
+        "frontend/src/lib/research/workspace-items.test.ts"
+      ]
+    },
+    {
+      "id": "5.2",
+      "evidence": "workspace 保存状态区分 loading/dirty/syncing/synced/conflict/error，账号保存只由服务端 CAS 回执确认。",
+      "productionFiles": [
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/lib/research/history-sync.ts",
+        "frontend/src/lib/research/use-research-history.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/history-sync.test.ts",
+        "frontend/src/lib/research/desktop-workspace.test.ts"
+      ]
+    },
+    {
+      "id": "5.3",
+      "evidence": "双标签 revision/CAS 冲突保留 pending workspace，重新读取后显式恢复/重试，避免静默覆盖。",
+      "productionFiles": [
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/lib/research/history-sync.ts",
+        "frontend/src/lib/research/history-model.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/history-sync.test.ts",
+        "frontend/src/lib/research/desktop-workspace.test.ts"
+      ]
+    },
+    {
+      "id": "5.4",
+      "evidence": "guest/legacy workspace、报告、notebook 和 selection 只能显式导入，按稳定 ID 去重，不在登录或账号切换时自动合并。",
+      "productionFiles": [
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/features/portal/reader/use-reader-notebook.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/workspace-items.test.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.test.ts"
+      ]
+    },
+    {
+      "id": "5.5",
+      "evidence": "notebook、selection、reader event 和解释/示例回答写入同一 owned workspace，绑定 paper/sourceRevision；legacy local selection 需显式导入。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/use-reader-notebook.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.ts",
+        "frontend/src/components/papers/open-reader/open-reader-page.tsx",
+        "frontend/src/lib/research/workspace-items.ts",
+        "frontend/src/features/portal/reader/reader-assistant.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/components/papers/open-reader/open-reader-state.test.ts",
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx",
+        "frontend/src/lib/research/selection-ask.test.ts"
+      ]
+    },
+    {
+      "id": "5.6",
+      "evidence": "notebook 章节/PDF 页、source revision、reader activity、report draft 位置和继续研究引用持久化在 owned workspace；无 exact identity 时只保留笔记输入。",
+      "productionFiles": [
+        "frontend/src/lib/research/workspace-items.ts",
+        "frontend/src/lib/research/history-model.ts",
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/features/portal/reader/use-reader-notebook.ts",
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/workspace-items.test.ts",
+        "frontend/src/lib/research/reader-location.test.ts"
+      ]
+    },
+    {
+      "id": "5.7",
+      "evidence": "URL expected sourceRevision 与当前 reader revision 不一致时拒绝恢复旧 section/page；citation 和 selection 同样校验 revision，定位不可用时显示原因。",
+      "productionFiles": [
+        "frontend/src/lib/research/reader-location.ts",
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/reader-location.test.ts",
+        "frontend/src/features/portal/reader/reader-assistant.test.ts"
+      ]
+    },
+    {
+      "id": "5.8",
+      "evidence": "材料选择、确定性比较和报告草稿保留原材料 ID、标题、URL、用户笔记与目标分组，不生成模型结论。",
+      "productionFiles": [
+        "frontend/src/lib/research/materials.ts",
+        "frontend/src/features/portal/components/research-group-page.tsx",
+        "frontend/src/lib/research/workspace-items.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/workspace-items.test.ts"
+      ]
+    },
+    {
+      "id": "5.9",
+      "evidence": "网络/存储失败和 owner 切换期间保留错误与未同步状态；每次持久化核对 expectedOwner，旧回执不能跨账号写入。",
+      "productionFiles": [
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/lib/research/history-sync.ts",
+        "frontend/src/features/portal/reader/use-reader-notebook.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/history-sync.test.ts",
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx"
+      ]
+    },
+    {
+      "id": "5.10",
+      "evidence": "CAS、owner 切换、显式 legacy import、notebook/selection 持久化和 revision 失效测试代码已编写。",
+      "productionFiles": [
+        "frontend/src/lib/research/history-sync.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/desktop-workspace.test.ts",
+        "frontend/src/lib/research/history-sync.test.ts",
+        "frontend/src/lib/research/workspace-items.test.ts",
+        "frontend/src/components/papers/open-reader/open-reader-state.test.ts",
+        "frontend/src/lib/research/reader-location.test.ts"
+      ]
+    },
+    {
+      "id": "6.1",
+      "evidence": "研究问题、可编辑 constraints、source mode、目标 group 和 material IDs 写入真实 guided request/context，失败后 workspace draft 保留原条件。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/design-demo-page.tsx",
+        "frontend/src/lib/research/constraints.ts",
+        "frontend/src/lib/research/guided-context.ts",
+        "frontend/src/lib/research/use-guided-research.ts",
+        "frontend/src/lib/research/entry.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/guided-context.test.ts",
+        "frontend/src/lib/research/guided-proxy.test.ts",
+        "frontend/src/lib/research/entry.test.ts"
+      ]
+    },
+    {
+      "id": "6.2",
+      "evidence": "首页识别 arXiv、DOI 和 GitHub URL，保存真实来源引用；GitHub 被识别为 project/material，不进入代码执行路径。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/design-demo-page.tsx",
+        "frontend/src/lib/research/materials.ts",
+        "frontend/src/lib/research/entry.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/__tests__/design-demo-page.test.tsx",
+        "frontend/src/lib/research/entry.test.ts"
+      ]
+    },
+    {
+      "id": "6.3",
+      "evidence": "PDF UI 校验扩展名、MIME、50MB 上限，文件名 percent 编码；local-desktop 请求包含内容 SHA-256、source revision/fingerprint 和 durable request identity。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/app/api/research/imports/route.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/__tests__/research-source-entry.test.tsx"
+      ]
+    },
+    {
+      "id": "6.4",
+      "evidence": "导入在发送前持久化 immutable request semantic；首次回执丢失转 unknown 并按原 request/generation 查询。失败状态提供显式检查或新文件/新身份重试，成功后生成真实 reader 跳转。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/lib/research/pending-operations.ts",
+        "frontend/src/lib/research/desktop/client.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/__tests__/research-source-entry.test.tsx",
+        "frontend/src/lib/research/pending-operations.test.ts",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "6.5",
+      "evidence": "导入 UI 只显示真实 waiting/running/passed/needs_action/rejected/failed/unknown 状态，不模拟进度；metadata-only 或缺 identity 不生成精确 reader 资格。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/lib/research/desktop/contracts.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/__tests__/research-source-entry.test.tsx",
+        "frontend/src/lib/research/desktop/contracts.test.ts"
+      ]
+    },
+    {
+      "id": "6.6",
+      "evidence": "上传/查询使用 AbortController 和有界请求；离开或 owner 变化时释放请求，恢复时先读取已保存 request。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/lib/research/pending-operations.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/__tests__/research-source-entry.test.tsx"
+      ]
+    },
+    {
+      "id": "6.7",
+      "evidence": "reader 严格解析 ready/needs_review/unavailable；ready 要求 exact identity，受控 private source URL 仅允许同源声明路径，缺资格仍可诚实显示公开正文或原 PDF。",
+      "productionFiles": [
+        "frontend/src/lib/research/desktop/contracts.ts",
+        "frontend/src/features/portal/reader/desktop-reader-page.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx",
+        "frontend/src/features/portal/reader/reader-contract.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/desktop/contracts.test.ts",
+        "frontend/src/features/portal/reader/reader-assistant.test.ts",
+        "frontend/src/features/portal/reader/reader-contract.test.ts"
+      ]
+    },
+    {
+      "id": "6.8",
+      "evidence": "成功导入绑定 workspace material/importId/paperId/sourceRevision，并提供正式 readerHref；材料可继续分组和复用。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/lib/research/history.ts",
+        "frontend/src/lib/research/workspace-items.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/__tests__/research-source-entry.test.tsx",
+        "frontend/src/lib/research/workspace-items.test.ts"
+      ]
+    },
+    {
+      "id": "6.9",
+      "evidence": "上传限制、中文文件名、owner 隔离、request 恢复、private null transport 和 reader 资格负例测试代码已编写。",
+      "productionFiles": [
+        "frontend/src/features/portal/components/research-source-entry.tsx",
+        "frontend/src/lib/research/desktop/request-contracts.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/components/__tests__/research-source-entry.test.tsx",
+        "frontend/src/app/api/research/desktop/operations/operation-routes.test.ts",
+        "frontend/src/lib/research/pending-operations.test.ts",
+        "frontend/src/lib/research/desktop/contracts.test.ts"
+      ]
+    },
+    {
+      "id": "7.1",
+      "evidence": "前端严格定义 prepare/analyze/ask semantic 和 BFF body 映射，固定 paper/run/source revision/fingerprint/question/selection；kind 仅参与 canonical fingerprint，不泄漏到后端 body。",
+      "productionFiles": [
+        "frontend/src/lib/research/workspace-items.ts",
+        "frontend/src/lib/research/desktop/request-contracts.ts",
+        "frontend/src/lib/research/desktop/contracts.ts"
+      ],
+      "testFiles": [
+        "frontend/src/app/api/research/desktop/operations/operation-routes.test.ts",
+        "frontend/src/lib/research/pending-operations.test.ts"
+      ]
+    },
+    {
+      "id": "7.2",
+      "evidence": "BFF request sanitizers 使用字段 allowlist、长度/类型限制，拒绝 owner scope、未知 options、空 constraints 和任意相对 analyze URL。",
+      "productionFiles": [
+        "frontend/src/lib/research/desktop/request-contracts.ts",
+        "frontend/src/app/api/research/desktop/operations/analyze/route.ts",
+        "frontend/src/app/api/research/desktop/operations/ask/route.ts"
+      ],
+      "testFiles": [
+        "frontend/src/app/api/research/desktop/operations/operation-routes.test.ts"
+      ]
+    },
+    {
+      "id": "7.3",
+      "evidence": "requestId/generation/fingerprint/完整 semantic 在首次发送前写入 owner workspace 并等待 CAS sync；BFF 不建立第二套 job store。",
+      "productionFiles": [
+        "frontend/src/lib/research/pending-operations.ts",
+        "frontend/src/lib/research/workspace-items.ts",
+        "frontend/src/lib/research/history.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/pending-operations.test.ts",
+        "frontend/src/lib/research/workspace-items.test.ts"
+      ]
+    },
+    {
+      "id": "7.4",
+      "evidence": "UI 禁止普通 retry 盲重发；waiting/unknown 继续使用原 request 查询，终态失败只能由用户显式创建新身份。服务端去重仍由 backend authority 负责。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.tsx",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.test.tsx",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "7.5",
+      "evidence": "operation query 以 requestId+generation 读取严格 UI DTO，包括 recoverable 与 automaticRetryAllowed；运行结果由真实 backend projection 解析。",
+      "productionFiles": [
+        "frontend/src/app/api/research/desktop/operations/[requestId]/route.ts",
+        "frontend/src/lib/research/desktop/client.ts",
+        "frontend/src/lib/research/desktop/contracts.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/desktop/contracts.test.ts",
+        "frontend/src/app/api/research/desktop/operations/operation-routes.test.ts"
+      ]
+    },
+    {
+      "id": "7.6",
+      "evidence": "正式 reader 的准备与分析入口调用 desktop application BFF；公开正文需要显式 prepare 获得 owned capability 后才允许 analyze。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.tsx",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx",
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx",
+        "frontend/src/features/portal/reader/reader-contract.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.test.tsx",
+        "frontend/src/features/portal/reader/reader-contract.test.ts"
+      ]
+    },
+    {
+      "id": "7.7",
+      "evidence": "单论文问答使用 accepted run、exact source revision/fingerprint 和 selection；safe typed citation 仅在当前 revision 与真实 section/page 可定位时提供回跳。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/reader-assistant.tsx",
+        "frontend/src/lib/research/selection-ask.ts",
+        "frontend/src/lib/research/reader-location.ts"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-assistant.test.ts",
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx",
+        "frontend/src/lib/research/selection-ask.test.ts"
+      ]
+    },
+    {
+      "id": "7.8",
+      "evidence": "准备、分析和问答显示 waiting/running/needs_action/passed/rejected/failed/interrupted/unknown，缺事件时只表述等待或待核对。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.tsx",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.test.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx"
+      ]
+    },
+    {
+      "id": "7.9",
+      "evidence": "prepare/analyze/ask 在刷新、断连和首次回执丢失后恢复原 request；重新挂载自动/显式查询，不自动再次执行。",
+      "productionFiles": [
+        "frontend/src/lib/research/pending-operations.ts",
+        "frontend/src/features/portal/reader/reader-preparation-control.tsx",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.test.tsx",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "7.10",
+      "evidence": "停止按钮只 abort 当前浏览器等待并明确后端任务未被取消；不存在 fake cancel 状态。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.tsx",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/features/portal/reader/reader-preparation-control.test.tsx",
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx"
+      ]
+    },
+    {
+      "id": "7.11",
+      "evidence": "runId、paperId、sourceRevision 和 report reference 与当前 reader/workspace session 绑定；前端不决定 quality gate、publication 或 memory write。",
+      "productionFiles": [
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx",
+        "frontend/src/features/portal/reader/reader-analysis-control.tsx",
+        "frontend/src/lib/research/workspace-items.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/workspace-items.test.ts",
+        "frontend/src/lib/research/desktop/contracts.test.ts"
+      ]
+    },
+    {
+      "id": "7.12",
+      "evidence": "共享 canonical fingerprint、private PDF null transport、first-ack-lost、owner/selection async isolation 和浏览器无盲重试测试代码已编写。",
+      "productionFiles": [
+        "frontend/src/lib/research/pending-operations.ts",
+        "frontend/src/lib/research/desktop/request-contracts.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/pending-operations.test.ts",
+        "frontend/src/app/api/research/desktop/operations/operation-routes.test.ts",
+        "frontend/src/features/portal/reader/reader-assistant.component.test.tsx",
+        "frontend/tests/e2e/desktop-research-readiness.spec.ts"
+      ]
+    },
+    {
+      "id": "8.1",
+      "evidence": "Research report 使用独立严格 DTO 映射真实 analysis/summary/analysis.quality/quality/run/sourceRevision/citations/eligibility，不复用通用 report store。",
+      "productionFiles": [
+        "frontend/src/lib/research/desktop/contracts.ts",
+        "frontend/src/lib/research/desktop/client.ts"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/desktop/contracts.test.ts"
+      ]
+    },
+    {
+      "id": "8.2",
+      "evidence": "authenticated BFF 分别代理 exact run report、saved report、save/list/export；浏览器不能提供 owner scope，响应使用严格 public projection。",
+      "productionFiles": [
+        "frontend/src/app/api/research/desktop/reports/route.ts",
+        "frontend/src/app/api/research/desktop/reports/[reportId]/route.ts",
+        "frontend/src/app/api/research/desktop/reports/runs/[runId]/route.ts",
+        "frontend/src/lib/research/desktop/server-proxy.ts"
+      ],
+      "testFiles": [
+        "frontend/src/app/api/research/desktop/reports/report-routes.test.ts",
+        "frontend/src/lib/research/desktop/server-proxy.test.ts"
+      ]
+    },
+    {
+      "id": "8.3",
+      "evidence": "报告详情呈现三分钟阅读、贡献、方法、实验、局限、可复现性、claims、质量门、引用和折叠诊断；缺失候选信息不伪造正文。",
+      "productionFiles": [
+        "frontend/src/app/reports/desktop-report-detail.tsx",
+        "frontend/src/lib/research/desktop/contracts.ts"
+      ],
+      "testFiles": [
+        "frontend/src/app/reports/desktop-report-detail.test.tsx",
+        "frontend/src/lib/research/desktop/contracts.test.ts"
+      ]
+    },
+    {
+      "id": "8.4",
+      "evidence": "report citation 携带 paperId/sourceRevision/section/page；reader 导航前核对当前 paper/revision 与 locator，有版本差异时拒绝旧位置。",
+      "productionFiles": [
+        "frontend/src/app/reports/desktop-report-detail.tsx",
+        "frontend/src/lib/research/reader-location.ts",
+        "frontend/src/features/portal/reader/paper-reader-workspace.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/reader-location.test.ts",
+        "frontend/src/app/reports/desktop-report-detail.test.tsx"
+      ]
+    },
+    {
+      "id": "8.5",
+      "evidence": "报告列表、保存、重新打开使用 owner-scoped report reference，正文与质量仍从 exact run/artifact projection 获取。",
+      "productionFiles": [
+        "frontend/src/app/reports/desktop-reports-page.tsx",
+        "frontend/src/app/reports/desktop-report-detail.tsx",
+        "frontend/src/lib/research/desktop/client.ts",
+        "frontend/src/lib/research/workspace-items.ts"
+      ],
+      "testFiles": [
+        "frontend/src/app/reports/desktop-reports-page.test.tsx",
+        "frontend/src/app/reports/desktop-report-detail.test.tsx"
+      ]
+    },
+    {
+      "id": "8.6",
+      "evidence": "多材料 draft/确定性比较与 accepted single-paper report 使用不同 kind/页面标识；draft 不显示为自动综述或 accepted artifact。",
+      "productionFiles": [
+        "frontend/src/lib/research/workspace-items.ts",
+        "frontend/src/features/portal/components/research-group-page.tsx",
+        "frontend/src/app/reports/desktop-report-detail.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/workspace-items.test.ts",
+        "frontend/src/app/reports/desktop-report-detail.test.tsx"
+      ]
+    },
+    {
+      "id": "8.7",
+      "evidence": "Markdown/JSON accepted export 仅由 backend eligibility.acceptedExport 授权；draft export 使用独立受控 route，不把候选伪装为 accepted。",
+      "productionFiles": [
+        "frontend/src/app/api/research/desktop/reports/runs/[runId]/export/route.ts",
+        "frontend/src/app/api/research/desktop/reports/drafts/export/route.ts",
+        "frontend/src/lib/research/desktop/client.ts",
+        "frontend/src/app/reports/desktop-report-detail.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/app/api/research/desktop/reports/report-routes.test.ts",
+        "frontend/src/app/reports/desktop-report-detail.test.tsx"
+      ]
+    },
+    {
+      "id": "8.8",
+      "evidence": "导出使用 authenticated fetch、20MB 上限、受控 Content-Disposition 文件名、Blob 下载和失败/中断提示；401、corrupt/no-export 时保留报告并允许重试，public DTO 拒绝 metadata/file URI。",
+      "productionFiles": [
+        "frontend/src/lib/research/desktop/client.ts",
+        "frontend/src/app/reports/desktop-report-detail.tsx",
+        "frontend/src/lib/research/desktop/contracts.ts"
+      ],
+      "testFiles": [
+        "frontend/src/app/reports/desktop-report-detail.test.tsx",
+        "frontend/src/app/api/research/desktop/reports/report-routes.test.ts",
+        "frontend/src/lib/research/desktop/contracts.test.ts"
+      ]
+    },
+    {
+      "id": "8.9",
+      "evidence": "报告资格/owner、source revision、citation、corrupt/unauthorized artifact、draft/accepted 区分和安全 export 测试代码已编写。",
+      "productionFiles": [
+        "frontend/src/lib/research/desktop/contracts.ts",
+        "frontend/src/app/reports/desktop-report-detail.tsx"
+      ],
+      "testFiles": [
+        "frontend/src/lib/research/desktop/contracts.test.ts",
+        "frontend/src/app/reports/desktop-report-detail.test.tsx",
+        "frontend/src/app/reports/desktop-reports-page.test.tsx",
+        "frontend/src/app/api/research/desktop/reports/report-routes.test.ts"
+      ]
+    }
+  ],
+  "keyContracts": [
+    "Client-visible deployment profile is server-derived; server authorization never trusts browser profile or owner fields",
+    "BFF POSTs use validated canonical Origin and bounded strict bodies; request helpers live outside Next route modules",
+    "Request identity and complete semantic persist owner-scoped before first send; unknown responses are queried by the same request and generation without blind resubmission",
+    "Public reader hashes support honest reading but do not grant owned analysis capability; explicit prepare establishes an owner-qualified reader projection",
+    "Private source assets use the single controlled same-origin source path; analyze transport remains public HTTP(S) or null",
+    "Notebook, exact reading position, selection, explanation/example answer and reader events bind owner, paper and exact source revision",
+    "Accepted report rendering and export require strict complete public analysis/quality identity and backend eligibility; internal metadata and file paths are rejected",
+    "Stopping browser wait never claims backend cancellation"
+  ],
+  "pendingConfirmedProductionItems": [],
+  "pendingTestCodeItems": [],
+  "executionBoundary": {
+    "chapter11": "All frontend unit, contract, typecheck, lint, build and mocked browser regression execution remains unexecuted and must be recorded in chapter 11.",
+    "chapter12": "Real browser, real local-desktop services, real provider, real PDF/source, real Windows viewport/scaling and end-to-end acceptance remain unexecuted chapter 12 evidence.",
+    "browserFixtureQualification": "frontend/tests/e2e/desktop-research-readiness.spec.ts is chapter 11 route-fixture/browser regression code and is not chapter 12 live-service proof."
+  }
+}

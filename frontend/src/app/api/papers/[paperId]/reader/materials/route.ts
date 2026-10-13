@@ -6,26 +6,28 @@ import { paperRouteErrorStatus, requirePublicPaper } from "@/lib/papers/public-r
 
 export const dynamic = "force-dynamic"
 
-export async function GET(_request: Request, { params }: { params: { paperId: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ paperId: string }> }) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response
   }
 
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiGet(`/api/v1/papers/${encodeURIComponent(guard.paper.id)}/reader/materials`, {
     headers: token ? { "x-newsroom-session": token } : undefined,
   })
   return readerMaterialsResponse(result)
 }
 
-export async function DELETE(_request: Request, { params }: { params: { paperId: string } }) {
+export async function DELETE(_request: Request, props: { params: Promise<{ paperId: string }> }) {
+  const params = await props.params;
   const guard = await requirePublicPaper(params.paperId)
   if (!guard.ok) {
     return guard.response
   }
 
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   const result = await safeApiDelete(`/api/v1/papers/${encodeURIComponent(guard.paper.id)}/reader/materials`, {
     headers: token ? { "x-newsroom-session": token } : undefined,
   })

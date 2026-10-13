@@ -1,0 +1,13 @@
+{
+  "stage": "test-final",
+  "cwd": "F:\\github\\NewsRoom",
+  "command": ".venv/Scripts/python.exe -m scripts.dev test",
+  "environment": {
+    "PYTHONFAULTHANDLER": "1"
+  },
+  "utcStart": "2026-10-12T19:19:12.8014371Z",
+  "utcEnd": "2026-10-12T20:52:52.2854690Z",
+  "exitCode": 1,
+  "log": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\newsroom-full-test-final-20261013-031912-793.log",
+  "logSha256": "8b46d55fb2560b0e8acd3bf4a8a3d4962d4eb38d0961d337ade4f3cb25fd4ed2"
+}

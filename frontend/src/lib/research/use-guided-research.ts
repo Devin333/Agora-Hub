@@ -1,5 +1,6 @@
 "use client"
 
+import { researchHomeHref } from "@/lib/research/routes"
 import { useEffect, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { historyState, saveResearchConversation, updateResearchVisit, type ResearchVisit } from "./history"
@@ -44,7 +45,7 @@ export function useGuidedResearch() {
     const current = state.current, turn = current?.conversation.turns.at(-1)
     if (turn && running(turn)) patchTurn(turn.id, value => transitionResearchTurn(value, "stopped"))
   }
-  function reset() { stop(); state.current = null; setActive(null); setSaveError(""); window.history.replaceState(null, "", "/design-demo") }
+  function reset() { stop(); state.current = null; setActive(null); setSaveError(""); window.history.replaceState(null, "", researchHomeHref()) }
   function resume(visit: ResearchVisit) {
     if (!visit.conversation || visit.deletedAt || !workspace.ready) return false
     stop()

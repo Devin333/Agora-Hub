@@ -1,0 +1,27 @@
+{
+  "schema": "newsroom.desktop-validation-run/v1",
+  "id": "runtime-all-contracts",
+  "attempt": 2,
+  "status": "passed-with-environment-skips",
+  "command": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe -m pytest tests/framework/shared/test_local_desktop.py tests/framework/shared/test_process_identity.py tests/scripts/test_local_desktop_autostart.py tests/scripts/test_local_desktop_cli.py tests/scripts/test_local_desktop_config.py tests/scripts/test_local_desktop_control.py tests/scripts/test_local_desktop_desktop_entry.py tests/scripts/test_local_desktop_doctor.py tests/scripts/test_local_desktop_log_collector.py tests/scripts/test_local_desktop_processes.py tests/scripts/test_local_desktop_recovery.py tests/scripts/test_local_desktop_release.py -q -rs",
+  "workingDirectory": "F:\\github\\NewsRoom",
+  "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+  "startedAt": "2026-10-12T18:10:11.2856694Z",
+  "endedAt": "2026-10-12T18:10:23.0372477Z",
+  "exitCode": 0,
+  "summary": "101 passed, 2 skipped in 11.22s",
+  "skipped": [
+    {
+      "test": "test_release_copy_rejects_source_symlink_escape",
+      "reason": "test environment cannot create symlinks"
+    },
+    {
+      "test": "test_release_verify_rejects_manifested_resource_replaced_by_symlink",
+      "reason": "test environment cannot create symlinks"
+    }
+  ],
+  "logSha256": "sha256:5f58c32db6dc7adc965ef69f25f63ba5f57d9e9b7432421f7b580b953327869c",
+  "logFile": "runtime-all-contracts-validation-20261013.log.gz",
+  "liveAcceptanceExecuted": false,
+  "sourceStatus": "runtime owner final handoff; full suite integration pending"
+}

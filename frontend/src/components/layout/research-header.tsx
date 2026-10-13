@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { ChevronDown, Menu, Search } from "lucide-react"
 import { AccountMenu } from "@/components/auth/account-menu"
 import { PapersLanguageToggle } from "@/components/papers/shared/language-toggle"
@@ -27,6 +28,7 @@ export function ResearchHeader({
   onLocaleChange: (locale: Locale) => void
   onThemeChange: (theme: ThemeMode) => void
 }) {
+  const router = useRouter()
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -47,7 +49,7 @@ export function ResearchHeader({
     const query = searchQuery.trim()
     if (!query) {
       event.preventDefault()
-      window.location.assign("/papers")
+      router.push("/papers")
       return
     }
     setMobileOpen(false)
@@ -55,16 +57,16 @@ export function ResearchHeader({
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#e2e7df] bg-white/90 backdrop-blur-xl dark:border-border dark:bg-card/95">
-      <div className="mx-auto flex min-h-[60px] max-w-[1440px] items-center gap-4 px-4 py-2 sm:px-6 lg:px-8">
-        <Link href="/papers" className="flex shrink-0 items-center gap-3" aria-label="Agora Hub Research">
+      <div className="mx-auto flex min-h-[60px] max-w-[1440px] items-center gap-2 px-3 py-2 sm:gap-4 sm:px-6 lg:px-8">
+        <Link href="/papers" className="flex min-w-0 items-center gap-2 sm:gap-3" aria-label="Agora Hub Research">
           <span className="flex size-9 items-center justify-center rounded-xl bg-[#172033] text-sm font-black text-white shadow-sm">
             A
           </span>
-          <span>
-            <span className="block text-base font-semibold leading-5">
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold leading-5 sm:text-base">
               Agora Hub <span className="text-emerald-600">Research</span>
             </span>
-            <span className="block text-xs text-[#334155]/55 dark:text-muted-foreground">{t(papersCopy.brandSubline, locale)}</span>
+            <span className="hidden truncate text-xs text-[#334155]/55 dark:text-muted-foreground sm:block">{t(papersCopy.brandSubline, locale)}</span>
           </span>
         </Link>
 

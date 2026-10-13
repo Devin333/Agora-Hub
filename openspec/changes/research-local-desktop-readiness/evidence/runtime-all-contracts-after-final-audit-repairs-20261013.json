@@ -1,0 +1,43 @@
+{
+  "command": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe -m pytest tests/scripts/test_local_desktop_autostart.py tests/scripts/test_local_desktop_cli.py tests/scripts/test_local_desktop_common.py tests/scripts/test_local_desktop_config.py tests/scripts/test_local_desktop_control.py tests/scripts/test_local_desktop_desktop_entry.py tests/scripts/test_local_desktop_doctor.py tests/scripts/test_local_desktop_log_collector.py tests/scripts/test_local_desktop_processes.py tests/scripts/test_local_desktop_recovery.py tests/scripts/test_local_desktop_release.py tests/framework/shared/test_local_desktop.py tests/framework/shared/test_process_identity.py -q -rs",
+  "cwd": "F:\\github\\NewsRoom",
+  "python": "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+  "utc_start": "2026-10-12T18:49:54.1043803Z",
+  "utc_end": "2026-10-12T18:50:06.4417554Z",
+  "exit_code": 0,
+  "log": "runtime-all-contracts-after-final-audit-repairs-20261013.log.gz",
+  "tests": [
+    "tests/scripts/test_local_desktop_autostart.py",
+    "tests/scripts/test_local_desktop_cli.py",
+    "tests/scripts/test_local_desktop_common.py",
+    "tests/scripts/test_local_desktop_config.py",
+    "tests/scripts/test_local_desktop_control.py",
+    "tests/scripts/test_local_desktop_desktop_entry.py",
+    "tests/scripts/test_local_desktop_doctor.py",
+    "tests/scripts/test_local_desktop_log_collector.py",
+    "tests/scripts/test_local_desktop_processes.py",
+    "tests/scripts/test_local_desktop_recovery.py",
+    "tests/scripts/test_local_desktop_release.py",
+    "tests/framework/shared/test_local_desktop.py",
+    "tests/framework/shared/test_process_identity.py"
+  ],
+  "logSha256": "7067462a69cfb7007d622159a607f521e11593ac428f237b7c211689006b3160",
+  "results": {
+    "passed": 138,
+    "failed": 0,
+    "skipped": 2,
+    "skipReason": "test environment cannot create symlinks"
+  },
+  "finalFullSuitePending": true,
+  "liveAcceptance": false,
+  "supersedes": "runtime-all-contracts-validation-final-20261013.json",
+  "rawLogSha256": "a403627fe2081b4835c3a7e90d6709bf5c9d12b244daf5d84a9e27aee82a8874",
+  "logArchiveIdentity": {
+    "path": "runtime-all-contracts-after-final-audit-repairs-20261013.log.gz",
+    "encoding": "gzip",
+    "sha256": "7067462a69cfb7007d622159a607f521e11593ac428f237b7c211689006b3160",
+    "bytes": 198,
+    "decompressedSha256": "a403627fe2081b4835c3a7e90d6709bf5c9d12b244daf5d84a9e27aee82a8874",
+    "decompressedBytes": 480
+  }
+}

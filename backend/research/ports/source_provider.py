@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Mapping, Protocol, runtime_checkable
 
+from backend.research.domain.document import ResearchDocument
 from backend.research.domain.paper import PaperSourceRecord, ResearchPaper
+
+
+@dataclass(frozen=True)
+class BoundPaperSource:
+    paper: ResearchPaper
+    source_record: PaperSourceRecord
+    document: ResearchDocument
 
 
 @runtime_checkable
@@ -14,4 +23,17 @@ class PaperSourceProvider(Protocol):
         ...
 
 
-__all__ = ["PaperSourceProvider"]
+@runtime_checkable
+class BoundPaperSourceProvider(PaperSourceProvider, Protocol):
+    def fetch_bound_source(
+        self,
+        *,
+        source_ref: str,
+        paper_id: str,
+        source_revision: str,
+        actor_scope: Mapping[str, str],
+    ) -> BoundPaperSource | None:
+        ...
+
+
+__all__ = ["BoundPaperSource", "BoundPaperSourceProvider", "PaperSourceProvider"]

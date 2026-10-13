@@ -16,6 +16,8 @@ import { ResearchComposerContext, ResearchContextSummary } from "./research-comp
 import { ResearchSourceEntry } from "./research-source-entry"
 import { useGuidedResearch } from "@/lib/research/use-guided-research"
 import { GuidedResearchView } from "./guided-research-view"
+import { ResearchCapabilityNotice } from "./research-capability-notice"
+import { researchHomeHref, researchPapersHref } from "@/lib/research/routes"
 
 const icons = { auto: Sparkles, plan: Sparkles, papers: BookOpen, projects: Github, community: Quote, reports: ClipboardCheck }
 const focusStyle = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6] focus-visible:ring-offset-2"
@@ -75,7 +77,7 @@ export function DesignDemoPage() {
   return <div className="h-screen overflow-hidden bg-[#fbf8ff] font-papers-research text-[#211a3c] [--header-height:73px]">
     <header className="h-[var(--header-height)] border-b border-[#eee8f5] bg-white">
       <nav className="flex h-full items-center px-6" aria-label="主导航">
-        <a href="/design-demo" className={`flex items-center gap-2.5 rounded-lg ${focusStyle}`}><span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span><span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span></a>
+        <a href={researchHomeHref()} className={`flex items-center gap-2.5 rounded-lg ${focusStyle}`}><span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span><span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span></a>
       </nav>
     </header>
     <div className="flex h-[calc(100svh-var(--header-height))]">
@@ -86,6 +88,7 @@ export function DesignDemoPage() {
     <main id="workspace" className="grid h-[calc(100svh-var(--header-height)-var(--header-height))] min-h-[520px] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)]">
       <h1 className="mx-auto w-[calc(100%-80px)] max-w-[900px] self-start pt-[clamp(5rem,12vh,9rem)] text-center font-sans text-[56px] font-bold leading-[1.2]"><span className="text-[#35274f]">Ask.</span>{" "}<span className="text-[#7c3aed]">Discover.</span></h1>
       <section aria-label="研究提问框" className="relative mx-auto w-[calc(100%-80px)] max-w-[960px] rounded-3xl border border-[#e7dff1] bg-white p-8 shadow-[0_18px_45px_rgba(86,58,127,0.13)]">
+        <ResearchCapabilityNotice compact />
         {restored && <div role="status" className="mb-4 flex items-center justify-between rounded-xl bg-[#f6f0fd] px-4 py-3 text-sm text-[#684b82]"><span>已恢复一条尚未发送的研究问题</span><span className="flex items-center gap-3"><button type="button" onClick={continueEditing} className={`rounded-md px-2 py-1 text-[#6d28d9] ${focusStyle}`}>继续编辑</button><button type="button" onClick={clear} aria-label="清除未发送的问题" className={`rounded-md ${focusStyle}`}><X size={16} /></button></span></div>}
         <form onSubmit={submit} aria-busy={busy} className="flex min-h-[72px] flex-wrap items-center gap-3 rounded-[24px] border border-[#ded4ec] bg-[#fefeff] p-2.5 pl-3 shadow-[0_3px_12px_rgba(86,58,127,0.06)] focus-within:border-[#a783ec] focus-within:ring-2 focus-within:ring-[#f0e9ff]">
           <ResearchComposerContext key={workspace.owner ?? "guest"} groupId={groupId} setGroupId={setGroupId} materialIds={materialIds} setMaterialIds={setMaterialIds} disabled={busy} />
@@ -137,7 +140,7 @@ function SourceHint({ query }: { query: string }) {
   const source = arxiv || github || doi
   if (!source) return null
   const resolvedSource = source
-  const related = `/design-demo/papers?q=${encodeURIComponent(query.replace(resolvedSource, "").trim())}&entry=source`
+  const related = `${researchPapersHref()}?q=${encodeURIComponent(query.replace(resolvedSource, "").trim())}&entry=source`
   function save() {
     if (!workspace.ready || !workspace.workspace.groups.some(group => group.id === groupId)) return
     const kind = resolvedSource.includes("github.com") ? "project" : "paper"

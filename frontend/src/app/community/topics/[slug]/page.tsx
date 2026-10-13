@@ -1,4 +1,5 @@
-"use client"
+"use client";
+import { use } from "react";
 
 import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
@@ -8,7 +9,8 @@ import { PageSkeleton } from "@/components/common/loading-skeleton"
 import { CommunityTopicDetail } from "@/features/community/components/community-topic-detail"
 import { fetchCommunityTopic } from "@/lib/community/api"
 
-export default function CommunityTopicPage({ params }: { params: { slug: string } }) {
+export default function CommunityTopicPage(props: { params: Promise<{ slug: string }> }) {
+  const params = use(props.params);
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["community", "topic", params.slug],
     queryFn: () => fetchCommunityTopic(params.slug)

@@ -6,19 +6,19 @@ import { authFailure, isSameOrigin } from "@/lib/auth/portal-server"
 export const dynamic = "force-dynamic"
 const backend = process.env.NEWSROOM_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
 
-export async function GET(_request: NextRequest, context: { params: { importId: string } }) {
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+export async function GET(_request: NextRequest, context: { params: Promise<{ importId: string }> }) {
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   if (!token) return authFailure("auth_required", 401)
-  const { importId } = context.params
+  const { importId } = (await context.params)
   if (!/^imp_[a-zA-Z0-9_-]{1,128}$/.test(importId)) return authFailure("invalid_request", 400)
   return forward(`${backend}/api/v1/research/imports/${encodeURIComponent(importId)}`, "GET", token)
 }
 
-export async function POST(request: NextRequest, context: { params: { importId: string } }) {
+export async function POST(request: NextRequest, context: { params: Promise<{ importId: string }> }) {
   if (!isSameOrigin(request)) return authFailure("auth_invalid_origin", 403)
-  const token = cookies().get(NEWSROOM_SESSION_COOKIE)?.value
+  const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
   if (!token) return authFailure("auth_required", 401)
-  const { importId } = context.params
+  const { importId } = (await context.params)
   if (!/^imp_[a-zA-Z0-9_-]{1,128}$/.test(importId)) return authFailure("invalid_request", 400)
   return forward(`${backend}/api/v1/research/imports/${encodeURIComponent(importId)}/retry`, "POST", token)
 }

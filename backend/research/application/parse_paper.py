@@ -269,6 +269,12 @@ class InMemoryResearchEventSink:
         )
         return {"state": "owner", "run_id": run_id}
 
+    def load_final(
+        self, run_id: str, *, actor_scope: Mapping[str, str],
+    ) -> dict[str, Any] | None:
+        value = self._finals.get((run_id, _scope_key(actor_scope)))
+        return dict(value) if value is not None else None
+
     def finalize(self, run_id: str, payload: Mapping[str, Any]) -> None:
         key = (run_id, _scope_key(payload.get("actor_scope") if isinstance(payload.get("actor_scope"), Mapping) else {}))
         existing = self._finals.get(key)
@@ -781,6 +787,8 @@ class ParsePaperUseCase:
                     "artifact_refs": artifact_refs,
                     "source_snapshot_refs": [item.snapshot_id for item in snapshots],
                     "document_id": document.document_id,
+                    "document_source_hash": document.source_hash,
+                    "quality_report": quality_report,
                     "actor_scope": actor_scope,
                     "budget": budget,
                     "request_fingerprint": request_fingerprint,
@@ -859,6 +867,43 @@ class ParsePaperUseCase:
             ) from exc
 
     execute = parse
+
+    def recover_completed(self, request: ParsePaperRequest) -> "ParsePaperResult | None":
+        """Read one scoped durable parse final without acquiring a lease or executing."""
+
+        request = request.model_copy(update={"options": validate_parse_options(request.options)})
+        if not request.run_id:
+            raise ParsePaperError("invalid_request", "parse recovery requires run_id", status_code=400)
+        actor_scope = _actor_scope(request)
+        loader = getattr(self._event_sink, "load_final", None)
+        if not callable(loader):
+            return None
+        final = loader(request.run_id, actor_scope=actor_scope)
+        if final is None:
+            return None
+        if not isinstance(final, Mapping) or final.get("request_fingerprint") != _request_fingerprint(request, actor_scope):
+            raise ParsePaperError(
+                "run_recovery_invalid",
+                "durable parse final does not match the original request",
+                status_code=409,
+            )
+        result = self._replay_completed_run(
+            run_id=request.run_id, final=final, actor_scope=actor_scope,
+        )
+        actual_hash = getattr(result.document, "source_hash", None)
+        if (
+            not actual_hash
+            or final.get("document_source_hash") != actual_hash
+            or getattr(result.document, "document_id", None) != final.get("document_id")
+            or not isinstance(final.get("quality_report"), Mapping)
+            or dict(getattr(result.document, "quality_report", {}) or {}) != dict(final["quality_report"])
+        ):
+            raise ParsePaperError(
+                "run_recovery_invalid",
+                "durable parse result no longer matches its exact document and quality receipt",
+                status_code=409,
+            )
+        return result
 
     def _replay_completed_run(
         self,
@@ -1226,7 +1271,12 @@ class ParsePaperUseCase:
             "lineage": lineage,
             "artifact_refs": unique_texts([*document.artifact_refs, *snapshot.artifact_refs]),
             "parser_attempts": typed_attempts,
-            "source_locators": unique_texts([*document.source_locators, *document.lineage.source_refs, *snapshot.lineage.source_refs]),
+            "source_locators": unique_texts([
+                *document.source_locators,
+                *document.lineage.source_refs,
+                *snapshot.lineage.source_refs,
+                *([str(snapshot.metadata.get("source_locator"))] if snapshot.metadata.get("source_locator") else []),
+            ]),
             "created_at": document.created_at or snapshot.fetched_at or datetime.now(UTC),
             "observed_at": document.observed_at or snapshot.observed_at or snapshot.fetched_at or datetime.now(UTC),
             "actor_scope": dict(_scope_from_snapshot(snapshot)),
@@ -2379,7 +2429,10 @@ def _terminal_text_document(
             "reason": "all_structured_parsers_failed",
             "body_chars": len(text),
         },
-        source_locators=[source_ref],
+        source_locators=unique_texts([
+            source_ref,
+            *([str(snapshot.metadata.get("source_locator"))] if snapshot.metadata.get("source_locator") else []),
+        ]),
         created_at=snapshot.fetched_at or datetime.now(UTC),
         observed_at=snapshot.observed_at or snapshot.fetched_at or datetime.now(UTC),
         actor_scope=dict(_scope_from_snapshot(snapshot)),

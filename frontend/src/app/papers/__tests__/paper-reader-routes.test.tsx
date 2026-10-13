@@ -65,7 +65,7 @@ describe("paper reader routes", () => {
   it("loads standalone detail pages with the decoded paper slug", async () => {
     vi.mocked(getPaperById).mockResolvedValueOnce(paper)
 
-    const element = await PaperDetailPageRoute({ params: { slug: "agent%20paper%2Fv2" } }) as ReactElement<{
+    const element = await PaperDetailPageRoute({ params: Promise.resolve({ slug: "agent%20paper%2Fv2" }) }) as ReactElement<{
       paper: Paper
     }>
 
@@ -76,7 +76,7 @@ describe("paper reader routes", () => {
   it("loads document payloads with the decoded paper slug", async () => {
     vi.mocked(loadPaperDocumentPayload).mockResolvedValueOnce(payload)
 
-    const element = await PaperDocumentReadRoute({ params: { slug: "agent%20paper%2Fv2" } }) as ReactElement<{
+    const element = await PaperDocumentReadRoute({ params: Promise.resolve({ slug: "agent%20paper%2Fv2" }) }) as ReactElement<{
       payload: PaperDocumentResponse
     }>
 

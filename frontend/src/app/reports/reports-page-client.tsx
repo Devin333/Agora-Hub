@@ -10,6 +10,7 @@ import { ReportPreparation } from "@/features/reports/components/report-preparat
 import { ReportToolbar } from "@/features/reports/components/report-toolbar"
 import { useReportList, type ReportFilters } from "@/features/reports/hooks/use-report-list"
 import { useI18n } from "@/lib/i18n/use-i18n"
+import { researchHomeHref } from "@/lib/research/routes"
 import type { ReportDraft } from "@/features/reports/lib/report-drafts"
 import type { ReportStatus, ReportType } from "@/types/report"
 
@@ -48,7 +49,7 @@ export function ReportsPageClient() {
   return (
     <div className="space-y-6">
       <PageHeader eyebrow={t("portal.reports.eyebrow")} title={t("portal.reports.title")} description={t("portal.reports.description")} />
-      <div className="flex items-center justify-between gap-4"><a href="/design-demo" className="rounded text-sm text-[#7c3aed] hover:underline focus-visible:ring-2 focus-visible:ring-[#8b5cf6]">返回首页</a>{!compose && <button type="button" onClick={() => replaceParams(params => params.set("compose", "1"))} className="rounded-xl border border-[#e0d3f2] bg-[#faf7ff] px-4 py-2.5 text-sm font-medium text-[#6d28d9] focus-visible:ring-2 focus-visible:ring-[#8b5cf6]">准备研究报告</button>}</div>
+      <div className="flex items-center justify-between gap-4"><a href={researchHomeHref()} className="rounded text-sm text-[#7c3aed] hover:underline focus-visible:ring-2 focus-visible:ring-[#8b5cf6]">返回首页</a>{!compose && <button type="button" onClick={() => replaceParams(params => params.set("compose", "1"))} className="rounded-xl border border-[#e0d3f2] bg-[#faf7ff] px-4 py-2.5 text-sm font-medium text-[#6d28d9] focus-visible:ring-2 focus-visible:ring-[#8b5cf6]">准备研究报告</button>}</div>
       {compose ? <ReportPreparation question={question} draftId={draftId} onSaved={rememberDraft} /> : question ? <QuestionContext question={question} /> : null}
       <h2 className="text-lg font-semibold">已有报告</h2>
       <ReportToolbar filters={filters} onChange={setFilters} />

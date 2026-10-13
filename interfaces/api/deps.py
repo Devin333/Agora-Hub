@@ -21,6 +21,7 @@ from interfaces.services.harness_wait_service import HarnessWaitApplicationServi
 from interfaces.services.project_service import ProjectApplicationService
 from interfaces.services.research_service import ResearchApplicationService
 from interfaces.services.research_history_service import ResearchHistoryService
+from interfaces.services.research_desktop_service import ResearchDesktopApplicationService
 from interfaces.services.guided_research_service import GuidedResearchService
 from interfaces.services.report_service import ReportApplicationService
 from interfaces.services.run_inspection_service import GraphRunInspectionService
@@ -61,6 +62,7 @@ AuthServiceFactory = Callable[[], AuthApplicationService]
 ProjectServiceFactory = Callable[[], ProjectApplicationService]
 ResearchServiceFactory = Callable[[], ResearchApplicationService]
 ResearchHistoryServiceFactory = Callable[[], ResearchHistoryService]
+ResearchDesktopServiceFactory = Callable[[], ResearchDesktopApplicationService]
 GuidedResearchServiceFactory = Callable[[], GuidedResearchService]
 RuntimeOperatorStatusServiceFactory = Callable[[], RuntimeOperatorStatusService]
 
@@ -87,6 +89,7 @@ class ApiServices:
     research_service_factory: ResearchServiceFactory
     research_history_service_factory: ResearchHistoryServiceFactory
     guided_research_service_factory: GuidedResearchServiceFactory
+    research_desktop_service_factory: ResearchDesktopServiceFactory | None = None
     harness_graph_service_factory: HarnessGraphServiceFactory | None = None
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None
     runtime_operator_status_service_factory: RuntimeOperatorStatusServiceFactory | None = None
@@ -127,6 +130,7 @@ def build_api_services(
     research_service_factory: ResearchServiceFactory = build_research_application_service,
     research_history_service_factory: ResearchHistoryServiceFactory = ResearchHistoryService,
     guided_research_service_factory: GuidedResearchServiceFactory = build_guided_research_service,
+    research_desktop_service_factory: ResearchDesktopServiceFactory | None = None,
     harness_graph_service_factory: HarnessGraphServiceFactory | None = None,
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None,
     runtime_operator_status_service_factory: RuntimeOperatorStatusServiceFactory | None = None,
@@ -153,6 +157,7 @@ def build_api_services(
         research_service_factory=research_service_factory,
         research_history_service_factory=research_history_service_factory,
         guided_research_service_factory=guided_research_service_factory,
+        research_desktop_service_factory=research_desktop_service_factory,
         harness_graph_service_factory=harness_graph_service_factory,
         harness_wait_service_factory=harness_wait_service_factory,
         runtime_operator_status_service_factory=runtime_operator_status_service_factory,

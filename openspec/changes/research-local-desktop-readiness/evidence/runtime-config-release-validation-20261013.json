@@ -1,0 +1,34 @@
+{
+  "schema": "research-desktop-validation-run-v1",
+  "id": "runtime-config-release-targeted",
+  "attempt": 2,
+  "status": "passed-with-environment-skips",
+  "command": [
+    "F:\\github\\NewsRoom\\.venv\\Scripts\\python.exe",
+    "-m",
+    "pytest",
+    "tests/scripts/test_local_desktop_config.py",
+    "tests/scripts/test_local_desktop_release.py",
+    "-q",
+    "-rs"
+  ],
+  "workingDirectory": "F:\\github\\NewsRoom",
+  "startedAt": "2026-10-12T17:32:55.4247864Z",
+  "endedAt": "2026-10-12T17:32:58.5308807Z",
+  "exitCode": 0,
+  "summary": "21 passed, 2 skipped",
+  "skipped": [
+    {
+      "test": "test_release_copy_rejects_source_symlink_escape",
+      "reason": "test environment cannot create symlinks"
+    },
+    {
+      "test": "test_release_verify_rejects_manifested_resource_replaced_by_symlink",
+      "reason": "test environment cannot create symlinks"
+    }
+  ],
+  "logSha256": "sha256:112245d20fe926b90fae4e063023a440f2fa5a59cc8bab1090eb2e0f05401e39",
+  "logFile": "runtime-config-release-validation-20261013.log.gz",
+  "liveAcceptanceExecuted": false,
+  "sourceCoverage": "runtime mock guard and installed Node dependency tree repair; final full suite pending"
+}

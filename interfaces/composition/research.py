@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import os
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Condition, Lock
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from backend.research.application.analyze_paper import AnalyzePaperUseCase
 from backend.research.application.ask_paper import AskPaperUseCase
@@ -67,7 +71,10 @@ from backend.research.document.chunker import PaperDocumentChunker
 from backend.research.document.latex_compiler import ArxivLatexDocumentCompiler
 from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
 from backend.research.document.mineru_pdf_parser import MinerUPdfDocumentParser
+from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
+from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
+from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
 from backend.research.ports.artifact_publication import (
     RESEARCH_ARTIFACT_MANIFEST_VERSION,
     ResearchArtifactDiagnosticClaim,
@@ -192,7 +199,10 @@ from infrastructure.research.catalog_store import (
 )
 from infrastructure.research.source_resolver import ResearchSourceResolverAdapter
 from infrastructure.research.local_chunk_store import LocalChunkPayloadStore
-from infrastructure.research.source_provider import ArxivResearchSourceProvider
+from infrastructure.research.source_provider import (
+    ArxivResearchSourceProvider,
+    CatalogBoundResearchSourceProvider,
+)
 from infrastructure.research.reader_repair_failure_diagnostic_side_effect import (
     ReaderRepairFailureDiagnosticSideEffectHandler,
 )
@@ -928,11 +938,21 @@ class _PaperRagUseCaseProvider:
         "_closed",
         "_lock",
         "_runtime_resources",
+        "_runtime_resources_factory",
+        "_service_factory",
         "_service",
     )
 
-    def __init__(self, ask_use_case: AskPaperUseCase) -> None:
+    def __init__(
+        self,
+        ask_use_case: AskPaperUseCase,
+        *,
+        runtime_resources_factory: Callable[[], Any] | None = None,
+        service_factory: Callable[[], Any] | None = None,
+    ) -> None:
         self._ask_use_case = ask_use_case
+        self._runtime_resources_factory = runtime_resources_factory
+        self._service_factory = service_factory
         self._closed = False
         self._lock = Lock()
         self._runtime_resources: Any | None = None
@@ -940,6 +960,9 @@ class _PaperRagUseCaseProvider:
 
     def rag_ask(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._get().rag_ask(*args, **kwargs)
+
+    def recover_gated_answer(self, **kwargs: Any) -> dict[str, Any] | None:
+        return self._get().recover_gated_answer(**kwargs)
 
     def get_reranker(self) -> Any:
         return self._get().get_reranker()
@@ -989,15 +1012,27 @@ class _PaperRagUseCaseProvider:
                     PaperRagRuntimeResources,
                 )
 
-                runtime_resources = PaperRagRuntimeResources()
-                try:
-                    service = PaperRagApplicationService(
-                        ask_use_case=self._ask_use_case,
-                        runtime_resources=runtime_resources,
+                if self._service_factory is not None:
+                    service = self._service_factory()
+                    if not isinstance(service, PaperRagApplicationService):
+                        raise TypeError("service_factory must return PaperRagApplicationService")
+                    runtime_resources = None
+                else:
+                    runtime_resources = (
+                        self._runtime_resources_factory()
+                        if self._runtime_resources_factory is not None
+                        else PaperRagRuntimeResources()
                     )
-                except BaseException:
-                    _close_quietly(runtime_resources)
-                    raise
+                    if not isinstance(runtime_resources, PaperRagRuntimeResources):
+                        raise TypeError("runtime_resources_factory must return PaperRagRuntimeResources")
+                    try:
+                        service = PaperRagApplicationService(
+                            ask_use_case=self._ask_use_case,
+                            runtime_resources=runtime_resources,
+                        )
+                    except BaseException:
+                        _close_quietly(runtime_resources)
+                        raise
                 self._runtime_resources = runtime_resources
                 self._service = service
             return self._service
@@ -1643,6 +1678,58 @@ class _DurableResearchRunRecoverySource:
         return envelope
 
 
+
+def _configured_paper_answer_worker_factory(
+    llm_client: OpenAICompatibleClient,
+    *,
+    max_output_tokens: int,
+) -> Any:
+    async def answer_llm_call(
+        prompt: str,
+        *,
+        execution_identity: GraphExecutionIdentity | None = None,
+        timeout_seconds: float | None = None,
+        max_transport_attempts: int | None = None,
+    ) -> str:
+        request = LLMRequest(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_output_tokens,
+            temperature=0.0,
+            execution_identity=execution_identity,
+            timeout_seconds=timeout_seconds,
+            max_transport_attempts=max_transport_attempts,
+        )
+        response = await asyncio.to_thread(llm_client.complete, request)
+        return response.content or ""
+
+    return lambda: PaperAnswerWorker(AnswerGenerator(answer_llm_call))
+
+def _local_reader_rag_service(
+    *,
+    ask_use_case: AskPaperUseCase,
+    chunk_store: ChunkStorePort,
+    answer_worker_factory: Callable[[], Any],
+    context_assembler_factory: Callable[[RAGSessionSpec], ContextAssembler],
+    transcript_root: Path,
+) -> Any:
+    from interfaces.services.paper_rag_service import PaperRagApplicationService
+    from interfaces.services.paper_rag_transcript_store import PaperRagTranscriptFileStore
+
+    return PaperRagApplicationService(
+        with_reranker=False,
+        retriever=ResearchRetriever(chunk_store),
+        session_factory=lambda **_kwargs: PaperRAGSession(
+            chunk_store,
+            answer_worker=answer_worker_factory(),
+            generation_policy={"enabled": True, "max_attempts": 2},
+            context_assembler_factory=context_assembler_factory,
+            event_recorder=_kwargs.get("event_recorder"),
+        ),
+        ask_use_case=ask_use_case,
+        transcript_store=PaperRagTranscriptFileStore(transcript_root),
+    )
+
+
 def _unavailable_composition(
     error: ResearchCompositionError,
     *,
@@ -1656,6 +1743,9 @@ def _unavailable_composition(
         ask_use_case=ask_use_case,
         rag_ask_use_case=rag_ask_provider,
         run_store=_UnavailableResearchRunStore(error),
+        runtime_config_identity=(
+            _research_runtime_config_identity(settings) if settings is not None else "unconfigured"
+        ),
     )
     return ResearchRuntimeComposition(
         settings=settings,
@@ -1809,7 +1899,7 @@ def _build_configured_composition(
             source_runtime.research_arxiv_connector,
             package_policy,
         )
-        source_provider = ArxivResearchSourceProvider(
+        arxiv_source_provider = ArxivResearchSourceProvider(
             metadata_connector,
             api_url=settings.source.api_url,
             cache_size=settings.source.cache_size,
@@ -1863,6 +1953,7 @@ def _build_configured_composition(
         from infrastructure.research.document_repository import FilesystemResearchDocumentRepository
 
         documents = FilesystemResearchDocumentRepository(catalog_store)
+        source_provider = CatalogBoundResearchSourceProvider(arxiv_source_provider, documents)
         catalog_service = ResearchPaperCatalogService(
             catalog_repository=catalog_store,
             identity_repository=catalog_store,
@@ -1876,7 +1967,7 @@ def _build_configured_composition(
             github_repository=github_repository,
         )
         source_resolver = ResearchSourceResolverAdapter(
-            arxiv_provider=source_provider,
+            arxiv_provider=arxiv_source_provider,
             arxiv_fetcher=package_connector,
             github_repository=github_repository,
             fetch_policy=package_policy,
@@ -2435,7 +2526,19 @@ def _build_configured_composition(
             runtime_binding_registrar=harness_wait_runtime_registry,
         )
         ask_use_case = AskPaperUseCase()
-        rag_ask_provider = _PaperRagUseCaseProvider(ask_use_case)
+        paper_answer_worker_factory = _configured_paper_answer_worker_factory(
+            llm_client,
+            max_output_tokens=min(settings.llm.max_output_tokens, 900),
+        )
+        rag_ask_provider = _PaperRagUseCaseProvider(
+            ask_use_case,
+            service_factory=lambda: _local_reader_rag_service(
+                ask_use_case=ask_use_case,
+                chunk_store=chunk_store,
+                answer_worker_factory=paper_answer_worker_factory,
+                context_assembler_factory=rag_context_assembler_factory,
+            ),
+        )
         owned_resources.append(rag_ask_provider)
         # Registered last so reverse-order close releases the lifecycle owner
         # and stops child workers before the canonical durable backend closes.
@@ -2450,6 +2553,7 @@ def _build_configured_composition(
             artifact_reader=catalog_store,
             parse_use_case=parse_use_case,
             catalog_service=catalog_service,
+            runtime_config_identity=_research_runtime_config_identity(settings),
         )
         return ResearchRuntimeComposition(
             settings=settings,
@@ -2860,6 +2964,50 @@ def _compose_component(
 
 _DEFAULT_RESEARCH_RUNTIME_PROVIDER = ResearchRuntimeProvider()
 
+
+
+def _research_runtime_config_identity(settings: ResearchRuntimeSettings) -> str:
+    def origin(value: str | None) -> str | None:
+        if not value:
+            return None
+        parsed = urlsplit(value)
+        return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else str(value)
+
+    payload = {
+        "source": {
+            "provider": settings.source.provider,
+            "apiOrigin": origin(settings.source.api_url),
+        },
+        "llm": {
+            "routeId": settings.llm.route_id,
+            "provider": settings.llm.provider,
+            "baseOrigin": origin(settings.llm.base_url),
+            "model": settings.llm.model,
+        },
+        "parser": {
+            "backends": list(settings.parser.backends),
+            "allowAbstractFallback": settings.parser.allow_abstract_fallback,
+            "maxDocumentBytes": settings.parser.max_document_bytes,
+        },
+        "rag": {
+            "backend": settings.rag.backend,
+            "collection": settings.rag.collection,
+            "vectorSize": settings.rag.vector_size,
+        },
+        "storage": {
+            "researchRoot": str(settings.research_root),
+            "artifactRoot": str(settings.artifact.root),
+            "runStoreRoot": str(settings.run_store.root),
+            "ragLocalRoot": str(settings.rag.local_root),
+            "ragTranscriptRoot": str(settings.rag.transcript_root),
+        },
+        "desktop": {
+            "releaseId": str(os.getenv("NEWSROOM_DESKTOP_RELEASE_ID") or ""),
+            "configDigest": str(os.getenv("NEWSROOM_DESKTOP_CONFIG_DIGEST") or ""),
+        },
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 __all__ = [
     "ConfiguredCompositionFactory",

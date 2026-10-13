@@ -11,7 +11,7 @@ const cookieState = vi.hoisted(() => ({
 }))
 
 vi.mock("next/headers", () => ({
-  cookies: () => ({
+  cookies: async () => ({
     get: (name: string) => (name === "newsroom_session" && cookieState.token ? { value: cookieState.token } : undefined),
   }),
 }))
@@ -128,7 +128,7 @@ describe("paper ops route guard", () => {
         method: "POST",
         body: JSON.stringify({ force: true }),
       }),
-      { params: { paperId: "public-paper" } },
+      { params: Promise.resolve({ paperId: "public-paper" }) },
     )
 
     expect(response.status).toBe(200)
