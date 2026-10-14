@@ -45,3 +45,9 @@
 ## B-04：新增 native bridge 的真实 E2E 合同尚未同步（已复跑）
 
 `npm run test:e2e` 已重新构建 host 并实际启动 Electron，返回 1 failed。首个断言失败于 bridge 的 exact key contract：旧 E2E 只允许 export/lifecycle/runtime/version，当前生产 bridge 已新增 config/credentials。不能把 exact 断言改成宽松 includes 或跳过用例；需要准确验证新两个 namespace 的每个允许方法与拒绝参数/来源行为，并继续执行后续单实例与安全路径断言。当前没有这一轮 Electron E2E 通过结论，此前故障窗口通过记录不覆盖新增配置桥。
+
+## B-05：portable staging 的 npm 工具版本一致性（已实测）
+
+portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_node_dependency_tree_invalid` 拒绝，4 个 problems。主控使用同一 managed npm 在原 source release 上进行只读 `npm ls --json --all` 复现：`@img/sharp-wasm32@0.35.5`、`@napi-rs/wasm-runtime@1.1.4`、`@tybys/wasm-util@0.10.2`、sharp 子目录 `@emnapi/runtime@1.11.3` 被判定为 extraneous。即使 npm exit 0，owner 仍正确拒绝，不篡改 dependency digest 或忽略 problems。
+
+原 source build 使用本机 Anaconda 的 Node/npm，portable 输入为另一版本。下一候选 source build 已在**仅当前命令进程的 PATH**前置已管理 Node/npm，保持原唯一 ReleaseManager 正常 build，尝试得到与打包输入一致的 dependency tree；不改系统 PATH、不改 package lock、不删除包。该进程尚在运行，不能预先宣称修复或 staging 通过。
