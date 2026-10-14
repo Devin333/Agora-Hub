@@ -2,7 +2,7 @@
 
 用户已确认以「Linear 的桌面框架 + Bear 的文字排版 + Paperlib / Zotero 的论文结构」构建论文专用 personal agent。现有 `/paper-agent-lab` 只是隔离的界面预览；下一步需要把已选定的阅读体验变成可安装、能连接真实 Research 能力、个人资料与长期记忆保存在用户电脑上的桌面 App。
 
-本次先提交 PRD 与 OpenSpec 实施合同供评审，不生成安装包、不修改运行代码、不宣称后端或真实模型已完成验收。产品需求以 `prd.md` 为主，当前实施状态为未开始。
+PRD 已由用户授权进入开发。产品需求以 `prd.md` 为主，当前处于实施阶段；实现任务、候选桌面构建和逐项验收以 `tasks.md` 与 `evidence/implementation-status.md` 为准，不提前宣称后端、真实模型或安装交付通过。
 
 ## What Changes
 
@@ -29,6 +29,6 @@
 
 - 文档：新增本目录下的 `prd.md`、`design.md`、三个 capability spec、`tasks.md` 与用户红框截图参考。
 - 预计实现范围：桌面宿主与打包入口；`frontend/src/features/paper-agent-lab/` 的设计提炼与正式 Research 页面；已有 `interfaces/services/research_desktop_service.py`、Research 阅读/工作区接口；必要的个人记忆 application service、port 和本地存储适配。
-- 不在本次文档工作中变更 API、数据库、运行配置、用户数据或已运行的 3107 界面预览。
+- 实施将按明确归属新增/接入 API、个人记忆与桌面运行资源；已运行的 3107 预览在正式入口可用前保留，真实用户数据不被擅自迁移或覆盖。
 - 依赖：`paper-agent-app-design-lab` 的视觉结论；`research-local-desktop-readiness` 的正式本机能力与未完成验收项。后者的运行基础不等同于已经有原生窗口 App 或已完成最终发布。
 - 桌面宿主与安装工具在实施前做有界验证并记录 ADR；本 PRD 不凭未经验证的体积或性能判断锁定框架。

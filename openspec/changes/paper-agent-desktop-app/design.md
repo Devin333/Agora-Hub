@@ -1,6 +1,6 @@
 ## Context
 
-产品需求见 `prd.md`。本次只规划；现有 `/paper-agent-lab` 为隔离设计预览，本机 Research 工具及相关真实验收仍属于 `research-local-desktop-readiness`。共享工作区有其他变更，不能把本目录的文档完成状态解释成那些变更的发布资格。
+产品需求见 `prd.md`。用户已授权按文档开发，当前处于实现与集成验收阶段；现有 `/paper-agent-lab` 为隔离设计预览，本机 Research 工具及相关真实验收仍属于 `research-local-desktop-readiness`。共享工作区有其他变更，不能把本目录的文档完成状态解释成那些变更的发布资格。
 
 当前可复用的是 Research application services、desktop operation admission、owner/revision 工作区、阅读/报告模型及本机运行管理。缺口是独立桌面交付、阅读优先前端的正式接线，以及个人记忆的完整用户控制闭环。本设计不预设全部接口无需修改，但也不批准重建一套 backend。
 
@@ -17,7 +17,7 @@
 
 - 不扩展到通用助理、其他业务板块、系统自动化、云记忆同步或无人值守执行。
 - 不用静态前端、硬编码回答、URL 快捷方式充当安装版 App。
-- 不在本 PRD 阶段改代码、启动收费调用、打包发布或替用户重启电脑。
+- 不在未授权时启动收费调用、发布未验收安装构建或替用户重启电脑。用户授权开发不等于批准费用或操作系统重启。
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Desktop host (window + narrow native bridge + lifecycle adapter)
 
 ### D3. 实施前用有界验证冻结宿主与安装方案
 
-本稿不锁定桌面框架。M1 只验证以下决策条件，并保存 ADR：
+文档评审阶段未锁定框架；实现阶段当前候选采用 Electron 的窄宿主，继续承载真实 Next.js server/BFF 与既有 Python runtime。决策及尚未通过的证明见 `evidence/desktop-host-adr.md`，依赖输入见 `evidence/runtime-dependency-inventory.md`。M1 仍需验证以下决策条件，不以框架选择代替安装验收：
 
 1. 承载现有前端路由、服务端渲染/BFF 和本地身份；不能假定当前 Next 应用可全部静态导出。
 2. 启动被管理的 Python/必要前端运行依赖，无需用户开发环境或 PATH 上任意解释器。
@@ -106,6 +106,17 @@ App 用户资料与安装资源分开。已有本机 Research 数据只在确认
 新增记忆 owner 必须加入既有备份 inventory、schema/release 兼容与隔离恢复验证。恢复前清楚说明旧记忆与 pending operation，使用恢复代际拒绝旧请求自动重放；旧版本不兼容时拒绝降级。卸载默认保留用户数据。
 
 替代方案：直接复制 `.newsroom` 或把整个开发仓库打进安装资源。拒绝原因：会带入 secrets、缓存、绝对路径和未经验证的 writer/owner 状态。
+
+### D9. 设置变更由运行配置 owner 管理，不从渲染器直接修改文件
+
+F-08 必须提供模型与论文检索配置的真实管理闭环；能力状态、数据目录和诊断只读展示不能替代配置编辑。该能力正在实现，尚不作为已通过证据。
+
+- 普通页面仅编辑非秘密的模型路由、模型名、受校验的服务地址及受支持的论文来源参数；不接受任意环境变量名、凭据值、文件路径或新闻/项目来源。
+- 唯一运行配置 owner 负责版本、revision/CAS、校验预览、单次确认票据与原子写入。预览不写入配置、不启动模型、不探测收费接口。
+- Windows 凭据存放在系统 Credential Manager 的本 App / 数据根专属槽位，使用原生录入入口；普通渲染器只取得是否存在的状态，密钥不进入 JSON 协议、配置文件、release manifest、诊断或默认备份。
+- 显式应用前重新核对未保存编辑和活动任务，再由既有生命周期 owner 安全停止本 App 进程。取消、CAS 冲突、漂移或校验失败不得伪报成功，也不得无授权接管其他服务。
+- 配置身份由 ReleaseManager 公共接口重新验证。变更产生新的不可变配置绑定候选，保留源代码与依赖身份；不能原地篡改 active release 或接受渲染器提交的 digest。应用失败保留可核对的旧配置 / 状态，不以部分重启冒充成功。
+- API composition、Research worker 和 guided intent 使用同一受控配置投影。缺少密钥仍可打开本地资料与管理记忆；“已配置”不等于“provider 已合格验证”，真实收费检索、分析或问答仍须用户显式提交。
 
 ## Risks / Trade-offs
 
