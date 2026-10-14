@@ -1,0 +1,35 @@
+# 当前候选的真实集成阻塞记录
+
+日期：2026-10-14。以下均为当前 worktree 的复核，不是最终 release 通过证明。
+
+## 已复跑检查
+
+- 必需 `python -m scripts.dev smoke`：进程退出码 0；pytest `4526 passed, 23 deselected, 61 warnings in 4494.49s`；offline AgentLoop fixture 成功且 `network_calls=0`；来源 `is_valid=true`、error/warning 均 0。
+- Python desktop config/runtime/runtime-config/credentials/protocol/bundle/release-config/memory-recovery/processes：`106 passed in 7.58s`。
+- native host：TypeScript 通过；14 files、51 tests 通过。新增配置桥等行为仍需检查覆盖和真实宿主验证，不能由此核销全部 native 合同。
+- 正式论文页面浏览器 fixture 回归：14 passed。其网络路由使用测试 fixture，并非真实论文服务/安装验收。
+
+## B-01：ReleaseManager 长路径误报（已实测）
+
+- 正常 build 在独立资料根 `C:/Users/Administrator/AppData/Local/Temp/AgoraPaperAgentCandidate-20261014-1653` 失败，code=`desktop_release_resource_missing`。
+- 候选：`20261014T085434Z-e87b23830dba`；该候选没有 active pointer，不能启动为已通过 release。
+- 失败资源是 Next.js 自带 `react-server-dom-turbopack-client.browser.development.js`。原始绝对路径长度 261；普通 `Path.is_file()` 为 false，内部 Win32 extended-length 形式为 true；实际内容 size 与 SHA-256 均与 manifest 相同。
+- 根因定位：`scripts/local_desktop/release.py` 的 verify 资源循环仍使用普通 `resource.is_file()` / `resource.read_bytes()`，与 bundle 输入复制的 extended-length 支持未贯通。
+- 不删除资源、不篡改 manifest、不放宽 inventory/checksum、不修改 Windows 系统设置。应在所有相关内部可信 IO 保持 lexical no-reparse/containment 验证后使用一致的长路径策略，并加真实 >260 字符发布目录回归。
+- 另启短目录候选仅继续验证独立业务流程，不构成长路径修复或最终发布条件通过。
+
+## B-02：降级但本地服务健康时的宿主入口（代码审阅，待真实复现）
+
+- 旧中间候选的 start 回执 `ok=true/state=DEGRADED`，api/frontend/bff/raw_rewrite/runtime health 均 true。
+- 当前 `RuntimeCoordinator` 将 DEGRADED 映射 degraded，`navigateWhenReady` 仅接受 ready；未配置远程模型时可能停留故障/待配置页，不能进入应当可用的本地阅读。
+- 不能简单把所有 DEGRADED 当 READY，因为 DRAINING/身份或 transport 异常同样可能被映射为 degraded。需要 owner 提供可验证的本地就绪语义并保留远程能力未验证/不可用提示。
+
+## B-03：API-only secret 投影的真实子进程边界（代码审阅，待修复验证）
+
+- 当前 start 在 common/frontend environment 移除固定 key 后，仅向 API `_launch` 参数注入 key。
+- 但 `_launch` 又把同一个 environment 传给两个 log collector 子进程。现有 API-only 测试 monkeypatch 整个 `_launch`，没有覆盖这条真实分支；不能据其通过声称“仅 API 子进程”。
+- 应在可信 API 进程的最终 spawn 边界才注入；log collector/frontend/native 公共进程不得得到 key，且不更改全局 os.environ。
+
+## 执行约束
+
+原指定代码 worker 多次收到上游 403 `insufficient balance`，已停止相应工作，没有静默换模型。主控仍可进行本机只读审阅、测试与真实构建取证；未完成代码不提交为生产完成项。真实模型/搜索付费验收仍需用户确认 provider 与预算，两者是独立约束。
