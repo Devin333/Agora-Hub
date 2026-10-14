@@ -33,3 +33,15 @@
 ## 执行约束
 
 原指定代码 worker 多次收到上游 403 `insufficient balance`，已停止相应工作，没有静默换模型。主控仍可进行本机只读审阅、测试与真实构建取证；未完成代码不提交为生产完成项。真实模型/搜索付费验收仍需用户确认 provider 与预算，两者是独立约束。
+
+## B-02 补充：真实 owner 首启已复现更早的拒绝
+
+短目录 source build 由唯一 owner 成功构建和激活：release `20261014T085734Z-e87b23830dba`，source digest `e87b23830dba46e1445205e60f760cfc1425401f1467d4beab918147259d26ad`。这仅是中间检查点，不是完成/安装证明。
+
+随后同一 owner 的正常 start 返回 `ok=false/state=ERROR/code=desktop_doctor_blocked_start`，未启动服务。doctor 的 profile/Python/Node/frontend lock/production release/ports 检查均通过；本地 parser/storage 已配置，远程 analysis/QA `configured=no`。当前 `_DesktopAppDoctor` 的未配置远程模型被 aggregate 当作 fatal required 条件，LifecycleManager 随之拒绝全部本机服务。它与 PRD “未配置联网仍可本地阅读/记忆管理”的合同冲突，而且会使首次用户无法进入正式页面录入配置。不能放入假 key 或放宽全部 doctor 错误来绕过；需要区分本地 startup admission 与远程能力可用性，保留真实权限、端口、release/storage 错误的 fail-closed。
+
+因此此次没有真实登录/PDF导入/本地记忆验收结论。已关闭隔离浏览器，没有注入 cookie、手工启动 child 或绕过 gate。当前另一个 portable staging 进程仍有独立取证价值，但其产出也不能核销上述首启/长路径阻塞。
+
+## B-04：新增 native bridge 的真实 E2E 合同尚未同步（已复跑）
+
+`npm run test:e2e` 已重新构建 host 并实际启动 Electron，返回 1 failed。首个断言失败于 bridge 的 exact key contract：旧 E2E 只允许 export/lifecycle/runtime/version，当前生产 bridge 已新增 config/credentials。不能把 exact 断言改成宽松 includes 或跳过用例；需要准确验证新两个 namespace 的每个允许方法与拒绝参数/来源行为，并继续执行后续单实例与安全路径断言。当前没有这一轮 Electron E2E 通过结论，此前故障窗口通过记录不覆盖新增配置桥。
