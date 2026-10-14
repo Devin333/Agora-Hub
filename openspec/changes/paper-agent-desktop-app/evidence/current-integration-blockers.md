@@ -73,3 +73,16 @@ portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_nod
 这不是允许忽略版本或 packages 的依据。已交 release owner 将两个 dependency identity producer 统一为 JSON-native list-of-list 稳定模型并补真实序列化 roundtrip 回归；bundle 必须继续精确验证包/版本/hash。修复后需新候选冻结并重新 binding，不能直接重写旧 manifest。
 
 同时已完成的当前源码 root-fix checkpoint：App 显式启动 capability policy 区分本地硬门和未配置远程能力；实际 spawn 边界只给 API 传 fixed key，不给4个log collector/frontend/common/global。主控复跑匹配3组 `54 passed in 3.75s`。仍须新 release 正常 start 才能证明真实首启修复，不核销 AC。
+
+## 新候选真实首启与认证合同取证
+
+包含首启 policy/disabled-route/key-isolation/长路径修复的 source candidate 已正常 build：`20261014T103935Z-f881824e16d5`，source digest `f881824e16d55378b42a4919931e3120b8c19df6ee49b912a0ca8972bfe4f023`。正常 owner start 返回 `ok=true/DEGRADED` 且 api/frontend/bff/raw_rewrite/runtime 全 true，未配置远程模型没有再次阻止本机服务启动。这仍不是安装验收。
+
+通过实际生产 BFF 首次 bootstrap 返回 200，实际 session GET 200、HttpOnly 本机会话存在；未注入 cookie/token。由此发现两项此前 fake tests 未覆盖的问题：
+
+1. 本地账号 bootstrap/login 成功后，root PortalAccountProvider 仍保留 guest context，直到手工 reload。已将成功 auth 状态通知放入统一 event owner，失败不广播，Provider abort stale initial fetch；真实 API→Provider→history owner 回归已补。正常 reload 仅用于继续定位，不当作此问题通过。
+2. reload 后 history/desktop identity/capabilities 均 500。真实 `AuthSessionResult` 为扁平 `sessionId`，认证 middleware 却读取 `session.session.sessionId`；原 fake 恰好伪造该嵌套结构掩盖错误。已根因修为 `session.sessionId`，fake 改遵循真实模型，并增加真实 Auth + disabled Research + History/Desktop/Memory 集成测试。没有放宽认证或返回假空库。
+
+页面还补齐初次 history 失败的显式错误和原 owner 路径 retry，不再无限 loading 或借访客 workspace 冒充成功。
+
+主控已关闭浏览器页面并通过唯一 owner 完成 drain/STOPPED，保留隔离账号和资料根用于正常重开复核。新源码已冻结并在同一根重建；重建/真实导入仍待结果。当前全前端复跑 `164 files / 885 tests passed`，typecheck 通过；原生 E2E 故障窗口与 strict bridge contract 已重获 1/1 pass，但未当作真实论文窗口证明。
