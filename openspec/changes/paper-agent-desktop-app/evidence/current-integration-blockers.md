@@ -51,3 +51,11 @@
 portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_node_dependency_tree_invalid` 拒绝，4 个 problems。主控使用同一 managed npm 在原 source release 上进行只读 `npm ls --json --all` 复现：`@img/sharp-wasm32@0.35.5`、`@napi-rs/wasm-runtime@1.1.4`、`@tybys/wasm-util@0.10.2`、sharp 子目录 `@emnapi/runtime@1.11.3` 被判定为 extraneous。即使 npm exit 0，owner 仍正确拒绝，不篡改 dependency digest 或忽略 problems。
 
 原 source build 使用本机 Anaconda 的 Node/npm，portable 输入为另一版本。下一候选 source build 已在**仅当前命令进程的 PATH**前置已管理 Node/npm，保持原唯一 ReleaseManager 正常 build，尝试得到与打包输入一致的 dependency tree；不改系统 PATH、不改 package lock、不删除包。该进程尚在运行，不能预先宣称修复或 staging 通过。
+
+### B-05 后续：同工具链构建与真实 portable stage 通过
+
+已用命令进程级 PATH 前置 managed Node/npm，由唯一 owner 完成 source build：`20261014T090824Z-e87b23830dba`，dependency digest `3d034553cd31caa50745e5857e5b2ace3201d052946895ee0393fb5b2c9e84c5`。同 managed npm 的完整 `ls --json --all` 返回 0 且无 problems；未修改 package lock 或删包。
+
+随后正常 portable staging 退出码 0，bundle `desktop-13fb2b551f22afdee74631cb`，79,949 个资源、1,935,863,691 bytes；CPython 3.12.14 / 85 distributions、Node v24.21.0 / npm 11.19.0。portable dependency digest `860f93d1871e3ee5dab24c10452c6b07189c5cc053d4e71be93500223e1bde0d`，输入 source identity 与新 runtime identity 均记录在 envelope，未伪造其相同。
+
+这证明构建输入需要同工具链，不证明当前 doctor、长路径、密钥子进程或正式 App 已完成修复。该 bundle 仍是中间候选，已在独立根运行 portable binding 和 Node envelope 全资源校验，结果尚待取得。代码 worker 此后重新分派已可实际执行，按不重叠 scope 收口上述问题；此前余额错误不再是当前唯一执行阻塞。
