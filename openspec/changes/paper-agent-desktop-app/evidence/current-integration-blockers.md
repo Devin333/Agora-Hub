@@ -106,3 +106,74 @@ portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_nod
 - `6.1` 的基础实现已独立提交 `a2805e6e`：domain/application/port/SQLite adapter 分层，owner namespace、来源、revision、candidate/active/disabled/deleted、默认拒绝远程处理以及本机确定性检索。主控使用项目 interpreter 复跑三组 core 测试：`22 passed, 1 skipped in 2.95s`。跳过项是当前 Windows 无 symlink 创建特权的负向用例；不把该项当作已通过。仅勾选基础存储任务 6.1；6.2–6.5 和完整 AC-09–AC-11 仍需 API/UI/重开/外发证据。
 - 观察到正常无 cookie 首启已有 proxy → `/login?next=/paper-agent`。额外修复的是失效 cookie/挂载后退出后的 client AuthGate，避免打开只支持外部账号的 Portal dialog；default profile 保持原行为，3 files / 22 tests 通过。该修改晚于 source candidate e snapshot，下一冻结必须重新构建，不冒充已在 e 中验证。
 - 本轮完整 `python -m scripts.dev smoke` 有 live handle（6998，C:\Python314\python.exe），输出已进入全范围 pytest，尚未终态；不会因慢或观察超时中止/重启，也不把旧 smoke 结果当作此轮通过。匹配生产 runtime 检查使用项目 `.venv`，二者 interpreter 范围明确区分。
+
+
+### 2026-10-14 接续：本地解析根因已修复，等待新生产候选
+
+Candidate E 中实际导入返回 `research_parse_unavailable`：disabled LLM 触发完整 settings 异常，整个 service 被置为 unavailable。Candidate F 已用独立 local settings/composition 修复这条控制路径；真实认证+持久化 PDF integration、无网络断言、guided-disabled 安全边界均通过。只有用户已选文件进入本地 parser，远程模型和 source 没有被重新开启。正式 UI 单色导入和失效回执展示也已集成并通过回归。
+
+Candidate F 尚不能核销发布：source build 曾自然 exit 134；诊断证实 Node heap exhaustion。已精确清理本任务仅设计预览的临时服务释放资源，再通过唯一 owner 重建。旧完整 smoke 仍 live，但早于本次 source freeze，不能当作最终 gate。新 source build、生产 BFF 的真实 PDF/阅读/笔记重开、native business window、安装与真实 provider/预算确认等条件继续保留，不以局部测试或 parser preflight 代替。
+
+
+### 2026-10-15：导入已成功，发布仍保留 reader 与 gate 条件
+
+Candidate F 已经真实 import POST 200 / passed 和 reader GET 200；但 reader 因未知发布日期崩溃，不能核销可阅读。日期 formatter 与 owner 文件名标题来源已做 root fix 并通过定向检查。Candidate G 正在正常重建并执行新完整 smoke。原 smoke 的 4 个失败保留；资源清理后同原 interpreter 四项独立通过以及完整相关文件 28 项通过，均不能取代新全范围门禁。安装、原生业务窗口、重开/离线/恢复与用户确认的真实 provider/费用闭环继续待验收。
+
+
+### B-06：Portable Doctor 的真实 Windows 长路径重复检查
+
+Candidate G 79,960-file bundle 已通过全部 Node checksum 和完整 ReleaseManager.verify，但普通 Doctor 在 266 字符资源路径上 is_file/read_bytes 失败，错误被投影为 active_release_invalid；extended-length IO 同文件真实存在且 size/hash 相符。必须精准修复 Doctor 内部 IO，保持全量 gate、安全 path/junction checks 和 identity 正常路径，不能删包资源或缩短用户资料根回避。managed startup/笔记重开/安装因此尚未通过。source BFF 已验证真实全文可读，不能替代 portable/native proof。
+
+### B-07：Portable 重绑定后的 raw API rewrite 仍冻结源端口
+
+Candidate H managed start 已自然 exit 2：`desktop_readiness_deadline`，API/frontend/BFF/runtime 均通过，raw_rewrite 未通过。真实 bound `.next/routes-manifest.json` 仍将 `/api/v1/:path*` 发到 source build 的 `8122`；本实例真实 API 为 `8124`。长路径 gate 已通过至真实启动，不能把新的路由失败归回旧 Doctor。必须修复 local-desktop 的 server-owned runtime 路由绑定，保留原始 API、owner/auth/Origin 和 readiness 四项检查；不得手改不可变 manifest、删除 raw probe 或固定用户端口回避。H 的真实笔记/记忆 UI helper 尚未运行，未虚构回执。该 root fix 将进入下一 Candidate I。
+
+### B-08：真实 PDF viewer transport 仍经公共 URL proxy
+
+J development native 重验已通过启动、普通账号初始化、文件选择、真实解析、server-confirmed library 和未知日期 reader；进入 PDF 模式后实际 GET `/api/papers/pdf` 400，fallback 如实显示加载失败。后端提供的是 owner/revision/fingerprint 绑定的相对私有 source URL，而 shared viewer 总把它封装进仅接受公共绝对 URL 的 proxy，因此根因在 transport 接线，不是用例 timeout。必须在严格私有路径校验后直连同源受控 route，继续由后端认证与 source 身份判定；公共代理 allowlist/SSRF 不放宽。此修复将使 J 源漂移，J 历史失败与不可变包保留，下一 K 只在完整 UI 闭环确认后进入最终门禁。
+
+J 第一次 native helper 另有两处 PRIVATE 观察错误：把正常 DEGRADED→应用路由过渡当终态，以及 Playwright launcher cmd.exe PID 当实际 Electron PID。v2 已按真实 Electron PID及严格 local transport 状态修正，没有改生产就绪判定；原失败回执未回写通过。真实原生退出确认由已校验 exact owned dialog/button 点击，durable owner 日志均自然 stopped→host_exit。J v2 在 PDF 失败之后正常 owner drain 也真实完成，仍不核销整体业务。
+
+### 2026-10-15 03:05：冻结 K 原生真实 PDF 通过，完整验收仍未通过
+
+- K source release `20261014T185240Z-3c1c3993b69d`，source digest `3c1c3993b69d92dfa02a9c3999e093beda8c20034093658b22d750888d6fe642`；全前端 172 文件 / 1041 项、普通与显式 feature TypeScript、lint 全部通过。
+- K development Electron 经正常账号 UI 和真实文件选择器验证：私有 PDF 原件同源传输成功，真实 18 页、第 2 页 canvas 595×841；刷新恢复 PDF mode / page 2，笔记精确匹配 owner 工作区回执且重开保持。黑白真实窗口截图已保存，无 pageerror、console error 或外网 browser request。
+- 整轮 native helper 仍 exit 1：多操作组合的个人记忆步骤超过 15 秒总体预算，实际 create/confirm/disable POST 均 200，随后定位/刷新过程尚待独立诊断；不得据此认定完整记忆 native 验收通过。失败 receipt 和截图保留。原生 owner 已确认正常 drain / stopped / host_exit，未 fallback kill。
+- 完整 portable K bundle `desktop-9c4994dd76dcacdfc369d984` 已 staged。J portable 已正常 drain stop 并保留数据；K 使用独立数据根开始实际 3124/8124 重绑定。首次 CLI timeout=600 正确被有限预算合同拒绝，保留失败日志；重新使用允许的 300 秒预算，未改 timeout 合同。
+- I 历史完整 smoke 自然运行约 73%，其晚续 source drift 仍不可冒充最终 gate；K handover 独立检查前一终态与冻结输入后才允许运行。未生成最终安装版、未提交完成代码、未核销完整 tasks。
+
+### 2026-10-15 03:20：K portable 真实闭环通过，备份暴露新的合同缺陷
+
+- I 历史完整 smoke 命令自然 exit 0：4528 passed, 23 deselected, 61 warnings in 4473.45s；AgentLoop deterministic/network_calls=0 与 source validation 随后通过。其 wrapper 正确拒绝 freeze 后五个文件漂移，不能作为冻结最终 gate。J handover 正常拒绝，K 在完整输入再次确认无漂移后于 `2026-10-14T19:17:59Z` 接续唯一完整 smoke（runner 61012），未并发启动第二个。
+- K portable 实际绑定 3124/8124，API/frontend/BFF/raw/runtime health 全 true，DEGRADED 表示远程未配置，不是联网能力通过。独立完整 UI 成功：正常创建本地账号；真实 PDF 导入与同 bytes 再导入只有一个 canonical/material identity；真实 18 页 PDF 和第 2 页 canvas；笔记真实持久化及刷新；PDF mode/page 2 刷新恢复；个人记忆候选/确认/停用后刷新仍 disabled r3，remote policy false。pageerror 及 browser 外网请求为空。此为 portable production BFF/browser scope，仍非 installed Electron。
+- K portable 输入 79972 个资源、1936273519 bytes，完整 manifest/size/hash/未登记文件校验通过。CLI 先前非 bundled interpreter 被正确拒绝，随后实际使用包内 Python -B -s，未放宽 isolation。
+- 真实 J 数据备份验收 exit 2：`desktop_inventory_required_owner_missing` / `research_rag_local`，缺少从未启用的 `research/catalog/chunks`。backup 未产生有效 ZIP、未进行 restore/activate；23 个源审计文件 hash/size 前后不变。不得制造空索引目录掩盖问题。正在根因修复 local-only runtime 与 required storage contract 的差异，已存在/启用 RAG 的完整性验证保留；完成后必须新建 L 冻结，不能继续宣称 K 最终通过。
+- K native 后续独立 helper 因复用 root 的 STOPPED startup projection 拒绝；实际本次启动还是旧状态瞬态仍在审计，不先删终态条件。原失败 evidence 与正常 owner shutdown 记录保留。
+- 独立 candidate packaged directory 首次下载 Electron 网络 timeout，保留失败日志；后续使用已存在且实际验证版本 44.7.1 的 Electron distribution，未改生产配置或跳过 runtime inventory。候选目录不是最终安装构建或安装验收。
+
+### 2026-10-15 03:30：候选打包目录已构建，但完整包验收正确拒绝
+
+使用同版本已验证 Electron distribution 44.7.1 构建独立 packaged directory，electron-builder exit 0；产品 Agora Paper Agent 0.1.0.0，实际 Authenticode=NotSigned，不能把日志 signing with signtool 当作已签名。EXE SHA-256 `b48f3f9361fada8ceb020c366a10e32752cc28942532173dbaf64df90a995068`，app.asar SHA-256 `38da9f8cab167b33bf2e2d6468d34acaac52037c7cee65d2514476a0e1adb3b2`。
+
+主控对真正打包输出重新执行同一完整 runtime validator，正确失败：`resource frontend/node_modules/cssstyle/lib/generated/.gitkeep is missing`。进一步精确 inventory 差集发现 146 个缺失文件、0 新增，包含 hidden/pyc/长路径第三方 license。未启动该包、未修改 stage/manifest、未把 builder exit 0 视为包装完整，更未删除资源或许可来通过检查。正在对生产 packaging copy 和最终验证钩子做根因修复，并保持严格 owner/size/hash/extra-file/reparse gate；需新 L freeze 后复验。当前其他 local-only backup 合同修复也进行中，K smoke 将保留为实际历史检查，不虚称无漂移最终通过。
+
+## 2026-10-15 04:15 集成检查点：包库存根因、原生剩余动作与未完成范围
+
+- 修正早期包差异计数：普通 Windows 路径扫描得到的“146 缺失”含长路径误判；对 namespaced path 完整库存与逐文件 hash 复核，实际缺失为 **22 个 `.gitkeep`**，其余 79,950 个资源全部匹配。根因为 builder 的 glob walker 在 matcher 前忽略这些文件，不是 bundle manifest 错误。
+- 生产打包改为 manifest-owned 的独立、排他复制（非硬链接），拒绝已有目标、source/destination 别名重叠、reparse、未列出或被修改的文件，并在复制、签名后与最终 artifact 阶段进行完整 gate；不重写 manifest、不修补旧包。匹配检查为 desktop 18 files / 86 tests 及 typecheck。
+- `.tmp/paper-agent-desktop-app-20261014/candidate-l-packaged-dir-local-electron/win-unpacked` 已由实际 builder 构建并通过 79,972/79,972 资源、1,936,273,519 bytes 的完整校验。**该目录名含 l，但 payload 仍是 K，证明范围仅为打包根因修复；不是重新冻结的 L release，也不是安装/签名验收。** Python/host EXE 当前未签名；Node 保留原有有效签名。
+- 原生 development host 的剩余交互已实际通过：18 页真实 PDF 的第 2 页和 exact source 恢复、1.25 zoom、Ctrl+K、本机响应式 drawer、专注往返、真实 history/lifecycle 一致；最终 zoom 恢复 1。该运行无 page/console error，精确 owner PID 44272 由正常 drain/STOPPED 退出，3120/8120 已释放。此证据仅补充剩余 unpackaged 动作，不冒充整流/packaged/installed、物理输入法或电脑重启证据。
+- native v4 诊断已单独确认 memory disabled revision 3、默认不外发策略及正常 reload 后保持；其整体失败是 helper 在 PDF 保存回执之前读 history。后续 helper 使用真实 PUT ACK 与精确 GET，旧失败证据保留，不调整生产业务状态来让 helper 通过。
+- 目前仍欠缺 PRD F-08 / task 7.3 的独立、明确确认的数据清除入口；正在补齐 owner 受控停止、预览身份绑定、有限清除、凭据/会话和失败安全合同。默认 packaged profile 尚未创建，不能先污染用户默认根再用手工删除冒充产品能力。
+- K 全量 smoke 仍自然运行，未取消/并跑；之后的 recovery/packaging 修复会使冻结后 wrapper 如实报 drift。即使命令最终 exit 0，也只能作为该运行证据；最终代码仍需重新冻结并通过完整 smoke。联网 provider/来源/费用授权、真实问答/报告导出闭环、失败场景、备份恢复迁移、安装升级/卸载、电脑重启等范围未核销，最终目标尚未完成。
+
+
+## 2026-10-15 04:34：K gate 终态与后续实施
+
+K 全量 smoke 已自然结束，session 50991 terminal：实际测试命令 exit 0，pytest `4528 passed, 23 deselected, 61 warnings in 4422.01s`；deterministic AgentLoop `network_calls=0`，source validation valid、0 errors、0 warnings。日志 SHA-256 为 `0b17e3cdf561d4d1d5092ad6323638fcc0dc4cb61c80d1adec10e388acb13f68`，主控重算匹配。runner PID 61012，helper PID 67560；未取消或并跑第二个全量 smoke。
+
+冻结后检测为 added 7 / changed 12 / removed 0，HEAD 未变；wrapper 正确返回 failed/2，handover 不继续启动下一 gate。该结果仅证明本轮命令通过，**不是最终源码 gate**。L freeze 尚未捕获、L gate 尚未启动，必须先等 production 修复与安全清除实现完成。
+
+主控已补 desktop-shell 清除 requirement / design D10，strict 校验通过，并由三个互斥 worker 实现 Python owner/finalizer、Electron bridge/session/原生确认、设置 UI。旧 profile 不作实际删除测试；只清除本轮新建的受控 fixture。另有独立 worker 处理实际 125% 截图里的 PDF toolbar 裁切，避免把外层 overflow hidden 当无布局缺陷。完整范围见 `acceptance-gap-audit-20261015.md`，没有把后续工作缩减为安装验证。
+
+Recovery 的 current-source + actual J data 隔离 restore 已返回 VERIFIED，但第三轮发现源 memory SQLite 字节审计变化，仍在定位 WAL/checkpoint/helper 路径；不伪称 23 个源文件始终未变，失败回执原样保留。该证明既不激活恢复，也不操作 K 的 live 实例或账号凭据。

@@ -118,6 +118,15 @@ F-08 必须提供模型与论文检索配置的真实管理闭环；能力状态
 - 配置身份由 ReleaseManager 公共接口重新验证。变更产生新的不可变配置绑定候选，保留源代码与依赖身份；不能原地篡改 active release 或接受渲染器提交的 digest。应用失败保留可核对的旧配置 / 状态，不以部分重启冒充成功。
 - API composition、Research worker 和 guided intent 使用同一受控配置投影。缺少密钥仍可打开本地资料与管理记忆；“已配置”不等于“provider 已合格验证”，真实收费检索、分析或问答仍须用户显式提交。
 
+### D10. 清除全 profile 由一次性授权和退出后唯一执行者控制
+
+PRD 的独立“删除全部数据”不能用恢复覆盖、卸载或手工删除测试 profile 代替。设置先展示真实作用域及停止服务的预览副作用，精确中文输入与默认取消的原生确认是两层独立授权；未保存草稿、活动任务或未知 lifecycle 必须受到保护。
+
+- Renderer 只接收非敏感预览 ID/到期时间/范围与真实状态，不接收路径参数、私有 capability、密钥或 shell。主进程绑定当前实际 userData，Python 绑定其固定 runtime 子根及 marker、目录文件身份、代际、范围摘要、release 与一次性票据；预览不能静默收编未知旧目录。
+- 沿用唯一 lifecycle owner 安全停止服务。私有 apply/finalizer 授权通过有界 stdin 传递，不进入 renderer、日志或命令行。准备阶段仅报告 PREPARED，不提前声称删除成功。
+- 安装资源中的固定 finalizer 等待精确宿主 PID 与 OS 创建身份退出后，才作为唯一文件删除执行者清理整个已授权 userData 和该 profile 专属 vault 槽位；不按端口/名称杀进程，不触及外部备份、导出、导入原件、安装资源或其他 profile。
+- 维护 journal 位于目标外的固定受保护位置，仅含最小操作身份摘要和状态，范围预览必须披露。pending、删除部分失败或凭据状态未知时阻止普通启动，绝不自动继续删除或创建空资料假装恢复；需要新的明确授权才能重试。
+- root 置换、过期/replay、scope/CAS 变化、reparse/alias、停止失败或文件锁定都必须有确定性的失败测试。最终实际验收还包括真实原生确认、退出后 CLEARED、正常重开首次 bootstrap，以及外部文件未改动；只测 helper 或收到 PREPARED 不足以核销 task 7.3。
 ## Risks / Trade-offs
 
 - [现有后端有入口但真实 provider/材料尚未通过验收] → capabilities 如实降级，先补合格配置与真实闭环，不把待配置作为发布通过。
