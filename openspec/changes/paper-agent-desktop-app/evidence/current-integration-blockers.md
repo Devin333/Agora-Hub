@@ -65,3 +65,11 @@ portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_nod
 首次 portable CLI 直接使用 `python -s -m`，未在 import 前提供 `-B` 或 `PYTHONDONTWRITEBYTECODE=1`，因而在受校验 payload 中生成 `scripts/desktop_app/__pycache__` 的三个 .pyc。Node envelope 验证和 Python binding 都实际拒绝 `missing=0/extra=3`。这是主控验收启动方式错误，不应忽略 pyc 或把 inventory gate 失败当通过。
 
 已等待第一次 binding 进程实际终态退出 2，按 manifest 核对只有上述三个精确非登记 .pyc 后，以经绝对路径 containment 和 no-reparse 检查的 `Remove-Item -LiteralPath` 删除它们；没有递归删除或修改任何登记资源。随后以 `-B -s` 和命令进程级 `PYTHONDONTWRITEBYTECODE=1` 重跑 owner binding，并重新运行 Node 全量校验。两者仍在执行，结果待取得。实际宿主 RuntimeClient 的入口也必须在首次 import 前禁用 bytecode，已要求其 owner 验证并加回归；不可依赖 CLI import 后才投影环境来保护不可变 payload。
+
+### Portable 校验结果与 dependency identity 表示根因
+
+禁用 bytecode 后 Node `validate:runtime` 全资源/envelope 校验退出 0。Python binding 则继续 fail-closed，返回 `desktop_app_release_dependency_drift`（Python dependency）。主控在同一个 portable interpreter 上只读对账：expected/actual 均 CPython 3.12.14、85 distributions；packages 的 JSON 序列完全相同，但 manifest entries 是 list，`ReleaseManager.dependency_identity` 的内存 entries 为 tuple，raw dict 比较为 false。
+
+这不是允许忽略版本或 packages 的依据。已交 release owner 将两个 dependency identity producer 统一为 JSON-native list-of-list 稳定模型并补真实序列化 roundtrip 回归；bundle 必须继续精确验证包/版本/hash。修复后需新候选冻结并重新 binding，不能直接重写旧 manifest。
+
+同时已完成的当前源码 root-fix checkpoint：App 显式启动 capability policy 区分本地硬门和未配置远程能力；实际 spawn 边界只给 API 传 fixed key，不给4个log collector/frontend/common/global。主控复跑匹配3组 `54 passed in 3.75s`。仍须新 release 正常 start 才能证明真实首启修复，不核销 AC。
