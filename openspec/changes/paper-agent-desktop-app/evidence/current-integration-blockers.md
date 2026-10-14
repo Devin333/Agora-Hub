@@ -86,3 +86,13 @@ portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_nod
 页面还补齐初次 history 失败的显式错误和原 owner 路径 retry，不再无限 loading 或借访客 workspace 冒充成功。
 
 主控已关闭浏览器页面并通过唯一 owner 完成 drain/STOPPED，保留隔离账号和资料根用于正常重开复核。新源码已冻结并在同一根重建；重建/真实导入仍待结果。当前全前端复跑 `164 files / 885 tests passed`，typecheck 通过；原生 E2E 故障窗口与 strict bridge contract 已重获 1/1 pass，但未当作真实论文窗口证明。
+
+### 本轮真实导入前的工作区写入阻塞
+
+修复后的生产候选 `20261014T113432Z-5bc0e8b23226` 已正常首启；保留原隔离会话重开时，页面显示真实 owner `user_c37b37efb4381350` 与 0 篇空库，GET history/identity/personal-memory policy 均 200，未出现六篇样本。
+
+通过真实页面明确选择官方公开 PDF 时，请求身份需要先保存至 workspace。浏览器捕获 `PUT /api/research/history` 为 403，尚未发送 import POST；页面保留失败状态，不报导入成功。本 BFF PUT 已验证浏览器 same-origin，但 upstream headers 没有 server-owned canonical Origin，与 local-desktop 写入认证合同不一致；已分派精确根因修复及 foreign-origin/default-profile/no-store/CAS 回归。不会通过取消 backend Origin gate 或手工调用导入绕过请求身份持久化。
+
+本轮 smoke handle 已确认正常结束：exit 0、`4526 passed, 23 deselected`、offline AgentLoop `network_calls=0`、来源校验无 errors/warnings。该运行启动后发生认证修复，虽有匹配认证集成 `18 passed`，最终 release 仍需重新绑定最终检查范围，不声称该 smoke 是所有后续改动的最终 gate。已独立提交 flat session 合同根修复 `a2abb93f`，未混入其他 task 的代码。
+
+新的 portable staging `desktop-4a02600e9622cf14e5d765de` 已成功；同 managed runtime 的正常 binding 仍在执行，等待最终状态，未直接修改此 payload 或忽略 inventory。
