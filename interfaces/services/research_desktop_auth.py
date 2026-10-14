@@ -174,7 +174,7 @@ def authenticate_desktop_actor(
         request_id=str(getattr(request.state, "request_id", "") or ""),
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
-        metadata={"user_id": user.userId, "auth_session_id": session.session.sessionId},
+        metadata={"user_id": user.userId, "auth_session_id": session.sessionId},
     )
 
 
