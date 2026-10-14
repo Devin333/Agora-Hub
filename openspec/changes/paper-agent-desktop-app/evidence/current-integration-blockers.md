@@ -96,3 +96,13 @@ portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_nod
 本轮 smoke handle 已确认正常结束：exit 0、`4526 passed, 23 deselected`、offline AgentLoop `network_calls=0`、来源校验无 errors/warnings。该运行启动后发生认证修复，虽有匹配认证集成 `18 passed`，最终 release 仍需重新绑定最终检查范围，不声称该 smoke 是所有后续改动的最终 gate。已独立提交 flat session 合同根修复 `a2abb93f`，未混入其他 task 的代码。
 
 新的 portable staging `desktop-4a02600e9622cf14e5d765de` 已成功；同 managed runtime 的正常 binding 仍在执行，等待最终状态，未直接修改此 payload 或忽略 inventory。
+
+
+## 2026-10-14 22:16 集成检查点：Origin、首次绑定与本地记忆基础
+
+- History PUT 与 guided mutation 在浏览器 same-origin 验证之后，通过共享 server-owned helper 仅为 local-desktop 注入 canonical Origin；foreign browser Origin 在 upstream 前拒绝，default profile 不合成 Origin。前端 owner 记录：4 files / 19 tests、全前端 165 files / 889 tests、typecheck/lint/production build 通过。修复后的真实 PDF UI 导入尚未验收，不能以代理单测替代。
+- Portable 首次绑定现在通过唯一 `ReleaseManager.configuration_identity_for_runtime(stage)` 计算最终 config，而非手工复制 source config。真实集成新增 configured→null 回归进一步暴露旧 model 路径已删除但 identity calculator 仍先读取它；bound-null 分支已在 dependency calculator 前移除两个 model 引用，保留 source 真实 size/hash 检查。普通未绑定 profile 分支不变。
+- 主控使用项目 `.venv/Scripts/python.exe` 复跑 bundle/config/runtime_config/release/runtime/CLI/credential 检查：`93 passed in 11.99s`；新 source release `20261014T141041Z-056b8ae19dd4` 正常构建并激活，source digest `056b8ae19dd4cb346b72a68dcef61098a58466631607feb22d6d3559fb2299d7`，config digest `327cdd57bc89bb9aae387c3e4a04d7ee04860a414c69551d1609015c75c24b8a`。这仍是中间 source candidate，不是最终 installer。
+- `6.1` 的基础实现已独立提交 `a2805e6e`：domain/application/port/SQLite adapter 分层，owner namespace、来源、revision、candidate/active/disabled/deleted、默认拒绝远程处理以及本机确定性检索。主控使用项目 interpreter 复跑三组 core 测试：`22 passed, 1 skipped in 2.95s`。跳过项是当前 Windows 无 symlink 创建特权的负向用例；不把该项当作已通过。仅勾选基础存储任务 6.1；6.2–6.5 和完整 AC-09–AC-11 仍需 API/UI/重开/外发证据。
+- 观察到正常无 cookie 首启已有 proxy → `/login?next=/paper-agent`。额外修复的是失效 cookie/挂载后退出后的 client AuthGate，避免打开只支持外部账号的 Portal dialog；default profile 保持原行为，3 files / 22 tests 通过。该修改晚于 source candidate e snapshot，下一冻结必须重新构建，不冒充已在 e 中验证。
+- 本轮完整 `python -m scripts.dev smoke` 有 live handle（6998，C:\Python314\python.exe），输出已进入全范围 pytest，尚未终态；不会因慢或观察超时中止/重启，也不把旧 smoke 结果当作此轮通过。匹配生产 runtime 检查使用项目 `.venv`，二者 interpreter 范围明确区分。
