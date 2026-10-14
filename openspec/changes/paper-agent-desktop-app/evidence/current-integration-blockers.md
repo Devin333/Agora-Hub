@@ -59,3 +59,9 @@ portable staging 使用已校验 Node v24.21.0 / npm 11.19.0 后被 `desktop_nod
 随后正常 portable staging 退出码 0，bundle `desktop-13fb2b551f22afdee74631cb`，79,949 个资源、1,935,863,691 bytes；CPython 3.12.14 / 85 distributions、Node v24.21.0 / npm 11.19.0。portable dependency digest `860f93d1871e3ee5dab24c10452c6b07189c5cc053d4e71be93500223e1bde0d`，输入 source identity 与新 runtime identity 均记录在 envelope，未伪造其相同。
 
 这证明构建输入需要同工具链，不证明当前 doctor、长路径、密钥子进程或正式 App 已完成修复。该 bundle 仍是中间候选，已在独立根运行 portable binding 和 Node envelope 全资源校验，结果尚待取得。代码 worker 此后重新分派已可实际执行，按不重叠 scope 收口上述问题；此前余额错误不再是当前唯一执行阻塞。
+
+### Portable 入口取证的命令修正（非放宽 inventory）
+
+首次 portable CLI 直接使用 `python -s -m`，未在 import 前提供 `-B` 或 `PYTHONDONTWRITEBYTECODE=1`，因而在受校验 payload 中生成 `scripts/desktop_app/__pycache__` 的三个 .pyc。Node envelope 验证和 Python binding 都实际拒绝 `missing=0/extra=3`。这是主控验收启动方式错误，不应忽略 pyc 或把 inventory gate 失败当通过。
+
+已等待第一次 binding 进程实际终态退出 2，按 manifest 核对只有上述三个精确非登记 .pyc 后，以经绝对路径 containment 和 no-reparse 检查的 `Remove-Item -LiteralPath` 删除它们；没有递归删除或修改任何登记资源。随后以 `-B -s` 和命令进程级 `PYTHONDONTWRITEBYTECODE=1` 重跑 owner binding，并重新运行 Node 全量校验。两者仍在执行，结果待取得。实际宿主 RuntimeClient 的入口也必须在首次 import 前禁用 bytecode，已要求其 owner 验证并加回归；不可依赖 CLI import 后才投影环境来保护不可变 payload。
