@@ -110,3 +110,19 @@
 - Windows 长路径修复尚待真实 managed Python / Node staging 复跑；42k 资源校验性能及 ReleaseManager 全部同规模长路径覆盖仍需实测。10min interim 宿主 envelope 不是已验收发布性能。
 - 全量集成 smoke 尚在运行，当前没有最终通过或失败报告；本轮无代码提交。文档与明确标记的 fixture 视觉证据已独立提交，不混入其他变更的生产代码或用户数据。
 - 保持 `tasks.md` 未核销状态；已保存 PRD/规格合同不等于可安装 App 交付，更不等于 AC-01–AC-16 已通过。
+
+### 本轮续开发：长路径与安全校验的实测
+
+- 主控复跑 Windows common / bundle 回归：`23 passed in 3.44s`。真实 junction（包括 owned root 内部别名、root 和祖先）拒绝，长路径资源保留；未添加跨调用缓存或删除 checksum gate。
+- 逐级路径检查移除重复 `lexists` 和已证明无链接链上的重复 resolve，仅直接 `lstat`，其他检查错误仍 fail-closed。受控 400 / 1000 文件中位耗时下降 59.1% / 57.6%。
+- 主控通过唯一 ReleaseManager 对原 42,539 个资源进行完整校验：真实耗时 `74.25s`，不是通过 fixture 或跳过资源得到。
+- managed Python 原始输入经真实长路径复制、完整源/目标 count/hash 对账成功，耗时 `74.39s`，仅排除已登记的额外 pip distribution 元数据。移位后 native/import probe 成功：CPython `3.12.14`、87 distributions、SQLite `3.53.1`、OpenSSL `3.5.8`。这是输入能力证明，不是安装包或 portable release 通过。
+- 原中间 release 再次 staging 被新增配置 owner schema 严格拒绝，错误 `desktop_app_release_schema_incompatible`。不篡改旧 manifest 或放宽 schema；待冻结新源码构建后再真实 stage。
+- 配置 crash/reopen/recovery owner、native 单一 credential/typed bridge、设置编辑由三个 disjoint workers 继续实现。全范围 smoke 与前端集成测试正在运行，当前没有最终 gate 通过结论。
+
+### 本轮续开发：全前端与架构复核
+
+- 主控复跑全前端单元测试：`161 files / 873 tests passed`，耗时 `16.42s`；随后 `tsc --noEmit` 通过。这是当前源码检查点，不等同于 native 配置 apply、实际宿主或安装包验收。
+- 主控再次复跑完整 `tests/architecture`：`256 passed, 8 warnings in 168.85s`；不据此核销 App 全部安全和发布条件。
+- 设置表单的重复文本断言已按实际“系统凭据”区域收敛，保留所有“已配置但未验证”提示。取消、冲突和缺失 authoritative configuration 均不能假成功清草稿；native apply 仍需 owner 协议与真实验证后才能交付。
+- 运行配置 worker 因上游 compact 服务故障中断，并非已取得完成结论；已按同一 worker 职责重新分派收口，不静默更换模型或将其 WIP 视为完成。全范围 smoke 仍在运行，本轮未提交生产代码。
