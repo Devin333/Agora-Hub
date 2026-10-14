@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from "@/lib/api/client"
+import { notifyPortalSessionChanged } from "@/lib/auth/session-events"
 import type { AuthSession } from "@/lib/papers/types"
 
 type ApiEnvelope<T> = {
@@ -28,7 +29,9 @@ export async function bootstrapAccount(username: string, password: string, init?
     { username, password },
     init
   )
-  return unwrapEnvelope(envelope).session
+  const session = unwrapEnvelope(envelope).session
+  notifyPortalSessionChanged()
+  return session
 }
 
 export async function login(username: string, password: string, init?: RequestInit): Promise<AuthSession> {
@@ -37,11 +40,15 @@ export async function login(username: string, password: string, init?: RequestIn
     { username, password },
     init
   )
-  return unwrapEnvelope(envelope).session
+  const session = unwrapEnvelope(envelope).session
+  notifyPortalSessionChanged()
+  return session
 }
 
 export async function logout(init?: RequestInit): Promise<void> {
-  await apiPost<ApiEnvelope<{ revoked: boolean }>>("/api/auth/logout", undefined, init)
+  const envelope = await apiPost<ApiEnvelope<{ revoked: boolean }>>("/api/auth/logout", undefined, init)
+  unwrapEnvelope(envelope)
+  notifyPortalSessionChanged()
 }
 
 function unwrapEnvelope<T>(envelope: ApiEnvelope<T>): T {

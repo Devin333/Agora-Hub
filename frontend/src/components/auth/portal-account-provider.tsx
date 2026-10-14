@@ -2,8 +2,11 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { fetchPortalSession, logoutPortal, authErrorMessage } from "@/lib/auth/portal-api"
+import { portalSessionChangedEvent } from "@/lib/auth/session-events"
 import type { AuthSession } from "@/lib/papers/types"
 import { PortalLoginDialog } from "./portal-login-dialog"
+
+export { portalSessionChangedEvent } from "@/lib/auth/session-events"
 
 type AccountContext = {
   session: AuthSession | null
@@ -13,7 +16,6 @@ type AccountContext = {
   openLogin: (trigger?: HTMLElement) => void
   signOut: () => Promise<void>
 }
-export const portalSessionChangedEvent = "newsroom:portal-session-changed"
 
 const Context = createContext<AccountContext | null>(null)
 
@@ -24,57 +26,61 @@ export function PortalAccountProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const trigger = useRef<HTMLElement | null>(null)
-  const initialSession = useRef<AbortController | null>(null)
+  const sessionRequest = useRef<AbortController | null>(null)
+
   useEffect(() => {
-    const controller = new AbortController()
-    initialSession.current = controller
-    fetchPortalSession(controller.signal).then((result) => {
-      if (!controller.signal.aborted) { setSession(result.session); setResolved(true) }
-    }).catch(() => { if (!controller.signal.aborted) setError("账号状态暂时无法读取，请重新登录。") })
-    return () => controller.abort()
-  }, [])
-  useEffect(() => {
+    let mounted = true
     const refreshSession = () => {
-      initialSession.current?.abort()
+      sessionRequest.current?.abort()
       const controller = new AbortController()
-      initialSession.current = controller
+      sessionRequest.current = controller
       setResolved(false)
       setError(null)
       fetchPortalSession(controller.signal)
         .then(result => {
-          if (!controller.signal.aborted) {
+          if (mounted && !controller.signal.aborted) {
             setSession(result.session)
             setResolved(true)
           }
         })
         .catch(() => {
-          if (!controller.signal.aborted) {
+          if (mounted && !controller.signal.aborted) {
             setSession(null)
             setResolved(true)
             setError("账号状态暂时无法读取，请重新登录。")
           }
         })
     }
+
     window.addEventListener(portalSessionChangedEvent, refreshSession)
-    return () => window.removeEventListener(portalSessionChangedEvent, refreshSession)
+    refreshSession()
+    return () => {
+      mounted = false
+      window.removeEventListener(portalSessionChangedEvent, refreshSession)
+      sessionRequest.current?.abort()
+      sessionRequest.current = null
+    }
   }, [])
+
   const openLogin = useCallback((element?: HTMLElement) => {
     trigger.current = element ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
     setError(null)
     setOpen(true)
   }, [])
+
   async function signOut() {
     if (pending) return
     setPending(true)
-    initialSession.current?.abort()
+    sessionRequest.current?.abort()
     setError(null)
-    try { await logoutPortal(); setSession(null) }
+    try { await logoutPortal(); setSession(null); setResolved(true) }
     catch (cause) { setError(authErrorMessage(cause)) }
     finally { setPending(false) }
   }
+
   return <Context.Provider value={{ session, resolved, pending, error, openLogin, signOut }}>
     {children}
-    <PortalLoginDialog open={open} onOpenChange={setOpen} onAuthenticated={(value) => { initialSession.current?.abort(); setSession(value); setResolved(true); setError(null); setOpen(false) }} onRestoreFocus={() => trigger.current?.focus({ preventScroll: true })} />
+    <PortalLoginDialog open={open} onOpenChange={setOpen} onAuthenticated={(value) => { sessionRequest.current?.abort(); setSession(value); setResolved(true); setError(null); setOpen(false) }} onRestoreFocus={() => trigger.current?.focus({ preventScroll: true })} />
   </Context.Provider>
 }
 
