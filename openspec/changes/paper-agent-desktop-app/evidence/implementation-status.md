@@ -100,3 +100,13 @@
 ### 配置 owner 集成审阅要求
 
 新论文配置不得覆盖既有 lifecycle `config.json` 或复用其 schema。应独立保存于 `desktop/config/research-runtime.json`，使用真实 optional inventory / schema 与派生 models 管理，保持原生命周期配置和本机恢复合同。主控已要求 apply 在安全 stop 前进行无副作用 admission，并以跨进程锁保护 stop 后再校验、CAS、单次 ticket、journal、不可变 release 绑定和失败恢复；旧票据或冲突不得先停止服务。以上仍需真实 resolve / 重开 / 备份恢复回归，不以 fake release owner 的成功单测替代集成证明。
+
+### 本轮冻结交接与明确未完成项
+
+- 运行适配 / 配置 owner checkpoint：生产文件编译通过，定向 `110 passed in 18.72s`，diff check 通过；这不是完整 smoke 或真实 portable stage。
+- 认证 + 设置只读 / 维护 UI checkpoint：4 文件 `34 passed`，lint 和 typecheck 通过。模型/检索配置的 native typed bridge 和 renderer 编辑闭环尚未接通，不将只读面板说成 F-08 全部完成。
+- 宿主 / credential worker 在交接时发生运行时 compaction 错误。现有 vault 文件和 tests 必须重新审阅，尤其单一固定 ref/env 与 namespace 合同；没有该 worker 最终验证结论，不按完成处理。
+- 配置实现仍有已识别的必须修复项：crash 后 config resolve 早于 journal recovery、恢复后 environment / doctor / lifecycle 未重新投影、packaged reopen 可能重新激活初始 bundle 覆盖用户配置、restore 后尚未完成派生 models 与不可变 release 安全重绑定。
+- Windows 长路径修复尚待真实 managed Python / Node staging 复跑；42k 资源校验性能及 ReleaseManager 全部同规模长路径覆盖仍需实测。10min interim 宿主 envelope 不是已验收发布性能。
+- 全量集成 smoke 尚在运行，当前没有最终通过或失败报告；本轮无代码提交。文档与明确标记的 fixture 视觉证据已独立提交，不混入其他变更的生产代码或用户数据。
+- 保持 `tasks.md` 未核销状态；已保存 PRD/规格合同不等于可安装 App 交付，更不等于 AC-01–AC-16 已通过。
