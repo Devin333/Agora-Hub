@@ -24,6 +24,7 @@ from scripts.local_desktop.common import (
     windows_extended_path,
 )
 from scripts.local_desktop.config import REAL_DATA_MODE, sanitized_environment
+from scripts.local_desktop.safe_tree import SafeTreeSnapshot, scan_tree
 
 RELEASE_SCHEMA = "newsroom.local-desktop-release/v1"
 ACTIVE_RELEASE_SCHEMA = "newsroom.local-desktop-active-release/v1"
@@ -133,8 +134,7 @@ class ReleaseManager:
             if windows_extended_path(destination).exists():
                 raise DesktopOperationError("desktop_release_exists", f"release already exists: {release_id}")
             _replace_long_path(stage, destination)
-            verified = self.verify(destination)
-            self.activate(destination)
+            verified, _pointer = self.verify_and_activate(destination)
             return verified
         except Exception:
             if windows_extended_path(stage).exists():
@@ -155,37 +155,48 @@ class ReleaseManager:
         reject_reparse_path(manifest_path, root=path)
         if not _is_file_long_path(manifest_path):
             raise DesktopOperationError("desktop_release_manifest_missing", "release manifest is missing")
-        try:
-            manifest = json.loads(_read_text_long_path(manifest_path))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise DesktopOperationError("desktop_release_manifest_invalid", "release manifest is invalid") from exc
+        snapshot = scan_tree(
+            path,
+            excluded={"release-manifest.json"},
+            captured={"release-manifest.json", ".desktop-app/config/models.json"},
+            filesystem_reason_code="desktop_release_filesystem_scan_failed",
+            filesystem_message="release filesystem could not be inventoried safely",
+            node_type_reason_code="desktop_release_resource_type_invalid",
+        )
+        manifest_data = snapshot.captured.get("release-manifest.json")
+        if manifest_data is None:
+            raise DesktopOperationError("desktop_release_manifest_missing", "release manifest is missing")
+        manifest = _decode_json_object(
+            manifest_data,
+            reason_code="desktop_release_manifest_invalid",
+            message="release manifest is invalid",
+        )
         if manifest.get("schema") != RELEASE_SCHEMA:
             raise DesktopOperationError("desktop_release_schema_unsupported", "release manifest schema is unsupported")
         expected = manifest.get("resources")
         if not isinstance(expected, list) or not expected:
             raise DesktopOperationError("desktop_release_incomplete", "release resource inventory is empty")
-        seen: set[str] = set()
+        expected_by_path: dict[str, Mapping[str, Any]] = {}
         for entry in expected:
             if not isinstance(entry, dict):
                 raise DesktopOperationError("desktop_release_manifest_invalid", "release resource entry is invalid")
             relative = _safe_relative(entry.get("path"))
-            if relative in seen:
+            if relative in expected_by_path:
                 raise DesktopOperationError("desktop_release_manifest_invalid", f"duplicate release resource: {relative}")
-            seen.add(relative)
-            lexical_resource = path / relative
-            reject_reparse_path(lexical_resource, root=path)
-            resource = ensure_contained(path, lexical_resource, field="release resource")
-            if not _is_file_long_path(resource):
+            expected_by_path[relative] = entry
+        for relative, entry in expected_by_path.items():
+            identity = snapshot.resources.get(relative)
+            if identity is None:
                 raise DesktopOperationError("desktop_release_resource_missing", f"release resource is missing: {relative}")
-            data = read_bytes_long_path(resource)
-            if len(data) != entry.get("size") or sha256(data).hexdigest() != entry.get("sha256"):
+            if identity[0] != entry.get("size") or identity[1] != entry.get("sha256"):
                 raise DesktopOperationError("desktop_release_checksum_mismatch", f"release resource checksum mismatch: {relative}")
-        actual_paths = {entry["path"] for entry in _resource_entries(path)}
-        if actual_paths != seen:
+        actual_paths = set(snapshot.resources)
+        expected_paths = set(expected_by_path)
+        if actual_paths != expected_paths:
             raise DesktopOperationError(
                 "desktop_release_resource_inventory_mismatch",
                 "release contains missing or unmanifested resources",
-                details={"missing_count": len(seen - actual_paths), "extra_count": len(actual_paths - seen)},
+                details={"missing_count": len(expected_paths - actual_paths), "extra_count": len(actual_paths - expected_paths)},
             )
         entrypoints = manifest.get("entrypoints")
         if not isinstance(entrypoints, dict) or set(entrypoints) != {"api", "frontend"}:
@@ -196,7 +207,7 @@ class ReleaseManager:
             raise DesktopOperationError("desktop_release_manifest_invalid", "release API entrypoint is invalid")
         if entrypoints.get("frontend") != expected_frontend:
             raise DesktopOperationError("desktop_release_manifest_invalid", "release frontend entrypoint is invalid")
-        if not _is_file_long_path(path / "frontend" / "node_modules" / "next" / "dist" / "bin" / "next"):
+        if "frontend/node_modules/next/dist/bin/next" not in snapshot.resources:
             raise DesktopOperationError("desktop_release_incomplete", "release Next.js runtime is missing")
         identity = manifest.get("identity")
         if not isinstance(identity, Mapping):
@@ -207,7 +218,7 @@ class ReleaseManager:
             raise DesktopOperationError("desktop_release_manifest_invalid", "release source revision is invalid")
         if len(source_digest) != 64 or any(char not in "0123456789abcdef" for char in source_digest):
             raise DesktopOperationError("desktop_release_manifest_invalid", "release source digest is invalid")
-        if _source_input_digest(path) != identity.get("source_digest"):
+        if _source_input_digest_from_snapshot(snapshot) != identity.get("source_digest"):
             raise DesktopOperationError("desktop_release_source_drift", "packaged source does not match the release identity")
         config_identity = manifest.get("config")
         if not isinstance(config_identity, Mapping) or _json_digest(config_identity) != identity.get("config_digest"):
@@ -217,6 +228,7 @@ class ReleaseManager:
                 path,
                 runtime_config_document,
                 bind_unconfigured=True,
+                snapshot=snapshot,
             )
         else:
             from scripts.local_desktop.runtime_config import read_runtime_config_document, runtime_config_paths
@@ -225,10 +237,16 @@ class ReleaseManager:
                 path,
                 read_runtime_config_document(runtime_config_paths(self.config).document),
                 bind_unconfigured=isinstance(manifest.get("desktop_runtime_configuration"), Mapping),
+                snapshot=snapshot,
             )
         if dict(config_identity) != expected_config:
             raise DesktopOperationError("desktop_release_config_incompatible", "release was prepared for a different local desktop configuration")
-        current_dependencies = self._dependency_identity(path / "frontend")
+        frontend_resources = {
+            relative.removeprefix("frontend/"): value
+            for relative, value in snapshot.resources.items()
+            if relative.startswith("frontend/")
+        }
+        current_dependencies = self._dependency_identity(path / "frontend", verified_resources=frontend_resources)
         if _json_digest(current_dependencies) != identity.get("dependency_digest"):
             raise DesktopOperationError("desktop_release_dependency_drift", "current interpreter, Node runtime, or installed dependencies do not match the release")
         return manifest
@@ -326,6 +344,7 @@ class ReleaseManager:
         document: Mapping[str, Any],
         *,
         bind_unconfigured: bool = False,
+        snapshot: SafeTreeSnapshot | None = None,
     ) -> dict[str, Any]:
         from scripts.local_desktop.runtime_config import models_config_payload, runtime_config_digest, validate_runtime_config_document
 
@@ -347,6 +366,7 @@ class ReleaseManager:
                     sanitized_environment(self.config),
                     project_root=self.config.project_root,
                     release_path=release_path,
+                    verified_resources=snapshot.resources if snapshot is not None else None,
                 ),
             }
         if models is None:
@@ -357,6 +377,7 @@ class ReleaseManager:
                 environment,
                 project_root=self.config.project_root,
                 release_path=release_path,
+                verified_resources=snapshot.resources if snapshot is not None else None,
             )
             return {
                 **base,
@@ -369,13 +390,18 @@ class ReleaseManager:
                 },
             }
         resource = Path(".desktop-app/config/models.json")
-        _reject_existing_reparse_chain(release_path / resource)
-        bound_models = ensure_contained(release_path, release_path / resource, field="bound runtime models configuration")
-        reject_reparse_path(bound_models, root=release_path)
-        if not _is_file_long_path(bound_models):
-            raise DesktopOperationError("desktop_runtime_models_missing", "bound runtime models configuration is missing")
         expected_bytes = (json.dumps(models, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-        actual_bytes = read_bytes_long_path(bound_models)
+        if snapshot is not None:
+            actual_bytes = snapshot.captured.get(resource.as_posix())
+            if actual_bytes is None:
+                raise DesktopOperationError("desktop_runtime_models_missing", "bound runtime models configuration is missing")
+        else:
+            _reject_existing_reparse_chain(release_path / resource)
+            bound_models = ensure_contained(release_path, release_path / resource, field="bound runtime models configuration")
+            reject_reparse_path(bound_models, root=release_path)
+            if not _is_file_long_path(bound_models):
+                raise DesktopOperationError("desktop_runtime_models_missing", "bound runtime models configuration is missing")
+            actual_bytes = read_bytes_long_path(bound_models)
         if actual_bytes != expected_bytes:
             raise DesktopOperationError("desktop_release_config_drift", "bound runtime models configuration does not match validated runtime settings")
         descriptor = {
@@ -468,8 +494,17 @@ class ReleaseManager:
         return result
 
     def activate(self, release: str | Path) -> dict[str, Any]:
+        _manifest, pointer = self.verify_and_activate(release)
+        return pointer
+
+    def verify_and_activate(self, release: str | Path) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Verify once and publish the active pointer from that operation's result."""
         path = self.resolve_release(release)
         manifest = self.verify(path)
+        pointer = self._write_active_pointer(path, manifest)
+        return manifest, pointer
+
+    def _write_active_pointer(self, path: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
         pointer = {
             "schema": ACTIVE_RELEASE_SCHEMA,
             "activated_at": utc_timestamp(),
@@ -481,6 +516,10 @@ class ReleaseManager:
         return pointer
 
     def active(self) -> tuple[Path, dict[str, Any]]:
+        path, manifest, _pointer = self.active_with_pointer()
+        return path, manifest
+
+    def active_with_pointer(self) -> tuple[Path, dict[str, Any], dict[str, Any]]:
         if not _is_file_long_path(self.active_pointer):
             raise DesktopOperationError("desktop_release_not_activated", "no production release is active; run build first")
         try:
@@ -493,7 +532,7 @@ class ReleaseManager:
         manifest = self.verify(path)
         if pointer.get("release_id") != manifest.get("identity", {}).get("release_id"):
             raise DesktopOperationError("desktop_release_pointer_mismatch", "active release pointer does not match its manifest")
-        return path, manifest
+        return path, manifest, pointer
 
     def resolve_release(self, release: str | Path) -> Path:
         raw = Path(release)
@@ -514,7 +553,12 @@ class ReleaseManager:
             if not _is_file_long_path(path):
                 raise DesktopOperationError("desktop_frontend_lock_missing", f"required frontend build input is missing: {path.name}")
 
-    def dependency_identity(self, frontend_root: Path | None = None) -> dict[str, Any]:
+    def dependency_identity(
+        self,
+        frontend_root: Path | None = None,
+        *,
+        verified_resources: Mapping[str, tuple[int, str]] | None = None,
+    ) -> dict[str, Any]:
         """Return the dependency identity of the interpreter and tools running this manager."""
         dependency_root = frontend_root or self.config.frontend_root
         lockfile = dependency_root / "package-lock.json"
@@ -540,8 +584,16 @@ class ReleaseManager:
                 "npm_executable": str(Path(npm_executable).resolve(strict=False)) if npm_executable else None,
                 "npm_executable_sha256": _file_sha256(Path(npm_executable)) if npm_executable else None,
                 "npm_version": self._tool_version([npm_executable, "--version"]) if npm_executable else None,
-                "package_lock_sha256": _optional_file_sha256(lockfile),
-                "installed_lock_sha256": _optional_file_sha256(installed_lock),
+                "package_lock_sha256": _optional_verified_sha256(
+                    lockfile,
+                    relative="package-lock.json",
+                    verified_resources=verified_resources,
+                ),
+                "installed_lock_sha256": _optional_verified_sha256(
+                    installed_lock,
+                    relative="node_modules/.package-lock.json",
+                    verified_resources=verified_resources,
+                ),
                 "installed_tree": self._node_dependency_tree_identity(dependency_root, npm_executable) if npm_executable else None,
             },
         }
@@ -641,8 +693,15 @@ class ReleaseManager:
             },
         }
 
-    def _dependency_identity(self, frontend_root: Path | None = None) -> dict[str, Any]:
-        return self.dependency_identity(frontend_root)
+    def _dependency_identity(
+        self,
+        frontend_root: Path | None = None,
+        *,
+        verified_resources: Mapping[str, tuple[int, str]] | None = None,
+    ) -> dict[str, Any]:
+        if verified_resources is None:
+            return self.dependency_identity(frontend_root)
+        return self.dependency_identity(frontend_root, verified_resources=verified_resources)
 
     def _node_dependency_tree_identity(
         self,
@@ -868,7 +927,6 @@ def _decode_utf8_stream(value: Any) -> str:
     raise TypeError("captured command output must be bytes or text")
 
 
-
 def _normalized_node_dependency_tree(
     payload: Mapping[str, Any],
 ) -> tuple[dict[str, Any], int]:
@@ -1005,13 +1063,11 @@ def _require_directory_long_path(path: Path) -> os.stat_result:
 
 
 def _resource_entries(root: Path) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for path in _trusted_tree_files(root):
-        relative = path.relative_to(root).as_posix()
-        if relative == "release-manifest.json":
-            continue
-        data = read_bytes_long_path(path)
-        entries.append({"path": relative, "size": len(data), "sha256": sha256(data).hexdigest()})
+    snapshot = _scan_release_tree(root, excluded={"release-manifest.json"})
+    entries = [
+        {"path": relative, "size": size, "sha256": digest}
+        for relative, (size, digest) in sorted(snapshot.resources.items())
+    ]
     if not entries:
         raise DesktopOperationError("desktop_release_incomplete", "release contains no runtime resources")
     return entries
@@ -1019,30 +1075,24 @@ def _resource_entries(root: Path) -> list[dict[str, Any]]:
 
 def _trusted_tree_files(root: Path) -> list[Path]:
     """Inventory a trusted tree without dropping Win32 paths longer than MAX_PATH."""
-    reject_reparse_path(root, root=root)
-    _require_directory_long_path(root)
-    root_io = windows_extended_path(root)
-    files: list[Path] = []
-    for directory, names, filenames in os.walk(
-        root_io,
-        topdown=True,
-        onerror=_raise_release_walk_error,
-        followlinks=False,
-    ):
-        names.sort()
-        filenames.sort()
-        lexical_directory = root / Path(directory).relative_to(root_io)
-        reject_reparse_path(lexical_directory, root=root)
-        for name in names:
-            directory_path = lexical_directory / name
-            reject_reparse_path(directory_path, root=root)
-            _require_directory_long_path(directory_path)
-        for name in filenames:
-            path = lexical_directory / name
-            reject_reparse_path(path, root=root)
-            _require_regular_file_long_path(path)
-            files.append(path)
-    return sorted(files, key=lambda item: item.relative_to(root).as_posix())
+    snapshot = _scan_release_tree(root)
+    return [root / Path(relative) for relative in sorted(snapshot.resources)]
+
+
+def _scan_release_tree(
+    root: Path,
+    *,
+    excluded: set[str] | frozenset[str] = frozenset(),
+    captured: set[str] | frozenset[str] = frozenset(),
+) -> SafeTreeSnapshot:
+    return scan_tree(
+        root,
+        excluded=excluded,
+        captured=captured,
+        filesystem_reason_code="desktop_release_filesystem_scan_failed",
+        filesystem_message="release filesystem could not be inventoried safely",
+        node_type_reason_code="desktop_release_resource_type_invalid",
+    )
 
 
 def _raise_release_walk_error(error: OSError) -> None:
@@ -1065,6 +1115,18 @@ def _optional_file_sha256(path: Path) -> str | None:
     return _file_sha256(path) if _is_file_long_path(path) else None
 
 
+def _optional_verified_sha256(
+    path: Path,
+    *,
+    relative: str,
+    verified_resources: Mapping[str, tuple[int, str]] | None,
+) -> str | None:
+    if verified_resources is None:
+        return _optional_file_sha256(path)
+    identity = verified_resources.get(relative)
+    return identity[1] if identity is not None else None
+
+
 def _tree_digest(root: Path) -> str:
     digest = sha256()
     for entry in _resource_entries(root):
@@ -1080,6 +1142,16 @@ def _json_digest(payload: Mapping[str, Any]) -> str:
     return sha256(encoded).hexdigest()
 
 
+def _decode_json_object(data: bytes, *, reason_code: str, message: str) -> dict[str, Any]:
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise DesktopOperationError(reason_code, message) from exc
+    if not isinstance(value, dict):
+        raise DesktopOperationError(reason_code, message)
+    return value
+
+
 def _safe_relative(value: Any) -> str:
     if not isinstance(value, str) or not value or "\\" in value or any(":" in part or part.endswith((" ", ".")) for part in Path(value).parts):
         raise DesktopOperationError("desktop_release_manifest_invalid", "release resource path is invalid")
@@ -1089,12 +1161,12 @@ def _safe_relative(value: Any) -> str:
     return path.as_posix()
 
 
-
 def _external_config_identity(
     environment: Mapping[str, str],
     *,
     project_root: Path | None = None,
     release_path: Path | None = None,
+    verified_resources: Mapping[str, tuple[int, str]] | None = None,
 ) -> list[dict[str, Any]]:
     dependencies: list[dict[str, Any]] = []
     trusted_project_root = project_root.resolve(strict=False) if project_root is not None else None
@@ -1107,12 +1179,19 @@ def _external_config_identity(
             relative = path.relative_to(trusted_project_root)
             if relative.parts and relative.parts[0] in _BACKEND_SOURCE_ROOTS:
                 packaged_relative = Path("app") / relative
+                packaged_key = packaged_relative.as_posix()
+                if verified_resources is not None:
+                    identity = verified_resources.get(packaged_key)
+                    if identity is None:
+                        raise DesktopOperationError("desktop_release_config_missing", f"packaged runtime configuration file is missing: {name}")
+                    dependencies.append({"name": name, "mode": "packaged", "resource": packaged_key, "size": identity[0], "sha256": identity[1]})
+                    continue
                 packaged = (release_path / packaged_relative).resolve(strict=False) if release_path is not None else path
                 if not _is_file_long_path(packaged):
                     raise DesktopOperationError("desktop_release_config_missing", f"packaged runtime configuration file is missing: {name}")
                 reject_reparse_path(packaged, root=release_path if release_path is not None else packaged.parent)
                 data = read_bytes_long_path(packaged)
-                dependencies.append({"name": name, "mode": "packaged", "resource": packaged_relative.as_posix(), "size": len(data), "sha256": sha256(data).hexdigest()})
+                dependencies.append({"name": name, "mode": "packaged", "resource": packaged_key, "size": len(data), "sha256": sha256(data).hexdigest()})
                 continue
         if not _is_file_long_path(path):
             raise DesktopOperationError("desktop_external_config_missing", f"declared runtime configuration file is missing: {name}")
@@ -1128,19 +1207,54 @@ def _source_input_digest(root: Path) -> str:
     for source_root, label in roots:
         if not windows_extended_path(source_root).exists():
             continue
-        reject_reparse_path(source_root, root=source_root.parent)
-        for source_path in _trusted_tree_files(source_root):
-            source_relative = source_path.relative_to(source_root)
-            relative_parts = source_relative.parts
-            if any(_release_source_excluded(part) for part in relative_parts):
-                continue
-            if label == "frontend" and _frontend_generated_source_input(source_relative.name):
-                continue
-            relative = f"{label}/{source_relative.as_posix()}"
-            digest.update(relative.encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(sha256(read_bytes_long_path(source_path)).digest())
+        snapshot = _scan_release_tree(source_root)
+        _update_source_digest(digest, snapshot.resources, label=label)
     return digest.hexdigest()
+
+
+def _source_input_digest_from_snapshot(snapshot: SafeTreeSnapshot) -> str:
+    digest = sha256()
+    app_prefix = "app" if "app" in snapshot.directories else ""
+    for name in _BACKEND_SOURCE_ROOTS:
+        physical_prefix = f"{app_prefix}/{name}" if app_prefix else name
+        _update_source_digest(
+            digest,
+            snapshot.resources,
+            label=f"app/{name}",
+            physical_prefix=physical_prefix,
+        )
+    _update_source_digest(digest, snapshot.resources, label="frontend", physical_prefix="frontend")
+    return digest.hexdigest()
+
+
+def _update_source_digest(
+    digest: Any,
+    resources: Mapping[str, tuple[int, str]],
+    *,
+    label: str,
+    physical_prefix: str = "",
+) -> None:
+    prefix = physical_prefix.rstrip("/")
+    selected: list[tuple[str, str]] = []
+    for resource_path, (_size, resource_digest) in resources.items():
+        if prefix:
+            marker = prefix + "/"
+            if not resource_path.startswith(marker):
+                continue
+            source_relative = resource_path[len(marker) :]
+        else:
+            source_relative = resource_path
+        relative_path = Path(source_relative)
+        if any(_release_source_excluded(part) for part in relative_path.parts):
+            continue
+        if label == "frontend" and _frontend_generated_source_input(relative_path.name):
+            continue
+        selected.append((source_relative, resource_digest))
+    for source_relative, resource_digest in sorted(selected):
+        relative = f"{label}/{source_relative}"
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(resource_digest))
 
 
 def _file_sha256(path: Path) -> str:

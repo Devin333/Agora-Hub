@@ -8,16 +8,6 @@ export const dynamic = "force-dynamic"
 
 export async function GET() {
   const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value
-  if (!token) {
-    try {
-      return authResponse(
-        { ok: true, data: attachFrontendRuntimeIdentity({ session: null }) },
-        { issueSession: false },
-      )
-    } catch {
-      return authFailure("desktop_runtime_identity_invalid", 503)
-    }
-  }
   const result = await safeApiGet("/api/v1/auth/session", {
     headers: token ? { "x-newsroom-session": token } : undefined,
     signal: AbortSignal.timeout(10000),

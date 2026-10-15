@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { assertPlainOwnedPaths, type PlainOwnedPathDirent, type PlainOwnedPathStats } from "../src/plain-owned-path-batch"
 import { resolveRuntimeLayout, RuntimeLayoutError } from "../src/runtime-layout"
 
 async function fixture() {
@@ -47,6 +48,26 @@ async function packagedFixture(resources: string[], files: string[] = resources)
 
 function packagedInput(root: string, resourcesPath: string) {
   return { isPackaged: true, appPath: "unused", resourcesPath, userDataPath: path.join(root, "user-data") }
+}
+
+function mockStats(ino: bigint, directory = true, symbolicLink = false, mtimeNs = 1n, ctimeNs = 1n): PlainOwnedPathStats {
+  return {
+    dev: 1n,
+    ino,
+    mtimeNs,
+    ctimeNs,
+    isDirectory: () => directory,
+    isSymbolicLink: () => symbolicLink
+  }
+}
+
+function mockDirent(name: string, directory = false, symbolicLink = false): PlainOwnedPathDirent {
+  return {
+    name,
+    isFile: () => !directory && !symbolicLink,
+    isDirectory: () => directory,
+    isSymbolicLink: () => symbolicLink
+  }
 }
 
 describe("resolveRuntimeLayout", () => {
@@ -150,6 +171,80 @@ describe("resolveRuntimeLayout", () => {
       code: "runtime_manifest_invalid",
       message: "Packaged resource inventory contains a duplicate path"
     })
+  })
+
+  it("validates a 79,920-entry inventory with directory-bounded filesystem calls", async () => {
+    const root = path.join(path.parse(process.cwd()).root, "runtime-layout-batch")
+    const inventory = path.join(root, "inventory")
+    const leafNames = Array.from({ length: 79_920 }, (_, index) => `resource-${String(index).padStart(5, "0")}.dat`)
+    const identities = new Map<string, bigint>()
+    const identityFor = (candidate: string) => {
+      const normalized = path.normalize(candidate)
+      let identity = identities.get(normalized)
+      if (identity === undefined) {
+        identity = BigInt(identities.size + 1)
+        identities.set(normalized, identity)
+      }
+      return identity
+    }
+    const io = {
+      lstat: vi.fn(async (candidate: string) => mockStats(identityFor(candidate))),
+      realpath: vi.fn(async (candidate: string) => path.resolve(candidate)),
+      readdir: vi.fn(async (candidate: string) => {
+        if (path.normalize(candidate) === path.normalize(root)) return [mockDirent("inventory", true)]
+        if (path.normalize(candidate) === path.normalize(inventory)) return leafNames.map(name => mockDirent(name))
+        throw new Error("unexpected directory")
+      })
+    }
+
+    await expect(assertPlainOwnedPaths(root, leafNames.map(name => ({
+      path: path.join(inventory, name),
+      label: `inventory/${name}`
+    })), { io })).resolves.toBeUndefined()
+
+    expect(io.readdir).toHaveBeenCalledTimes(2)
+    expect(io.realpath).toHaveBeenCalledTimes(2)
+    expect(io.lstat).toHaveBeenCalledTimes(5)
+  })
+
+  it("rejects a symbolic-link inventory entry without following it", async () => {
+    const root = path.join(path.parse(process.cwd()).root, "runtime-layout-link-test")
+    const assets = path.join(root, "assets")
+    const io = {
+      lstat: vi.fn(async (candidate: string) => mockStats(BigInt(path.normalize(candidate).length))),
+      realpath: vi.fn(async (candidate: string) => path.resolve(candidate)),
+      readdir: vi.fn(async (candidate: string) => path.normalize(candidate) === path.normalize(root)
+        ? [mockDirent("assets", true)]
+        : [mockDirent("runtime.json", false, true)])
+    }
+
+    await expect(assertPlainOwnedPaths(root, [{
+      path: path.join(assets, "runtime.json"),
+      label: "assets/runtime.json"
+    }], { io })).rejects.toMatchObject({ code: "path_untrusted", label: "assets/runtime.json" })
+    expect(io.readdir).toHaveBeenCalledTimes(2)
+  })
+
+  it("rejects a traversed directory whose mtime changes during the scan", async () => {
+    const root = path.join(path.parse(process.cwd()).root, "runtime-layout-replacement-test")
+    const assets = path.join(root, "assets")
+    let assetsChecks = 0
+    const io = {
+      lstat: vi.fn(async (candidate: string) => {
+        if (path.normalize(candidate) === path.normalize(assets)) return mockStats(7n, true, false, BigInt(++assetsChecks), 1n)
+        return mockStats(BigInt(path.normalize(candidate).length))
+      }),
+      realpath: vi.fn(async (candidate: string) => path.resolve(candidate)),
+      readdir: vi.fn(async (candidate: string) => path.normalize(candidate) === path.normalize(root)
+        ? [mockDirent("assets", true)]
+        : [mockDirent("runtime.json")])
+    }
+
+    await expect(assertPlainOwnedPaths(root, [{
+      path: path.join(assets, "runtime.json"),
+      label: "assets/runtime.json"
+    }], { io })).rejects.toMatchObject({ code: "path_untrusted" })
+    expect(assetsChecks).toBe(2)
   })
 
   it("rejects a manifest that points outside the expected owned root", async () => {

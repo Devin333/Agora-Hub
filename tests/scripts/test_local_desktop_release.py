@@ -4,11 +4,13 @@ import json
 import os
 import subprocess
 import sys
+from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+import scripts.local_desktop.safe_tree as safe_tree_module
 from framework.shared.local_desktop import resolve_local_desktop_config
 from scripts.local_desktop.common import DesktopOperationError
 from scripts.local_desktop.config import sanitized_environment
@@ -33,7 +35,7 @@ def _manager(
             base=isolated_environment if base is None else base,
         ),
     )
-    monkeypatch.setattr(manager, "_dependency_identity", lambda _root=None: {"python": {"version": "3.12"}, "node": {"version": "v22"}})
+    monkeypatch.setattr(manager, "_dependency_identity", lambda _root=None, **_kwargs: {"python": {"version": "3.12"}, "node": {"version": "v22"}})
     release = config.release_root / "release-one"
     (release / "app" / "interfaces").mkdir(parents=True)
     (release / "app" / "interfaces" / "__init__.py").write_text("", encoding="utf-8")
@@ -75,6 +77,66 @@ def _manager(
     (release / "release-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return manager, release
 
+
+@pytest.mark.parametrize(
+    "verified_resources",
+    [None, {}, {"frontend/package-lock.json": (7, "a" * 64)}],
+)
+def test_private_dependency_identity_forwards_snapshot_only_when_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    verified_resources,
+) -> None:
+    manager = ReleaseManager(resolve_local_desktop_config(project_root=tmp_path))
+    frontend_root = tmp_path / "frontend"
+    expected = {"python": {"version": "test"}, "node": {}}
+    calls = []
+
+    def public_identity(*args, **kwargs):
+        calls.append((args, kwargs))
+        return expected
+
+    monkeypatch.setattr(manager, "dependency_identity", public_identity)
+
+    assert manager._dependency_identity(frontend_root, verified_resources=verified_resources) is expected
+    expected_kwargs = {} if verified_resources is None else {"verified_resources": verified_resources}
+    assert calls == [((frontend_root,), expected_kwargs)]
+    if verified_resources is not None:
+        assert calls[0][1]["verified_resources"] is verified_resources
+
+
+@pytest.mark.parametrize("operation", ["verify", "activate"])
+def test_release_validation_operation_uses_bounded_node_validation_and_hashes_each_file_once(
+    tmp_path: Path,
+    monkeypatch,
+    operation: str,
+) -> None:
+    manager, release = _manager(tmp_path, monkeypatch)
+    expected_files = {path.relative_to(release).as_posix() for path in release.rglob("*") if path.is_file()}
+    expected_directories = {path.relative_to(release).as_posix() for path in release.rglob("*") if path.is_dir()}
+    validated: list[str] = []
+    hashed: list[str] = []
+    original_validate = safe_tree_module._validate_node
+    original_hash = safe_tree_module._hash_file
+
+    def count_validate(path: Path, metadata, **kwargs):
+        validated.append(path.relative_to(release).as_posix())
+        return original_validate(path, metadata, **kwargs)
+
+    def count_hash(path: Path, metadata, **kwargs):
+        hashed.append(path.relative_to(release).as_posix())
+        return original_hash(path, metadata, **kwargs)
+
+    monkeypatch.setattr(safe_tree_module, "_validate_node", count_validate)
+    monkeypatch.setattr(safe_tree_module, "_hash_file", count_hash)
+
+    getattr(manager, operation)(release)
+
+    expected_validations = Counter({path: 2 for path in expected_files})
+    expected_validations.update({path: 4 for path in expected_directories})
+    expected_validations["."] = 4
+    assert Counter(validated) == expected_validations
+    assert Counter(hashed) == Counter({path: 1 for path in expected_files})
 
 def test_release_verify_rejects_unmanifested_file(tmp_path: Path, monkeypatch) -> None:
     manager, release = _manager(tmp_path, monkeypatch)
@@ -128,7 +190,6 @@ def test_activate_keeps_previous_pointer_when_target_is_invalid(tmp_path: Path, 
     with pytest.raises(DesktopOperationError):
         manager.activate(invalid)
     assert manager.active_pointer.read_bytes() == previous
-
 
 
 def test_release_copy_excludes_all_environment_files_and_development_outputs(tmp_path: Path) -> None:
@@ -306,7 +367,6 @@ def test_release_verify_rejects_external_runtime_config_drift(tmp_path: Path, mo
     with pytest.raises(DesktopOperationError) as raised:
         manager.verify(release)
     assert raised.value.reason_code == "desktop_release_config_incompatible"
-
 
 
 def test_release_verify_rejects_manifested_resource_replaced_by_symlink(tmp_path: Path, monkeypatch) -> None:

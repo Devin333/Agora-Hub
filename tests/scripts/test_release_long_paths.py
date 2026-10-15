@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from hashlib import sha256
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.local_desktop.safe_tree as safe_tree_module
 from framework.shared.local_desktop import resolve_local_desktop_config
 from scripts.local_desktop.common import DesktopOperationError, read_bytes_long_path, windows_extended_path
 from scripts.local_desktop.release import (
@@ -42,7 +44,7 @@ def _prepare_release(
     config = resolve_local_desktop_config(project_root=project_root, cli_overrides=overrides)
     manager = ReleaseManager(config)
     dependencies = {"python": {"version": "3.12"}, "node": {"version": "v22"}}
-    monkeypatch.setattr(manager, "_dependency_identity", lambda _root=None: dependencies)
+    monkeypatch.setattr(manager, "_dependency_identity", lambda _root=None, **_kwargs: dependencies)
     monkeypatch.setattr("scripts.local_desktop.release.sanitized_environment", lambda _config, base=None: {})
 
     release = config.release_root / "release-long-path"
@@ -211,18 +213,46 @@ def test_release_copy_and_cleanup_support_long_staging_targets(tmp_path: Path) -
     assert not windows_extended_path(destination).exists()
 
 
-def test_release_inventory_fails_closed_when_walk_reports_non_regular_file(
+def test_release_inventory_fails_closed_when_scan_reports_non_regular_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "release"
-    non_regular = root / "not-a-file"
-    non_regular.mkdir(parents=True)
-    root_io = windows_extended_path(root)
-    monkeypatch.setattr(
-        "scripts.local_desktop.release.os.walk",
-        lambda *_args, **_kwargs: iter([(root_io, [], [non_regular.name])]),
-    )
+    root.mkdir()
+
+    class NonRegularEntry:
+        name = "not-a-file"
+        path = str(root / name)
+
+        @staticmethod
+        def stat(*, follow_symlinks: bool):
+            assert follow_symlinks is False
+            return os.stat_result((stat.S_IFIFO, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+
+    class ScanResult:
+        def __enter__(self):
+            return iter([NonRegularEntry()])
+
+        def __exit__(self, _type, _value, _traceback):
+            return False
+
+    original_lstat = safe_tree_module._lstat
+
+    def non_regular_lstat(path: Path, **kwargs):
+        if path.name == NonRegularEntry.name:
+            return type("Metadata", (), {
+                "st_mode": stat.S_IFIFO,
+                "st_dev": 1,
+                "st_ino": 1,
+                "st_size": 0,
+                "st_mtime_ns": 0,
+                "st_ctime_ns": 0,
+                "st_file_attributes": 0,
+            })()
+        return original_lstat(path, **kwargs)
+
+    monkeypatch.setattr(safe_tree_module.os, "scandir", lambda _path: ScanResult())
+    monkeypatch.setattr(safe_tree_module, "_lstat", non_regular_lstat)
 
     with pytest.raises(DesktopOperationError) as raised:
         _trusted_tree_files(root)

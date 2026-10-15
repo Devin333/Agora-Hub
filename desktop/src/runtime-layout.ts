@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { assertPlainOwnedPath as assertSharedPlainOwnedPath, inside } from "../shared/plain-owned-path.cjs"
+import { assertPlainOwnedPaths as assertBatchPlainOwnedPaths, PlainOwnedPathBatchError } from "./plain-owned-path-batch"
 
 const DEV_MANIFEST_SCHEMA = "agora.desktop-runtime-manifest.v1"
 const DEV_MANIFEST_OWNER = "agora-paper-agent-desktop"
@@ -90,6 +91,21 @@ async function assertPlainOwnedPath(root: string, candidate: string, label: stri
     throw new RuntimeLayoutError("runtime_path_untrusted", `${label} must not traverse a symbolic link or junction`)
   }
 }
+async function assertRequiredPaths(root: string, requiredPaths: readonly string[]): Promise<void> {
+  try {
+    await assertBatchPlainOwnedPaths(root, requiredPaths.map(requiredPath => ({
+      path: path.join(root, requiredPath),
+      label: requiredPath
+    })))
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "path_untrusted"
+    const label = error instanceof PlainOwnedPathBatchError ? error.label : "runtime path"
+    if (code === "path_outside_root") throw new RuntimeLayoutError("runtime_path_outside_root", `${label} escapes the owned runtime root`)
+    if (code === "path_missing") throw new RuntimeLayoutError("runtime_path_missing", `${label} is missing from the runtime payload`)
+    throw new RuntimeLayoutError("runtime_path_untrusted", `${label} must not traverse a symbolic link or junction`)
+  }
+}
+
 async function readJson(manifestPath: string): Promise<unknown> {
   try { return JSON.parse(await readFile(manifestPath, "utf8")) }
   catch (error) {
@@ -115,13 +131,10 @@ export async function resolveRuntimeLayout(input: RuntimeLayoutInput): Promise<R
         return { pythonRelativePath: manifest.pythonRelativePath, requiredPaths: manifest.requiredPaths }
       })()
 
-
-  for (const requiredPath of new Set(descriptor.requiredPaths)) await assertPlainOwnedPath(resourceRoot, path.join(resourceRoot, requiredPath), requiredPath)
+  await assertRequiredPaths(resourceRoot, [...descriptor.requiredPaths, descriptor.pythonRelativePath])
   const pythonPath = path.resolve(resourceRoot, descriptor.pythonRelativePath)
   await assertPlainOwnedPath(resourceRoot, pythonPath, "Python interpreter")
   const dataRoot = path.resolve(input.userDataPath, "runtime")
   if (!inside(path.resolve(input.userDataPath), dataRoot)) throw new RuntimeLayoutError("runtime_data_root_invalid", "Runtime data root must stay within Electron userData")
   return { resourceRoot, dataRoot, pythonPath, manifestPath, entryModule: "scripts.desktop_app", mode }
 }
-
-

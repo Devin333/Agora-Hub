@@ -22,6 +22,7 @@ from scripts.local_desktop.common import (
     windows_extended_path,
 )
 from scripts.local_desktop.release import DATA_SCHEMAS, RELEASE_SCHEMA, ReleaseManager
+from scripts.local_desktop.safe_tree import SafeTreeSnapshot, scan_tree
 
 BUNDLE_SCHEMA = "newsroom.desktop-app-bundle/v1"
 BINDING_SCHEMA = "newsroom.desktop-app-release-binding/v1"
@@ -94,7 +95,9 @@ class DependencyIdentityProvider(Protocol):
 
     def activate(self, release: str | Path) -> dict[str, Any]: ...
 
-    def active(self) -> tuple[Path, dict[str, Any]]: ...
+    def verify_and_activate(self, release: str | Path) -> tuple[dict[str, Any], dict[str, Any]]: ...
+
+    def active_with_pointer(self) -> tuple[Path, dict[str, Any], dict[str, Any]]: ...
 
 
 class DesktopAppReleaseManager(ReleaseManager):
@@ -119,46 +122,69 @@ class PortableBundleManager:
         self.command_runner = command_runner or subprocess.run
 
     def verify_bundle(self) -> dict[str, Any]:
+        envelope, _original = self._verify_bundle_details()
+        return envelope
+
+    def _verify_bundle_details(self) -> tuple[dict[str, Any], dict[str, Any]]:
         root = self.config.resource_root
         _reject_lexical_reparse_chain(root)
-        envelope = _read_json(root / "desktop-bundle.json", "desktop_app_bundle_manifest_invalid")
+        envelope_path = root / "desktop-bundle.json"
+        reject_reparse_path(envelope_path, root=root)
+        if not _is_file_long_path(envelope_path):
+            raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle manifest is missing")
+        snapshot = scan_tree(
+            root,
+            excluded={"desktop-bundle.json"},
+            captured={"desktop-bundle.json", _ORIGINAL_MANIFEST_PATH},
+            deferred=("node/npm.cmd", "node/node.exe", ".venv/Scripts/python.exe"),
+            filesystem_reason_code="desktop_app_bundle_filesystem_scan_failed",
+            filesystem_message="portable runtime filesystem scan failed",
+            node_type_reason_code="desktop_app_bundle_resource_type_invalid",
+        )
+        envelope_data = snapshot.captured.get("desktop-bundle.json")
+        if envelope_data is None:
+            raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle manifest is missing")
+        envelope = _decode_json_object(
+            envelope_data,
+            name="desktop-bundle.json",
+            reason_code="desktop_app_bundle_manifest_invalid",
+        )
         if envelope.get("schema") != BUNDLE_SCHEMA:
             raise DesktopOperationError("desktop_app_bundle_schema_unsupported", "desktop app bundle schema is unsupported")
         resources = envelope.get("resources")
         if not isinstance(resources, list) or not resources:
             raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle resource inventory is empty")
-        expected: set[str] = set()
+        expected: dict[str, Mapping[str, Any]] = {}
         for item in resources:
             if not isinstance(item, Mapping):
                 raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle resource entry is invalid")
             relative = _safe_relative(item.get("path"))
             if relative in expected or relative == "desktop-bundle.json":
                 raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle resource inventory contains duplicates")
-            expected.add(relative)
-            candidate = ensure_contained(root, root / relative, field="bundle resource")
-            _reject_lexical_reparse_chain(root / relative)
-            reject_reparse_path(candidate, root=root)
-            if not _is_file_long_path(candidate):
+            expected[relative] = item
+        for relative, item in expected.items():
+            identity = snapshot.resources.get(relative)
+            if identity is None:
                 raise DesktopOperationError("desktop_app_bundle_resource_missing", f"desktop app bundle resource is missing: {relative}")
-            data = read_bytes_long_path(candidate)
-            if len(data) != item.get("size") or sha256(data).hexdigest() != item.get("sha256"):
+            if identity[0] != item.get("size") or identity[1] != item.get("sha256"):
                 raise DesktopOperationError("desktop_app_bundle_checksum_mismatch", f"desktop app bundle checksum mismatch: {relative}")
-        actual = {item["path"] for item in _resource_entries(root, excluded={"desktop-bundle.json"})}
-        if actual != expected:
+        actual = set(snapshot.resources)
+        expected_paths = set(expected)
+        if actual != expected_paths:
             raise DesktopOperationError(
                 "desktop_app_bundle_resource_inventory_mismatch",
                 "desktop app bundle contains missing or unmanifested resources",
-                details={"missing_count": len(expected - actual), "extra_count": len(actual - expected)},
+                details={"missing_count": len(expected_paths - actual), "extra_count": len(actual - expected_paths)},
             )
-        original = self._original_manifest(envelope)
+        original = self._original_manifest(envelope, verified_data=snapshot.captured.get(_ORIGINAL_MANIFEST_PATH))
         _validate_release_compatibility(original)
         _reject_external_release_config(original)
         _validate_relocation_policy(envelope)
         expected_bundle_id = _bundle_id(envelope["release"]["original_identity"], envelope["runtime"], resources, envelope["relocation_policy"])
         if envelope.get("bundle_id") != expected_bundle_id:
             raise DesktopOperationError("desktop_app_bundle_identity_mismatch", "desktop app bundle identity does not match its envelope")
-        self._verify_runtime(envelope, original)
-        return envelope
+        self._verify_runtime(envelope, original, snapshot=snapshot)
+        return envelope, original
 
     def install_and_activate(self) -> dict[str, Any]:
         # Configuration calculation and verification must see the same trusted
@@ -167,8 +193,7 @@ class PortableBundleManager:
             return self._install_and_activate()
 
     def _install_and_activate(self) -> dict[str, Any]:
-        envelope = self.verify_bundle()
-        original = self._original_manifest(envelope)
+        envelope, original = self._verify_bundle_details()
         binding_digest = _json_digest(
             {
                 "bundle_id": envelope["bundle_id"],
@@ -197,16 +222,16 @@ class PortableBundleManager:
                 bundle_id=str(envelope["bundle_id"]),
             )
             if preserved is not None:
-                active_manifest, pointer = preserved
+                active_manifest, pointer, preserved_runtime_configuration = preserved
             else:
-                active_manifest = self.release_manager.verify(destination)
-                pointer = self.release_manager.activate(destination)
+                active_manifest, pointer = self.release_manager.verify_and_activate(destination)
+                preserved_runtime_configuration = False
             return {
                 "release": active_manifest.get("identity", {}),
                 "binding": dict(binding),
                 "activation": pointer,
                 "reused": True,
-                "preserved_runtime_configuration": preserved is not None,
+                "preserved_runtime_configuration": preserved_runtime_configuration,
             }
 
         self.config.desktop.release_root.mkdir(parents=True, exist_ok=True)
@@ -276,8 +301,7 @@ class PortableBundleManager:
             atomic_write_json(stage / "release-manifest.json", manifest)
             self.release_manager.verify(stage)
             os.replace(stage, destination)
-            verified = self.release_manager.verify(destination)
-            pointer = self.release_manager.activate(destination)
+            verified, pointer = self.release_manager.verify_and_activate(destination)
             return {
                 "release": verified.get("identity", {}),
                 "binding": verified.get("desktop_app_binding", {}),
@@ -296,19 +320,16 @@ class PortableBundleManager:
         base_release_id: str,
         binding_digest: str,
         bundle_id: str,
-    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-        active_reader = getattr(self.release_manager, "active", None)
-        if not callable(active_reader):
-            return None
+    ) -> tuple[dict[str, Any], dict[str, Any], bool] | None:
         try:
-            active_path, active_manifest = active_reader()
+            active_path, active_manifest, active_pointer = self.release_manager.active_with_pointer()
         except DesktopOperationError as exc:
             if exc.reason_code == "desktop_release_not_activated":
                 return None
             raise
         active_path = Path(active_path)
         if active_path == base_release:
-            return None
+            return active_manifest, active_pointer, False
         runtime_binding = active_manifest.get("desktop_runtime_configuration")
         app_binding = active_manifest.get("desktop_app_binding")
         if not isinstance(runtime_binding, Mapping) or runtime_binding.get("source_release_id") != base_release_id:
@@ -318,25 +339,31 @@ class PortableBundleManager:
                 "desktop_app_active_release_binding_conflict",
                 "active runtime-configured release does not match the verified desktop bundle binding",
             )
-        verified = self.release_manager.verify(active_path)
-        pointer = self.release_manager.activate(active_path)
-        return verified, pointer
+        return active_manifest, active_pointer, True
 
-    def _original_manifest(self, envelope: Mapping[str, Any]) -> dict[str, Any]:
+    def _original_manifest(self, envelope: Mapping[str, Any], *, verified_data: bytes | None = None) -> dict[str, Any]:
         descriptor = envelope.get("release")
         if not isinstance(descriptor, Mapping) or descriptor.get("manifest_path") != _ORIGINAL_MANIFEST_PATH:
             raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle release descriptor is invalid")
-        path = ensure_contained(self.config.resource_root, self.config.resource_root / _ORIGINAL_MANIFEST_PATH, field="original release manifest")
-        reject_reparse_path(path, root=self.config.resource_root)
-        data = read_bytes_long_path(path) if _is_file_long_path(path) else b""
+        data = verified_data or b""
         if not data or sha256(data).hexdigest() != descriptor.get("manifest_sha256"):
             raise DesktopOperationError("desktop_app_bundle_release_manifest_mismatch", "original release manifest does not match the bundle envelope")
-        manifest = _read_json(path, "desktop_app_bundle_release_manifest_invalid")
+        manifest = _decode_json_object(
+            data,
+            name=Path(_ORIGINAL_MANIFEST_PATH).name,
+            reason_code="desktop_app_bundle_release_manifest_invalid",
+        )
         if manifest.get("identity") != descriptor.get("original_identity"):
             raise DesktopOperationError("desktop_app_bundle_release_identity_invalid", "original release identity does not match the bundle envelope")
         return manifest
 
-    def _verify_runtime(self, envelope: Mapping[str, Any], original: Mapping[str, Any]) -> None:
+    def _verify_runtime(
+        self,
+        envelope: Mapping[str, Any],
+        original: Mapping[str, Any],
+        *,
+        snapshot: SafeTreeSnapshot,
+    ) -> None:
         runtime = envelope.get("runtime")
         if not isinstance(runtime, Mapping):
             raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle runtime descriptor is missing")
@@ -344,7 +371,7 @@ class PortableBundleManager:
         node = runtime.get("node")
         if not isinstance(python, Mapping) or not isinstance(node, Mapping):
             raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle runtime descriptor is incomplete")
-        _verify_executable(self.config.resource_root, python, expected_relative=".venv/Scripts/python.exe")
+        _verify_executable(snapshot.resources, python, expected_relative=".venv/Scripts/python.exe")
         if python.get("launch_requirements") != _PYTHON_LAUNCH_REQUIREMENTS:
             raise DesktopOperationError(
                 "desktop_app_bundle_runtime_invalid",
@@ -357,18 +384,14 @@ class PortableBundleManager:
         ) or len(excluded_input_paths) != len(set(excluded_input_paths)):
             raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle Python input exclusions are invalid")
         for relative in excluded_input_paths:
-            excluded = ensure_contained(
-                self.config.python_executable.parent,
-                self.config.python_executable.parent / relative,
-                field="excluded portable Python input",
-            )
-            if excluded.exists():
+            excluded = (Path(".venv/Scripts") / relative).as_posix()
+            if excluded in snapshot.nodes or any(path.startswith(excluded + "/") for path in snapshot.nodes):
                 raise DesktopOperationError("desktop_app_python_runtime_drift", "excluded portable Python metadata is present in the bundle")
-        _verify_executable(self.config.resource_root, node, expected_relative="node/node.exe")
+        _verify_executable(snapshot.resources, node, expected_relative="node/node.exe")
         npm = node.get("npm")
         if not isinstance(npm, Mapping):
             raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle npm descriptor is missing")
-        _verify_executable(self.config.resource_root, npm, expected_relative="node/npm.cmd")
+        _verify_executable(snapshot.resources, npm, expected_relative="node/npm.cmd")
         actual_python = Path(sys.executable).resolve(strict=False)
         if os.path.normcase(str(actual_python)) != os.path.normcase(str(self.config.python_executable.resolve(strict=False))):
             raise DesktopOperationError("desktop_app_wrong_python", "desktop app CLI must run with the bundled interpreter")
@@ -914,13 +937,16 @@ def _external_config_identity(
     return dependencies
 
 
-def _verify_executable(root: Path, descriptor: Mapping[str, Any], *, expected_relative: str) -> None:
+def _verify_executable(
+    resources: Mapping[str, tuple[int, str]],
+    descriptor: Mapping[str, Any],
+    *,
+    expected_relative: str,
+) -> None:
     if descriptor.get("path") != expected_relative:
         raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle executable path is not an allowed relocation")
-    executable = ensure_contained(root, root / expected_relative, field="bundle executable")
-    _reject_lexical_reparse_chain(root / expected_relative)
-    reject_reparse_path(executable, root=root)
-    if not _is_file_long_path(executable) or _file_sha256(executable) != descriptor.get("sha256"):
+    identity = resources.get(expected_relative)
+    if identity is None or identity[1] != descriptor.get("sha256"):
         raise DesktopOperationError("desktop_app_bundle_executable_drift", f"bundled executable does not match its envelope: {expected_relative}")
 
 
@@ -1012,29 +1038,18 @@ def _raise_bundle_walk_error(error: OSError) -> None:
     ) from error
 
 
-def _resource_identity_long_path(root: Path) -> dict[str, tuple[int, str]]:
-    entries: dict[str, tuple[int, str]] = {}
-    root_io = windows_extended_path(root)
-    for directory, _names, files in os.walk(
-        root_io,
-        topdown=True,
-        onerror=_raise_bundle_walk_error,
-        followlinks=False,
-    ):
-        lexical_directory = root / Path(directory).relative_to(root_io)
-        for name in files:
-            path = lexical_directory / name
-            _reject_lexical_reparse_chain(path)
-            reject_reparse_path(path, root=root)
-            data = read_bytes_long_path(path)
-            entries[path.relative_to(root).as_posix()] = (len(data), sha256(data).hexdigest())
-    return entries
+def _resource_identity_long_path(root: Path, *, excluded: set[str] | frozenset[str] = frozenset()) -> dict[str, tuple[int, str]]:
+    return scan_tree(
+        root,
+        excluded=excluded,
+        filesystem_reason_code="desktop_app_bundle_filesystem_scan_failed",
+        filesystem_message="portable runtime filesystem scan failed",
+        node_type_reason_code="desktop_app_bundle_resource_type_invalid",
+    ).resources
 
 def _resource_entries(root: Path, *, excluded: set[str]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    for relative, (size, digest) in sorted(_resource_identity_long_path(root).items()):
-        if relative in excluded:
-            continue
+    for relative, (size, digest) in sorted(_resource_identity_long_path(root, excluded=excluded).items()):
         entries.append({"path": relative, "size": size, "sha256": digest})
     if not entries:
         raise DesktopOperationError("desktop_app_bundle_incomplete", "desktop app bundle contains no resources")
@@ -1059,11 +1074,19 @@ def _is_file_long_path(path: Path) -> bool:
 
 def _read_json(path: Path, reason_code: str) -> dict[str, Any]:
     try:
-        value = json.loads(read_bytes_long_path(path).decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        data = read_bytes_long_path(path)
+    except OSError as exc:
         raise DesktopOperationError(reason_code, f"invalid UTF-8 JSON: {path.name}") from exc
+    return _decode_json_object(data, name=path.name, reason_code=reason_code)
+
+
+def _decode_json_object(data: bytes, *, name: str, reason_code: str) -> dict[str, Any]:
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise DesktopOperationError(reason_code, f"invalid UTF-8 JSON: {name}") from exc
     if not isinstance(value, dict):
-        raise DesktopOperationError(reason_code, f"JSON document must be an object: {path.name}")
+        raise DesktopOperationError(reason_code, f"JSON document must be an object: {name}")
     return value
 
 

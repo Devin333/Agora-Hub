@@ -39,12 +39,16 @@ describe("public auth BFF", () => {
       else process.env[key] = value
     }
   })
-  it("allows a guest to use local research without waiting on the authentication backend", async () => {
+  it("reads the real initialization status when no session cookie exists", async () => {
     sessionCookie.value = undefined
+    vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { initialized: false, session: null } })
     const result = await session()
-    expect(await result.json()).toEqual({ success: true, data: { session: null } })
+    expect(await result.json()).toEqual({ success: true, data: { initialized: false, session: null } })
     expect(result.headers.get("cache-control")).toBe("no-store")
-    expect(safeApiGet).not.toHaveBeenCalled()
+    expect(safeApiGet).toHaveBeenCalledWith("/api/v1/auth/session", {
+      headers: undefined,
+      signal: expect.any(AbortSignal),
+    })
   })
   it("issues a private browser binding when fetching noncached method capabilities", async () => {
     vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { methods: {} } })

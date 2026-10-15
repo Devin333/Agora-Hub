@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import scripts.desktop_app.bundle as bundle_module
+import scripts.local_desktop.safe_tree as safe_tree_module
 from scripts.desktop_app.bundle import BUNDLE_SCHEMA, PortableBundleManager, stage_portable_bundle
 from scripts.desktop_app.config import resolve_desktop_app_config
 from scripts.local_desktop.common import DesktopOperationError
@@ -147,6 +149,17 @@ class FakeReleaseManager:
         self.activated.append(path)
         return {"release_path": str(path)}
 
+    def verify_and_activate(self, release):
+        verified = self.verify(release)
+        return verified, self.activate(release)
+
+    def active_with_pointer(self):
+        if not self.activated:
+            raise DesktopOperationError("desktop_release_not_activated", "no release is active")
+        path = self.activated[-1]
+        manifest = self.verify(path)
+        return path, manifest, {"release_path": str(path), "release_id": manifest["identity"]["release_id"]}
+
 
 def _manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root, manifest, envelope, probe = _write_bundle(tmp_path)
@@ -175,7 +188,6 @@ def test_verified_bundle_installs_only_controlled_binding_and_preserves_original
     assert local["config"]["api_base_url"] == "http://127.0.0.1:8120"
     assert local["desktop_app_binding"]["original_identity"] == original["identity"]
     assert set(local["desktop_app_binding"]["relocated_fields"]) == {"release_path", "config.canonical_origin", "config.api_base_url", "entrypoints.api.host_port", "entrypoints.frontend.host_port", "dependencies.python.executable", "dependencies.node.executable", "dependencies.node.npm_executable"}
-
 
 
 def test_binding_rejects_dependency_identity_drift_outside_executable_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -226,6 +238,51 @@ def test_binding_verifies_packaged_config_independently_of_disabled_runtime_over
     assert original["config"]["external_config_dependencies"]
     assert "NEWS_MODELS_CONFIG" not in manager.config.environment
 
+
+def test_verify_bundle_uses_bounded_node_validation_and_hashes_each_file_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _release_manager, root, _manifest_value, _envelope = _manager(tmp_path, monkeypatch)
+    expected_files = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
+    expected_directories = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_dir()}
+    validated: list[str] = []
+    hashed: list[str] = []
+    original_validate = safe_tree_module._validate_node
+    original_hash = safe_tree_module._hash_file
+
+    def count_validate(path: Path, metadata, **kwargs):
+        validated.append(path.relative_to(root).as_posix())
+        return original_validate(path, metadata, **kwargs)
+
+    def count_hash(path: Path, metadata, **kwargs):
+        hashed.append(path.relative_to(root).as_posix())
+        return original_hash(path, metadata, **kwargs)
+
+    monkeypatch.setattr(safe_tree_module, "_validate_node", count_validate)
+    monkeypatch.setattr(safe_tree_module, "_hash_file", count_hash)
+
+    manager.verify_bundle()
+
+    expected_validations = Counter({path: 2 for path in expected_files})
+    expected_validations.update({path: 4 for path in expected_directories})
+    expected_validations["."] = 4
+    assert Counter(validated) == expected_validations
+    assert Counter(hashed) == Counter({path: 1 for path in expected_files})
+
+
+def test_verify_bundle_rejects_unmanifested_resource_after_single_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _release_manager, root, _manifest_value, _envelope = _manager(tmp_path, monkeypatch)
+    (root / "unexpected.txt").write_text("drift", encoding="utf-8")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.verify_bundle()
+
+    assert raised.value.reason_code == "desktop_app_bundle_resource_inventory_mismatch"
+
 def test_bundle_rejects_runtime_checksum_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     manager, _release_manager, root, _manifest, _envelope = _manager(tmp_path, monkeypatch)
     (root / "node/node.exe").write_bytes(b"unknown-binary")
@@ -262,7 +319,6 @@ def test_bundle_rejects_unsafe_resource_path(tmp_path: Path, monkeypatch: pytest
     with pytest.raises(DesktopOperationError) as raised:
         manager.verify_bundle()
     assert raised.value.reason_code == "desktop_app_bundle_manifest_invalid"
-
 
 
 def test_bundle_rejects_modified_relocation_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,7 +385,6 @@ def test_staging_rejects_absolute_pyvenv_binding_before_copy(tmp_path: Path) -> 
     with pytest.raises(DesktopOperationError) as raised:
         stage_portable_bundle(output_root=tmp_path / "output", source_release=release, python_root=python_root, node_root=node_root, release_manager=SourceManager())
     assert raised.value.reason_code == "desktop_app_nonportable_python_rejected"
-
 
 
 def test_staging_uses_probed_portable_identity_and_excludes_only_duplicate_pip_metadata(
@@ -549,7 +604,6 @@ def test_bundle_rejects_inward_junction_resource_before_checksum_read(
             os.rmdir(junction)
 
 
-
 def _long_relative_resource() -> Path:
     return Path("packages") / Path(*(("segment-" + "x" * 32,) * 7)) / "module.py"
 
@@ -576,8 +630,8 @@ def test_verify_bundle_checks_long_path_resource_without_ordinary_path_io(
     }
     (root / "desktop-bundle.json").write_text(json.dumps(envelope), encoding="utf-8")
     manager = PortableBundleManager(SimpleNamespace(resource_root=root), release_manager=FakeReleaseManager())
-    monkeypatch.setattr(manager, "_original_manifest", lambda _envelope: {})
-    monkeypatch.setattr(manager, "_verify_runtime", lambda _envelope, _original: None)
+    monkeypatch.setattr(manager, "_original_manifest", lambda _envelope, **_kwargs: {})
+    monkeypatch.setattr(manager, "_verify_runtime", lambda _envelope, _original, **_kwargs: None)
     monkeypatch.setattr(bundle_module, "_validate_release_compatibility", lambda _manifest: None)
     monkeypatch.setattr(bundle_module, "_reject_external_release_config", lambda _manifest: None)
     monkeypatch.setattr(bundle_module, "_validate_relocation_policy", lambda _envelope: None)
@@ -649,10 +703,12 @@ def test_packaged_reopen_preserves_active_runtime_config_rebind(tmp_path: Path, 
     }
     (rebound_path / "release-manifest.json").write_text(json.dumps(rebound_manifest), encoding="utf-8")
 
-    def active():
-        return rebound_path, rebound_manifest
+    def active_with_pointer():
+        verified = release_manager.verify(rebound_path)
+        pointer = {"release_path": str(rebound_path), "release_id": verified["identity"]["release_id"]}
+        return rebound_path, verified, pointer
 
-    release_manager.active = active
+    release_manager.active_with_pointer = active_with_pointer
     original_verify = release_manager.verify
 
     def verify_active_before_base(release):
@@ -667,9 +723,9 @@ def test_packaged_reopen_preserves_active_runtime_config_rebind(tmp_path: Path, 
     assert first["preserved_runtime_configuration"] if "preserved_runtime_configuration" in first else True
     assert second["preserved_runtime_configuration"] is True
     assert second["release"]["release_id"].endswith("-config-user")
-    assert release_manager.activated[-1] == rebound_path
+    assert second["activation"]["release_path"] == str(rebound_path)
+    assert release_manager.verified[-1] == rebound_path
     assert second["binding"] == binding
-
 
 
 @pytest.mark.parametrize("persisted_null", [False, True])
@@ -708,7 +764,7 @@ def test_first_binding_and_reopen_use_real_release_configuration_and_verifier(
     # Small portable dependency probe fixture only. Source/config/resource
     # identities, manifest verification, activation and rebind are real owners.
     class FixtureDependencyReleaseManager(ReleaseManager):
-        def dependency_identity(self, frontend_root=None):
+        def dependency_identity(self, frontend_root=None, *, verified_resources=None):
             identity = json.loads(json.dumps(original["dependencies"]))
             identity["python"]["executable"] = str(config.python_executable)
             identity["node"]["executable"] = str(config.node_executable)
