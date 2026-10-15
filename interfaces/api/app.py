@@ -6,12 +6,15 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from threading import Lock
 from typing import Any, Callable
 
 from fastapi import FastAPI, Request
+from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from backend.research.application.personal_memory import PersonalMemoryService
 from framework.events import (
     EventTelemetry,
     TelemetryInstrumentationScope,
@@ -44,7 +47,7 @@ from interfaces.models.contracts import RunStatus
 from interfaces.api.deps import ApiRouteHelpers, build_api_services
 from interfaces.api.rate_limit import Clock, InMemoryRateLimiter
 from interfaces.api.openapi import configure_openapi_contract
-from interfaces.api.routers import include_routers
+from interfaces.api.routers import include_routers, personal_memory
 from interfaces.api.responses import (
     REQUEST_ID_HEADER,
     current_request_id,
@@ -57,6 +60,10 @@ from interfaces.api.responses import (
     success,
 )
 from interfaces.api.errors import http_error_code
+from interfaces.composition.personal_memory import (
+    PersonalMemoryRuntimeResolver,
+    build_personal_memory_runtime,
+)
 from interfaces.composition.research import (
     build_default_harness_wait_service,
     build_research_application_service,
@@ -78,6 +85,7 @@ from interfaces.services.harness_wait_service import HarnessWaitApplicationServi
 from interfaces.services.memory_service import MemoryApplicationService
 from interfaces.services.mcp_service import MCPApplicationService
 from interfaces.services.project_service import ProjectApplicationService
+from interfaces.services.personal_memory_service import PersonalMemoryApplicationService
 from interfaces.services.research_service import ResearchApplicationService
 from interfaces.services.research_desktop_service import ResearchDesktopApplicationService
 from interfaces.services.research_desktop_control import ResearchDesktopControlError
@@ -134,6 +142,8 @@ AuthServiceFactory = Callable[[], AuthApplicationService]
 ProjectServiceFactory = Callable[[], ProjectApplicationService]
 ResearchServiceFactory = Callable[[], ResearchApplicationService]
 ResearchDesktopServiceFactory = Callable[[], ResearchDesktopApplicationService]
+PersonalMemoryServiceFactory = Callable[[], PersonalMemoryApplicationService]
+PersonalMemoryCoreFactory = Callable[[], PersonalMemoryService]
 ResearchHistoryServiceFactory = Callable[[], ResearchHistoryService]
 GuidedResearchServiceFactory = Callable[[], GuidedResearchService]
 RuntimeOperatorStatusServiceFactory = Callable[[], RuntimeOperatorStatusService]
@@ -163,6 +173,8 @@ def create_app(
     research_service_factory: ResearchServiceFactory = build_research_application_service,
     research_history_service_factory: ResearchHistoryServiceFactory = ResearchHistoryService,
     research_desktop_service_factory: ResearchDesktopServiceFactory | None = None,
+    personal_memory_service_factory: PersonalMemoryServiceFactory | None = None,
+    personal_memory_core_factory: PersonalMemoryCoreFactory | None = None,
     guided_research_service_factory: GuidedResearchServiceFactory = build_guided_research_service,
     harness_graph_service_factory: HarnessGraphServiceFactory | None = None,
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None,
@@ -192,11 +204,55 @@ def create_app(
         scope=TelemetryInstrumentationScope(name="interfaces.api", version="1"),
     )
 
+    default_personal_memory_runtime: PersonalMemoryRuntimeResolver | None = None
+    resolved_personal_memory_service_factory = personal_memory_service_factory
+    if resolved_personal_memory_service_factory is None:
+        runtime_resolver = PersonalMemoryRuntimeResolver(
+            build_personal_memory_runtime
+        )
+        default_personal_memory_runtime = runtime_resolver
+
+        def resolved_personal_memory_service_factory() -> PersonalMemoryApplicationService:
+            return runtime_resolver.get().service
+
+        @api.on_event("shutdown")
+        def _close_personal_memory_runtime() -> None:
+            runtime_resolver.close()
+
     resolved_research_desktop_service_factory = research_desktop_service_factory
     if resolved_research_desktop_service_factory is None:
-        resolved_research_desktop_service_factory = lambda: ResearchDesktopApplicationService(
-            research=research_service_factory()
-        )
+        if personal_memory_core_factory is not None:
+            personal_memory_core_lock = Lock()
+            resolved_personal_memory_core: PersonalMemoryService | None = None
+
+            def resolve_personal_memory_core() -> PersonalMemoryService:
+                nonlocal resolved_personal_memory_core
+                with personal_memory_core_lock:
+                    if resolved_personal_memory_core is None:
+                        resolved_personal_memory_core = personal_memory_core_factory()
+                    return resolved_personal_memory_core
+
+            def resolved_research_desktop_service_factory() -> ResearchDesktopApplicationService:
+                return ResearchDesktopApplicationService(
+                    research=research_service_factory(),
+                    personal_memory=resolve_personal_memory_core(),
+                )
+
+        elif default_personal_memory_runtime is not None:
+
+            def resolved_research_desktop_service_factory() -> ResearchDesktopApplicationService:
+                return ResearchDesktopApplicationService(
+                    research=research_service_factory(),
+                    personal_memory=default_personal_memory_runtime.get().application,
+                )
+
+        else:
+
+            def resolved_research_desktop_service_factory() -> ResearchDesktopApplicationService:
+                return ResearchDesktopApplicationService(
+                    research=research_service_factory(),
+                )
+
     desktop_auth_rate_limiter = (
         InMemoryRateLimiter(
             limit=max(1, min(60, int(os.environ.get("NEWSROOM_DESKTOP_AUTH_RATE_LIMIT_PER_MINUTE", "10")))),
@@ -420,6 +476,19 @@ def create_app(
         )
         return response
 
+    @api.middleware("http")
+    async def personal_memory_private_response(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/api/v1/research/desktop/memory" or path.startswith(
+            "/api/v1/research/desktop/memory/"
+        ):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     @api.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         return _error(
@@ -530,6 +599,7 @@ def create_app(
         research_history_service_factory=research_history_service_factory,
         guided_research_service_factory=guided_research_service_factory,
         research_desktop_service_factory=resolved_research_desktop_service_factory,
+        personal_memory_service_factory=resolved_personal_memory_service_factory,
         harness_graph_service_factory=harness_graph_service_factory,
         harness_wait_service_factory=harness_wait_service_factory,
         runtime_operator_status_service_factory=runtime_operator_status_service_factory,
@@ -546,7 +616,24 @@ def create_app(
         run_events_sse_frames=_run_events_sse_frames,
     )
     include_routers(api, services=services, helpers=helpers)
+    # Keep router registration in this composition root so shared router registry files
+    # remain untouched while preserving the concrete-route introspection contract.
+    memory_router = personal_memory.create_router(services, helpers)
+    api.router.routes.extend(memory_router.routes)
+    mark_routes_changed = getattr(api.router, "_mark_routes_changed", None)
+    if callable(mark_routes_changed):
+        mark_routes_changed()
     configure_openapi_contract(api)
+    # The global operation-id helper currently collapses every Research PUT to
+    # research_put; pin this second PUT endpoint to a stable unique contract id.
+    for route in api.routes:
+        if (
+            isinstance(route, APIRoute)
+            and route.path == "/api/v1/research/desktop/memory/policy"
+            and "PUT" in (route.methods or set())
+        ):
+            route.operation_id = "research_update_desktop_memory_policy"
+    api.openapi_schema = None
 
     @api.on_event("startup")
     def _preload_reranker() -> None:

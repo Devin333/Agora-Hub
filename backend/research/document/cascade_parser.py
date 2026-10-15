@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Sequence
 
-import fitz
+import pymupdf
 
 from backend.foundation import build_stable_id
 from backend.research.document.latex_compiler import LatexSourceParser
@@ -147,7 +147,7 @@ class PyMuPDFTextDocumentParser:
         sections: list[ResearchSection] = []
         extracted_chars = 0
         try:
-            doc = fitz.open(stream=source_bytes, filetype="pdf")
+            doc = pymupdf.open(stream=source_bytes, filetype="pdf")
         except Exception as exc:
             raise PdfTextExtractionError("pdf_open_failed") from exc
         try:
@@ -246,7 +246,7 @@ class SelectableTextPdfDocumentParser:
         return document.model_copy(
             update={
                 "parser_backend": "pymupdf",
-                "parser_version": str(fitz.version[0]),
+                "parser_version": str(pymupdf.version[0]),
                 "normalization_version": "native-page-text-v1",
                 "metadata": metadata,
             }

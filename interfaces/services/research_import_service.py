@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 from urllib.parse import unquote
 
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 from interfaces.services.json_file_store import locked_json_file, read_json_object_unlocked, write_json_object_unlocked
 
 MAX_IMPORT_BYTES = 50 * 1024 * 1024
@@ -28,7 +29,7 @@ class ResearchImportService:
     """Owns uploaded bytes and lifecycle state; parsing stays in Research runtime."""
 
     def __init__(self, root: str | Path | None = None) -> None:
-        self.root = Path(root or os.getenv("NEWSROOM_RESEARCH_IMPORT_DIR", ".newsroom/research/imports")).expanduser().resolve()
+        self.root = resolve_storage_path(root or os.getenv("NEWSROOM_RESEARCH_IMPORT_DIR", ".newsroom/research/imports"))
         self.index_path = self.root / "index.json"
 
     def create_received(
@@ -45,6 +46,18 @@ class ResearchImportService:
             raise ResearchImportError("invalid_pdf", "Only a valid PDF file can be imported")
         if len(content) > MAX_IMPORT_BYTES:
             raise ResearchImportError("pdf_too_large", "PDF exceeds the 50 MB limit", status_code=413)
+        actual_fingerprint = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        declared_fingerprint = (
+            _source_fingerprint(source_fingerprint)
+            if source_fingerprint is not None
+            else None
+        )
+        if declared_fingerprint is not None and declared_fingerprint != actual_fingerprint:
+            raise ResearchImportError(
+                "source_fingerprint_mismatch",
+                "Uploaded PDF does not match sourceFingerprint",
+                status_code=409,
+            )
         actual_import_id = _import_id(import_id) if import_id is not None else f"imp_{uuid4().hex}"
         path = self.root / user_id / f"{actual_import_id}.pdf"
         record = {
@@ -52,7 +65,7 @@ class ResearchImportService:
             "filename": _safe_filename(filename), "sizeBytes": len(content),
             "createdAt": _now(), "updatedAt": _now(), "path": str(path),
             **({"sourceRevision": _required_identity(source_revision, "sourceRevision")} if source_revision is not None else {}),
-            **({"sourceFingerprint": _source_fingerprint(source_fingerprint)} if source_fingerprint is not None else {}),
+            **({"sourceFingerprint": declared_fingerprint} if declared_fingerprint is not None else {}),
         }
         self._write_record(record, content)
         return _public(record)
@@ -98,17 +111,18 @@ class ResearchImportService:
         user_id: str,
     ) -> tuple[Path, bytes]:
         raw_path = Path(str(record.get("path", ""))).expanduser()
-        if raw_path.is_symlink():
+        if storage_io_path(raw_path).is_symlink():
             raise ResearchImportError(
                 "import_file_invalid", "Imported PDF identity is invalid", status_code=409
             )
-        path = raw_path.resolve()
-        owner_root = (self.root / user_id).resolve()
-        if owner_root not in path.parents or path.suffix.casefold() != ".pdf" or not path.is_file():
+        path = resolve_storage_path(raw_path)
+        owner_root = resolve_storage_path(self.root / user_id)
+        io_path = storage_io_path(path)
+        if owner_root not in path.parents or path.suffix.casefold() != ".pdf" or not io_path.is_file():
             raise ResearchImportError(
                 "import_file_missing", "Imported PDF is unavailable", status_code=404
             )
-        content = path.read_bytes()
+        content = io_path.read_bytes()
         expected_size = int(record.get("sizeBytes") or -1)
         if len(content) > MAX_IMPORT_BYTES or len(content) != expected_size:
             raise ResearchImportError(
@@ -162,7 +176,7 @@ class ResearchImportService:
             "sourceRevision": expected_revision,
             "sourceFingerprint": expected_fingerprint,
             "filename": str(record.get("filename") or "paper.pdf"),
-            "sizeBytes": int(record.get("sizeBytes") or path.stat().st_size),
+            "sizeBytes": int(record.get("sizeBytes") or storage_io_path(path).stat().st_size),
             "path": path,
         }
 
@@ -185,7 +199,7 @@ class ResearchImportService:
         return dict(record)
 
     def _write_record(self, record: dict[str, Any], content: bytes | None = None) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
+        storage_io_path(self.root).mkdir(parents=True, exist_ok=True)
         with locked_json_file(self.index_path) as resolved:
             records = self._read_records_unlocked(resolved)
             if record["importId"] not in records:
@@ -193,11 +207,27 @@ class ResearchImportService:
                 if count >= MAX_IMPORTS_PER_USER:
                     raise ResearchImportError("import_limit_reached", "Too many PDF imports; remove an old import and retry", status_code=429)
             if content is not None:
-                path = Path(str(record["path"]))
+                # Keep the persisted locator logical; only filesystem I/O uses
+                # the Win32 extended namespace, including the atomic temp file.
+                path = storage_io_path(str(record["path"]))
                 path.parent.mkdir(parents=True, exist_ok=True)
                 temp = path.with_suffix(f".{uuid4().hex}.tmp")
-                temp.write_bytes(content)
-                temp.replace(path)
+                temporary_created = False
+                try:
+                    handle = temp.open("xb")
+                    temporary_created = True
+                    with handle:
+                        handle.write(content)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    temp.replace(path)
+                except BaseException as exc:
+                    if temporary_created:
+                        try:
+                            temp.unlink(missing_ok=True)
+                        except BaseException as cleanup_error:
+                            exc.add_note(f"Could not remove temporary PDF file {temp}: {cleanup_error!r}")
+                    raise
             records[str(record["importId"])] = record
             write_json_object_unlocked(resolved, {"imports": records})
 

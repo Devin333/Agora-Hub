@@ -112,6 +112,10 @@ from backend.research.domain import (
     research_subject_scope_ref,
     stable_research_id,
 )
+from backend.research.domain.personal_memory_context import (
+    PersonalMemoryContext,
+    PersonalMemoryContextProvider,
+)
 from backend.research.paper_card import PaperCardBuilder, ResearchPaperCard
 from backend.research.rag import ResearchRAGContext, ResearchRetrievalGoal
 from backend.research.reader import ReaderPayloadBuilder
@@ -168,6 +172,7 @@ class AnalyzePaperRequest:
     options: dict[str, Any] = field(default_factory=dict)
     tenant_id: str | None = None
     memory_namespace: str | None = None
+    personal_memory_context: PersonalMemoryContextProvider | None = None
 
 
 def build_research_harness_run_spec(
@@ -875,16 +880,80 @@ def _generate_research_candidate(
     )
 
 
-def _candidate_payload_with_prepared_input(
+def _prepare_candidate_payload(
     workspace: "_ResearchRunWorkspace",
     payload: Mapping[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], PersonalMemoryContext | None]:
     prepared = (
         {"prepared_input": workspace.input_context.candidate_projection()}
         if workspace.input_context is not None
         else {}
     )
-    return {**prepared, **dict(payload)}
+    context: PersonalMemoryContext | None = None
+    personal_memory: dict[str, Any] = {}
+    provider = workspace.request.personal_memory_context
+    if provider is not None:
+        if not isinstance(provider, PersonalMemoryContextProvider):
+            raise ValueError("personal memory context provider is invalid")
+        context = provider.current()
+        if not isinstance(context, PersonalMemoryContext):
+            raise ValueError("personal memory context provider returned an invalid context")
+        personal_memory["personal_memory_context"] = context.to_worker_payload()
+    return {**prepared, **personal_memory, **dict(payload)}, context
+
+
+def _candidate_payload_with_prepared_input(
+    workspace: "_ResearchRunWorkspace",
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    prepared, _context = _prepare_candidate_payload(workspace, payload)
+    return prepared
+
+
+def _generate_research_candidate_with_prepared_input(
+    worker: Any,
+    *,
+    task: str,
+    workspace: "_ResearchRunWorkspace",
+    payload: Mapping[str, Any],
+    execution_identity: GraphExecutionIdentity | None,
+) -> dict[str, Any]:
+    prepared, context = _prepare_candidate_payload(workspace, payload)
+    if context is not None:
+        # This is intentionally bound to the worker invocation attempt rather than
+        # payload preparation. A gate or budget halt before this point must not claim
+        # that personal memory was sent to a worker. Every worker in the run must see
+        # the same frozen context; a provider may revalidate state, but cannot silently
+        # switch the selected records or policy revision between phases.
+        previous = workspace.used_personal_memory_context
+        if previous is not None and previous != context:
+            raise ValueError("personal memory context changed during the research run")
+        # The worker port forwards this per-request budget to the real client.
+        # A memory send must not inherit hidden transport retries after this
+        # provider validation; any subsequent invocation revalidates above.
+        worker_kwargs: dict[str, Any] = {
+            "task": task,
+            "payload": prepared,
+            "max_transport_attempts": 1,
+        }
+        if execution_identity is not None:
+            worker_kwargs["execution_identity"] = execution_identity
+        generate_candidate = getattr(worker, "generate_candidate", None)
+        try:
+            inspect.signature(generate_candidate).bind(**worker_kwargs)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "personal memory analysis worker must support max_transport_attempts"
+            ) from exc
+        workspace.used_personal_memory_context = context
+        # Do not catch invocation TypeError or retry without the transport budget.
+        return generate_candidate(**worker_kwargs)
+    return _generate_research_candidate(
+        worker,
+        task=task,
+        payload=prepared,
+        execution_identity=execution_identity,
+    )
 
 
 class ResearchSinglePaperRuntime:
@@ -1439,6 +1508,15 @@ class ResearchSinglePaperRuntime:
             "worker_results": worker_results,
             "gate_failures": _gate_failures(harness_result.events),
             "research_diagnostics": list(workspace.diagnostics),
+            **(
+                {
+                    "used_personal_memory": list(
+                        workspace.used_personal_memory_context.used_refs
+                    )
+                }
+                if workspace.used_personal_memory_context is not None
+                else {}
+            ),
         }
         if terminal_outcome is not None:
             diagnostics.update(
@@ -2021,25 +2099,23 @@ class ResearchSinglePaperRuntime:
         *,
         execution_identity: GraphExecutionIdentity | None = None,
     ) -> HarnessWorkerResult:
-        candidate = _generate_research_candidate(
+        candidate = _generate_research_candidate_with_prepared_input(
             self.llm_worker,
             task="candidate_three_minute_read",
-            payload=_candidate_payload_with_prepared_input(
-                workspace,
-                {
-                    **(
-                        {"dependency_outputs": task["dependency_outputs"]}
-                        if task.get("dependency_outputs")
-                        else {}
-                    ),
-                    "paper": workspace.paper.to_dict() if workspace.paper else {},
-                    "evidence_pack": (
-                        workspace.evidence_pack.to_dict()
-                        if workspace.evidence_pack
-                        else {}
-                    ),
-                },
-            ),
+            workspace=workspace,
+            payload={
+                **(
+                    {"dependency_outputs": task["dependency_outputs"]}
+                    if task.get("dependency_outputs")
+                    else {}
+                ),
+                "paper": workspace.paper.to_dict() if workspace.paper else {},
+                "evidence_pack": (
+                    workspace.evidence_pack.to_dict()
+                    if workspace.evidence_pack
+                    else {}
+                ),
+            },
             execution_identity=execution_identity,
         )
         workspace.llm_candidate_warnings.extend(_forbidden_candidate_keys(candidate))
@@ -2109,25 +2185,23 @@ class ResearchSinglePaperRuntime:
                 evidence_refs=item["evidence_refs"],
                 confidence=float(item.get("confidence", 0.0)),
             )
-            for item in _generate_research_candidate(
+            for item in _generate_research_candidate_with_prepared_input(
                 self.llm_worker,
                 task="candidate_taxonomy",
-                payload=_candidate_payload_with_prepared_input(
-                    workspace,
-                    {
-                        **(
-                            {"dependency_outputs": task["dependency_outputs"]}
-                            if task.get("dependency_outputs")
-                            else {}
-                        ),
-                        "paper": workspace.paper.to_dict() if workspace.paper else {},
-                        "evidence_pack": (
-                            workspace.evidence_pack.to_dict()
-                            if workspace.evidence_pack
-                            else {}
-                        ),
-                    },
-                ),
+                workspace=workspace,
+                payload={
+                    **(
+                        {"dependency_outputs": task["dependency_outputs"]}
+                        if task.get("dependency_outputs")
+                        else {}
+                    ),
+                    "paper": workspace.paper.to_dict() if workspace.paper else {},
+                    "evidence_pack": (
+                        workspace.evidence_pack.to_dict()
+                        if workspace.evidence_pack
+                        else {}
+                    ),
+                },
                 execution_identity=execution_identity,
             ).get("taxonomy_candidates", [])
         ]
@@ -2159,24 +2233,22 @@ class ResearchSinglePaperRuntime:
         *,
         execution_identity: GraphExecutionIdentity | None = None,
     ) -> HarnessWorkerResult:
-        candidate = _generate_research_candidate(
+        candidate = _generate_research_candidate_with_prepared_input(
             self.llm_worker,
             task="candidate_experiment_claims",
-            payload=_candidate_payload_with_prepared_input(
-                workspace,
-                {
-                    **(
-                        {"dependency_outputs": task["dependency_outputs"]}
-                        if task.get("dependency_outputs")
-                        else {}
-                    ),
-                    "evidence_pack": (
-                        workspace.evidence_pack.to_dict()
-                        if workspace.evidence_pack
-                        else {}
-                    ),
-                },
-            ),
+            workspace=workspace,
+            payload={
+                **(
+                    {"dependency_outputs": task["dependency_outputs"]}
+                    if task.get("dependency_outputs")
+                    else {}
+                ),
+                "evidence_pack": (
+                    workspace.evidence_pack.to_dict()
+                    if workspace.evidence_pack
+                    else {}
+                ),
+            },
             execution_identity=execution_identity,
         )
         claims: list[ResearchClaim] = []
@@ -2717,6 +2789,7 @@ class _ResearchRunWorkspace:
     claim_gate_results: list[GateResult] = field(default_factory=list)
     score_gate_results: list[GateResult] = field(default_factory=list)
     llm_candidate_warnings: list[str] = field(default_factory=list)
+    used_personal_memory_context: PersonalMemoryContext | None = None
     artifact_refs: dict[str, str] = field(default_factory=dict)
     planned_artifact_refs: dict[str, str] = field(default_factory=dict)
     pending_artifact_bundles: dict[str, tuple[ArtifactWriteRequest, ...]] = field(

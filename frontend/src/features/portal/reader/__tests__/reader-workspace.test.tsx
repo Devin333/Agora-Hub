@@ -29,7 +29,7 @@ describe("reader workspace experience", () => {
 
   function open() {
     const rendered = render(<PaperReaderWorkspace payload={readyWorkspace()} backHref="/design-demo/papers?q=Agent&topic=cs.AI" />)
-    fireEvent.click(screen.getByRole("button", { name: "章节精读", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: "章节精读" }))
     return rendered
   }
 
@@ -38,16 +38,16 @@ describe("reader workspace experience", () => {
     const rendered = render(<PaperReaderWorkspace payload={payload} backHref="/design-demo/papers" />)
     expect(screen.queryByRole("region", { name: "完整 PDF" })).not.toBeInTheDocument()
     expect(screen.queryByText(paper.abstractSnippet)).not.toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "章节精读", exact: true })).toHaveAttribute("aria-pressed", "true")
-    fireEvent.click(screen.getByRole("button", { name: "PDF 对照", exact: true }))
+    expect(screen.getByRole("button", { name: "章节精读" })).toHaveAttribute("aria-pressed", "true")
+    fireEvent.click(screen.getByRole("button", { name: "PDF 对照" }))
     expect(screen.getByRole("region", { name: "完整 PDF" })).toHaveAttribute("data-source", paper.pdfUrl)
     fireEvent.click(screen.getByRole("button", { name: "翻到第 5 页" }))
     rendered.unmount()
     render(<PaperReaderWorkspace payload={payload} backHref="/design-demo/papers" />)
-    expect(screen.getByRole("button", { name: "章节精读", exact: true })).toHaveAttribute("aria-pressed", "true")
-    fireEvent.click(screen.getByRole("button", { name: "PDF 对照", exact: true }))
+    expect(screen.getByRole("button", { name: "章节精读" })).toHaveAttribute("aria-pressed", "true")
+    fireEvent.click(screen.getByRole("button", { name: "PDF 对照" }))
     expect(screen.getByRole("region", { name: "完整 PDF" })).toHaveTextContent("第 5 页")
-    fireEvent.click(screen.getByRole("button", { name: "论文概览", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: "论文概览" }))
     expect(screen.getByText(paper.abstractSnippet)).toBeVisible()
   })
 
@@ -57,9 +57,9 @@ describe("reader workspace experience", () => {
     expect(within(article).getByText("Original method with verifiable evidence.")).toBeVisible()
     expect(within(article).queryByText(paper.abstractSnippet)).not.toBeInTheDocument()
     expect(screen.getByRole("link", { name: "返回论文" })).toHaveAttribute("href", "/design-demo/papers?q=Agent&topic=cs.AI")
-    fireEvent.click(screen.getByRole("button", { name: "Method", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: "Method" }))
     await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole("button", { name: "专注", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: "专注" }))
     expect(screen.queryByRole("complementary", { name: "阅读助手" })).not.toBeInTheDocument()
     expect(article).toBeVisible()
     fireEvent.click(screen.getByRole("button", { name: "退出专注" }))
@@ -78,7 +78,7 @@ describe("reader workspace experience", () => {
     fireEvent.click(screen.getByRole("button", { name: /阅读笔记/ }))
     expect(screen.getByLabelText("我的阅读笔记")).toHaveValue("Need to check the evaluation.")
     expect(screen.getByLabelText("当前正文字号")).toHaveTextContent("20")
-    fireEvent.click(screen.getByRole("button", { name: "问论文", exact: true }))
+    fireEvent.click(screen.getByRole("button", { name: "问论文" }))
     expect(screen.getByLabelText("向这篇论文提问")).toHaveValue("What evidence supports this?")
     again.unmount()
     render(<PaperReaderWorkspace payload={{ paper: { ...paper, id: "other" }, state: "unavailable", reader: null }} backHref="/design-demo/papers" />)

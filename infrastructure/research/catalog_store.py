@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, Mapping
+from pathlib import Path, PurePosixPath
+from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit
 
 from backend.research.ports.catalog_models import ResearchScore, ResearchSOTAClaim
@@ -21,6 +22,7 @@ from backend.research.domain.code_repository import CodeRepositoryProfile
 from backend.research.domain.document import ResearchDocument
 from backend.research.domain.evidence import ResearchEvidencePack
 from backend.research.domain.paper import ResearchPaper
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 from infrastructure.storage.json_file_store import (
     locked_json_file,
     read_json_object_unlocked,
@@ -30,6 +32,8 @@ from infrastructure.storage.json_file_store import (
 
 CATALOG_STORE_SCHEMA_VERSION = 2
 _LEGACY_CATALOG_STORE_SCHEMA_VERSIONS = frozenset({1})
+RESTORE_PROVENANCE_SCHEMA = "newsroom.research-catalog-restore-provenance/v1"
+_RESTORE_PROVENANCE_DIR = "_restore-provenance"
 
 
 class ResearchCatalogStoreError(RuntimeError):
@@ -328,10 +332,16 @@ class FilesystemResearchCatalogStore:
         artifact_metadata["scope_ref"] = (
             actor_scope_ref(artifact_scope) if artifact_scope else self.scope_ref
         )
+        stored_payload = _portable_artifact_payload(
+            artifact_type=artifact_type,
+            payload=payload,
+            metadata=artifact_metadata,
+            root=self.root,
+        )
         envelope = {
             "artifact_type": artifact_type,
             "metadata": artifact_metadata,
-            "payload": dict(payload),
+            "payload": stored_payload,
         }
         encoded = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()
@@ -429,7 +439,15 @@ class FilesystemResearchCatalogStore:
             "committedAt": marker.get("created_at"),
         }
         if include_payload:
-            payload = envelope.get("payload")
+            payload = _operational_artifact_payload(
+                artifact_type=artifact_type,
+                payload=envelope.get("payload"),
+                metadata=metadata,
+                root=self.root,
+                artifact_ref=f"artifact://research/{artifact_type}/{digest}",
+                artifact_path=target,
+                marker_path=marker_path,
+            )
             encoded_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             if len(encoded_payload) > max_chars:
                 result["diagnostics"] = [{"code": "payload_truncated", "max_chars": max_chars}]
@@ -438,11 +456,548 @@ class FilesystemResearchCatalogStore:
         return result
 
 
+def _portable_artifact_payload(
+    *,
+    artifact_type: str,
+    payload: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    stored = dict(payload)
+    if artifact_type != "research-chunk-manifest":
+        return stored
+    raw_path = stored.get("manifest_path")
+    if raw_path is None:
+        return stored
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ResearchCatalogStoreError("research chunk manifest artifact path is invalid")
+    expected = _expected_chunk_manifest_relative(payload=stored, metadata=metadata)
+    _validate_canonical_filesystem_path(raw_path)
+    candidate = Path(raw_path).expanduser()
+    lexical_root = Path(os.path.abspath(root))
+    if not candidate.is_absolute():
+        cwd_candidate = Path(os.path.abspath(candidate))
+        candidate = cwd_candidate if cwd_candidate.is_relative_to(lexical_root) else lexical_root / candidate
+    try:
+        portable = PurePosixPath(candidate.resolve(strict=True).relative_to(root.resolve(strict=True)).as_posix())
+    except (OSError, ValueError) as exc:
+        raise ResearchCatalogStoreError("research chunk manifest artifact path escapes the catalog owner") from exc
+    if portable != expected:
+        raise ResearchCatalogStoreError("research chunk manifest artifact path conflicts with its paper or actor scope")
+    _require_owned_regular_file(root, candidate)
+    stored["manifest_path"] = portable.as_posix()
+    return stored
+
+
+def _operational_artifact_payload(
+    *,
+    artifact_type: str,
+    payload: Any,
+    metadata: Mapping[str, Any],
+    root: Path,
+    artifact_ref: str,
+    artifact_path: Path,
+    marker_path: Path,
+) -> Any:
+    if artifact_type != "research-chunk-manifest":
+        return payload
+    if not isinstance(payload, Mapping):
+        raise ResearchCatalogStoreCorruptionError("research chunk manifest artifact payload is invalid")
+    projected = dict(payload)
+    raw_path = projected.get("manifest_path")
+    if raw_path is None:
+        return projected
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ResearchCatalogStoreCorruptionError("research chunk manifest artifact path is invalid")
+    try:
+        if os.path.isabs(raw_path):
+            _validate_canonical_filesystem_path(raw_path)
+        expected = _expected_chunk_manifest_relative(payload=projected, metadata=metadata)
+    except (ResearchCatalogStoreError, ValueError) as exc:
+        raise ResearchCatalogStoreCorruptionError(str(exc)) from exc
+    persisted = Path(raw_path).expanduser()
+    if persisted.is_absolute():
+        lexical = Path(os.path.abspath(persisted))
+        lexical_root = Path(os.path.abspath(root))
+        try:
+            relative = PurePosixPath(lexical.relative_to(lexical_root).as_posix())
+        except ValueError:
+            relative = _restore_provenance_relative_path(
+                root=root,
+                artifact_ref=artifact_ref,
+                artifact_path=artifact_path,
+                marker_path=marker_path,
+                legacy_path=raw_path,
+                payload=projected,
+                metadata=metadata,
+            )
+    else:
+        try:
+            relative = _safe_owner_relative_path(raw_path)
+        except ResearchCatalogStoreError as exc:
+            raise ResearchCatalogStoreCorruptionError(str(exc)) from exc
+    if relative != expected:
+        raise ResearchCatalogStoreCorruptionError("research chunk manifest artifact path conflicts with its paper or actor scope")
+    candidate = root / Path(*relative.parts)
+    try:
+        _require_owned_regular_file(root, candidate)
+    except ResearchCatalogStoreError as exc:
+        raise ResearchCatalogStoreCorruptionError(str(exc)) from exc
+    projected["manifest_path"] = str(candidate.resolve(strict=True))
+    return projected
+
+
+def _expected_chunk_manifest_relative(*, payload: Mapping[str, Any], metadata: Mapping[str, Any]) -> PurePosixPath:
+    paper_id = _safe_segment(str(payload.get("paper_id") or ""), "paper_id")
+    metadata_paper_id = _safe_segment(str(metadata.get("paper_id") or ""), "metadata paper_id")
+    if metadata_paper_id != paper_id:
+        raise ResearchCatalogStoreError("research chunk manifest paper identity conflicts with artifact metadata")
+    payload_scope = _normalized_scope(payload.get("actor_scope") if isinstance(payload.get("actor_scope"), Mapping) else {})
+    metadata_scope = _normalized_scope(metadata.get("actor_scope") if isinstance(metadata.get("actor_scope"), Mapping) else {})
+    if payload_scope != metadata_scope:
+        raise ResearchCatalogStoreError("research chunk manifest actor scope conflicts with artifact metadata")
+    components = ["chunk-manifests"]
+    if payload_scope:
+        encoded = json.dumps(payload_scope, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        components.append(hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24])
+    components.extend((paper_id, "chunk_manifest.json"))
+    return PurePosixPath(*components)
+
+
+def _safe_owner_relative_path(value: str) -> PurePosixPath:
+    if "\\" in value or "\x00" in value:
+        raise ResearchCatalogStoreError("research artifact owner-relative path is invalid")
+    components = value.split("/")
+    if any(part in {"", ".", ".."} for part in components):
+        raise ResearchCatalogStoreError("research artifact owner-relative path escapes the catalog owner")
+    path = PurePosixPath(*components)
+    if path.is_absolute():
+        raise ResearchCatalogStoreError("research artifact owner-relative path escapes the catalog owner")
+    return path
+
+
+def _validate_canonical_filesystem_path(value: str) -> None:
+    if "\x00" in value:
+        raise ResearchCatalogStoreError("research chunk manifest artifact path is invalid")
+    normalized = value.replace("\\", "/")
+    if len(normalized) >= 3 and normalized[1] == ":" and normalized[2] == "/":
+        normalized = normalized[3:]
+    elif normalized.startswith("/"):
+        normalized = normalized[1:]
+    if not normalized or any(part in {"", ".", ".."} for part in normalized.split("/")):
+        raise ResearchCatalogStoreError("research chunk manifest artifact path is not canonical")
+
+
+def _require_owned_regular_file(root: Path, candidate: Path) -> None:
+    lexical_root = Path(os.path.abspath(root))
+    lexical_candidate = Path(os.path.abspath(candidate))
+    try:
+        relative = lexical_candidate.relative_to(lexical_root)
+    except ValueError as exc:
+        raise ResearchCatalogStoreError("research chunk manifest artifact target is outside the catalog owner") from exc
+    root_attributes = getattr(lexical_root.lstat(), "st_file_attributes", 0)
+    if lexical_root.is_symlink() or root_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+        raise ResearchCatalogStoreError("research catalog owner root is a reparse point")
+    current = lexical_root
+    for part in relative.parts:
+        current = current / part
+        try:
+            attributes = getattr(current.lstat(), "st_file_attributes", 0)
+        except OSError as exc:
+            raise ResearchCatalogStoreError("research chunk manifest artifact target is missing") from exc
+        if current.is_symlink() or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            raise ResearchCatalogStoreError("research chunk manifest artifact path contains a reparse point")
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved = lexical_candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ResearchCatalogStoreError("research chunk manifest artifact target is missing") from exc
+    if resolved == resolved_root or not resolved.is_relative_to(resolved_root) or not resolved.is_file():
+        raise ResearchCatalogStoreError("research chunk manifest artifact target is outside the catalog owner")
+
+
+def persist_restore_provenance(
+    root: str | Path,
+    *,
+    backup_id: str,
+    owner_id: str,
+    owner_schema: str,
+    trusted_backup_origins: Iterable[str | Path],
+) -> dict[str, Any]:
+    """Persist exact legacy artifact relocation authority inside one catalog owner."""
+
+    if str(owner_id) != "research_paper_catalog" or not str(owner_schema).strip():
+        raise ResearchCatalogStoreError("research catalog restore provenance owner identity is invalid")
+    catalog_root = Path(os.path.abspath(Path(root).expanduser()))
+    existing = _load_restore_provenance(catalog_root, required=False)
+    existing_entries = existing.get("entries", {}) if existing else {}
+    if not isinstance(existing_entries, Mapping):
+        raise ResearchCatalogStoreCorruptionError("research catalog restore provenance entries are invalid")
+    origins = tuple(
+        sorted(
+            {
+                Path(os.path.abspath(Path(item).expanduser()))
+                for item in trusted_backup_origins
+            },
+            key=lambda item: os.path.normcase(str(item)),
+        )
+    )
+    if existing and existing.get("owner_schema") != str(owner_schema):
+        raise ResearchCatalogStoreCorruptionError(
+            "research catalog restore provenance owner schema is invalid"
+        )
+    entries: dict[str, dict[str, Any]] = {}
+    artifact_root = catalog_root / "artifacts"
+    for artifact_path in sorted(artifact_root.glob("*.json")) if artifact_root.is_dir() else ():
+        if artifact_path.name.endswith(".commit.json"):
+            continue
+        envelope, artifact_ref, marker_path = _read_committed_artifact_envelope(
+            catalog_root,
+            artifact_path,
+        )
+        if envelope.get("artifact_type") != "research-chunk-manifest":
+            continue
+        payload = envelope.get("payload")
+        metadata = envelope.get("metadata")
+        if not isinstance(payload, Mapping) or not isinstance(metadata, Mapping):
+            raise ResearchCatalogStoreCorruptionError("research chunk manifest artifact payload is invalid")
+        raw_path = payload.get("manifest_path")
+        if raw_path is None or not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        if os.path.isabs(raw_path):
+            try:
+                _validate_canonical_filesystem_path(raw_path)
+            except ResearchCatalogStoreError as exc:
+                raise ResearchCatalogStoreCorruptionError(str(exc)) from exc
+        persisted = Path(raw_path).expanduser()
+        if not persisted.is_absolute():
+            continue
+        lexical = Path(os.path.abspath(persisted))
+        try:
+            lexical.relative_to(catalog_root)
+            continue
+        except ValueError:
+            pass
+        prior = existing_entries.get(artifact_ref)
+        if prior is not None:
+            relative = _validate_restore_provenance_entry(
+                prior,
+                root=catalog_root,
+                artifact_ref=artifact_ref,
+                artifact_path=artifact_path,
+                marker_path=marker_path,
+                legacy_path=raw_path,
+                payload=payload,
+                metadata=metadata,
+            )
+            entries[artifact_ref] = dict(prior)
+            if relative != _expected_chunk_manifest_relative(payload=payload, metadata=metadata):
+                raise ResearchCatalogStoreCorruptionError("research catalog restore provenance target is invalid")
+            continue
+        expected = _expected_chunk_manifest_relative(payload=payload, metadata=metadata)
+        matched_origin: Path | None = None
+        relative: PurePosixPath | None = None
+        for origin in origins:
+            try:
+                candidate_relative = PurePosixPath(lexical.relative_to(origin).as_posix())
+            except ValueError:
+                continue
+            if candidate_relative == expected:
+                matched_origin = origin
+                relative = candidate_relative
+                break
+        if matched_origin is None or relative is None:
+            raise ResearchCatalogStoreCorruptionError(
+                "legacy research chunk manifest path has no verified backup owner association"
+            )
+        _require_owned_regular_file(catalog_root, catalog_root / Path(*relative.parts))
+        digest = artifact_ref.rsplit("/", 1)[-1]
+        entries[artifact_ref] = {
+            "artifact_ref": artifact_ref,
+            "artifact_type": "research-chunk-manifest",
+            "content_checksum": f"sha256:{digest}",
+            "artifact_file_sha256": _file_sha256(artifact_path),
+            "marker_file_sha256": _file_sha256(marker_path),
+            "legacy_manifest_path_sha256": _text_sha256(raw_path),
+            "target_relative_path": relative.as_posix(),
+            "paper_id": str(payload.get("paper_id") or ""),
+            "actor_scope": _normalized_scope(metadata.get("actor_scope")),
+            "established_from": {
+                "backup_id": str(backup_id),
+                "owner_id": str(owner_id),
+                "owner_schema": str(owner_schema),
+                "source_owner_identity": _text_sha256(
+                    os.path.normcase(str(matched_origin))
+                ),
+            },
+        }
+    unexpected = sorted(set(existing_entries) - set(entries))
+    if unexpected:
+        raise ResearchCatalogStoreCorruptionError(
+            "research catalog restore provenance references absent legacy artifacts"
+        )
+    if not entries and not existing:
+        return {
+            "schema": RESTORE_PROVENANCE_SCHEMA,
+            "status": "not_required",
+            "entry_count": 0,
+        }
+    payload = {
+        "schema": RESTORE_PROVENANCE_SCHEMA,
+        "owner_id": "research_paper_catalog",
+        "owner_schema": str(owner_schema),
+        "entries": {key: entries[key] for key in sorted(entries)},
+    }
+    checksum = _mapping_checksum(payload)
+    document = {**payload, "content_checksum": checksum}
+    marker = {
+        "schema": RESTORE_PROVENANCE_SCHEMA,
+        "record_type": "research_catalog_restore_provenance_commit",
+        "status": "committed",
+        "content_checksum": checksum,
+    }
+    provenance_path, marker_path = _restore_provenance_paths(catalog_root)
+    if not existing or existing != document:
+        provenance_path.parent.mkdir(parents=True, exist_ok=True)
+        _reject_link_path(provenance_path.parent, catalog_root)
+        write_json_object_unlocked(provenance_path, document)
+        write_json_object_unlocked(marker_path, marker)
+    return {
+        "schema": RESTORE_PROVENANCE_SCHEMA,
+        "path": str(provenance_path),
+        "content_checksum": checksum,
+        "entry_count": len(entries),
+    }
+
+
+def _restore_provenance_relative_path(
+    *,
+    root: Path,
+    artifact_ref: str,
+    artifact_path: Path,
+    marker_path: Path,
+    legacy_path: str,
+    payload: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> PurePosixPath:
+    provenance = _load_restore_provenance(root, required=True)
+    entries = provenance.get("entries")
+    entry = entries.get(artifact_ref) if isinstance(entries, Mapping) else None
+    if not isinstance(entry, Mapping):
+        raise ResearchCatalogStoreCorruptionError(
+            "legacy research chunk manifest has no exact restore provenance"
+        )
+    return _validate_restore_provenance_entry(
+        entry,
+        root=root,
+        artifact_ref=artifact_ref,
+        artifact_path=artifact_path,
+        marker_path=marker_path,
+        legacy_path=legacy_path,
+        payload=payload,
+        metadata=metadata,
+    )
+
+
+def _validate_restore_provenance_entry(
+    entry: Mapping[str, Any],
+    *,
+    root: Path,
+    artifact_ref: str,
+    artifact_path: Path,
+    marker_path: Path,
+    legacy_path: str,
+    payload: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> PurePosixPath:
+    digest = artifact_ref.rsplit("/", 1)[-1]
+    expected = _expected_chunk_manifest_relative(payload=payload, metadata=metadata)
+    try:
+        relative = _safe_owner_relative_path(str(entry.get("target_relative_path") or ""))
+    except ResearchCatalogStoreError as exc:
+        raise ResearchCatalogStoreCorruptionError(str(exc)) from exc
+    established = entry.get("established_from")
+    if (
+        entry.get("artifact_ref") != artifact_ref
+        or entry.get("artifact_type") != "research-chunk-manifest"
+        or entry.get("content_checksum") != f"sha256:{digest}"
+        or entry.get("artifact_file_sha256") != _file_sha256(artifact_path)
+        or entry.get("marker_file_sha256") != _file_sha256(marker_path)
+        or entry.get("legacy_manifest_path_sha256") != _text_sha256(legacy_path)
+        or entry.get("paper_id") != str(payload.get("paper_id") or "")
+        or _normalized_scope(entry.get("actor_scope"))
+        != _normalized_scope(metadata.get("actor_scope"))
+        or relative != expected
+        or not isinstance(established, Mapping)
+        or not str(established.get("backup_id") or "").strip()
+        or established.get("owner_id") != "research_paper_catalog"
+        or not str(established.get("owner_schema") or "").strip()
+        or not _valid_sha256(str(established.get("source_owner_identity") or ""))
+    ):
+        raise ResearchCatalogStoreCorruptionError(
+            "research catalog restore provenance does not match the committed artifact"
+        )
+    _require_owned_regular_file(root, root / Path(*relative.parts))
+    return relative
+
+
+def _load_restore_provenance(root: Path, *, required: bool) -> dict[str, Any]:
+    provenance_path, marker_path = _restore_provenance_paths(root)
+    if not provenance_path.exists() and not marker_path.exists():
+        if required:
+            raise ResearchCatalogStoreCorruptionError(
+                "legacy research chunk manifest has no restore provenance"
+            )
+        return {}
+    if not provenance_path.is_file() or not marker_path.is_file():
+        raise ResearchCatalogStoreCorruptionError(
+            "research catalog restore provenance is incomplete"
+        )
+    _require_owned_regular_file(root, provenance_path)
+    _require_owned_regular_file(root, marker_path)
+    try:
+        document = json.loads(provenance_path.read_text(encoding="utf-8"))
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ResearchCatalogStoreCorruptionError(
+            "research catalog restore provenance is invalid"
+        ) from exc
+    if not isinstance(document, Mapping) or not isinstance(marker, Mapping):
+        raise ResearchCatalogStoreCorruptionError(
+            "research catalog restore provenance is invalid"
+        )
+    content = dict(document)
+    checksum = content.pop("content_checksum", None)
+    if (
+        document.get("schema") != RESTORE_PROVENANCE_SCHEMA
+        or document.get("owner_id") != "research_paper_catalog"
+        or not str(document.get("owner_schema") or "").strip()
+        or not isinstance(document.get("entries"), Mapping)
+        or checksum != _mapping_checksum(content)
+        or marker.get("schema") != RESTORE_PROVENANCE_SCHEMA
+        or marker.get("record_type")
+        != "research_catalog_restore_provenance_commit"
+        or marker.get("status") != "committed"
+        or marker.get("content_checksum") != checksum
+    ):
+        raise ResearchCatalogStoreCorruptionError(
+            "research catalog restore provenance checksum is invalid"
+        )
+    return dict(document)
+
+
+def _read_committed_artifact_envelope(
+    root: Path,
+    artifact_path: Path,
+) -> tuple[dict[str, Any], str, Path]:
+    _require_owned_regular_file(root, artifact_path)
+    try:
+        envelope = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ResearchCatalogStoreCorruptionError(
+            "research artifact envelope is invalid"
+        ) from exc
+    if not isinstance(envelope, dict):
+        raise ResearchCatalogStoreCorruptionError(
+            "research artifact envelope is invalid"
+        )
+    encoded = json.dumps(
+        envelope,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    artifact_type = str(envelope.get("artifact_type") or "")
+    expected_name = f"{artifact_type}-{digest[:32]}.json"
+    if artifact_path.name != expected_name:
+        raise ResearchCatalogStoreCorruptionError(
+            "research artifact checksum does not own its path"
+        )
+    artifact_ref = f"artifact://research/{artifact_type}/{digest}"
+    marker_path = artifact_path.with_suffix(".commit.json")
+    _require_owned_regular_file(root, marker_path)
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ResearchCatalogStoreCorruptionError(
+            "research artifact commit marker is invalid"
+        ) from exc
+    if (
+        not isinstance(marker, Mapping)
+        or marker.get("status") != "committed"
+        or marker.get("artifact_ref") != artifact_ref
+        or marker.get("artifact_type") != artifact_type
+        or marker.get("content_checksum") != digest
+    ):
+        raise ResearchCatalogStoreCorruptionError(
+            "research artifact commit marker is invalid"
+        )
+    return envelope, artifact_ref, marker_path
+
+
+def _restore_provenance_paths(root: Path) -> tuple[Path, Path]:
+    directory = root / _RESTORE_PROVENANCE_DIR
+    return directory / "manifest.json", directory / "manifest.commit.json"
+
+
+def _mapping_checksum(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        dict(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _text_sha256(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _valid_sha256(value: str) -> bool:
+    raw = value.removeprefix("sha256:")
+    return len(raw) == 64 and all(char in "0123456789abcdef" for char in raw.casefold())
+
+
+def _reject_link_path(path: Path, root: Path) -> None:
+    lexical_root = Path(os.path.abspath(root))
+    lexical_path = Path(os.path.abspath(path))
+    try:
+        relative = lexical_path.relative_to(lexical_root)
+    except ValueError as exc:
+        raise ResearchCatalogStoreError(
+            "research catalog restore provenance escapes the catalog owner"
+        ) from exc
+    current = lexical_root
+    for part in relative.parts:
+        current = current / part
+        if not current.exists():
+            continue
+        attributes = getattr(current.lstat(), "st_file_attributes", 0)
+        if current.is_symlink() or attributes & getattr(
+            stat,
+            "FILE_ATTRIBUTE_REPARSE_POINT",
+            0x400,
+        ):
+            raise ResearchCatalogStoreError(
+                "research catalog restore provenance contains a reparse point"
+            )
+
+
 class FilesystemResearchEventSink:
     """Append-only JSON event transcript for parse phase transitions."""
 
     def __init__(self, root: str | Path = ".newsroom/research_catalog") -> None:
-        self.root = Path(root).expanduser()
+        self.root = resolve_storage_path(root)
 
     def create_run_intent(
         self,
@@ -483,7 +1038,7 @@ class FilesystemResearchEventSink:
             "created_at": datetime.now(UTC).isoformat(),
         }
         with locked_json_file(target) as resolved:
-            if resolved.exists():
+            if storage_io_path(resolved).exists():
                 existing = read_json_object_unlocked(resolved, default={}, strict=True)
                 if not isinstance(existing, Mapping):
                     raise ResearchCatalogStoreCorruptionError("research run intent is invalid")
@@ -514,7 +1069,7 @@ class FilesystemResearchEventSink:
         normalized_scope = _normalized_scope(scope)
         intent_path = self._run_record_path(run_id, normalized_scope, "intent")
         with locked_json_file(intent_path) as resolved:
-            if not resolved.exists():
+            if not storage_io_path(resolved).exists():
                 raise ResearchCatalogStoreError("research final result has no run intent")
             intent = read_json_object_unlocked(resolved, default={}, strict=True)
         if not isinstance(intent, Mapping):
@@ -535,7 +1090,7 @@ class FilesystemResearchEventSink:
             "committed_at": datetime.now(UTC).isoformat(),
         }
         with locked_json_file(target) as resolved:
-            if resolved.exists():
+            if storage_io_path(resolved).exists():
                 existing = read_json_object_unlocked(resolved, default={}, strict=True)
                 existing_comparable = {
                     key: value for key, value in existing.items()
@@ -575,8 +1130,8 @@ class FilesystemResearchEventSink:
             target = self.root / "events" / f"{run}.jsonl"
         with locked_json_file(target) as resolved:
             sequence = 1
-            if resolved.exists():
-                with resolved.open("r", encoding="utf-8") as existing:
+            if storage_io_path(resolved).exists():
+                with storage_io_path(resolved).open("r", encoding="utf-8") as existing:
                     for raw in existing:
                         if not raw.strip():
                             continue
@@ -593,7 +1148,7 @@ class FilesystemResearchEventSink:
                 ensure_ascii=False,
                 sort_keys=True,
             )
-            with resolved.open("a", encoding="utf-8") as handle:
+            with storage_io_path(resolved).open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -613,12 +1168,12 @@ class FilesystemResearchEventSink:
             target = self.root / "events" / digest / f"{run}.jsonl"
         else:
             target = self.root / "events" / f"{run}.jsonl"
-        if not target.exists():
+        if not storage_io_path(target).exists():
             return ()
         records: list[dict[str, Any]] = []
         expected = 1
         with locked_json_file(target) as resolved:
-            with resolved.open("r", encoding="utf-8") as handle:
+            with storage_io_path(resolved).open("r", encoding="utf-8") as handle:
                 for raw in handle:
                     if not raw.strip():
                         continue
@@ -643,10 +1198,11 @@ class FilesystemResearchEventSink:
     def scan_incomplete_runs(self) -> tuple[dict[str, Any], ...]:
         """Find durable run intents without a matching final result."""
 
-        if not (self.root / "runs").exists():
+        runs_io = storage_io_path(self.root / "runs")
+        if not runs_io.exists():
             return ()
         results: list[dict[str, Any]] = []
-        for intent_path in sorted((self.root / "runs").glob("*/*.intent.json")):
+        for intent_path in sorted(runs_io.glob("*/*.intent.json")):
             try:
                 intent = read_json_object_unlocked(intent_path, default={}, strict=True)
             except Exception as exc:
@@ -777,7 +1333,7 @@ class FilesystemResearchEventSink:
     ) -> dict[str, Any] | None:
         target = self._run_record_path(run_id, actor_scope, "final")
         with locked_json_file(target) as resolved:
-            if not resolved.exists():
+            if not storage_io_path(resolved).exists():
                 return None
             record = read_json_object_unlocked(resolved, default={}, strict=True)
         if not isinstance(record, Mapping):
@@ -793,7 +1349,7 @@ class FilesystemResearchEventSink:
     ) -> dict[str, Any] | None:
         target = self._run_record_path(run_id, actor_scope, "recovery")
         with locked_json_file(target) as resolved:
-            if not resolved.exists():
+            if not storage_io_path(resolved).exists():
                 return None
             record = read_json_object_unlocked(resolved, default={}, strict=True)
         if not isinstance(record, Mapping):
@@ -827,7 +1383,7 @@ class FilesystemResearchEventSink:
         }
         target = self._run_record_path(run_id, scope, "recovery")
         with locked_json_file(target) as resolved:
-            if resolved.exists():
+            if storage_io_path(resolved).exists():
                 existing = read_json_object_unlocked(resolved, default={}, strict=True)
                 if not isinstance(existing, Mapping):
                     raise ResearchCatalogStoreCorruptionError("research run recovery record is invalid")
@@ -1001,4 +1557,6 @@ __all__ = [
     "ResearchCatalogArtifactScopeError",
     "ResearchCatalogStoreCorruptionError",
     "ResearchCatalogStoreError",
+    "RESTORE_PROVENANCE_SCHEMA",
+    "persist_restore_provenance",
 ]

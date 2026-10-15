@@ -224,6 +224,103 @@ def test_new_definition_alias_or_reflection_fails(
     assert _has_code(verify_tree(tmp_path, baseline), code)
 
 
+@pytest.mark.parametrize("flag", ["False", "True"])
+def test_lower_camel_boolean_policy_dictionary_keys_are_not_legacy_bindings(
+    tmp_path: Path, flag: str
+) -> None:
+    baseline = _capture(tmp_path, {"backend/service.py": "VALUE = 1\n"})
+    _write(
+        tmp_path,
+        "backend/service.py",
+        "def to_payload():\n"
+        "    return {'permissions': {"
+        f"'mayChangeWorkflow': {flag}, 'mayAuthorizeTools': False"
+        "}}\n",
+    )
+
+    assert verify_tree(tmp_path, baseline) == []
+    assert scan_tree(tmp_path).active["retired_symbols"] == {}
+
+
+@pytest.mark.parametrize("symbol", ["WorkflowRunner", "WorkflowExecutor"])
+def test_policy_dictionary_still_rejects_real_retired_reflection_values(
+    tmp_path: Path, symbol: str
+) -> None:
+    baseline = _capture(tmp_path, {"backend/service.py": "VALUE = 1\n"})
+    _write(
+        tmp_path,
+        "backend/service.py",
+        "PAYLOAD = {'mayChangeWorkflow': False, "
+        f"'runner': '{symbol}'}}\n",
+    )
+
+    violations = verify_tree(tmp_path, baseline)
+    expected = (
+        "graph_only_freeze_new_workflow_runner_symbol"
+        if symbol == "WorkflowRunner"
+        else "graph_only_freeze_new_workflow_executor_symbol"
+    )
+    assert _has_code(violations, expected)
+    symbols = scan_tree(tmp_path).active["retired_symbols"]
+    assert any(key.endswith(f"|string_literal|{symbol}") for key in symbols)
+    assert not any(key.endswith("|mayChangeWorkflow") for key in symbols)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "RUNNER = getattr(module, 'WorkflowRunner')\n",
+        "RUNNER = getattr(module, 'customWorkflowBinding')\n",
+        "RUNNER = __import__('provider', fromlist=['WorkflowExecutor'])\n",
+        "RUNNER = getattr(importlib.import_module('provider'), 'WorkflowRunner')\n",
+        "def __getattr__(name):\n"
+        "    if name == 'customWorkflowBinding':\n"
+        "        return object\n",
+        "ALIAS = 'customWorkflowBinding'\n",
+        "PAYLOAD = {'mayChangeWorkflow': 'WorkflowRunner'}\n",
+        "PAYLOAD = {'WorkflowRunner': False}\n",
+        "PAYLOAD = {'customWorkflowRunner': False}\n",
+        "PAYLOAD = {'LEGACY_WORKFLOW': False}\n",
+        "PAYLOAD = {'StepRunner': False}\n",
+        "def customWorkflowBinding():\n    pass\n",
+        "from provider import customWorkflowBinding\n",
+        "__all__ = ['customWorkflowBinding']\n",
+    ],
+)
+def test_policy_key_exclusion_does_not_hide_retired_symbols_in_other_contexts(
+    tmp_path: Path, source: str
+) -> None:
+    baseline = _capture(tmp_path, {"backend/service.py": "VALUE = 1\n"})
+    _write(tmp_path, "backend/service.py", source)
+
+    assert scan_tree(tmp_path).active["retired_symbols"]
+    assert verify_tree(tmp_path, baseline)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from framework.workflow.runtime import WorkflowRunner\n",
+        "from framework.harness.workflow import HarnessWorkflowSpec\n",
+        "import framework.workflow.runtime\n",
+    ],
+)
+def test_policy_key_exclusion_keeps_forbidden_namespace_imports_strict(
+    tmp_path: Path, source: str
+) -> None:
+    baseline = _capture(tmp_path, {"backend/service.py": "VALUE = 1\n"})
+    _write(
+        tmp_path,
+        "backend/service.py",
+        source + "PAYLOAD = {'mayChangeWorkflow': False}\n",
+    )
+
+    assert _has_code(
+        verify_tree(tmp_path, baseline),
+        "graph_only_freeze_new_legacy_import_edge",
+    )
+
+
 def test_new_legacy_public_export_fails(tmp_path: Path) -> None:
     baseline = _capture(tmp_path, {"backend/service.py": "__all__ = []\n"})
     _write(tmp_path, "backend/service.py", "__all__ = ['RunResult']\n")

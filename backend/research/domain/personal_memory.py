@@ -58,6 +58,12 @@ class PersonalMemorySourceType(StrEnum):
     OTHER = "other"
 
 
+class PersonalMemoryRemoteChannel(StrEnum):
+    MODEL = "model"
+    TOOL = "tool"
+    EMBEDDING = "embedding"
+
+
 @dataclass(frozen=True, slots=True)
 class PersonalMemoryOwner:
     """Trusted application identity used for every personal-memory operation."""
@@ -321,9 +327,26 @@ class PersonalMemoryRemotePolicy:
             updated_at=ensure_utc(updated_at, "updated_at"),
         )
 
+    def allows_remote_processing(
+        self,
+        channel: PersonalMemoryRemoteChannel | str,
+        *,
+        use_memory: bool,
+    ) -> bool:
+        PersonalMemoryRemoteChannel(channel)
+        if type(use_memory) is not bool:
+            raise TypeError("use_memory must be boolean")
+        return self.allow_remote_processing and use_memory
+
     def to_dict(self, *, include_owner: bool = True) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "allow_remote_processing": self.allow_remote_processing,
+            "remote_processing_permissions": {
+                channel.value: self.allows_remote_processing(
+                    channel, use_memory=True
+                )
+                for channel in PersonalMemoryRemoteChannel
+            },
             "revision": self.revision,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -569,6 +592,7 @@ __all__ = [
     "PersonalMemoryRecallItem",
     "PersonalMemoryRecallResult",
     "PersonalMemoryRecord",
+    "PersonalMemoryRemoteChannel",
     "PersonalMemoryRemotePolicy",
     "PersonalMemorySelection",
     "PersonalMemorySourceRef",

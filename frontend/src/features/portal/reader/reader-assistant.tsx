@@ -16,7 +16,10 @@ import {
   submitResearchAsk,
 } from "@/lib/research/desktop/client"
 import { groundedAnswerSchema, type ResearchOperation } from "@/lib/research/desktop/contracts"
-import type { ResearchPendingOperation } from "@/lib/research/workspace-items"
+import type {
+  ResearchPendingOperation,
+  ResearchPersonalMemorySelection,
+} from "@/lib/research/workspace-items"
 import { buildAskRequest } from "@/lib/research/desktop/request-contracts"
 import {
   operationReceiptMatches,
@@ -26,6 +29,13 @@ import {
   type OperationReceiptIdentity,
 } from "@/lib/research/pending-operations"
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
+import {
+  resolveReaderPersonalMemory,
+  usedPersonalMemoryFromResult,
+  usedPersonalMemoryMatches,
+  type ReaderPersonalMemoryControl,
+  type ReaderTaskActivity,
+} from "./personal-memory-task-context"
 import type { useReaderNotebook } from "./use-reader-notebook"
 import styles from "./reader-workspace.module.css"
 
@@ -75,7 +85,7 @@ export function safeReaderSourceUrl(value?: string): string | undefined {
 
 type Notebook = ReturnType<typeof useReaderNotebook>
 
-type ReaderAssistantProps = {
+export type ReaderAssistantProps = {
   paper: Paper
   notebook: Notebook
   sectionIds: Set<string>
@@ -88,6 +98,10 @@ type ReaderAssistantProps = {
   unavailableMessage?: string
   selectionRequest?: ReaderSelectionAskRequest
   onSelectionAnswered?: (answer: ReaderSelectionAskAnswer) => void
+  personalMemory?: ReaderPersonalMemoryControl
+  onTaskActivity?: (activity: ReaderTaskActivity) => void
+  onUnsavedChanges?: (hasUnsavedChanges: boolean) => void
+  onExportNote?: (value: { filename: string; content: string }) => void | Promise<void>
 }
 
 const prompts = [
@@ -109,6 +123,10 @@ export function ReaderAssistant({
   unavailableMessage,
   selectionRequest,
   onSelectionAnswered,
+  personalMemory,
+  onTaskActivity,
+  onUnsavedChanges,
+  onExportNote,
 }: ReaderAssistantProps) {
   const desktopProfile = isLocalDesktopProfile()
   const workspace = useOwnedResearchWorkspace()
@@ -120,6 +138,9 @@ export function ReaderAssistant({
   const paperIdRef = useRef(paper.id)
   const notebookQuestionRef = useRef(notebook.question)
   const selectionAnsweredRef = useRef(onSelectionAnswered)
+  const personalMemoryRef = useRef(personalMemory)
+  const taskActivityRef = useRef(onTaskActivity)
+  const operationPersonalMemoryRef = useRef<ResearchPersonalMemorySelection | undefined>(undefined)
   ownerRef.current = owner
   sourceRevisionRef.current = sourceRevision
   runIdRef.current = runId
@@ -127,6 +148,8 @@ export function ReaderAssistant({
   paperIdRef.current = paper.id
   notebookQuestionRef.current = notebook.question
   selectionAnsweredRef.current = onSelectionAnswered
+  personalMemoryRef.current = personalMemory
+  taskActivityRef.current = onTaskActivity
   const [tab, setTab] = useState<"ask" | "notes">("ask")
   const [answer, setAnswer] = useState<PaperReaderAnswer | null>(null)
   const [pending, setPending] = useState(false)
@@ -142,6 +165,9 @@ export function ReaderAssistant({
   useLayoutEffect(() => {
     updateNotebookRef.current = notebook.update
   }, [notebook.update])
+  useEffect(() => {
+    onUnsavedChanges?.(notebook.saveStatus !== "synced")
+  }, [notebook.saveStatus, onUnsavedChanges])
 
   const applyOperation = useCallback(async (
     operation: ResearchOperation,
@@ -150,6 +176,7 @@ export function ReaderAssistant({
     expectedRunId: string | undefined,
     expectedOperation: OperationReceiptIdentity,
     expectedSelection?: ReaderSelectionAskRequest,
+    expectedPersonalMemory?: ResearchPersonalMemorySelection,
   ) => {
     if (
       ownerRef.current !== expectedOwner ||
@@ -167,6 +194,22 @@ export function ReaderAssistant({
       setError("问答回执与已保存的请求身份不一致，请检查原请求，不能采用该回答。")
       return
     }
+    if (
+      operation.status === "passed" &&
+      !usedPersonalMemoryMatches(expectedPersonalMemory, operation.result)
+    ) {
+      updateResearchOperation(expectedOperation.requestId, { status: "unknown" })
+      setOperationStatus("unknown")
+      setError("问答返回的个人记忆披露与原请求快照不一致，不能采用该回答。")
+      taskActivityRef.current?.({
+        kind: "ask",
+        requestId: operation.requestId,
+        generation: operation.generation,
+        status: "unknown",
+        usedPersonalMemory: [],
+      })
+      return
+    }
     setOperationStatus(operation.status)
     setRequestGeneration(operation.generation)
     setRequestId(operation.requestId)
@@ -174,6 +217,13 @@ export function ReaderAssistant({
       status: operation.status,
       ...(operation.runId ? { runId: operation.runId } : {}),
       ...(operation.errorCode ? { errorCode: operation.errorCode } : {}),
+    })
+    taskActivityRef.current?.({
+      kind: "ask",
+      requestId: operation.requestId,
+      generation: operation.generation,
+      status: operation.status,
+      usedPersonalMemory: usedPersonalMemoryFromResult(operation.result),
     })
 
     if (operation.status === "passed") {
@@ -185,6 +235,7 @@ export function ReaderAssistant({
         expectedRevision,
       )
       if (!parsed) {
+        setAnswer(null)
         setError("问答已完成，但返回内容无法安全呈现。请从运行记录核对结果。")
         return
       }
@@ -231,6 +282,7 @@ export function ReaderAssistant({
     setAnswer(null)
     setError("")
     operationIdentityRef.current = null
+    operationPersonalMemoryRef.current = undefined
     setRequestId("")
     setRequestGeneration("")
     setOperationStatus("")
@@ -249,6 +301,9 @@ export function ReaderAssistant({
     const expectedOwner = owner
     const recoveredSelection = recoverSelectionRequest(existing, expectedOwner)
     operationIdentityRef.current = existing
+    operationPersonalMemoryRef.current = existing.semantic.kind === "ask"
+      ? existing.semantic.personalMemory
+      : undefined
     setRequestId(existing.requestId)
     setRequestGeneration(existing.generation)
     setOperationStatus(existing.status === "prepared" ? "waiting" : existing.status)
@@ -261,7 +316,8 @@ export function ReaderAssistant({
             sourceRevision,
             runId,
             existing,
-            selectionRequest ?? recoveredSelection,
+            recoveredSelection,
+            operationPersonalMemoryRef.current,
           )
         }
       })
@@ -295,6 +351,7 @@ export function ReaderAssistant({
     setRequestId("")
     setRequestGeneration("")
     setOperationStatus("")
+    operationPersonalMemoryRef.current = undefined
     updateNotebookRef.current({ question: selectionRequest.question })
     window.requestAnimationFrame(() => questionRef.current?.focus())
   }, [owner, selectionRequest, sourceRevision])
@@ -311,13 +368,15 @@ export function ReaderAssistant({
     const expectedRevision = sourceRevision
     const expectedRunId = runId
     const expectedSelection = selectionRequest
+    const expectedMemoryEnabled = personalMemory?.enabled === true
     const controller = new AbortController()
     const identityChanged = () =>
       ownerRef.current !== expectedOwner ||
       sourceRevisionRef.current !== expectedRevision ||
       runIdRef.current !== expectedRunId ||
       (expectedSelection != null &&
-        selectionRequestRef.current?.requestKey !== expectedSelection.requestKey)
+        selectionRequestRef.current?.requestKey !== expectedSelection.requestKey) ||
+      (personalMemoryRef.current?.enabled === true) !== expectedMemoryEnabled
     const scopeChanged = () => controller.signal.aborted || identityChanged()
     request.current = controller
     setPending(true)
@@ -343,7 +402,15 @@ export function ReaderAssistant({
           controller.signal,
         )
         if (controller.signal.aborted) return
-        await applyOperation(operation, expectedOwner, expectedRevision, expectedRunId, expectedOperation, expectedSelection)
+        await applyOperation(
+          operation,
+          expectedOwner,
+          expectedRevision,
+          expectedRunId,
+          expectedOperation,
+          expectedSelection,
+          operationPersonalMemoryRef.current,
+        )
         return
       }
 
@@ -356,6 +423,19 @@ export function ReaderAssistant({
         : activeSection
           ? { sectionId: activeSection }
           : {}
+      const memorySelection = await resolveReaderPersonalMemory(
+        personalMemory,
+        [
+          question,
+          paper.title,
+          paper.abstractSnippet,
+          expectedSelection?.selection.selectedText,
+          activeSection,
+        ],
+        controller.signal,
+      )
+      if (scopeChanged()) return
+      operationPersonalMemoryRef.current = memorySelection
       const semantic = {
         kind: "ask" as const,
         runId: runId!,
@@ -365,6 +445,7 @@ export function ReaderAssistant({
         question,
         selection,
         locale: "zh",
+        ...(memorySelection ? { personalMemory: memorySelection } : {}),
       }
       const operation = await prepareResearchOperation({
         kind: "ask",
@@ -381,12 +462,27 @@ export function ReaderAssistant({
       setRequestGeneration(operation.generation)
       setOperationStatus("waiting")
       updateResearchOperation(preparedId, { status: "waiting" })
+      taskActivityRef.current?.({
+        kind: "ask",
+        requestId: preparedId,
+        generation: operation.generation,
+        status: "waiting",
+        usedPersonalMemory: [],
+      })
       const submitted = await submitResearchAsk(
         buildAskRequest(operation, semantic),
         controller.signal,
       )
       if (controller.signal.aborted) return
-      await applyOperation(submitted, expectedOwner, expectedRevision, expectedRunId, operation, expectedSelection)
+      await applyOperation(
+        submitted,
+        expectedOwner,
+        expectedRevision,
+        expectedRunId,
+        operation,
+        expectedSelection,
+        memorySelection,
+      )
     } catch (cause) {
       if (identityChanged()) return
       if (preparedId) {
@@ -429,10 +525,15 @@ export function ReaderAssistant({
 
   function exportNote() {
     const content = `# ${paper.title}\n\n${safeReaderSourceUrl(paper.pdfUrl) || ""}\n\n## 阅读笔记\n\n${notebook.note}\n`
+    const filename = `${paper.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-notes.md`
+    if (onExportNote) {
+      void onExportNote({ filename, content })
+      return
+    }
     const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }))
     const link = document.createElement("a")
     link.href = url
-    link.download = `${paper.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-notes.md`
+    link.download = filename
     link.click()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
@@ -459,6 +560,31 @@ export function ReaderAssistant({
             <div className={styles.answer} ref={replyRef} tabIndex={-1}>
               <p className={styles.askedQuestion}><Quote size={15} />{answer.question}</p>
               <ReactMarkdown>{answer.answer}</ReactMarkdown>
+              {answer.executionTrace && (
+                <section className={styles.evidence} aria-label="回答执行追溯">
+                  <details>
+                    <summary>回答执行追溯</summary>
+                    <dl>
+                      <dt>运行 ID</dt>
+                      <dd><code>{answer.executionTrace.runId}</code></dd>
+                      <dt>来源修订</dt>
+                      <dd><code>{answer.executionTrace.sourceRevision}</code></dd>
+                      <dt>Transcript ID</dt>
+                      <dd><code>{answer.executionTrace.transcriptId}</code></dd>
+                      <dt>回答状态</dt>
+                      <dd><code>{answer.executionTrace.answerStatus}</code></dd>
+                      <dt>证据 ID</dt>
+                      <dd>
+                        <ul>
+                          {answer.executionTrace.evidenceRefs.map(evidenceId => (
+                            <li key={evidenceId}><code>{evidenceId}</code></li>
+                          ))}
+                        </ul>
+                      </dd>
+                    </dl>
+                  </details>
+                </section>
+              )}
               <div className={styles.evidence}>
                 <strong>回答依据 · {answer.citations.length} 条</strong>
                 {answer.citations.length ? answer.citations.map(citation => (
@@ -628,7 +754,7 @@ export function ReaderAssistant({
   )
 }
 
-function answerFromResult(
+export function answerFromResult(
   value: unknown,
   paperId: string,
   question: string,
@@ -659,6 +785,13 @@ function answerFromResult(
       evidenceId: citation.evidenceId,
       textExcerpt: citation.excerpt,
     })),
+    executionTrace: {
+      runId: parsed.data.runId,
+      sourceRevision: parsed.data.sourceRevision,
+      transcriptId: parsed.data.transcriptId,
+      answerStatus: parsed.data.answerStatus,
+      evidenceRefs: [...parsed.data.evidenceRefs],
+    },
     confidence: parsed.data.confidence,
     generatedAt: parsed.data.generatedAt ?? new Date().toISOString(),
     cached: false,

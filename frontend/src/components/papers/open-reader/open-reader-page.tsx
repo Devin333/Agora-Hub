@@ -339,11 +339,17 @@ export function OpenReaderPage({ reader, locale, backHref = "/papers", visualLay
   }
 
   const themeClass = settings.theme === "dark" ? styles.darkTheme : settings.theme === "light" ? styles.lightTheme : styles.warmTheme
+  const workspaceAppearanceClass = workspace?.appearance === "monochrome-dark"
+    ? styles.monochromeDarkWorkspace
+    : workspace?.appearance === "monochrome-light"
+      ? styles.monochromeLightWorkspace
+      : ""
   const ReaderRoot = workspace ? "div" : "main"
 
   return (
     <ReaderRoot
-      className={`${styles.openReader} ${themeClass} ${workspace ? styles.workspaceReader : ""}`}
+      className={`${styles.openReader} ${themeClass} ${workspace ? styles.workspaceReader : ""} ${workspaceAppearanceClass}`}
+      data-workspace-appearance={workspace?.appearance}
       style={{ ["--reader-font-size" as string]: `${workspace?.fontSize ?? settings.fontSize}px`, ["--reader-content-width" as string]: `${settings.contentWidth}px` }}
     >
       {!workspace && <Link className={styles.readerBackButton} href={backHref} aria-label={readerCopy(locale).backToPapers}>

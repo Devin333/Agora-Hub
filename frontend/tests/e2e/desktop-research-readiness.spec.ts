@@ -42,9 +42,15 @@ test.describe("local desktop research regression", () => {
     await page.getByRole("button", { name: "开始真实分析" }).click()
     await expect(page.getByText("请求结果未知，需要按原身份查询")).toBeVisible()
     expect(state.analyzePosts).toBe(1)
+    const report = page.getByRole("link", { name: "查看本次运行报告" })
+    await expect(report).toHaveCount(0)
 
     await page.getByRole("button", { name: "检查已有请求" }).click()
-    await expect(page.getByRole("link", { name: "查看本次运行报告" })).toBeVisible()
+    await expect(report).toBeVisible()
+    await expect(report).toHaveAttribute(
+      "href",
+      "/reports/runs/run-accepted-1?sourceRevision=revision-1",
+    )
     expect(state.analyzePosts).toBe(1)
     expect(state.operationGets).toBe(1)
   })
@@ -320,6 +326,7 @@ function operationReceipt(identity: ReturnType<typeof durableOperation>) {
       runId: "run-accepted-1",
       paperId: "2601.01234",
       sourceRevision: "revision-1",
+      status: "succeeded",
       accepted: true,
       qualityPassed: true,
       eligibleForAcceptedExport: true,

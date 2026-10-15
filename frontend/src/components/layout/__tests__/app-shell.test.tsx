@@ -1,11 +1,13 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { AppShell } from "@/components/layout/app-shell"
 import { useUiStore } from "@/stores/ui-store"
 
 const navigationState = vi.hoisted(() => ({
   pathname: "/"
 }))
+const originalDeploymentProfile = process.env.NEWSROOM_DEPLOYMENT_PROFILE
+const originalPublicDeploymentProfile = process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navigationState.pathname,
@@ -19,7 +21,14 @@ vi.mock("@/components/auth/account-menu", () => ({
 describe("AppShell", () => {
   beforeEach(() => {
     navigationState.pathname = "/"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "default"
+    delete process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
     useUiStore.setState({ locale: "en", theme: "light" })
+  })
+
+  afterEach(() => {
+    restoreEnv("NEWSROOM_DEPLOYMENT_PROFILE", originalDeploymentProfile)
+    restoreEnv("NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", originalPublicDeploymentProfile)
   })
 
   it.each(["/papers/methods", "/papers/tasks"])("allows the redesigned directory to own its header on %s", pathname => {
@@ -107,6 +116,49 @@ describe("AppShell", () => {
     expect(mobileNavigation.queryByRole("link", { name: "Open Source" })).not.toBeInTheDocument()
   })
 
+  it.each(["/login", "/login/"])("keeps exact local-desktop login route %s outside legacy Research chrome", (pathname) => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+    navigationState.pathname = pathname
+
+    const { container } = render(
+      <AppShell>
+        <div>Desktop login</div>
+      </AppShell>
+    )
+
+    expect(screen.getByText("Desktop login")).toBeInTheDocument()
+    expect(screen.queryByRole("link", { name: "Agora Hub Research" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument()
+    expect(container.querySelector("main")).toBeNull()
+  })
+
+  it("keeps the ordinary Portal login route on the normal Research shell", () => {
+    navigationState.pathname = "/login"
+
+    render(
+      <AppShell>
+        <div>Portal login</div>
+      </AppShell>
+    )
+
+    expect(screen.getByRole("link", { name: "Agora Hub Research" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Projects" })).toBeInTheDocument()
+  })
+
+  it("does not broaden local-desktop login isolation to similarly prefixed routes", () => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+    navigationState.pathname = "/login/help"
+
+    render(
+      <AppShell>
+        <div>Login help</div>
+      </AppShell>
+    )
+
+    expect(screen.getByRole("link", { name: "Agora Hub Research" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Projects" })).toBeInTheDocument()
+  })
+
   it.each(["/admin", "/studio", "/studio/runs"])("keeps management route %s outside the portal Research header", (pathname) => {
     navigationState.pathname = pathname
 
@@ -147,3 +199,11 @@ describe("AppShell", () => {
     expect(screen.queryByRole("link", { name: "Agora Hub Research" })).not.toBeInTheDocument()
   })
 })
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name]
+    return
+  }
+  process.env[name] = value
+}

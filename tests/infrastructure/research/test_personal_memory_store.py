@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
+import stat
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Iterator
+from uuid import uuid4
 
 import pytest
 
@@ -20,6 +25,7 @@ from backend.research.ports.personal_memory import (
     PersonalMemoryStoreReason,
     PersonalMemoryStoreUnavailableError,
 )
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 from infrastructure.research.personal_memory_store import SQLitePersonalMemoryStore
 
 
@@ -466,3 +472,105 @@ def test_schema_contains_versioned_memory_policy_history_and_idempotency_tables(
             "personal_memory_create_requests",
         } <= tables
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+@pytest.fixture
+def long_memory_database(tmp_path: Path) -> Iterator[Path]:
+    fixture_parent = resolve_storage_path(tmp_path)
+    owned_name = f"personal-memory-long-path-{uuid4().hex}"
+    owned_root = fixture_parent / owned_name
+    directory = owned_root
+    index = 0
+    while len(os.fspath(directory)) <= 300:
+        directory /= f"segment-{index:02d}-abcdefghijklmnopqrstuvwxyz"
+        index += 1
+    storage_io_path(directory).mkdir(parents=True)
+    try:
+        yield directory / "personal-memory # space 中文 %.sqlite3"
+    finally:
+        resolved = resolve_storage_path(owned_root)
+        if resolved.parent != resolve_storage_path(fixture_parent) or resolved.name != owned_name:
+            raise RuntimeError("refusing to remove an unowned personal memory test directory")
+        shutil.rmtree(storage_io_path(resolved))
+
+
+@pytest.mark.parametrize("path_type", [str, Path], ids=["str", "path"])
+def test_public_logical_long_path_persists_records_policy_and_wal(
+    long_memory_database: Path, path_type: type[str] | type[Path],
+) -> None:
+    database = long_memory_database
+    owner = _owner()
+    assert len(os.fspath(database)) > 260
+    assert not str(database).startswith("\\\\?\\")
+    with SQLitePersonalMemoryStore(path_type(database)) as store:
+        assert store.database_path == database
+        service = PersonalMemoryService(store)
+        first = service.create_confirmed(
+            owner, content="Persist real owner-scoped data on long paths.",
+            category="reading_preference", source_refs=_source(), client_request_id="long-create",
+        )
+        updated = service.update(
+            owner, first.memory_id, expected_revision=first.revision,
+            content="Persist exact revisions on long paths.",
+        )
+        policy = service.get_policy(owner)
+        policy = service.update_policy(owner, allow_remote_processing=True, expected_revision=policy.revision)
+        policy = service.update_policy(owner, allow_remote_processing=False, expected_revision=policy.revision)
+        assert (updated.revision, policy.revision) == (2, 3)
+        for suffix in ("", "-wal", "-shm"):
+            assert storage_io_path(Path(f"{database}{suffix}")).is_file()
+        assert service.get_policy(owner).allow_remote_processing is False
+
+    with SQLitePersonalMemoryStore(path_type(database)) as reopened:
+        assert reopened.database_path == database
+        service = PersonalMemoryService(reopened)
+        assert service.get(owner, updated.memory_id) == updated
+        assert service.get_policy(owner) == policy
+
+    # Trusted internal callers may supply a namespace, but it must never leak
+    # through the store's public identity. On non-Windows this is the same path.
+    with SQLitePersonalMemoryStore(storage_io_path(database)) as internal:
+        assert internal.database_path == database
+        assert not str(internal.database_path).startswith("\\\\?\\")
+        assert PersonalMemoryService(internal).get(owner, updated.memory_id) == updated
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_long_path_rejects_nonregular_sqlite_sidecar_without_creating_database(
+    long_memory_database: Path, suffix: str,
+) -> None:
+    database = long_memory_database
+    sidecar = storage_io_path(Path(f"{database}{suffix}"))
+    sidecar.mkdir()
+    with pytest.raises(ValueError, match="regular file"):
+        SQLitePersonalMemoryStore(database)
+    assert not storage_io_path(database).exists()
+    assert sidecar.is_dir()
+
+
+def test_long_path_dangling_link_is_rejected_before_normalization_or_connect(
+    long_memory_database: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import infrastructure.research.personal_memory_store as memory_module
+
+    # Windows CI cannot create file symlinks without extra privilege. Exercise
+    # the dangling-link metadata branch without bypassing real long parent I/O;
+    # the existing junction test separately verifies a real reparse boundary.
+    database = long_memory_database
+    native_database = storage_io_path(database)
+    original_lstat = Path.lstat
+
+    def dangling_lstat(path: Path, *args, **kwargs):
+        if path == native_database:
+            return SimpleNamespace(st_mode=stat.S_IFLNK | 0o777, st_file_attributes=0)
+        return original_lstat(path, *args, **kwargs)
+
+    def unexpected_io(*args, **kwargs):
+        raise AssertionError("linked input must be rejected before resolving or opening SQLite")
+
+    monkeypatch.setattr(Path, "lstat", dangling_lstat)
+    monkeypatch.setattr(memory_module, "resolve_storage_path", unexpected_io)
+    monkeypatch.setattr(memory_module.sqlite3, "connect", unexpected_io)
+    with pytest.raises(ValueError, match="symlink|reparse"):
+        SQLitePersonalMemoryStore(database)
+    assert not native_database.exists()

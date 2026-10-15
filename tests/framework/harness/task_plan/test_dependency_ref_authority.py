@@ -21,9 +21,16 @@ from tests.framework.harness.test_ref_snapshot_store import _store
 DEPENDENCY = "task://structure/output"
 
 
+def _run_with_owned_runtime_cleanup(setup):
+    try:
+        return setup.graph_runtime.run(setup.spec)
+    finally:
+        setup.owned_child_runtime.close()
+
+
 def _completed(tmp_path):
     setup = _setup(tmp_path, dependency_ref=DEPENDENCY)
-    result = setup.graph_runtime.run(setup.spec)
+    result = _run_with_owned_runtime_cleanup(setup)
     assert result.succeeded, result
     assert len(setup.child_calls) == 2
     execution = setup.admission.snapshot.execution_identity
@@ -70,7 +77,7 @@ def test_real_dependent_worker_receives_only_accepted_public_output_and_reopens(
 @pytest.mark.parametrize("ref,share", ((DEPENDENCY, False), ("task://structure/transcript", True), ("task:structure/context", True)))
 def test_unshared_or_private_dependency_is_rejected_before_any_worker(tmp_path, ref, share):
     setup = _setup(tmp_path, dependency_ref=ref, share_dependency=share)
-    setup.graph_runtime.run(setup.spec)
+    _run_with_owned_runtime_cleanup(setup)
     assert setup.child_calls == []
     assert setup.task_store.plan(setup.spec.run_id, setup.policy.stage_id) is None
 
@@ -149,7 +156,11 @@ def test_derived_grant_cannot_forge_source_or_expand_payload_access(tmp_path, mo
         if change == "undeclared_read":
             setup.authority.read_dependency_outputs(identity, input_refs=("private-sibling-ref",))
         else:
-            changed = replace(binding, source_snapshot_ref=checksum_for("missing-source")) if change == "missing_source" else replace(
-                binding, descriptor=replace(binding.descriptor, scope=RefScope.SHARED_READ_ONLY),
-            )
+            if change == "missing_source":
+                changed = replace(binding, source_snapshot_ref=checksum_for("missing-source"))
+            else:
+                assert binding.descriptor.scope is RefScope.PRIVATE
+                altered_descriptor = replace(binding.descriptor, scope=RefScope.SHARED_READ_ONLY)
+                assert altered_descriptor != binding.descriptor
+                changed = replace(binding, descriptor=altered_descriptor)
             setup.grants.commit(replace(grant, dependency_bindings=(changed,)))

@@ -7,8 +7,9 @@ import sqlite3
 import stat
 import tempfile
 import zipfile
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
@@ -20,11 +21,11 @@ from scripts.local_desktop.common import (
     DesktopOperationError,
     OperationResult,
     atomic_write_json,
-    ensure_contained,
     exclusive_lock,
     protect_private_path,
     read_json_object,
     reject_reparse_path,
+    windows_extended_path,
 )
 from scripts.local_desktop.control import ApplicationControlPlane
 from scripts.local_desktop.release import ReleaseManager
@@ -37,6 +38,15 @@ ACTIVATION_SCHEMA = "newsroom.local-desktop-activation-journal/v1"
 MAX_BACKUP_FILES = 200_000
 MAX_BACKUP_BYTES = 50 * 1024 * 1024 * 1024
 MAX_SINGLE_FILE_BYTES = 8 * 1024 * 1024 * 1024
+PERSONAL_MEMORY_APPLICATION_ID = 0x504D454D
+PERSONAL_MEMORY_SCHEMA_VERSION = 1
+PERSONAL_MEMORY_TABLES = (
+    "personal_memory_metadata",
+    "personal_memory_policies",
+    "personal_memories",
+    "personal_memory_revisions",
+    "personal_memory_create_requests",
+)
 _EXCLUDED_NAMES = {
     ".env",
     ".git",
@@ -51,6 +61,185 @@ _EXCLUDED_NAMES = {
     "logs",
 }
 _EXCLUDED_SUFFIXES = {".log", ".tmp", ".pyc", ".pyo"}
+_EXTENDED_PATH_PREFIX = "\\\\?\\"
+_EXTENDED_UNC_PREFIX = "\\\\?\\UNC\\"
+
+
+def _native_path(path: str | Path) -> Path:
+    """Return the internal OS path for recovery I/O without changing public identity."""
+
+    return windows_extended_path(Path(path))
+
+
+def _logical_path(path: str | Path) -> Path:
+    raw = os.fspath(path)
+    if os.name != "nt":
+        return Path(raw)
+    if raw[: len(_EXTENDED_UNC_PREFIX)].casefold() == _EXTENDED_UNC_PREFIX.casefold():
+        return Path("\\\\" + raw[len(_EXTENDED_UNC_PREFIX) :])
+    if raw.startswith(_EXTENDED_PATH_PREFIX):
+        return Path(raw[len(_EXTENDED_PATH_PREFIX) :])
+    return Path(raw)
+
+
+def _resolved_path(path: str | Path, *, strict: bool = False) -> Path:
+    return _logical_path(_native_path(path).resolve(strict=strict))
+
+
+def _path_exists(path: str | Path) -> bool:
+    return _native_path(path).exists()
+
+
+def _path_is_file(path: str | Path) -> bool:
+    return _native_path(path).is_file()
+
+
+def _path_is_dir(path: str | Path) -> bool:
+    return _native_path(path).is_dir()
+
+
+def _path_is_symlink(path: str | Path) -> bool:
+    return _native_path(path).is_symlink()
+
+
+def _path_stat(path: str | Path):
+    return _native_path(path).stat()
+
+
+def _path_lstat(path: str | Path):
+    return _native_path(path).lstat()
+
+
+def _mkdir(path: str | Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+    _native_path(path).mkdir(parents=parents, exist_ok=exist_ok)
+
+
+def _touch(path: str | Path, *, exist_ok: bool = True) -> None:
+    _native_path(path).touch(exist_ok=exist_ok)
+
+
+def _unlink(path: str | Path, *, missing_ok: bool = False) -> None:
+    _native_path(path).unlink(missing_ok=missing_ok)
+
+
+def _replace(source: str | Path, destination: str | Path) -> None:
+    os.replace(_native_path(source), _native_path(destination))
+
+
+def _copy2(source: str | Path, destination: str | Path) -> Path:
+    copied = shutil.copy2(_native_path(source), _native_path(destination))
+    return _logical_path(copied)
+
+
+def _copytree(source: str | Path, destination: str | Path) -> None:
+    shutil.copytree(_native_path(source), _native_path(destination), dirs_exist_ok=True)
+
+
+def _remove_tree(path: str | Path, *, ignore_errors: bool = False) -> None:
+    shutil.rmtree(_native_path(path), ignore_errors=ignore_errors)
+
+
+def _read_bytes(path: str | Path) -> bytes:
+    return _native_path(path).read_bytes()
+
+
+def _read_text(path: str | Path, *, encoding: str) -> str:
+    return _native_path(path).read_text(encoding=encoding)
+
+
+def _open_path(path: str | Path, mode: str, **kwargs: Any):
+    return _native_path(path).open(mode, **kwargs)
+
+
+def _atomic_write_recovery_json(path: Path, payload: dict[str, Any]) -> None:
+    atomic_write_json(_native_path(path), payload)
+
+
+def _read_recovery_json(path: Path, *, missing: dict[str, Any] | None = None) -> dict[str, Any]:
+    return read_json_object(_native_path(path), missing=missing)
+
+
+def _sqlite_uri(path: str | Path, *, mode: str = "ro") -> str:
+    from urllib.parse import quote
+
+    if os.name != "nt":
+        return f"{_native_path(path).as_uri()}?mode={mode}"
+    # Encode the complete native Windows filename so SQLite decodes ``\\?\\`` as
+    # filename data instead of treating ``?`` as the URI query delimiter.
+    return f"file:{quote(os.fspath(_native_path(path)), safe=':')}?mode={mode}"
+
+
+
+
+def _application_io_path(path: Path) -> Path:
+    """Namespace only roots whose descendants can exceed legacy Win32 MAX_PATH."""
+
+    logical = _resolved_path(path)
+    if os.name == "nt" and len(os.fspath(logical)) >= 180:
+        return _native_path(logical)
+    return logical
+
+
+def _iter_tree(root: Path) -> Iterable[Path]:
+    """Yield logical descendants while traversing through native long paths."""
+
+    stack: list[tuple[Path, Path]] = [(root, _native_path(root))]
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    while stack:
+        logical_parent, native_parent = stack.pop()
+        with os.scandir(native_parent) as iterator:
+            entries = sorted(iterator, key=lambda item: item.name.casefold())
+        directories: list[tuple[Path, Path]] = []
+        for entry in entries:
+            logical = logical_parent / entry.name
+            native = native_parent / entry.name
+            yield logical
+            metadata = entry.stat(follow_symlinks=False)
+            attributes = getattr(metadata, "st_file_attributes", 0)
+            if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode) and not (
+                os.name == "nt" and attributes & reparse
+            ):
+                directories.append((logical, native))
+        stack.extend(reversed(directories))
+
+
+def _iter_files(root: Path) -> Iterable[Path]:
+    if not _path_is_dir(root):
+        return
+    for path in _iter_tree(root):
+        if _path_is_file(path):
+            yield path
+
+
+def _glob_paths(root: Path, pattern: str, *, recursive: bool) -> tuple[Path, ...]:
+    if not _path_is_dir(root):
+        return ()
+    paths = _iter_tree(root) if recursive else (path for path in _iter_tree(root) if path.parent == root)
+    return tuple(sorted(path for path in paths if path.relative_to(root).match(pattern)))
+
+
+def _ensure_contained_path(root: Path, candidate: Path, *, field: str) -> Path:
+    resolved_root = _resolved_path(root)
+    resolved_candidate = _resolved_path(candidate)
+    if resolved_candidate == resolved_root or resolved_candidate.is_relative_to(resolved_root):
+        return resolved_candidate
+    raise DesktopOperationError("desktop_path_escape", f"{field} escapes its owned root")
+
+
+def _mkdtemp(*, prefix: str, directory: Path) -> Path:
+    return _logical_path(tempfile.mkdtemp(prefix=prefix, dir=_native_path(directory)))
+
+
+def _public_logical_paths(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(_EXTENDED_PATH_PREFIX):
+        return str(_logical_path(value))
+    if isinstance(value, Mapping):
+        return {str(key): _public_logical_paths(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_public_logical_paths(item) for item in value)
+    if isinstance(value, list):
+        return [_public_logical_paths(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -89,7 +278,7 @@ class StorageInventory:
         identifiers = [item.owner_id for item in self.owners]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("storage owner identifiers must be unique")
-        resolved = [(item.owner_id, item.path.resolve(strict=False)) for item in self.owners]
+        resolved = [(item.owner_id, _resolved_path(item.path)) for item in self.owners]
         for index, (owner, path) in enumerate(resolved):
             for other_owner, other in resolved[index + 1 :]:
                 if path == other or path.is_relative_to(other) or other.is_relative_to(path):
@@ -176,10 +365,36 @@ class StorageInventoryResolver:
             StorageOwner("research_graph_results", settings.research_root / "graph-results.sqlite3", "file", storage_schema("research_graph_results"), False, True, "sqlite", ("runtime_artifacts",), ()),
             StorageOwner("research_harness_side_effects", settings.research_root / "harness-side-effects.sqlite3", "file", storage_schema("research_harness_side_effects"), False, True, "sqlite", ("runtime_artifacts",), ()),
             StorageOwner("research_harness_node_output", settings.research_root / "harness-node-output.sqlite3", "file", storage_schema("research_harness_node_output"), False, True, "sqlite", ("runtime_artifacts",), ()),
-            StorageOwner("desktop_control", self.config.control_path.resolve(strict=False), "file", storage_schema("desktop_control"), True, True, "json_lock", ("runtime_artifacts",), ()),
+            StorageOwner(
+                "research_personal_memory",
+                self._path(
+                    self.environ.get("NEWSROOM_RESEARCH_PERSONAL_MEMORY_PATH")
+                    or Path(self.environ.get("NEWS_RESEARCH_ROOT") or settings.research_root)
+                    / "personal-memory.sqlite3"
+                ),
+                "file",
+                storage_schema("research_personal_memory"),
+                False,
+                True,
+                "sqlite",
+                (),
+                (),
+            ),
+            StorageOwner(
+                "research_runtime_settings",
+                Path(self.config.runtime_root) / "desktop" / "config" / "research-runtime.json",
+                "file",
+                storage_schema("research_runtime_settings"),
+                False,
+                False,
+                "json_lock",
+                (),
+                ("OS vault credential values are never included; only the fixed credential reference is restored",),
+            ),
+            StorageOwner("desktop_control", _resolved_path(self.config.control_path), "file", storage_schema("desktop_control"), True, True, "json_lock", ("runtime_artifacts",), ()),
         ]
         if settings.rag_backend == "local":
-            owners.append(StorageOwner("research_rag_local", settings.rag_local_root, "directory", storage_schema("research_rag_local"), True, True, "local_chunk_store", ("research_run_store",), ()))
+            owners.append(StorageOwner("research_rag_local", settings.rag_local_root, "directory", storage_schema("research_rag_local"), settings.rag_local_required or _path_exists(settings.rag_local_root), True, "local_chunk_store", ("research_run_store",), ()))
         else:
             run_owner = next(owner for owner in owners if owner.owner_id == "research_run_store")
             owners[owners.index(run_owner)] = replace(run_owner, external_requirements=("external vector index must be rebuilt or restored independently",))
@@ -196,7 +411,8 @@ class StorageInventoryResolver:
         path = Path(value).expanduser()
         if not path.is_absolute():
             path = self.config.project_root / path
-        resolved = path.resolve(strict=False)
+        _reject_inventory_reparse_path(path)
+        resolved = _resolved_path(path)
         if resolved == Path(resolved.anchor):
             raise DesktopOperationError("desktop_inventory_path_unsafe", "storage owner cannot resolve to a filesystem root")
         return resolved
@@ -204,11 +420,11 @@ class StorageInventoryResolver:
     @staticmethod
     def _validate_known_paths(owners: list[StorageOwner], *, require_existing: bool) -> None:
         for owner in owners:
-            if owner.path.exists() and owner.kind == "file" and not owner.path.is_file():
+            if _path_exists(owner.path) and owner.kind == "file" and not _path_is_file(owner.path):
                 raise DesktopOperationError("desktop_inventory_kind_mismatch", f"storage owner is not a file: {owner.owner_id}")
-            if owner.path.exists() and owner.kind == "directory" and not owner.path.is_dir():
+            if _path_exists(owner.path) and owner.kind == "directory" and not _path_is_dir(owner.path):
                 raise DesktopOperationError("desktop_inventory_kind_mismatch", f"storage owner is not a directory: {owner.owner_id}")
-            if require_existing and owner.required and not owner.path.exists():
+            if require_existing and owner.required and not _path_exists(owner.path):
                 raise DesktopOperationError("desktop_inventory_required_owner_missing", f"required storage owner is missing: {owner.owner_id}")
 
 
@@ -229,10 +445,10 @@ class BackupManager:
         target = Path(destination).expanduser() if destination else self.config.backup_root / f"{backup_id}.zip"
         if not target.is_absolute():
             target = self.config.project_root / target
-        target = target.resolve(strict=False)
-        if target.exists():
+        target = _resolved_path(target)
+        if _path_exists(target):
             raise DesktopOperationError("desktop_backup_exists", "backup destination already exists")
-        target.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir(target.parent, parents=True, exist_ok=True)
         snapshots_root: Path | None = None
         temp_target = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         admission_was_open = False
@@ -240,93 +456,89 @@ class BackupManager:
             admission_was_open = bool(
                 self.control_plane.status().get("admission_open", True)
             )
-            self.config.runtime_root.mkdir(parents=True, exist_ok=True)
-            snapshots_root = Path(
-                tempfile.mkdtemp(
-                    prefix="desktop-backup-",
-                    dir=self.config.runtime_root,
-                )
-            )
-            protect_private_path(snapshots_root)
+            _mkdir(self.config.runtime_root, parents=True, exist_ok=True)
+            snapshots_root = _mkdtemp(prefix="desktop-backup-", directory=self.config.runtime_root)
+            protect_private_path(_native_path(snapshots_root))
             drain = self.control_plane.begin_drain(timeout_seconds=30.0)
             if int(drain.get("active_count", 0)) != 0:
                 raise DesktopOperationError("desktop_backup_writer_detected", "application writers did not drain before backup")
             files: list[BackupFile] = []
             total_bytes = 0
             for owner in inventory.owners:
-                if not owner.path.exists():
+                if not _path_exists(owner.path):
                     continue
                 owner_snapshot = snapshots_root / owner.owner_id
                 self._snapshot_owner(owner, owner_snapshot)
                 for source, relative in _iter_snapshot_files(owner_snapshot):
-                    size = source.stat().st_size
+                    size = _path_stat(source).st_size
                     if size > MAX_SINGLE_FILE_BYTES:
                         raise DesktopOperationError("desktop_backup_file_too_large", f"backup item exceeds the per-file limit: {owner.owner_id}/{relative}")
-                    data = source.read_bytes()
+                    data = _read_bytes(source)
                     files.append(BackupFile(owner.owner_id, relative, size, sha256(data).hexdigest()))
                     total_bytes += size
                     if len(files) > MAX_BACKUP_FILES or total_bytes > MAX_BACKUP_BYTES:
                         raise DesktopOperationError("desktop_backup_limit_exceeded", "backup exceeds configured file or byte limits")
+            _validate_local_chunk_snapshot(inventory, snapshots_root)
             requirements = sorted({item for owner in inventory.owners for item in owner.external_requirements})
             if self.inventory_resolver.environ.get("NEWSROOM_PAPERS_DATA_PATH"):
                 requirements.append("rebuildable public paper cache")
             manifest = BackupManifest(backup_id, utc_timestamp(), release_identity, inventory, tuple(files), tuple(sorted(_EXCLUDED_NAMES | {f"*{suffix}" for suffix in _EXCLUDED_SUFFIXES})), tuple(requirements))
-            temp_target.touch(exist_ok=False)
-            protect_private_path(temp_target)
-            with zipfile.ZipFile(temp_target, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+            _touch(temp_target, exist_ok=False)
+            protect_private_path(_native_path(temp_target))
+            with zipfile.ZipFile(_native_path(temp_target), "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
                 for item in files:
-                    archive.write(snapshots_root / item.owner_id / Path(item.path), arcname=f"data/{item.owner_id}/{item.path}")
+                    archive.write(_native_path(snapshots_root / item.owner_id / Path(item.path)), arcname=f"data/{item.owner_id}/{item.path}")
                 archive.writestr("manifest.json", json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-            protect_private_path(temp_target)
-            os.replace(temp_target, target)
-            protect_private_path(target)
+            protect_private_path(_native_path(temp_target))
+            _replace(temp_target, target)
+            protect_private_path(_native_path(target))
             return OperationResult(True, "backup", "COMPLETE", "desktop_backup_created", "consistent local desktop backup created", {"backup_path": str(target), "backup_id": backup_id, "file_count": len(files), "total_bytes": manifest.total_bytes, "external_requirements": requirements})
         except Exception:
-            if temp_target.exists():
-                temp_target.unlink()
+            if _path_exists(temp_target):
+                _unlink(temp_target)
             raise
         finally:
             if snapshots_root is not None:
-                shutil.rmtree(snapshots_root, ignore_errors=True)
+                _remove_tree(snapshots_root, ignore_errors=True)
             if admission_was_open:
                 self.control_plane.resume_admission()
 
     def _snapshot_owner(self, owner: StorageOwner, destination: Path) -> None:
-        destination.mkdir(parents=True, exist_ok=True)
+        _mkdir(destination, parents=True, exist_ok=True)
         if owner.kind == "file":
             self._snapshot_file(owner.path, destination / "value", consistency=owner.consistency)
             return
         reject_reparse_path(owner.path, root=owner.path)
         with ExitStack() as locks:
             for lock_path in _owner_lock_paths(owner):
-                locks.enter_context(exclusive_lock(lock_path, timeout_seconds=0.1))
+                locks.enter_context(exclusive_lock(_native_path(lock_path), timeout_seconds=0.1))
             before = _tree_signature(owner.path)
-            for path in sorted(owner.path.rglob("*")):
+            for path in _iter_tree(owner.path):
                 relative = path.relative_to(owner.path)
                 if _excluded(relative, path):
                     continue
-                if path.is_symlink() or _is_reparse_point(path):
+                if _path_is_symlink(path) or _is_reparse_point(path):
                     raise DesktopOperationError("desktop_backup_reparse_point", f"storage owner contains a link or junction: {owner.owner_id}/{relative.as_posix()}")
-                if path.is_dir():
+                if _path_is_dir(path):
                     continue
                 target = destination / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
+                _mkdir(target.parent, parents=True, exist_ok=True)
                 self._snapshot_file(path, target, consistency="sqlite" if _is_sqlite(path) else "file")
             after = _tree_signature(owner.path)
             if before != after:
                 raise DesktopOperationError("desktop_backup_writer_detected", f"storage owner changed while being copied: {owner.owner_id}")
 
     def _snapshot_file(self, source: Path, destination: Path, *, consistency: str) -> None:
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir(destination.parent, parents=True, exist_ok=True)
         if consistency == "sqlite" or _is_sqlite(source):
             _sqlite_snapshot(source, destination)
             return
         lock = Path(f"{source}.lock")
-        with exclusive_lock(lock, timeout_seconds=0.1):
-            before = source.stat()
+        with exclusive_lock(_native_path(lock), timeout_seconds=0.1):
+            before = _path_stat(source)
             before_digest = _file_digest(source)
-            shutil.copy2(source, destination)
-            after = source.stat()
+            _copy2(source, destination)
+            after = _path_stat(source)
             after_digest = _file_digest(source)
             copied_digest = _file_digest(destination)
             if (before.st_size, before.st_mtime_ns, before_digest) != (after.st_size, after.st_mtime_ns, after_digest) or copied_digest != before_digest:
@@ -340,7 +552,7 @@ class BackupManager:
             return {"release_id": "unavailable", "source_revision": "unavailable"}
 
     def _instance_status(self) -> str:
-        return str(read_json_object(self.config.runtime_root / "instance.json", missing={"status": "STOPPED"}).get("status") or "STOPPED")
+        return str(_read_recovery_json(self.config.runtime_root / "instance.json", missing={"status": "STOPPED"}).get("status") or "STOPPED")
 
 
 class RestoreManager:
@@ -352,39 +564,56 @@ class RestoreManager:
         self.lifecycle_status = lifecycle_status or self._instance_status
         self.validator = validator or _validate_restored_owners
 
-    def restore(self, backup: str | Path, *, target_root: str | Path | None = None, activate: bool = False, _schema_compatibility: Mapping[str, Any] | None = None) -> OperationResult:
+    def restore(
+        self,
+        backup: str | Path,
+        *,
+        target_root: str | Path | None = None,
+        activate: bool = False,
+        personal_memory_confirmation: str | None = None,
+        _schema_compatibility: Mapping[str, Any] | None = None,
+    ) -> OperationResult:
         try:
-            source = Path(backup).expanduser().resolve(strict=True)
+            source = _resolved_path(Path(backup).expanduser(), strict=True)
         except (FileNotFoundError, OSError) as exc:
             raise DesktopOperationError("desktop_backup_missing", "backup archive does not exist") from exc
-        if not source.is_file():
+        if not _path_is_file(source):
             raise DesktopOperationError("desktop_backup_missing", "backup archive does not exist")
         target = Path(target_root).expanduser() if target_root else self.config.backup_root / "restores" / f"restore-{uuid4().hex}"
         if not target.is_absolute():
             target = self.config.project_root / target
-        target = target.resolve(strict=False)
+        target = _resolved_path(target)
         if target == Path(target.anchor):
             raise DesktopOperationError("desktop_restore_target_unsafe", "restore target cannot be a filesystem root")
         expected_inventory = self.inventory_resolver.resolve(require_existing=False)
         for owner in expected_inventory.owners:
-            original = owner.path.resolve(strict=False)
+            original = _resolved_path(owner.path)
             if target == original or target.is_relative_to(original) or original.is_relative_to(target):
                 raise DesktopOperationError("desktop_restore_target_overlaps_storage", "restore target must be isolated from every original storage root")
-        if target.exists() and any(target.iterdir()):
+        if _path_exists(target) and any(_iter_tree(target)):
             raise DesktopOperationError("desktop_restore_target_not_empty", "restore target must be absent or empty")
-        target.mkdir(parents=True, exist_ok=True)
+        _mkdir(target, parents=True, exist_ok=True)
         reject_reparse_path(target, root=target)
-        protect_private_path(target)
+        protect_private_path(_native_path(target))
         manifest, inventory, owner_paths = self._extract_and_validate(source, target, schema_compatibility=_schema_compatibility)
         relocation_count = _rewrite_path_references(
             owner_paths,
             _owner_path_mapping(inventory, owner_paths, use_backup_sources=True),
+        )
+        owner_provenance = _persist_restored_owner_provenance(
+            inventory,
+            owner_paths,
+            backup_id=str(manifest["backup_id"]),
         )
         validation = self.validator(inventory, owner_paths)
         _invalidate_staged_sessions(owner_paths.get("auth_sessions"))
         isolation = validation.get("application_isolation", {}) if isinstance(validation, Mapping) else {}
         if not isolation.get("verified"):
             raise DesktopOperationError("desktop_restore_application_validation_missing", "restored storage was not read through an isolated application store")
+        personal_memory_preview = _personal_memory_restore_preview(
+            owner_paths.get("research_personal_memory"),
+            backup_id=str(manifest["backup_id"]),
+        )
         restore_report = {
             "schema": RESTORE_SCHEMA,
             "backup_id": manifest["backup_id"],
@@ -395,9 +624,28 @@ class RestoreManager:
             "validation": validation,
             "application_isolation": isolation,
             "relocated_reference_count": relocation_count,
+            "owner_provenance": owner_provenance,
+            "personal_memory_restore": personal_memory_preview,
             "activation": "pending" if activate else "not_requested",
         }
-        atomic_write_json(target / "restore-report.json", restore_report)
+        if (
+            activate
+            and personal_memory_preview is not None
+            and personal_memory_confirmation
+            != personal_memory_preview["confirmation_token"]
+        ):
+            restore_report["activation"] = "personal_memory_confirmation_required"
+            _atomic_write_recovery_json(target / "restore-report.json", restore_report)
+            raise DesktopOperationError(
+                "desktop_restore_personal_memory_confirmation_required",
+                "restoring personal memory requires explicit confirmation for this backup preview",
+                details={
+                    "restore_root": str(target),
+                    "backup_id": manifest["backup_id"],
+                    "personal_memory_restore": personal_memory_preview,
+                },
+            )
+        _atomic_write_recovery_json(target / "restore-report.json", restore_report)
         activation = None
         if activate:
             admission_was_open = bool(self.control_plane.status().get("admission_open", True))
@@ -415,14 +663,14 @@ class RestoreManager:
                 activation = self._activate(inventory, owner_paths, target, backup=source)
                 restore_report["activation"] = "complete"
                 restore_report["generation"] = activation["generation"]
-                atomic_write_json(target / "restore-report.json", restore_report)
+                _atomic_write_recovery_json(target / "restore-report.json", restore_report)
             finally:
                 if admission_was_open:
                     self.control_plane.resume_admission()
-        return OperationResult(True, "restore", "ACTIVATED" if activate else "VERIFIED", "desktop_restore_activated" if activate else "desktop_restore_verified", "backup restored and validated in an isolated root", {"restore_root": str(target), "backup_id": manifest["backup_id"], "validation": validation, "activation": activation})
+        return OperationResult(True, "restore", "ACTIVATED" if activate else "VERIFIED", "desktop_restore_activated" if activate else "desktop_restore_verified", "backup restored and validated in an isolated root", {"restore_root": str(target), "backup_id": manifest["backup_id"], "validation": validation, "owner_provenance": owner_provenance, "personal_memory_restore": personal_memory_preview, "activation": activation})
 
     def _extract_and_validate(self, source: Path, target: Path, *, schema_compatibility: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], StorageInventory, dict[str, Path]]:
-        with zipfile.ZipFile(source, "r") as archive:
+        with zipfile.ZipFile(_native_path(source), "r") as archive:
             try:
                 manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
             except (KeyError, UnicodeError, json.JSONDecodeError) as exc:
@@ -442,18 +690,21 @@ class RestoreManager:
             owner_paths = {owner.owner_id: target / "owners" / owner.owner_id / ("value" if owner.kind == "file" else "") for owner in inventory.owners}
             for owner in inventory.owners:
                 if owner.kind == "directory":
-                    owner_paths[owner.owner_id].mkdir(parents=True, exist_ok=True)
+                    # Preserve an absent local-only index rather than manufacturing one.
+                    if owner.owner_id == "research_rag_local" and not owner.required:
+                        continue
+                    _mkdir(owner_paths[owner.owner_id], parents=True, exist_ok=True)
             for name, entry in expected_members.items():
                 info = archive_members[name]
                 _validate_zip_member(info)
                 if info.file_size != entry.size or entry.size > MAX_SINGLE_FILE_BYTES:
                     raise DesktopOperationError("desktop_backup_size_mismatch", f"backup member size mismatch: {name}")
                 destination_root = target / "owners" / entry.owner_id
-                destination = ensure_contained(destination_root, destination_root / Path(entry.path), field="restore member")
-                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination = _ensure_contained_path(destination_root, destination_root / Path(entry.path), field="restore member")
+                _mkdir(destination.parent, parents=True, exist_ok=True)
                 digest = sha256()
                 written = 0
-                with archive.open(info, "r") as reader, destination.open("xb") as writer:
+                with archive.open(info, "r") as reader, _open_path(destination, "xb") as writer:
                     while True:
                         chunk = reader.read(1024 * 1024)
                         if not chunk:
@@ -464,7 +715,7 @@ class RestoreManager:
                         digest.update(chunk)
                         writer.write(chunk)
                 if written != entry.size or digest.hexdigest() != entry.sha256:
-                    destination.unlink(missing_ok=True)
+                    _unlink(destination, missing_ok=True)
                     raise DesktopOperationError("desktop_backup_checksum_mismatch", f"backup member checksum mismatch: {name}")
                 reject_reparse_path(destination, root=target)
             return manifest, inventory, owner_paths
@@ -473,8 +724,8 @@ class RestoreManager:
         if self.lifecycle_status() not in {"STOPPED", "FAILED"}:
             raise DesktopOperationError("desktop_restore_requires_stopped_instance", "restore activation requires the local desktop instance to be stopped")
         journal_path = self.config.runtime_root / "restore-activation.json"
-        if journal_path.exists():
-            existing = read_json_object(journal_path)
+        if _path_exists(journal_path):
+            existing = _read_recovery_json(journal_path)
             if existing.get("status") not in {"complete", "rolled_back"}:
                 self._recover_activation_journal(existing, journal_path)
         transaction = uuid4().hex
@@ -486,15 +737,15 @@ class RestoreManager:
             prepared = destination.parent / f".{destination.name}.restore-{transaction}"
             rollback = destination.parent / f".{destination.name}.rollback-{transaction}"
             failed = destination.parent / f".{destination.name}.failed-{transaction}"
-            if prepared.exists() or rollback.exists() or failed.exists():
+            if _path_exists(prepared) or _path_exists(rollback) or _path_exists(failed):
                 raise DesktopOperationError("desktop_activation_path_exists", "owned restore preparation, rollback, or failure path already exists")
-            if not staged.exists() and owner.required:
+            if not _path_exists(staged) and owner.required:
                 raise DesktopOperationError("desktop_restore_required_owner_missing", f"required restored owner is missing: {owner.owner_id}")
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            _mkdir(destination.parent, parents=True, exist_ok=True)
             reject_reparse_path(destination.parent, root=destination.parent)
-            operations.append({"owner_id": owner.owner_id, "destination": str(destination), "prepared": str(prepared) if staged.exists() else None, "rollback": str(rollback), "failed": str(failed), "ownership_marker": _activation_ownership_marker(transaction, owner.owner_id, destination), "had_destination": destination.exists(), "had_prepared": staged.exists(), "prepared_ready": False, "state": "preparing"})
+            operations.append({"owner_id": owner.owner_id, "destination": str(destination), "prepared": str(prepared) if _path_exists(staged) else None, "rollback": str(rollback), "failed": str(failed), "ownership_marker": _activation_ownership_marker(transaction, owner.owner_id, destination), "had_destination": _path_exists(destination), "had_prepared": _path_exists(staged), "prepared_ready": False, "state": "preparing"})
         journal = {"schema": ACTIVATION_SCHEMA, "transaction": transaction, "status": "preparing", "created_at": utc_timestamp(), "backup": str(backup), "restore_root": str(restore_root), "operations": operations}
-        atomic_write_json(journal_path, journal)
+        _atomic_write_recovery_json(journal_path, journal)
         try:
             for operation in operations:
                 if operation["prepared"] is not None:
@@ -502,40 +753,40 @@ class RestoreManager:
                     prepared = Path(str(operation["prepared"]))
                     owner = owners_by_id[str(operation["owner_id"])]
                     if owner.kind == "file":
-                        prepared.touch(exist_ok=False)
-                        protect_private_path(prepared)
-                        shutil.copy2(staged, prepared)
+                        _touch(prepared, exist_ok=False)
+                        protect_private_path(_native_path(prepared))
+                        _copy2(staged, prepared)
                     else:
-                        prepared.mkdir()
-                        protect_private_path(prepared)
-                        shutil.copytree(staged, prepared, dirs_exist_ok=True)
+                        _mkdir(prepared)
+                        protect_private_path(_native_path(prepared))
+                        _copytree(staged, prepared)
                     operation["prepared_ready"] = True
                 operation["state"] = "prepared"
-                atomic_write_json(journal_path, journal)
+                _atomic_write_recovery_json(journal_path, journal)
             prepared_paths = {operation["owner_id"]: Path(operation["prepared"]) for operation in operations if operation["prepared"]}
             destination_paths = {owner.owner_id: owner.path for owner in inventory.owners}
             _rewrite_path_references(prepared_paths, _owner_path_mapping(inventory, destination_paths, use_backup_sources=False, staged_paths=owner_paths))
             journal["status"] = "activating"
-            atomic_write_json(journal_path, journal)
+            _atomic_write_recovery_json(journal_path, journal)
             for operation in operations:
                 destination = Path(str(operation["destination"]))
                 prepared = Path(str(operation["prepared"])) if operation["prepared"] else None
                 rollback = Path(str(operation["rollback"]))
-                if destination.exists():
-                    os.replace(destination, rollback)
+                if _path_exists(destination):
+                    _replace(destination, rollback)
                     operation["state"] = "old_moved"
-                    atomic_write_json(journal_path, journal)
+                    _atomic_write_recovery_json(journal_path, journal)
                 if prepared is not None:
-                    os.replace(prepared, destination)
+                    _replace(prepared, destination)
                 operation["state"] = "activated"
-                atomic_write_json(journal_path, journal)
+                _atomic_write_recovery_json(journal_path, journal)
             journal["status"] = "rotating_generation"
-            atomic_write_json(journal_path, journal)
+            _atomic_write_recovery_json(journal_path, journal)
             rotation = self.control_plane.rotate_generation(reason=f"restore:{transaction}")
             journal["generation"] = rotation["generation"]
             journal["status"] = "complete"
             journal["completed_at"] = utc_timestamp()
-            atomic_write_json(journal_path, journal)
+            _atomic_write_recovery_json(journal_path, journal)
             return {"transaction": transaction, "generation": rotation["generation"], "journal": str(journal_path), "rollback_paths": {operation["owner_id"]: operation["rollback"] for operation in operations}}
         except Exception:
             self._recover_activation_journal(journal, journal_path)
@@ -544,41 +795,41 @@ class RestoreManager:
     def _recover_activation_journal(self, journal: dict[str, Any], journal_path: Path) -> None:
         transaction, operations = self._validated_activation_journal(journal)
         journal["status"] = "rolling_back"
-        atomic_write_json(journal_path, journal)
+        _atomic_write_recovery_json(journal_path, journal)
         changed = False
         for operation, destination, prepared, rollback, failed in reversed(operations):
-            if rollback.exists():
-                if destination.exists():
-                    if failed.exists():
+            if _path_exists(rollback):
+                if _path_exists(destination):
+                    if _path_exists(failed):
                         raise DesktopOperationError("desktop_activation_journal_invalid", "restore activation recovery path combination is ambiguous")
-                    os.replace(destination, failed)
+                    _replace(destination, failed)
                     changed = True
-                if prepared is not None and prepared.exists():
+                if prepared is not None and _path_exists(prepared):
                     _remove_activation_path(prepared)
-                os.replace(rollback, destination)
+                _replace(rollback, destination)
                 changed = True
             elif bool(operation["had_destination"]):
-                if failed.exists():
+                if _path_exists(failed):
                     changed = True
-                if prepared is not None and prepared.exists():
+                if prepared is not None and _path_exists(prepared):
                     _remove_activation_path(prepared)
             else:
-                if destination.exists():
-                    if failed.exists():
+                if _path_exists(destination):
+                    if _path_exists(failed):
                         raise DesktopOperationError("desktop_activation_journal_invalid", "restore activation recovery path combination is ambiguous")
-                    os.replace(destination, failed)
+                    _replace(destination, failed)
                     changed = True
-                elif failed.exists():
+                elif _path_exists(failed):
                     changed = True
-                if prepared is not None and prepared.exists():
+                if prepared is not None and _path_exists(prepared):
                     _remove_activation_path(prepared)
             operation["state"] = "rolled_back"
-            atomic_write_json(journal_path, journal)
+            _atomic_write_recovery_json(journal_path, journal)
         rotation = self.control_plane.rotate_generation(reason=f"restore-recovery:{transaction}") if changed else None
         journal["status"] = "rolled_back"
         journal["recovered_at"] = utc_timestamp()
         journal["recovery_generation"] = rotation["generation"] if rotation else None
-        atomic_write_json(journal_path, journal)
+        _atomic_write_recovery_json(journal_path, journal)
 
     def _validated_activation_journal(self, journal: Mapping[str, Any]) -> tuple[str, list[tuple[dict[str, Any], Path, Path | None, Path, Path]]]:
         transaction = str(journal.get("transaction") or "")
@@ -621,12 +872,12 @@ class RestoreManager:
                 raise DesktopOperationError("desktop_activation_journal_invalid", "restore activation journal state is invalid")
             reject_reparse_path(destination.parent, root=destination.parent)
             for existing in (destination, prepared, rollback, failed):
-                if existing is not None and existing.exists():
+                if existing is not None and _path_exists(existing):
                     reject_reparse_path(existing, root=existing)
-            destination_exists = destination.exists()
-            prepared_exists = prepared is not None and prepared.exists()
-            rollback_exists = rollback.exists()
-            failed_exists = failed.exists()
+            destination_exists = _path_exists(destination)
+            prepared_exists = prepared is not None and _path_exists(prepared)
+            rollback_exists = _path_exists(rollback)
+            failed_exists = _path_exists(failed)
             if rollback_exists and not had_destination:
                 raise DesktopOperationError("desktop_activation_journal_invalid", "restore activation rollback presence is inconsistent")
             if had_destination and not destination_exists and not rollback_exists:
@@ -662,8 +913,8 @@ class RestoreManager:
                 raise DesktopOperationError("desktop_release_data_incompatible", "target release cannot read the current data schemas", details={"incompatible": incompatible})
             preflight_root = self.config.backup_root / "restores" / f"rollback-{uuid4().hex}"
             restore_result = self.restore(compatible_backup, target_root=preflight_root, activate=False, _schema_compatibility=compatibility)
-            backup_source = Path(compatible_backup).expanduser().resolve(strict=True)
-            with zipfile.ZipFile(backup_source, "r") as archive:
+            backup_source = _resolved_path(Path(compatible_backup).expanduser(), strict=True)
+            with zipfile.ZipFile(_native_path(backup_source), "r") as archive:
                 try:
                     backup_manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
                 except (KeyError, UnicodeError, json.JSONDecodeError) as exc:
@@ -678,14 +929,14 @@ class RestoreManager:
         except Exception:
             if activation is not None:
                 journal_path = self.config.runtime_root / "restore-activation.json"
-                journal = read_json_object(journal_path)
+                journal = _read_recovery_json(journal_path)
                 journal["status"] = "rolling_back"
-                atomic_write_json(journal_path, journal)
+                _atomic_write_recovery_json(journal_path, journal)
                 self._recover_activation_journal(journal, journal_path)
             raise
         return OperationResult(True, "rollback", "ACTIVATED", "desktop_release_rolled_back", "compatible verified release activated", {"release": pointer, "data_restore": restore_result.to_dict() if restore_result else None, "activation": activation})
     def _instance_status(self) -> str:
-        return str(read_json_object(self.config.runtime_root / "instance.json", missing={"status": "STOPPED"}).get("status") or "STOPPED")
+        return str(_read_recovery_json(self.config.runtime_root / "instance.json", missing={"status": "STOPPED"}).get("status") or "STOPPED")
 
 
 def _activation_ownership_marker(transaction: str, owner_id: str, destination: Path) -> str:
@@ -703,10 +954,10 @@ def _lexical_absolute_path(value: Any, *, field: str) -> Path:
 
 def _remove_activation_path(path: Path) -> None:
     reject_reparse_path(path, root=path)
-    if path.is_dir():
-        shutil.rmtree(path)
+    if _path_is_dir(path):
+        _remove_tree(path)
     else:
-        path.unlink()
+        _unlink(path)
 
 def _incompatible_schemas(inventory: StorageInventory, readable_schemas: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return {
@@ -744,7 +995,12 @@ def _inventory_from_manifest(manifest: Mapping[str, Any], expected: StorageInven
         raw_source = Path(str(raw.get("source_path") or "")).expanduser()
         if not raw_source.is_absolute() or raw_source == Path(raw_source.anchor):
             raise DesktopOperationError("desktop_backup_manifest_invalid", f"backup owner source path is invalid: {owner_id}")
-        owners.append(replace(current, schema=raw_schema, backup_source_path=raw_source.resolve(strict=False)))
+        raw_required = raw.get("required")
+        if not isinstance(raw_required, bool):
+            raise DesktopOperationError("desktop_backup_manifest_invalid", "backup owner required flag is invalid")
+        if owner_id == "research_rag_local" and current.required and not raw_required:
+            raise DesktopOperationError("desktop_backup_required_owner_missing", "backup lacks the local chunk owner required by the current runtime")
+        owners.append(replace(current, required=current.required or raw_required, schema=raw_schema, backup_source_path=_resolved_path(raw_source)))
     missing = [owner.owner_id for owner in expected.owners if owner.required and owner.owner_id not in seen]
     if missing:
         raise DesktopOperationError("desktop_backup_required_owner_missing", "backup omits required storage owners", details={"owners": missing})
@@ -808,7 +1064,7 @@ def _owner_path_mapping(
         sources.append((owner.backup_source_path if use_backup_sources else None) or owner.path)
         sources.append(owner.path)
         for source in sources:
-            mappings.append((source.resolve(strict=False), target.resolve(strict=False), owner.kind))
+            mappings.append((_resolved_path(source), _resolved_path(target), owner.kind))
     return tuple(mappings)
 
 
@@ -818,15 +1074,15 @@ def _rewrite_path_references(owner_paths: Mapping[str, Path], mappings: Iterable
     for owner_id, owner_root in owner_paths.items():
         if owner_id != "research_imports":
             continue
-        files = [owner_root] if owner_root.is_file() else list(owner_root.rglob("*.json")) if owner_root.is_dir() else []
+        files = [owner_root] if _path_is_file(owner_root) else list(_glob_paths(owner_root, "*.json", recursive=True)) if _path_is_dir(owner_root) else []
         for file in files:
             try:
-                payload = json.loads(file.read_text(encoding="utf-8"))
+                payload = json.loads(_read_text(file, encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError):
                 continue
             rewritten, count = _rewrite_value(payload, replacements)
             if count:
-                atomic_write_json(file, rewritten)
+                _atomic_write_recovery_json(file, rewritten)
                 changed += count
     return changed
 
@@ -859,53 +1115,99 @@ def _rewrite_value(value: Any, mappings: tuple[tuple[Path, Path, str], ...], *, 
     return value, 0
 
 
+
+def _persist_restored_owner_provenance(
+    inventory: StorageInventory,
+    owner_paths: Mapping[str, Path],
+    *,
+    backup_id: str,
+) -> dict[str, Any]:
+    receipts: dict[str, Any] = {}
+    for owner in inventory.owners:
+        if owner.owner_id != "research_paper_catalog":
+            continue
+        restored = owner_paths.get(owner.owner_id)
+        if restored is None or not _path_exists(restored):
+            continue
+        from infrastructure.research.catalog_store import (
+            ResearchCatalogStoreError,
+            persist_restore_provenance,
+        )
+
+        try:
+            receipts[owner.owner_id] = _public_logical_paths(persist_restore_provenance(
+                _native_path(restored),
+                backup_id=backup_id,
+                owner_id=owner.owner_id,
+                owner_schema=owner.schema,
+                trusted_backup_origins={
+                    owner.path,
+                    owner.backup_source_path or owner.path,
+                },
+            ))
+        except (OSError, ResearchCatalogStoreError) as exc:
+            raise DesktopOperationError(
+                "desktop_restore_paper_catalog_provenance_invalid",
+                "restored Research paper catalog provenance is invalid",
+            ) from exc
+    return receipts
+
 def _validate_restored_owners(inventory: StorageInventory, owner_paths: Mapping[str, Path]) -> dict[str, Any]:
     results: dict[str, Any] = {}
     application_receipts: dict[str, dict[str, Any]] = {}
     relocation_roots: list[tuple[Path, Path, str]] = []
     for item in inventory.owners:
         staged = owner_paths[item.owner_id]
-        for source in {item.path.resolve(strict=False), (item.backup_source_path or item.path).resolve(strict=False)}:
+        for source in {_resolved_path(item.path), _resolved_path(item.backup_source_path or item.path)}:
             relocation_roots.append((source, staged, item.kind))
-        relocation_roots.append((staged.resolve(strict=False), staged.resolve(strict=False), item.kind))
+        relocation_roots.append((_resolved_path(staged), _resolved_path(staged), item.kind))
     for owner in inventory.owners:
         restored = owner_paths[owner.owner_id]
-        if owner.required and not restored.exists():
+        if owner.required and not _path_exists(restored):
             raise DesktopOperationError("desktop_restore_required_owner_missing", f"required restored owner is missing: {owner.owner_id}")
-        if not restored.exists():
+        if not _path_exists(restored):
             results[owner.owner_id] = {"status": "absent_optional"}
             continue
-        reject_reparse_path(restored, root=restored if restored.is_dir() else restored.parent)
-        files = [restored] if restored.is_file() else [item for item in restored.rglob("*") if item.is_file() and not _excluded(item.relative_to(restored), item)]
+        reject_reparse_path(restored, root=restored if _path_is_dir(restored) else restored.parent)
+        files = [restored] if _path_is_file(restored) else [item for item in _iter_files(restored) if not _excluded(item.relative_to(restored), item)]
+        restored_io = _application_io_path(restored)
         relocated_references = 0
         if owner.owner_id == "auth_users":
-            application_receipts[owner.owner_id] = _validate_auth_users(restored)
+            application_receipts[owner.owner_id] = _validate_auth_users(restored_io)
         elif owner.owner_id == "auth_sessions":
-            application_receipts[owner.owner_id] = _validate_auth_sessions(restored)
+            application_receipts[owner.owner_id] = _validate_auth_sessions(restored_io)
         elif owner.owner_id == "auth_otp":
-            application_receipts[owner.owner_id] = _validate_auth_transaction(restored, collection="challenges", schema=owner.schema)
+            application_receipts[owner.owner_id] = _validate_auth_transaction(restored_io, collection="challenges", schema=owner.schema)
         elif owner.owner_id == "auth_oauth":
-            application_receipts[owner.owner_id] = _validate_auth_transaction(restored, collection="states", schema=owner.schema)
+            application_receipts[owner.owner_id] = _validate_auth_transaction(restored_io, collection="states", schema=owner.schema)
         elif owner.owner_id == "research_history":
-            application_receipts[owner.owner_id] = _validate_research_history(restored)
+            application_receipts[owner.owner_id] = _validate_research_history(restored_io)
         elif owner.owner_id == "research_imports":
-            application_receipts[owner.owner_id] = _validate_research_imports(restored)
+            application_receipts[owner.owner_id] = _validate_research_imports(restored_io)
         elif owner.owner_id == "runtime_artifacts":
-            application_receipts[owner.owner_id] = _validate_runtime_artifacts(restored, run_store_root=owner_paths.get("research_run_store"))
+            application_receipts[owner.owner_id] = _validate_runtime_artifacts(restored_io, run_store_root=_native_path(owner_paths["research_run_store"]) if owner_paths.get("research_run_store") is not None else None)
         elif owner.owner_id == "research_run_store":
-            application_receipts[owner.owner_id] = _validate_research_run_store(restored)
+            application_receipts[owner.owner_id] = _validate_research_run_store(restored_io)
         elif owner.owner_id == "research_rag_local":
-            application_receipts[owner.owner_id] = _validate_local_chunk_store(restored)
+            application_receipts[owner.owner_id] = _validate_local_chunk_store(restored_io)
         elif owner.owner_id == "research_rag_transcripts":
-            application_receipts[owner.owner_id] = _validate_paper_rag_transcript_store(restored)
+            application_receipts[owner.owner_id] = _validate_paper_rag_transcript_store(restored_io)
         elif owner.owner_id == "research_paper_catalog":
-            application_receipts[owner.owner_id] = _validate_research_catalog_store(restored)
+            application_receipts[owner.owner_id] = _validate_research_catalog_store(restored_io)
         elif owner.owner_id == "research_graph_results":
-            application_receipts[owner.owner_id] = _validate_graph_result_store(restored)
+            application_receipts[owner.owner_id] = _validate_graph_result_store(restored_io)
         elif owner.owner_id == "research_harness_side_effects":
-            application_receipts[owner.owner_id] = _validate_harness_side_effect_store(restored)
+            application_receipts[owner.owner_id] = _validate_harness_side_effect_store(restored_io)
         elif owner.owner_id == "research_harness_node_output":
-            application_receipts[owner.owner_id] = _validate_harness_node_output_store(restored)
+            application_receipts[owner.owner_id] = _validate_harness_node_output_store(restored_io)
+        elif owner.owner_id == "research_personal_memory":
+            application_receipts[owner.owner_id] = _validate_personal_memory_store(restored_io)
+        elif owner.owner_id == "research_runtime_settings":
+            application_receipts[owner.owner_id] = _validate_research_runtime_settings(restored_io)
+        if owner.owner_id in application_receipts:
+            receipt = _public_logical_paths(application_receipts[owner.owner_id])
+            receipt["configured_root"] = str(_resolved_path(restored))
+            application_receipts[owner.owner_id] = receipt
         for file in files:
             if _is_sqlite(file):
                 _validate_sqlite(file, required_tables=_required_sqlite_tables(owner.owner_id))
@@ -914,21 +1216,28 @@ def _validate_restored_owners(inventory: StorageInventory, owner_paths: Mapping[
             if file.suffix.casefold() != ".json" and owner.kind != "file":
                 continue
             try:
-                payload = json.loads(file.read_text(encoding="utf-8"))
+                payload = json.loads(_read_text(file, encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise DesktopOperationError("desktop_restore_json_invalid", f"restored JSON is invalid: {owner.owner_id}") from exc
             if owner.kind == "file":
                 actual_schema = payload.get("schemaVersion") or payload.get("schema_version") or payload.get("schema") if isinstance(payload, Mapping) else None
                 if actual_schema != owner.schema:
                     raise DesktopOperationError("desktop_restore_schema_mismatch", f"restored owner schema is incompatible: {owner.owner_id}")
-            for reference in _walk_path_references(payload):
+            for field_path, reference in _walk_path_references(payload):
                 candidate = _absolute_reference_path(reference)
                 if candidate is None:
+                    continue
+                if owner.owner_id == "research_paper_catalog" and _validate_legacy_catalog_manifest_reference(
+                    payload=payload,
+                    field_path=field_path,
+                    staged_root=restored,
+                ):
+                    relocated_references += 1
                     continue
                 if owner.owner_id != "research_imports":
                     raise DesktopOperationError("desktop_restore_absolute_reference_unsupported", f"checksum-protected restored owner contains an absolute reference that cannot be rewritten: {owner.owner_id}")
                 mapped = _relocated_reference(candidate, relocation_roots)
-                if mapped is None or not mapped.exists():
+                if mapped is None or not _path_exists(mapped):
                     raise DesktopOperationError("desktop_restore_absolute_reference_unsupported", f"restored owner contains an absolute reference that cannot be safely relocated: {owner.owner_id}")
                 relocated_references += 1
             _validate_declared_file_checksums(payload, file.parent)
@@ -945,17 +1254,17 @@ def _validate_restored_owners(inventory: StorageInventory, owner_paths: Mapping[
     present_application_owners = sorted(
         owner.owner_id
         for owner in inventory.owners
-        if owner_paths[owner.owner_id].exists() and owner.owner_id in _APPLICATION_VALIDATED_OWNERS
+        if _path_exists(owner_paths[owner.owner_id]) and owner.owner_id in _APPLICATION_VALIDATED_OWNERS
     )
     missing_application_validation = sorted(set(present_application_owners) - set(isolated_owner_ids))
     if missing_application_validation:
         raise DesktopOperationError("desktop_restore_application_validation_missing", "restored application owner was not read through its isolated adapter")
     for owner_id, receipt in application_receipts.items():
-        configured = Path(str(receipt["configured_root"])).resolve(strict=False)
-        staged = owner_paths[owner_id].resolve(strict=False)
+        configured = _resolved_path(Path(str(receipt["configured_root"])))
+        staged = _resolved_path(owner_paths[owner_id])
         if configured != staged:
             raise DesktopOperationError("desktop_restore_application_root_mismatch", "restored application adapter was not configured to the isolated owner root")
-        original = next(owner.path.resolve(strict=False) for owner in inventory.owners if owner.owner_id == owner_id)
+        original = next(_resolved_path(owner.path) for owner in inventory.owners if owner.owner_id == owner_id)
         if configured == original or configured.is_relative_to(original):
             raise DesktopOperationError("desktop_restore_application_root_mismatch", "restored application adapter resolved an original storage root")
     return {
@@ -972,6 +1281,14 @@ def _validate_restored_owners(inventory: StorageInventory, owner_paths: Mapping[
 
 def _public_validation_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     return {str(key): value for key, value in receipt.items() if not str(key).startswith("_")}
+
+
+def _canonical_source_revision(value: Any) -> str:
+    revision = str(value or "")
+    digest = revision.removeprefix("sha256:")
+    if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest.casefold()):
+        return digest.casefold()
+    return revision
 
 
 def _validate_application_reference_closure(owner_paths: Mapping[str, Path], receipts: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
@@ -995,12 +1312,12 @@ def _validate_application_reference_closure(owner_paths: Mapping[str, Path], rec
 
     artifact_refs = tuple(str(value) for value in run_receipt.get("_artifact_refs", ()))
     artifact_root = owner_paths.get("runtime_artifacts")
-    if artifact_refs and (artifact_root is None or not artifact_root.exists()):
+    if artifact_refs and (artifact_root is None or not _path_exists(artifact_root)):
         raise DesktopOperationError("desktop_restore_artifact_reference_dangling", "restored Research runs reference an absent isolated artifact store")
     if artifact_refs:
         from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
 
-        artifact_store = FilesystemHarnessArtifactPort(artifact_root)
+        artifact_store = FilesystemHarnessArtifactPort(_application_io_path(artifact_root))
         for ref in artifact_refs:
             parsed = urlsplit(ref)
             if parsed.scheme != "artifact" or not parsed.netloc:
@@ -1013,9 +1330,9 @@ def _validate_application_reference_closure(owner_paths: Mapping[str, Path], rec
     catalog_receipt = receipts.get("research_paper_catalog", {})
     catalog_papers = set(catalog_receipt.get("_paper_ids", ()))
     catalog_documents = set(catalog_receipt.get("_document_ids", ()))
-    catalog_revisions = set(catalog_receipt.get("_source_revisions", ()))
+    catalog_revisions = {_canonical_source_revision(value) for value in catalog_receipt.get("_source_revisions", ())}
     imported_papers = set(receipts.get("research_imports", {}).get("_paper_ids", ()))
-    imported_revisions = set(receipts.get("research_imports", {}).get("_source_revisions", ()))
+    imported_revisions = {_canonical_source_revision(value) for value in receipts.get("research_imports", {}).get("_source_revisions", ())}
     run_papers = set(run_receipt.get("_paper_ids", ()))
     if (imported_papers | run_papers) - catalog_papers:
         raise DesktopOperationError("desktop_restore_source_reference_dangling", "restored import or run references a paper absent from the isolated catalog")
@@ -1043,40 +1360,109 @@ def _validate_application_reference_closure(owner_paths: Mapping[str, Path], rec
 def _invalidate_staged_sessions(path: Path | None) -> None:
     if path is None:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, {"schemaVersion": "newsroom_auth_sessions.v1", "sessions": []})
+    _mkdir(path.parent, parents=True, exist_ok=True)
+    _atomic_write_recovery_json(path, {"schemaVersion": "newsroom_auth_sessions.v1", "sessions": []})
 
 
 def _sqlite_snapshot(source: Path, destination: Path) -> None:
-    write_uri = f"file:{source.as_posix()}?mode=rw"
-    read_uri = f"file:{source.as_posix()}?mode=ro"
+    """Create a consistent SQLite snapshot without opening the owned source via SQLite.
+
+    Opening the last connection to a WAL database can checkpoint durable WAL pages
+    into the main file on close, even when the connection only reads. Copy the
+    stable SQLite file set first, then run the native backup API against that
+    private copy so backup never creates SHM files or checkpoints user storage.
+    """
+
+    before = _sqlite_file_set_signature(source)
+    if not before[0][1]:
+        raise DesktopOperationError("desktop_sqlite_open_failed", f"could not open SQLite owner: {source.name}")
+    scratch = _mkdtemp(prefix="sqlite-source-", directory=destination.parent)
+    private_source = scratch / source.name
     try:
-        guard = sqlite3.connect(write_uri, uri=True, timeout=0, isolation_level=None)
-    except sqlite3.Error as exc:
-        raise DesktopOperationError("desktop_sqlite_open_failed", f"could not open SQLite owner: {source.name}") from exc
-    try:
-        guard.execute("PRAGMA busy_timeout=0")
-        guard.execute("BEGIN IMMEDIATE")
-        source_db = sqlite3.connect(read_uri, uri=True, timeout=0, isolation_level=None)
-        destination_db = sqlite3.connect(destination)
-        try:
+        protect_private_path(_native_path(scratch))
+        for suffix, exists, _size, _mtime_ns, _digest in before:
+            if not exists:
+                continue
+            source_file = Path(f"{source}{suffix}")
+            private_file = Path(f"{private_source}{suffix}")
+            _copy2(source_file, private_file)
+        _verify_sqlite_private_copy(before, private_source)
+        if _sqlite_file_set_signature(source) != before:
+            raise DesktopOperationError("desktop_backup_writer_detected", f"SQLite owner changed while being copied: {source.name}")
+
+        with ExitStack() as connections:
+            source_db = connections.enter_context(closing(sqlite3.connect(_native_path(private_source))))
+            destination_db = connections.enter_context(closing(sqlite3.connect(_native_path(destination))))
             source_db.backup(destination_db)
             integrity = destination_db.execute("PRAGMA integrity_check").fetchone()
             if not integrity or integrity[0] != "ok":
                 raise DesktopOperationError("desktop_sqlite_integrity_failed", f"SQLite snapshot failed integrity check: {source.name}")
-        finally:
-            destination_db.close()
-            source_db.close()
-        guard.execute("ROLLBACK")
-    except sqlite3.OperationalError as exc:
-        raise DesktopOperationError("desktop_backup_writer_detected", f"SQLite owner has an active or unknown writer: {source.name}") from exc
+        if _sqlite_file_set_signature(source) != before:
+            _unlink(destination, missing_ok=True)
+            raise DesktopOperationError("desktop_backup_writer_detected", f"SQLite owner changed while being snapshotted: {source.name}")
+    except DesktopOperationError:
+        _unlink(destination, missing_ok=True)
+        raise
+    except (OSError, sqlite3.Error) as exc:
+        _unlink(destination, missing_ok=True)
+        if _sqlite_file_set_signature(source) != before:
+            raise DesktopOperationError("desktop_backup_writer_detected", f"SQLite owner changed while being snapshotted: {source.name}") from exc
+        raise DesktopOperationError("desktop_sqlite_open_failed", f"could not snapshot SQLite owner: {source.name}") from exc
     finally:
-        guard.close()
+        try:
+            _remove_tree(scratch)
+        except OSError as exc:
+            _unlink(destination, missing_ok=True)
+            raise DesktopOperationError(
+                "desktop_sqlite_cleanup_failed",
+                f"could not remove private SQLite snapshot staging: {source.name}",
+            ) from exc
+
+
+def _sqlite_file_set_signature(source: Path) -> tuple[tuple[str, bool, int, int, str | None], ...]:
+    signature: list[tuple[str, bool, int, int, str | None]] = []
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(f"{source}{suffix}")
+        reject_reparse_path(path, root=source.parent)
+        try:
+            stat_result = _path_lstat(path)
+        except FileNotFoundError:
+            signature.append((suffix, False, 0, 0, None))
+            continue
+        if not stat.S_ISREG(stat_result.st_mode):
+            raise DesktopOperationError("desktop_sqlite_open_failed", f"SQLite owner file is invalid: {source.name}{suffix}")
+        if stat_result.st_nlink != 1:
+            raise DesktopOperationError(
+                "desktop_sqlite_link_rejected",
+                f"SQLite owner file has an unsupported hard link: {source.name}{suffix}",
+            )
+        signature.append((suffix, True, stat_result.st_size, stat_result.st_mtime_ns, _file_digest(path)))
+    return tuple(signature)
+
+
+def _verify_sqlite_private_copy(
+    expected: tuple[tuple[str, bool, int, int, str | None], ...],
+    private_source: Path,
+) -> None:
+    copied = _sqlite_file_set_signature(private_source)
+    for before, after in zip(expected, copied, strict=True):
+        suffix, existed, size, _mtime_ns, digest = before
+        copied_suffix, copied_exists, copied_size, _copied_mtime_ns, copied_digest = after
+        if copied_suffix != suffix or copied_exists != existed:
+            raise DesktopOperationError(
+                "desktop_sqlite_copy_mismatch",
+                f"private SQLite snapshot file set did not match source: {private_source.name}{suffix}",
+            )
+        if existed and (copied_size != size or copied_digest != digest):
+            raise DesktopOperationError(
+                "desktop_sqlite_copy_mismatch",
+                f"private SQLite snapshot checksum did not match source: {private_source.name}{suffix}",
+            )
 
 
 def _validate_sqlite(path: Path, *, required_tables: tuple[str, ...] = ()) -> None:
     try:
-        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(_sqlite_uri(path), uri=True)
         try:
             result = connection.execute("PRAGMA integrity_check").fetchone()
             if required_tables:
@@ -1110,8 +1496,36 @@ _APPLICATION_VALIDATED_OWNERS = frozenset(
         "research_graph_results",
         "research_harness_side_effects",
         "research_harness_node_output",
+        "research_personal_memory",
+        "research_runtime_settings",
     }
 )
+
+
+def _validate_research_runtime_settings(path: Path) -> dict[str, Any]:
+    from scripts.local_desktop.runtime_config import (
+        FIXED_CREDENTIAL_ENV,
+        FIXED_CREDENTIAL_REF,
+        read_runtime_config_document,
+    )
+
+    document = read_runtime_config_document(path)
+    llm = document["research"]["llm"]
+    if llm is not None and (
+        llm.get("credential_ref") != FIXED_CREDENTIAL_REF
+        or llm.get("credential_env") != FIXED_CREDENTIAL_ENV
+    ):
+        raise DesktopOperationError(
+            "desktop_restore_runtime_settings_credential_invalid",
+            "restored Research runtime settings contain an unsupported credential reference",
+        )
+    return {
+        "store": "ResearchRuntimeSettings",
+        "configured_root": str(path.resolve(strict=False)),
+        "revision": document["revision"],
+        "configured": llm is not None,
+        "credential_values_restored": False,
+    }
 
 
 def _validate_auth_users(path: Path) -> dict[str, Any]:
@@ -1475,7 +1889,12 @@ def _validate_research_catalog_store(root: Path) -> dict[str, Any]:
                 if not separator or key not in {"tenant", "user", "memory"}:
                     raise ValueError("catalog scope is invalid")
                 dimensions[key] = value
-            store = FilesystemResearchCatalogStore(root, tenant_id=dimensions.get("tenant"), user_id=dimensions.get("user"), memory_namespace=dimensions.get("memory"))
+            store = FilesystemResearchCatalogStore(
+                root,
+                tenant_id=dimensions.get("tenant"),
+                user_id=dimensions.get("user"),
+                memory_namespace=dimensions.get("memory"),
+            )
             if store.path.resolve(strict=False) != path.resolve(strict=False):
                 raise ValueError("catalog scope does not own its path")
             state = store._read()
@@ -1509,7 +1928,11 @@ def _validate_research_catalog_store(root: Path) -> dict[str, Any]:
             actor_scope = metadata.get("actor_scope") if isinstance(metadata, Mapping) else None
             encoded = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
             digest = sha256(encoded).hexdigest()
-            FilesystemResearchCatalogStore(root).read(f"artifact://research/{artifact_type}/{digest}", actor_scope=actor_scope if isinstance(actor_scope, Mapping) else {}, include_payload=True)
+            FilesystemResearchCatalogStore(root).read(
+                f"artifact://research/{artifact_type}/{digest}",
+                actor_scope=actor_scope if isinstance(actor_scope, Mapping) else {},
+                include_payload=True,
+            )
             artifact_count += 1
         except Exception as exc:
             raise DesktopOperationError("desktop_restore_paper_catalog_invalid", "restored Research catalog artifact is invalid") from exc
@@ -1531,7 +1954,7 @@ def _validate_graph_result_store(path: Path) -> dict[str, Any]:
     store = SQLiteGraphResultStore(path)
     store.verify_integrity()
     attempt_count = 0
-    with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+    with closing(sqlite3.connect(_sqlite_uri(path), uri=True)) as connection:
         for (binding_json,) in connection.execute("SELECT binding_json FROM graph_result_attempts"):
             binding = NodeResultBinding.from_dict(json.loads(binding_json))
             if store.get(binding) is None:
@@ -1548,7 +1971,7 @@ def _validate_harness_side_effect_store(path: Path) -> dict[str, Any]:
     decision_count = 0
     outcome_count = 0
     try:
-        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(_sqlite_uri(path), uri=True)) as connection:
             for (decision_ref,) in connection.execute("SELECT decision_ref FROM harness_side_effect_decisions"):
                 if store.get_decision(str(decision_ref)) is None:
                     raise DesktopOperationError("desktop_restore_harness_side_effect_invalid", "restored side-effect decision does not resolve through its application store")
@@ -1571,7 +1994,7 @@ def _validate_harness_node_output_store(path: Path) -> dict[str, Any]:
     commit_count = 0
     leases_by_ref: dict[str, HarnessNodeOutputLease] = {}
     try:
-        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(_sqlite_uri(path), uri=True)) as connection:
             for lease_json, in connection.execute("SELECT lease_json FROM leases"):
                 lease = HarnessNodeOutputLease.from_dict(json.loads(lease_json))
                 current = store.current_lease(lease.resource)
@@ -1594,9 +2017,149 @@ def _validate_harness_node_output_store(path: Path) -> dict[str, Any]:
 
 
 
+def _validate_personal_memory_store(path: Path) -> dict[str, Any]:
+    from backend.research.domain.personal_memory import (
+        PersonalMemoryOwner,
+        PersonalMemoryStatus,
+    )
+    from backend.research.ports.personal_memory import PersonalMemoryStoreError
+    from infrastructure.research.personal_memory_store import SQLitePersonalMemoryStore
+
+    _validate_sqlite(path, required_tables=PERSONAL_MEMORY_TABLES)
+    try:
+        with closing(sqlite3.connect(_sqlite_uri(path), uri=True)) as connection:
+            application_id = int(connection.execute("PRAGMA application_id").fetchone()[0])
+            user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            metadata = connection.execute(
+                "SELECT singleton, schema_version FROM personal_memory_metadata"
+            ).fetchall()
+            memory_owners = {
+                (str(row[0]), row[1], str(row[2]), str(row[3]))
+                for row in connection.execute(
+                    "SELECT tenant_scope, tenant_id, user_id, namespace FROM personal_memories"
+                )
+            }
+            policy_owners = {
+                (str(row[0]), row[1], str(row[2]), str(row[3]))
+                for row in connection.execute(
+                    "SELECT tenant_scope, tenant_id, user_id, namespace FROM personal_memory_policies"
+                )
+            }
+            record_count = int(
+                connection.execute("SELECT COUNT(*) FROM personal_memories").fetchone()[0]
+            )
+            policy_count = int(
+                connection.execute("SELECT COUNT(*) FROM personal_memory_policies").fetchone()[0]
+            )
+    except sqlite3.Error as exc:
+        raise DesktopOperationError(
+            "desktop_restore_personal_memory_invalid",
+            "restored personal-memory SQLite metadata is invalid",
+        ) from exc
+    if (
+        application_id != PERSONAL_MEMORY_APPLICATION_ID
+        or user_version != PERSONAL_MEMORY_SCHEMA_VERSION
+        or metadata != [(1, PERSONAL_MEMORY_SCHEMA_VERSION)]
+        or not memory_owners.issubset(policy_owners)
+    ):
+        raise DesktopOperationError(
+            "desktop_restore_personal_memory_schema_mismatch",
+            "restored personal-memory SQLite contract is incompatible",
+        )
+    store = None
+    try:
+        store = SQLitePersonalMemoryStore(path)
+        statuses = tuple(PersonalMemoryStatus)
+        for tenant_scope, tenant_id, user_id, namespace in sorted(
+            policy_owners, key=lambda item: tuple("" if value is None else str(value) for value in item)
+        ):
+            if tenant_scope != (tenant_id or ""):
+                raise DesktopOperationError(
+                    "desktop_restore_personal_memory_invalid",
+                    "restored personal-memory owner scope is invalid",
+                )
+            owner = PersonalMemoryOwner(
+                user_id=user_id, tenant_id=tenant_id, namespace=namespace
+            )
+            policy = store.get_or_create_policy(owner, created_at=_utc_now())
+            if policy.owner != owner:
+                raise DesktopOperationError(
+                    "desktop_restore_personal_memory_invalid",
+                    "restored personal-memory policy resolved to a different owner",
+                )
+            offset = 0
+            while True:
+                records, total = store.list(
+                    owner, statuses=statuses, limit=100, offset=offset
+                )
+                for record in records:
+                    if record.owner != owner:
+                        raise DesktopOperationError(
+                            "desktop_restore_personal_memory_invalid",
+                            "restored personal-memory record resolved to a different owner",
+                        )
+                offset += len(records)
+                if offset >= total:
+                    break
+    except DesktopOperationError:
+        raise
+    except (PersonalMemoryStoreError, TypeError, ValueError, OSError) as exc:
+        raise DesktopOperationError(
+            "desktop_restore_personal_memory_invalid",
+            "restored personal-memory data is invalid",
+        ) from exc
+    finally:
+        if store is not None:
+            store.close()
+    return {
+        "store": "SQLitePersonalMemoryStore",
+        "configured_root": str(path.resolve(strict=False)),
+        "application_id": application_id,
+        "schema_version": user_version,
+        "record_count": record_count,
+        "policy_count": policy_count,
+    }
+
+
+def _personal_memory_restore_preview(
+    path: Path | None, *, backup_id: str
+) -> dict[str, Any] | None:
+    if path is None or not _path_exists(path):
+        return None
+    try:
+        with closing(sqlite3.connect(_sqlite_uri(path), uri=True)) as connection:
+            status_counts = {
+                str(status): int(count)
+                for status, count in connection.execute(
+                    "SELECT status, COUNT(*) FROM personal_memories GROUP BY status"
+                )
+            }
+            policy_count = int(
+                connection.execute("SELECT COUNT(*) FROM personal_memory_policies").fetchone()[0]
+            )
+    except sqlite3.Error as exc:
+        raise DesktopOperationError(
+            "desktop_restore_personal_memory_invalid",
+            "restored personal-memory preview could not be read",
+        ) from exc
+    return {
+        "owner_id": "research_personal_memory",
+        "backup_id": backup_id,
+        "confirmation_token": f"restore-personal-memory:{backup_id}",
+        "status_counts": status_counts,
+        "policy_count": policy_count,
+        "requires_explicit_activation_confirmation": True,
+        "warning": "Activation restores the reviewed snapshot exactly, including disabled and deleted tombstones; it does not replay operations.",
+    }
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 def _validate_sqlite_path_columns(path: Path) -> None:
     try:
-        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(_sqlite_uri(path), uri=True)) as connection:
             tables = [str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
             for table in tables:
                 quoted_table = '"' + table.replace('"', '""') + '"'
@@ -1627,21 +2190,67 @@ def _required_sqlite_tables(owner_id: str) -> tuple[str, ...]:
         "research_graph_results": ("graph_result_store_metadata", "graph_result_attempts"),
         "research_harness_side_effects": ("harness_side_effect_store_metadata", "harness_side_effect_decisions"),
         "research_harness_node_output": ("resource_state", "leases", "staged"),
+        "research_personal_memory": PERSONAL_MEMORY_TABLES,
     }.get(owner_id, ())
 
 
-def _walk_path_references(value: Any, *, field_name: str | None = None) -> Iterable[str]:
+def _walk_path_references(
+    value: Any,
+    *,
+    field_path: tuple[str, ...] = (),
+) -> Iterable[tuple[tuple[str, ...], str]]:
     if isinstance(value, Mapping):
         for key, item in value.items():
-            yield from _walk_path_references(item, field_name=str(key))
+            yield from _walk_path_references(item, field_path=(*field_path, str(key)))
     elif isinstance(value, list):
         for item in value:
-            yield from _walk_path_references(item, field_name=field_name)
+            yield from _walk_path_references(item, field_path=field_path)
     elif isinstance(value, str):
-        normalized = (field_name or "").casefold().replace("-", "_")
+        normalized = (field_path[-1] if field_path else "").casefold().replace("-", "_")
         reference_field = normalized == "path" or normalized.endswith("_path") or normalized.endswith("path_ref") or normalized in {"artifact_ref", "artifactref"}
         if reference_field:
-            yield value
+            yield field_path, value
+
+
+def _validate_legacy_catalog_manifest_reference(
+    *,
+    payload: Mapping[str, Any],
+    field_path: tuple[str, ...],
+    staged_root: Path,
+) -> bool:
+    if field_path != ("payload", "manifest_path") or payload.get("artifact_type") != "research-chunk-manifest":
+        return False
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return False
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = sha256(encoded).hexdigest()
+    actor_scope = metadata.get("actor_scope")
+    from infrastructure.research.catalog_store import (
+        FilesystemResearchCatalogStore,
+        ResearchCatalogStoreError,
+    )
+
+    try:
+        loaded = FilesystemResearchCatalogStore(staged_root).read(
+            f"artifact://research/research-chunk-manifest/{digest}",
+            actor_scope=actor_scope if isinstance(actor_scope, Mapping) else {},
+            include_payload=True,
+        )
+    except ResearchCatalogStoreError as exc:
+        raise DesktopOperationError(
+            "desktop_restore_paper_catalog_invalid",
+            "restored Research catalog artifact provenance is invalid",
+        ) from exc
+    manifest_path = loaded.get("payload", {}).get("manifest_path")
+    if not isinstance(manifest_path, str):
+        return False
+    resolved_staged = _resolved_path(staged_root)
+    resolved_manifest = _resolved_path(Path(manifest_path), strict=True)
+    if not resolved_manifest.is_relative_to(resolved_staged):
+        return False
+    reject_reparse_path(resolved_manifest, root=resolved_staged)
+    return True
 
 
 def _relocated_reference(candidate: Path, roots: Iterable[tuple[Path, Path, str]]) -> Path | None:
@@ -1699,12 +2308,12 @@ def _validate_declared_file_checksums(value: Any, base: Path) -> None:
         raw_checksum = value.get("sha256") or value.get("checksum")
         if isinstance(raw_path, str) and isinstance(raw_checksum, str):
             absolute_candidate = _absolute_reference_path(raw_path)
-            candidate = absolute_candidate or (base / raw_path).resolve(strict=False)
-            if absolute_candidate is None and candidate != base.resolve(strict=False) and not candidate.is_relative_to(base.resolve(strict=False)):
+            candidate = absolute_candidate or _resolved_path(base / raw_path)
+            if absolute_candidate is None and candidate != _resolved_path(base) and not candidate.is_relative_to(_resolved_path(base)):
                 raise DesktopOperationError("desktop_restore_artifact_checksum_mismatch", "restored file reference escapes its declaring metadata directory")
             expected = raw_checksum.removeprefix("sha256:")
             if len(expected) == 64 and all(char in "0123456789abcdef" for char in expected.casefold()):
-                if not candidate.is_file() or _file_digest(candidate) != expected.casefold():
+                if not _path_is_file(candidate) or _file_digest(candidate) != expected.casefold():
                     raise DesktopOperationError("desktop_restore_artifact_checksum_mismatch", "restored file reference failed its declared checksum")
         for item in value.values():
             _validate_declared_file_checksums(item, base)
@@ -1714,9 +2323,8 @@ def _validate_declared_file_checksums(value: Any, base: Path) -> None:
 
 
 def _iter_snapshot_files(root: Path) -> Iterable[tuple[Path, str]]:
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            yield path, path.relative_to(root).as_posix()
+    for path in _iter_files(root):
+        yield path, path.relative_to(root).as_posix()
 
 
 def _excluded(relative: Path, path: Path) -> bool:
@@ -1724,19 +2332,65 @@ def _excluded(relative: Path, path: Path) -> bool:
     return bool(names & _EXCLUDED_NAMES) or path.suffix.casefold() in (_EXCLUDED_SUFFIXES | {".lock"}) or path.name.casefold().startswith(".env") or path.name.casefold().endswith(("-wal", "-shm"))
 
 
+def _validate_local_chunk_snapshot(inventory: StorageInventory, snapshots_root: Path) -> None:
+    """Validate owned chunks, or reject operational references to an absent index."""
+    chunk_owner = next((owner for owner in inventory.owners if owner.owner_id == "research_rag_local"), None)
+    if chunk_owner is None:
+        return  # The external Qdrant recovery contract is unchanged.
+    chunk_snapshot = snapshots_root / chunk_owner.owner_id
+    if _path_exists(chunk_snapshot):
+        try:
+            _validate_local_chunk_store(_application_io_path(chunk_snapshot))
+        except DesktopOperationError as exc:
+            raise DesktopOperationError("desktop_backup_local_chunk_invalid", "local chunk snapshot failed application validation") from exc
+        return
+    chunk_root = _resolved_path(chunk_owner.path)
+    for owner in inventory.owners:
+        root = snapshots_root / owner.owner_id
+        if not _path_exists(root):
+            continue
+        for file, relative in _iter_snapshot_files(root):
+            original_file = owner.path if owner.kind == "file" else owner.path / relative
+            references: Iterable[str] = ()
+            if _is_sqlite(file):
+                # Inspect operational columns only, not business text or credentials.
+                with closing(sqlite3.connect(_sqlite_uri(file), uri=True)) as connection:
+                    tables = [str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
+                    values: list[str] = []
+                    for table in tables:
+                        quoted = '"' + table.replace('"', '""') + '"'
+                        columns = [str(row[1]) for row in connection.execute(f"PRAGMA table_info({quoted})")]
+                        selected = [column for column in columns if _sqlite_reference_column(column)]
+                        if selected:
+                            selection = ", ".join('"' + column.replace('"', '""') + '"' for column in selected)
+                            values.extend(value for row in connection.execute(f"SELECT {selection} FROM {quoted}") for value in row if isinstance(value, str))
+                    references = values
+            elif file.suffix.casefold() in {".json", ".jsonl"} or owner.kind == "file":
+                try:
+                    text = _read_text(file, encoding="utf-8")
+                    payloads = [json.loads(line) for line in text.splitlines() if line.strip()] if file.suffix.casefold() == ".jsonl" else [json.loads(text)]
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise DesktopOperationError("desktop_backup_json_invalid", f"storage metadata is invalid: {owner.owner_id}") from exc
+                references = (reference for payload in payloads for _, reference in _walk_path_references(payload))
+            for reference in references:
+                candidate = _absolute_reference_path(reference)
+                if candidate is None:
+                    candidate = _resolved_path(original_file.parent / reference)
+                if candidate == chunk_root or candidate.is_relative_to(chunk_root):
+                    raise DesktopOperationError("desktop_backup_chunk_reference_dangling", "storage metadata references the absent local chunk owner")
+
+
 def _owner_lock_paths(owner: StorageOwner) -> tuple[Path, ...]:
     if owner.consistency == "research_run_store":
         return (owner.path / ".research-run-store.lock",)
     if owner.consistency == "local_chunk_store":
-        return tuple(sorted(owner.path.glob(".*.lock"))) if owner.path.exists() else ()
+        return tuple(_glob_paths(owner.path, ".*.lock", recursive=False)) if _path_exists(owner.path) else ()
     return ()
 
 
 def _tree_signature(root: Path) -> str:
     digest = sha256()
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
+    for path in _iter_files(root):
         relative = path.relative_to(root)
         if _excluded(relative, path):
             continue
@@ -1749,7 +2403,7 @@ def _tree_signature(root: Path) -> str:
 
 def _file_digest(path: Path) -> str:
     digest = sha256()
-    with path.open("rb") as handle:
+    with _open_path(path, "rb") as handle:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
@@ -1759,14 +2413,28 @@ def _is_sqlite(path: Path) -> bool:
     if path.suffix.casefold() in {".sqlite", ".sqlite3", ".db"}:
         return True
     try:
-        with path.open("rb") as handle:
+        with _open_path(path, "rb") as handle:
             return handle.read(16) == b"SQLite format 3\x00"
     except OSError:
         return False
 
 
+def _reject_inventory_reparse_path(path: Path) -> None:
+    probe = Path(os.path.abspath(path))
+    root = Path(probe.anchor)
+    while True:
+        if _path_is_symlink(probe) or (_path_exists(probe) and _is_reparse_point(probe)):
+            raise DesktopOperationError(
+                "desktop_reparse_point_rejected",
+                f"storage owner path contains a link or junction: {probe.name}",
+            )
+        if probe == root or probe == probe.parent:
+            break
+        probe = probe.parent
+
+
 def _is_reparse_point(path: Path) -> bool:
-    return bool(getattr(path.stat(), "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(getattr(_path_lstat(path), "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
 def _walk_strings(value: Any) -> Iterable[str]:

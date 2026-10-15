@@ -6,6 +6,9 @@ from typing import Any, Callable, Mapping
 
 from backend.research.application import AskPaperUseCase
 from backend.research.domain import stable_research_id
+from backend.research.domain.personal_memory_context import (
+    PersonalMemoryContext, PersonalMemoryContextProvider,
+)
 from backend.research.rag.models import ResearchRetrievalGoal
 from backend.research.rag.retrieval.paper_retriever import RetrievalRequest
 from backend.research.services.tenant_visibility import chunk_visible_to_tenant, public_metrics
@@ -230,15 +233,20 @@ class PaperRagApplicationService:
             if isinstance(accepted, list) and isinstance(item, Mapping) and item.get("evidence_id")
         } if isinstance(accepted, list) else {}
         cited = [str(item) for item in answer.get("cited_evidence_ids") or () if str(item)]
-        citations = [
-            {
+        citations = []
+        for evidence_id in cited:
+            evidence = evidence_by_id.get(evidence_id, {})
+            metadata = evidence.get("metadata")
+            metadata = metadata if isinstance(metadata, Mapping) else {}
+            available = set(evidence.get("span_refs") or ())
+            spans = _unique_cited_replay_spans(answer, evidence_id, available)
+            citations.append({
                 "evidence_id": evidence_id,
-                "source_ref": evidence_by_id[evidence_id].get("source_ref"),
-                "span_refs": list(evidence_by_id[evidence_id].get("span_refs") or ()),
-            }
-            for evidence_id in cited
-            if evidence_id in evidence_by_id
-        ]
+                "source_ref": evidence.get("source_ref"),
+                "chunk_id": _verified_chunk_id(metadata),
+                "source_locator": metadata.get("source_locator") or evidence.get("source_ref"),
+                "span_refs": spans,
+            })
         decisions = list(replay.decisions)
         decision_payload = decisions[-1].get("payload") if decisions and isinstance(decisions[-1], Mapping) else {}
         return {
@@ -253,6 +261,11 @@ class PaperRagApplicationService:
             "decision": dict(decision_payload) if isinstance(decision_payload, Mapping) else {},
             "transcript_id": replay.transcript_id,
             "recovered": True,
+            **(
+                {"used_personal_memory": used_personal_memory}
+                if (used_personal_memory := _answer_used_personal_memory(answer))
+                else {}
+            ),
         }
 
     def rag_ask(
@@ -272,6 +285,8 @@ class PaperRagApplicationService:
         target_sections: list[str] | tuple[str, ...] | None = None,
         graph_identity: ContextGraphIdentity | None = None,
         memory_recall: ExecutionMemoryRecallPort | None = None,
+        personal_memory_context: PersonalMemoryContext | None = None,
+        personal_memory_context_provider: PersonalMemoryContextProvider | None = None,
     ) -> dict[str, Any]:
         with self._operation():
             return self._rag_ask(
@@ -289,6 +304,8 @@ class PaperRagApplicationService:
                 target_sections=target_sections,
                 graph_identity=graph_identity,
                 memory_recall=memory_recall,
+                personal_memory_context=personal_memory_context,
+                personal_memory_context_provider=personal_memory_context_provider,
             )
 
     def _rag_ask(
@@ -308,6 +325,8 @@ class PaperRagApplicationService:
         target_sections: list[str] | tuple[str, ...] | None,
         graph_identity: ContextGraphIdentity | None,
         memory_recall: ExecutionMemoryRecallPort | None,
+        personal_memory_context: PersonalMemoryContext | None,
+        personal_memory_context_provider: PersonalMemoryContextProvider | None,
     ) -> dict[str, Any]:
         if generate and not gated:
             raise ValueError(
@@ -328,7 +347,11 @@ class PaperRagApplicationService:
                 target_sections=target_sections,
                 graph_identity=graph_identity,
                 memory_recall=memory_recall,
+                personal_memory_context=personal_memory_context,
+                personal_memory_context_provider=personal_memory_context_provider,
             )
+        if personal_memory_context is not None or personal_memory_context_provider is not None:
+            raise ValueError("personal memory context requires gated Harness generation")
         if memory_recall is not None:
             raise ValueError("execution-bound memory requires gated Harness generation")
         result = self._retriever.retrieve(RetrievalRequest(
@@ -383,6 +406,8 @@ class PaperRagApplicationService:
         target_sections: list[str] | tuple[str, ...] | None,
         graph_identity: ContextGraphIdentity | None,
         memory_recall: ExecutionMemoryRecallPort | None,
+        personal_memory_context: PersonalMemoryContext | None,
+        personal_memory_context_provider: PersonalMemoryContextProvider | None,
     ) -> dict[str, Any]:
         if not isinstance(graph_identity, ContextGraphIdentity):
             raise ValueError(
@@ -405,6 +430,16 @@ class PaperRagApplicationService:
             "with_answer_worker": True,
             "event_recorder": _BoundPaperRagEventRecorder(self._transcript_store, actor_scope),
         }
+        if personal_memory_context_provider is not None:
+            if personal_memory_context is not None:
+                raise ValueError("provide either frozen context or a context provider, not both")
+            if not isinstance(personal_memory_context_provider, PersonalMemoryContextProvider):
+                raise TypeError("personal memory context provider is invalid")
+            session_kwargs["personal_memory_context_provider"] = personal_memory_context_provider
+        if personal_memory_context is not None:
+            if not isinstance(personal_memory_context, PersonalMemoryContext):
+                raise TypeError("personal_memory_context must be PersonalMemoryContext")
+            session_kwargs["personal_memory_context"] = personal_memory_context
         if memory_recall is not None:
             if not isinstance(memory_recall, ExecutionMemoryRecallPort):
                 raise TypeError("RAG memory requires execution-bound recall")
@@ -528,7 +563,13 @@ def _gated_payload(
     pack_contains_hidden_accepted = bool(
         pack is not None and len(visible_accepted) != len(pack.accepted_evidence)
     )
-    answer = result.answer
+    raw_answer = result.answer
+    used_personal_memory = (
+        _answer_used_personal_memory(raw_answer.to_dict())
+        if raw_answer is not None
+        else []
+    )
+    answer = raw_answer
     if not _answer_is_visible(
         answer,
         accepted_ids=accepted_ids,
@@ -552,6 +593,11 @@ def _gated_payload(
         "transcript_id": result.transcript.transcript_id,
         "transcript_artifact": transcript_artifact,
         "context_pack": _context_pack_summary(pack, tenant_id=tenant_id),
+        **(
+            {"used_personal_memory": used_personal_memory}
+            if used_personal_memory
+            else {}
+        ),
     }
 
 
@@ -584,6 +630,25 @@ def _passages_from_pack(accepted_evidence: tuple[Any, ...], *, limit: int) -> li
     return passages
 
 
+def _verified_chunk_id(metadata: Mapping[str, Any]) -> str:
+    chunk_id = metadata.get("rag_chunk_id") or metadata.get("chunk_id")
+    paper_chunk = metadata.get("paper_chunk")
+    if not chunk_id and isinstance(paper_chunk, Mapping):
+        chunk_id = paper_chunk.get("chunk_id")
+    return chunk_id if isinstance(chunk_id, str) else ""
+
+
+def _unique_cited_replay_spans(answer: Mapping[str, Any], evidence_id: str, available: set[str]) -> list[str]:
+    spans: list[str] = []
+    for claim in answer.get("claims") or ():
+        if not isinstance(claim, Mapping) or evidence_id not in (claim.get("evidence_ids") or ()):
+            continue
+        for span in claim.get("span_refs") or ():
+            if isinstance(span, str) and span in available and span not in spans:
+                spans.append(span)
+    return spans
+
+
 def _citations_from_answer(answer: Any | None, accepted_evidence: tuple[Any, ...]) -> list[dict[str, Any]]:
     if answer is None:
         return []
@@ -593,7 +658,8 @@ def _citations_from_answer(answer: Any | None, accepted_evidence: tuple[Any, ...
         evidence = by_id.get(evidence_id)
         citations.append({
             "evidence_id": evidence_id,
-            "chunk_id": evidence.metadata.get("rag_chunk_id", evidence_id) if evidence else evidence_id,
+            "source_ref": evidence.source_ref if evidence else "",
+            "chunk_id": _verified_chunk_id(evidence.metadata) if evidence else "",
             "span_refs": _citation_span_refs(answer, evidence_id, evidence),
             "source_locator": (
                 evidence.metadata.get("source_locator")
@@ -675,6 +741,26 @@ def _answer_is_visible(
         for evidence_id in claim.evidence_ids
     }
     return cited_ids.union(claim_ids).issubset(accepted_ids)
+
+
+def _answer_used_personal_memory(answer: Mapping[str, Any]) -> list[dict[str, str | int]]:
+    metadata = answer.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return []
+    generated = metadata.get("generated_answer_metadata")
+    raw = generated.get("used_personal_memory") if isinstance(generated, Mapping) else None
+    if not isinstance(raw, list) or len(raw) > 20:
+        return []
+    refs: list[dict[str, str | int]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            return []
+        memory_id = item.get("memoryId")
+        revision = item.get("revision")
+        if not isinstance(memory_id, str) or isinstance(revision, bool) or not isinstance(revision, int):
+            return []
+        refs.append({"memoryId": memory_id, "revision": revision})
+    return refs
 
 
 __all__ = ["PaperRagApplicationService"]

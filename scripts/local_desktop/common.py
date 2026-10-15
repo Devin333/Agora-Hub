@@ -235,6 +235,21 @@ def exclusive_lock(path: Path, *, timeout_seconds: float = 5.0) -> Iterator[None
         handle.close()
 
 
+
+def windows_extended_path(path: Path) -> Path:
+    """Return an absolute Win32 extended-length path for trusted internal I/O."""
+    absolute = os.path.abspath(os.fspath(path))
+    if os.name != "nt" or absolute.startswith("\\\\?\\"):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
+def read_bytes_long_path(path: Path) -> bytes:
+    with open(windows_extended_path(path), "rb") as handle:
+        return handle.read()
+
 def ensure_contained(root: Path, candidate: Path, *, field: str) -> Path:
     resolved_root = root.resolve(strict=False)
     resolved_candidate = candidate.resolve(strict=False)
@@ -244,19 +259,39 @@ def ensure_contained(root: Path, candidate: Path, *, field: str) -> Path:
 
 
 def reject_reparse_path(path: Path, *, root: Path) -> None:
-    current = path.resolve(strict=False)
-    owned_root = root.resolve(strict=False)
-    if not (current == owned_root or current.is_relative_to(owned_root)):
+    """Reject lexical escapes and every existing symlink/junction before resolution."""
+    lexical_root = Path(os.path.abspath(os.fspath(root.expanduser())))
+    lexical_path = Path(os.path.abspath(os.fspath(path.expanduser())))
+    try:
+        common = os.path.commonpath((os.fspath(lexical_root), os.fspath(lexical_path)))
+    except ValueError as exc:
+        raise DesktopOperationError("desktop_path_escape", "path escapes its owned root") from exc
+    if os.path.normcase(common) != os.path.normcase(os.fspath(lexical_root)):
         raise DesktopOperationError("desktop_path_escape", "path escapes its owned root")
-    probe = path
-    while probe != probe.parent and (probe == root or probe.is_relative_to(root)):
-        if probe.exists() and probe.is_symlink():
-            raise DesktopOperationError("desktop_reparse_point_rejected", f"symbolic link is not allowed: {probe.name}")
-        if os.name == "nt" and probe.exists():
-            attributes = getattr(probe.stat(), "st_file_attributes", 0)
-            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-            if attributes & reparse:
-                raise DesktopOperationError("desktop_reparse_point_rejected", f"reparse point is not allowed: {probe.name}")
-        if probe == root:
+
+    probes: list[Path] = []
+    probe = lexical_path
+    while True:
+        probes.append(probe)
+        if probe == lexical_root:
             break
+        if probe == probe.parent:
+            raise DesktopOperationError("desktop_path_escape", "path escapes its owned root")
         probe = probe.parent
+    probe = lexical_root.parent
+    while probe != probe.parent:
+        probes.append(probe)
+        probe = probe.parent
+    probes.append(probe)
+
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    for candidate in probes:
+        try:
+            metadata = windows_extended_path(candidate).lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise DesktopOperationError("desktop_path_inspection_failed", "path could not be inspected safely") from exc
+        attributes = getattr(metadata, "st_file_attributes", 0)
+        if stat.S_ISLNK(metadata.st_mode) or (os.name == "nt" and attributes & reparse):
+            raise DesktopOperationError("desktop_reparse_point_rejected", f"reparse point is not allowed: {candidate.name}")

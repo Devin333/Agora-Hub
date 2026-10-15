@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 import re
 from threading import Thread
@@ -8,6 +9,9 @@ from typing import Any
 from uuid import uuid4
 
 from backend.research.document.models import PaperChunk
+from backend.research.domain.personal_memory_context import (
+    PersonalMemoryContext, PersonalMemoryContextProvider,
+)
 from backend.research.rag.retrieval.contracts import RetrievalResult
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator, GeneratedAnswer
 from backend.research.rag.retrieval.paper_policy import classify_query_intent
@@ -25,8 +29,34 @@ class _ProjectedContext:
 class PaperAnswerWorker:
     """Projects verified Paper RAG context packs into grounded answer candidates."""
 
-    def __init__(self, generator: AnswerGenerator) -> None:
+    def __init__(
+        self,
+        generator: AnswerGenerator,
+        *,
+        personal_memory_context: PersonalMemoryContext | None = None,
+        personal_memory_context_provider: PersonalMemoryContextProvider | None = None,
+    ) -> None:
+        if personal_memory_context is not None and not isinstance(
+            personal_memory_context, PersonalMemoryContext
+        ):
+            raise TypeError("personal_memory_context must be PersonalMemoryContext")
         self._generator = generator
+        if personal_memory_context_provider is not None and personal_memory_context is None:
+            raise ValueError("a memory provider requires the frozen context")
+        self._personal_memory_context = personal_memory_context
+        self._personal_memory_context_provider = personal_memory_context_provider
+
+    def with_personal_memory_context(
+        self,
+        context: PersonalMemoryContext,
+        *,
+        provider: PersonalMemoryContextProvider | None = None,
+    ) -> "PaperAnswerWorker":
+        return PaperAnswerWorker(
+            self._generator,
+            personal_memory_context=context,
+            personal_memory_context_provider=provider,
+        )
 
     def generate_answer(
         self,
@@ -43,30 +73,65 @@ class PaperAnswerWorker:
                 context_pack_id=pack.pack_id,
             )
 
-        if execution_identity is None:
-            generated = _run_async(self._generator.generate(question, projected.retrieval))
-        else:
-            generated = _run_async(
-                self._generator.generate(
-                    question,
-                    projected.retrieval,
-                    execution_identity=execution_identity,
-                )
+        if self._personal_memory_context is not None and not _supports_personal_memory_context(
+            self._generator
+        ):
+            return _abstention(
+                question,
+                reason="answer generator does not support personal memory context",
+                context_pack_id=pack.pack_id,
             )
-        cited_evidence_ids = _map_chunk_ids(generated.context_chunk_ids, projected.chunk_to_evidence_id)
+
+        generator_kwargs: dict[str, Any] = {}
+        if execution_identity is not None:
+            generator_kwargs["execution_identity"] = execution_identity
+        if self._personal_memory_context is not None:
+            generator_kwargs["personal_memory_context"] = self._personal_memory_context
+        if self._personal_memory_context_provider is not None:
+            generator_kwargs["personal_memory_context_provider"] = self._personal_memory_context_provider
+        generated = _run_async(
+            self._generator.generate(
+                question,
+                projected.retrieval,
+                **generator_kwargs,
+            )
+        )
+        actual_used_personal_memory: list[dict[str, str | int]] = []
+        if self._personal_memory_context is not None:
+            receipt = _verified_personal_memory_receipt(
+                generated,
+                expected=self._personal_memory_context,
+            )
+            if receipt is None:
+                return _abstention(
+                    question,
+                    reason="answer generator did not acknowledge personal memory context",
+                    context_pack_id=pack.pack_id,
+                    metadata={"generated_answer": generated.to_dict()},
+                )
+            actual_used_personal_memory = receipt
+        generated_metadata = {
+            "generated_answer": generated.to_dict(),
+            "generated_answer_metadata": dict(generated.context_metadata),
+            **(
+                {"used_personal_memory": actual_used_personal_memory}
+                if actual_used_personal_memory
+                else {}
+            ),
+        }
         if not generated.answer.strip():
             return _abstention(
                 question,
                 reason="answer generator returned empty answer",
                 context_pack_id=pack.pack_id,
-                metadata={"generated_answer": generated.to_dict()},
+                metadata=generated_metadata,
             )
         if _looks_like_context_abstention(generated.answer):
             return _abstention(
                 question,
                 reason="answer generator reported insufficient context",
                 context_pack_id=pack.pack_id,
-                metadata={"generated_answer": generated.to_dict()},
+                metadata=generated_metadata,
             )
         if negative_presence := _negative_presence_relevance_gap(
             question,
@@ -78,9 +143,43 @@ class PaperAnswerWorker:
                 reason="negative presence answer lacked target relevance",
                 context_pack_id=pack.pack_id,
                 metadata={
-                    "generated_answer": generated.to_dict(),
+                    **generated_metadata,
                     "negative_presence_relevance": negative_presence,
                 },
+            )
+
+        cited_chunk_ids = _explicitly_cited_chunk_ids(
+            generated.answer,
+            generated.context_chunk_ids,
+        )
+        if cited_chunk_ids is None:
+            return _abstention(
+                question,
+                reason="answer citations do not resolve to retrieved context",
+                context_pack_id=pack.pack_id,
+                metadata=generated_metadata,
+            )
+        if any(
+            chunk_id not in projected.chunk_to_evidence_id
+            for chunk_id in cited_chunk_ids
+        ):
+            return _abstention(
+                question,
+                reason="answer citations do not resolve to verified evidence",
+                context_pack_id=pack.pack_id,
+                metadata=generated_metadata,
+            )
+        cited_evidence_ids = _map_chunk_ids(
+            cited_chunk_ids, projected.chunk_to_evidence_id
+        )
+        if not cited_evidence_ids or not _cited_evidence_has_locators(
+            cited_evidence_ids, projected.evidence_id_to_span_refs
+        ):
+            return _abstention(
+                question,
+                reason="cited evidence lacks a verified locator",
+                context_pack_id=pack.pack_id,
+                metadata=generated_metadata,
             )
 
         return GroundedAnswerCandidate(
@@ -100,8 +199,61 @@ class PaperAnswerWorker:
                 },
                 "claims_degraded": True,
                 "generated_answer_metadata": dict(generated.context_metadata),
+                **(
+                    {"used_personal_memory": actual_used_personal_memory}
+                    if actual_used_personal_memory
+                    else {}
+                ),
             },
         )
+
+
+def _supports_personal_memory_context(generator: Any) -> bool:
+    generate = getattr(generator, "generate", None)
+    if not callable(generate):
+        return False
+    try:
+        parameters = inspect.signature(generate).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.name == "personal_memory_context"
+            and parameter.kind is not inspect.Parameter.POSITIONAL_ONLY
+        )
+        for parameter in parameters
+    )
+
+
+def _verified_personal_memory_receipt(
+    generated: GeneratedAnswer,
+    *,
+    expected: PersonalMemoryContext,
+) -> list[dict[str, str | int]] | None:
+    raw = generated.context_metadata.get("used_personal_memory")
+    if not isinstance(raw, list):
+        return None
+    normalized: list[dict[str, str | int]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict) or set(item) != {"memoryId", "revision"}:
+            return None
+        memory_id = item.get("memoryId")
+        revision = item.get("revision")
+        if (
+            not isinstance(memory_id, str)
+            or not memory_id
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 1
+            or memory_id in seen
+        ):
+            return None
+        seen.add(memory_id)
+        normalized.append({"memoryId": memory_id, "revision": revision})
+    expected_refs = list(expected.used_refs)
+    return normalized if normalized == expected_refs else None
 
 
 def _project_context_pack(pack: RAGContextPack, *, question: str) -> _ProjectedContext | None:
@@ -116,7 +268,14 @@ def _project_context_pack(pack: RAGContextPack, *, question: str) -> _ProjectedC
             continue
         chunks.append(chunk)
         chunk_to_evidence_id.setdefault(chunk.chunk_id, evidence.evidence_id)
-        evidence_id_to_span_refs.setdefault(evidence.evidence_id, tuple(evidence.span_refs))
+        evidence_id_to_span_refs.setdefault(
+            evidence.evidence_id,
+            tuple(
+                span_ref
+                for raw_span_ref in evidence.span_refs
+                if (span_ref := str(raw_span_ref).strip())
+            ),
+        )
 
     chunks = _dedupe_chunks(chunks)
     if not chunks:
@@ -189,6 +348,31 @@ def _paper_chunk_from_evidence(evidence: Any) -> PaperChunk | None:
     if "content" not in metadata and "text" not in metadata:
         metadata["content"] = str(getattr(evidence, "summary", "") or "")
     return _paper_chunk_from_evidence_metadata(metadata)
+
+
+def _explicitly_cited_chunk_ids(
+    answer: str,
+    context_chunk_ids: list[str],
+) -> list[str] | None:
+    indexes: list[int] = []
+    seen: set[int] = set()
+    for match in re.finditer(r"\[(\d+)\]", str(answer or "")):
+        index = int(match.group(1))
+        if index < 1 or index > len(context_chunk_ids):
+            return None
+        if index not in seen:
+            seen.add(index)
+            indexes.append(index)
+    if not indexes:
+        return None
+    return [context_chunk_ids[index - 1] for index in indexes]
+
+
+def _cited_evidence_has_locators(
+    evidence_ids: list[str],
+    evidence_id_to_span_refs: dict[str, tuple[str, ...]],
+) -> bool:
+    return all(evidence_id_to_span_refs.get(evidence_id) for evidence_id in evidence_ids)
 
 
 def _map_chunk_ids(chunk_ids: list[str], mapping: dict[str, str]) -> list[str]:

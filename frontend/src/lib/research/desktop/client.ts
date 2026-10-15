@@ -2,6 +2,8 @@ import {
   desktopCapabilitiesSchema,
   desktopIdentitySchema,
   operationSchema,
+  personalMemoryPolicySchema,
+  personalMemoryRecallSchema,
   parseDesktopReader,
   researchReportListSchema,
   researchReportSchema,
@@ -10,10 +12,14 @@ import {
   type DesktopIdentity,
   type DesktopReaderPayload,
   type ResearchOperation,
+  type PersonalMemoryPolicy,
+  type PersonalMemoryRecall,
   type ResearchReport,
   type ResearchReportReference,
   type SavedResearchReport,
 } from "./contracts"
+import type { ResearchPersonalMemorySelection } from "../workspace-items"
+export type { DesktopCapabilities, DesktopIdentity } from "./contracts"
 
 const MAX_REPORT_EXPORT_BYTES = 20 * 1024 * 1024
 
@@ -63,6 +69,72 @@ export async function fetchDesktopReader(
       { signal },
     ),
   )
+}
+
+export async function fetchPersonalMemoryPolicy(
+  signal?: AbortSignal,
+): Promise<PersonalMemoryPolicy> {
+  return personalMemoryPolicySchema.parse(
+    await request("/api/research/personal-memory/policy", { signal }),
+  )
+}
+
+export async function previewPersonalMemory(
+  input: { query: string; limit?: number; useMemory?: boolean },
+  signal?: AbortSignal,
+): Promise<PersonalMemoryRecall> {
+  return personalMemoryRecallSchema.parse(
+    await request(
+      "/api/research/personal-memory/recall",
+      jsonPost(
+        {
+          query: input.query,
+          limit: input.limit ?? 5,
+          use_memory: input.useMemory ?? true,
+        },
+        signal,
+      ),
+    ),
+  )
+}
+
+export type PersonalMemoryTaskPreview = {
+  policy: PersonalMemoryPolicy
+  recall: PersonalMemoryRecall | null
+  selection?: ResearchPersonalMemorySelection
+  reason: "task_disabled" | "policy_disabled" | "no_match" | "matched"
+}
+
+export async function previewPersonalMemoryTask(
+  input: { query: string; limit?: number; useMemory: boolean },
+  signal?: AbortSignal,
+): Promise<PersonalMemoryTaskPreview> {
+  const policy = await fetchPersonalMemoryPolicy(signal)
+  if (!input.useMemory) {
+    return { policy, recall: null, reason: "task_disabled" }
+  }
+  if (!policy.policy.allow_remote_processing) {
+    return { policy, recall: null, reason: "policy_disabled" }
+  }
+  const recall = await previewPersonalMemory(
+    { query: input.query, limit: input.limit ?? 5, useMemory: true },
+    signal,
+  )
+  if (recall.used_memory_refs.length === 0) {
+    return { policy, recall, reason: "no_match" }
+  }
+  return {
+    policy,
+    recall,
+    reason: "matched",
+    selection: {
+      policyRevision: policy.policy.revision,
+      refs: recall.used_memory_refs.map(ref => ({
+        memoryId: ref.memory_id,
+        revision: ref.revision,
+      })),
+    },
+  }
 }
 
 export async function submitResearchPrepare(

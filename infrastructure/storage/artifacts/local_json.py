@@ -18,6 +18,7 @@ from framework.agent.artifacts.stores.fs_safety import (
 from framework.shared.graph_identity import GraphStageIdentity
 from framework.shared.hashing import hash_text
 from framework.shared.json import stable_json_dumps
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 
 
 class ArtifactIndexNotFoundError(FileNotFoundError):
@@ -44,7 +45,7 @@ class LocalJsonArtifactIndexStore:
             root=self.root,
             identity=identity,
         ):
-            if path.exists():
+            if storage_io_path(path).exists():
                 existing = self._read_ref(path, identity=identity)
                 if existing != ref:
                     raise ArtifactStoreMetadataError(
@@ -67,7 +68,7 @@ class LocalJsonArtifactIndexStore:
         ref = self._resolve_lookup(ref_or_run_id, artifact_id)
         _validate_ref(ref)
         path = self._record_path(ref)
-        if not path.exists():
+        if not storage_io_path(path).exists():
             raise ArtifactIndexNotFoundError(
                 f"artifact index record not found: {_artifact_identity_label(ref)}"
             )
@@ -81,7 +82,7 @@ class LocalJsonArtifactIndexStore:
     def list_by_run(self, run_id: str) -> list[ArtifactRef]:
         validate_artifact_path_segment(run_id, field="run_id")
         run_dir = self._run_dir(run_id)
-        if not run_dir.exists():
+        if not storage_io_path(run_dir).exists():
             return []
         refs = [
             self._read_ref(candidate, identity=f"{run_id}/{candidate.name}")
@@ -95,10 +96,11 @@ class LocalJsonArtifactIndexStore:
         return sorted(refs, key=_ref_sort_key)
 
     def list_all(self) -> list[ArtifactRef]:
-        if not self.root.exists():
+        root = resolve_storage_path(self.root)
+        if not storage_io_path(root).exists():
             return []
         refs: list[ArtifactRef] = []
-        for candidate_run_dir in sorted(self.root.iterdir()):
+        for candidate_run_dir in sorted(storage_io_path(root).iterdir()):
             if candidate_run_dir.name == "_locks":
                 continue
             run_dir = resolve_artifact_descendant(
@@ -106,7 +108,7 @@ class LocalJsonArtifactIndexStore:
                 candidate_run_dir.name,
                 field="artifact index run directory",
             )
-            if not run_dir.is_dir():
+            if not storage_io_path(run_dir).is_dir():
                 continue
             refs.extend(
                 self._read_ref(candidate, identity=candidate.as_posix())
@@ -150,14 +152,14 @@ class LocalJsonArtifactIndexStore:
         ref = self._resolve_lookup(ref_or_run_id, artifact_id)
         _validate_ref(ref)
         path = self._record_path(ref)
-        if not path.exists():
+        if not storage_io_path(path).exists():
             return
         stored = self._read_ref(path, identity=_artifact_identity_label(ref))
         if stored != ref:
             raise ArtifactStoreMetadataError(
                 f"artifact index identity mismatch: {ref.artifact_id}"
             )
-        path.unlink()
+        storage_io_path(path).unlink()
 
     def _resolve_lookup(
         self,
@@ -203,17 +205,21 @@ class LocalJsonArtifactIndexStore:
 
     @staticmethod
     def _record_candidates(run_dir: Path) -> list[Path]:
-        return sorted(candidate for candidate in run_dir.glob("*.json") if candidate.is_file())
+        return sorted(
+            candidate
+            for candidate in storage_io_path(run_dir).glob("*.json")
+            if candidate.is_file()
+        )
 
     def _read_ref(self, path: Path, *, identity: str) -> ArtifactRef:
         reject_link_chain(
             path,
-            root=self.root.resolve(strict=False),
+            root=resolve_storage_path(self.root),
             identity=identity,
             role="artifact index record",
         )
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(storage_io_path(path).read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ArtifactStoreMetadataError(
                 f"artifact index record is invalid: {identity}"

@@ -29,6 +29,7 @@ from backend.research.ports.personal_memory import (
     PersonalMemoryStoreUnavailableError,
     PersonalMemoryStoreValidationError,
 )
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 
 
 PERSONAL_MEMORY_SCHEMA_VERSION = 1
@@ -147,7 +148,7 @@ class SQLitePersonalMemoryStore:
         self._connection: sqlite3.Connection | None = None
         try:
             connection = sqlite3.connect(
-                str(self._path),
+                str(storage_io_path(self._path)),
                 timeout=float(busy_timeout_seconds),
                 isolation_level=None,
                 check_same_thread=False,
@@ -985,20 +986,25 @@ def _validate_database_path(value: str | os.PathLike[str]) -> Path:
     if not path.name or path.name in {".", ".."}:
         raise ValueError("database_path must identify a file")
     parent = path.parent
-    if not parent.exists() or not parent.is_dir():
+    parent_io = storage_io_path(parent)
+    path_io = storage_io_path(path)
+    if not parent_io.exists() or not parent_io.is_dir():
         raise ValueError("database_path parent must be an existing directory")
     _reject_linked_path(parent)
-    if path.exists():
+    if path_io.exists() or path_io.is_symlink():
         _assert_regular_file(path)
-        if not os.access(path, os.W_OK):
+        if not os.access(path_io, os.W_OK):
             raise ValueError("database_path must be writable")
-    if not os.access(parent, os.W_OK):
+    if not os.access(parent_io, os.W_OK):
         raise ValueError("database_path parent must be writable")
     for suffix in ("-wal", "-shm"):
         sidecar = Path(f"{path}{suffix}")
-        if sidecar.exists() or sidecar.is_symlink():
+        sidecar_io = storage_io_path(sidecar)
+        if sidecar_io.exists() or sidecar_io.is_symlink():
             _assert_regular_file(sidecar)
-    return path
+    # Resolve only after rejecting linked components, keeping the public path
+    # logical even when a trusted recovery caller supplied an I/O namespace.
+    return resolve_storage_path(path) if os.name == "nt" else path
 
 
 def _reject_linked_path(path: Path) -> None:
@@ -1017,7 +1023,8 @@ def _assert_regular_database_files(path: Path) -> None:
     _assert_regular_file(path)
     for suffix in ("-wal", "-shm"):
         sidecar = Path(f"{path}{suffix}")
-        if sidecar.exists() or sidecar.is_symlink():
+        sidecar_io = storage_io_path(sidecar)
+        if sidecar_io.exists() or sidecar_io.is_symlink():
             _assert_regular_file(sidecar)
 
 
@@ -1025,7 +1032,7 @@ def _assert_regular_file(path: Path) -> None:
     if _is_link_or_reparse(path):
         raise ValueError("database files must not be symlinks or reparse points")
     try:
-        mode = path.lstat().st_mode
+        mode = storage_io_path(path).lstat().st_mode
     except OSError as exc:
         raise ValueError("database file cannot be inspected") from exc
     if not stat.S_ISREG(mode):
@@ -1034,12 +1041,12 @@ def _assert_regular_file(path: Path) -> None:
 
 def _is_link_or_reparse(path: Path) -> bool:
     try:
-        details = path.lstat()
+        details = storage_io_path(path).lstat()
     except FileNotFoundError:
         return False
     except OSError as exc:
         raise ValueError("database path cannot be inspected") from exc
-    return path.is_symlink() or bool(
+    return stat.S_ISLNK(details.st_mode) or bool(
         getattr(details, "st_file_attributes", 0)
         & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     )

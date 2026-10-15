@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from hashlib import sha256
 from pathlib import Path
 
@@ -10,7 +12,7 @@ import pytest
 from framework.shared.local_desktop import resolve_local_desktop_config
 from scripts.local_desktop.common import DesktopOperationError
 from scripts.local_desktop.config import sanitized_environment
-from scripts.local_desktop.release import CONFIG_SCHEMA, DATA_SCHEMAS, RELEASE_SCHEMA, ReleaseManager, _external_config_identity, _json_digest, _source_input_digest
+from scripts.local_desktop.release import CONFIG_SCHEMA, DATA_SCHEMAS, RELEASE_SCHEMA, ReleaseManager, _external_config_identity, _frontend_copy_ignore, _json_digest, _source_input_digest
 
 
 def _manager(
@@ -26,9 +28,9 @@ def _manager(
     isolated_environment = dict(external_environment or {})
     monkeypatch.setattr(
         "scripts.local_desktop.release.sanitized_environment",
-        lambda actual_config: sanitized_environment(
+        lambda actual_config, base=None: sanitized_environment(
             actual_config,
-            base=isolated_environment,
+            base=isolated_environment if base is None else base,
         ),
     )
     monkeypatch.setattr(manager, "_dependency_identity", lambda _root=None: {"python": {"version": "3.12"}, "node": {"version": "v22"}})
@@ -49,6 +51,7 @@ def _manager(
         "canonical_origin": config.canonical_origin,
         "api_base_url": config.api_base_url,
         "parser_mode": config.parser_mode,
+        "storage_mode": config.storage_mode,
         "data_mode": "real",
         "external_config_dependencies": [],
     }
@@ -141,15 +144,73 @@ def test_release_copy_excludes_all_environment_files_and_development_outputs(tmp
     (source / ".next" / "cache" / "trace").write_text("developer-cache", encoding="utf-8")
     (source / "test-results" / "browser.json").write_text("{}", encoding="utf-8")
     (source / "src" / "page.tsx").write_text("export default function Page() {}", encoding="utf-8")
+    (source / "next-env.d.ts").write_text("development routes", encoding="utf-8")
+    (source / "tsconfig.tsbuildinfo").write_text("development graph", encoding="utf-8")
+    (source / ".next-dev.log").write_text("development stdout", encoding="utf-8")
+    (source / ".next-dev-error.log").write_text("development stderr", encoding="utf-8")
 
-    ReleaseManager._copy_tree(source, destination)
+    ReleaseManager._copy_tree(source, destination, ignore=_frontend_copy_ignore)
 
     assert (destination / "src" / "page.tsx").is_file()
     assert not (destination / ".env.local").exists()
     assert not (destination / ".env.production").exists()
     assert not (destination / ".next").exists()
     assert not (destination / "test-results").exists()
+    assert not (destination / "next-env.d.ts").exists()
+    assert not (destination / "tsconfig.tsbuildinfo").exists()
+    assert not (destination / ".next-dev.log").exists()
+    assert not (destination / ".next-dev-error.log").exists()
     assert _source_input_digest(source_root) == _source_input_digest(destination_root)
+
+
+def test_source_identity_ignores_frontend_generated_rewrites_but_tracks_real_source(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    (frontend / "src").mkdir(parents=True)
+    source = frontend / "src" / "page.tsx"
+    source.write_text("export default function Page() { return 'one' }", encoding="utf-8")
+    backend_build_info = tmp_path / "backend" / "source-owned.tsbuildinfo"
+    backend_build_info.parent.mkdir()
+    backend_build_info.write_text("source-owned state", encoding="utf-8")
+    (frontend / "next-env.d.ts").write_text("import './.next/dev/types/routes.d.ts'", encoding="utf-8")
+    (frontend / "tsconfig.tsbuildinfo").write_text("development graph", encoding="utf-8")
+    (frontend / ".next-dev.log").write_text("development stdout", encoding="utf-8")
+    (frontend / ".next-dev-error.log").write_text("development stderr", encoding="utf-8")
+    before = _source_input_digest(tmp_path)
+
+    (frontend / "next-env.d.ts").write_text("import './.next/types/routes.d.ts'", encoding="utf-8")
+    (frontend / "tsconfig.tsbuildinfo").write_text("production graph", encoding="utf-8")
+    (frontend / ".next-dev.log").write_text("later development stdout", encoding="utf-8")
+    (frontend / ".next-dev-error.log").write_text("later development stderr", encoding="utf-8")
+
+    assert _source_input_digest(tmp_path) == before
+    backend_build_info.write_text("changed source-owned state", encoding="utf-8")
+    assert _source_input_digest(tmp_path) != before
+    backend_build_info.write_text("source-owned state", encoding="utf-8")
+    assert _source_input_digest(tmp_path) == before
+    source.write_text("export default function Page() { return 'two' }", encoding="utf-8")
+    assert _source_input_digest(tmp_path) != before
+
+
+def test_generated_frontend_resource_remains_checksum_protected(tmp_path: Path, monkeypatch) -> None:
+    manager, release = _manager(tmp_path, monkeypatch)
+    generated = release / "frontend" / "next-env.d.ts"
+    generated.write_text("production routes", encoding="utf-8")
+    manifest_path = release / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data = generated.read_bytes()
+    manifest["resources"].append({
+        "path": "frontend/next-env.d.ts",
+        "size": len(data),
+        "sha256": sha256(data).hexdigest(),
+    })
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    manager.verify(release)
+    generated.write_text("tampered production routes", encoding="utf-8")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.verify(release)
+    assert raised.value.reason_code == "desktop_release_checksum_mismatch"
 
 
 def test_release_copy_rejects_source_symlink_escape(tmp_path: Path) -> None:
@@ -196,6 +257,7 @@ def test_release_runtime_config_identity_packages_project_config_and_binds_relea
         release,
         {
             "config": {
+                "storage_mode": manager.config.storage_mode,
                 "data_mode": "real",
                 "external_config_dependencies": dependencies,
             }
@@ -371,3 +433,105 @@ def test_research_models_config_has_business_priority_and_is_release_bound(tmp_p
         "NEWS_MODELS_CONFIG",
         "NEWS_RESEARCH_MODELS_CONFIG",
     ]
+
+
+def test_release_verify_rejects_storage_mode_drift(tmp_path: Path, monkeypatch) -> None:
+    manager, release = _manager(tmp_path, monkeypatch)
+    manifest_path = release / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["config"]["storage_mode"] = "owned-local"
+    manifest["identity"]["config_digest"] = _json_digest(manifest["config"])
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.verify(release)
+
+    assert raised.value.reason_code == "desktop_release_config_incompatible"
+
+
+def test_owned_local_runtime_binding_keeps_empty_dsn_shadow(tmp_path: Path) -> None:
+    project_root = tmp_path
+    config = resolve_local_desktop_config(
+        project_root=project_root,
+        runtime_config={"storage_mode": "owned-local"},
+    )
+    manager = ReleaseManager(config)
+
+    bound = manager.bind_runtime_environment(
+        project_root,
+        {
+            "config": {
+                "storage_mode": "owned-local",
+                "data_mode": "real",
+                "external_config_dependencies": [],
+            }
+        },
+        {"NEWS_DATABASE_DSN": "postgresql://local.invalid/newsroom"},
+    )
+
+    assert bound["NEWS_DATABASE_DSN"] == ""
+    assert bound["NEWSROOM_DESKTOP_ROOT_DATABASE_DSN_SHADOWED"] == "1"
+
+
+def test_release_subprocess_decodes_real_utf8_non_ascii_output_strictly(tmp_path: Path) -> None:
+    manager = ReleaseManager(resolve_local_desktop_config(project_root=tmp_path))
+    helper = [sys.executable, "-c", "import sys; sys.stdout.buffer.write('版本二'.encode('utf-8')); sys.stderr.buffer.write('构建完成'.encode('utf-8'))"]
+
+    assert manager._tool_version(helper) == "版本二"
+    manager._run(helper, cwd=tmp_path, env=os.environ, timeout=10)
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_release_build_rejects_non_utf8_command_output_with_typed_error(tmp_path: Path, stream: str) -> None:
+    invalid = b"\xb2"
+
+    def runner(argv, **kwargs):
+        assert kwargs["text"] is False
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            invalid if stream == "stdout" else b"ok",
+            invalid if stream == "stderr" else b"",
+        )
+
+    manager = ReleaseManager(resolve_local_desktop_config(project_root=tmp_path), command_runner=runner)
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager._run(["npm.cmd", "run", "build"], cwd=tmp_path, env={}, timeout=10)
+
+    assert raised.value.reason_code == "desktop_command_output_encoding_invalid"
+    assert raised.value.details == {"command": "npm.cmd", "stream": stream}
+
+
+def test_release_inspection_commands_capture_bytes_and_decode_utf8(tmp_path: Path) -> None:
+    calls: list[tuple[tuple[str, ...], bool]] = []
+    dependency_payload = {"name": "前端", "version": "1.0.0", "dependencies": {}}
+
+    def runner(argv, **kwargs):
+        calls.append((tuple(argv), kwargs["text"]))
+        if argv[:2] == ["npm.cmd", "ls"]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps(dependency_payload, ensure_ascii=False).encode("utf-8"), "依赖正常".encode("utf-8"))
+        if argv[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(argv, 0, ("a" * 40 + "\n").encode("utf-8"), b"")
+        return subprocess.CompletedProcess(argv, 0, "版本三\n".encode("utf-8"), b"")
+
+    manager = ReleaseManager(resolve_local_desktop_config(project_root=tmp_path), command_runner=runner)
+
+    assert manager._tool_version(["node.exe", "--version"]) == "版本三"
+    assert manager._git_revision() == "a" * 40
+    assert manager._node_dependency_tree_identity(tmp_path, "npm.cmd")["package_count"] == 1
+    assert calls and all(text is False for _argv, text in calls)
+
+
+def test_release_dependency_inspection_rejects_non_utf8_json_output(tmp_path: Path) -> None:
+    def runner(argv, **kwargs):
+        assert kwargs["text"] is False
+        return subprocess.CompletedProcess(argv, 0, b"{\xb2}", b"")
+
+    manager = ReleaseManager(resolve_local_desktop_config(project_root=tmp_path), command_runner=runner)
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager._node_dependency_tree_identity(tmp_path, "npm.cmd")
+
+    assert raised.value.reason_code == "desktop_command_output_encoding_invalid"
+    assert raised.value.details == {"command": "npm.cmd", "stream": "stdout"}

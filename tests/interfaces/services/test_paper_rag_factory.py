@@ -7,6 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.research.domain.personal_memory import PersonalMemorySourceRef
+from backend.research.domain.personal_memory_context import (
+    PersonalMemoryContext,
+    PersonalMemoryContextItem,
+)
 from interfaces.services import paper_rag_factory
 from framework.harness.control_plane.errors import HarnessValidationError
 from tests.fixtures.admitted_memory import admitted_memory
@@ -581,3 +586,144 @@ def test_public_rag_builders_delegate_to_one_default_runtime_owner(
 
     resources.close()
     assert vector_store.close_calls == 1
+
+
+def test_runtime_factory_rejects_shared_worker_personal_memory_mutation() -> None:
+    class SharedWorker:
+        def with_personal_memory_context(self, _context):
+            return self
+
+    resources = paper_rag_factory.PaperRagRuntimeResources(
+        vector_store_factory=_LifecycleVectorStore,
+        visual_store_factory=lambda: None,
+        retrieval_policy_factory=lambda: None,
+        plan_worker_factory=lambda: None,
+        answer_worker_factory=SharedWorker,
+    )
+    context = PersonalMemoryContext(
+        policy_revision=2,
+        items=(
+            PersonalMemoryContextItem(
+                memory_id="pmem_" + "1" * 32,
+                revision=3,
+                content="Prefer methods-first explanations.",
+                category="reading_preference",
+                source_refs=(
+                    PersonalMemorySourceRef(
+                        source_type="user_input",
+                        source_ref="user://alice/preference",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(TypeError, match="run-scoped"):
+        resources.build_paper_rag_session(
+            with_reranker=False,
+            with_answer_worker=True,
+            personal_memory_context=context,
+        )
+
+    resources.close()
+
+
+def test_runtime_factory_preserves_per_session_event_recorders(monkeypatch) -> None:
+    class Recorder:
+        def record_event(self, **_kwargs) -> None:
+            pass
+
+    resources = paper_rag_factory.PaperRagRuntimeResources(
+        vector_store_factory=_LifecycleVectorStore,
+        visual_store_factory=lambda: None,
+        retrieval_policy_factory=lambda: None,
+        plan_worker_factory=lambda: None,
+    )
+    first_recorder = Recorder()
+    second_recorder = Recorder()
+    first = resources.build_paper_rag_session(with_reranker=False, event_recorder=first_recorder)
+    second = paper_rag_factory.build_paper_rag_session(
+        runtime_resources=resources, with_reranker=False, event_recorder=second_recorder,
+    )
+    unbound = resources.build_paper_rag_session(with_reranker=False)
+    assert first._event_recorder is first_recorder
+    assert second._event_recorder is second_recorder
+    assert unbound._event_recorder is None
+    assert not hasattr(resources, "_event_recorder")
+    resources.close()
+
+
+@pytest.mark.parametrize("second", ["same", "revoked", "changed"])
+def test_memory_answer_worker_revalidates_each_attempt_without_recalling(second) -> None:
+    context = PersonalMemoryContext(
+        policy_revision=7,
+        items=(PersonalMemoryContextItem(
+            memory_id="pmem_" + "2" * 32, revision=4,
+            content="Prefer methods first.", category="reading_preference",
+            source_refs=(PersonalMemorySourceRef(source_type="user_input", source_ref="user://alice"),),
+        ),),
+    )
+    calls = []
+    bindings = []
+
+    class Provider:
+        count = 0
+
+        def current(self):
+            self.count += 1
+            if self.count == 1 or second == "same":
+                return context
+            if second == "revoked":
+                raise PermissionError("remote model permission revoked")
+            return PersonalMemoryContext(policy_revision=8, items=context.items)
+
+    class BoundWorker:
+        def generate_answer(self, **kwargs):
+            calls.append(kwargs)
+            return "candidate"
+
+    class Worker:
+        def with_personal_memory_context(self, frozen, *, provider):
+            bindings.append((frozen, provider))
+            return BoundWorker()
+
+    provider = Provider()
+    worker = paper_rag_factory._RevalidatingPersonalMemoryAnswerWorker(Worker(), provider)
+    assert provider.count == 0  # Authorization is not cached before retrieval.
+    pack = object()
+    assert worker.generate_answer(question="Question", pack=pack) == "candidate"
+    if second == "same":
+        assert worker.generate_answer(question="Question", pack=pack) == "candidate"
+        assert len(calls) == 2
+        assert len(bindings) == 2
+    else:
+        with pytest.raises((PermissionError, ValueError)):
+            worker.generate_answer(question="Question", pack=pack)
+        assert len(calls) == 1
+        assert len(bindings) == 1
+    assert provider.count == 2
+    assert all(frozen is context and authority is provider for frozen, authority in bindings)
+
+
+def test_factory_installs_live_provider_per_session_and_does_not_authorize_early() -> None:
+    class Provider:
+        def current(self):
+            pytest.fail("session construction must not authorize a future model send")
+
+    class Worker:
+        def with_personal_memory_context(self, context, *, provider=None):
+            pytest.fail("session construction must not bind future memory content")
+
+    resources = paper_rag_factory.PaperRagRuntimeResources(
+        vector_store_factory=_LifecycleVectorStore, visual_store_factory=lambda: None,
+        retrieval_policy_factory=lambda: None, plan_worker_factory=lambda: None,
+        answer_worker_factory=Worker,
+    )
+    first = resources.build_paper_rag_session(
+        with_reranker=False, with_answer_worker=True, personal_memory_context_provider=Provider(),
+    )
+    second = resources.build_paper_rag_session(with_reranker=False, with_answer_worker=True)
+    assert isinstance(first._answer_worker, paper_rag_factory._RevalidatingPersonalMemoryAnswerWorker)
+    assert isinstance(second._answer_worker, Worker)
+    assert first._answer_worker is not second._answer_worker
+    resources.close()

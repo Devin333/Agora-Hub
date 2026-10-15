@@ -147,7 +147,10 @@ def test_domain_rejects_invalid_owner_content_sources_and_namespace() -> None:
 
 
 def test_remote_policy_requires_boolean_and_monotonic_revision() -> None:
-    from backend.research.domain.personal_memory import PersonalMemoryRemotePolicy
+    from backend.research.domain.personal_memory import (
+        PersonalMemoryRemoteChannel,
+        PersonalMemoryRemotePolicy,
+    )
 
     owner = PersonalMemoryOwner(user_id="user-a", namespace="research/default")
     policy = PersonalMemoryRemotePolicy(
@@ -159,7 +162,27 @@ def test_remote_policy_requires_boolean_and_monotonic_revision() -> None:
     )
 
     assert policy.to_dict()["allow_remote_processing"] is False
-    assert policy.evolve(allow_remote_processing=True, updated_at=NOW).revision == 2
+    assert policy.to_dict()["remote_processing_permissions"] == {
+        "model": False,
+        "tool": False,
+        "embedding": False,
+    }
+    assert all(
+        not policy.allows_remote_processing(channel, use_memory=True)
+        for channel in PersonalMemoryRemoteChannel
+    )
+    enabled = policy.evolve(allow_remote_processing=True, updated_at=NOW)
+    assert enabled.revision == 2
+    assert all(
+        enabled.allows_remote_processing(channel, use_memory=True)
+        for channel in PersonalMemoryRemoteChannel
+    )
+    assert all(
+        not enabled.allows_remote_processing(channel, use_memory=False)
+        for channel in PersonalMemoryRemoteChannel
+    )
+    with pytest.raises(TypeError, match="use_memory"):
+        enabled.allows_remote_processing("model", use_memory=1)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="boolean"):
         PersonalMemoryRemotePolicy(
             owner=owner,

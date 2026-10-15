@@ -164,7 +164,7 @@ def test_research_service_reader_ask_uses_gated_grounded_generation() -> None:
             "claims": [{"claim_id": "claim-1"}],
             "decision": {"decision_type": "return_answer"},
             "generation_mode": "gated_harness",
-            "status": "completed",
+            "status": "answered",
             "transcript_id": "rag-transcript-1",
         }
     )
@@ -1514,3 +1514,137 @@ def test_service_startup_reconciles_pending_runs_once_and_lazy_read_reuses_recor
 
     assert service.get_trace(run_id)["runId"] == run_id
     assert source.load_calls == 1
+
+
+def _locator_reader(*, ambiguous=False):
+    from types import SimpleNamespace
+
+    sections = [SimpleNamespace(
+        section_id="methods", title="Methods", source_ref="paper://p1/pdf",
+        page_start=4, page_end=8,
+    )]
+    if ambiguous:
+        sections.append(SimpleNamespace(
+            section_id="results", title="Results", source_ref="paper://p1/pdf",
+            page_start=6, page_end=9,
+        ))
+    return SimpleNamespace(document=SimpleNamespace(source_hash="a" * 64, sections=sections))
+
+
+def _project_locator_answer(citation, *, status="answered", decision="return_answer", transcript="transcript-real"):
+    from interfaces.services.research_service import _reader_answer_projection
+
+    return _reader_answer_projection(
+        {"answer": "Verified answer [1].", "citations": [citation],
+         "status": status, "decision": {"decision_type": decision}, "transcript_id": transcript,
+         "generation_mode": "gated_harness"},
+        run_id="run-real", paper_id="p1", question="What is the method?",
+        source_refs=["paper://p1/pdf"], reader_payload=_locator_reader(),
+    )
+
+
+@pytest.mark.parametrize("spans,expected_page", [
+    (["section=methods"], None),
+    (["section=methods&page=7"], 7),
+    (["paper://p1/pdf#page=6"], 6),
+])
+def test_grounded_locator_uses_only_explicit_page_not_section_start(spans, expected_page) -> None:
+    result = _project_locator_answer({
+        "evidence_id": "ev-real", "source_ref": "paper://p1/pdf", "span_refs": spans,
+    })
+    citation = result["citations"][0]
+    assert result["abstained"] is False
+    assert result["status"] == "answered"
+    assert result["transcriptId"] == "transcript-real"
+    assert result["evidenceRefs"] == ["ev-real"]
+    assert citation["valid"] is True
+    assert citation["sectionId"] == "methods"
+    assert citation.get("page") == expected_page
+    assert ("page" in citation) is (expected_page is not None)
+    assert citation["sourceRevision"] == "sha256:" + "a" * 64
+
+
+@pytest.mark.parametrize("spans", [
+    [], ["chunk-unresolved"], ["section=methods", "chunk-unresolved"],
+    ["section=methods&page=2"], ["section=methods", "section=results"],
+    ["section=methods&page=0"], ["section=methods&page=invalid"],
+    ["section=methods&page=7&page=8"], ["paper://foreign/pdf#section=methods"],
+    ["subsection=methods"], [None],
+])
+def test_grounded_locator_rejection_preserves_real_evidence_and_trace(spans) -> None:
+    result = _project_locator_answer({
+        "evidence_id": "ev-real", "source_ref": "paper://p1/pdf", "span_refs": spans,
+    })
+    assert result["answer"] is None
+    assert result["abstained"] is True
+    assert result["confidence"] == 0.0
+    assert result["evidenceRefs"] == ["ev-real"]
+    assert result["transcriptId"] == "transcript-real"
+    assert result["status"] == "answered"  # Preserve actual Harness status, not a fabricated pass.
+    assert result["citations"][0]["valid"] is False
+    assert "page" not in result["citations"][0]
+    assert "sectionId" not in result["citations"][0]
+
+
+def test_page_only_ambiguous_section_is_not_verified() -> None:
+    from interfaces.services.research_service import _grounded_answer_citations
+
+    citation = _grounded_answer_citations(
+        [{"evidence_id": "ev-real", "source_ref": "paper://p1/pdf", "span_refs": ["page=7"]}],
+        paper_id="p1", source_revision="sha256:" + "a" * 64,
+        source_refs={"paper://p1/pdf"}, reader_payload=_locator_reader(ambiguous=True),
+    )[0]
+    assert citation["valid"] is False
+    assert "page" not in citation
+
+
+def test_verified_chunk_locator_must_agree_with_explicit_cited_span() -> None:
+    raw = {"evidence_id": "ev-real", "source_ref": "paper://p1/pdf",
+           "span_refs": ["chunk-7"], "chunk_id": "chunk-7",
+           "source_locator": "paper://p1/pdf#section=methods&page=7"}
+    result = _project_locator_answer(raw)
+    assert result["abstained"] is False
+    assert result["citations"][0]["page"] == 7
+    raw["span_refs"] = ["section=results"]
+    assert _project_locator_answer(raw)["abstained"] is True
+
+
+@pytest.mark.parametrize("status,decision,transcript", [
+    ("completed", "return_answer", "transcript-real"),
+    ("answered", None, "transcript-real"),
+    ("answered", "abstain", "transcript-real"),
+    ("answered", "return_answer", None),
+    ("answered", "return_answer", "x" * 257),
+])
+def test_reader_answer_does_not_infer_a_gate_or_transcript(status, decision, transcript) -> None:
+    result = _project_locator_answer(
+        {"evidence_id": "ev-real", "source_ref": "paper://p1/pdf", "span_refs": ["section=methods"]},
+        status=status, decision=decision, transcript=transcript,
+    )
+    assert result["answer"] is None
+    assert result["abstained"] is True
+    assert result["confidence"] == 0.0
+    assert result["status"] == status
+    assert result["transcriptId"] == transcript
+
+
+def test_missing_evidence_id_is_not_replaced_by_a_position_based_id() -> None:
+    result = _project_locator_answer({"source_ref": "paper://p1/pdf", "span_refs": ["section=methods"]})
+    assert result["citations"] == []
+    assert result["evidenceRefs"] == []
+    assert result["abstained"] is True
+
+
+@pytest.mark.parametrize("locator", [
+    "paper://foreign/pdf#section=methods&page=7",
+    "paper://p1/pdf#section=methods&page=invalid",
+    "paper://p1/pdf#section=methods&page=8",
+])
+def test_evidence_locator_conflict_is_not_ignored_when_claim_span_looks_valid(locator) -> None:
+    result = _project_locator_answer({
+        "evidence_id": "ev-real", "source_ref": "paper://p1/pdf",
+        "span_refs": ["section=methods&page=7"], "source_locator": locator,
+    })
+    assert result["abstained"] is True
+    assert result["citations"][0]["valid"] is False
+    assert result["evidenceRefs"] == ["ev-real"]

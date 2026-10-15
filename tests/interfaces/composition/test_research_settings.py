@@ -567,3 +567,82 @@ def test_storage_paths_resolve_without_llm_credentials(tmp_path: Path) -> None:
     assert paths.run_store_root == (tmp_path / "data/runs").resolve()
     assert paths.rag_local_root == (tmp_path / "data/chunks").resolve()
     assert paths.rag_transcript_root == (tmp_path / "data/transcripts").resolve()
+
+
+@pytest.mark.parametrize("enabled", [None, "1"])
+def test_desktop_llm_flag_preserves_other_profile_defaults_when_absent_or_enabled(
+    tmp_path: Path, enabled: str | None
+) -> None:
+    from interfaces.composition.research_settings import DESKTOP_RESEARCH_LLM_ENABLED_ENV
+
+    environment = _minimum_env()
+    if enabled is not None:
+        environment[DESKTOP_RESEARCH_LLM_ENABLED_ENV] = enabled
+    settings = ResearchRuntimeSettings.from_env(environment, cwd=tmp_path)
+    assert settings.llm.route_id == "writer-primary"
+    assert settings.llm.api_key_env == "DASHSCOPE_API_KEY"
+
+
+@pytest.mark.parametrize("invalid", ["", "false", "true", "disabled", "2", " 0 "])
+def test_desktop_llm_flag_rejects_noncanonical_values(tmp_path: Path, invalid: str) -> None:
+    from interfaces.composition.research_settings import DESKTOP_RESEARCH_LLM_ENABLED_ENV
+
+    with pytest.raises(ResearchConfigurationError) as raised:
+        ResearchRuntimeSettings.from_env(
+            _minimum_env() | {DESKTOP_RESEARCH_LLM_ENABLED_ENV: invalid}, cwd=tmp_path
+        )
+    assert raised.value.capabilities == ("research.llm.route",)
+
+
+def test_disabled_desktop_llm_rejects_before_default_or_secret_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import interfaces.composition.research_settings as settings_module
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("disabled desktop LLM must not resolve default providers or credentials")
+
+    monkeypatch.setattr(settings_module, "_default_api_key_env", forbidden)
+    monkeypatch.setattr(settings_module, "_secret_is_present", forbidden)
+    with pytest.raises(ResearchRuntimeUnavailableError) as raised:
+        ResearchRuntimeSettings.from_env(
+            {
+                settings_module.DESKTOP_RESEARCH_LLM_ENABLED_ENV: "0",
+                "NEWS_LLM_MODEL": "inherited-model",
+                "OPENAI_BASE_URL": "https://inherited.example/v1",
+                "OPENAI_API_KEY": "synthetic-openai-credential",
+                "DASHSCOPE_API_KEY": "synthetic-dashscope-credential",
+            },
+            cwd=tmp_path,
+        )
+    assert raised.value.capabilities == ("research.llm.route",)
+    assert raised.value.retryable is False
+    assert not list(tmp_path.iterdir())
+
+
+def test_local_runtime_settings_parse_storage_without_llm_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import interfaces.composition.research_settings as settings_module
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("local settings must not resolve model defaults or credentials")
+
+    monkeypatch.setattr(settings_module, "_default_api_key_env", forbidden)
+    monkeypatch.setattr(settings_module, "_secret_is_present", forbidden)
+    settings = settings_module.ResearchLocalRuntimeSettings.from_env(
+        {
+            settings_module.DESKTOP_RESEARCH_LLM_ENABLED_ENV: "0",
+            "NEWS_RESEARCH_ROOT": str(tmp_path / "research"),
+            "NEWS_RESEARCH_RUN_STORE_ROOT": str(tmp_path / "runs"),
+            "NEWSROOM_RESEARCH_IMPORT_DIR": str(tmp_path / "imports"),
+            "NEWS_RESEARCH_PARSER_BACKENDS": "pymupdf",
+            "OPENAI_API_KEY": "must-not-be-read",
+        },
+        cwd=tmp_path,
+    )
+
+    assert settings.research_root == (tmp_path / "research").resolve()
+    assert settings.local_authorized_root == (tmp_path / "imports").resolve()
+    assert settings.run_store.root == (tmp_path / "runs").resolve()
+    assert settings.parser.backends == ("pymupdf",)

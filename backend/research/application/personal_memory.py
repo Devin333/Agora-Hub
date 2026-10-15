@@ -23,6 +23,7 @@ from backend.research.domain.personal_memory import (
     PersonalMemoryRecallItem,
     PersonalMemoryRecallResult,
     PersonalMemoryRecord,
+    PersonalMemoryRemoteChannel,
     PersonalMemoryRemotePolicy,
     PersonalMemorySelection,
     PersonalMemorySourceRef,
@@ -284,6 +285,8 @@ class PersonalMemoryService:
         current = self._get_for_mutation(owner, memory_id, expected_revision)
         if current.status is PersonalMemoryStatus.DELETED:
             return current
+        if current.status is PersonalMemoryStatus.CANDIDATE:
+            raise PersonalMemoryStateError("candidate memory must be rejected explicitly")
         now = self._now()
         return self._store.compare_and_swap(
             current.evolve(
@@ -322,6 +325,20 @@ class PersonalMemoryService:
                 updated_at=self._now(),
             ),
             expected_revision=expected_revision,
+        )
+
+    def is_remote_processing_allowed(
+        self,
+        owner: PersonalMemoryOwner,
+        *,
+        channel: PersonalMemoryRemoteChannel | str,
+        use_memory: bool,
+    ) -> bool:
+        """Authorize one outbound channel without exposing memory content."""
+
+        return self.get_policy(owner).allows_remote_processing(
+            channel,
+            use_memory=use_memory,
         )
 
     def select_active(

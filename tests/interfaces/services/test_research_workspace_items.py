@@ -10,7 +10,7 @@ from interfaces.services.research_history_service import ResearchHistoryError, R
 
 def items() -> dict:
     return {
-        "materials": [{"id": "source-a", "groupId": "group-a", "kind": "paper", "title": "A paper", "url": "https://arxiv.org/abs/2605.22343", "notes": "First line\nSecond line", "createdAt": 1, "updatedAt": 2}],
+        "materials": [{"id": "source-a", "groupId": "group-a", "kind": "paper", "title": "A paper", "url": "https://arxiv.org/abs/2605.22343", "notes": "First line\nSecond line", "favorite": False, "readingStatus": "unread", "tags": [], "createdAt": 1, "updatedAt": 2}],
         "reportDrafts": [{"id": "draft-a", "groupId": "group-a", "question": "Agent", "title": "Agent report", "scope": "Evaluation", "notes": "Working notes", "materials": [{"id": "source-a", "title": "A paper", "url": "https://arxiv.org/abs/2605.22343", "notes": "Read methods"}], "updatedAt": 2}],
         "prompts": [{"id": "prompt-a", "name": "Agent papers", "question": "Find Agent papers", "mode": "papers", "constraints": {"recentYear": True, "hasCode": True}, "updatedAt": 2}],
         "composerDraft": {"question": "Not submitted", "mode": "papers", "constraints": {}, "groupId": "group-a", "updatedAt": 2},
@@ -241,4 +241,111 @@ def test_reader_notebook_allows_20000_chars_but_selection_note_stays_bounded(tmp
         service.replace(
             user_id="alice", revision=1, visits=[], groups=[],
             workspace_items={"readerNotebooks": [notebook], "readerSelections": [selection]},
+        )
+
+
+def test_reader_notebook_view_defaults_to_text_and_rejects_invalid_fields(tmp_path: Path) -> None:
+    service = ResearchHistoryService(tmp_path / "history.json")
+    revision = "sha256:" + "b" * 64
+    notebook = {
+        "paperId": "2601.01234", "sourceRevision": revision, "note": "",
+        "question": "", "fontSize": 18, "sectionId": "", "pdfPage": 1, "updatedAt": 2,
+    }
+
+    legacy = service.replace(
+        user_id="alice", revision=0, visits=[], groups=[],
+        workspace_items={"readerNotebooks": [notebook]},
+    )
+    assert legacy.workspace_items["readerNotebooks"][0].get("readerView", "text") == "text"
+
+    notebook["readerView"] = "pdf"
+    saved = service.replace(
+        user_id="alice", revision=1, visits=[], groups=[],
+        workspace_items={"readerNotebooks": [notebook]},
+    )
+    assert saved.workspace_items["readerNotebooks"][0]["readerView"] == "pdf"
+
+    notebook["readerView"] = "slides"
+    with pytest.raises(ResearchHistoryError):
+        service.replace(
+            user_id="alice", revision=2, visits=[], groups=[],
+            workspace_items={"readerNotebooks": [notebook]},
+        )
+
+    notebook["readerView"] = "text"
+    notebook["unexpected"] = True
+    with pytest.raises(ResearchHistoryError):
+        service.replace(
+            user_id="alice", revision=2, visits=[], groups=[],
+            workspace_items={"readerNotebooks": [notebook]},
+        )
+
+
+def test_legacy_material_defaults_are_migrated_and_new_state_survives_cas(tmp_path: Path) -> None:
+    path = tmp_path / "history.json"
+    service = ResearchHistoryService(path)
+    legacy = {
+        "id": "source-legacy",
+        "groupId": "group-a",
+        "kind": "paper",
+        "title": "Legacy paper",
+        "url": "https://example.test/legacy",
+        "notes": "",
+        "createdAt": 1,
+        "updatedAt": 1,
+    }
+
+    migrated = service.replace(
+        user_id="a",
+        revision=0,
+        visits=[],
+        groups=GROUPS,
+        workspace_items={"materials": [legacy]},
+    )
+    assert migrated.workspace_items["materials"][0] == {
+        **legacy,
+        "favorite": False,
+        "readingStatus": "unread",
+        "tags": [],
+    }
+
+    updated = {
+        **migrated.workspace_items["materials"][0],
+        "favorite": True,
+        "readingStatus": "read",
+        "tags": ["RAG", "Methods"],
+        "updatedAt": 2,
+    }
+    saved = service.replace(
+        user_id="a",
+        revision=1,
+        visits=[],
+        groups=GROUPS,
+        workspace_items={"materials": [updated]},
+    )
+    assert saved.workspace_items["materials"] == [updated]
+    assert ResearchHistoryService(path).read(user_id="a").workspace_items["materials"] == [updated]
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        [""],
+        [" leading"],
+        ["duplicate", "DUPLICATE"],
+        ["x" * 65],
+        [f"tag-{index}" for index in range(33)],
+    ],
+)
+def test_material_tags_are_bounded_trimmed_and_unique(tmp_path: Path, tags: list[str]) -> None:
+    service = ResearchHistoryService(tmp_path / "history.json")
+    material = {**items()["materials"][0], "tags": tags}
+
+    with pytest.raises(ResearchHistoryError):
+        service.replace(
+            user_id="a",
+            revision=0,
+            visits=[],
+            groups=GROUPS,
+            workspace_items={"materials": [material]},
         )

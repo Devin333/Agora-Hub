@@ -395,6 +395,54 @@ def test_paper_answer_worker_keeps_supported_negative_presence_answer_with_targe
     assert "negative_presence_relevance" not in candidate.metadata
 
 
+def test_paper_answer_worker_discloses_only_explicitly_cited_evidence() -> None:
+    async def fake_llm(prompt: str) -> str:
+        assert "First evidence" in prompt and "Second evidence" in prompt
+        return "The second context supports the answer [2]."
+
+    worker = PaperAnswerWorker(AnswerGenerator(fake_llm, max_context_chunks=2))
+    pack = RAGContextPack(
+        pack_id="pack-selective",
+        query="Which context supports the answer?",
+        accepted_evidence=(
+            _evidence("ev-first", _chunk("chunk-first", "First evidence.")),
+            _evidence("ev-second", _chunk("chunk-second", "Second evidence.")),
+        ),
+    )
+
+    candidate = worker.generate_answer(
+        question="Which context supports the answer?",
+        pack=pack,
+    )
+
+    assert candidate.abstained is False
+    assert candidate.cited_evidence_ids == ("ev-second",)
+    assert candidate.claims[0].evidence_ids == ("ev-second",)
+    assert candidate.claims[0].span_refs == ("chunk-second",)
+    assert candidate.metadata["context_chunk_ids"] == ["chunk-first", "chunk-second"]
+
+
+def test_answer_generator_repairs_zero_index_citation_without_fabricating_a_locator() -> None:
+    async def fake_llm(_prompt: str) -> str:
+        return "An invalid generated citation points at context zero [0]."
+
+    worker = PaperAnswerWorker(AnswerGenerator(fake_llm, max_context_chunks=1))
+    pack = RAGContextPack(
+        pack_id="pack-zero",
+        query="What does the evidence say?",
+        accepted_evidence=(
+            _evidence("ev-method", _chunk("chunk-method", "Verified method evidence.")),
+        ),
+    )
+
+    candidate = worker.generate_answer(question="What does the evidence say?", pack=pack)
+
+    assert candidate.abstained is False
+    assert "[0]" not in candidate.answer_text
+    assert candidate.cited_evidence_ids == ("ev-method",)
+    assert candidate.claims[0].span_refs == ("chunk-method",)
+
+
 def _chunk(chunk_id: str, content: str, *, chunk_type: str = "paragraph") -> PaperChunk:
     return PaperChunk(
         chunk_id=chunk_id,

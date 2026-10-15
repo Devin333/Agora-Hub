@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+from hashlib import sha256
 from pathlib import Path
 
-from framework.shared.local_desktop import CapabilityState, ProbeBudget, resolve_local_desktop_config
-from scripts.local_desktop.doctor import LocalDesktopDoctor, _research_parser_contract
+import pytest
+
+from framework.shared.local_desktop import CapabilityProjection, CapabilityState, ProbeBudget, resolve_local_desktop_config
+from scripts.local_desktop.common import windows_extended_path
+from scripts.local_desktop.doctor import DoctorCheck, LocalDesktopDoctor, _aggregate_status, _research_parser_contract
+from scripts.local_desktop.release import ACTIVE_RELEASE_SCHEMA, RELEASE_SCHEMA
 
 
 def _project(tmp_path: Path) -> tuple[Path, object]:
@@ -18,6 +24,65 @@ def _project(tmp_path: Path) -> tuple[Path, object]:
     (tmp_path / "configs").mkdir()
     (tmp_path / "configs" / "sources.yaml").write_text("sources: []", encoding="utf-8")
     return tmp_path, resolve_local_desktop_config(project_root=tmp_path)
+
+
+def _write_windows_path(path: Path, data: bytes) -> None:
+    io_path = windows_extended_path(path)
+    io_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(io_path, "wb") as handle:
+        handle.write(data)
+
+
+def _prepare_active_release(tmp_path: Path) -> tuple[LocalDesktopDoctor, Path, Path]:
+    _, config = _project(tmp_path)
+    release_id = "20261014T160620Z-b2d933ba0487-portable-860f93d1871e-desktop-54afd7ef8932"
+    release = config.release_root / release_id
+    long_relative = Path(
+        "frontend/node_modules/@radix-ui/react-dismissable-layer/node_modules/"
+        "@radix-ui/primitive/dist/internal/is-development.false.d.mts"
+    )
+    resources = {
+        Path("app/interfaces/__init__.py"): b"",
+        Path("frontend/.next/BUILD_ID"): b"doctor-long-path-build",
+        Path("frontend/node_modules/next/dist/bin/next"): b"next-runtime\n",
+        long_relative: b"export type IsDevelopment = false;\n",
+    }
+    for relative, data in resources.items():
+        _write_windows_path(release / relative, data)
+    manifest = {
+        "schema": RELEASE_SCHEMA,
+        "identity": {"release_id": release_id},
+        "resources": [
+            {"path": relative.as_posix(), "size": len(data), "sha256": sha256(data).hexdigest()}
+            for relative, data in sorted(resources.items(), key=lambda item: item[0].as_posix())
+        ],
+    }
+    _write_windows_path(release / "release-manifest.json", json.dumps(manifest).encode("utf-8"))
+    pointer = {
+        "schema": ACTIVE_RELEASE_SCHEMA,
+        "release_id": release_id,
+        "release_path": str(release),
+    }
+    _write_windows_path(config.runtime_root / "active-release.json", json.dumps(pointer).encode("utf-8"))
+    doctor = LocalDesktopDoctor(
+        config,
+        environ={},
+        command_runner=lambda _argv, _timeout: None,
+        port_checker=lambda _host, _port: False,
+    )
+    return doctor, release, long_relative
+
+
+def _create_junction(link: Path, target: Path) -> None:
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"Windows junction creation unavailable: {result.stderr or result.stdout}")
 
 
 def test_doctor_default_never_runs_live_probe(tmp_path: Path, monkeypatch) -> None:
@@ -152,6 +217,67 @@ def test_pymupdf_mode_does_not_require_docker_check(tmp_path: Path, monkeypatch)
 
 
 
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows extended-length paths")
+def test_doctor_accepts_active_release_resource_beyond_max_path_with_exact_checksum(tmp_path: Path) -> None:
+    doctor, release, long_relative = _prepare_active_release(tmp_path)
+    resource = release / long_relative
+
+    assert len(os.fspath(resource.absolute())) > 260
+    assert windows_extended_path(resource).is_file()
+
+    check = doctor._release_check()
+
+    assert check.status == "ok"
+    assert check.reason_code == "desktop_active_release_prepared"
+    assert check.details == {"release_id": release.name}
+    assert str(windows_extended_path(resource)) not in json.dumps(check.to_dict())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows extended-length paths")
+def test_doctor_rejects_corrupt_active_release_resource_beyond_max_path(tmp_path: Path) -> None:
+    doctor, release, long_relative = _prepare_active_release(tmp_path)
+    resource_io = windows_extended_path(release / long_relative)
+    original = resource_io.read_bytes()
+    resource_io.write_bytes(b"X" + original[1:])
+
+    check = doctor._release_check()
+
+    assert check.status == "error"
+    assert check.reason_code == "desktop_active_release_invalid"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows extended-length paths")
+def test_doctor_rejects_missing_active_release_resource_beyond_max_path(tmp_path: Path) -> None:
+    doctor, release, long_relative = _prepare_active_release(tmp_path)
+    windows_extended_path(release / long_relative).unlink()
+
+    check = doctor._release_check()
+
+    assert check.status == "error"
+    assert check.reason_code == "desktop_active_release_invalid"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires a real Windows junction")
+def test_doctor_rejects_junction_inside_active_release(tmp_path: Path) -> None:
+    doctor, release, _long_relative = _prepare_active_release(tmp_path)
+    interfaces = release / "app" / "interfaces"
+    windows_extended_path(interfaces / "__init__.py").unlink()
+    windows_extended_path(interfaces).rmdir()
+    target = tmp_path / "doctor-junction-target"
+    target.mkdir()
+    (target / "__init__.py").write_bytes(b"")
+    _create_junction(interfaces, target)
+    try:
+        check = doctor._release_check()
+
+        assert check.status == "error"
+        assert check.reason_code == "desktop_active_release_invalid"
+        assert (target / "__init__.py").read_bytes() == b""
+    finally:
+        if os.path.lexists(interfaces):
+            os.rmdir(interfaces)
+
+
 def test_doctor_does_not_treat_workspace_next_directory_as_prepared_release(tmp_path: Path, monkeypatch) -> None:
     _, config = _project(tmp_path)
     (config.frontend_root / ".next").mkdir()
@@ -177,3 +303,62 @@ def test_doctor_reports_corrupt_active_release_pointer_with_stable_reason(tmp_pa
     release_check = next(item for item in report.checks if item.check_id == "production_release")
     assert release_check.status == "error"
     assert release_check.reason_code == "desktop_active_release_invalid"
+
+
+def test_owned_local_doctor_uses_effective_environment_and_reports_first_start_warning(tmp_path: Path) -> None:
+    _project(tmp_path)
+    config = resolve_local_desktop_config(
+        project_root=tmp_path,
+        runtime_config={"storage_mode": "owned-local"},
+    )
+    doctor = LocalDesktopDoctor(
+        config,
+        environ={"NEWS_DATABASE_DSN": "postgresql://local.invalid/newsroom"},
+        command_runner=lambda _argv, _timeout: None,
+        port_checker=lambda _host, _port: False,
+    )
+
+    check = doctor._storage_check()
+
+    assert doctor.environ["NEWS_DATABASE_DSN"] == ""
+    assert check.status == "warning"
+    assert check.reason_code == "desktop_storage_uninitialized"
+    assert check.details["storage_mode"] == "owned-local"
+    assert check.details["root_database_dsn_shadowed"] is True
+    assert {"auth_users", "research_history", "research_imports", "research_run_store", "desktop_control"} <= set(
+        check.details["missing_owner_ids"]
+    )
+
+
+def test_root_environment_doctor_keeps_external_database_gate(tmp_path: Path) -> None:
+    _project(tmp_path)
+    config = resolve_local_desktop_config(project_root=tmp_path)
+    doctor = LocalDesktopDoctor(
+        config,
+        environ={"NEWS_DATABASE_DSN": "postgresql://local.invalid/newsroom"},
+        command_runner=lambda _argv, _timeout: None,
+        port_checker=lambda _host, _port: False,
+    )
+
+    check = doctor._storage_check()
+
+    assert doctor.environ["NEWS_DATABASE_DSN"] == "postgresql://local.invalid/newsroom"
+    assert check.status == "error"
+    assert check.reason_code == "desktop_inventory_external_database_unsupported"
+
+def test_base_doctor_profile_preserves_required_business_capability_gate() -> None:
+    checks = [DoctorCheck("local", "ok", "desktop_local_ready", "local prerequisites are ready")]
+    capabilities = (
+        CapabilityProjection(
+            "single_paper_analysis",
+            True,
+            CapabilityState.NO,
+            reason_code="desktop_llm_not_configured",
+        ),
+    )
+
+    assert _aggregate_status(checks, capabilities) == "error"
+    assert (
+        _aggregate_status(checks, capabilities, startup_required_capability_ids=frozenset({"pdf_import"}))
+        == "warning"
+    )

@@ -450,7 +450,15 @@ class _FreezeVisitor(ast.NodeVisitor):
                 value, self.legacy_schema_bindings
             ):
                 self._record_schema_writer(f"dict_field:{field}", node)
-        self.generic_visit(node)
+            # A lowerCamel boolean field describes data/policy, not a symbol
+            # binding. Visit every value independently: a real reflection value
+            # in the same dictionary must still fail the freeze gate.
+            if key is not None and not (
+                not self.is_legacy_namespace
+                and _is_lower_camel_boolean_data_key(key, value)
+            ):
+                self.visit(key)
+            self.visit(value)
 
     def visit_Call(self, node: ast.Call) -> None:
         for keyword in node.keywords:
@@ -573,6 +581,20 @@ def _matches_namespace(module: str) -> bool:
 
 def _matches_module(module: str, prefix: str) -> bool:
     return module == prefix or module.startswith(f"{prefix}.")
+
+
+def _is_lower_camel_boolean_data_key(key: ast.expr, value: ast.expr) -> bool:
+    """Exclude only literal boolean data keys, never reflection expressions."""
+    field = _constant_string(key)
+    return (
+        field is not None
+        and re.fullmatch(r"[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+", field) is not None
+        and isinstance(value, ast.Constant)
+        and type(value.value) is bool
+        and field not in EXPLICIT_RETIRED_SYMBOLS
+        and not field.startswith("LEGACY_")
+        and not field.endswith(("Runner", "Executor"))
+    )
 
 
 def _is_retired_symbol(symbol: str, is_legacy_namespace: bool) -> bool:

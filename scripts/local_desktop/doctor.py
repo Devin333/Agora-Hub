@@ -21,7 +21,7 @@ from framework.shared.local_desktop import (
     utc_timestamp,
 )
 from framework.shared.redaction import redact_sensitive_values
-from scripts.local_desktop.config import sanitized_environment
+from scripts.local_desktop.config import load_root_environment, sanitized_environment
 from interfaces.composition.research_errors import ResearchConfigurationError, ResearchRuntimeUnavailableError
 from framework.llm import LLMConfigurationError
 
@@ -76,15 +76,20 @@ class LocalDesktopDoctor:
         environ: Mapping[str, str] | None = None,
         command_runner: CommandRunner | None = None,
         port_checker: Callable[[str, int], bool] | None = None,
+        startup_required_capability_ids: frozenset[str] | None = None,
     ) -> None:
         self.config = config
-        self.environ = dict(environ if environ is not None else os.environ)
+        raw_environment = load_root_environment(environ=environ)
+        self.environ = sanitized_environment(config, base=raw_environment)
+        self.root_database_dsn_shadowed = (
+            self.environ.get("NEWSROOM_DESKTOP_ROOT_DATABASE_DSN_SHADOWED") == "1"
+        )
         if command_runner is None:
-            probe_environment = sanitized_environment(config, base=self.environ)
-            self.command_runner = lambda argv, timeout: _run_command(argv, timeout, env=probe_environment)
+            self.command_runner = lambda argv, timeout: _run_command(argv, timeout, env=self.environ)
         else:
             self.command_runner = command_runner
         self.port_checker = port_checker or _port_is_listening
+        self.startup_required_capability_ids = startup_required_capability_ids
 
     def run(self, *, probe_network: bool = False, budget: ProbeBudget | None = None) -> DoctorReport:
         actual_budget = budget or ProbeBudget()
@@ -105,7 +110,11 @@ class LocalDesktopDoctor:
             capabilities = tuple(parser_capability if item.capability_id == "pdf_import" else item for item in capabilities)
         if probe_network:
             capabilities = self._probe_network(capabilities, actual_budget)
-        status = _aggregate_status(checks, capabilities)
+        status = _aggregate_status(
+            checks,
+            capabilities,
+            startup_required_capability_ids=self.startup_required_capability_ids,
+        )
         return DoctorReport(
             status=status,
             checks=tuple(checks),
@@ -172,7 +181,7 @@ class LocalDesktopDoctor:
         )
 
     def _release_check(self) -> DoctorCheck:
-        from scripts.local_desktop.common import DesktopOperationError, reject_reparse_path
+        from scripts.local_desktop.common import DesktopOperationError, reject_reparse_path, windows_extended_path
         from scripts.local_desktop.release import ACTIVE_RELEASE_SCHEMA, RELEASE_SCHEMA
 
         pointer_path = self.config.runtime_root / "active-release.json"
@@ -213,9 +222,10 @@ class LocalDesktopDoctor:
                 lexical_candidate = release_path / relative
                 reject_reparse_path(lexical_candidate, root=release_path)
                 candidate = lexical_candidate.resolve(strict=False)
-                if not relative or candidate == release_path or not candidate.is_relative_to(release_path) or not candidate.is_file():
+                candidate_io = windows_extended_path(candidate)
+                if not relative or candidate == release_path or not candidate.is_relative_to(release_path) or not candidate_io.is_file():
                     raise ValueError("release resource path")
-                data = candidate.read_bytes()
+                data = candidate_io.read_bytes()
                 if len(data) != item.get("size") or hash_bytes(data) != item.get("sha256"):
                     raise ValueError("release resource checksum")
         except (DesktopOperationError, KeyError, OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
@@ -252,10 +262,10 @@ class LocalDesktopDoctor:
         if unavailable:
             return DoctorCheck("storage", "error", "desktop_storage_unavailable", "one or more desktop roots are not usable", "Correct the configured path or its current-user permissions.", {"paths": unavailable, "free_bytes": free})
         if missing_required:
-            return DoctorCheck("storage", "warning", "desktop_storage_uninitialized", "required application storage owners are not initialized yet", "Start only after configuration is reviewed; backup remains unavailable until real stores exist.", {"missing_owner_ids": missing_required, "owner_count": len(inventory.owners), "free_bytes": free})
+            return DoctorCheck("storage", "warning", "desktop_storage_uninitialized", "required application storage owners are not initialized yet", "Start only after configuration is reviewed; backup remains unavailable until real stores exist.", {"missing_owner_ids": missing_required, "owner_count": len(inventory.owners), "free_bytes": free, "storage_mode": self.config.storage_mode, "root_database_dsn_shadowed": self.root_database_dsn_shadowed})
         if free < 2 * 1024 * 1024 * 1024:
             return DoctorCheck("storage", "warning", "desktop_disk_space_low", "less than 2 GiB is available for release and backup operations", "Free disk space before build or backup.", {"free_bytes": free, "owner_count": len(inventory.owners)})
-        return DoctorCheck("storage", "ok", "desktop_storage_ready", "desktop and application storage roots are usable", details={"free_bytes": free, "owner_count": len(inventory.owners)})
+        return DoctorCheck("storage", "ok", "desktop_storage_ready", "desktop and application storage roots are usable", details={"free_bytes": free, "owner_count": len(inventory.owners), "storage_mode": self.config.storage_mode, "root_database_dsn_shadowed": self.root_database_dsn_shadowed})
 
     def _port_check(self, check_id: str, host: str, port: int) -> DoctorCheck:
         occupied = self.port_checker(host, port)
@@ -286,7 +296,7 @@ class LocalDesktopDoctor:
         artifact_root = runtime_settings.artifact.root if runtime_settings is not None else self.config.project_root / ".newsroom" / "runs"
         artifact_parent = next((parent for parent in (artifact_root, *artifact_root.parents) if parent.exists()), self.config.project_root)
         artifact_configured = artifact_parent.is_dir() and os.access(artifact_parent, os.R_OK | os.W_OK)
-        parser_installed = importlib.util.find_spec("fitz") is not None
+        parser_installed = importlib.util.find_spec("pymupdf") is not None
         llm = runtime_settings is not None and self._llm_configured(runtime_settings)
         return (
             CapabilityProjection("real_source", True, _state(source_configured), reason_code=None if source_configured else (settings_reason or "desktop_source_config_missing"), checked_at=checked, remediation=(() if source_configured else ("Correct the Research source settings resolved by ResearchRuntimeSettings.",))),
@@ -507,10 +517,24 @@ def _redact_doctor_details(value: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _aggregate_status(checks: list[DoctorCheck], capabilities: tuple[CapabilityProjection, ...]) -> str:
-    if any(item.status == "error" for item in checks) or any(item.required and item.configured is CapabilityState.NO for item in capabilities):
+def _aggregate_status(
+    checks: list[DoctorCheck],
+    capabilities: tuple[CapabilityProjection, ...],
+    *,
+    startup_required_capability_ids: frozenset[str] | None = None,
+) -> str:
+    startup_capabilities = (
+        tuple(item for item in capabilities if item.required)
+        if startup_required_capability_ids is None
+        else tuple(item for item in capabilities if item.capability_id in startup_required_capability_ids)
+    )
+    if any(item.status == "error" for item in checks) or any(
+        item.configured is CapabilityState.NO for item in startup_capabilities
+    ):
         return "error"
-    if any(item.status == "warning" for item in checks) or any(item.required and not item.available for item in capabilities):
+    if any(item.status == "warning" for item in checks) or any(
+        item.required and not item.available for item in capabilities
+    ):
         return "warning"
     return "ok"
 

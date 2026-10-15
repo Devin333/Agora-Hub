@@ -240,9 +240,11 @@ from interfaces.composition.research_errors import (
     ResearchRuntimeUnavailableError,
 )
 from interfaces.composition.research_settings import (
+    ResearchLocalRuntimeSettings,
     ResearchParserSettings,
     ResearchRAGSettings,
     ResearchRuntimeSettings,
+    desktop_research_llm_enabled,
 )
 from interfaces.composition.research_graph_artifacts import (
     compose_research_graph_artifact_runtime,
@@ -737,7 +739,7 @@ class ResearchRuntimeComposition:
     def __init__(
         self,
         *,
-        settings: ResearchRuntimeSettings | None,
+        settings: ResearchRuntimeSettings | ResearchLocalRuntimeSettings | None,
         service: ResearchApplicationService,
         source_runtime_provider: SourceRuntimeProvider,
         resources: Iterable[Any] = (),
@@ -753,8 +755,10 @@ class ResearchRuntimeComposition:
         execution_composition: Any | None = None,
         subagent_transcript_store: Any | None = None,
     ) -> None:
-        if settings is not None and not isinstance(settings, ResearchRuntimeSettings):
-            raise TypeError("settings must be ResearchRuntimeSettings")
+        if settings is not None and not isinstance(
+            settings, (ResearchRuntimeSettings, ResearchLocalRuntimeSettings)
+        ):
+            raise TypeError("settings must be ResearchRuntimeSettings or ResearchLocalRuntimeSettings")
         if not isinstance(service, ResearchApplicationService):
             raise TypeError("service must be ResearchApplicationService")
         if not isinstance(source_runtime_provider, SourceRuntimeProvider):
@@ -826,7 +830,7 @@ class ResearchRuntimeComposition:
         self._closed = False
 
     @property
-    def settings(self) -> ResearchRuntimeSettings | None:
+    def settings(self) -> ResearchRuntimeSettings | ResearchLocalRuntimeSettings | None:
         return self._settings
 
     @property
@@ -1057,6 +1061,16 @@ def build_research_runtime_composition(
     if settings is not None and settings_factory is not None:
         raise ValueError("settings and settings_factory are mutually exclusive")
     provider = source_runtime_provider or SourceRuntimeProvider()
+
+    # Explicit desktop disablement is process-owned authorization. Do not enter
+    # the remote settings/factory path, even if credentials were inherited.
+    try:
+        if desktop_research_llm_enabled() is False:
+            return _build_local_only_composition(provider)
+    except ResearchCompositionError as exc:
+        return _unavailable_composition(
+            exc, settings=None, source_runtime_provider=provider,
+        )
 
     actual_settings = settings
     if actual_settings is None:
@@ -1727,6 +1741,25 @@ def _local_reader_rag_service(
         ),
         ask_use_case=ask_use_case,
         transcript_store=PaperRagTranscriptFileStore(transcript_root),
+    )
+
+
+def _build_local_only_composition(
+    source_runtime_provider: SourceRuntimeProvider,
+) -> ResearchRuntimeComposition:
+    from interfaces.composition.research_local import build_local_research_service
+
+    settings = ResearchLocalRuntimeSettings.from_env()
+    error = ResearchRuntimeUnavailableError(
+        (ResearchCapability.LLM_ROUTE,),
+        retryable=False,
+    )
+    service = build_local_research_service(settings)
+    return ResearchRuntimeComposition(
+        settings=settings,
+        service=service,
+        source_runtime_provider=source_runtime_provider,
+        availability_error=error,
     )
 
 
@@ -2537,6 +2570,7 @@ def _build_configured_composition(
                 chunk_store=chunk_store,
                 answer_worker_factory=paper_answer_worker_factory,
                 context_assembler_factory=rag_context_assembler_factory,
+                transcript_root=settings.rag.transcript_root,
             ),
         )
         owned_resources.append(rag_ask_provider)

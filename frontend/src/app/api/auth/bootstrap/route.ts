@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
-import { safeApiPost } from "@/lib/api/server";
-import { authFailure, authResponse, isSameOrigin, readBoundedJson } from "@/lib/auth/portal-server";
+import { authFailure, authResponse, isSameOrigin, publicAuthPost, readBoundedJson } from "@/lib/auth/portal-server";
 export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
     if (!isSameOrigin(request))
@@ -9,5 +8,5 @@ export async function POST(request: NextRequest) {
     if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => !["username", "password"].includes(key)) || typeof body.username !== "string" || typeof body.password !== "string" || body.username.length < 3 || body.username.length > 64 || body.password.length < 8 || body.password.length > 256) {
         return authFailure("auth_invalid_request", 400);
     }
-    return authResponse(await safeApiPost("/api/v1/auth/bootstrap", { username: body.username, password: body.password }, { signal: AbortSignal.timeout(15000) }));
+    return authResponse(await publicAuthPost("/api/v1/auth/bootstrap", { username: body.username, password: body.password }, { signal: AbortSignal.timeout(15000) }));
 }

@@ -36,6 +36,7 @@ const ANALYZE_FIELDS = new Set([
   "pdfUrl",
   "objective",
   "constraints",
+  "personalMemory",
 ])
 
 const ASK_FIELDS = new Set([
@@ -49,6 +50,7 @@ const ASK_FIELDS = new Set([
   "question",
   "selection",
   "locale",
+  "personalMemory",
 ])
 
 export type PreparedRequestIdentity = {
@@ -112,6 +114,7 @@ export function buildAnalyzeRequest(
     pdfUrl: normalizeAnalyzeTransportUrl(semantic.pdfUrl),
     objective: semantic.objective,
     constraints: semantic.constraints,
+    ...(semantic.personalMemory ? { personalMemory: semantic.personalMemory } : {}),
   }
 }
 
@@ -130,6 +133,7 @@ export function buildAskRequest(
     question: semantic.question,
     selection: semantic.selection,
     locale: semantic.locale,
+    ...(semantic.personalMemory ? { personalMemory: semantic.personalMemory } : {}),
   }
 }
 
@@ -143,6 +147,7 @@ export function sanitizeAnalyzeRequest(
   if (typeof body.sourceFingerprint !== "string" || !SHA256_PATTERN.test(body.sourceFingerprint)) return null
   if (!validAnalyzeTransportUrl(body.sourceUrl) || !validAnalyzeTransportUrl(body.pdfUrl)) return null
   if (!validNullableText(body.objective, 2000)) return null
+  if (body.personalMemory !== undefined && !validPersonalMemorySelection(body.personalMemory)) return null
   if (
     body.constraints !== undefined &&
     (!Array.isArray(body.constraints) ||
@@ -166,6 +171,7 @@ export function sanitizeAskRequest(
   if (!validText(body.question, 1, 2000) || !body.question.trim()) return null
   if (!validSelection(body.selection)) return null
   if (body.locale !== undefined && body.locale !== null && !validText(body.locale, 1, 32)) return null
+  if (body.personalMemory !== undefined && !validPersonalMemorySelection(body.personalMemory)) return null
   return body
 }
 
@@ -212,6 +218,24 @@ function validRequestIdentity(body: Record<string, unknown>): boolean {
     typeof body.requestFingerprint === "string" &&
     SHA256_PATTERN.test(body.requestFingerprint)
   )
+}
+
+function validPersonalMemorySelection(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const selection = value as Record<string, unknown>
+  if (hasOwnerScope(selection) || hasUnknownFields(selection, new Set(["refs", "policyRevision"]))) return false
+  if (typeof selection.policyRevision !== "number" || !Number.isSafeInteger(selection.policyRevision) || selection.policyRevision < 1) return false
+  if (!Array.isArray(selection.refs) || selection.refs.length < 1 || selection.refs.length > 20) return false
+  const ids = new Set<string>()
+  for (const raw of selection.refs) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
+    const ref = raw as Record<string, unknown>
+    if (hasOwnerScope(ref) || hasUnknownFields(ref, new Set(["memoryId", "revision"]))) return false
+    if (typeof ref.memoryId !== "string" || !/^pmem_[0-9a-f]{32}$/.test(ref.memoryId) || ids.has(ref.memoryId)) return false
+    if (typeof ref.revision !== "number" || !Number.isSafeInteger(ref.revision) || ref.revision < 1) return false
+    ids.add(ref.memoryId)
+  }
+  return true
 }
 
 function validSelection(value: unknown): boolean {

@@ -40,6 +40,10 @@ ALLOWED_BUSINESS_IMPORTS = {
     "infrastructure/research/artifact_port.py": {
         "backend.research.ports.artifact_publication",
     },
+    "infrastructure/research/personal_memory_store.py": {
+        "backend.research.domain.personal_memory",
+        "backend.research.ports.personal_memory",
+    },
     "infrastructure/research/filesystem_run_store.py": {
         "backend.research.domain.run_disposition",
         "backend.research.ports.run_store",
@@ -108,6 +112,10 @@ RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
         "backend.research.domain.paper",
         "backend.research.ports.document_compiler",
         "backend.research.ports.document_parser",
+    },
+    "infrastructure/research/personal_memory_store.py": {
+        "backend.research.domain.personal_memory",
+        "backend.research.ports.personal_memory",
     },
     "infrastructure/research/filesystem_run_store.py": {
         "backend.research.domain.run_disposition",

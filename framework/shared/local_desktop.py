@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 
 LOCAL_DESKTOP_PROFILE = "local-desktop"
 LOCAL_DESKTOP_CONFIG_SCHEMA = "newsroom.local-desktop-config/v1"
+ROOT_ENVIRONMENT_STORAGE_MODE = "root-environment"
+OWNED_LOCAL_STORAGE_MODE = "owned-local"
 DEFAULT_FRONTEND_HOST = "127.0.0.1"
 DEFAULT_FRONTEND_PORT = 3000
 DEFAULT_API_HOST = "127.0.0.1"
@@ -36,7 +38,7 @@ _ENV_TO_FIELD = {
     "NEWS_RESEARCH_ROOT": "research_root",
     "NEWS_RESEARCH_ARTIFACT_ROOT": "artifact_root",
 }
-_ALLOWED_FIELDS = frozenset(_ENV_TO_FIELD.values())
+_ALLOWED_FIELDS = frozenset((*_ENV_TO_FIELD.values(), "storage_mode"))
 _SECRET_NAME_TOKENS = ("secret", "token", "password", "credential", "api_key", "apikey", "cookie")
 _NON_SECRET_BUDGET_FIELDS = frozenset({
     "timeout_seconds",
@@ -164,6 +166,7 @@ class LocalDesktopConfig:
     backup_root: Path
     control_path: Path
     parser_mode: str
+    storage_mode: str
     config_schema: str = LOCAL_DESKTOP_CONFIG_SCHEMA
     research_root: Path | None = None
     artifact_root: Path | None = None
@@ -222,6 +225,7 @@ class LocalDesktopConfig:
             "backup_root": str(self.backup_root),
             "control_path": str(self.control_path),
             "parser_mode": self.parser_mode,
+            "storage_mode": self.storage_mode,
             "research_root": str(self.research_root) if self.research_root is not None else None,
             "artifact_root": str(self.artifact_root) if self.artifact_root is not None else None,
         }
@@ -255,6 +259,7 @@ def resolve_local_desktop_config(
         "backup_root": root / ".newsroom" / "desktop" / "backups",
         "control_path": root / ".newsroom" / "local-desktop" / "control.json",
         "parser_mode": "pymupdf",
+        "storage_mode": ROOT_ENVIRONMENT_STORAGE_MODE,
         "research_root": None,
         "artifact_root": None,
     }
@@ -281,6 +286,13 @@ def resolve_local_desktop_config(
     parser_mode = str(merged["parser_mode"]).strip().lower()
     if parser_mode not in {"pymupdf", "marker", "mineru"}:
         raise LocalDesktopConfigError("desktop_parser_mode_invalid", "parser_mode must be pymupdf, marker, or mineru", field_name="parser_mode")
+    storage_mode = str(merged["storage_mode"]).strip().lower()
+    if storage_mode not in {ROOT_ENVIRONMENT_STORAGE_MODE, OWNED_LOCAL_STORAGE_MODE}:
+        raise LocalDesktopConfigError(
+            "desktop_storage_mode_invalid",
+            "storage_mode must be root-environment or owned-local",
+            field_name="storage_mode",
+        )
     return LocalDesktopConfig(
         project_root=root,
         deployment_profile=profile,
@@ -295,6 +307,7 @@ def resolve_local_desktop_config(
         backup_root=backup_root,
         control_path=control_path,
         parser_mode=parser_mode,
+        storage_mode=storage_mode,
         research_root=_resolved_path(root, merged["research_root"], "research_root") if merged["research_root"] is not None else None,
         artifact_root=_resolved_path(root, merged["artifact_root"], "artifact_root") if merged["artifact_root"] is not None else None,
     )
@@ -426,6 +439,8 @@ __all__ = [
     "DEFAULT_FRONTEND_PORT",
     "LOCAL_DESKTOP_CONFIG_SCHEMA",
     "LOCAL_DESKTOP_PROFILE",
+    "OWNED_LOCAL_STORAGE_MODE",
+    "ROOT_ENVIRONMENT_STORAGE_MODE",
     "MAX_LIFECYCLE_TIMEOUT_SECONDS",
     "validate_lifecycle_timeout",
     "LocalDesktopConfig",

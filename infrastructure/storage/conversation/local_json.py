@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone as _tz
-UTC = _tz.utc
 from pathlib import Path
 from typing import Any
 
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 from infrastructure.storage.conversation.models import (
     AgentMessageRecord,
     AgentIterationCheckpoint,
@@ -14,6 +15,8 @@ from infrastructure.storage.conversation.models import (
     message_scope_key,
 )
 from infrastructure.storage.security import StorageRedactor
+
+UTC = _tz.utc
 
 
 class ConversationNotFoundError(FileNotFoundError):
@@ -27,7 +30,10 @@ class LocalJsonConversationStore:
         *,
         redactor: StorageRedactor | None = None,
     ) -> None:
-        self.root = Path(root)
+        logical_root = Path(root)
+        self.root = (
+            resolve_storage_path(logical_root) if os.name == "nt" else logical_root
+        )
         self.redactor = redactor or StorageRedactor()
 
     def append_message(self, conversation_id: str, message: AgentMessageRecord) -> Path:
@@ -37,10 +43,11 @@ class LocalJsonConversationStore:
             raise ValueError("message conversation_id does not match")
         message = self._redacted_message(message)
         path = self._messages_path(conversation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        existing = _read_messages(path) if path.exists() else []
+        io_path = storage_io_path(path)
+        io_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = _read_messages(io_path) if io_path.exists() else []
         _assert_consistent_scope(existing, message)
-        with path.open("a", encoding="utf-8") as handle:
+        with io_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(message.to_dict(), ensure_ascii=False, sort_keys=True))
             handle.write("\n")
         return path
@@ -49,7 +56,7 @@ class LocalJsonConversationStore:
         _validate_id(conversation_id, "conversation_id")
         if limit is not None and limit <= 0:
             raise ValueError("limit must be greater than zero")
-        path = self._messages_path(conversation_id)
+        path = storage_io_path(self._messages_path(conversation_id))
         if not path.exists():
             return []
         messages = _read_messages(path)
@@ -74,15 +81,16 @@ class LocalJsonConversationStore:
         if redaction.redacted:
             payload["redaction_report"] = redaction.report.to_dict()
         path = self._summary_path(conversation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
+        io_path = storage_io_path(path)
+        io_path.parent.mkdir(parents=True, exist_ok=True)
+        with io_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
         return path
 
     def get_summary(self, conversation_id: str) -> str | None:
         _validate_id(conversation_id, "conversation_id")
-        path = self._summary_path(conversation_id)
+        path = storage_io_path(self._summary_path(conversation_id))
         if not path.exists():
             return None
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -162,8 +170,9 @@ class LocalJsonConversationStore:
             metadata=metadata,
         )
         path = self._compaction_path(conversation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
+        io_path = storage_io_path(path)
+        io_path.parent.mkdir(parents=True, exist_ok=True)
+        with io_path.open("w", encoding="utf-8") as handle:
             json.dump(record.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
         self._write_messages(conversation_id, [marker_message, *retained])
@@ -172,7 +181,7 @@ class LocalJsonConversationStore:
 
     def get_compaction(self, conversation_id: str) -> ConversationCompactionRecord | None:
         _validate_id(conversation_id, "conversation_id")
-        path = self._compaction_path(conversation_id)
+        path = storage_io_path(self._compaction_path(conversation_id))
         if not path.exists():
             return None
         return ConversationCompactionRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
@@ -206,15 +215,16 @@ class LocalJsonConversationStore:
             schema_version=cursor.schema_version,
         )
         path = self._cursor_path(cursor.conversation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
+        io_path = storage_io_path(path)
+        io_path.parent.mkdir(parents=True, exist_ok=True)
+        with io_path.open("w", encoding="utf-8") as handle:
             json.dump(safe_cursor.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
         return path
 
     def read_cursor(self, conversation_id: str) -> ConversationCursor | None:
         _validate_id(conversation_id, "conversation_id")
-        path = self._cursor_path(conversation_id)
+        path = storage_io_path(self._cursor_path(conversation_id))
         if not path.exists():
             return None
         return ConversationCursor.from_dict(json.loads(path.read_text(encoding="utf-8")))
@@ -271,15 +281,16 @@ class LocalJsonConversationStore:
             schema_version=checkpoint.schema_version,
         )
         path = self._iteration_checkpoint_path(checkpoint.conversation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
+        io_path = storage_io_path(path)
+        io_path.parent.mkdir(parents=True, exist_ok=True)
+        with io_path.open("w", encoding="utf-8") as handle:
             json.dump(safe_checkpoint.to_dict(), handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
         return path
 
     def read_iteration_checkpoint(self, conversation_id: str) -> AgentIterationCheckpoint | None:
         _validate_id(conversation_id, "conversation_id")
-        path = self._iteration_checkpoint_path(conversation_id)
+        path = storage_io_path(self._iteration_checkpoint_path(conversation_id))
         if not path.exists():
             return None
         return AgentIterationCheckpoint.from_dict(json.loads(path.read_text(encoding="utf-8")))
@@ -347,9 +358,10 @@ class LocalJsonConversationStore:
 
     def _write_messages(self, conversation_id: str, messages: list[AgentMessageRecord]) -> Path:
         path = self._messages_path(conversation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        io_path = storage_io_path(path)
+        io_path.parent.mkdir(parents=True, exist_ok=True)
         _assert_consistent_scope(messages)
-        with path.open("w", encoding="utf-8") as handle:
+        with io_path.open("w", encoding="utf-8") as handle:
             for message in messages:
                 handle.write(json.dumps(message.to_dict(), ensure_ascii=False, sort_keys=True))
                 handle.write("\n")

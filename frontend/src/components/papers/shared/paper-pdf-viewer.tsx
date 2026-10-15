@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import { ChevronLeft, ChevronRight, FileWarning, Loader2, Search, ZoomIn, ZoomOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { normalizeAnalyzeTransportUrl } from "@/lib/research/desktop/request-contracts"
 import type { Locale, PaperReaderNote, PaperReaderNoteCreate, PaperReaderNoteRect } from "@/lib/papers/types"
 
 type PaperPdfViewerProps = {
@@ -16,7 +17,10 @@ type PaperPdfViewerProps = {
   notes?: PaperReaderNote[]
   onCreateReaderNote?: (note: PaperReaderNoteCreate) => void
   onPageChange?: (pageNumber: number, numPages: number) => void
+  onLoadError?: () => void
   className?: string
+  /** Opt-in chrome slots styled by the paper-agent palette; document pixels stay untouched. */
+  appearance?: "default" | "paper-agent"
   errorMessage?: string
 }
 
@@ -111,7 +115,9 @@ export function PaperPdfViewer({
   notes = [],
   onCreateReaderNote,
   onPageChange,
+  onLoadError,
   className,
+  appearance = "default",
   errorMessage,
 }: PaperPdfViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -122,6 +128,8 @@ export function PaperPdfViewer({
   const initialPageRef = useRef(initialPage)
   const initialPageAppliedRef = useRef(false)
   const userNavigatedRef = useRef(false)
+  const onLoadErrorRef = useRef(onLoadError)
+  onLoadErrorRef.current = onLoadError
   const [pdfDocument, setPdfDocument] = useState<PdfDocument | null>(null)
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
   const [isRendering, setIsRendering] = useState(false)
@@ -174,13 +182,16 @@ export function PaperPdfViewer({
 
     async function loadPdf() {
       try {
+        const loadUrl = pdfProxyUrl(pdfUrl)
         const pdfjs = await import("pdfjs-dist")
         pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
         loadingTask = pdfjs.getDocument({
           disableAutoFetch: true,
           disableStream: true,
           rangeChunkSize: 65536,
-          url: pdfProxyUrl(pdfUrl),
+          url: loadUrl,
+          // Both transports are same-origin BFF routes: default same-origin cookies suffice.
+          // Never send renderer credentials directly to a public/remote PDF host.
           withCredentials: false,
         }) as unknown as PdfLoadingTask
         const pdf = await loadingTask.promise
@@ -199,6 +210,7 @@ export function PaperPdfViewer({
       } catch {
         if (!cancelled) {
           setStatus("error")
+          onLoadErrorRef.current?.()
         }
       }
     }
@@ -398,8 +410,8 @@ export function PaperPdfViewer({
 
   if (status === "error") {
     return (
-      <div className="min-h-[42rem]">
-        <div className="border-b border-[#d8dfd8] bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-border dark:bg-amber-950/30 dark:text-amber-100">
+      <div data-pdf-appearance={appearance} className={appearance === "paper-agent" && className ? `min-h-[42rem] ${className}` : "min-h-[42rem]"}>
+        <div data-pdf-failure className="border-b border-[#d8dfd8] bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-border dark:bg-amber-950/30 dark:text-amber-100">
           <div className="flex items-center gap-2 font-semibold">
             <FileWarning className="size-4" />
             {errorMessage || (locale === "zh" ? "PDF 无法渲染，已切换到文本阅读。" : "PDF could not be rendered; showing text fallback.")}
@@ -500,15 +512,16 @@ export function PaperPdfViewer({
 
   return (
     <div
+      data-pdf-appearance={appearance}
       aria-label={locale === "zh" ? `${title} PDF 阅读器` : `${title} PDF viewer`}
       className={`flex min-h-[42rem] flex-col bg-[#f8faf9] outline-none focus-visible:ring-2 focus-visible:ring-[#315d8a]/35 dark:bg-background ${className || ""}`}
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
       <div data-pdf-toolbar className="flex flex-col gap-3 border-b border-[#d8dfd8] bg-white px-4 py-3 dark:border-border dark:bg-card lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold text-[#334155] dark:text-foreground" title={title}>{title}</h2>
-          <p className="mt-1 text-xs text-[#334155]/55 dark:text-muted-foreground">
+        <div data-pdf-title className="min-w-0">
+          <h2 data-pdf-text className="truncate text-sm font-semibold text-[#334155] dark:text-foreground" title={title}>{title}</h2>
+          <p data-pdf-muted className="mt-1 text-xs text-[#334155]/55 dark:text-muted-foreground">
             {status === "ready"
               ? locale === "zh"
                 ? `第 ${pageNumber} / ${numPages} 页`
@@ -518,64 +531,73 @@ export function PaperPdfViewer({
                 : "Loading PDF"}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            aria-label={locale === "zh" ? "上一页" : "Previous page"}
-            disabled={!canGoPrevious}
-            onClick={() => goToPage(pageNumber - 1)}
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
-          <form className="flex items-center gap-2" onSubmit={handlePageSubmit}>
-            <Input
-              aria-label={locale === "zh" ? "页码" : "Page number"}
-              className="h-9 w-20 bg-white text-center dark:bg-background"
-              disabled={status !== "ready"}
-              min={1}
-              max={numPages || 1}
-              type="number"
-              value={pageInput}
-              onChange={(event) => setPageInput(event.target.value)}
-            />
-            <span className="text-xs text-[#334155]/55 dark:text-muted-foreground">/ {numPages || "-"}</span>
-          </form>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            aria-label={locale === "zh" ? "下一页" : "Next page"}
-            disabled={!canGoNext}
-            onClick={() => goToPage(pageNumber + 1)}
-          >
-            <ChevronRight className="size-4" />
-          </Button>
-          <span className="mx-1 h-6 w-px bg-[#d8dfd8] dark:bg-border" />
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            aria-label={locale === "zh" ? "缩小" : "Zoom out"}
-            disabled={!canZoomOut}
-            onClick={() => changeScale(scale - SCALE_STEP)}
-          >
-            <ZoomOut className="size-4" />
-          </Button>
-          <span className="w-14 text-center text-xs font-semibold text-[#334155]/70 dark:text-muted-foreground">
-            {Math.round(scale * 100)}%
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            aria-label={locale === "zh" ? "放大" : "Zoom in"}
-            disabled={!canZoomIn}
-            onClick={() => changeScale(scale + SCALE_STEP)}
-          >
-            <ZoomIn className="size-4" />
-          </Button>
+        <div data-pdf-toolbar-actions className="flex flex-wrap items-center gap-2">
+          <div data-pdf-pagination className={appearance === "paper-agent" ? undefined : "contents"}>
+            <Button
+              data-pdf-control="button"
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={locale === "zh" ? "上一页" : "Previous page"}
+              disabled={!canGoPrevious}
+              onClick={() => goToPage(pageNumber - 1)}
+            >
+              <ChevronLeft className="size-4" />
+            </Button>
+            <form data-pdf-page-form className="flex items-center gap-2" onSubmit={handlePageSubmit}>
+              <Input
+                data-pdf-control="input"
+                aria-label={locale === "zh" ? "页码" : "Page number"}
+                className="h-9 w-20 bg-white text-center dark:bg-background"
+                disabled={status !== "ready"}
+                min={1}
+                max={numPages || 1}
+                type="number"
+                value={pageInput}
+                onChange={(event) => setPageInput(event.target.value)}
+              />
+              <span data-pdf-muted className="text-xs text-[#334155]/55 dark:text-muted-foreground">/ {numPages || "-"}</span>
+            </form>
+            <Button
+              data-pdf-control="button"
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={locale === "zh" ? "下一页" : "Next page"}
+              disabled={!canGoNext}
+              onClick={() => goToPage(pageNumber + 1)}
+            >
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+          <span data-pdf-divider className="mx-1 h-6 w-px bg-[#d8dfd8] dark:bg-border" />
+          <div data-pdf-zoom className={appearance === "paper-agent" ? undefined : "contents"}>
+            <Button
+              data-pdf-control="button"
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={locale === "zh" ? "缩小" : "Zoom out"}
+              disabled={!canZoomOut}
+              onClick={() => changeScale(scale - SCALE_STEP)}
+            >
+              <ZoomOut className="size-4" />
+            </Button>
+            <span data-pdf-zoom-value data-pdf-muted className="w-14 text-center text-xs font-semibold text-[#334155]/70 dark:text-muted-foreground">
+              {Math.round(scale * 100)}%
+            </span>
+            <Button
+              data-pdf-control="button"
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={locale === "zh" ? "放大" : "Zoom in"}
+              disabled={!canZoomIn}
+              onClick={() => changeScale(scale + SCALE_STEP)}
+            >
+              <ZoomIn className="size-4" />
+            </Button>
+          </div>
         </div>
       </div>
       <PdfSearchPanel
@@ -603,64 +625,70 @@ export function PaperPdfViewer({
         />
         <div data-pdf-canvas-scroll className="relative flex h-[78vh] min-h-[38rem] flex-1 justify-center overflow-auto bg-[#eef4ef] p-4 dark:bg-secondary/30">
           {status === "loading" ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-background/80">
-              <div className="inline-flex items-center gap-2 rounded-md border border-[#d8dfd8] bg-white px-4 py-3 text-sm font-semibold text-[#334155]/70 shadow-sm dark:border-border dark:bg-card dark:text-muted-foreground">
+            <div data-pdf-loading-overlay className="absolute inset-0 flex items-center justify-center bg-white/80 dark:bg-background/80">
+              <div data-pdf-message className="inline-flex items-center gap-2 rounded-md border border-[#d8dfd8] bg-white px-4 py-3 text-sm font-semibold text-[#334155]/70 shadow-sm dark:border-border dark:bg-card dark:text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
                 {locale === "zh" ? "正在加载 PDF" : "Loading PDF"}
               </div>
             </div>
           ) : null}
           {isRendering && status === "ready" ? (
-            <div className="absolute right-4 top-4 inline-flex items-center gap-2 rounded-md bg-white px-3 py-2 text-xs font-semibold text-[#334155]/65 shadow-sm dark:bg-card dark:text-muted-foreground">
+            <div data-pdf-message className="absolute right-4 top-4 inline-flex items-center gap-2 rounded-md bg-white px-3 py-2 text-xs font-semibold text-[#334155]/65 shadow-sm dark:bg-card dark:text-muted-foreground">
               <Loader2 className="size-3 animate-spin" />
               {locale === "zh" ? "正在渲染" : "Rendering"}
             </div>
           ) : null}
-          <div ref={pageLayerRef} className="relative self-start bg-white shadow-lg">
-            <canvas
-              ref={canvasRef}
-              aria-label={locale === "zh" ? `${title} PDF 第 ${pageNumber} 页` : `${title} PDF page ${pageNumber}`}
-              className="block bg-white"
-            />
-            <div
-              ref={textLayerRef}
-              aria-label={locale === "zh" ? `${title} PDF 第 ${pageNumber} 页可选择文本` : `${title} selectable PDF text page ${pageNumber}`}
-              className="paper-pdf-text-layer absolute left-0 top-0 z-10 overflow-hidden text-transparent"
-              onMouseUp={handleTextSelection}
-              onKeyUp={handleTextSelection}
-            />
-            <PdfNoteOverlay notes={currentPageNotes} />
-            {selectionDraft && onCreateReaderNote ? (
-              <div className="absolute left-3 top-3 z-30 w-[min(22rem,calc(100%-1.5rem))] rounded-md border border-[#d8dfd8] bg-white p-3 text-xs shadow-lg dark:border-border dark:bg-card">
-                <div className="font-semibold text-[#334155] dark:text-foreground">
-                  {locale === "zh" ? "已选文本" : "Selected text"}
+          {/* The flow wrapper owns placement inside the scroll surface, not PDF pixels
+              or the document-relative coordinates used by text and annotations. */}
+          <div data-pdf-page-flow className={appearance === "paper-agent" ? undefined : "contents"}>
+            <div data-pdf-document ref={pageLayerRef} className="relative self-start bg-white shadow-lg">
+              <canvas
+                ref={canvasRef}
+                aria-label={locale === "zh" ? `${title} PDF 第 ${pageNumber} 页` : `${title} PDF page ${pageNumber}`}
+                className="block bg-white"
+              />
+              <div
+                data-pdf-text-layer
+                ref={textLayerRef}
+                aria-label={locale === "zh" ? `${title} PDF 第 ${pageNumber} 页可选择文本` : `${title} selectable PDF text page ${pageNumber}`}
+                className="paper-pdf-text-layer absolute left-0 top-0 z-10 overflow-hidden text-transparent"
+                onMouseUp={handleTextSelection}
+                onKeyUp={handleTextSelection}
+              />
+              <PdfNoteOverlay notes={currentPageNotes} />
+              {selectionDraft && onCreateReaderNote ? (
+                <div data-pdf-selection-panel className="absolute left-3 top-3 z-30 w-[min(22rem,calc(100%-1.5rem))] rounded-md border border-[#d8dfd8] bg-white p-3 text-xs shadow-lg dark:border-border dark:bg-card">
+                  <div data-pdf-text className="font-semibold text-[#334155] dark:text-foreground">
+                    {locale === "zh" ? "已选文本" : "Selected text"}
+                  </div>
+                  <p data-pdf-muted className="mt-1 line-clamp-2 leading-5 text-[#334155]/65 dark:text-muted-foreground">
+                    {selectionDraft.quote}
+                  </p>
+                  <Input
+                    data-pdf-control="input"
+                    aria-label={locale === "zh" ? "批注内容" : "Note text"}
+                    className="mt-2 h-8 bg-white dark:bg-background"
+                    placeholder={locale === "zh" ? "批注内容" : "Note text"}
+                    value={selectionNoteText}
+                    onChange={(event) => setSelectionNoteText(event.target.value)}
+                  />
+                  <div className="mt-2 flex gap-2">
+                    <Button data-pdf-control="primary" type="button" size="sm" className="h-8 rounded-md" onClick={() => createSelectionNote("highlight")}>
+                      {locale === "zh" ? "高亮" : "Highlight"}
+                    </Button>
+                    <Button data-pdf-control="button" type="button" size="sm" variant="outline" className="h-8 rounded-md" onClick={() => createSelectionNote("note")}>
+                      {locale === "zh" ? "添加批注" : "Add note"}
+                    </Button>
+                    <Button data-pdf-control="button" type="button" size="sm" variant="ghost" className="h-8 rounded-md" onClick={() => setSelectionDraft(null)}>
+                      {locale === "zh" ? "取消" : "Cancel"}
+                    </Button>
+                  </div>
                 </div>
-                <p className="mt-1 line-clamp-2 leading-5 text-[#334155]/65 dark:text-muted-foreground">
-                  {selectionDraft.quote}
-                </p>
-                <Input
-                  aria-label={locale === "zh" ? "批注内容" : "Note text"}
-                  className="mt-2 h-8 bg-white dark:bg-background"
-                  placeholder={locale === "zh" ? "批注内容" : "Note text"}
-                  value={selectionNoteText}
-                  onChange={(event) => setSelectionNoteText(event.target.value)}
-                />
-                <div className="mt-2 flex gap-2">
-                  <Button type="button" size="sm" className="h-8 rounded-md" onClick={() => createSelectionNote("highlight")}>
-                    {locale === "zh" ? "高亮" : "Highlight"}
-                  </Button>
-                  <Button type="button" size="sm" variant="outline" className="h-8 rounded-md" onClick={() => createSelectionNote("note")}>
-                    {locale === "zh" ? "添加批注" : "Add note"}
-                  </Button>
-                  <Button type="button" size="sm" variant="ghost" className="h-8 rounded-md" onClick={() => setSelectionDraft(null)}>
-                    {locale === "zh" ? "取消" : "Cancel"}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
           {textLayerStatus === "error" && status === "ready" ? (
-            <div className="absolute bottom-4 right-4 rounded-md bg-white px-3 py-2 text-xs font-semibold text-[#334155]/65 shadow-sm dark:bg-card dark:text-muted-foreground">
+            <div data-pdf-message className="absolute bottom-4 right-4 rounded-md bg-white px-3 py-2 text-xs font-semibold text-[#334155]/65 shadow-sm dark:bg-card dark:text-muted-foreground">
               {locale === "zh" ? "文本选择不可用" : "Text selection unavailable"}
             </div>
           ) : null}
@@ -738,11 +766,12 @@ function PdfSearchPanel({
               : "Search this PDF"
 
   return (
-    <section className="border-b border-[#d8dfd8] bg-white px-4 py-3 dark:border-border dark:bg-card">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <label className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#334155]/45" />
+    <section data-pdf-search className="border-b border-[#d8dfd8] bg-white px-4 py-3 dark:border-border dark:bg-card">
+      <div data-pdf-search-row className="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <label data-pdf-search-field className="relative min-w-0 flex-1">
+          <Search data-pdf-muted className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#334155]/45" />
           <Input
+              data-pdf-control="input"
             aria-label={locale === "zh" ? "搜索 PDF 文本" : "Search PDF text"}
             className="h-9 bg-white pl-9 dark:bg-background"
             disabled={searchStatus === "indexing"}
@@ -752,11 +781,12 @@ function PdfSearchPanel({
             onChange={(event) => onQueryChange(event.target.value)}
           />
         </label>
-        <div className="flex items-center gap-2">
-          <span className="min-w-36 text-xs font-semibold text-[#334155]/58 dark:text-muted-foreground">
+        <div data-pdf-search-navigation className="flex items-center gap-2">
+          <span data-pdf-search-status data-pdf-muted className="min-w-36 text-xs font-semibold text-[#334155]/58 dark:text-muted-foreground">
             {statusText}
           </span>
           <Button
+            data-pdf-control="button"
             type="button"
             variant="outline"
             size="icon"
@@ -767,6 +797,7 @@ function PdfSearchPanel({
             <ChevronLeft className="size-4" />
           </Button>
           <Button
+            data-pdf-control="button"
             type="button"
             variant="outline"
             size="icon"
@@ -779,10 +810,12 @@ function PdfSearchPanel({
         </div>
       </div>
       {canUseResults ? (
-        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+        <div data-pdf-search-results className="mt-3 flex gap-2 overflow-x-auto pb-1">
           {results.map((result, index) => (
             <button
               key={result.id}
+              data-pdf-control="navigation"
+              data-pdf-search-result
               type="button"
               aria-current={index === activeIndex ? "true" : undefined}
               className={[
@@ -793,7 +826,7 @@ function PdfSearchPanel({
               ].join(" ")}
               onClick={() => onSelectResult(index)}
             >
-              <span className="block font-semibold text-[#334155] dark:text-foreground">
+              <span data-pdf-text className="block font-semibold text-[#334155] dark:text-foreground">
                 {locale === "zh" ? `第 ${result.pageNumber} 页` : `Page ${result.pageNumber}`}
               </span>
               <span className="line-clamp-2">{result.snippet}</span>
@@ -824,8 +857,8 @@ function PdfThumbnailRail({
 }) {
   if (status !== "ready" || !pdfDocument || numPages <= 0) {
     return (
-      <aside className="hidden border-r border-[#d8dfd8] bg-white p-3 dark:border-border dark:bg-card lg:block">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/45 dark:text-muted-foreground">
+      <aside data-pdf-thumbnails className="hidden border-r border-[#d8dfd8] bg-white p-3 dark:border-border dark:bg-card lg:block">
+        <p data-pdf-muted className="text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/45 dark:text-muted-foreground">
           {locale === "zh" ? "页面" : "Pages"}
         </p>
       </aside>
@@ -833,8 +866,8 @@ function PdfThumbnailRail({
   }
 
   return (
-    <aside className="hidden max-h-[78vh] overflow-y-auto border-r border-[#d8dfd8] bg-white p-3 dark:border-border dark:bg-card lg:block">
-      <p className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/45 dark:text-muted-foreground">
+    <aside data-pdf-thumbnails className="hidden max-h-[78vh] overflow-y-auto border-r border-[#d8dfd8] bg-white p-3 dark:border-border dark:bg-card lg:block">
+      <p data-pdf-muted className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/45 dark:text-muted-foreground">
         {locale === "zh" ? "页面" : "Pages"}
       </p>
       <div className="space-y-2">
@@ -973,6 +1006,8 @@ function PdfThumbnailButton({
   return (
     <button
       ref={buttonRef}
+      data-pdf-control="navigation"
+      data-pdf-thumbnail
       type="button"
       aria-current={active ? "page" : undefined}
       aria-label={locale === "zh" ? `跳转到第 ${pageNumber} 页` : `Go to page ${pageNumber}`}
@@ -984,14 +1019,14 @@ function PdfThumbnailButton({
       ].join(" ")}
       onClick={onSelect}
     >
-      <span className="flex min-h-28 items-center justify-center rounded-sm bg-[#eef4ef] dark:bg-secondary/60">
+      <span data-pdf-thumbnail-viewport className="flex min-h-28 items-center justify-center rounded-sm bg-[#eef4ef] dark:bg-secondary/60">
         {status === "error" ? (
-          <span className="px-2 text-center text-[0.68rem] font-semibold text-[#334155]/55 dark:text-muted-foreground">
+          <span data-pdf-muted className="px-2 text-center text-[0.68rem] font-semibold text-[#334155]/55 dark:text-muted-foreground">
             {locale === "zh" ? `第 ${pageNumber} 页` : `Page ${pageNumber}`}
           </span>
         ) : null}
         {status === "loading" ? (
-          <Loader2 className="size-4 animate-spin text-[#334155]/40" />
+          <Loader2 data-pdf-muted className="size-4 animate-spin text-[#334155]/40" />
         ) : null}
         <canvas
           ref={canvasRef}
@@ -999,7 +1034,7 @@ function PdfThumbnailButton({
           className={status === "ready" ? "block bg-white shadow-sm" : "hidden"}
         />
       </span>
-      <span className="mt-1 block text-center font-semibold text-[#334155]/65 dark:text-muted-foreground">
+      <span data-pdf-muted className="mt-1 block text-center font-semibold text-[#334155]/65 dark:text-muted-foreground">
         {pageNumber}
       </span>
     </button>
@@ -1007,7 +1042,42 @@ function PdfThumbnailButton({
 }
 
 function pdfProxyUrl(pdfUrl: string) {
-  return `/api/papers/pdf?url=${encodeURIComponent(pdfUrl)}`
+  if (pdfUrl.startsWith("/")) {
+    // Check the raw shape before URL parsing can normalize traversal or backslashes.
+    const match = /^\/api\/v1\/research\/desktop\/papers\/([A-Za-z0-9._:%-]{1,768})\/source\?([^#]+)$/.exec(pdfUrl)
+    if (!match || /[\\\s\x00-\x1F\x7F]/.test(pdfUrl) || /%(?![0-9a-f]{2})/i.test(pdfUrl)) {
+      throw new Error("Invalid private PDF source URL.")
+    }
+    const paperId = decodeURIComponent(match[1])
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(paperId) || paperId.includes("..")) {
+      throw new Error("Invalid private PDF source identity.")
+    }
+    const query = new URLSearchParams(match[2])
+    const revisions = query.getAll("sourceRevision")
+    const fingerprints = query.getAll("sourceFingerprint")
+    if (
+      [...query.keys()].length !== 2 ||
+      revisions.length !== 1 ||
+      fingerprints.length !== 1 ||
+      !revisions[0] ||
+      revisions[0].length > 512 ||
+      revisions[0].trim() !== revisions[0] ||
+      /[\x00-\x1F\x7F]/.test(revisions[0]) ||
+      !/^sha256:[0-9a-f]{64}$/.test(fingerprints[0])
+    ) {
+      throw new Error("Invalid private PDF source binding.")
+    }
+    // Preserve the exact revision/fingerprint URL. The raw BFF owns session binding,
+    // service-origin selection, and unmodified PDF/Range response forwarding.
+    return pdfUrl
+  }
+
+  const publicUrl = normalizeAnalyzeTransportUrl(pdfUrl)
+  if (!publicUrl || new URL(publicUrl).pathname.startsWith("/api/v1/research/desktop/")) {
+    // An absolute private asset URL must never escape through the public PDF proxy.
+    throw new Error("Invalid public PDF source URL.")
+  }
+  return `/api/papers/pdf?url=${encodeURIComponent(publicUrl)}`
 }
 
 function renderSimpleTextLayer(container: HTMLElement, content: PdfTextContent) {

@@ -21,6 +21,13 @@ def _nonblank(value: str) -> str:
     return value
 
 
+def _material_tag(value: str) -> str:
+    _clean_text(value)
+    if not value or value != value.strip():
+        raise ValueError("material tags must be nonblank and trimmed")
+    return value
+
+
 def _source_url(value: str) -> str:
     if not value:
         return value
@@ -135,6 +142,11 @@ class ResearchMaterial(WorkspaceModel):
     referenceId: Annotated[str, Field(max_length=200), AfterValidator(_nonblank)] | None = None
     readerHref: ReaderHref | None = None
     notes: Notes
+    favorite: bool = False
+    readingStatus: Literal["unread", "reading", "read"] = "unread"
+    tags: list[Annotated[str, Field(max_length=64), AfterValidator(_material_tag)]] = Field(
+        default_factory=list, max_length=32
+    )
     createdAt: WorkspaceTime
     updatedAt: WorkspaceTime
 
@@ -144,6 +156,8 @@ class ResearchMaterial(WorkspaceModel):
             raise ValueError("updatedAt cannot precede createdAt")
         if self.kind != "note" and not self.url and not self.readerHref and not (self.kind == "pdf" and self.referenceId):
             raise ValueError("a material must retain its source")
+        if len({tag.casefold() for tag in self.tags}) != len(self.tags):
+            raise ValueError("material tags must be unique")
         return self
 
 
@@ -204,6 +218,7 @@ class ResearchReaderNotebook(WorkspaceModel):
     fontSize: Literal[16, 18, 20, 22]
     sectionId: Annotated[str, Field(max_length=200), AfterValidator(_clean_text)]
     pdfPage: Annotated[int, Field(gt=0, le=10000)]
+    readerView: Literal["text", "pdf"] = "text"
     updatedAt: WorkspaceTime
 
 
@@ -258,6 +273,22 @@ class ResearchReaderEvent(WorkspaceModel):
     createdAt: WorkspaceTime
 
 
+class ResearchPersonalMemoryRef(WorkspaceModel):
+    memoryId: Annotated[str, Field(pattern=r"^pmem_[0-9a-f]{32}$")]
+    revision: Annotated[int, Field(ge=1)]
+
+
+class ResearchPersonalMemorySelection(WorkspaceModel):
+    refs: list[ResearchPersonalMemoryRef] = Field(min_length=1, max_length=20)
+    policyRevision: Annotated[int, Field(ge=1)]
+
+    @model_validator(mode="after")
+    def validate_unique_refs(self) -> "ResearchPersonalMemorySelection":
+        if len({item.memoryId for item in self.refs}) != len(self.refs):
+            raise ValueError("personal memory refs must have unique memoryId values")
+        return self
+
+
 class ResearchPrepareSemantic(WorkspaceModel):
     kind: Literal["prepare"]
     paperId: Annotated[str, Field(max_length=256), AfterValidator(_nonblank)]
@@ -274,6 +305,7 @@ class ResearchAnalyzeSemantic(WorkspaceModel):
     pdfUrl: SourceUrl | None = None
     objective: Annotated[str, Field(max_length=2000), AfterValidator(_clean_text)] | None = None
     constraints: list[Annotated[str, Field(max_length=500), AfterValidator(_clean_text), AfterValidator(_nonblank)]] = Field(default_factory=list, max_length=20)
+    personalMemory: ResearchPersonalMemorySelection | None = None
 
 
 class ResearchAskSemantic(WorkspaceModel):
@@ -285,6 +317,7 @@ class ResearchAskSemantic(WorkspaceModel):
     question: Annotated[Question, AfterValidator(_nonblank)]
     selection: dict[str, Any] = Field(default_factory=dict)
     locale: Annotated[str, Field(max_length=32), AfterValidator(_nonblank)] | None = None
+    personalMemory: ResearchPersonalMemorySelection | None = None
 
 
 class ResearchImportSemantic(WorkspaceModel):
@@ -310,6 +343,7 @@ class ResearchPendingOperation(WorkspaceModel):
     status: Literal["prepared", "waiting", "running", "needs_action", "passed", "rejected", "failed", "interrupted", "unknown"]
     paperId: Annotated[str, Field(max_length=200), AfterValidator(_nonblank)] | None = None
     sourceRevision: Annotated[str, Field(max_length=512), AfterValidator(_nonblank)] | None = None
+    sourceFingerprint: Annotated[str, Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")] | None = None
     importId: Annotated[str, Field(max_length=200), AfterValidator(_nonblank)] | None = None
     runId: Annotated[str, Field(max_length=256), AfterValidator(_nonblank)] | None = None
     question: Annotated[str, Field(max_length=4000), AfterValidator(_clean_text), AfterValidator(_nonblank)] | None = None
@@ -323,14 +357,41 @@ class ResearchPendingOperation(WorkspaceModel):
             raise ValueError("operation updatedAt cannot precede createdAt")
         if self.semantic.kind != self.kind:
             raise ValueError("operation semantic kind must match operation kind")
-        semantic_paper = getattr(self.semantic, "paperId", None)
-        semantic_revision = getattr(self.semantic, "sourceRevision", None)
-        semantic_question = getattr(self.semantic, "question", None)
-        if self.paperId is not None and semantic_paper != self.paperId:
-            raise ValueError("operation paperId must match fixed semantic")
-        if self.sourceRevision is not None and semantic_revision != self.sourceRevision:
-            raise ValueError("operation sourceRevision must match fixed semantic")
-        if self.question is not None and semantic_question != self.question:
+        # History stores client-supplied receipt references, not authoritative
+        # receipts or a server-verified quality verdict. Validate their shape and
+        # fixed input identity without treating a claimed status as proof.
+        if self.paperId is not None:
+            if isinstance(self.semantic, ResearchImportSemantic):
+                if (
+                    self.status != "passed"
+                    or self.importId is None
+                    or self.sourceRevision is None
+                    or self.sourceFingerprint is None
+                ):
+                    raise ValueError(
+                        "import output paperId requires a passed receipt reference "
+                        "with importId and source identity"
+                    )
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", self.paperId) is None:
+                    raise ValueError("import output paperId must be a canonical paper identity")
+            elif self.paperId != self.semantic.paperId:
+                raise ValueError("operation paperId must match fixed semantic")
+        if isinstance(self.semantic, ResearchPrepareSemantic):
+            if (self.sourceRevision is not None or self.sourceFingerprint is not None) and (
+                self.status != "passed"
+                or self.sourceRevision is None
+                or self.sourceFingerprint is None
+            ):
+                raise ValueError(
+                    "prepare output source identity requires a passed receipt reference "
+                    "with revision and fingerprint"
+                )
+        else:
+            if self.sourceRevision is not None and self.sourceRevision != self.semantic.sourceRevision:
+                raise ValueError("operation sourceRevision must match fixed semantic")
+            if self.sourceFingerprint is not None and self.sourceFingerprint != self.semantic.sourceFingerprint:
+                raise ValueError("operation sourceFingerprint must match fixed semantic")
+        if self.question is not None and self.question != getattr(self.semantic, "question", None):
             raise ValueError("operation question must match fixed semantic")
         return self
 
@@ -468,5 +529,17 @@ def validate_workspace_items(raw: Any, *, group_ids: set[str], visits: list[dict
     for saved in items.savedReports:
         if saved.kind == "draft" and saved.draftId not in drafts:
             raise ValueError("saved draft report must reference an owned report draft")
-    # An omitted field from a prior snapshot stays omitted in its serialized form.
-    return items.model_dump(exclude_unset=True)
+    serialized = items.model_dump(exclude_unset=True)
+    if "materials" in serialized:
+        serialized["materials"] = [
+            {
+                **value,
+                "favorite": material.favorite,
+                "readingStatus": material.readingStatus,
+                "tags": list(material.tags),
+            }
+            for value, material in zip(
+                serialized["materials"], items.materials, strict=True
+            )
+        ]
+    return serialized

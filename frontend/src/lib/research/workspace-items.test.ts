@@ -5,7 +5,7 @@ import { researchQuestionHref } from "./entry"
 import { validMaterial, type ResearchMaterial, type ResearchReportDraft } from "./workspace-items"
 import { importLegacyReportDrafts, readReportDrafts } from "@/features/reports/lib/report-drafts"
 
-const material: ResearchMaterial = { id: "paper-a", groupId: "group-a", kind: "paper", title: "Source paper", url: "https://arxiv.org/abs/2605.22343", notes: "Review methods", createdAt: 1, updatedAt: 2 }
+const material: ResearchMaterial = { id: "paper-a", groupId: "group-a", kind: "paper", title: "Source paper", url: "https://arxiv.org/abs/2605.22343", notes: "Review methods", favorite: false, readingStatus: "unread", tags: [], createdAt: 1, updatedAt: 2 }
 const report: ResearchReportDraft = { id: "report-a", groupId: "group-a", question: "Agent", title: "Agent review", scope: "Methods", notes: "Compare evidence", materials: [{ id: material.id, title: material.title, url: material.url, notes: material.notes }], updatedAt: 2 }
 
 describe("owned research workspace", () => {
@@ -15,6 +15,33 @@ describe("owned research workspace", () => {
     expect(validMaterial(pdf)).toBe(true)
     expect(validMaterial({ ...pdf, referenceId: undefined })).toBe(false)
     expect(validMaterial({ ...pdf, kind: "project" })).toBe(false)
+  })
+  it("migrates legacy material defaults and persists explicit library state", () => {
+    const legacy: Record<string, unknown> = {
+      id: "paper-legacy",
+      groupId: null,
+      kind: "paper",
+      title: "Legacy paper",
+      url: "https://example.test/legacy",
+      notes: "",
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    expect(validMaterial(legacy)).toBe(true)
+    expect(legacy).toMatchObject({ favorite: false, readingStatus: "unread", tags: [] })
+
+    const updated: ResearchMaterial = {
+      ...(legacy as ResearchMaterial),
+      favorite: true,
+      readingStatus: "read",
+      tags: ["RAG", "Methods"],
+      updatedAt: 2,
+    }
+    expect(saveResearchMaterial(updated)).toBe(true)
+    expect(readResearchWorkspace().materials).toEqual([updated])
+    expect(validMaterial({ ...updated, tags: ["duplicate", "DUPLICATE"] })).toBe(false)
+    expect(validMaterial({ ...updated, tags: [" leading"] })).toBe(false)
+    expect(validMaterial({ ...updated, tags: Array.from({ length: 33 }, (_, index) => `tag-${index}`) })).toBe(false)
   })
   function populate() {
     saveResearchGroup("Agent", "group-a")
@@ -195,4 +222,45 @@ describe("owned research workspace", () => {
     expect(localStorage.getItem("agora-report-drafts:v1")).not.toBeNull()
     expect(historyState().dirty).toBe(true)
   })
+})
+
+
+describe("durable import source identity", () => {
+  it("round-trips a passed import receipt and rejects a malformed source fingerprint", () => {
+    const sourceFingerprint = `sha256:${"a".repeat(64)}`
+    const operation = { requestId: "request-import-owned", generation: `gen_${"b".repeat(32)}`, fingerprint: `sha256:${"c".repeat(64)}`, kind: "import", status: "passed", semantic: { kind: "import", filename: "owned.pdf", sizeBytes: 128, sourceRevision: sourceFingerprint, sourceFingerprint }, paperId: "owned-paper", sourceRevision: sourceFingerprint, sourceFingerprint, importId: "owned-import", createdAt: 1, updatedAt: 2 }
+    const restored = validateWorkspace({ visits: [], groups: [], pendingOperations: [operation] })
+    expect(restored?.pendingOperations?.[0]).toEqual(operation)
+    expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [{ ...operation, sourceFingerprint: "not-a-sha" }] })).toBeNull()
+  })
+})
+
+it("retains prepare output identity without rewriting its fixed input semantic", () => {
+  const sourceFingerprint = "sha256:" + "a".repeat(64)
+  const operation = { requestId: "request-prepare-output", generation: "gen_" + "b".repeat(32), fingerprint: "sha256:" + "c".repeat(64), kind: "prepare", status: "passed", semantic: { kind: "prepare", paperId: "paper-prepare", sourceUrl: "https://example.org/paper", sourceType: null }, paperId: "paper-prepare", sourceRevision: "parsed-revision", sourceFingerprint, createdAt: 1, updatedAt: 2 }
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [operation] })?.pendingOperations?.[0]).toEqual(operation)
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [{ ...operation, paperId: "other-paper" }] })).toBeNull()
+})
+
+it("does not let an import recovery change its admitted byte fingerprint or source revision", () => {
+  const original = "sha256:" + "a".repeat(64)
+  const operation = { requestId: "request-fixed-import", generation: "gen_" + "b".repeat(32), fingerprint: "sha256:" + "c".repeat(64), kind: "import", status: "passed", semantic: { kind: "import", filename: "paper.pdf", sizeBytes: 128, sourceRevision: original, sourceFingerprint: original }, paperId: "paper-import", sourceRevision: original, sourceFingerprint: original, importId: "import-fixed", createdAt: 1, updatedAt: 2 }
+  for (const patch of [{ sourceRevision: "other-revision" }, { sourceFingerprint: "sha256:" + "d".repeat(64) }, { question: "not an ask operation" }]) {
+    expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [{ ...operation, ...patch }] })).toBeNull()
+  }
+})
+
+
+it("requires complete passed output identity for import and prepare receipts", () => {
+  const fingerprint = "sha256:" + "a".repeat(64)
+  const base = { requestId: "request-operation-contract", generation: "gen_" + "b".repeat(32), fingerprint: "sha256:" + "c".repeat(64), createdAt: 1, updatedAt: 2 }
+  const imported = { ...base, kind: "import", status: "passed", semantic: { kind: "import", filename: "paper.pdf", sizeBytes: 128, sourceRevision: fingerprint, sourceFingerprint: fingerprint }, paperId: "paper-import", importId: "import-id", sourceRevision: fingerprint, sourceFingerprint: fingerprint }
+  const prepared = { ...base, requestId: "request-prepare-contract", kind: "prepare", status: "passed", semantic: { kind: "prepare", paperId: "paper-prepare", sourceUrl: "https://example.org/paper", sourceType: null }, paperId: "paper-prepare", sourceRevision: "source-revision", sourceFingerprint: fingerprint }
+
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [imported] })).not.toBeNull()
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [{ ...imported, status: "unknown" }] })).toBeNull()
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [{ ...imported, importId: undefined }] })).toBeNull()
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [prepared] })).not.toBeNull()
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [{ ...prepared, status: "needs_action" }] })).toBeNull()
+  expect(validateWorkspace({ visits: [], groups: [], pendingOperations: [{ ...prepared, sourceFingerprint: undefined }] })).toBeNull()
 })

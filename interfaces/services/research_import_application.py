@@ -19,11 +19,26 @@ class ResearchImportApplication:
                 return record
             self._imports.mark_parsing(user_id=user_id, import_id=import_id)
             try:
+                metadata = {"import_id": import_id}
+                filename = record.get("filename")
+                if isinstance(filename, str) and filename.strip():
+                    safe_filename = filename.strip()
+                    metadata.update(
+                        title=safe_filename,
+                        title_source="import_filename",
+                        import_filename=safe_filename,
+                    )
+                source_revision = record.get("sourceRevision")
+                if isinstance(source_revision, str) and source_revision.strip():
+                    metadata["source_revision"] = source_revision.strip()
+                source_fingerprint = record.get("sourceFingerprint")
+                if isinstance(source_fingerprint, str) and source_fingerprint.strip():
+                    metadata["source_fingerprint"] = source_fingerprint.strip().casefold()
                 result = self._research.parse_paper(ResearchParseInput(
                     source=self._imports.source_path(user_id=user_id, import_id=import_id).as_uri(),
                     source_type="local",
                     options={"quality_profile": "reading", "include_catalog": True, "include_chunks": True},
-                    metadata={"import_id": import_id},
+                    metadata=metadata,
                     user_id=user_id,
                 ))
                 paper_id = result.get("paperId") or result.get("paper_id")

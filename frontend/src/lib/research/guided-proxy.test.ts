@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
 import { safeApiPost } from "@/lib/api/server"
 import { cachedReaderReady } from "@/features/portal/reader/reader-source-server"
@@ -10,12 +10,46 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: "o
 const origin = "http://localhost:3000"
 const post = (body: unknown, requestOrigin = origin) => new NextRequest(`${origin}/api/research/search`, { method: "POST", headers: { Origin: requestOrigin }, body: JSON.stringify(body) })
 const result = { source: "papers", results: [{ id: "paper-1", kind: "papers", title: "Paper", description: "Source-backed abstract", source: "arXiv", url: "https://arxiv.org/abs/2605.22343", href: "/design-demo/papers/paper-1/read" }], total: 1, moreHref: "/design-demo/papers?q=agent&has=code" }
-beforeEach(() => { vi.resetAllMocks() })
+const envKeys = ["NEWSROOM_DEPLOYMENT_PROFILE", "NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", "NEWSROOM_CANONICAL_ORIGIN", "NEWSROOM_DESKTOP_CANONICAL_ORIGIN"] as const
+const originalEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
+beforeEach(() => {
+  vi.resetAllMocks()
+  process.env.NEWSROOM_DEPLOYMENT_PROFILE = "default"
+  delete process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
+  delete process.env.NEWSROOM_CANONICAL_ORIGIN
+  delete process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN
+})
+afterEach(() => {
+  for (const key of envKeys) {
+    const value = originalEnv[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+})
 
 it("rejects foreign origin and oversized bodies without contacting the service", async () => {
   expect((await guidedResearchProxy(post({}, "https://foreign.test"), "search")).status).toBe(403)
   expect((await guidedResearchProxy(post({ question: "x".repeat(256 * 1024) }), "search")).status).toBe(413)
   expect(safeApiPost).not.toHaveBeenCalled()
+})
+
+it("forwards the server-owned canonical Origin for local-desktop research mutations", async () => {
+  process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+  process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
+  vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: result })
+  vi.mocked(cachedReaderReady).mockReturnValue(false)
+  const request = new NextRequest("http://localhost:3120/api/research/search", {
+    method: "POST",
+    headers: { Host: "127.0.0.1:3120", Origin: "http://127.0.0.1:3120", "Sec-Fetch-Site": "same-origin" },
+    body: JSON.stringify({ source: "papers" }),
+  })
+
+  expect((await guidedResearchProxy(request, "search")).status).toBe(200)
+  expect(safeApiPost).toHaveBeenCalledWith(
+    "/api/v1/research/guided/search",
+    { source: "papers" },
+    expect.objectContaining({ headers: { "x-newsroom-session": "owned-session", Origin: "http://127.0.0.1:3120" } }),
+  )
 })
 
 it("forwards owned session context but only offers a reader for verified full text", async () => {

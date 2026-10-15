@@ -22,6 +22,8 @@ from interfaces.composition.research_errors import (
 )
 
 
+DESKTOP_RESEARCH_LLM_ENABLED_ENV = "NEWSROOM_DESKTOP_RESEARCH_LLM_ENABLED"
+
 _DEFAULT_ARXIV_API_URL = "https://export.arxiv.org/api/query"
 _DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DEFAULT_LLM_MODEL = "deepseek-v4-flash"
@@ -359,6 +361,60 @@ def research_storage_paths_from_env(
     )
 
 
+def desktop_research_llm_enabled(
+    env: Mapping[str, str] | None = None,
+) -> bool | None:
+    values = os.environ if env is None else env
+    raw = values.get(DESKTOP_RESEARCH_LLM_ENABLED_ENV)
+    if raw is None:
+        return None
+    if raw not in {"0", "1"}:
+        _invalid("research.llm.route")
+    return raw == "1"
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchLocalRuntimeSettings:
+    """Local reading settings, independent of model and vector capabilities."""
+
+    research_root: Path
+    local_authorized_root: Path
+    parser: ResearchParserSettings
+    run_store: ResearchRunStoreSettings
+
+    def __post_init__(self) -> None:
+        _directory_root(self.research_root, "research.storage.root")
+        _directory_root(self.local_authorized_root, "research.source.local_authorized_root")
+        if not isinstance(self.parser, ResearchParserSettings):
+            _invalid("research.parser")
+        if not isinstance(self.run_store, ResearchRunStoreSettings):
+            _invalid("research.storage.run_store")
+
+    @classmethod
+    def from_env(
+        cls,
+        env: Mapping[str, str] | None = None,
+        *,
+        cwd: str | os.PathLike[str] | None = None,
+    ) -> "ResearchLocalRuntimeSettings":
+        values = os.environ if env is None else env
+        desktop_research_llm_enabled(values)
+        base = _base_path(cwd)
+        storage = research_storage_paths_from_env(values, cwd=base)
+        return cls(
+            research_root=storage.research_root,
+            local_authorized_root=_root_from_env(
+                values,
+                ("NEWSROOM_RESEARCH_IMPORT_DIR",),
+                base / ".newsroom" / "research" / "imports",
+                base=base,
+                capability="research.source.local_authorized_root",
+            ),
+            parser=_research_parser_settings_from_env(values),
+            run_store=_research_run_store_settings_from_env(values, storage.run_store_root),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ResearchRuntimeSettings:
     research_root: Path
@@ -397,6 +453,15 @@ class ResearchRuntimeSettings:
         cwd: str | os.PathLike[str] | None = None,
     ) -> "ResearchRuntimeSettings":
         values = os.environ if env is None else env
+        # The desktop configuration owner projects this flag from its persisted
+        # document. Reject before resolving defaults or credentials: llm=null is
+        # an unavailable remote capability, not permission to inherit a provider.
+        if desktop_research_llm_enabled(values) is False:
+            raise ResearchRuntimeUnavailableError(
+                ("research.llm.route",),
+                remediation=ResearchRemediation.REVIEW_RUNTIME_CONFIGURATION,
+                retryable=False,
+            )
         base = _base_path(cwd)
         storage = research_storage_paths_from_env(values, cwd=base)
         artifact_root = storage.artifact_root
@@ -529,36 +594,7 @@ class ResearchRuntimeSettings:
                 ),
             ),
             llm=llm,
-            parser=ResearchParserSettings(
-                backends=_parser_backends(
-                    _first_text(
-                        values,
-                        (
-                            "NEWS_RESEARCH_PARSER_BACKENDS",
-                            "NEWSROOM_PDF_PARSER_CASCADE",
-                        ),
-                        "mineru,marker",
-                    )
-                ),
-                allow_abstract_fallback=_env_bool(
-                    values,
-                    "NEWS_RESEARCH_ALLOW_ABSTRACT_FALLBACK",
-                    True,
-                    capability="research.parser.abstract_fallback",
-                ),
-                timeout_seconds=_env_float(
-                    values,
-                    "NEWS_RESEARCH_PARSER_TIMEOUT_SECONDS",
-                    300.0,
-                    capability="research.parser.timeout",
-                ),
-                max_document_bytes=_env_int(
-                    values,
-                    "NEWS_RESEARCH_PARSER_MAX_DOCUMENT_BYTES",
-                    _DEFAULT_SOURCE_MAX_BYTES,
-                    capability="research.parser.max_document_bytes",
-                ),
-            ),
+            parser=_research_parser_settings_from_env(values),
             rag=ResearchRAGSettings(
                 backend=rag_backend,
                 local_root=rag_local_root,
@@ -641,42 +677,7 @@ class ResearchRuntimeSettings:
                     capability="research.storage.artifact_max_bytes",
                 ),
             ),
-            run_store=ResearchRunStoreSettings(
-                root=run_store_root,
-                max_record_bytes=_env_int(
-                    values,
-                    "NEWS_RESEARCH_RUN_RECORD_MAX_BYTES",
-                    16_777_216,
-                    capability="research.storage.run_record_max_bytes",
-                ),
-                write_schema_version=_first_text(
-                    values,
-                    ("NEWS_RESEARCH_RUN_WRITE_SCHEMA_VERSION",),
-                    "v2",
-                ),
-                supported_schema_versions=_research_run_schema_versions_from_text(
-                    _first_text(
-                        values,
-                        ("NEWS_RESEARCH_RUN_SUPPORTED_SCHEMA_VERSIONS",),
-                        "v1,v2",
-                    ),
-                    "research.storage.run_store",
-                ),
-                rollback_schema_versions=_research_run_schema_versions_from_text(
-                    _first_text(
-                        values,
-                        ("NEWS_RESEARCH_RUN_ROLLBACK_SCHEMA_VERSIONS",),
-                        "v1,v2",
-                    ),
-                    "research.storage.run_store",
-                ),
-                reconciliation_max_runs=_env_int(
-                    values,
-                    "NEWS_RESEARCH_RUN_RECONCILIATION_MAX_RUNS",
-                    100,
-                    capability="research.storage.run_store",
-                ),
-            ),
+            run_store=_research_run_store_settings_from_env(values, run_store_root),
             graph_artifact_persistence=_graph_artifact_persistence_from_env(values),
         )
         if not _secret_is_present(values, settings.llm.api_key_env):
@@ -686,6 +687,82 @@ class ResearchRuntimeSettings:
                 retryable=False,
             )
         return settings
+
+
+def _research_run_store_settings_from_env(
+    values: Mapping[str, str], root: Path,
+) -> ResearchRunStoreSettings:
+    return ResearchRunStoreSettings(
+        root=root,
+        max_record_bytes=_env_int(
+            values,
+            "NEWS_RESEARCH_RUN_RECORD_MAX_BYTES",
+            16_777_216,
+            capability="research.storage.run_record_max_bytes",
+        ),
+        write_schema_version=_first_text(
+            values,
+            ("NEWS_RESEARCH_RUN_WRITE_SCHEMA_VERSION",),
+            "v2",
+        ),
+        supported_schema_versions=_research_run_schema_versions_from_text(
+            _first_text(
+                values,
+                ("NEWS_RESEARCH_RUN_SUPPORTED_SCHEMA_VERSIONS",),
+                "v1,v2",
+            ),
+            "research.storage.run_store",
+        ),
+        rollback_schema_versions=_research_run_schema_versions_from_text(
+            _first_text(
+                values,
+                ("NEWS_RESEARCH_RUN_ROLLBACK_SCHEMA_VERSIONS",),
+                "v1,v2",
+            ),
+            "research.storage.run_store",
+        ),
+        reconciliation_max_runs=_env_int(
+            values,
+            "NEWS_RESEARCH_RUN_RECONCILIATION_MAX_RUNS",
+            100,
+            capability="research.storage.run_store",
+        ),
+    )
+
+
+def _research_parser_settings_from_env(
+    values: Mapping[str, str],
+) -> ResearchParserSettings:
+    return ResearchParserSettings(
+        backends=_parser_backends(
+            _first_text(
+                values,
+                (
+                    "NEWS_RESEARCH_PARSER_BACKENDS",
+                    "NEWSROOM_PDF_PARSER_CASCADE",
+                ),
+                "mineru,marker",
+            )
+        ),
+        allow_abstract_fallback=_env_bool(
+            values,
+            "NEWS_RESEARCH_ALLOW_ABSTRACT_FALLBACK",
+            True,
+            capability="research.parser.abstract_fallback",
+        ),
+        timeout_seconds=_env_float(
+            values,
+            "NEWS_RESEARCH_PARSER_TIMEOUT_SECONDS",
+            300.0,
+            capability="research.parser.timeout",
+        ),
+        max_document_bytes=_env_int(
+            values,
+            "NEWS_RESEARCH_PARSER_MAX_DOCUMENT_BYTES",
+            _DEFAULT_SOURCE_MAX_BYTES,
+            capability="research.parser.max_document_bytes",
+        ),
+    )
 
 
 def _graph_artifact_persistence_from_env(
@@ -1191,11 +1268,14 @@ def _invalid(capability: str) -> NoReturn:
 
 
 __all__ = [
+    "DESKTOP_RESEARCH_LLM_ENABLED_ENV",
     "ResearchArtifactSettings",
     "ResearchLLMSettings",
+    "ResearchLocalRuntimeSettings",
     "ResearchParserSettings",
     "ResearchRAGSettings",
     "ResearchRunStoreSettings",
     "ResearchRuntimeSettings",
     "ResearchSourceSettings",
+    "desktop_research_llm_enabled",
 ]

@@ -14,6 +14,7 @@ from backend.research.application.personal_memory import (
 from backend.research.domain.personal_memory import (
     MAX_QUERY_LENGTH,
     PersonalMemoryOwner,
+    PersonalMemoryRemoteChannel,
     PersonalMemorySourceRef,
     PersonalMemoryStatus,
 )
@@ -241,6 +242,9 @@ def test_candidate_rejection_creates_non_recallable_tombstone(
         client_request_id="candidate-reject-1",
     )
 
+    with pytest.raises(PersonalMemoryStateError, match="rejected explicitly"):
+        service.delete(owner, candidate.memory_id, expected_revision=1)
+
     rejected = service.reject_candidate(
         owner,
         candidate.memory_id,
@@ -271,6 +275,12 @@ def test_remote_policy_defaults_off_uses_cas_and_does_not_disable_local_preview(
     default_policy = service.get_policy(owner)
     assert default_policy.allow_remote_processing is False
     assert default_policy.revision == 1
+    assert {
+        channel.value: service.is_remote_processing_allowed(
+            owner, channel=channel, use_memory=True
+        )
+        for channel in PersonalMemoryRemoteChannel
+    } == {"model": False, "tool": False, "embedding": False}
     assert service.recall(owner, query="local preview", use_memory=True).records
 
     enabled = service.update_policy(
@@ -280,6 +290,18 @@ def test_remote_policy_defaults_off_uses_cas_and_does_not_disable_local_preview(
     )
     assert enabled.allow_remote_processing is True
     assert enabled.revision == 2
+    assert all(
+        service.is_remote_processing_allowed(
+            owner, channel=channel, use_memory=True
+        )
+        for channel in PersonalMemoryRemoteChannel
+    )
+    assert all(
+        not service.is_remote_processing_allowed(
+            owner, channel=channel, use_memory=False
+        )
+        for channel in PersonalMemoryRemoteChannel
+    )
     unchanged = service.update_policy(
         owner,
         allow_remote_processing=True,
@@ -296,6 +318,11 @@ def test_remote_policy_defaults_off_uses_cas_and_does_not_disable_local_preview(
     exported = service.export(owner).to_dict()
     assert exported["policy"] == {
         "allow_remote_processing": True,
+        "remote_processing_permissions": {
+            "model": True,
+            "tool": True,
+            "embedding": True,
+        },
         "revision": 2,
         "created_at": default_policy.created_at.isoformat(),
         "updated_at": enabled.updated_at.isoformat(),

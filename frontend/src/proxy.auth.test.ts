@@ -114,6 +114,21 @@ describe("auth proxy", () => {
     expect(proxy(request("/reports", "newsroom_session=session-token")).headers.get("location")).toBeNull()
   })
 
+  it("protects only the exact formal paper-agent route and preserves the login next target", () => {
+    process.env.NEWSROOM_FRONTEND_SURFACE = "portal"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+
+    expect(proxy(request("/paper-agent")).headers.get("location")).toBe(
+      "http://localhost/login?next=%2Fpaper-agent",
+    )
+    expect(proxy(request("/paper-agent?panel=memory")).headers.get("location")).toBe(
+      "http://localhost/login?next=%2Fpaper-agent%3Fpanel%3Dmemory",
+    )
+    expect(proxy(request("/paper-agent/", "newsroom_session=session-token")).headers.get("location")).toBeNull()
+    expect(proxy(request("/paper-agent/settings")).headers.get("location")).toBeNull()
+    expect(proxy(request("/paper-agent-notes")).headers.get("location")).toBeNull()
+  })
+
   it("permanently normalizes the allowed legacy desktop route and preserves its query", () => {
     process.env.NEWSROOM_FRONTEND_SURFACE = "portal"
     process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"

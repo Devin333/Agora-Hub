@@ -13,6 +13,7 @@ from backend.research.domain.common import (
     bounded_float,
     ensure_utc,
     require_text,
+    stable_research_id,
     unique_texts,
 )
 
@@ -324,13 +325,15 @@ class ResearchPaperIdentity(PrimitiveModel):
         if self.canonical_paper_id and self.canonical_paper_id != self.paper_id:
             raise ValueError("canonical_paper_id must match paper_id")
         object.__setattr__(self, "canonical_paper_id", self.paper_id)
-        fingerprint = self.fingerprint or self.title_author_year_fingerprint or build_paper_identity_fingerprint(
+        fallback_fingerprint = build_paper_identity_fingerprint(
             title,
             self.authors,
             published_year,
         )
+        fingerprint = self.fingerprint or self.title_author_year_fingerprint or fallback_fingerprint
+        title_fingerprint = self.title_author_year_fingerprint or fallback_fingerprint
         object.__setattr__(self, "fingerprint", fingerprint)
-        object.__setattr__(self, "title_author_year_fingerprint", fingerprint)
+        object.__setattr__(self, "title_author_year_fingerprint", title_fingerprint)
         conflicts = list(self.metadata_conflicts)
         metadata_conflicts = self.metadata.get("metadata_conflicts") or self.metadata.get("conflict_diagnostics")
         if isinstance(metadata_conflicts, list):
@@ -530,6 +533,31 @@ def build_paper_identity_fingerprint(
     return "|".join(part for part in (normalized_title, normalized_authors, year) if part)
 
 
+def build_local_content_paper_id(
+    source_hash: str,
+    actor_scope: Mapping[str, Any] | None,
+) -> str:
+    """Build an owner-scoped identity for verified local document bytes.
+
+    Local paths, upload request ids, and filenames are observations used for
+    provenance. They must not create a new paper identity when the same owner
+    imports the same bytes again. The actor scope remains part of the identity
+    so local content identities never cross an authorization boundary.
+    """
+
+    digest = str(source_hash or "").strip().casefold()
+    if digest.startswith("sha256:"):
+        digest = digest.removeprefix("sha256:")
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise ValueError("local paper source_hash must be a SHA-256 digest")
+    return stable_research_id(
+        "paper",
+        "local-content-sha256",
+        actor_scope_ref(actor_scope),
+        digest,
+    )
+
+
 def stable_identity_ref(identity: ResearchPaperIdentity) -> str:
     """Return a stable typed reference for a canonical paper identity."""
 
@@ -654,6 +682,7 @@ __all__ = [
     "ResearchSourceSnapshot",
     "ResearchSourceType",
     "SourceAccessStatus",
+    "build_local_content_paper_id",
     "build_paper_identity_fingerprint",
     "stable_identity_ref",
     "actor_scope_matches",

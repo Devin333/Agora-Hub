@@ -11,6 +11,7 @@ import { startHistorySync } from "@/lib/research/history-sync"
 import { setHistoryStatus } from "@/lib/research/history"
 import { ResearchCommandPalette } from "@/features/portal/components/research-command-palette"
 import { researchHomeHref } from "@/lib/research/routes"
+import { isLocalDesktopProfile } from "@/lib/deployment-profile"
 
 function ResearchHistoryRuntime() {
   const account = usePortalAccount()
@@ -41,7 +42,8 @@ function ThemeBridge() {
 function GlobalResearchCommands() {
   const pathname = usePathname()
   const isPaperReader = /^\/papers\/[^/]+\/read\/?$/.test(pathname)
-  if (pathname === researchHomeHref()) return null
+  const isLocalDesktopLogin = isLocalDesktopProfile() && (pathname === "/login" || pathname === "/login/")
+  if (pathname === researchHomeHref() || pathname === "/paper-agent" || pathname === "/paper-agent/" || isLocalDesktopLogin) return null
   return <ResearchCommandPalette showTrigger={!isPaperReader} />
 }
 

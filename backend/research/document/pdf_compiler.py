@@ -12,7 +12,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
-import fitz  # PyMuPDF
+import pymupdf
 
 from backend.foundation import build_stable_id
 from backend.research.document.docker_pdf_parser import safe_paper_id
@@ -94,7 +94,7 @@ def _pdf_parse_artifacts_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def _extract_pdf_images(pdf_doc: fitz.Document, paper_id: str) -> list[FigureImageRef]:
+def _extract_pdf_images(pdf_doc: pymupdf.Document, paper_id: str) -> list[FigureImageRef]:
     """Extract images from PDF pages, save to figures dir.
 
     Returns paths in appearance order (page order, deduplicated by xref).
@@ -339,13 +339,13 @@ def _coerce_bbox(value: Any) -> list[float] | None:
 def _bbox_to_page_rect(
     bbox: list[float],
     *,
-    page_rect: fitz.Rect,
+    page_rect: pymupdf.Rect,
     pix_width: int,
     pix_height: int,
-) -> fitz.Rect:
+) -> pymupdf.Rect:
     x0, y0, x1, y1 = bbox
     if max(abs(v) for v in bbox) <= 1.5:
-        rect = fitz.Rect(
+        rect = pymupdf.Rect(
             page_rect.x0 + x0 * page_rect.width,
             page_rect.y0 + y0 * page_rect.height,
             page_rect.x0 + x1 * page_rect.width,
@@ -353,14 +353,14 @@ def _bbox_to_page_rect(
         )
         return _pad_rect(rect, page_rect, _FIGURE_CROP_PADDING_POINTS)
     if max(abs(v) for v in bbox) <= _SURYA_BBOX_SCALE:
-        rect = fitz.Rect(
+        rect = pymupdf.Rect(
             page_rect.x0 + (x0 / _SURYA_BBOX_SCALE) * page_rect.width,
             page_rect.y0 + (y0 / _SURYA_BBOX_SCALE) * page_rect.height,
             page_rect.x0 + (x1 / _SURYA_BBOX_SCALE) * page_rect.width,
             page_rect.y0 + (y1 / _SURYA_BBOX_SCALE) * page_rect.height,
         )
         return _pad_rect(rect, page_rect, _FIGURE_CROP_PADDING_POINTS)
-    return fitz.Rect(
+    return pymupdf.Rect(
         page_rect.x0 + (x0 / pix_width) * page_rect.width,
         page_rect.y0 + (y0 / pix_height) * page_rect.height,
         page_rect.x0 + (x1 / pix_width) * page_rect.width,
@@ -377,8 +377,8 @@ def _bbox_coordinate_system(bbox: list[float]) -> str:
     return "render_pixels"
 
 
-def _pad_rect(rect: fitz.Rect, page_rect: fitz.Rect, padding: float) -> fitz.Rect:
-    return fitz.Rect(
+def _pad_rect(rect: pymupdf.Rect, page_rect: pymupdf.Rect, padding: float) -> pymupdf.Rect:
+    return pymupdf.Rect(
         rect.x0 - padding,
         rect.y0 - padding,
         rect.x1 + padding,
@@ -411,14 +411,14 @@ def _ocr_figure_crop_metadata(
 
 
 def _extract_surya_figure_images(
-    pdf_doc: fitz.Document,
+    pdf_doc: pymupdf.Document,
     paper_id: str,
 ) -> list[FigureImageRef]:
     return _extract_surya_layout_artifacts(pdf_doc, paper_id).figure_images
 
 
 def _extract_surya_layout_artifacts(
-    pdf_doc: fitz.Document,
+    pdf_doc: pymupdf.Document,
     paper_id: str,
 ) -> SuryaLayoutArtifacts:
     base_url = _surya_base_url()
@@ -531,18 +531,18 @@ def _extract_surya_layout_artifacts(
     )
 
 
-def _rect_to_list(rect: fitz.Rect) -> list[float]:
+def _rect_to_list(rect: pymupdf.Rect) -> list[float]:
     return [float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)]
 
 
-def _rect_from_list(values: Any) -> fitz.Rect | None:
+def _rect_from_list(values: Any) -> pymupdf.Rect | None:
     bbox = _coerce_bbox(values)
     if bbox is None:
         return None
-    return fitz.Rect(*bbox)
+    return pymupdf.Rect(*bbox)
 
 
-def _extract_region_text(page: fitz.Page, rect: fitz.Rect) -> str:
+def _extract_region_text(page: pymupdf.Page, rect: pymupdf.Rect) -> str:
     try:
         return page.get_text("text", clip=rect).strip()
     except Exception:
@@ -579,8 +579,8 @@ def _format_rect_fragment(rect: list[float]) -> str:
 
 
 def _extract_table_structure_metadata(
-    page: fitz.Page,
-    rect: fitz.Rect,
+    page: pymupdf.Page,
+    rect: pymupdf.Rect,
 ) -> dict[str, Any]:
     try:
         columns, rows = _extract_table_structure_with_find_tables(page, rect)
@@ -607,8 +607,8 @@ def _extract_table_structure_metadata(
 
 
 def _extract_table_structure_with_find_tables(
-    page: fitz.Page,
-    rect: fitz.Rect,
+    page: pymupdf.Page,
+    rect: pymupdf.Rect,
 ) -> tuple[list[str], list[dict[str, str]]]:
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         finder = page.find_tables(clip=rect)
@@ -622,8 +622,8 @@ def _extract_table_structure_with_find_tables(
 
 
 def _extract_table_structure_from_words(
-    page: fitz.Page,
-    rect: fitz.Rect,
+    page: pymupdf.Page,
+    rect: pymupdf.Rect,
 ) -> tuple[list[str], list[dict[str, str]]]:
     words = page.get_text("words", clip=rect)
     if not words:
@@ -721,13 +721,13 @@ def _clean_plain_table_cell(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def _horizontal_overlap_ratio(a: fitz.Rect, b: fitz.Rect) -> float:
+def _horizontal_overlap_ratio(a: pymupdf.Rect, b: pymupdf.Rect) -> float:
     overlap = max(0.0, min(a.x1, b.x1) - max(a.x0, b.x0))
     denominator = max(1.0, min(a.width, b.width))
     return overlap / denominator
 
 
-def _caption_region_score(target_rect: fitz.Rect, caption_rect: fitz.Rect) -> float:
+def _caption_region_score(target_rect: pymupdf.Rect, caption_rect: pymupdf.Rect) -> float:
     overlap = _horizontal_overlap_ratio(target_rect, caption_rect)
     if overlap < 0.2:
         return 0.0
@@ -1500,7 +1500,7 @@ def _extract_missing_pages(mmd: str) -> set[int]:
     return {int(match.group(1)) for match in _MISSING_PAGE_RE.finditer(mmd)}
 
 
-def _extract_page_text_evidence(pdf_doc: fitz.Document) -> list[PageTextEvidence]:
+def _extract_page_text_evidence(pdf_doc: pymupdf.Document) -> list[PageTextEvidence]:
     min_chars = _pdf_text_min_chars()
     ocr_dpi = _pdf_ocr_dpi()
     base_url = _surya_base_url()
@@ -1926,7 +1926,7 @@ def _parse_pdf(
     sections, equations, figures, tables = _parse_mmd(mmd, paper_id, source_ref)
     missing_pages = _extract_missing_pages(mmd)
 
-    pdf_doc: fitz.Document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pdf_doc: pymupdf.Document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     surya_error: str | None = None
     surya_artifacts = SuryaLayoutArtifacts(figure_images=[], table_images=[])
     page_texts: list[PageTextEvidence] = []

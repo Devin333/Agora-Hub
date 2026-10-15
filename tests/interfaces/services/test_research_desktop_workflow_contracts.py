@@ -220,6 +220,8 @@ def test_private_pdf_analysis_uses_owned_bytes_and_rejects_tampering_or_caller_a
         constraints=semantic["constraints"],
     )
     assert completed["status"] == "passed"
+    assert completed["result"]["paperId"] == "paper-private"
+    assert completed["result"]["sourceRevision"] == digest
     assert research.analysis_calls[0].source_url is None
     assert research.analysis_calls[0].pdf_url.startswith("file:")
 
@@ -286,9 +288,13 @@ def test_ask_gate_records_only_grounded_answer_and_corrupt_journal_requires_acti
 
     research.response = {
         "answer": "The method is grounded in the methods section.", "abstained": False, "status": "answered",
-        "runId": "run-1", "paperId": "paper-1", "transcriptId": "transcript-accepted",
-        "citations": [{"id": "citation-1", "paperId": "paper-1", "sourceRevision": REVISION, "sectionId": "methods", "valid": True}],
-        "evidenceRefs": ["citation-1"], "claims": [{"claimId": "claim-1", "citationIds": ["citation-1"]}],
+        "runId": "run-1", "paperId": "paper-1", "transcriptId": "rag-transcript://workflow-fixture/accepted",
+        "decision": {"decision_type": "return_answer"},
+        "citations": [{
+            "id": "citation-1", "label": "Methods", "evidenceId": "evidence-methods-1",
+            "paperId": "paper-1", "sourceRevision": REVISION, "sectionId": "methods", "valid": True,
+        }],
+        "evidenceRefs": ["evidence-methods-1"], "claims": [{"claimId": "claim-1", "citationIds": ["citation-1"]}],
         "metadata": {"generationMode": "gated_harness"},
     }
     accepted_semantic = {**semantic, "question": "Which method is verified?"}
@@ -301,6 +307,11 @@ def test_ask_gate_records_only_grounded_answer_and_corrupt_journal_requires_acti
     assert accepted["result"]["sourceRevision"] == REVISION
     assert accepted["result"]["citations"][0]["sectionId"] == "methods"
     assert accepted["result"]["citations"][0]["valid"] is True
+    assert accepted["result"]["citations"][0]["evidenceId"] == "evidence-methods-1"
+    assert accepted["result"]["evidenceRefs"] == ["evidence-methods-1"]
+    assert accepted["result"]["transcriptId"] == "rag-transcript://workflow-fixture/accepted"
+    assert accepted["result"]["answerStatus"] == "answered"
+    assert not {"status", "abstained", "claims", "metadata"}.intersection(accepted["result"])
 
     interrupted_id = "ask-interrupted-1"
     store.admit(owner_id="alice", request_id=interrupted_id, generation=generation, kind="ask", fingerprint=canonical_request_fingerprint(semantic), semantic=semantic)

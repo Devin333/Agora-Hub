@@ -516,6 +516,15 @@ export interface PaperReaderCitation {
   url?: string
 }
 
+/** A complete accepted desktop answer receipt; absent on legacy public answers. */
+export interface PaperReaderExecutionTrace {
+  runId: string
+  sourceRevision: string
+  transcriptId: string
+  answerStatus: "answered"
+  evidenceRefs: string[]
+}
+
 export interface PaperReaderAnswer {
   paperId: string
   locale: Locale
@@ -525,6 +534,7 @@ export interface PaperReaderAnswer {
   confidence: number
   generatedAt: string
   cached: boolean
+  executionTrace?: PaperReaderExecutionTrace
 }
 
 export interface PaperTask {

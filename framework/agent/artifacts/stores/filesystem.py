@@ -19,11 +19,13 @@ from framework.agent.artifacts.stores.errors import (
     ArtifactStoreMetadataError,
 )
 from framework.agent.artifacts.stores.fs_safety import (
+    is_link_or_reparse_point,
     reject_link_chain,
     verified_atomic_write,
     verified_exclusive_file_lock,
 )
 from framework.agent.artifacts.stores.integrity import verify_sha256_checksum
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 
 
 class FilesystemArtifactStore:
@@ -51,10 +53,10 @@ class FilesystemArtifactStore:
             root=self.root,
             identity=identity,
         ):
-            if target.exists():
+            if storage_io_path(target).exists():
                 existing = _read_verified_regular_file(
                     target,
-                    root=self.root.resolve(strict=False),
+                    root=resolve_storage_path(self.root),
                     artifact_id=artifact_id,
                 )
                 if existing != data:
@@ -98,7 +100,7 @@ class FilesystemArtifactStore:
         try:
             data = _read_verified_regular_file(
                 path,
-                root=self.root.resolve(strict=False),
+                root=resolve_storage_path(self.root),
                 artifact_id=artifact_ref.artifact_id,
             )
         except FileNotFoundError as exc:
@@ -127,7 +129,7 @@ class FilesystemArtifactStore:
         try:
             _reject_symlink_chain(
                 path,
-                root=self.root.resolve(strict=False),
+                root=resolve_storage_path(self.root),
                 artifact_id=artifact_ref.artifact_id,
             )
         except FileNotFoundError:
@@ -135,11 +137,11 @@ class FilesystemArtifactStore:
             # Keep the existence query total while preserving link rejection
             # for every path component that is actually present.
             return False
-        return path.exists()
+        return storage_io_path(path).exists()
 
     def list(self, run_id: str) -> list[str]:
         validate_artifact_path_segment(run_id, field="run_id")
-        root = self.root.resolve(strict=False)
+        root = resolve_storage_path(self.root)
         lexical_run_dir = root / run_id
         _reject_symlink_chain(
             lexical_run_dir,
@@ -147,20 +149,31 @@ class FilesystemArtifactStore:
             artifact_id=run_id,
         )
         run_dir = resolve_artifact_descendant(self.root, run_id, field="run_id")
-        if not run_dir.exists():
+        if not storage_io_path(run_dir).exists():
             return []
         paths: list[str] = []
-        for candidate in run_dir.rglob("*"):
-            relative_path = artifact_path_relative_to(candidate, run_dir).as_posix()
-            if relative_path == "_locks" or relative_path.startswith("_locks/"):
-                continue
-            path = resolve_artifact_descendant(
-                run_dir,
-                relative_path,
-                field="artifact list path",
+        pending = [run_dir]
+        while pending:
+            directory = pending.pop()
+            _reject_symlink_chain(
+                directory,
+                root=root,
+                artifact_id=run_id,
             )
-            if path.is_file():
-                paths.append(relative_path)
+            for candidate in storage_io_path(directory).iterdir():
+                relative_path = artifact_path_relative_to(candidate, run_dir).as_posix()
+                if relative_path == "_locks" or relative_path.startswith("_locks/"):
+                    continue
+                info = os.lstat(storage_io_path(candidate))
+                if is_link_or_reparse_point(info):
+                    raise ArtifactStoreMetadataError(
+                        "artifact list path contains a symlink, junction, or reparse "
+                        f"point: {relative_path}"
+                    )
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(candidate)
+                elif stat.S_ISREG(info.st_mode):
+                    paths.append(relative_path)
         return sorted(paths)
 
     def checksum(self, artifact_ref: ArtifactRef) -> str:
@@ -169,7 +182,7 @@ class FilesystemArtifactStore:
         try:
             content = _read_verified_regular_file(
                 path,
-                root=self.root.resolve(strict=False),
+                root=resolve_storage_path(self.root),
                 artifact_id=artifact_ref.artifact_id,
             )
         except FileNotFoundError as exc:
@@ -185,18 +198,18 @@ class FilesystemArtifactStore:
         path = self._raw_artifact_path(artifact_ref.run_id, artifact_ref.path)
         _reject_symlink_chain(
             path,
-            root=self.root.resolve(strict=False),
+            root=resolve_storage_path(self.root),
             artifact_id=artifact_ref.artifact_id,
         )
-        if path.exists():
-            path.unlink()
+        if storage_io_path(path).exists():
+            storage_io_path(path).unlink()
 
     def _raw_artifact_path(self, run_id: str, relative_path: str) -> Path:
         """Return a lexical path so reads can reject final symlinks before open."""
 
         validate_artifact_path_segment(run_id, field="run_id")
         relative = validate_relative_artifact_path(relative_path, field="artifact path")
-        root = self.root.resolve(strict=False)
+        root = resolve_storage_path(self.root)
         path = root.joinpath(run_id, *PurePosixPath(relative).parts)
         try:
             artifact_path_relative_to(path, root)
@@ -221,13 +234,14 @@ class FilesystemArtifactStore:
 
 def _read_verified_regular_file(path: Path, *, root: Path, artifact_id: str) -> bytes:
     _reject_symlink_chain(path, root=root, artifact_id=artifact_id)
-    before = os.lstat(path)
+    io_path = storage_io_path(path)
+    before = os.lstat(io_path)
     if not stat.S_ISREG(before.st_mode):
         raise ArtifactStoreMetadataError(
             f"artifact is not a regular file: {artifact_id}"
         )
     try:
-        with path.open("rb") as handle:
+        with io_path.open("rb") as handle:
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode):
                 raise ArtifactStoreMetadataError(

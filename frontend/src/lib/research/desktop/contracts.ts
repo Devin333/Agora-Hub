@@ -69,6 +69,96 @@ export const desktopCapabilitiesSchema = z
 
 export type DesktopCapabilities = z.infer<typeof desktopCapabilitiesSchema>
 
+export const personalMemoryRefSchema = z
+  .object({
+    memoryId: z.string().regex(/^pmem_[0-9a-f]{32}$/),
+    revision: z.number().int().positive(),
+  })
+  .strict()
+
+export const personalMemorySelectionSchema = z
+  .object({
+    refs: z.array(personalMemoryRefSchema).min(1).max(20),
+    policyRevision: z.number().int().positive(),
+  })
+  .strict()
+  .superRefine((selection, context) => {
+    if (new Set(selection.refs.map(item => item.memoryId)).size !== selection.refs.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["refs"],
+        message: "Personal memory refs must be unique",
+      })
+    }
+  })
+
+export type PersonalMemoryRef = z.infer<typeof personalMemoryRefSchema>
+export type PersonalMemorySelection = z.infer<typeof personalMemorySelectionSchema>
+
+const personalMemorySourceRefSchema = z
+  .object({
+    source_type: z.enum([
+      "user_input", "reading_note", "paper", "evidence",
+      "conversation", "import", "other",
+    ]),
+    source_ref: boundedText(1024),
+    source_revision: boundedText(256).nullable(),
+    locator: boundedText(512).nullable(),
+    label: boundedText(256).nullable(),
+  })
+  .strict()
+
+const recalledPersonalMemoryRecordSchema = z
+  .object({
+    memory_id: z.string().regex(/^pmem_[0-9a-f]{32}$/),
+    content: boundedText(8000),
+    category: z.enum(["research_interest", "reading_preference", "background"]),
+    source_refs: z.array(personalMemorySourceRefSchema).min(1).max(32),
+    status: z.literal("active"),
+    revision: z.number().int().positive(),
+    created_at: boundedText(100),
+    updated_at: boundedText(100),
+    origin: z.enum(["model_candidate", "user_confirmed"]),
+    confirmed_at: boundedText(100),
+    disabled_at: z.null(),
+    deleted_at: z.null(),
+    score: z.number().int(),
+    reasons: z.array(boundedText(200)).max(100),
+  })
+  .strict()
+
+const recalledPersonalMemoryRefSchema = z
+  .object({
+    memory_id: z.string().regex(/^pmem_[0-9a-f]{32}$/),
+    revision: z.number().int().positive(),
+  })
+  .strict()
+
+export const personalMemoryRecallSchema = z
+  .object({
+    records: z.array(recalledPersonalMemoryRecordSchema).max(20),
+    used_memory_refs: z.array(recalledPersonalMemoryRefSchema).max(20),
+    query: boundedText(512),
+    memory_enabled: z.boolean(),
+  })
+  .strict()
+
+export const personalMemoryPolicySchema = z
+  .object({
+    policy: z
+      .object({
+        allow_remote_processing: z.boolean(),
+        revision: z.number().int().positive(),
+        created_at: boundedText(100),
+        updated_at: boundedText(100),
+      })
+      .strict(),
+  })
+  .strict()
+
+export type PersonalMemoryRecall = z.infer<typeof personalMemoryRecallSchema>
+export type PersonalMemoryPolicy = z.infer<typeof personalMemoryPolicySchema>
+
 export const operationSchema = z
   .object({
     requestId: z.string().min(8).max(128),
@@ -101,30 +191,76 @@ export const operationSchema = z
 
 export type ResearchOperation = z.infer<typeof operationSchema>
 
+// Trace identifiers are opaque references, not browser URLs or filesystem paths.
+// Preserve their exact spelling: trimming, coercing, or truncating would change identity.
+const answerEvidenceRefSchema = identifier.refine(
+  value => !/\s|[\u0000-\u001f\u007f]/.test(value),
+  "Expected a nonblank evidence identifier without whitespace or control characters",
+)
+const answerTranscriptRefSchema = identifier.refine(
+  value => !/\s|[\u0000-\u001f\u007f]/.test(value),
+  "Expected an opaque transcript reference without whitespace or control characters",
+)
+
 const groundedAnswerCitationSchema = z
   .object({
     id: boundedText(200),
     label: boundedText(500),
-    evidenceId: boundedText(256).optional(),
+    evidenceId: answerEvidenceRefSchema,
     sectionId: boundedText(200).optional(),
     page: z.number().int().positive().max(100000).optional(),
     excerpt: boundedText(10000).optional(),
-    valid: z.boolean(),
+    valid: z.literal(true),
     reasonCode: boundedText(200).nullable().optional(),
   })
   .strict()
+  .superRefine((citation, context) => {
+    if (!citation.sectionId?.trim() && citation.page === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sectionId"],
+        message: "An accepted answer citation must have a section or page locator",
+      })
+    }
+  })
 
 export const groundedAnswerSchema = z
   .object({
     runId: identifier,
     paperId: identifier,
     sourceRevision: boundedText(512),
-    answer: boundedText(100000),
-    citations: z.array(groundedAnswerCitationSchema).max(1000),
+    answer: boundedText(100000).min(1).refine(value => value.trim().length > 0, "Expected a nonblank answer"),
+    citations: z.array(groundedAnswerCitationSchema).min(1).max(1000),
     confidence: z.number().min(0).max(1),
+    evidenceRefs: z.array(answerEvidenceRefSchema).min(1).max(1000),
+    transcriptId: answerTranscriptRefSchema,
+    // The desktop service rejects non-answer outcomes before projecting this receipt.
+    answerStatus: z.literal("answered"),
     generatedAt: boundedText(100).optional(),
+    usedPersonalMemory: z.array(personalMemoryRefSchema).max(20).optional(),
   })
   .strict()
+  .superRefine((answer, context) => {
+    if (new Set(answer.evidenceRefs).size !== answer.evidenceRefs.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["evidenceRefs"],
+        message: "Answer evidence refs must be unique",
+      })
+    }
+
+    const citedRefs = [...new Set(answer.citations.map(citation => citation.evidenceId))]
+    if (
+      citedRefs.length !== answer.evidenceRefs.length ||
+      citedRefs.some((ref, index) => ref !== answer.evidenceRefs[index])
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["evidenceRefs"],
+        message: "Answer evidence refs must match the ordered evidence IDs of valid citations",
+      })
+    }
+  })
 
 
 const citationSchema = z
@@ -246,6 +382,7 @@ export const researchReportSchema = z
     analysis: researchAnalysisSchema.nullable(),
     quality: researchQualitySchema.nullable(),
     citations: z.array(citationSchema).max(1000),
+    usedPersonalMemory: z.array(personalMemoryRefSchema).max(20).optional(),
     artifactRefs: z.array(z.never()).length(0),
     traceRef: z.null(),
     diagnostics: reportDiagnosticsSchema,
@@ -352,6 +489,7 @@ export type ResearchReportView = {
     reasons: string[]
   }
   citations: ResearchReport["citations"]
+  usedPersonalMemory: ResearchReport["usedPersonalMemory"]
   artifactStatus: ResearchReport["diagnostics"]["artifactStatus"]
   artifactReason: string
   accepted: boolean
@@ -420,6 +558,7 @@ export function toResearchReportView(
       reasons: qualityReasons(quality),
     },
     citations: report.citations,
+    usedPersonalMemory: report.usedPersonalMemory,
     artifactStatus: report.diagnostics.artifactStatus,
     artifactReason: report.diagnostics.artifactReason,
     accepted: report.eligibility.accepted,

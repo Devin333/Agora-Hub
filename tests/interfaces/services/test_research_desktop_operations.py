@@ -64,11 +64,10 @@ class _ResearchFacade(ResearchApplicationService):
     def get_run_projection(self, run_id, *, actor):
         assert actor.user_id == "alice"
         return {
-            "runId": run_id, "paperId": "paper-1", "status": "succeeded",
+            "runId": run_id, "status": "succeeded",
             "accepted": True, "qualityPassed": True,
             "eligibleForAcceptedExport": True, "artifactStatus": "valid",
-            "sourceRevision": "sha256:" + "a" * 64,
-            "sourceFingerprint": "sha256:" + "a" * 64,
+            **self.identity,
         }
 
     def ask_paper(self, paper_id, request):
@@ -77,10 +76,12 @@ class _ResearchFacade(ResearchApplicationService):
             "answer": "Grounded answer", "abstained": False,
             "citations": [{
                 "id": "citation:1", "label": "Methods", "paperId": paper_id,
-                "sourceRevision": "sha256:" + "a" * 64,
+                "evidenceId": "evidence:methods:1",
+                "sourceRevision": self.identity["sourceRevision"],
                 "valid": True, "sectionId": "methods",
             }],
-            "evidenceRefs": ["citation:1"], "claims": [], "confidence": 1.0,
+            "evidenceRefs": ["evidence:methods:1"], "claims": [], "confidence": 1.0,
+            "decision": {"decision_type": "return_answer"},
             "transcriptId": "transcript-1", "status": "answered",
             "runId": request.run_id, "paperId": paper_id,
             "metadata": {"retrievalGoalId": "goal-1", "generationMode": "gated_harness", "recovered": False},
@@ -184,6 +185,8 @@ def test_private_analysis_uses_verified_catalog_locator_and_fixture_null_semanti
     )
 
     assert result["status"] == "passed"
+    assert result["result"]["paperId"] == "paper-1"
+    assert result["result"]["sourceRevision"] == digest
     assert research.analysis_calls[0].pdf_url == "file:///immutable/catalog/source.pdf"
     assert (
         research.analysis_calls[0].options["research_input_objective"]

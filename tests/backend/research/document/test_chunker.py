@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+
+from framework.shared.windows_paths import storage_io_path
 
 from backend.research.document.chunk_manifest import ChunkManifestManager
 from backend.research.document.chunker import PaperDocumentChunker
@@ -826,6 +830,64 @@ def test_chunk_manifest_reuses_id_when_paragraph_index_shifts(tmp_path):
     manifest = json.loads((tmp_path / "chunk_manifest.json").read_text(encoding="utf-8"))
     entries = {entry["semantic_key"]: entry for entry in manifest["chunks"]}
     assert entries[first_target.metadata["semantic_key"]]["chunk_id"] == first_target.chunk_id
+
+
+def test_chunk_manifest_concurrent_same_paper_writes_converge_with_source_history(tmp_path):
+    root = tmp_path / "owned-manifest"
+    while len(os.fspath(root)) <= 270:
+        root /= "long-manifest-storage-abcdefghijklmnopqrstuvwxyz"
+    manifest_path = root / "chunk_manifest.json"
+    manager = ChunkManifestManager(manifest_path)
+    doc = make_doc(sections=[make_section("s0", "Methods", "Concurrent source content.")])
+    chunks = CHUNKER.chunk(doc, "latex")
+    scope = {"user_id": "alice", "memory_namespace": "research:user:alice"}
+    writes = [
+        {
+            "document_id": "document-0",
+            "source_hash": "sha256:" + "0" * 64,
+            "run_id": "run-0",
+            "observed_at": "2026-10-16T00:00:00+00:00",
+        },
+        {
+            "document_id": "document-1",
+            "source_hash": "sha256:" + "1" * 64,
+            "run_id": "run-1",
+            "observed_at": "2026-10-16T00:00:01+00:00",
+        },
+    ]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                lambda item: manager.write(
+                    doc.paper_id,
+                    chunks,
+                    document_metadata={
+                        "document_id": item["document_id"],
+                        "source_hash": item["source_hash"],
+                        "actor_scope": scope,
+                    },
+                    actor_scope=scope,
+                    **item,
+                ),
+                writes,
+            )
+        )
+
+    assert not os.fspath(manifest_path).startswith("\\\\?\\")
+    persisted_path = manager.path_for(doc.paper_id, actor_scope=scope)
+    payload = json.loads(storage_io_path(persisted_path).read_text(encoding="utf-8"))
+    persisted_sources = {
+        str(payload.get("source_hash")),
+        *(str(entry.get("source_hash")) for entry in payload.get("history", [])),
+    }
+    assert persisted_sources == {item["source_hash"] for item in writes}
+    assert payload["paper_id"] == doc.paper_id
+    assert payload["actor_scope"] == scope
+    assert payload["run_id"] in {item["run_id"] for item in writes}
+    assert len(payload["history"]) == 1
+    assert payload["chunks"]
+    assert not list(storage_io_path(persisted_path.parent).glob(f".{persisted_path.name}.*.tmp"))
 
 
 def test_chunk_manifest_includes_parser_cascade_metadata(tmp_path):

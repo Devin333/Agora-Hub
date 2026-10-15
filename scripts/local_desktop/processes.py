@@ -79,35 +79,53 @@ class ProcessInspector:
             return _windows_process_identity(pid)
         return _portable_process_identity(pid)
 
-    def owns(self, process: ProcessIdentity) -> bool:
+    def ownership(self, process: ProcessIdentity) -> str:
         actual = self.identity(process.pid)
         if actual is None:
-            return False
+            return "absent"
         created, executable = actual
-        return created == process.created and os.path.normcase(executable) == os.path.normcase(process.executable)
+        if created == process.created and os.path.normcase(executable) == os.path.normcase(process.executable):
+            return "owned"
+        return "foreign"
+
+    def owns(self, process: ProcessIdentity) -> bool:
+        return self.ownership(process) == "owned"
 
     def terminate(self, process: ProcessIdentity, *, grace_seconds: float) -> None:
         grace_seconds = validate_lifecycle_timeout(grace_seconds, field_name="process_timeout")
-        if not self.owns(process):
+        ownership = self.ownership(process)
+        if ownership == "absent":
+            return
+        if ownership == "foreign":
             raise DesktopOperationError("desktop_process_not_owned", f"refusing to stop non-owned or reused PID for {process.role}")
         if os.name == "nt":
             _send_windows_break(process)
         else:
             try:
                 os.kill(process.pid, signal.SIGTERM)
-            except OSError:
-                pass
+            except ProcessLookupError:
+                return
         deadline = time.monotonic() + grace_seconds
         while time.monotonic() < deadline:
-            if self.identity(process.pid) is None:
+            if self.ownership(process) != "owned":
                 return
             time.sleep(0.1)
-        if not self.owns(process):
+        if self.ownership(process) != "owned":
             return
         if os.name == "nt":
             _terminate_windows_process(process)
         else:
-            os.kill(process.pid, signal.SIGKILL)
+            try:
+                os.kill(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+        forced_deadline = time.monotonic() + grace_seconds
+        while time.monotonic() < forced_deadline:
+            if self.ownership(process) != "owned":
+                return
+            time.sleep(0.1)
+        if self.ownership(process) == "owned":
+            raise DesktopOperationError("desktop_process_termination_failed", f"owned process did not exit before the termination deadline for {process.role}")
 
 
 class LifecycleManager:
@@ -121,6 +139,8 @@ class LifecycleManager:
         inspector: ProcessInspector | None = None,
         popen_factory: Callable[..., subprocess.Popen[Any]] | None = None,
         opener: Callable[[str], Any] | None = None,
+        api_environment_provider: Callable[[], Mapping[str, str]] | None = None,
+        api_environment_names: tuple[str, ...] = (),
     ) -> None:
         self.config = config
         self.release_manager = release_manager or ReleaseManager(config)
@@ -129,6 +149,14 @@ class LifecycleManager:
         self.inspector = inspector or ProcessInspector()
         self.popen_factory = popen_factory or subprocess.Popen
         self.opener = opener or webbrowser.open
+        self.api_environment_provider = api_environment_provider
+        self.api_environment_names = tuple(dict.fromkeys(api_environment_names))
+        if self.api_environment_provider is None and self.api_environment_names:
+            raise ValueError("api_environment_names require an api_environment_provider")
+        if self.api_environment_provider is not None and not self.api_environment_names:
+            raise ValueError("api_environment_provider requires an explicit environment allow-list")
+        if any(not name or name != name.strip() or "=" in name or "\x00" in name for name in self.api_environment_names):
+            raise ValueError("api environment allow-list contains an invalid name")
 
     @property
     def instance_path(self) -> Path:
@@ -146,11 +174,22 @@ class LifecycleManager:
         readiness_timeout = validate_lifecycle_timeout(readiness_timeout, field_name="readiness_timeout")
         with exclusive_lock(self.lock_path):
             current = self._instance()
-            owned = self._owned_processes(current)
-            recorded_count = len(current.get("processes", []))
-            if recorded_count and len(owned) != recorded_count:
-                self._record_state("FAILED", owned, release=current.get("release"), reason_code="desktop_process_ownership_incomplete", boot_id=current.get("boot_id"))
-                raise DesktopOperationError("desktop_process_ownership_incomplete", "one or more recorded child processes are absent or no longer owned")
+            recorded = [ProcessIdentity.from_dict(raw) for raw in current.get("processes", [])]
+            ownership = {process.role: self._process_ownership(process) for process in recorded}
+            foreign = [process for process in recorded if ownership[process.role] == "foreign"]
+            owned = [process for process in recorded if ownership[process.role] == "owned"]
+            if foreign or (owned and len(owned) != len(recorded)):
+                self._record_state(
+                    "FAILED",
+                    recorded,
+                    release=current.get("release"),
+                    reason_code="desktop_process_ownership_incomplete",
+                    boot_id=current.get("boot_id"),
+                )
+                raise DesktopOperationError(
+                    "desktop_process_ownership_incomplete",
+                    "one or more recorded child processes are absent, foreign, or no longer owned",
+                )
             if owned and current.get("status") in RUNNING_STATES:
                 expected = self._runtime_identity(current.get("release"), current.get("boot_id"))
                 health = self._readiness_once(expected)
@@ -161,7 +200,13 @@ class LifecycleManager:
                     return OperationResult(True, "start", state, "desktop_instance_already_running", "owned local desktop instance is already running", self._public_instance(current))
                 raise DesktopOperationError("desktop_instance_unhealthy", "owned instance is running but did not pass readiness", details=health)
             if current.get("processes") and not owned:
-                self._record_state("FAILED", [], reason_code="desktop_stale_process_record")
+                self._record_state(
+                    "FAILED",
+                    [],
+                    release=current.get("release"),
+                    reason_code="desktop_stale_process_record",
+                    boot_id=current.get("boot_id"),
+                )
             conflicts = [endpoint for endpoint in ((self.config.frontend_host, self.config.frontend_port), (self.config.api_host, self.config.api_port)) if _port_is_listening(*endpoint)]
             if conflicts:
                 raise DesktopOperationError("desktop_port_owned_elsewhere", "a required desktop port is occupied by an unrelated process", details={"endpoints": [f"{host}:{port}" for host, port in conflicts]})
@@ -177,12 +222,15 @@ class LifecycleManager:
             environment = self.release_manager.bind_runtime_environment(release_path, manifest, sanitized_environment(self.config))
             environment.update({
                 "PYTHONPATH": str(release_path / "app"),
+                "PYTHONDONTWRITEBYTECODE": "1",
                 "NEXT_TELEMETRY_DISABLED": "1",
                 "NEWSROOM_DESKTOP_INSTANCE_KEY": runtime_identity["instance_key"],
                 "NEWSROOM_DESKTOP_RELEASE_ID": runtime_identity["release_id"],
                 "NEWSROOM_DESKTOP_CONFIG_DIGEST": runtime_identity["config_digest"],
                 "NEWSROOM_DESKTOP_BOOT_ID": runtime_identity["boot_id"],
             })
+            for name in self.api_environment_names:
+                environment.pop(name, None)
             children: list[tuple[subprocess.Popen[Any], ProcessIdentity]] = []
             self._record_state("STARTING", [], release=release_identity, reason_code="desktop_starting", boot_id=boot_id)
             try:
@@ -215,21 +263,94 @@ class LifecycleManager:
         process_timeout = validate_lifecycle_timeout(process_timeout, field_name="process_timeout")
         with exclusive_lock(self.lock_path):
             current = self._instance()
-            processes = self._owned_processes(current)
-            recorded_count = len(current.get("processes", []))
-            if recorded_count and len(processes) != recorded_count:
-                self._record_state("FAILED", processes, release=current.get("release"), reason_code="desktop_process_ownership_incomplete")
-                raise DesktopOperationError("desktop_process_ownership_incomplete", "one or more recorded child processes are absent or no longer owned; no process was stopped")
-            if not processes:
-                if current.get("processes"):
-                    self._record_state("FAILED", [], reason_code="desktop_stale_process_record")
-                    raise DesktopOperationError("desktop_process_not_owned", "recorded processes are absent or no longer owned; no process was stopped")
+            processes = [ProcessIdentity.from_dict(raw) for raw in current.get("processes", [])]
+            ownership = {process.role: self._process_ownership(process) for process in processes}
+            foreign = [process for process in processes if ownership[process.role] == "foreign"]
+            if foreign:
+                self._record_state(
+                    "FAILED",
+                    processes,
+                    release=current.get("release"),
+                    reason_code="desktop_process_ownership_incomplete",
+                    boot_id=current.get("boot_id"),
+                )
+                raise DesktopOperationError(
+                    "desktop_process_ownership_incomplete",
+                    "one or more recorded PIDs belong to foreign or reused processes; no process was stopped",
+                    details={"roles": [process.role for process in foreign]},
+                )
+            owned = [process for process in processes if ownership[process.role] == "owned"]
+            if not owned:
+                self._require_stopped_endpoints(current, processes)
+                if processes or current.get("status") != "STOPPED":
+                    self._record_state(
+                        "STOPPED",
+                        [],
+                        release=current.get("release"),
+                        reason_code="desktop_stopped",
+                        boot_id=current.get("boot_id"),
+                    )
                 return OperationResult(True, "stop", "STOPPED", "desktop_already_stopped", "local desktop is already stopped", {})
-            self._record_state("STOPPING", processes, release=current.get("release"), reason_code="desktop_draining")
-            self.control_plane.begin_drain(timeout_seconds=drain_timeout)
-            for process in reversed(processes):
-                self.inspector.terminate(process, grace_seconds=process_timeout)
-            self._record_state("STOPPED", [], release=current.get("release"), reason_code="desktop_stopped")
+            self._record_state(
+                "STOPPING",
+                processes,
+                release=current.get("release"),
+                reason_code="desktop_draining",
+                boot_id=current.get("boot_id"),
+            )
+            if ownership.get("api") == "owned":
+                self.control_plane.begin_drain(timeout_seconds=drain_timeout)
+            try:
+                for process in reversed(processes):
+                    current_ownership = self._process_ownership(process)
+                    if current_ownership == "absent":
+                        continue
+                    if current_ownership == "foreign":
+                        raise DesktopOperationError(
+                            "desktop_process_not_owned",
+                            f"refusing to stop non-owned or reused PID for {process.role}",
+                        )
+                    self.inspector.terminate(process, grace_seconds=process_timeout)
+            except Exception:
+                remaining = [process for process in processes if self._process_ownership(process) != "absent"]
+                self._record_state(
+                    "FAILED",
+                    remaining,
+                    release=current.get("release"),
+                    reason_code="desktop_stop_failed",
+                    boot_id=current.get("boot_id"),
+                )
+                raise
+            remaining = [(process, self._process_ownership(process)) for process in processes]
+            remaining_live = [process for process, state in remaining if state != "absent"]
+            if remaining_live:
+                remaining_foreign = [process for process, state in remaining if state == "foreign"]
+                self._record_state(
+                    "FAILED",
+                    remaining_live,
+                    release=current.get("release"),
+                    reason_code="desktop_process_ownership_changed" if remaining_foreign else "desktop_stop_incomplete",
+                    boot_id=current.get("boot_id"),
+                )
+                if remaining_foreign:
+                    raise DesktopOperationError(
+                        "desktop_process_not_owned",
+                        "one or more recorded PIDs were reused while stopping; no signal was sent to the replacement processes",
+                        details={"roles": [process.role for process in remaining_foreign]},
+                    )
+                raise DesktopOperationError(
+                    "desktop_process_termination_failed",
+                    "one or more owned local desktop processes remained after bounded termination",
+                    details={"roles": [process.role for process in remaining_live]},
+                )
+            self._require_stopped_endpoints(current, processes)
+            self._record_state(
+                "STOPPED",
+                [],
+                release=current.get("release"),
+                reason_code="desktop_stopped",
+                boot_id=current.get("boot_id"),
+            )
             return OperationResult(True, "stop", "STOPPED", "desktop_stopped", "owned local desktop processes stopped after drain", {})
 
     def restart(self, *, readiness_timeout: float = 60.0, drain_timeout: float = 30.0) -> OperationResult:
@@ -285,24 +406,36 @@ class LifecycleManager:
         stderr_path = self.log_root / f"{role}.stderr.log"
         _rotate_log(stdout_path)
         _rotate_log(stderr_path)
+        common_environment = dict(environment)
+        for name in self.api_environment_names:
+            common_environment.pop(name, None)
         collectors: list[tuple[subprocess.Popen[Any], ProcessIdentity]] = []
         try:
-            collectors.append(self._launch_log_collector(f"{role}:log:stdout", stdout_path, cwd, environment))
-            collectors.append(self._launch_log_collector(f"{role}:log:stderr", stderr_path, cwd, environment))
+            collectors.append(self._launch_log_collector(f"{role}:log:stdout", stdout_path, cwd, common_environment))
+            collectors.append(self._launch_log_collector(f"{role}:log:stderr", stderr_path, cwd, common_environment))
         except Exception:
             for collector, _ in collectors:
                 if collector.stdin is not None:
                     collector.stdin.close()
                 collector.terminate()
             raise
+        try:
+            child_environment = self._child_environment(role, common_environment)
+        except Exception:
+            for collector, _ in collectors:
+                if collector.stdin is not None:
+                    collector.stdin.close()
+                collector.terminate()
+            raise
+        launch_argv, launch_environment = _direct_windows_venv_launch(argv, child_environment)
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         try:
             process = self.popen_factory(
-                argv,
+                launch_argv,
                 cwd=cwd,
-                env=dict(environment),
+                env=launch_environment,
                 stdin=subprocess.DEVNULL,
                 stdout=collectors[0][0].stdin,
                 stderr=collectors[1][0].stdin,
@@ -326,8 +459,31 @@ class LifecycleManager:
                 collector.terminate()
             raise DesktopOperationError("desktop_process_identity_unavailable", f"could not establish ownership for {role}")
         created, executable = identity_raw
-        identity = ProcessIdentity(role, process.pid, created, executable, _argv_digest(argv), str(stdout_path), str(stderr_path))
+        identity = ProcessIdentity(role, process.pid, created, executable, _argv_digest(launch_argv), str(stdout_path), str(stderr_path))
         return [*collectors, (process, identity)]
+
+
+    def _child_environment(self, role: str, environment: Mapping[str, str]) -> dict[str, str]:
+        child_environment = dict(environment)
+        for name in self.api_environment_names:
+            child_environment.pop(name, None)
+        if role != "api" or self.api_environment_provider is None:
+            return child_environment
+        projected = dict(self.api_environment_provider())
+        unexpected = sorted(set(projected) - set(self.api_environment_names))
+        if unexpected:
+            raise DesktopOperationError(
+                "desktop_api_environment_projection_invalid",
+                "API environment provider returned a name outside its fixed allow-list",
+                details={"unexpected_environment_names": unexpected},
+            )
+        if any(not isinstance(value, str) or not value for value in projected.values()):
+            raise DesktopOperationError(
+                "desktop_api_environment_projection_invalid",
+                "API environment provider returned an invalid value",
+            )
+        child_environment.update(projected)
+        return child_environment
 
     def _launch_log_collector(
         self,
@@ -343,13 +499,14 @@ class LifecycleManager:
             "--path",
             str(log_path),
         ]
+        launch_argv, launch_environment = _direct_windows_venv_launch(argv, environment)
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         process = self.popen_factory(
-            argv,
+            launch_argv,
             cwd=cwd,
-            env=dict(environment),
+            env=launch_environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -362,7 +519,7 @@ class LifecycleManager:
             process.terminate()
             raise DesktopOperationError("desktop_process_identity_unavailable", f"could not establish ownership for {role}")
         created, executable = identity_raw
-        identity = ProcessIdentity(role, process.pid, created, executable, _argv_digest(argv), str(log_path), str(log_path))
+        identity = ProcessIdentity(role, process.pid, created, executable, _argv_digest(launch_argv), str(log_path), str(log_path))
         return process, identity
 
     def _frontend_command(self, release_path: Path, manifest: Mapping[str, Any]) -> list[str]:
@@ -430,6 +587,42 @@ class LifecycleManager:
         if value.get("schema") != INSTANCE_SCHEMA:
             raise DesktopOperationError("desktop_instance_record_invalid", "instance record schema is unsupported")
         return value
+
+    def _require_stopped_endpoints(self, current: Mapping[str, Any], processes: list[ProcessIdentity]) -> None:
+        conflicts = [
+            f"{host}:{port}"
+            for host, port in (
+                (self.config.frontend_host, self.config.frontend_port),
+                (self.config.api_host, self.config.api_port),
+            )
+            if _port_is_listening(host, port)
+        ]
+        if not conflicts:
+            return
+        self._record_state(
+            "FAILED",
+            processes,
+            release=current.get("release"),
+            reason_code="desktop_stop_transport_active",
+            boot_id=current.get("boot_id"),
+        )
+        raise DesktopOperationError(
+            "desktop_process_termination_failed",
+            "local desktop transport remained active after recorded processes exited",
+            details={"endpoints": conflicts},
+        )
+
+    def _process_ownership(self, process: ProcessIdentity) -> str:
+        ownership = getattr(self.inspector, "ownership", None)
+        if callable(ownership):
+            return str(ownership(process))
+        actual = self.inspector.identity(process.pid)
+        if actual is None:
+            return "absent"
+        created, executable = actual
+        if created == process.created and os.path.normcase(executable) == os.path.normcase(process.executable):
+            return "owned"
+        return "foreign"
 
     def _owned_processes(self, instance: Mapping[str, Any]) -> list[ProcessIdentity]:
         owned: list[ProcessIdentity] = []
@@ -582,6 +775,38 @@ def _redact_log_line(line: str) -> str:
         redacted = redacted.encode("utf-8", errors="replace")[:4096].decode("utf-8", errors="ignore")
     return redacted
 
+def _direct_windows_venv_launch(argv: list[str], environment: Mapping[str, str]) -> tuple[list[str], dict[str, str]]:
+    launch_argv = list(argv)
+    launch_environment = dict(environment)
+    if os.name != "nt" or not launch_argv:
+        return launch_argv, launch_environment
+    venv_python = Path(launch_argv[0])
+    pyvenv_config = venv_python.parent.parent / "pyvenv.cfg"
+    if not pyvenv_config.is_file():
+        return launch_argv, launch_environment
+    values: dict[str, str] = {}
+    try:
+        for line in pyvenv_config.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                values[key.strip().lower()] = value.strip()
+    except OSError as exc:
+        raise DesktopOperationError("desktop_python_runtime_invalid", "could not read the configured Windows virtual environment") from exc
+    home = values.get("home")
+    if not home:
+        raise DesktopOperationError("desktop_python_runtime_invalid", "Windows virtual environment does not declare its base interpreter home")
+    base_python = Path(home) / "python.exe"
+    if not base_python.is_file():
+        raise DesktopOperationError(
+            "desktop_python_runtime_invalid",
+            "Windows virtual environment base interpreter is unavailable",
+            details={"base_python": str(base_python)},
+        )
+    launch_argv[0] = str(base_python)
+    launch_environment["__PYVENV_LAUNCHER__"] = str(venv_python)
+    return launch_argv, launch_environment
+
+
 def _portable_process_identity(pid: int) -> tuple[int, str] | None:
     proc = Path("/proc") / str(pid)
     try:
@@ -615,6 +840,8 @@ def _windows_kernel32() -> Any:
         ctypes.POINTER(_WindowsFileTime),
     )
     kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
     kernel32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
     kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
     kernel32.GenerateConsoleCtrlEvent.argtypes = (wintypes.DWORD, wintypes.DWORD)
@@ -640,9 +867,27 @@ def _windows_process_identity(pid: int) -> tuple[int, str] | None:
             details={"winerror": error},
         )
     try:
-        return _windows_handle_identity(kernel32, process)
+        if not _windows_process_is_active(kernel32, process):
+            return None
+        try:
+            return _windows_handle_identity(kernel32, process)
+        except DesktopOperationError:
+            if not _windows_process_is_active(kernel32, process):
+                return None
+            raise
     finally:
         kernel32.CloseHandle(process)
+
+
+def _windows_process_is_active(kernel32: Any, process: Any) -> bool:
+    exit_code = wintypes.DWORD()
+    if not kernel32.GetExitCodeProcess(process, ctypes.byref(exit_code)):
+        raise DesktopOperationError(
+            "desktop_process_inspection_failed",
+            "Windows could not read the process exit status",
+            details={"winerror": ctypes.get_last_error()},
+        )
+    return exit_code.value == 259
 
 
 def _windows_handle_identity(kernel32: Any, process: Any) -> tuple[int, str]:
@@ -688,7 +933,14 @@ def _terminate_windows_process(identity: ProcessIdentity) -> None:
             details={"winerror": error},
         )
     try:
-        created, executable = _windows_handle_identity(kernel32, process)
+        if not _windows_process_is_active(kernel32, process):
+            return
+        try:
+            created, executable = _windows_handle_identity(kernel32, process)
+        except DesktopOperationError:
+            if not _windows_process_is_active(kernel32, process):
+                return
+            raise
         if created != identity.created or os.path.normcase(executable) != os.path.normcase(identity.executable):
             raise DesktopOperationError("desktop_process_not_owned", "refusing to terminate a reused or unowned Windows process handle")
         if not kernel32.TerminateProcess(process, 1):

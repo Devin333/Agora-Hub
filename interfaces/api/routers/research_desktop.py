@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 from urllib.parse import quote
 
 from fastapi import APIRouter, Header, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
 from interfaces.models import ActorContext
@@ -18,6 +18,33 @@ from interfaces.services.research_import_service import MAX_IMPORT_BYTES, Resear
 
 class DesktopRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_personal_memory_null(cls, value: Any) -> Any:
+        if (
+            isinstance(value, Mapping)
+            and "personalMemory" in value
+            and value["personalMemory"] is None
+        ):
+            raise ValueError("personalMemory must be omitted when unused")
+        return value
+
+
+class DesktopPersonalMemoryRef(DesktopRequestModel):
+    memoryId: str = Field(pattern=r"^pmem_[0-9a-f]{32}$")
+    revision: int = Field(ge=1)
+
+
+class DesktopPersonalMemorySelection(DesktopRequestModel):
+    refs: list[DesktopPersonalMemoryRef] = Field(min_length=1, max_length=20)
+    policyRevision: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def unique_memory_ids(self) -> "DesktopPersonalMemorySelection":
+        if len({item.memoryId for item in self.refs}) != len(self.refs):
+            raise ValueError("personalMemory refs must have unique memoryId values")
+        return self
 
 
 class DesktopPrepareRequest(DesktopRequestModel):
@@ -40,6 +67,7 @@ class DesktopAnalyzeRequest(DesktopRequestModel):
     pdfUrl: str | None = Field(default=None, max_length=4000)
     objective: str | None = Field(default=None, max_length=2000)
     constraints: list[str] = Field(default_factory=list, max_length=20)
+    personalMemory: DesktopPersonalMemorySelection | None = None
 
 
 class DesktopAskRequest(DesktopRequestModel):
@@ -53,6 +81,7 @@ class DesktopAskRequest(DesktopRequestModel):
     question: str = Field(min_length=1, max_length=4000)
     selection: dict[str, Any] = Field(default_factory=dict)
     locale: str | None = Field(default=None, max_length=32)
+    personalMemory: DesktopPersonalMemorySelection | None = None
 
 
 class DesktopSaveReportRequest(DesktopRequestModel):
@@ -187,6 +216,11 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
                 pdf_url=payload.pdfUrl,
                 objective=payload.objective,
                 constraints=payload.constraints,
+                personal_memory=(
+                    payload.personalMemory.model_dump()
+                    if payload.personalMemory is not None
+                    else None
+                ),
             ),
             services=services,
             request=request,
@@ -208,6 +242,11 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
                 question=payload.question,
                 selection=payload.selection,
                 locale=payload.locale,
+                personal_memory=(
+                    payload.personalMemory.model_dump()
+                    if payload.personalMemory is not None
+                    else None
+                ),
             ),
             services=services,
             request=request,

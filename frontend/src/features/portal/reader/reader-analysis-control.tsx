@@ -9,6 +9,7 @@ import {
   submitResearchAnalyze,
 } from "@/lib/research/desktop/client"
 import type { ResearchOperation } from "@/lib/research/desktop/contracts"
+import type { ResearchPersonalMemorySelection } from "@/lib/research/workspace-items"
 import { buildAnalyzeRequest, normalizeAnalyzeTransportUrl } from "@/lib/research/desktop/request-contracts"
 import {
   operationReceiptMatches,
@@ -18,6 +19,28 @@ import {
   type OperationReceiptIdentity,
 } from "@/lib/research/pending-operations"
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
+import {
+  resolveReaderPersonalMemory,
+  usedPersonalMemoryFromResult,
+  usedPersonalMemoryIsCompatible,
+  usedPersonalMemoryMatches,
+  type ReaderPersonalMemoryControl,
+  type ReaderTaskActivity,
+} from "./personal-memory-task-context"
+
+
+export type ReaderAnalysisControlProps = {
+  paper: Paper
+  sourceRevision: string
+  sourceFingerprint?: string
+  sourceUrl?: string
+  pdfUrl?: string
+  initialRunId?: string
+  enabled: boolean
+  onRun: (runId: string) => void | Promise<void>
+  personalMemory?: ReaderPersonalMemoryControl
+  onTaskActivity?: (activity: ReaderTaskActivity) => void
+}
 
 export function ReaderAnalysisControl({
   paper,
@@ -28,22 +51,20 @@ export function ReaderAnalysisControl({
   initialRunId,
   enabled,
   onRun,
-}: {
-  paper: Paper
-  sourceRevision: string
-  sourceFingerprint?: string
-  sourceUrl?: string
-  pdfUrl?: string
-  initialRunId?: string
-  enabled: boolean
-  onRun: (runId: string) => void | Promise<void>
-}) {
+  personalMemory,
+  onTaskActivity,
+}: ReaderAnalysisControlProps) {
   const workspace = useOwnedResearchWorkspace()
   const owner = workspace.owner
   const ownerRef = useRef(owner)
   const scopeRef = useRef("")
+  const personalMemoryRef = useRef(personalMemory)
+  const taskActivityRef = useRef(onTaskActivity)
+  const operationPersonalMemoryRef = useRef<ResearchPersonalMemorySelection | undefined>(undefined)
   ownerRef.current = owner
   scopeRef.current = `${owner ?? ""}:${paper.id}:${sourceRevision}:${sourceFingerprint ?? ""}`
+  personalMemoryRef.current = personalMemory
+  taskActivityRef.current = onTaskActivity
   const [operation, setOperation] = useState<ResearchOperation | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
@@ -53,6 +74,7 @@ export function ReaderAnalysisControl({
     active.current?.abort()
     setBusy(false)
     setError("")
+    operationPersonalMemoryRef.current = undefined
     const saved = recoverableResearchOperations("analyze").find(
       item =>
         item.paperId === paper.id &&
@@ -60,6 +82,9 @@ export function ReaderAnalysisControl({
         item.semantic.kind === "analyze" &&
         item.semantic.sourceFingerprint === sourceFingerprint,
     )
+    if (saved?.semantic.kind === "analyze") {
+      operationPersonalMemoryRef.current = saved.semantic.personalMemory
+    }
     setOperation(
       saved
         ? {
@@ -91,6 +116,7 @@ export function ReaderAnalysisControl({
     expectedOwner: string,
     expectedScope: string,
     expectedOperation: OperationReceiptIdentity,
+    expectedPersonalMemory?: ResearchPersonalMemorySelection,
   ) {
     if (ownerRef.current !== expectedOwner || scopeRef.current !== expectedScope) return
     if (!operationReceiptMatches(next, expectedOperation)) {
@@ -108,11 +134,58 @@ export function ReaderAnalysisControl({
       setError("分析回执与已保存的请求身份不一致，请检查原请求，不能采用该结果。")
       return
     }
+    const memoryDisclosureMatches = next.status === "passed"
+      ? usedPersonalMemoryMatches(expectedPersonalMemory, next.result)
+      : usedPersonalMemoryIsCompatible(expectedPersonalMemory, next.result)
+    if (!memoryDisclosureMatches) {
+      updateResearchOperation(expectedOperation.requestId, { status: "unknown" })
+      setOperation({
+        ...next,
+        status: "unknown",
+        errorCode: "personal_memory_disclosure_mismatch",
+      })
+      setError("分析返回的个人记忆披露与原请求快照不一致，不能采用该结果。")
+      taskActivityRef.current?.({
+        kind: "analyze",
+        requestId: next.requestId,
+        generation: next.generation,
+        status: "unknown",
+        usedPersonalMemory: [],
+      })
+      return
+    }
+    if (
+      next.status === "passed" &&
+      !acceptedAnalysisResultMatches(next, paper.id, sourceRevision)
+    ) {
+      updateResearchOperation(expectedOperation.requestId, { status: "unknown" })
+      setOperation({
+        ...next,
+        status: "unknown",
+        errorCode: "analysis_result_not_accepted",
+      })
+      setError("分析结果的运行、来源或确定性质量门回执无效，不能作为已接受报告。")
+      taskActivityRef.current?.({
+        kind: "analyze",
+        requestId: next.requestId,
+        generation: next.generation,
+        status: "unknown",
+        usedPersonalMemory: [],
+      })
+      return
+    }
     setOperation(next)
     updateResearchOperation(next.requestId, {
       status: next.status,
       ...(next.runId ? { runId: next.runId } : {}),
       ...(next.errorCode ? { errorCode: next.errorCode } : {}),
+    })
+    taskActivityRef.current?.({
+      kind: "analyze",
+      requestId: next.requestId,
+      generation: next.generation,
+      status: next.status,
+      usedPersonalMemory: usedPersonalMemoryFromResult(next.result),
     })
     if (next.status === "passed" && next.runId) await onRun(next.runId)
     if (["failed", "rejected", "needs_action"].includes(next.status)) {
@@ -123,6 +196,9 @@ export function ReaderAnalysisControl({
   async function start() {
     const expectedOwner = owner
     const expectedScope = scopeRef.current
+    const expectedMemoryEnabled = personalMemory?.enabled === true
+    const memoryControlChanged = () =>
+      (personalMemoryRef.current?.enabled === true) !== expectedMemoryEnabled
     if (
       !expectedOwner ||
       busy ||
@@ -138,7 +214,25 @@ export function ReaderAnalysisControl({
     let preparedView: ResearchOperation | null = null
     try {
       const identity = await fetchDesktopIdentity(controller.signal)
-      if (ownerRef.current !== expectedOwner || scopeRef.current !== expectedScope) return
+      if (
+        ownerRef.current !== expectedOwner ||
+        scopeRef.current !== expectedScope ||
+        memoryControlChanged() ||
+        controller.signal.aborted
+      ) return
+      const objective = `Analyze paper ${paper.id}`
+      const memorySelection = await resolveReaderPersonalMemory(
+        personalMemory,
+        [objective, paper.title, paper.abstractSnippet, ...paper.tags],
+        controller.signal,
+      )
+      if (
+        ownerRef.current !== expectedOwner ||
+        scopeRef.current !== expectedScope ||
+        memoryControlChanged() ||
+        controller.signal.aborted
+      ) return
+      operationPersonalMemoryRef.current = memorySelection
       const semantic = {
         kind: "analyze" as const,
         paperId: paper.id,
@@ -146,8 +240,9 @@ export function ReaderAnalysisControl({
         sourceFingerprint: sourceFingerprint!,
         sourceUrl: normalizeAnalyzeTransportUrl(sourceUrl),
         pdfUrl: normalizeAnalyzeTransportUrl(pdfUrl),
-        objective: `Analyze paper ${paper.id}`,
+        objective,
         constraints: [],
+        ...(memorySelection ? { personalMemory: memorySelection } : {}),
       }
       const prepared = await prepareResearchOperation({
         kind: "analyze",
@@ -156,7 +251,12 @@ export function ReaderAnalysisControl({
         paperId: paper.id,
         sourceRevision,
       })
-      if (ownerRef.current !== expectedOwner || scopeRef.current !== expectedScope) return
+      if (
+        ownerRef.current !== expectedOwner ||
+        scopeRef.current !== expectedScope ||
+        memoryControlChanged() ||
+        controller.signal.aborted
+      ) return
       preparedView = {
         requestId: prepared.requestId,
         generation: prepared.generation,
@@ -171,13 +271,31 @@ export function ReaderAnalysisControl({
       }
       setOperation(preparedView)
       updateResearchOperation(prepared.requestId, { status: "waiting" })
+      taskActivityRef.current?.({
+        kind: "analyze",
+        requestId: prepared.requestId,
+        generation: prepared.generation,
+        status: "waiting",
+        usedPersonalMemory: [],
+      })
+      if (memoryControlChanged() || controller.signal.aborted) return
       const response = await submitResearchAnalyze(
         buildAnalyzeRequest(prepared, semantic),
         controller.signal,
       )
-      await apply(response, expectedOwner, expectedScope, prepared)
+      await apply(
+        response,
+        expectedOwner,
+        expectedScope,
+        prepared,
+        memorySelection,
+      )
     } catch (cause) {
-      if (ownerRef.current !== expectedOwner || scopeRef.current !== expectedScope) return
+      if (
+        ownerRef.current !== expectedOwner ||
+        scopeRef.current !== expectedScope ||
+        memoryControlChanged()
+      ) return
       if (preparedView) {
         const uncertain = { ...preparedView, status: "unknown" as const }
         setOperation(uncertain)
@@ -214,7 +332,13 @@ export function ReaderAnalysisControl({
         operation.generation,
         controller.signal,
       )
-      await apply(response, expectedOwner, expectedScope, operation)
+      await apply(
+        response,
+        expectedOwner,
+        expectedScope,
+        operation,
+        operationPersonalMemoryRef.current,
+      )
     } catch (cause) {
       if (
         ownerRef.current === expectedOwner &&
@@ -260,6 +384,7 @@ export function ReaderAnalysisControl({
               className="underline"
               onClick={() => {
                 setOperation(null)
+                operationPersonalMemoryRef.current = undefined
                 setError("")
               }}
             >
@@ -303,6 +428,29 @@ export function ReaderAnalysisControl({
       )}
       {error && <p role="alert" className="mt-2 text-[#a02b47]">{error}</p>}
     </section>
+  )
+}
+
+function acceptedAnalysisResultMatches(
+  operation: ResearchOperation,
+  paperId: string,
+  sourceRevision: string,
+): boolean {
+  if (!operation.result || typeof operation.result !== "object" || Array.isArray(operation.result)) {
+    return false
+  }
+  const result = operation.result as Record<string, unknown>
+  return (
+    typeof operation.runId === "string" &&
+    operation.runId.length > 0 &&
+    result.runId === operation.runId &&
+    result.paperId === paperId &&
+    result.sourceRevision === sourceRevision &&
+    result.status === "succeeded" &&
+    result.accepted === true &&
+    result.qualityPassed === true &&
+    result.eligibleForAcceptedExport === true &&
+    result.artifactStatus === "valid"
   )
 }
 

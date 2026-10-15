@@ -49,6 +49,7 @@ from framework.execution_environment import (
     RuntimeExecutionComposition,
 )
 from framework.harness import ArtifactReferenceVerifierPort, ContextAssembler
+from framework.harness.rag.models import RAGSessionStatus, RAGTranscript
 from framework.harness.agent_loop.child_executor import HarnessSubAgentTaskExecutor
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.ref_admission import HarnessRefAdmissionService
@@ -122,6 +123,7 @@ from interfaces.services.research_service import (
     InMemoryResearchRunStore,
     ResearchAnalyzeInput,
     ResearchApplicationService,
+    ResearchAskInput,
     ResearchRunRecord,
     ResearchServiceError,
 )
@@ -718,6 +720,80 @@ def test_valid_settings_without_activity_key_fail_closed_as_event_log_unavailabl
     moved_database.replace(event_database)
     composition.close()
     composition.close()
+
+
+def test_configured_lazy_rag_service_persists_transcript_under_owned_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = Path.cwd()
+    test_root = workspace / ".tmp" / f"rag-transcript-{uuid4().hex[:8]}"
+    settings = _settings(test_root)
+    packaged_app = test_root / "packaged" / "app"
+    packaged_app.mkdir(parents=True)
+    monkeypatch.delenv("NEWS_DATABASE_DSN", raising=False)
+    monkeypatch.setenv(
+        "NEWS_ACTIVITY_ENCRYPTION_KEY",
+        Fernet.generate_key().decode("ascii"),
+    )
+    monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(settings.artifact.root))
+    monkeypatch.setenv(settings.llm.api_key_env, "sk-composition-transcript-root")
+
+    composition = build_research_runtime_composition(settings=settings)
+    try:
+        assert composition.available is True
+        provider = composition.service._rag_ask_use_case
+        monkeypatch.chdir(packaged_app)
+
+        assert provider.recover_gated_answer(
+            session_id="configured-lazy-session",
+            paper_id="2608.00001",
+            question="Where is the transcript stored?",
+            tenant_id="tenant-transcript",
+            user_id="user-transcript",
+            memory_namespace="research:tenant-transcript:user-transcript",
+        ) is None
+
+        service = provider._service
+        assert service is not None
+        store = service._transcript_store
+        expected_root = settings.rag.transcript_root.resolve()
+        assert store.root == expected_root
+        assert store.root.is_absolute()
+
+        scope = {
+            "tenant_id": "tenant-transcript",
+            "user_id": "user-transcript",
+            "memory_namespace": "research:tenant-transcript:user-transcript",
+        }
+        transcript = RAGTranscript(
+            transcript_id="configured-lazy-transcript",
+            session_id="configured-lazy-session",
+            events=(
+                {
+                    "event_type": "rag_answer_returned",
+                    "payload": {"decision_type": "return_answer"},
+                },
+            ),
+            status=RAGSessionStatus.ANSWERED,
+        )
+        spec = SimpleNamespace(session_id=transcript.session_id)
+        store.record_event(
+            spec=spec,
+            sequence=0,
+            event_type="rag_answer_returned",
+            payload={"decision_type": "return_answer"},
+            actor_scope=scope,
+        )
+        artifact = store.persist(transcript, actor_scope=scope)
+
+        assert artifact.path.is_file()
+        assert artifact.path.is_relative_to(expected_root)
+        assert store.load(transcript.transcript_id, actor_scope=scope)["transcript"]["status"] == "answered"
+        assert not (packaged_app / ".newsroom").exists()
+    finally:
+        monkeypatch.chdir(workspace)
+        composition.close()
+        shutil.rmtree(test_root, ignore_errors=True)
 
 
 def test_default_research_pdf_parser_fails_closed_when_docker_is_unavailable(
@@ -1496,3 +1572,59 @@ def test_reset_finishes_closing_old_resources_before_rebuilding(
     assert factory_calls == [1, 2]
     assert len(rebuilt) == 1
     provider.close()
+
+
+def test_disabled_desktop_builds_local_only_composition_without_remote_clients(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from interfaces.composition.research_settings import (
+        DESKTOP_RESEARCH_LLM_ENABLED_ENV,
+        ResearchLocalRuntimeSettings,
+    )
+
+    monkeypatch.setenv(DESKTOP_RESEARCH_LLM_ENABLED_ENV, "0")
+    monkeypatch.setenv("NEWS_RESEARCH_ROOT", str(tmp_path / "research"))
+    monkeypatch.setenv("NEWS_RESEARCH_RUN_STORE_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("NEWSROOM_RESEARCH_IMPORT_DIR", str(tmp_path / "imports"))
+    monkeypatch.setenv("NEWS_RESEARCH_PARSER_BACKENDS", "pymupdf")
+    monkeypatch.setattr(
+        research_composition,
+        "OpenAICompatibleClient",
+        lambda *_args, **_kwargs: pytest.fail("local-only composition created an LLM client"),
+    )
+    provider = research_composition.SourceRuntimeProvider(
+        factory=lambda: pytest.fail("local-only composition created source runtime")
+    )
+
+    composition = build_research_runtime_composition(
+        source_runtime_provider=provider,
+    )
+    try:
+        assert composition.available is False
+        assert isinstance(composition.settings, ResearchLocalRuntimeSettings)
+        assert composition.availability_error is not None
+        assert composition.availability_error.capabilities == ("research.llm.route",)
+        assert composition.execution_composition is None
+        assert composition.resources == ()
+        assert composition.service.capability_projection() == {
+            "parse": True,
+            "analyze": False,
+            "ask": False,
+            "ragAsk": False,
+            "artifactRead": True,
+            "catalog": True,
+        }
+        with pytest.raises(ResearchServiceError) as analyze_error:
+            composition.service.analyze_paper(
+                ResearchAnalyzeInput(paper_id="paper-local", source_url="source://local/paper")
+            )
+        assert analyze_error.value.status_code == 503
+
+        with pytest.raises(ResearchServiceError) as ask_error:
+            composition.service.ask_paper(
+                "paper-local",
+                ResearchAskInput(question="Summarize this paper"),
+            )
+        assert ask_error.value.status_code == 503
+    finally:
+        composition.close()

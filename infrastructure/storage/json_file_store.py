@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
+
 
 class JsonFileInvalidError(RuntimeError):
     """Raised when a durable JSON state file cannot be decoded safely."""
@@ -21,12 +23,12 @@ _PATH_LOCKS_GUARD = threading.Lock()
 
 @contextmanager
 def locked_json_file(path: str | Path) -> Iterator[Path]:
-    resolved = Path(path).expanduser().resolve()
-    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved = resolve_storage_path(path)
+    storage_io_path(resolved.parent).mkdir(parents=True, exist_ok=True)
     lock = _path_lock(resolved)
     with lock:
         lock_path = resolved.with_name(f"{resolved.name}.lock")
-        with lock_path.open("a+b") as handle:
+        with storage_io_path(lock_path).open("a+b") as handle:
             _lock_handle(handle)
             try:
                 yield resolved
@@ -41,10 +43,11 @@ def read_json_object_unlocked(
     strict: bool = False,
 ) -> dict[str, Any]:
     resolved = Path(path)
-    if not resolved.exists():
+    io_path = storage_io_path(resolved)
+    if not io_path.exists():
         return dict(default)
     try:
-        payload = json.loads(resolved.read_text(encoding="utf-8"))
+        payload = json.loads(io_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         if strict:
             raise JsonFileInvalidError(f"{resolved} could not be read as a JSON object") from exc
@@ -58,14 +61,36 @@ def read_json_object_unlocked(
 
 def write_json_object_unlocked(path: str | Path, payload: Mapping[str, Any]) -> None:
     resolved = Path(path)
-    resolved.parent.mkdir(parents=True, exist_ok=True)
+    storage_io_path(resolved.parent).mkdir(parents=True, exist_ok=True)
     temporary = resolved.with_name(
         f"{resolved.name}.{os.getpid()}.{threading.get_ident()}.{uuid4().hex}.tmp"
     )
-    with temporary.open("w", encoding="utf-8") as handle:
-        handle.write(json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True))
-        handle.flush()
-        os.fsync(handle.fileno())
+    temporary_io = storage_io_path(temporary)
+    resolved_io = storage_io_path(resolved)
+    temporary_created = False
+    try:
+        handle = temporary_io.open("x", encoding="utf-8")
+        temporary_created = True
+        with handle:
+            handle.write(json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_with_retry(temporary_io, resolved_io)
+    except BaseException as exc:
+        if temporary_created:
+            try:
+                _cleanup_temporary_file(temporary_io)
+            except BaseException as cleanup_error:
+                exc.add_note(f"Could not remove temporary JSON file {temporary}: {cleanup_error!r}")
+        raise
+
+
+def _path_lock(path: Path) -> threading.RLock:
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(path, threading.RLock())
+
+
+def _replace_with_retry(temporary: Path, resolved: Path) -> None:
     attempts = 8 if os.name == "nt" else 1
     for attempt in range(attempts):
         try:
@@ -77,9 +102,18 @@ def write_json_object_unlocked(path: str | Path, payload: Mapping[str, Any]) -> 
             time.sleep(0.01 * (attempt + 1))
 
 
-def _path_lock(path: Path) -> threading.RLock:
-    with _PATH_LOCKS_GUARD:
-        return _PATH_LOCKS.setdefault(path, threading.RLock())
+def _cleanup_temporary_file(temporary: Path) -> None:
+    attempts = 8 if os.name == "nt" else 1
+    for attempt in range(attempts):
+        try:
+            temporary.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.01 * (attempt + 1))
 
 
 def _lock_handle(handle: Any) -> None:

@@ -14,6 +14,9 @@ from threading import Condition, Lock
 from typing import Any, Callable, cast
 
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.rag.models import GroundedAnswerCandidate, RAGContextPack
+from framework.harness.rag.session import RAGEventRecorder
+from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.memory.recall_port import ExecutionMemoryRecallPort
 from infrastructure.external.reranker import CrossEncoderReranker
 from infrastructure.storage.postgres.paper_chunk_repository import PaperChunkRepository
@@ -33,6 +36,9 @@ from backend.research.document.cascade_parser import CascadeArxivDocumentParser
 from backend.research.application.chunk_paper_pipeline import ChunkPaperPipeline
 from backend.research.application.visual_chunk_describer import build_visual_chunk_describer_from_env
 from backend.research.application.paper_rag_session import PaperRAGSession
+from backend.research.domain.personal_memory_context import (
+    PersonalMemoryContext, PersonalMemoryContextProvider,
+)
 from backend.research.application.llm_client import build_unity_llm_call
 from backend.research.rag.adapters import (
     LLMResearchRAGPlanCandidateWorker,
@@ -48,6 +54,39 @@ from backend.research.rag.retrieval.paper_retriever import (
 from interfaces.services.source_runtime import (
     SourceRuntimeComposition,
 )
+
+
+class _RevalidatingPersonalMemoryAnswerWorker:
+    """Run-scoped authorization at every candidate attempt; never recalls new memory."""
+
+    def __init__(self, worker: Any, provider: PersonalMemoryContextProvider) -> None:
+        self._worker = worker
+        self._provider = provider
+        self._frozen_context: PersonalMemoryContext | None = None
+
+    def generate_answer(
+        self,
+        *,
+        question: str,
+        pack: RAGContextPack,
+        execution_identity: GraphExecutionIdentity | None = None,
+    ) -> GroundedAnswerCandidate:
+        context = self._provider.current()
+        if not isinstance(context, PersonalMemoryContext):
+            raise TypeError("personal memory provider returned an invalid context")
+        if self._frozen_context is not None and context != self._frozen_context:
+            raise ValueError("personal memory changed during the frozen answer run")
+        binder = getattr(self._worker, "with_personal_memory_context", None)
+        if not callable(binder):
+            raise TypeError("answer worker cannot bind personal memory context")
+        bound = binder(context, provider=self._provider)
+        if bound is None or bound is self._worker or not callable(getattr(bound, "generate_answer", None)):
+            raise TypeError("answer worker must return a run-scoped personal memory binding")
+        self._frozen_context = context
+        kwargs: dict[str, Any] = {"question": question, "pack": pack}
+        if execution_identity is not None:
+            kwargs["execution_identity"] = execution_identity
+        return bound.generate_answer(**kwargs)
 
 
 def _dsn() -> str:
@@ -169,6 +208,9 @@ class PaperRagRuntimeResources:
         plan_worker: Any | None = None,
         with_answer_worker: bool = False,
         memory_recall: ExecutionMemoryRecallPort | None = None,
+        event_recorder: RAGEventRecorder | None = None,
+        personal_memory_context: PersonalMemoryContext | None = None,
+        personal_memory_context_provider: PersonalMemoryContextProvider | None = None,
     ) -> PaperRAGSession:
         with self._lock:
             self._ensure_open_locked()
@@ -181,6 +223,40 @@ class PaperRagRuntimeResources:
             answer_worker = (
                 self._answer_worker_locked() if with_answer_worker else None
             )
+            if personal_memory_context_provider is not None:
+                if personal_memory_context is not None:
+                    raise ValueError("provide either frozen context or a context provider, not both")
+                if not isinstance(personal_memory_context_provider, PersonalMemoryContextProvider):
+                    raise TypeError("personal memory context provider is invalid")
+                if answer_worker is None:
+                    raise ValueError("personal memory requires the gated answer worker")
+                answer_worker = _RevalidatingPersonalMemoryAnswerWorker(
+                    answer_worker, personal_memory_context_provider
+                )
+            if personal_memory_context is not None:
+                if not isinstance(personal_memory_context, PersonalMemoryContext):
+                    raise TypeError(
+                        "personal_memory_context must be PersonalMemoryContext"
+                    )
+                if answer_worker is None:
+                    raise ValueError(
+                        "personal memory context requires the gated answer worker"
+                    )
+                binder = getattr(answer_worker, "with_personal_memory_context", None)
+                if not callable(binder):
+                    raise TypeError(
+                        "answer worker cannot bind personal memory context"
+                    )
+                bound_answer_worker = binder(personal_memory_context)
+                if bound_answer_worker is answer_worker:
+                    raise TypeError(
+                        "answer worker must return a run-scoped personal memory binding"
+                    )
+                if bound_answer_worker is None:
+                    raise TypeError(
+                        "answer worker returned an invalid personal memory binding"
+                    )
+                answer_worker = bound_answer_worker
             resolved_plan_worker = (
                 plan_worker if plan_worker is not None else self._plan_worker_locked()
             )
@@ -202,6 +278,7 @@ class PaperRagRuntimeResources:
             generation_policy=generation_policy,
             relevance_scorer=relevance_scorer,
             memory=memory,
+            event_recorder=event_recorder,
         )
 
     def close(self) -> None:
@@ -418,6 +495,9 @@ def build_paper_rag_session(
     with_answer_worker: bool = False,
     runtime_resources: PaperRagRuntimeResources | None = None,
     memory_recall: ExecutionMemoryRecallPort | None = None,
+    event_recorder: RAGEventRecorder | None = None,
+    personal_memory_context: PersonalMemoryContext | None = None,
+    personal_memory_context_provider: PersonalMemoryContextProvider | None = None,
 ) -> PaperRAGSession:
     resources = runtime_resources or _default_runtime_resources()
     return resources.build_paper_rag_session(
@@ -425,6 +505,9 @@ def build_paper_rag_session(
         plan_worker=plan_worker,
         with_answer_worker=with_answer_worker,
         memory_recall=memory_recall,
+        event_recorder=event_recorder,
+        personal_memory_context=personal_memory_context,
+        personal_memory_context_provider=personal_memory_context_provider,
     )
 
 

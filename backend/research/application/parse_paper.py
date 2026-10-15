@@ -4,6 +4,7 @@ import inspect
 import logging
 import mimetypes
 from time import monotonic
+from threading import RLock
 from hashlib import sha256
 from datetime import UTC, datetime
 from typing import Any, Mapping, Protocol, runtime_checkable
@@ -18,6 +19,7 @@ from backend.research.domain.catalog import (
     ResearchPaperIdentity,
     ResearchSourceSnapshot,
     ResearchSourceType,
+    build_local_content_paper_id,
     build_paper_identity_fingerprint,
 )
 from backend.research.domain.common import SourceLineage, require_text, stable_research_id, unique_texts
@@ -64,6 +66,13 @@ PARSE_OPTION_KEYS = frozenset(
 )
 PARSE_OPTION_MAX_ATTEMPTS = 5
 PARSE_OPTION_MAX_TIMEOUT_SECONDS = 600
+_LOCAL_IMPORT_PROVENANCE_KEYS = (
+    "import_id",
+    "import_filename",
+    "title_source",
+    "source_revision",
+    "source_fingerprint",
+)
 PARSE_QUALITY_PROFILES = frozenset({"metadata", "reading", "catalog"})
 PARSE_STATUSES = frozenset(
     {
@@ -330,6 +339,7 @@ class ParsePaperUseCase:
         self._catalog_projection = catalog_projection
         self._chunker = chunker
         self._chunk_manifest = chunk_manifest
+        self._identity_lock = RLock()
         if isinstance(max_retries, bool) or int(max_retries) < 0 or int(max_retries) > 5:
             raise ValueError("max_retries must be between 0 and 5")
         self._max_retries = int(max_retries)
@@ -427,6 +437,7 @@ class ParsePaperUseCase:
             )
             _ensure_budget(budget_started, budget, diagnostics, phase="resolving")
             diagnostics.extend(dict(item) for item in resolved.diagnostics)
+            resolved = _bind_local_content_identity(resolved, actor_scope)
             snapshot = _snapshot_for_scope(resolved.snapshot, actor_scope, resolved.content)
             snapshot = snapshot.model_copy(
                 update={
@@ -503,27 +514,32 @@ class ParsePaperUseCase:
                     "actor_scope": actor_scope,
                 }
             )
-            paper, identity, merged = self._merge_identity(scoped_paper, snapshot, actor_scope=actor_scope)
-            if snapshot.paper_id != paper.paper_id:
-                snapshot = snapshot.model_copy(
-                    update={
-                        "paper_id": paper.paper_id,
-                        "metadata": {
-                            **dict(snapshot.metadata),
-                            **dict(actor_scope),
-                        },
-                        "lineage": snapshot.lineage.model_copy(
-                            update={"metadata": {**dict(snapshot.lineage.metadata), **dict(actor_scope)}}
-                        ),
-                    }
-                )
-                snapshots[0] = snapshot
-            # Persist only the canonical paper snapshot. Saving the resolver's
-            # provisional paper id before identity merge would leave an orphan
-            # snapshot whenever a DOI/arXiv/publisher source converges.
-            self._save_snapshot(snapshot)
-            self._save_paper(paper)
-            self._save_identity(identity)
+            # Identity lookup and its first persistence form one in-process
+            # critical section. Filesystem repositories serialize individual
+            # writes; this lock prevents concurrent imports through this runtime
+            # from both observing an absent identity and dropping provenance.
+            with self._identity_lock:
+                paper, identity, merged = self._merge_identity(scoped_paper, snapshot, actor_scope=actor_scope)
+                if snapshot.paper_id != paper.paper_id:
+                    snapshot = snapshot.model_copy(
+                        update={
+                            "paper_id": paper.paper_id,
+                            "metadata": {
+                                **dict(snapshot.metadata),
+                                **dict(actor_scope),
+                            },
+                            "lineage": snapshot.lineage.model_copy(
+                                update={"metadata": {**dict(snapshot.lineage.metadata), **dict(actor_scope)}}
+                            ),
+                        }
+                    )
+                    snapshots[0] = snapshot
+                # Persist only the canonical paper snapshot. Saving the resolver's
+                # provisional paper id before identity merge would leave an orphan
+                # snapshot whenever a DOI/arXiv/publisher source converges.
+                self._save_snapshot(snapshot)
+                self._save_paper(paper)
+                self._save_identity(identity)
             if merged:
                 diagnostics.append({"code": "identity_merged", "paper_id": paper.paper_id})
                 conflicts = identity.metadata.get("conflict_diagnostics")
@@ -1069,7 +1085,7 @@ class ParsePaperUseCase:
                     identity.canonical_url,
                     actor_scope=actor_scope,
                 )
-            if existing is None and identity.fingerprint:
+            if existing is None and identity.fingerprint and not _is_local_content_identity(snapshot):
                 existing = _repository_find_fingerprint(
                     self._identity_repository,
                     identity.fingerprint,
@@ -1223,6 +1239,7 @@ class ParsePaperUseCase:
             "abstract": paper.abstract,
             "authors": list(paper.authors),
             "actor_scope": dict(_scope_from_snapshot(snapshot)),
+            **_local_import_provenance(snapshot.metadata),
         }
         if parser_errors:
             existing_attempts = metadata.get("parser_attempts")
@@ -1583,6 +1600,14 @@ def identity_from_paper(
     )
     published_year = paper.published_at.year if paper.published_at else _as_int(metadata.get("published_year"))
     canonical = snapshot.canonical_url if snapshot is not None else paper.source_url
+    title_fingerprint = build_paper_identity_fingerprint(paper.title, paper.authors, published_year)
+    identity_basis = str(metadata.get("identity_basis") or "").strip()
+    local_content_fingerprint = str(metadata.get("local_content_fingerprint") or "").strip().casefold()
+    identity_fingerprint = (
+        f"local-content:{local_content_fingerprint}"
+        if identity_basis == "owner_scoped_local_content_sha256" and local_content_fingerprint
+        else title_fingerprint
+    )
     return ResearchPaperIdentity(
         paper_id=paper.paper_id,
         canonical_paper_id=paper.paper_id,
@@ -1598,8 +1623,8 @@ def identity_from_paper(
         versions=_as_text_list(metadata.get("versions")) or ([str(metadata["version"])] if metadata.get("version") else []),
         source_snapshot_ids=[snapshot.snapshot_id] if snapshot is not None else [],
         source_snapshot_refs=[snapshot.snapshot_id] if snapshot is not None else [],
-        fingerprint=build_paper_identity_fingerprint(paper.title, paper.authors, published_year),
-        title_author_year_fingerprint=build_paper_identity_fingerprint(paper.title, paper.authors, published_year),
+        fingerprint=identity_fingerprint,
+        title_author_year_fingerprint=title_fingerprint,
         external_links={
             key: value
             for key, value in {
@@ -1615,7 +1640,16 @@ def identity_from_paper(
             paper,
             snapshot.snapshot_id if snapshot is not None else None,
         ),
-        metadata={"source_type": source_type, "actor_scope": dict(actor_scope or {})},
+        metadata={
+            "source_type": source_type,
+            "actor_scope": dict(actor_scope or {}),
+            **({"identity_basis": identity_basis} if identity_basis else {}),
+            **(
+                {"local_content_fingerprint": local_content_fingerprint}
+                if local_content_fingerprint
+                else {}
+            ),
+        },
     )
 
 
@@ -1798,6 +1832,103 @@ def _explicit_paper_id(values: Mapping[str, Any]) -> str | None:
         if value is not None and str(value).strip():
             return str(value).strip()
     return None
+
+
+def _bind_local_content_identity(
+    resolved: ResolvedPaperSource,
+    actor_scope: Mapping[str, str],
+) -> ResolvedPaperSource:
+    """Replace path-derived local ids with verified owner/content identity."""
+
+    if resolved.snapshot.source_type != "local" or resolved.content is None:
+        return resolved
+    actual_hash = sha256(resolved.content).hexdigest()
+    declared_hash = str(resolved.snapshot.source_hash or resolved.snapshot.checksum or "").strip().casefold()
+    normalized_declared = declared_hash.removeprefix("sha256:")
+    if normalized_declared and normalized_declared != actual_hash:
+        raise ParsePaperError(
+            "source_integrity_mismatch",
+            "local source bytes do not match the resolver fingerprint",
+            status_code=409,
+            retryable=False,
+        )
+    paper_id = build_local_content_paper_id(actual_hash, actor_scope)
+    fingerprint = f"sha256:{actual_hash}"
+    provenance = _local_import_provenance(resolved.paper.metadata)
+    identity_metadata = {
+        "identity_basis": "owner_scoped_local_content_sha256",
+        "local_content_fingerprint": fingerprint,
+    }
+    paper = resolved.paper.model_copy(
+        update={
+            "paper_id": paper_id,
+            "metadata": {
+                **dict(resolved.paper.metadata),
+                **identity_metadata,
+                **provenance,
+            },
+        }
+    )
+    snapshot = resolved.snapshot.model_copy(
+        update={
+            "paper_id": paper_id,
+            "source_hash": actual_hash,
+            "checksum": actual_hash,
+            "metadata": {
+                **dict(resolved.snapshot.metadata),
+                **identity_metadata,
+                **provenance,
+            },
+            "lineage": resolved.snapshot.lineage.model_copy(
+                update={
+                    "source_hash": actual_hash,
+                    "metadata": {
+                        **dict(resolved.snapshot.lineage.metadata),
+                        **identity_metadata,
+                        **provenance,
+                    },
+                }
+            ),
+        }
+    )
+    source_record = resolved.source_record
+    if source_record is not None:
+        source_record = source_record.model_copy(
+            update={
+                "paper_id": paper_id,
+                "source_hash": actual_hash,
+                "metadata": {
+                    **dict(source_record.metadata),
+                    **identity_metadata,
+                    **provenance,
+                },
+            }
+        )
+    return ResolvedPaperSource(
+        paper=paper,
+        snapshot=snapshot,
+        content=resolved.content,
+        content_type=resolved.content_type,
+        source_record=source_record,
+        access_status=resolved.access_status,
+        diagnostics=resolved.diagnostics,
+    )
+
+
+def _local_import_provenance(values: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: values[key]
+        for key in _LOCAL_IMPORT_PROVENANCE_KEYS
+        if key in values and values[key] is not None and str(values[key]).strip()
+    }
+
+
+def _is_local_content_identity(snapshot: ResearchSourceSnapshot) -> bool:
+    return (
+        snapshot.source_type == "local"
+        and str(snapshot.metadata.get("identity_basis") or "")
+        == "owner_scoped_local_content_sha256"
+    )
 
 
 def _snapshot_for_scope(snapshot: ResearchSourceSnapshot, actor_scope: Mapping[str, str], content: bytes | None = None) -> ResearchSourceSnapshot:

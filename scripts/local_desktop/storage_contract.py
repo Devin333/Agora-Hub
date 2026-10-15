@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from interfaces.composition.research_settings import research_storage_paths_from_env
+from interfaces.composition.research_settings import desktop_research_llm_enabled, research_storage_paths_from_env
 from interfaces.services.paper_rag_transcript_store import SCHEMA_VERSION as PAPER_RAG_TRANSCRIPT_SCHEMA
 
 STORAGE_SCHEMAS = {
@@ -22,6 +22,8 @@ STORAGE_SCHEMAS = {
     "research_graph_results": "newsroom.graph-result-store/v1",
     "research_harness_side_effects": "newsroom.harness-side-effect-store/v1",
     "research_harness_node_output": "newsroom.harness-node-output/v1",
+    "research_personal_memory": "newsroom.personal-memory-store/v1",
+    "research_runtime_settings": "newsroom.desktop-runtime-settings/v1",
     "desktop_control": "newsroom.research-desktop-control/v1",
 }
 
@@ -35,6 +37,7 @@ class ResearchStoragePaths:
     rag_transcript_root: Path
     rag_backend: str
     rag_collection: str
+    rag_local_required: bool
 
 
 def resolve_research_storage_paths(project_root: Path, environ: Mapping[str, str]) -> ResearchStoragePaths:
@@ -55,6 +58,7 @@ def resolve_research_storage_paths(project_root: Path, environ: Mapping[str, str
         application_paths.rag_transcript_root,
         rag_backend,
         collection,
+        desktop_research_llm_enabled(environ) is not False,
     )
 
 

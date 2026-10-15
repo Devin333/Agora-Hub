@@ -13,6 +13,7 @@ from framework.agent.artifacts.paths import (
     artifact_path_relative_to,
 )
 from framework.agent.artifacts.stores.errors import ArtifactStoreMetadataError
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 
 
 _REPARSE_POINT_FLAG = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
@@ -36,7 +37,7 @@ def verified_exclusive_file_lock(
 ) -> Iterator[None]:
     """Serialize one filesystem lifecycle operation without following links."""
 
-    canonical_root = root.resolve(strict=False)
+    canonical_root = resolve_storage_path(root)
     path, canonical_root, _ = _lexical_descendant(
         path,
         root=canonical_root,
@@ -58,7 +59,7 @@ def verified_exclusive_file_lock(
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         try:
-            descriptor = os.open(path, flags, 0o600)
+            descriptor = os.open(storage_io_path(path), flags, 0o600)
         except OSError as exc:
             raise ArtifactStoreMetadataError(
                 f"artifact lock could not be opened: {identity}"
@@ -66,7 +67,7 @@ def verified_exclusive_file_lock(
         try:
             opened = os.fstat(descriptor)
             _require_regular(opened, identity=identity, role="artifact lock")
-            committed = os.lstat(path)
+            committed = os.lstat(storage_io_path(path))
             _require_regular(committed, identity=identity, role="artifact lock")
             if is_link_or_reparse_point(committed) or not os.path.samestat(
                 opened,
@@ -89,7 +90,7 @@ def verified_exclusive_file_lock(
 
 
 def _file_lock(path: Path) -> threading.RLock:
-    key = artifact_path_key(path.resolve(strict=False))
+    key = artifact_path_key(storage_io_path(path))
     with _FILE_LOCKS_GUARD:
         lock = _FILE_LOCKS.get(key)
         if lock is None:
@@ -140,7 +141,7 @@ def verified_atomic_write(
 ) -> None:
     """Atomically replace one regular file without traversing untrusted links."""
 
-    canonical_root = root.resolve(strict=False)
+    canonical_root = resolve_storage_path(root)
     target, canonical_root, _ = _lexical_descendant(
         target,
         root=canonical_root,
@@ -167,7 +168,7 @@ def verified_atomic_write(
     try:
         if os.name == "nt":
             guard_descriptor, guard_raw = tempfile.mkstemp(
-                dir=target.parent,
+                dir=storage_io_path(target.parent),
                 prefix=".g.",
                 suffix=".tmp",
             )
@@ -178,7 +179,7 @@ def verified_atomic_write(
             flags = os.O_RDONLY
             flags |= getattr(os, "O_DIRECTORY", 0)
             flags |= getattr(os, "O_NOFOLLOW", 0)
-            directory_descriptor = os.open(target.parent, flags)
+            directory_descriptor = os.open(storage_io_path(target.parent), flags)
             opened_parent = os.fstat(directory_descriptor)
             _require_directory(
                 opened_parent,
@@ -191,7 +192,7 @@ def verified_atomic_write(
                 )
 
         descriptor, raw_path = tempfile.mkstemp(
-            dir=target.parent,
+            dir=storage_io_path(target.parent),
             prefix=".t.",
             suffix=".tmp",
         )
@@ -205,7 +206,7 @@ def verified_atomic_write(
         finally:
             if descriptor != -1:
                 os.close(descriptor)
-        temporary_owned = os.lstat(temporary_path)
+        temporary_owned = os.lstat(storage_io_path(temporary_path))
         _require_regular(
             temporary_owned,
             identity=identity,
@@ -231,9 +232,9 @@ def verified_atomic_write(
                 dst_dir_fd=directory_descriptor,
             )
         else:
-            os.replace(temporary_path, target)
+            os.replace(storage_io_path(temporary_path), storage_io_path(target))
 
-        committed = os.lstat(target)
+        committed = os.lstat(storage_io_path(target))
         _require_regular(committed, identity=identity, role="committed target")
         if not os.path.samestat(temporary_owned, committed):
             raise ArtifactStoreMetadataError(
@@ -273,7 +274,7 @@ def verified_atomic_create(
     removed after the link succeeds or loses a concurrent race.
     """
 
-    canonical_root = root.resolve(strict=False)
+    canonical_root = resolve_storage_path(root)
     target, canonical_root, _ = _lexical_descendant(
         target,
         root=canonical_root,
@@ -286,7 +287,7 @@ def verified_atomic_create(
         return False
 
     descriptor, raw_path = tempfile.mkstemp(
-        dir=target.parent,
+        dir=storage_io_path(target.parent),
         # Keep staging names bounded: repeating a long target basename can
         # exceed Windows MAX_PATH even when the committed target fits.
         prefix=".artifact-",
@@ -304,7 +305,7 @@ def verified_atomic_create(
         finally:
             if descriptor != -1:
                 os.close(descriptor)
-        temporary_owned = os.lstat(temporary_path)
+        temporary_owned = os.lstat(storage_io_path(temporary_path))
         _require_regular(temporary_owned, identity=identity, role="owned temporary file")
         _assert_parent_unchanged(
             target.parent,
@@ -313,18 +314,18 @@ def verified_atomic_create(
             identity=identity,
         )
         try:
-            os.link(temporary_path, target)
+            os.link(storage_io_path(temporary_path), storage_io_path(target))
         except FileExistsError:
             _regular_file_or_missing(target, identity=identity)
             return False
         except OSError as exc:
-            if target.exists():
+            if storage_io_path(target).exists():
                 _regular_file_or_missing(target, identity=identity)
                 return False
             raise ArtifactStoreMetadataError(
                 f"immutable artifact create failed: {identity}"
             ) from exc
-        committed = os.lstat(target)
+        committed = os.lstat(storage_io_path(target))
         _require_regular(committed, identity=identity, role="committed target")
         if not os.path.samestat(temporary_owned, committed):
             raise ArtifactStoreMetadataError(
@@ -350,7 +351,7 @@ def reject_link_chain(
     identity: str,
     role: str,
 ) -> None:
-    canonical_root = root.resolve(strict=False)
+    canonical_root = resolve_storage_path(root)
     path, canonical_root, relative_parts = _lexical_descendant(
         path,
         root=canonical_root,
@@ -360,7 +361,7 @@ def reject_link_chain(
     for index, part in enumerate(relative_parts):
         current = current / part
         try:
-            info = os.lstat(current)
+            info = os.lstat(storage_io_path(current))
         except FileNotFoundError:
             if index == len(relative_parts) - 1:
                 return
@@ -384,8 +385,8 @@ def _ensure_directory_chain(
         root=root,
         identity=identity,
     )
-    root.mkdir(parents=True, exist_ok=True)
-    root_info = os.lstat(root)
+    storage_io_path(root).mkdir(parents=True, exist_ok=True)
+    root_info = os.lstat(storage_io_path(root))
     if is_link_or_reparse_point(root_info):
         raise ArtifactStoreMetadataError(
             f"artifact root is a symlink, junction, or reparse point: {identity}"
@@ -396,10 +397,10 @@ def _ensure_directory_chain(
     for part in relative_parts:
         current = current / part
         try:
-            os.mkdir(current)
+            os.mkdir(storage_io_path(current))
         except FileExistsError:
             pass
-        info = os.lstat(current)
+        info = os.lstat(storage_io_path(current))
         if is_link_or_reparse_point(info):
             raise ArtifactStoreMetadataError(
                 "artifact write path contains a symlink, junction, or reparse "
@@ -453,7 +454,7 @@ def _regular_file_or_missing(
     identity: str,
 ) -> os.stat_result | None:
     try:
-        info = os.lstat(path)
+        info = os.lstat(storage_io_path(path))
     except FileNotFoundError:
         return None
     if is_link_or_reparse_point(info):
@@ -470,7 +471,7 @@ def _verified_directory(
     identity: str,
     role: str,
 ) -> os.stat_result:
-    info = os.lstat(path)
+    info = os.lstat(storage_io_path(path))
     if is_link_or_reparse_point(info):
         raise ArtifactStoreMetadataError(
             f"{role} is a symlink, junction, or reparse point: {identity}"
@@ -515,10 +516,9 @@ def _lexical_descendant(
         raise ArtifactStoreMetadataError(
             f"artifact path escapes the artifact root: {identity}"
         ) from exc
-    # ``Path.resolve`` may return an extended DOS/UNC candidate while the
-    # configured root remains in the normal namespace. Rebase the root from
-    # the candidate so every subsequent filesystem operation retains the
-    # candidate's operational namespace and long-path capability.
+    # Rebase from the candidate rather than resolving ancestors: this preserves
+    # lexical junction/reparse-point checks. Equivalent DOS/UNC namespaces are
+    # normalized only for identity comparison and at the storage I/O boundary.
     operational_root = path
     for _ in relative_parts:
         operational_root = operational_root.parent
@@ -527,13 +527,13 @@ def _lexical_descendant(
 
 def _cleanup_owned_file(path: Path, owned: os.stat_result) -> None:
     try:
-        current = os.lstat(path)
+        current = os.lstat(storage_io_path(path))
     except FileNotFoundError:
         return
     if is_link_or_reparse_point(current) or not os.path.samestat(owned, current):
         return
     try:
-        path.unlink()
+        storage_io_path(path).unlink()
     except FileNotFoundError:
         return
 
@@ -548,7 +548,7 @@ def _fsync_directory(directory: Path, descriptor: int) -> None:
     if os.name == "nt":
         return
     try:
-        opened = os.open(directory, os.O_RDONLY)
+        opened = os.open(storage_io_path(directory), os.O_RDONLY)
     except OSError:
         return
     try:

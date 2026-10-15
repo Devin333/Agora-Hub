@@ -24,12 +24,44 @@ export function methodDescription(method: PaperMethod, locale: Locale) {
   return locale === "zh" ? method.descriptionZh ?? method.description : method.description
 }
 
-export function formatPaperDate(value: string, locale: Locale) {
+export function formatPaperDate(value: string | null | undefined, locale: Locale) {
+  const normalizedValue = value?.trim()
+  if (!normalizedValue || !hasValidCalendarDate(normalizedValue)) {
+    return unknownPaperDate(locale)
+  }
+
+  const date = new Date(normalizedValue)
+  if (!Number.isFinite(date.getTime())) {
+    return unknownPaperDate(locale)
+  }
+
   return new Intl.DateTimeFormat(locale === "zh" ? "zh-CN" : "en-US", {
     year: "numeric",
     month: "short",
     day: "numeric"
-  }).format(new Date(value))
+  }).format(date)
+}
+
+function hasValidCalendarDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value)
+  if (!match) {
+    return true
+  }
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const daysInMonth = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1]
+}
+
+function isLeapYear(year: number) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+}
+
+function unknownPaperDate(locale: Locale) {
+  return locale === "zh" ? "日期未知" : "Unknown date"
 }
 
 export function formatCompactNumber(value?: number) {

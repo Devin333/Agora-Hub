@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+import hashlib
 from threading import Event
 from types import SimpleNamespace
 
@@ -14,7 +16,15 @@ def _research(parse):
 
 def test_received_identity_survives_restart_and_concurrent_retry_parses_once(tmp_path):
     store = ResearchImportService(tmp_path)
-    record = store.create_received(user_id="alice", content=b"%PDF-1.7\nbody", filename="%E7%A0%94%E7%A9%B6.pdf")
+    content = b"%PDF-1.7\nbody"
+    fingerprint = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    record = store.create_received(
+        user_id="alice",
+        content=content,
+        filename="%E7%A0%94%E7%A9%B6.pdf",
+        source_revision="revision-1",
+        source_fingerprint=fingerprint,
+    )
     assert record["filename"] == "研究.pdf"
     entered, release = Event(), Event()
     calls = []
@@ -40,8 +50,38 @@ def test_received_identity_survives_restart_and_concurrent_retry_parses_once(tmp
     assert len(calls) == 1
     assert calls[0].user_id == "alice"
     assert calls[0].source.startswith("file:///")
+    assert calls[0].metadata == {
+        "import_id": record["importId"],
+        "title": "研究.pdf",
+        "title_source": "import_filename",
+        "import_filename": "研究.pdf",
+        "source_revision": "revision-1",
+        "source_fingerprint": fingerprint,
+    }
     with pytest.raises(ResearchImportError):
         app.process(user_id="bob", import_id=record["importId"])
+
+
+def test_missing_filename_leaves_title_to_existing_source_fallback(tmp_path, monkeypatch):
+    store = ResearchImportService(tmp_path)
+    record = store.create_received(user_id="alice", content=b"%PDF-1.7\nbody", filename="paper.pdf")
+    original_processing = store.processing
+
+    @contextmanager
+    def processing_without_filename(*, user_id, import_id):
+        with original_processing(user_id=user_id, import_id=import_id) as current:
+            current.pop("filename", None)
+            yield current
+
+    monkeypatch.setattr(store, "processing", processing_without_filename)
+    calls = []
+    app = ResearchImportApplication(
+        store,
+        _research(lambda command: calls.append(command) or {"paperId": "paper", "qualityReport": {"passed": True}}),
+    )
+
+    assert app.process(user_id="alice", import_id=record["importId"])["status"] == "completed"
+    assert calls[0].metadata == {"import_id": record["importId"]}
 
 
 def test_interrupted_or_failed_conversion_can_resume_without_reupload(tmp_path):

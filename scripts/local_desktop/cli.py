@@ -10,7 +10,7 @@ from framework.shared.local_desktop import LocalDesktopConfigError, ProbeBudget,
 from framework.shared.redaction import redact_sensitive_values
 from scripts.local_desktop.autostart import AutostartManager
 from scripts.local_desktop.common import DesktopOperationError, OperationResult
-from scripts.local_desktop.config import load_config, load_root_environment
+from scripts.local_desktop.config import load_config, sanitized_environment
 from scripts.local_desktop.desktop_entry import DesktopEntryManager
 from scripts.local_desktop.doctor import LocalDesktopDoctor
 from scripts.local_desktop.processes import LifecycleManager
@@ -135,8 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def dispatch(args: argparse.Namespace, config) -> OperationResult | dict[str, Any]:
-    environment = load_root_environment()
-    environment.update(config.as_environment())
+    environment = sanitized_environment(config)
     lifecycle = LifecycleManager(config, doctor=LocalDesktopDoctor(config, environ=environment))
     if args.command == "doctor":
         budget = ProbeBudget(args.timeout, args.max_requests, args.max_input_tokens, args.max_output_tokens, args.max_cost_usd)

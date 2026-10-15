@@ -2,6 +2,7 @@ import type { Locale, PaperReaderPayload, PaperSection } from "@/lib/papers/type
 import type { PaperBlock, PaperInlineSpan, PaperReference, PaperSourceRegion, PaperVisualAsset } from "@/lib/paper-reader/types"
 
 export type ReaderTheme = "light" | "warm" | "dark"
+export type ReaderWorkspaceAppearance = "default" | "monochrome-light" | "monochrome-dark"
 export type ReaderAssistMode = "explain" | "example" | "materials"
 
 export type ReaderSelectionStatus =
@@ -169,6 +170,7 @@ export interface OpenReaderPageProps {
   visualLayer?: OpenReaderVisualLayer
   workspace?: {
     fontSize: number
+    appearance?: ReaderWorkspaceAppearance
     sourceRevision?: string
     sectionRequest?: { id: string; sequence: number }
     onSectionChange?: (id: string) => void

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from interfaces.api import create_app
@@ -112,3 +114,148 @@ def test_history_api_rejects_user_supplied_owner_and_missing_title(tmp_path: Pat
     )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_request"
+
+
+def _history_pending_operation(kind: str, *, passed: bool = False) -> dict:
+    fixture_path = Path(__file__).resolve().parents[2] / "fixtures" / "research_desktop_request_contracts.json"
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"]
+    case = next(case for case in cases if case["semantic"]["kind"] == kind)
+    semantic = case["semantic"]
+    operation = {
+        "requestId": f"history-{kind}-0001",
+        "generation": "gen_" + "b" * 32,
+        "kind": kind,
+        "fingerprint": case["fingerprint"],
+        "semantic": semantic,
+        "status": "passed" if passed else "prepared",
+        "createdAt": 1,
+        "updatedAt": 2 if passed else 1,
+    }
+    for field in ("paperId", "sourceRevision", "sourceFingerprint", "question"):
+        if field in semantic:
+            operation[field] = semantic[field]
+    if passed and kind == "import":
+        operation.update(paperId="imported-paper-001", importId="import-0001")
+    elif passed and kind == "prepare":
+        operation.update(
+            sourceRevision="prepared-source-revision-1",
+            sourceFingerprint="sha256:" + "e" * 64,
+        )
+    return operation
+
+
+@pytest.mark.parametrize("kind", ("import", "prepare", "analyze", "ask"))
+def test_history_api_preserves_operation_receipt_reference_after_reopen(
+    tmp_path: Path, kind: str,
+) -> None:
+    client, auth = _client(tmp_path)
+    headers = {"X-Newsroom-Session": _session(client)}
+    pending = _history_pending_operation(kind)
+    first = client.put(
+        "/api/v1/research/history", headers=headers,
+        json={"revision": 0, "visits": [], "groups": [], "pendingOperations": [pending]},
+    )
+    assert first.status_code == 200
+    assert first.json()["data"]["pendingOperations"] == [pending]
+
+    # Re-create both service and API composition against the same durable files.
+    reopened_client, _ = _client(tmp_path)
+    restored_pending = reopened_client.get("/api/v1/research/history", headers=headers)
+    assert restored_pending.status_code == 200
+    assert restored_pending.json()["data"] == first.json()["data"]
+    completed = _history_pending_operation(kind, passed=True)
+    saved = reopened_client.put(
+        "/api/v1/research/history", headers=headers,
+        json={
+            "revision": first.json()["data"]["revision"],
+            "visits": [], "groups": [], "pendingOperations": [completed],
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["data"]["revision"] == 2
+    assert saved.json()["data"]["pendingOperations"] == [completed]
+    final_client, _ = _client(tmp_path)
+    restored = final_client.get("/api/v1/research/history", headers=headers)
+    assert restored.status_code == 200
+    assert restored.json()["data"] == saved.json()["data"]
+    stored = restored.json()["data"]["pendingOperations"][0]
+    assert stored["semantic"] == pending["semantic"]
+    assert (stored["requestId"], stored["generation"], stored["kind"], stored["fingerprint"]) == (
+        pending["requestId"], pending["generation"], pending["kind"], pending["fingerprint"],
+    )
+    assert "verified" not in stored
+    assert "qualityGate" not in stored
+    assert "result" not in stored
+    other_token = auth.create_identity_session(
+        provider="google", subject="other-history-owner", username="other-researcher",
+    ).sessionToken
+    assert other_token
+    isolated = final_client.get(
+        "/api/v1/research/history", headers={"X-Newsroom-Session": other_token},
+    )
+    assert isolated.status_code == 200
+    assert isolated.json()["data"] == {"revision": 0, "visits": [], "groups": []}
+
+
+@pytest.mark.parametrize("kind", ("import", "prepare"))
+@pytest.mark.parametrize("status", (
+    "prepared", "waiting", "running", "needs_action", "rejected", "failed", "interrupted", "unknown",
+))
+def test_history_api_rejects_output_identity_for_non_passed_operations(
+    tmp_path: Path, kind: str, status: str,
+) -> None:
+    client, _ = _client(tmp_path)
+    headers = {"X-Newsroom-Session": _session(client)}
+    operation = _history_pending_operation(kind, passed=True)
+    operation["status"] = status
+    response = client.put(
+        "/api/v1/research/history", headers=headers,
+        json={"revision": 0, "visits": [], "groups": [], "pendingOperations": [operation]},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_request"
+    loaded = client.get("/api/v1/research/history", headers=headers)
+    assert loaded.status_code == 200
+    assert loaded.json()["data"] == {"revision": 0, "visits": [], "groups": []}
+
+
+@pytest.mark.parametrize("kind,field,value", (
+    ("prepare", "paperId", "other-paper"),
+    ("analyze", "paperId", "other-paper"),
+    ("ask", "paperId", "other-paper"),
+    ("import", "sourceRevision", "other-revision"),
+    ("analyze", "sourceRevision", "other-revision"),
+    ("ask", "sourceRevision", "other-revision"),
+    ("import", "sourceFingerprint", "sha256:" + "f" * 64),
+    ("analyze", "sourceFingerprint", "sha256:" + "f" * 64),
+    ("ask", "sourceFingerprint", "sha256:" + "f" * 64),
+    ("prepare", "sourceFingerprint", "sha256:" + "e" * 64 + "\n"),
+    ("prepare", "sourceFingerprint", "sha256:" + "E" * 64),
+    ("prepare", "sourceFingerprint", None),
+    ("ask", "question", "A different question"),
+    ("import", "verified", True),
+    ("prepare", "verified", True),
+))
+def test_history_api_rejects_invalid_receipt_identity_without_losing_saved_history(
+    tmp_path: Path, kind: str, field: str, value: object,
+) -> None:
+    client, _ = _client(tmp_path)
+    headers = {"X-Newsroom-Session": _session(client)}
+    original = _history_pending_operation(kind)
+    saved = client.put(
+        "/api/v1/research/history", headers=headers,
+        json={"revision": 0, "visits": [], "groups": [], "pendingOperations": [original]},
+    )
+    assert saved.status_code == 200
+    operation = _history_pending_operation(kind, passed=True)
+    operation[field] = value
+    rejected = client.put(
+        "/api/v1/research/history", headers=headers,
+        json={"revision": 1, "visits": [], "groups": [], "pendingOperations": [operation]},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "invalid_request"
+    reopened_client, _ = _client(tmp_path)
+    loaded = reopened_client.get("/api/v1/research/history", headers=headers)
+    assert loaded.status_code == 200
+    assert loaded.json()["data"] == saved.json()["data"]

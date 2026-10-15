@@ -77,6 +77,18 @@ export function authResponse(result: SafeApiResult<unknown>, { issueSession = tr
     }
     return NextResponse.json({ success: true, data: result.data }, { headers: privateHeaders });
 }
+export async function publicAuthPost<T>(path: string, body?: unknown, init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> }): Promise<SafeApiResult<T>> {
+    if (!/^\/api\/v1\/auth\//.test(path))
+        return { ok: false, errorCode: "auth_service_unavailable", errorMessage: "Auth endpoint is not allowed" };
+    const { headers: suppliedHeaders, ...requestInit } = init ?? {};
+    const headers = { ...suppliedHeaders };
+    if (isLocalDesktopProfile())
+        headers.Origin = desktopCanonicalOrigin();
+    return safeApiPost<T>(path, body, {
+        ...requestInit,
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    });
+}
 export async function readBoundedJson(request: NextRequest, maximum = 16 * 1024): Promise<Record<string, unknown> | null> {
     const declared = Number(request.headers.get("content-length") ?? "0");
     if (Number.isFinite(declared) && declared > maximum)

@@ -17,6 +17,9 @@ export type ResearchMaterial = {
     referenceId?: string;
     readerHref?: string;
     notes: string;
+    favorite?: boolean;
+    readingStatus?: "unread" | "reading" | "read";
+    tags?: string[];
     createdAt: number;
     updatedAt: number;
 };
@@ -28,6 +31,7 @@ export type ResearchReaderNotebook = {
     fontSize: 16 | 18 | 20 | 22;
     sectionId: string;
     pdfPage: number;
+    readerView?: "text" | "pdf";
     updatedAt: number;
 };
 export type ResearchReaderSelection = {
@@ -98,6 +102,14 @@ export type ResearchImportSemantic = {
     sourceRevision: string;
     sourceFingerprint: string;
 };
+export type ResearchPersonalMemoryRef = {
+    memoryId: string;
+    revision: number;
+};
+export type ResearchPersonalMemorySelection = {
+    refs: ResearchPersonalMemoryRef[];
+    policyRevision: number;
+};
 export type ResearchAnalyzeSemantic = {
     kind: "analyze";
     paperId: string;
@@ -107,6 +119,7 @@ export type ResearchAnalyzeSemantic = {
     pdfUrl: string | null;
     objective: string | null;
     constraints: string[];
+    personalMemory?: ResearchPersonalMemorySelection;
 };
 export type ResearchAskSelection = {
     sectionId?: string;
@@ -124,6 +137,7 @@ export type ResearchAskSemantic = {
     question: string;
     selection: ResearchAskSelection;
     locale: string | null;
+    personalMemory?: ResearchPersonalMemorySelection;
 };
 export type ResearchOperationSemantic = ResearchPrepareSemantic | ResearchImportSemantic | ResearchAnalyzeSemantic | ResearchAskSemantic;
 export type ResearchPendingOperation = {
@@ -135,6 +149,7 @@ export type ResearchPendingOperation = {
     status: ResearchOperationStatus;
     paperId?: string;
     sourceRevision?: string;
+    sourceFingerprint?: string;
     importId?: string;
     runId?: string;
     question?: string;
@@ -326,11 +341,30 @@ export function validConstraints(value: unknown): value is ResearchConstraints {
         (constraints.language === undefined || ["python", "typescript", "javascript", "rust", "go"].includes(constraints.language)) &&
         (constraints.license === undefined || ["MIT", "Apache-2.0", "BSD-3-Clause"].includes(constraints.license)));
 }
+function validMaterialTags(value: unknown): value is string[] {
+    if (!Array.isArray(value) || value.length > 32) return false;
+    const normalized = new Set<string>();
+    for (const tag of value) {
+        if (typeof tag !== "string" || tag.length < 1 || tag.length > 64 || tag !== tag.trim()) return false;
+        const key = tag.toLowerCase();
+        if (normalized.has(key)) return false;
+        normalized.add(key);
+    }
+    return true;
+}
+
 export function validMaterial(value: unknown): value is ResearchMaterial {
     if (!value || typeof value !== "object")
         return false;
-    const material = value as ResearchMaterial;
-    return (validWorkspaceId(material.id) &&
+    const material = value as ResearchMaterial & {
+        favorite?: unknown;
+        readingStatus?: unknown;
+        tags?: unknown;
+    };
+    const favorite = material.favorite === undefined ? false : material.favorite;
+    const readingStatus = material.readingStatus === undefined ? "unread" : material.readingStatus;
+    const tags = material.tags === undefined ? [] : material.tags;
+    const valid = (validWorkspaceId(material.id) &&
         group(material.groupId) &&
         ["paper", "project", "discussion", "note", "pdf"].includes(material.kind) &&
         text(material.title, 500, true) &&
@@ -338,11 +372,19 @@ export function validMaterial(value: unknown): value is ResearchMaterial {
         (material.kind === "note" || Boolean(material.url) || Boolean(material.readerHref) ||
             (material.kind === "pdf" && Boolean(material.referenceId))) &&
         text(material.notes, 10000) &&
+        typeof favorite === "boolean" &&
+        ["unread", "reading", "read"].includes(String(readingStatus)) &&
+        validMaterialTags(tags) &&
         (material.referenceId === undefined || text(material.referenceId, 256, true)) &&
         (material.readerHref === undefined || safeWorkspaceReader(material.readerHref)) &&
         validWorkspaceTime(material.createdAt) &&
         validWorkspaceTime(material.updatedAt) &&
         material.updatedAt >= material.createdAt);
+    if (!valid) return false;
+    if (material.favorite === undefined) material.favorite = false;
+    if (material.readingStatus === undefined) material.readingStatus = "unread";
+    if (material.tags === undefined) material.tags = [];
+    return true;
 }
 export function validReportDraft(value: unknown): value is ResearchReportDraft {
     if (!value || typeof value !== "object")
@@ -475,16 +517,19 @@ export function validReaderEvent(value: unknown): value is ResearchReaderEvent {
     return true;
 }
 export function validReaderNotebook(value: unknown): value is ResearchReaderNotebook {
-    if (!value || typeof value !== "object")
+    if (!value || typeof value !== "object" || Array.isArray(value))
         return false;
     const item = value as ResearchReaderNotebook;
-    return (text(item.paperId, 200, true) &&
+    const allowed = ["paperId", "sourceRevision", "note", "question", "fontSize", "sectionId", "pdfPage", "readerView", "updatedAt"];
+    return (Object.keys(item).every(key => allowed.includes(key)) &&
+        text(item.paperId, 200, true) &&
         text(item.sourceRevision, 512, true) &&
         text(item.note, 20000) &&
         text(item.question, 2000) &&
         [16, 18, 20, 22].includes(item.fontSize) &&
         text(item.sectionId, 200) &&
         Number.isInteger(item.pdfPage) && item.pdfPage > 0 && item.pdfPage <= 10000 &&
+        (item.readerView === undefined || item.readerView === "text" || item.readerView === "pdf") &&
         validWorkspaceTime(item.updatedAt));
 }
 function validAskSelection(value: unknown): value is ResearchAskSelection {
@@ -510,6 +555,24 @@ function validAskSelection(value: unknown): value is ResearchAskSelection {
         return false;
     }
 }
+function validPersonalMemorySelection(value: unknown): value is ResearchPersonalMemorySelection {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const selection = value as Record<string, unknown>;
+    if (Object.keys(selection).length !== 2 || !Object.keys(selection).every(key => ["refs", "policyRevision"].includes(key))) return false;
+    if (!Number.isSafeInteger(selection.policyRevision) || Number(selection.policyRevision) < 1) return false;
+    if (!Array.isArray(selection.refs) || selection.refs.length < 1 || selection.refs.length > 20) return false;
+    const ids = new Set<string>();
+    for (const raw of selection.refs) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+        const ref = raw as Record<string, unknown>;
+        if (Object.keys(ref).length !== 2 || !Object.keys(ref).every(key => ["memoryId", "revision"].includes(key))) return false;
+        if (typeof ref.memoryId !== "string" || !/^pmem_[0-9a-f]{32}$/.test(ref.memoryId)) return false;
+        if (!Number.isSafeInteger(ref.revision) || Number(ref.revision) < 1 || ids.has(ref.memoryId)) return false;
+        ids.add(ref.memoryId);
+    }
+    return true;
+}
+
 export function validOperationSemantic(value: unknown, kind?: ResearchOperationKind): value is ResearchOperationSemantic {
     if (!value || typeof value !== "object" || Array.isArray(value))
         return false;
@@ -537,7 +600,7 @@ export function validOperationSemantic(value: unknown, kind?: ResearchOperationK
     if (semantic.kind === "analyze") {
         const allowed = [
             "kind", "paperId", "sourceRevision", "sourceFingerprint", "sourceUrl",
-            "pdfUrl", "objective", "constraints",
+            "pdfUrl", "objective", "constraints", "personalMemory",
         ];
         return (Object.keys(semantic).every(key => allowed.includes(key)) &&
             text(semantic.paperId, 256, true) &&
@@ -548,12 +611,13 @@ export function validOperationSemantic(value: unknown, kind?: ResearchOperationK
             (semantic.objective === null || text(semantic.objective, 2000, true)) &&
             Array.isArray(semantic.constraints) &&
             semantic.constraints.length <= 20 &&
-            semantic.constraints.every(item => text(item, 500, true)));
+            semantic.constraints.every(item => text(item, 500, true)) &&
+            (semantic.personalMemory === undefined || validPersonalMemorySelection(semantic.personalMemory)));
     }
     if (semantic.kind === "ask") {
         const allowed = [
             "kind", "runId", "paperId", "sourceRevision", "sourceFingerprint",
-            "question", "selection", "locale",
+            "question", "selection", "locale", "personalMemory",
         ];
         return (Object.keys(semantic).every(key => allowed.includes(key)) &&
             text(semantic.runId, 256, true) &&
@@ -562,7 +626,8 @@ export function validOperationSemantic(value: unknown, kind?: ResearchOperationK
             sha(semantic.sourceFingerprint) &&
             text(semantic.question, 2000, true) &&
             validAskSelection(semantic.selection) &&
-            (semantic.locale === null || text(semantic.locale, 32, true)));
+            (semantic.locale === null || text(semantic.locale, 32, true)) &&
+            (semantic.personalMemory === undefined || validPersonalMemorySelection(semantic.personalMemory)));
     }
     return false;
 }
@@ -575,9 +640,11 @@ export function validPendingOperation(value: unknown): value is ResearchPendingO
         ["prepare", "import", "analyze", "ask"].includes(item.kind) &&
         sha(item.fingerprint) &&
         validOperationSemantic(item.semantic, item.kind) &&
+        pendingSemanticIdentityMatches(item) &&
         ["prepared", "waiting", "running", "needs_action", "passed", "rejected", "failed", "interrupted", "unknown"].includes(item.status) &&
         (item.paperId === undefined || text(item.paperId, 200, true)) &&
         (item.sourceRevision === undefined || text(item.sourceRevision, 512, true)) &&
+        (item.sourceFingerprint === undefined || sha(item.sourceFingerprint)) &&
         (item.importId === undefined || text(item.importId, 256, true)) &&
         (item.runId === undefined || text(item.runId, 256, true)) &&
         (item.question === undefined || text(item.question, 4000)) &&
@@ -585,6 +652,35 @@ export function validPendingOperation(value: unknown): value is ResearchPendingO
         validWorkspaceTime(item.createdAt) &&
         validWorkspaceTime(item.updatedAt) &&
         item.updatedAt >= item.createdAt);
+}
+function pendingSemanticIdentityMatches(item: ResearchPendingOperation): boolean {
+    const semantic = item.semantic;
+    // Import paper identity and prepare source identity exist only on a complete,
+    // passed receipt. Input-fixed semantic fields remain immutable on recovery.
+    if (semantic.kind === "import") {
+        if (item.sourceRevision !== undefined && item.sourceRevision !== semantic.sourceRevision)
+            return false;
+        if (item.sourceFingerprint !== undefined && item.sourceFingerprint !== semantic.sourceFingerprint)
+            return false;
+        if (item.paperId !== undefined && (item.status !== "passed" || item.importId === undefined || item.sourceRevision === undefined || item.sourceFingerprint === undefined))
+            return false;
+    }
+    else if (semantic.kind === "prepare") {
+        if (item.paperId !== undefined && item.paperId !== semantic.paperId)
+            return false;
+        const hasSourceOutput = item.sourceRevision !== undefined || item.sourceFingerprint !== undefined;
+        if (hasSourceOutput && (item.status !== "passed" || item.sourceRevision === undefined || item.sourceFingerprint === undefined))
+            return false;
+    }
+    else {
+        if (item.paperId !== undefined && item.paperId !== semantic.paperId)
+            return false;
+        if (item.sourceRevision !== undefined && item.sourceRevision !== semantic.sourceRevision)
+            return false;
+        if (item.sourceFingerprint !== undefined && item.sourceFingerprint !== semantic.sourceFingerprint)
+            return false;
+    }
+    return item.question === undefined || (semantic.kind === "ask" && item.question === semantic.question);
 }
 export function validSavedReport(value: unknown): value is ResearchSavedReport {
     if (!value || typeof value !== "object")

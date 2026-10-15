@@ -50,7 +50,8 @@ function isPublicPath(pathname: string, surface: FrontendSurface, desktop: boole
 }
 function isResearchReadPath(pathname: string) { return pathname === "/papers" || pathname.startsWith("/papers/") }
 function isProtectedPath(pathname: string) { return pathname === "/" || isAdminPath(pathname) || isPortalPath(pathname) }
-function isPortalPath(pathname: string) { return PORTAL_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`)) }
+function isPortalPath(pathname: string) { return isPaperAgentPath(pathname) || PORTAL_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`)) }
+function isPaperAgentPath(pathname: string) { return pathname === "/paper-agent" || pathname === "/paper-agent/" }
 function isAdminPath(pathname: string) { return ADMIN_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`)) }
 function getCrossSurfaceRedirect(request: NextRequest, surface: FrontendSurface) {
   const { pathname, search } = request.nextUrl

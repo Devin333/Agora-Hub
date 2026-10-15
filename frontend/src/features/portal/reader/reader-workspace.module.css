@@ -172,3 +172,122 @@
 @media (min-width: 1600px) { .layout { grid-template-columns: 210px minmax(0, 1fr) 350px; gap: 32px; padding-top: 36px; } .focusLayout { grid-template-columns: minmax(0, 880px); } .pdfLayout { grid-template-columns: minmax(0, 1fr) 350px; } .pdfLayout.focusLayout { grid-template-columns: minmax(0, 1200px); } .paperHeading, .overviewBody { padding-left: 48px; padding-right: 48px; } }
 @media (max-width: 1200px) { .layout { grid-template-columns: 155px minmax(0, 1fr) 300px; gap: 18px; padding-left: 20px; padding-right: 20px; } .focusLayout { grid-template-columns: minmax(0, 880px); } .pdfLayout { grid-template-columns: minmax(0, 1fr) 300px; } .pdfLayout.focusLayout { grid-template-columns: minmax(0, 1200px); } .paperHeading, .overviewBody { padding-left: 26px; padding-right: 26px; } .readingControls { gap: 0; } .viewSwitch button { padding-left: 9px; padding-right: 9px; } }
 @media (prefers-reduced-motion: reduce) { .workspace *, .workspace *::before, .workspace *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* The formal paper-agent shell opts the existing assistant into its monochrome palette. */
+:global([data-paper-agent-shell][data-theme="light"]) .assistant {
+  --ink: #1d1d1b;
+  --muted: #5b5b56;
+  --purple: #2b2b28;
+  --line: #d1d1cb;
+  --soft: #ecece8;
+  color: var(--ink);
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 34px rgba(20, 20, 18, 0.1);
+}
+
+:global([data-paper-agent-shell][data-theme="dark"]) .assistant {
+  --ink: #f3f3ef;
+  --muted: #b8b8b0;
+  --purple: #e7e7e0;
+  --line: #3c3c37;
+  --soft: #30302c;
+  color: var(--ink);
+  border-color: var(--line);
+  background: rgba(25, 25, 23, 0.98);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.38);
+}
+
+:global([data-paper-agent-shell]) .assistantHeading,
+:global([data-paper-agent-shell]) .assistantTabs,
+:global([data-paper-agent-shell]) .assistantContent,
+:global([data-paper-agent-shell]) .askPanel,
+:global([data-paper-agent-shell]) .notesPanel {
+  color: var(--ink);
+  background: transparent;
+}
+
+:global([data-paper-agent-shell]) .spark,
+:global([data-paper-agent-shell]) .assistantTabs > button[aria-pressed="true"],
+:global([data-paper-agent-shell]) .answer .askedQuestion {
+  color: var(--ink);
+  background: var(--soft);
+}
+
+:global([data-paper-agent-shell]) .assistantTabs > button[aria-pressed="true"] {
+  border-bottom-color: var(--ink);
+}
+
+:global([data-paper-agent-shell]) .suggestions button,
+:global([data-paper-agent-shell]) .researchQuestion,
+:global([data-paper-agent-shell]) .questionInput,
+:global([data-paper-agent-shell]) .notesPanel textarea,
+:global([data-paper-agent-shell]) .exportButton,
+:global([data-paper-agent-shell]) .evidence details {
+  color: var(--ink);
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--soft) 42%, transparent);
+}
+
+:global([data-paper-agent-shell]) .suggestions button:hover,
+:global([data-paper-agent-shell]) .exportButton:hover {
+  border-color: var(--muted);
+  background: var(--soft);
+}
+
+:global([data-paper-agent-shell]) .askForm {
+  border-top-color: var(--line);
+  background: color-mix(in srgb, var(--soft) 30%, transparent);
+}
+
+:global([data-paper-agent-shell]) .questionInput:focus-within,
+:global([data-paper-agent-shell]) .notesPanel textarea:focus-visible {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 30%, transparent);
+}
+
+:global([data-paper-agent-shell]) .questionInput textarea,
+:global([data-paper-agent-shell]) .notesPanel textarea {
+  color: var(--ink);
+  caret-color: var(--ink);
+}
+
+:global([data-paper-agent-shell]) .questionInput textarea::placeholder,
+:global([data-paper-agent-shell]) .notesPanel textarea::placeholder,
+:global([data-paper-agent-shell]) .unavailableAsk,
+:global([data-paper-agent-shell]) .suggestions button > span,
+:global([data-paper-agent-shell]) .researchQuestion small {
+  color: var(--muted);
+  opacity: 1;
+}
+
+:global([data-paper-agent-shell]) .questionInput button {
+  color: var(--soft);
+  background: var(--ink);
+}
+
+:global([data-paper-agent-shell]) .answer a,
+:global([data-paper-agent-shell]) .evidence button {
+  color: var(--ink);
+  text-decoration-color: var(--muted);
+}
+
+:global([data-paper-agent-shell]) .answer pre {
+  color: var(--ink);
+  background: var(--soft);
+}
+
+:global([data-paper-agent-shell]) .evidence blockquote {
+  color: var(--muted);
+  border-left-color: var(--muted);
+}
+
+:global([data-paper-agent-shell]) .assistantContent,
+:global([data-paper-agent-shell]) .notesPanel,
+:global([data-paper-agent-shell]) .answer pre {
+  scrollbar-color: var(--muted) transparent;
+}
+
+:global([data-paper-agent-shell]) .assistant [hidden] {
+  display: none !important;
+}

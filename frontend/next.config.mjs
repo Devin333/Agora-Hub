@@ -30,8 +30,12 @@ if (deploymentProfile === "local-desktop") {
 const nextConfig = {
   reactStrictMode: true,
   devIndicators: false,
+  ...(deploymentProfile === "local-desktop"
+    ? { experimental: { isrFlushToDisk: false } }
+    : {}),
   env: { NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE: deploymentProfile },
   async rewrites() {
+    if (deploymentProfile === "local-desktop") return []
     return [{ source: "/api/v1/:path*", destination: `${apiBaseUrl.replace(/\/$/, "")}/api/v1/:path*` }]
   }
 }

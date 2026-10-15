@@ -34,6 +34,13 @@ describe("desktop workspace items", () => {
         expect(validReaderNotebook(readerNotebook("n".repeat(20001)))).toBe(false);
     });
 
+    it("accepts an optional bounded reader view and rejects unknown notebook fields", () => {
+        expect(validReaderNotebook({ ...readerNotebook("note"), readerView: "text" })).toBe(true);
+        expect(validReaderNotebook({ ...readerNotebook("note"), readerView: "pdf" })).toBe(true);
+        expect(validReaderNotebook({ ...readerNotebook("note"), readerView: "slides" })).toBe(false);
+        expect(validReaderNotebook({ ...readerNotebook("note"), readerView: "text", unexpected: true })).toBe(false);
+    });
+
     it("requires full bounded semantics on pending operations", () => {
         expect(
             validPendingOperation({

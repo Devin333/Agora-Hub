@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, is_dataclass, replace
 from threading import RLock
 from typing import Any, Protocol
 from uuid import uuid4
+from urllib.parse import parse_qsl, urlsplit
 
 from backend.research.application import (
     AnalyzePaperRequest,
@@ -30,6 +31,10 @@ from backend.research.application.parse_paper import (
     ParsePaperUseCase,
 )
 from backend.research.domain import stable_research_id
+from backend.research.domain.personal_memory_context import (
+    PersonalMemoryContext,
+    PersonalMemoryContextProvider,
+)
 from backend.research.graphs.paper_analysis import (
     build_paper_analysis_context_graph_identity,
 )
@@ -65,6 +70,7 @@ class ResearchAnalyzeInput:
     options: dict[str, Any] = field(default_factory=dict)
     tenant_id: str | None = None
     memory_namespace: str | None = None
+    personal_memory_context: PersonalMemoryContextProvider | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +89,7 @@ class ResearchAskInput:
     limit: int = 5
     generate: bool = False
     gated: bool = True
+    personal_memory_context: PersonalMemoryContextProvider | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +177,8 @@ class ResearchRagAskUseCase(Protocol):
         allowed_source_refs: list[str] | tuple[str, ...] | None = None,
         target_sections: list[str] | tuple[str, ...] | None = None,
         graph_identity: ContextGraphIdentity | None = None,
+        personal_memory_context: PersonalMemoryContext | None = None,
+        personal_memory_context_provider: PersonalMemoryContextProvider | None = None,
     ) -> dict[str, Any]:
         ...
 
@@ -853,6 +862,7 @@ class ResearchApplicationService:
             options=options,
             tenant_id=actor_scope.tenant_id,
             memory_namespace=actor_scope.memory_namespace,
+            personal_memory_context=command.personal_memory_context,
         )
         try:
             result = self._analyze_use_case.analyze(request)
@@ -1280,6 +1290,12 @@ class ResearchApplicationService:
                 "allowed_source_refs": allowed_source_refs,
                 "target_sections": target_sections,
             }
+            provider = request.personal_memory_context
+            if provider is not None:
+                if not isinstance(provider, PersonalMemoryContextProvider):
+                    raise ValueError("personal memory context provider is invalid")
+                # Keep the authority live through retrieval and every generation retry.
+                rag_kwargs["personal_memory_context_provider"] = provider
             if graph_identity is not None:
                 rag_kwargs["graph_identity"] = graph_identity
             return self._rag_ask_use_case.rag_ask(
@@ -1570,6 +1586,11 @@ class ResearchApplicationService:
             "traceRef": _trace_ref(record.result, record.run_id),
             "paperCardRef": _artifact_ref(record.result, "research-paper-card"),
             "metadata": {"artifactRefs": _artifact_refs(record.result)},
+            **(
+                {"usedPersonalMemory": used_personal_memory}
+                if (used_personal_memory := _result_used_personal_memory(record.result))
+                else {}
+            ),
         }
 
 
@@ -1865,7 +1886,60 @@ def _safe_run_diagnostics(result: Any) -> dict[str, Any]:
         value = diagnostics.get(key)
         if isinstance(value, (str, bool, int, float)) and len(str(value)) <= 256:
             allowed[key] = value
+    used = _bounded_used_personal_memory(diagnostics.get("used_personal_memory"))
+    if used:
+        allowed["usedPersonalMemory"] = used
     return allowed
+
+
+def _used_personal_memory(value: Mapping[str, Any]) -> list[dict[str, str | int]]:
+    direct = _bounded_used_personal_memory(value.get("used_personal_memory"))
+    if direct:
+        return direct
+    candidate = value.get("answer_candidate")
+    if not isinstance(candidate, Mapping):
+        return []
+    metadata = candidate.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return []
+    generated = metadata.get("generated_answer_metadata")
+    if isinstance(generated, Mapping):
+        nested = _bounded_used_personal_memory(generated.get("used_personal_memory"))
+        if nested:
+            return nested
+    return _bounded_used_personal_memory(metadata.get("used_personal_memory"))
+
+
+def _result_used_personal_memory(result: Any) -> list[dict[str, str | int]]:
+    diagnostics = getattr(result, "diagnostics", None)
+    if not isinstance(diagnostics, Mapping):
+        return []
+    return _bounded_used_personal_memory(diagnostics.get("used_personal_memory"))
+
+
+def _bounded_used_personal_memory(value: Any) -> list[dict[str, str | int]]:
+    if not isinstance(value, (list, tuple)) or len(value) > 20:
+        return []
+    refs: list[dict[str, str | int]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {"memoryId", "revision"}:
+            return []
+        memory_id = item.get("memoryId")
+        revision = item.get("revision")
+        if (
+            not isinstance(memory_id, str)
+            or re.fullmatch(r"pmem_[0-9a-f]{32}", memory_id) is None
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 1
+            or memory_id in seen
+        ):
+            return []
+        seen.add(memory_id)
+        refs.append({"memoryId": memory_id, "revision": revision})
+    return refs
+
 
 def _require_text(value: Any, field_name: str) -> str:
     text = str(value or "").strip()
@@ -2123,19 +2197,40 @@ def _reader_answer_projection(
     evidence_refs = _unique_texts([
         str(citation.get("evidenceId") or "")
         for citation in citations
-        if citation.get("valid") is True
     ])
     decision_type = decision.get("decision_type") or decision.get("decisionType")
-    abstained = not isinstance(answer, str) or not answer.strip()
+    transcript_id = generated.get("transcript_id")
+    trace_valid = (
+        isinstance(transcript_id, str)
+        and 1 <= len(transcript_id) <= 256
+        and re.search(r"[\s\x00-\x1f\x7f]", transcript_id) is None
+    )
+    raw_citations = generated.get("citations")
+    citations_valid = (
+        isinstance(raw_citations, list) and bool(citations)
+        and len(citations) == len(raw_citations)
+        and all(citation.get("valid") is True for citation in citations)
+    )
+    candidate = generated.get("answer_candidate")
+    candidate_not_abstained = not isinstance(candidate, Mapping) or candidate.get("abstained") is False
+    accepted = (
+        isinstance(answer, str) and bool(answer.strip())
+        and generated.get("abstained") is not True and candidate_not_abstained
+        and generated.get("status") == "answered"
+        and decision_type == "return_answer"
+        and trace_valid and citations_valid
+    )
+    abstained = not accepted
     return {
-        "answer": answer.strip() if isinstance(answer, str) and answer.strip() else None,
+        "answer": answer.strip() if accepted else None,
         "evidenceRefs": evidence_refs,
         "claims": list(generated.get("claims") or ()),
         "citations": citations,
-        "confidence": 1.0 if not abstained and decision_type in {"return_answer", None} else 0.0,
+        "confidence": 1.0 if accepted else 0.0,
         "abstained": abstained,
         "transcriptId": generated.get("transcript_id"),
-        "status": str(generated.get("status") or ("abstained" if abstained else "answered")),
+        "status": generated.get("status"),
+        "decision": dict(decision),
         "runId": run_id,
         "paperId": paper_id,
         "metadata": {
@@ -2144,14 +2239,23 @@ def _reader_answer_projection(
             "retrievalGoalId": stable_research_id("research_ask", run_id, question),
             "sourceRefs": list(source_refs),
             "generationMode": generated.get("generation_mode"),
+            "citationLocatorVerified": citations_valid,
+            "traceVerified": trace_valid,
             "recovered": generated.get("recovered") is True,
         },
+        **(
+            {"usedPersonalMemory": used_personal_memory}
+            if (used_personal_memory := _used_personal_memory(generated))
+            else {}
+        ),
     }
 
 
 def _reader_content_revision(reader_payload: Any) -> str:
     document = getattr(reader_payload, "document", None)
-    return str(getattr(document, "source_hash", "") or "")
+    revision = str(getattr(document, "source_hash", "") or "").strip()
+    digest = _normalized_sha256_identity(revision)
+    return f"sha256:{digest}" if digest else revision
 
 
 def _grounded_answer_citations(
@@ -2165,48 +2269,135 @@ def _grounded_answer_citations(
     document = getattr(reader_payload, "document", None)
     sections = list(getattr(document, "sections", []) or [])
     result: list[dict[str, Any]] = []
-    for index, item in enumerate(raw if isinstance(raw, list) else []):
+    for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, Mapping):
             continue
-        source_ref = str(item.get("source_ref") or "").strip()
-        span_refs = [str(value) for value in item.get("span_refs") or () if str(value).strip()]
-        section = _section_for_grounded_spans(sections, source_ref=source_ref, span_refs=span_refs)
-        evidence_id = str(item.get("evidence_id") or f"evidence-{index + 1}")
-        citation = {
+        evidence_id = item.get("evidence_id")
+        if (
+            not isinstance(evidence_id, str) or not 1 <= len(evidence_id) <= 256
+            or re.search(r"[\s\x00-\x1f\x7f]", evidence_id) is not None
+        ):
+            continue  # Never manufacture or truncate evidence identity.
+        source_ref = item.get("source_ref")
+        source_ref = source_ref if isinstance(source_ref, str) else ""
+        spans = item.get("span_refs")
+        locator_refs: list[str] = []
+        complete = isinstance(spans, (list, tuple)) and bool(spans)
+        source_locator = item.get("source_locator")
+        for span in spans if isinstance(spans, (list, tuple)) else ():
+            if not isinstance(span, str) or not span.strip():
+                complete = False
+            elif _parse_grounded_locator(span, source_ref=source_ref) is not None:
+                locator_refs.append(span)
+            elif span == item.get("chunk_id") and isinstance(source_locator, str):
+                # Chunk spans are verified by Harness; their locator comes from that
+                # exact accepted evidence, not from a model or an arbitrary section.
+                locator_refs.append(source_locator)
+            else:
+                complete = False
+        if source_locator is not None:
+            if not isinstance(source_locator, str):
+                complete = False
+            elif source_locator != source_ref:
+                if _parse_grounded_locator(source_locator, source_ref=source_ref) is None:
+                    complete = False
+                else:
+                    locator_refs.append(source_locator)
+        if _parse_grounded_locator(source_ref, source_ref=source_ref) is not None:
+            locator_refs.append(source_ref)
+        section = _section_for_grounded_spans(
+            sections, source_ref=source_ref, span_refs=locator_refs
+        ) if complete else None
+        valid = bool(source_ref in source_refs and source_revision and section is not None)
+        citation: dict[str, Any] = {
             "id": f"citation:{hashlib.sha256(evidence_id.encode('utf-8')).hexdigest()[:24]}",
             "label": str(getattr(section, "title", "") or evidence_id)[:500],
-            "evidenceId": evidence_id[:256],
+            "evidenceId": evidence_id,
             "paperId": paper_id,
             "sourceRevision": source_revision,
-            "valid": bool(source_ref in source_refs and section is not None),
+            "valid": valid,
         }
-        if section is not None:
-            citation["sectionId"] = str(getattr(section, "section_id"))
-            page = getattr(section, "page_start", None)
-            if isinstance(page, int) and not isinstance(page, bool):
-                citation["page"] = page
-        if not citation["valid"]:
+        if valid:
+            citation["sectionId"] = str(section.section_id)
+            pages = {
+                locator[1] for span in locator_refs
+                if (locator := _parse_grounded_locator(span, source_ref=source_ref)) is not None
+                and locator[1] is not None
+            }
+            if len(pages) == 1:
+                citation["page"] = pages.pop()
+        else:
             citation["reasonCode"] = "source_span_not_verified"
         result.append(citation)
     return result
 
 
+def _parse_grounded_locator(span: str, *, source_ref: str) -> tuple[str | None, int | None] | None:
+    """Parse explicit locators only; do not infer a page from section bounds."""
+    try:
+        parsed = urlsplit(span)
+        source = urlsplit(source_ref)
+    except ValueError:
+        return None
+    if parsed.scheme or parsed.netloc:
+        if parsed._replace(query="", fragment="").geturl() != source._replace(query="", fragment="").geturl():
+            return None
+        components = (parsed.query, parsed.fragment)
+    else:
+        components = (span.lstrip("#?"),)
+    sections: list[str] = []
+    pages: list[str] = []
+    for component in components:
+        for key, value in parse_qsl(component, keep_blank_values=True):
+            if key in {"section", "section_id"}:
+                sections.append(value)
+            elif key == "page":
+                pages.append(value)
+    if len(sections) > 1 or len(pages) > 1 or (not sections and not pages):
+        return None
+    section_id = sections[0] if sections else None
+    if section_id is not None and not section_id.strip():
+        return None
+    if pages and (not re.fullmatch(r"[1-9][0-9]{0,5}", pages[0]) or int(pages[0]) > 100_000):
+        return None
+    return section_id, int(pages[0]) if pages else None
+
+
 def _section_for_grounded_spans(sections: list[Any], *, source_ref: str, span_refs: list[str]) -> Any | None:
+    if not source_ref or not span_refs:
+        return None
+    locators = [_parse_grounded_locator(span, source_ref=source_ref) for span in span_refs]
+    if any(locator is None for locator in locators):
+        return None
+    explicit_sections = {locator[0] for locator in locators if locator is not None and locator[0] is not None}
+    explicit_pages = {locator[1] for locator in locators if locator is not None and locator[1] is not None}
+    if len(explicit_sections) > 1 or len(explicit_pages) > 1:
+        return None
+    matches = []
     for section in sections:
+        if str(getattr(section, "source_ref", "") or "") != source_ref:
+            continue
         section_id = str(getattr(section, "section_id", "") or "")
-        section_ref = str(getattr(section, "source_ref", "") or "")
-        page_start = getattr(section, "page_start", None)
-        page_end = getattr(section, "page_end", None) or page_start
-        for span in span_refs:
-            section_match = re.search(r"(?:section|section_id)=([^&#]+)", span)
-            page_match = re.search(r"page=(\d+)", span)
-            if section_match and section_match.group(1) == section_id and source_ref == section_ref:
-                return section
-            if page_match and isinstance(page_start, int) and isinstance(page_end, int):
-                page = int(page_match.group(1))
-                if page_start <= page <= page_end and source_ref == section_ref:
-                    return section
-    return None
+        if not section_id:
+            continue
+        start = getattr(section, "page_start", None)
+        end = getattr(section, "page_end", None)
+        end = start if end is None else end
+        matches_all = True
+        for locator in locators:
+            assert locator is not None
+            explicit_section, page = locator
+            if explicit_section is not None and explicit_section != section_id:
+                matches_all = False
+                break
+            if page is not None and not (
+                type(start) is int and type(end) is int and 1 <= start <= page <= end <= 100_000
+            ):
+                matches_all = False
+                break
+        if matches_all:
+            matches.append(section)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _normalized_sha256_identity(value: Any) -> str | None:

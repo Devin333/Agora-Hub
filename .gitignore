@@ -17,6 +17,10 @@ eggs/
 lib/
 !apps/web/src/lib/
 !apps/web/src/lib/**
+!frontend/src/features/news/lib/
+!frontend/src/features/news/lib/**
+!frontend/src/features/studio/**/lib/
+!frontend/src/features/studio/**/lib/**
 lib64/
 parts/
 sdist/

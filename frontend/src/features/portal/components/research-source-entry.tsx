@@ -1,15 +1,21 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { usePortalAccount } from "@/components/auth/portal-account-provider";
 import { historyState, saveResearchMaterial } from "@/lib/research/history";
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history";
-import { fetchDesktopIdentity, fetchResearchOperation } from "@/lib/research/desktop/client";
+import { fetchDesktopIdentity, fetchResearchOperation, submitResearchPrepare } from "@/lib/research/desktop/client";
 import { operationSchema, type ResearchOperation } from "@/lib/research/desktop/contracts";
 import { isLocalDesktopProfile } from "@/lib/deployment-profile";
-import { operationReceiptMatches, prepareResearchOperation, updateResearchOperation, type OperationReceiptIdentity } from "@/lib/research/pending-operations";
+import { mergeResearchOperationUpdate, operationReceiptMatches, operationReceiptUpdate, prepareResearchOperation, updateResearchOperation } from "@/lib/research/pending-operations";
+import type { ResearchMaterial, ResearchPendingOperation } from "@/lib/research/workspace-items";
+import { buildPrepareRequest, normalizeAnalyzeTransportUrl } from "@/lib/research/desktop/request-contracts";
+import styles from "./research-source-entry.module.css";
 type ImportStatus = "received" | "parsing" | "completed" | "failed" | "needs_action" | "rejected" | "passed" | "interrupted" | "unknown" | "waiting" | "running";
 type ImportRecord = {
+    updatedAt?: number;
+    kind?: "import" | "prepare";
+    sourceUrl?: string;
     importId?: string;
     requestId?: string;
     generation?: string;
@@ -20,6 +26,7 @@ type ImportRecord = {
     sourceRevision?: string;
     sourceFingerprint?: string;
     error?: {
+        code?: string;
         message?: string;
     } | null;
 };
@@ -36,15 +43,24 @@ function validRecord(value: unknown): value is ImportRecord {
     );
     return statuses.includes(record.status) && validRequestIdentity && (!record.paperId || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(record.paperId));
 }
-export function ResearchSourceEntry({ onAttach }: {
+export type ResearchSourceEntryAppearance = "portal" | "paper-agent";
+const noOperations: ResearchPendingOperation[] = [];
+const noMaterials: ResearchMaterial[] = [];
+
+export function ResearchSourceEntry({ onAttach, appearance = "portal" }: {
     onAttach?: (id: string) => void;
+    appearance?: ResearchSourceEntryAppearance;
 }) {
     const workspace = useOwnedResearchWorkspace();
-    return workspace.ready ? <OwnedSourceEntry key={workspace.owner ?? "guest"} owner={workspace.owner!} onAttach={onAttach}/> : null;
+    return workspace.ready ? <OwnedSourceEntry key={workspace.owner ?? "guest"} owner={workspace.owner!} operations={workspace.workspace.pendingOperations ?? noOperations} materials={workspace.workspace.materials ?? noMaterials} saveConfirmed={!workspace.dirty && workspace.status === "synced"} onAttach={onAttach} appearance={appearance}/> : null;
 }
-function OwnedSourceEntry({ owner, onAttach }: {
+function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttach, appearance }: {
     owner: string | null;
+    operations: ResearchPendingOperation[];
+    materials: ResearchMaterial[];
+    saveConfirmed: boolean;
     onAttach?: (id: string) => void;
+    appearance: ResearchSourceEntryAppearance;
 }) {
     const account = usePortalAccount();
     const input = useRef<HTMLInputElement>(null);
@@ -58,7 +74,17 @@ function OwnedSourceEntry({ owner, onAttach }: {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [attached, setAttached] = useState(false);
-    const isCurrent = () => current.current && historyState().owner === owner;
+    const [sourceInput, setSourceInput] = useState("");
+    const [sourcePaperId, setSourcePaperId] = useState("");
+    const targets = materials.filter((material, index, all) => identifiedPaper(material) && all.findIndex(item => identifiedPaper(item) && item.referenceId === material.referenceId) === index);
+    const selectedTarget = targets.find(material => material.referenceId === sourcePaperId);
+    const [online, setOnline] = useState(true);
+    useEffect(() => {
+        const update = () => setOnline(navigator.onLine);
+        update(); window.addEventListener("online", update); window.addEventListener("offline", update);
+        return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); };
+    }, []);
+    const isCurrent = useCallback(() => current.current && historyState().owner === owner, [owner]);
     function keep(value: ImportRecord) {
         if (!isCurrent())
             return;
@@ -77,7 +103,7 @@ function OwnedSourceEntry({ owner, onAttach }: {
         if (storageKey) {
             try {
                 const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null");
-                if (validRecord(saved)) {
+                if (validRecord(saved) && (!isLocalDesktopProfile() || !historyState().workspace.pendingOperations?.some(item => (item.kind === "import" || item.kind === "prepare")))) {
                     setRecord(saved);
                     setFilename(saved.filename ?? "PDF");
                 }
@@ -100,8 +126,54 @@ function OwnedSourceEntry({ owner, onAttach }: {
         window.addEventListener("agora-open-pdf-import", open);
         return () => { current.current = false; request.current?.abort(); window.removeEventListener("agora-open-pdf-import", open); };
     }, [account, owner, storageKey]);
+    useEffect(() => {
+        const saved = [...operations].filter(item => (item.kind === "import" || item.kind === "prepare") && item.semantic.kind === item.kind).sort((left, right) => right.updatedAt - left.updatedAt)[0];
+        if (!saved || !isCurrent()) return;
+        const recovered = sourceRecordFromPending(saved);
+        setRecord(previous => previous?.updatedAt && previous.updatedAt > saved.updatedAt ? previous : recovered);
+        setFilename(recovered.filename ?? "PDF");
+    }, [isCurrent, operations]);
+    async function prepareSource() {
+        if (!owner || !isCurrent() || request.current || !online) return;
+        const sourceUrl = normalizeDirectSource(sourceInput);
+        const paperId = sourcePaperId.trim();
+        const target = historyState().workspace.materials?.find(material => identifiedPaper(material) && material.referenceId === paperId);
+        if (!sourceUrl || !target) {
+            setError("请选择当前论文库中已识别的目标论文，并输入对应的公开 HTTP(S) URL 或 DOI。未知来源请先在线检索、选择真实结果并保存。");
+            return;
+        }
+        const previous = [...operations].reverse().find(item => item.semantic.kind === "prepare" && item.semantic.paperId === paperId && item.semantic.sourceUrl === sourceUrl && !["failed", "rejected", "needs_action"].includes(item.status));
+        if (previous) {
+            setRecord(sourceRecordFromPending(previous));
+            setError("该来源已有保存的请求；请检查原请求，不会重复准备或自动重传。");
+            return;
+        }
+        const controller = new AbortController();
+        request.current = controller; setBusy(true); setError(""); setAttached(false); setFilename(sourceUrl);
+        let prepared: ResearchPendingOperation | undefined;
+        try {
+            const identity = await fetchDesktopIdentity(controller.signal);
+            if (!isCurrent() || controller.signal.aborted || identity.owner.userId !== owner) return;
+            if (!historyState().workspace.materials?.some(material => identifiedPaper(material) && material.referenceId === paperId)) throw new Error("目标论文已不在当前库中，请重新选择；未提交来源准备。");
+            const semantic = { kind: "prepare" as const, paperId, sourceUrl, sourceType: null };
+            prepared = await prepareResearchOperation({ kind: "prepare", generation: identity.generation, semantic, paperId });
+            if (!isCurrent() || controller.signal.aborted) return;
+            updateResearchOperation(prepared.requestId, { status: "waiting" }, prepared, owner);
+            keep(sourceRecordFromPending({ ...prepared, status: "waiting" }));
+            if (!historyState().workspace.materials?.some(material => identifiedPaper(material) && material.referenceId === paperId)) throw new Error("目标论文已不在当前库中，来源准备未发送；原请求身份已保留。");
+            const result = await submitResearchPrepare(buildPrepareRequest(prepared, semantic), controller.signal);
+            if (isCurrent() && !controller.signal.aborted) applyOperation(result, sourceUrl, prepared);
+        } catch (cause) {
+            if (isCurrent()) {
+                if (prepared) { updateResearchOperation(prepared.requestId, { status: "unknown" }, prepared, owner); keep(sourceRecordFromPending({ ...prepared, status: "unknown" })); }
+                setError(cause instanceof Error ? cause.message : "来源准备结果暂时无法确认；请核对原请求。");
+            }
+        } finally {
+            if (request.current === controller) { request.current = null; if (isCurrent()) setBusy(false); }
+        }
+    }
     async function upload(file: File) {
-        if (busy || !owner)
+        if (busy || !owner || !isCurrent() || !online)
             return;
         setError("");
         setAttached(false);
@@ -109,8 +181,8 @@ function OwnedSourceEntry({ owner, onAttach }: {
             setError("请选择 PDF 文件。");
             return;
         }
-        if (file.size > 50 * 1024 * 1024) {
-            setError("PDF 不能超过 50 MB，请选择更小的文件。");
+        if (file.size === 0 || file.size > 50 * 1024 * 1024) {
+            setError("PDF 不能为空且不能超过 50 MB，请选择有效文件。");
             return;
         }
         const controller = new AbortController();
@@ -119,6 +191,7 @@ function OwnedSourceEntry({ owner, onAttach }: {
         setFilename(file.name);
         try {
             const content = await file.arrayBuffer();
+            if (!isCurrent() || controller.signal.aborted) return;
             if (!isLocalDesktopProfile()) {
                 await uploadLegacy(file, content, controller);
                 return;
@@ -140,7 +213,7 @@ function OwnedSourceEntry({ owner, onAttach }: {
         const response = await fetch("/api/research/imports", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: { "Content-Type": "application/pdf", "X-Filename": encodeURIComponent(file.name) }, body: content });
         const payload = await response.json();
         if (!response.ok || !payload.success || !validRecord(payload.data))
-            throw new Error(payload?.error?.message || "PDF 导入失败。");
+            throw new Error(importErrorMessage(payload?.error, "PDF 导入失败。"));
         keep(payload.data);
         if (payload.data.importId)
             void checkLegacy(payload.data.importId, controller);
@@ -149,60 +222,67 @@ function OwnedSourceEntry({ owner, onAttach }: {
         const sourceFingerprint = `sha256:${await sha256Hex(content)}`;
         const sourceRevision = sourceFingerprint;
         const identity = await fetchDesktopIdentity(controller.signal);
+        if (!isCurrent() || controller.signal.aborted || identity.owner.userId !== owner) throw new Error("导入 owner 已改变，未提交文件。");
         const semantic = { kind: "import" as const, filename: file.name, sizeBytes: file.size, sourceRevision, sourceFingerprint };
         const prepared = await prepareResearchOperation({ kind: "import", generation: identity.generation, semantic, sourceRevision });
-        updateResearchOperation(prepared.requestId, { status: "waiting" });
+        if (!isCurrent() || controller.signal.aborted) return;
+        updateResearchOperation(prepared.requestId, { status: "waiting" }, prepared, owner ?? undefined);
         keep({ requestId: prepared.requestId, generation: identity.generation, fingerprint: prepared.fingerprint, status: "waiting", filename: file.name, sourceRevision, sourceFingerprint });
         let response: Response;
         try {
             response = await fetch("/api/research/imports", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: { "Content-Type": "application/pdf", "X-Filename": encodeURIComponent(file.name), "X-Newsroom-Request-Id": prepared.requestId, "X-Newsroom-Generation": identity.generation, "X-Newsroom-Request-Fingerprint": prepared.fingerprint, "X-Newsroom-Source-Revision": sourceRevision, "X-Newsroom-Source-Fingerprint": sourceFingerprint }, body: content });
         }
         catch (cause) {
-            updateResearchOperation(prepared.requestId, { status: "unknown" });
+            updateResearchOperation(prepared.requestId, { status: "unknown" }, prepared, owner ?? undefined);
             keep({ requestId: prepared.requestId, generation: identity.generation, fingerprint: prepared.fingerprint, status: "unknown", filename: file.name, sourceRevision, sourceFingerprint });
             throw cause;
         }
         const payload = await response.json();
         if (!response.ok || !payload.success) {
-            updateResearchOperation(prepared.requestId, { status: "unknown" });
-            keep({ requestId: prepared.requestId, generation: identity.generation, status: "unknown", filename: file.name, sourceRevision, sourceFingerprint });
-            throw new Error(payload?.error?.message || "PDF 导入失败。");
+            updateResearchOperation(prepared.requestId, { status: "unknown" }, prepared, owner ?? undefined);
+            keep({ requestId: prepared.requestId, generation: identity.generation, fingerprint: prepared.fingerprint, status: "unknown", filename: file.name, sourceRevision, sourceFingerprint });
+            throw new Error(importErrorMessage(payload?.error, "PDF 导入失败。"));
         }
         applyOperation(payload.data, file.name, prepared);
     }
     function applyOperation(
         value: unknown,
         knownFilename?: string,
-        expectedOperation?: OperationReceiptIdentity,
+        expectedOperation?: ResearchPendingOperation,
     ) {
+        if (!isCurrent()) return;
         const operation = operationSchema.parse(value) as ResearchOperation;
-        const expected = expectedOperation ?? (record?.requestId && record.generation && record.fingerprint
-            ? {
-                requestId: record.requestId,
-                generation: record.generation,
-                fingerprint: record.fingerprint,
-                kind: "import" as const,
-            }
-            : null);
+        const expected = expectedOperation ?? historyState().workspace.pendingOperations?.find(item =>
+            (item.kind === "import" || item.kind === "prepare") && item.requestId === record?.requestId && item.generation === record.generation && item.fingerprint === record.fingerprint
+        ) ?? null;
         if (!expected || !operationReceiptMatches(operation, expected)) {
-            if (expected) updateResearchOperation(expected.requestId, { status: "unknown" });
+            const downgraded = expected
+                ? mergeResearchOperationUpdate(expected, { status: "unknown" })
+                : null;
+            if (expected) updateResearchOperation(expected.requestId, { status: "unknown" }, expected, owner ?? undefined);
             keep({
-                ...(record ?? { status: "unknown" }),
-                ...(expected ? {
-                    requestId: expected.requestId,
-                    generation: expected.generation,
-                    fingerprint: expected.fingerprint,
-                } : {}),
+                ...(downgraded ? sourceRecordFromPending(downgraded) : { status: "unknown" }),
                 status: "unknown",
                 filename: knownFilename || record?.filename || filename || "PDF",
             });
             setError("导入回执与已保存的请求身份不一致，请检查原请求，不能采用该结果。");
             return;
         }
-        const result = operation.result && typeof operation.result === "object" ? operation.result : {};
-        keep({ requestId: operation.requestId, generation: operation.generation, fingerprint: operation.fingerprint, importId: operation.importId, status: operation.status, filename: knownFilename || record?.filename || filename || (typeof result.filename === "string" ? result.filename : undefined), paperId: typeof result.paperId === "string" ? result.paperId : operation.paperId, sourceRevision: typeof result.sourceRevision === "string" ? result.sourceRevision : operation.sourceRevision, sourceFingerprint: typeof result.sourceFingerprint === "string" ? result.sourceFingerprint : undefined, error: operation.message ? { message: operation.message } : null });
-        updateResearchOperation(operation.requestId, { status: operation.status, ...(operation.importId ? { importId: operation.importId } : {}), ...(operation.errorCode ? { errorCode: operation.errorCode } : {}) });
+        const update = operationReceiptUpdate(operation, expected);
+        if (!update) {
+            const downgrade = { status: "unknown", errorCode: "import_receipt_identity_incomplete" } as const;
+            updateResearchOperation(expected.requestId, downgrade, expected, owner ?? undefined);
+            keep({ ...sourceRecordFromPending(mergeResearchOperationUpdate(expected, downgrade)), status: "unknown" });
+            setError("导入完成回执缺少或改变了已保存的 paper/source identity，未采用该结果。");
+            return;
+        }
+        if (!updateResearchOperation(operation.requestId, update, expected, owner ?? undefined)) {
+            setError("导入回执未能写入 owner 工作区，请保留原请求后重试核对。");
+            return;
+        }
+        keep({ ...sourceRecordFromPending(mergeResearchOperationUpdate(expected, update)), filename: knownFilename || record?.filename || filename || "PDF", error: operation.errorCode || operation.message ? { code: operation.errorCode, message: operation.message } : null });
     }
+
     async function checkLegacy(importId: string, existing?: AbortController) {
         const controller = existing ?? new AbortController();
         if (!existing) {
@@ -214,7 +294,7 @@ function OwnedSourceEntry({ owner, onAttach }: {
             const response = await fetch(`/api/research/imports/${encodeURIComponent(importId)}`, { credentials: "same-origin", signal: controller.signal, cache: "no-store" });
             const payload = await response.json();
             if (!response.ok || !payload.success || !validRecord(payload.data))
-                throw new Error(payload?.error?.message || "转换状态暂时不可用。");
+                throw new Error(importErrorMessage(payload?.error, "转换状态暂时不可用。"));
             keep(payload.data);
         }
         catch (cause) {
@@ -229,7 +309,7 @@ function OwnedSourceEntry({ owner, onAttach }: {
         }
     }
     async function check() {
-        if (request.current)
+        if (request.current || !online)
             return;
         if (!isLocalDesktopProfile() && record?.importId) {
             await checkLegacy(record.importId);
@@ -253,13 +333,33 @@ function OwnedSourceEntry({ owner, onAttach }: {
         }
     }
     function addToResearch() {
-        if (!isCurrent() || !record?.paperId || !record.importId || !attach.current)
+        const state = historyState();
+        if (!current.current || !state.ready || state.owner !== owner ||
+            !record?.paperId || (record.kind !== "prepare" && !record.importId) || !attach.current ||
+            !["completed", "passed"].includes(record.status))
             return;
+        // Import receipts identify individual operations, not library rows.
+        // Only the authenticated backend's canonical paper id can match a PDF.
+        const existing = state.workspace.materials?.find(material =>
+            (material.kind === "pdf" || material.kind === "paper") && material.referenceId === record.paperId);
         const now = Date.now();
-        const readerHref = isLocalDesktopProfile() ? `/papers/${encodeURIComponent(record.paperId)}/read${record.sourceRevision ? `?sourceRevision=${encodeURIComponent(record.sourceRevision)}` : ""}` : undefined;
-        const saved = saveResearchMaterial({ id: record.importId, groupId: null, kind: "pdf", title: record.filename || filename || "导入的 PDF", url: "", referenceId: record.paperId, ...(readerHref ? { readerHref } : {}), notes: "", createdAt: now, updatedAt: now }, owner);
+        const incomingReaderHref = isLocalDesktopProfile() ? `/papers/${encodeURIComponent(record.paperId)}/read${record.sourceRevision ? `?sourceRevision=${encodeURIComponent(record.sourceRevision)}` : ""}` : undefined;
+        const existingRevision = existing?.readerHref
+            ? new URL(existing.readerHref, "https://agora.invalid").searchParams.get("sourceRevision")
+            : null;
+        // Keep a same-revision locator intact. A genuinely new revision must
+        // reach the reader so its existing notebook contract resets old pages.
+        const readerHref = existing?.readerHref && (!incomingReaderHref ||
+            (record.sourceRevision && existingRevision === record.sourceRevision))
+            ? existing.readerHref
+            : incomingReaderHref;
+        const material = existing
+            ? { ...existing, ...(readerHref ? { readerHref } : {}), updatedAt: now }
+            : { id: record.importId ?? `source:${record.requestId}`, groupId: null, kind: record.kind === "prepare" ? "paper" as const : "pdf" as const, title: record.filename || filename || "导入的 PDF", url: record.sourceUrl ?? "", referenceId: record.paperId, ...(readerHref ? { readerHref } : {}), notes: "", createdAt: now, updatedAt: now };
+        const saved = saveResearchMaterial(material, owner);
         if (saved) {
-            attach.current(record.importId);
+            setError("");
+            attach.current(material.id);
             setAttached(true);
         }
         else
@@ -276,9 +376,14 @@ function OwnedSourceEntry({ owner, onAttach }: {
             : ""}`
         : "";
     return (
-        <div className={record || error || busy
-            ? "mt-4 flex flex-wrap items-center gap-3 text-sm"
-            : "sr-only"}>
+        <div
+            data-research-source-entry
+            data-appearance={appearance}
+            data-state={busy ? "processing" : error ? "error" : completed ? "completed" : record ? record.status : "missing"}
+            className={`${styles.root} ${record || error || busy || (appearance === "paper-agent" && isLocalDesktopProfile())
+                ? "mt-4 flex flex-wrap items-center gap-3 text-sm"
+                : "sr-only"}`}
+        >
             <input
                 ref={input}
                 type="file"
@@ -291,14 +396,23 @@ function OwnedSourceEntry({ owner, onAttach }: {
                     event.target.value = "";
                 }}
             />
+            {appearance === "paper-agent" && isLocalDesktopProfile() && <section aria-label="为已识别论文准备来源">
+                <label>论文 URL / DOI<input type="text" aria-label="论文来源 URL 或 DOI" value={sourceInput} onChange={event => setSourceInput(event.target.value)} placeholder="https://… 或 10.…/…" /></label>
+                <label>目标论文<select aria-label="选择已入库的目标论文" value={selectedTarget ? sourcePaperId : ""} onChange={event => setSourcePaperId(event.target.value)} disabled={busy || targets.length === 0}><option value="">请选择当前论文库中的论文</option>{targets.map(material => <option key={material.id} value={material.referenceId}>{material.title} — {material.referenceId}</option>)}</select></label>
+                {selectedTarget && <p>已识别目标：{selectedTarget.title}（真实 ID：<code>{selectedTarget.referenceId}</code>）</p>}
+                <p>此入口只为已识别论文补充对应正文；来源解析出的 canonical ID 必须与所选论文一致。不确定或未知的 arXiv / DOI / URL，请先使用上方“在线论文搜索”，选择真实识别结果并保存到库，再在这里选择目标准备来源。搜索成功和元数据入库不代表全文准备成功。</p>
+                {targets.length === 0 && <p>当前库中没有可绑定的已识别论文。请先在线检索并保存真实结果，或主动导入 PDF。</p>}
+                <p>通过既有 admission 核对身份；只有真实完成回执才可用于研究。解析器未配置、来源不受支持或目标身份不匹配都会显示失败，不会编造身份。</p>
+                <button type="button" disabled={busy || !online || !sourceInput.trim() || !selectedTarget} onClick={() => void prepareSource()}>准备所选论文来源</button>
+            </section>}
             {busy && (
-                <span role="status" className="inline-flex items-center gap-2 text-[#6d28d9]">
+                <span role="status" data-slot="status" className={`${styles.status} inline-flex items-center gap-2`}>
                     <LoaderCircle size={15} className="animate-spin" />
                     正在核对 {filename || "PDF"} 的真实导入状态…
                 </span>
             )}
             {!busy && record && (
-                <span role="status" className="inline-flex flex-wrap items-center gap-3 text-[#6d28d9]">
+                <span role="status" data-slot="status" className={`${styles.status} inline-flex flex-wrap items-center gap-3`}>
                     <span>{record.filename || filename}</span>
                     {completed ? (
                         <>
@@ -313,7 +427,7 @@ function OwnedSourceEntry({ owner, onAttach }: {
                                     className="underline"
                                     onClick={addToResearch}
                                 >
-                                    {attached ? "已加入本次研究" : "用于本次研究"}
+                                    {attached ? saveConfirmed ? "已加入本次研究" : "入库待保存" : "用于本次研究"}
                                 </button>
                             )}
                         </>
@@ -324,9 +438,9 @@ function OwnedSourceEntry({ owner, onAttach }: {
                                 <button
                                     type="button"
                                     className="underline"
-                                    onClick={() => input.current?.click()}
+                                    onClick={() => { if (record.kind === "prepare") { setSourceInput(record.sourceUrl ?? ""); setSourcePaperId(record.paperId ?? ""); } else input.current?.click(); }}
                                 >
-                                    重新选择文件并创建新请求
+                                    {record.kind === "prepare" ? "修改来源后创建新请求" : "重新选择文件并创建新请求"}
                                 </button>
                             ) : (
                                 <button
@@ -342,14 +456,51 @@ function OwnedSourceEntry({ owner, onAttach }: {
                     )}
                 </span>
             )}
-            {error && <span role="alert" className="text-[#a02b47]">{error}</span>}
+            {error && <span role="alert" data-slot="error" className={styles.error}>{error}</span>}
         </div>
     );
 }
 
+function identifiedPaper(material: ResearchMaterial): boolean {
+    return (material.kind === "paper" || material.kind === "pdf") && typeof material.referenceId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(material.referenceId);
+}
+
+function sourceRecordFromPending(operation: ResearchPendingOperation): ImportRecord {
+    if (operation.semantic.kind !== "import" && operation.semantic.kind !== "prepare") return { status: "unknown" };
+    const imported = operation.semantic.kind === "import" ? operation.semantic : undefined;
+    const prepared = operation.semantic.kind === "prepare" ? operation.semantic : undefined;
+    const complete = Boolean(operation.paperId && operation.sourceRevision && operation.sourceFingerprint && (prepared || operation.importId));
+    return {
+        requestId: operation.requestId, generation: operation.generation, fingerprint: operation.fingerprint,
+        kind: imported ? "import" : "prepare", sourceUrl: prepared?.sourceUrl,
+        importId: operation.importId, status: operation.status === "prepared" ? "waiting" : operation.status === "passed" && !complete ? "unknown" : operation.status,
+        filename: imported?.filename ?? prepared?.sourceUrl, paperId: operation.paperId,
+        sourceRevision: operation.sourceRevision ?? imported?.sourceRevision,
+        sourceFingerprint: operation.sourceFingerprint ?? imported?.sourceFingerprint,
+        updatedAt: operation.updatedAt, error: operation.errorCode ? { code: operation.errorCode } : null,
+    };
+}
+
+export function normalizeDirectSource(value: string): string | null {
+    const input = value.trim().replace(/^doi:\s*/i, "");
+    const source = /^10\.\d{4,9}\/\S+$/i.test(input) ? `https://doi.org/${input}` : input;
+    const transport = normalizeAnalyzeTransportUrl(source);
+    if (!transport) return null;
+    const url = new URL(transport);
+    if (url.hostname === "localhost" || url.hostname.endsWith(".localhost") || url.hostname === "[::1]" || url.hostname.startsWith("127.") || /^10\./.test(url.hostname) || /^192\.168\./.test(url.hostname) || /^172\.(1[6-9]|2\d|3[01])\./.test(url.hostname)) return null;
+    url.hash = "";
+    return url.toString();
+}
+
 function importStatusMessage(record: ImportRecord): string {
     if (record.status === "failed") {
-        return record.error?.message || "导入失败，请重新选择文件创建新请求";
+        return importErrorMessage(record.error, "导入失败，请重新选择文件创建新请求");
+    }
+    if (record.status === "completed" || record.status === "passed") {
+        return "导入回执缺少论文标识，尚不能打开阅读器或用于研究，请检查已有请求";
+    }
+    if (record.status === "parsing" || record.status === "running") {
+        return "PDF 正在处理中，等待真实转换结果";
     }
     if (record.status === "needs_action" || record.status === "rejected") {
         return "结果需要核对";
@@ -358,6 +509,13 @@ function importStatusMessage(record: ImportRecord): string {
         return "导入回执尚未确认，请先检查已有请求";
     }
     return "导入已接收，等待真实处理结果";
+}
+function importErrorMessage(error: ImportRecord["error"], fallback: string): string {
+    // Older saved receipts retained only the service's projected message, not errorCode.
+    if (error?.code === "research_parse_unavailable" || error?.message === "Research operation failed (research_parse_unavailable).") {
+        return "论文解析运行时尚未配置（research_parse_unavailable），请配置后重新选择文件创建新请求";
+    }
+    return error?.message || (error?.code ? `${fallback}（${error.code}）` : fallback);
 }
 async function sha256Hex(content: ArrayBuffer) {
     const digest = await crypto.subtle.digest("SHA-256", content);

@@ -1,0 +1,39 @@
+{
+  "schema": "newsroom.durable-event-compatibility-policy/v4",
+  "release_id": "durable-event-runtime-migration-1",
+  "compatibility_source_commit": "42a8636cd72aea0c466126fc5f2d69c55db1a1d6",
+  "compatibility_source_tree": "d6d2c55a965e47009d7dc8cf49582cb90e300c2d",
+  "compatibility_parent_commit": "f6bce48f786d5b08cc77d226b8b993e6e6b974df",
+  "deletion_boundary_commit": "570f840c7df3870841c93e37480d7a53a67921dd",
+  "deletion_boundary_tree": "8607c510e87c7f405519f5851949f9f5b5b5203b",
+  "deletion_boundary_parent_commit": "42a8636cd72aea0c466126fc5f2d69c55db1a1d6",
+  "qualified_deletion_source_commit": "f5ed16ccf0a2341b47337091c1052cbc68f69bf8",
+  "qualified_deletion_source_tree": "3ba3d1873fa8c00c0d65ac4ca16e4dc6c57657ad",
+  "qualified_deletion_source_parent_commit": "f28e27be8e14ff022c6408814df6e1b33531a9f7",
+  "authority_trust_status": "pending_external_activation",
+  "trust_epoch": null,
+  "trusted_governance_authority": null,
+  "trusted_observer_authority": null,
+  "trusted_consumer_owner_authority": null,
+  "required_query_surfaces": [
+    "api",
+    "cli",
+    "mcp",
+    "sse"
+  ],
+  "required_consumer_surfaces": [
+    "api",
+    "cli",
+    "mcp",
+    "sdk",
+    "sse"
+  ],
+  "required_inventory_sources": [
+    "deployment_registry",
+    "request_consumer_telemetry"
+  ],
+  "minimum_observation_seconds": 3600,
+  "maximum_observation_seconds": 604800,
+  "maximum_observation_records": 1000,
+  "policy_checksum": "sha256:17568d14e4a8514081a75f64fdb80fd5da6b47203b2d91a9efec1baeb0263767"
+}

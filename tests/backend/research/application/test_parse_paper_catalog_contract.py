@@ -799,3 +799,165 @@ def test_refresh_appends_an_immutable_snapshot_for_unchanged_source() -> None:
     assert refreshed.source_snapshots[0].snapshot_id != first.source_snapshots[0].snapshot_id
     assert refreshed.idempotent is False
     assert len(repository.list_for_paper(first.paper_id, actor_scope={"tenant_id": "tenant-a"})) == 2
+
+class _LocalResolver:
+    def __init__(self, sources: dict[str, tuple[str, bytes]]) -> None:
+        self.sources = sources
+
+    def resolve(self, request: ParsePaperRequest) -> ResolvedPaperSource:
+        title, content = self.sources[request.source]
+        digest = __import__("hashlib").sha256(content).hexdigest()
+        provisional_id = f"path-paper-{__import__('hashlib').sha256(request.source.encode()).hexdigest()[:12]}"
+        snapshot_id = f"snapshot-{__import__('hashlib').sha256((request.source + digest).encode()).hexdigest()[:16]}"
+        paper = ResearchPaper(
+            paper_id=provisional_id,
+            title=title,
+            source="local",
+            metadata=dict(request.metadata),
+        )
+        snapshot = ResearchSourceSnapshot(
+            snapshot_id=snapshot_id,
+            paper_id=provisional_id,
+            source_type="local",
+            external_id=Path(request.source).name,
+            content_type="application/pdf",
+            source_hash=digest,
+            checksum=digest,
+            fetched_at=datetime.now(UTC),
+            lineage=SourceLineage(source_refs=[request.source], source_hash=digest),
+            metadata={"source_locator": request.source},
+        )
+        source = PaperSourceRecord(
+            source_id=snapshot_id,
+            paper_id=provisional_id,
+            source_type="local",
+            source_url=f"source://local/{snapshot_id}",
+            fetched_at=snapshot.fetched_at,
+            source_hash=digest,
+            metadata=dict(request.metadata),
+        )
+        return ResolvedPaperSource(
+            paper=paper,
+            snapshot=snapshot,
+            content=content,
+            content_type="application/pdf",
+            source_record=source,
+        )
+
+
+def _local_use_case(
+    repository: InMemoryResearchCatalogRepository,
+    resolver: _LocalResolver,
+    parser: _Parser,
+) -> ParsePaperUseCase:
+    return ParsePaperUseCase(
+        source_resolver=resolver,
+        paper_repository=repository,
+        identity_repository=repository,
+        source_snapshot_repository=repository,
+        document_repository=repository,
+        evidence_repository=repository,
+        document_parser=parser,
+    )
+
+
+def test_local_content_identity_ignores_path_and_title_but_preserves_provenance() -> None:
+    content = b"same verified local bytes"
+    repository = InMemoryResearchCatalogRepository()
+    parser = _Parser()
+    use_case = _local_use_case(
+        repository,
+        _LocalResolver(
+            {
+                "file:///F/first.pdf": ("first.pdf", content),
+                "file:///G/renamed.pdf": ("renamed.pdf", content),
+            }
+        ),
+        parser,
+    )
+    scope = {"user_id": "alice", "memory_namespace": "research:user:alice"}
+
+    first = use_case.parse(
+        ParsePaperRequest(
+            source="file:///F/first.pdf",
+            source_type="local",
+            run_id="local-same-1",
+            actor_scope=scope,
+            metadata={
+                "import_id": "imp_first",
+                "import_filename": "first.pdf",
+                "title_source": "import_filename",
+                "source_revision": "revision-1",
+                "source_fingerprint": f"sha256:{__import__('hashlib').sha256(content).hexdigest()}",
+            },
+        )
+    )
+    second = use_case.parse(
+        ParsePaperRequest(
+            source="file:///G/renamed.pdf",
+            source_type="local",
+            run_id="local-same-2",
+            actor_scope=scope,
+            metadata={
+                "import_id": "imp_second",
+                "import_filename": "renamed.pdf",
+                "title_source": "import_filename",
+                "source_revision": "revision-2",
+                "source_fingerprint": f"sha256:{__import__('hashlib').sha256(content).hexdigest()}",
+            },
+        )
+    )
+
+    assert first.paper_id == second.paper_id
+    assert parser.calls == 1
+    assert first.source_snapshots[0].snapshot_id != second.source_snapshots[0].snapshot_id
+    assert second.document is not None
+    assert second.document.metadata["source_revision"] == "revision-1"
+    identity = repository.get_identity(first.paper_id, actor_scope=scope)
+    assert identity is not None
+    assert identity.metadata["identity_basis"] == "owner_scoped_local_content_sha256"
+    assert set(identity.source_snapshot_refs) == {
+        first.source_snapshots[0].snapshot_id,
+        second.source_snapshots[0].snapshot_id,
+    }
+    snapshots = repository.list_for_paper(first.paper_id, actor_scope=scope)
+    assert {snapshot.metadata["source_locator"] for snapshot in snapshots} == {
+        "file:///F/first.pdf",
+        "file:///G/renamed.pdf",
+    }
+
+
+def test_local_content_identity_separates_different_bytes_and_owners() -> None:
+    repository = InMemoryResearchCatalogRepository()
+    parser = _Parser()
+    first_bytes = b"first local content"
+    second_bytes = b"second local content"
+    use_case = _local_use_case(
+        repository,
+        _LocalResolver(
+            {
+                "file:///F/paper.pdf": ("paper.pdf", first_bytes),
+                "file:///G/paper.pdf": ("paper.pdf", second_bytes),
+                "file:///H/copy.pdf": ("copy.pdf", first_bytes),
+            }
+        ),
+        parser,
+    )
+    alice_scope = {"user_id": "alice", "memory_namespace": "research:user:alice"}
+    bob_scope = {"user_id": "bob", "memory_namespace": "research:user:bob"}
+
+    alice_first = use_case.parse(ParsePaperRequest(
+        source="file:///F/paper.pdf", source_type="local", run_id="alice-first", actor_scope=alice_scope
+    ))
+    alice_second = use_case.parse(ParsePaperRequest(
+        source="file:///G/paper.pdf", source_type="local", run_id="alice-second", actor_scope=alice_scope
+    ))
+    bob_copy = use_case.parse(ParsePaperRequest(
+        source="file:///H/copy.pdf", source_type="local", run_id="bob-copy", actor_scope=bob_scope
+    ))
+
+    assert alice_first.paper_id != alice_second.paper_id
+    assert alice_first.paper_id != bob_copy.paper_id
+    assert repository.get_document(alice_first.paper_id, actor_scope=bob_scope) is None
+    assert repository.get_identity(alice_first.paper_id, actor_scope=bob_scope) is None
+    assert parser.calls == 3

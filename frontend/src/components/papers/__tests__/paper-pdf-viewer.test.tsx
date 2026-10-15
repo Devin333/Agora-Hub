@@ -342,6 +342,135 @@ describe("PaperPdfViewer", () => {
     Reflect.deleteProperty(globalThis, "IntersectionObserver")
   })
 
+  it("preserves the default Portal chrome and active colors", async () => {
+    const { container } = renderViewer()
+    const viewer = screen.getByLabelText("Reader Paper PDF viewer")
+    expect(viewer).toHaveAttribute("data-pdf-appearance", "default")
+    expect(viewer).toHaveClass("bg-[#f8faf9]", "focus-visible:ring-[#315d8a]/35", "dark:bg-background")
+    expect(container.querySelector("[data-pdf-toolbar]")).toHaveClass("border-[#d8dfd8]", "bg-white", "dark:bg-card")
+    // Layout groups are transparent in the default Portal flex toolbar.
+    expect(container.querySelector("[data-pdf-pagination]")).toHaveClass("contents")
+    expect(container.querySelector("[data-pdf-zoom]")).toHaveClass("contents")
+    expect(container.querySelector("[data-pdf-page-flow]")).toHaveClass("contents")
+    expect(container.querySelector("[data-pdf-canvas-scroll]")).toHaveClass("bg-[#eef4ef]", "dark:bg-secondary/30")
+    expect(screen.getByText("Reader Paper")).toHaveClass("text-[#334155]", "dark:text-foreground")
+    await resolveViewerDocument()
+    expect(screen.getByRole("button", { name: "Go to page 1" })).toHaveClass("border-[#315d8a]", "bg-[#eef4ef]", "ring-[#315d8a]/25")
+    await waitFor(() => expect(pdfjsMock.getTextContent).toHaveBeenCalledWith(3))
+    fireEvent.change(screen.getByLabelText("Search PDF text"), { target: { value: "latent" } })
+    await screen.findByText("2 results")
+    expect(container.querySelector('[data-pdf-search-result][aria-current="true"]')).toHaveClass("border-[#315d8a]", "bg-[#eef4ef]", "ring-[#315d8a]/20")
+  })
+
+  it("exposes opt-in chrome slots in loading, controls, thumbnails, and search without altering document pixels", async () => {
+    const { container } = renderViewer({ appearance: "paper-agent", className: "agent-pdf" })
+    const viewer = screen.getByLabelText("Reader Paper PDF viewer")
+    expect(viewer).toHaveAttribute("data-pdf-appearance", "paper-agent")
+    expect(viewer).toHaveClass("agent-pdf")
+    for (const slot of ["toolbar", "search", "thumbnails", "canvas-scroll", "divider", "text", "muted", "loading-overlay", "message"]) {
+      expect(viewer.querySelector('[data-pdf-' + slot + ']')).not.toBeNull()
+    }
+    for (const control of viewer.querySelectorAll("button, input")) expect(control).toHaveAttribute("data-pdf-control")
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled()
+    expect(screen.getByLabelText("Page number")).toBeDisabled()
+    await resolveViewerDocument()
+    expect(screen.getByRole("button", { name: "Next page" })).not.toBeDisabled()
+    const thumbnail = screen.getByRole("button", { name: "Go to page 1" })
+    expect(thumbnail).toHaveAttribute("data-pdf-thumbnail")
+    expect(thumbnail).toHaveAttribute("data-pdf-control", "navigation")
+    expect(thumbnail).toHaveAttribute("aria-current", "page")
+    expect(thumbnail.querySelector("[data-pdf-thumbnail-viewport]")).not.toBeNull()
+    const pageCanvas = screen.getByLabelText("Reader Paper PDF page 1")
+    expect(pageCanvas).toHaveClass("block", "bg-white")
+    expect(pageCanvas.parentElement).toHaveAttribute("data-pdf-document")
+    await waitFor(() => expect(pdfjsMock.getTextContent).toHaveBeenCalledWith(3))
+    fireEvent.change(screen.getByLabelText("Search PDF text"), { target: { value: "latent" } })
+    await screen.findByText("2 results")
+    const results = container.querySelectorAll("[data-pdf-search-result]")
+    expect(results).toHaveLength(2)
+    for (const result of results) expect(result).toHaveAttribute("data-pdf-control", "navigation")
+    expect(results[0]).toHaveAttribute("aria-current", "true")
+    const thirdPageResult = screen.getByText(/Engineering notes mention LATENT planning/i)
+    fireEvent.click(thirdPageResult.closest("button")!)
+    expect(await screen.findByText("Page 3 of 3")).toBeInTheDocument()
+    for (const canvas of container.querySelectorAll("canvas")) {
+      expect(canvas.style.filter).toBe("")
+      expect(canvas).not.toHaveAttribute("data-pdf-control")
+      expect(canvas).not.toHaveAttribute("data-pdf-muted")
+    }
+    expect(container.querySelector("[data-pdf-text-layer]")).toHaveClass("text-transparent")
+  })
+
+  it.each(["default", "paper-agent"] as const)("isolates %s page placement from document and annotation coordinates", async (appearance) => {
+    const { container } = renderViewer({ appearance, className: "agent-pdf" })
+    const scroll = container.querySelector("[data-pdf-canvas-scroll]")!
+    const flow = container.querySelector("[data-pdf-page-flow]")!
+    const documentPage = container.querySelector<HTMLElement>("[data-pdf-document]")!
+    expect(flow.parentElement).toBe(scroll)
+    expect(flow.children).toHaveLength(1)
+    expect(flow.firstElementChild).toBe(documentPage)
+    expect(flow).not.toHaveAttribute("data-pdf-document")
+    expect(documentPage).not.toHaveAttribute("data-pdf-page-flow")
+    expect(documentPage).toHaveClass("relative", "self-start", "bg-white", "shadow-lg")
+    expect(documentPage).not.toHaveClass("contents")
+    expect(documentPage.style.cssText).toBe("")
+    if (appearance === "default") expect(flow).toHaveClass("contents")
+    else expect(flow).not.toHaveClass("contents")
+    await resolveViewerDocument()
+    const canvas = screen.getByLabelText("Reader Paper PDF page 1")
+    expect(canvas.parentElement).toBe(documentPage)
+    expect(container.querySelector("[data-pdf-text-layer]")?.parentElement).toBe(documentPage)
+    expect(documentPage.style.cssText).toBe("")
+  })
+
+  it("groups opt-in pagination, zoom and search without changing their user actions", async () => {
+    const title = "Long-unbroken-paper-source-".repeat(8)
+    const { container } = renderViewer({ title, appearance: "paper-agent", className: "agent-pdf" })
+    const pagination = container.querySelector("[data-pdf-pagination]")!
+    const zoom = container.querySelector("[data-pdf-zoom]")!
+    const searchRow = container.querySelector("[data-pdf-search-row]")!
+    expect(container.querySelector("[data-pdf-title] h2")).toHaveTextContent(title)
+    expect(pagination).not.toHaveClass("contents")
+    expect(zoom).not.toHaveClass("contents")
+    expect(pagination).toContainElement(screen.getByRole("button", { name: "Previous page" }))
+    expect(pagination).toContainElement(screen.getByRole("button", { name: "Next page" }))
+    expect(pagination.querySelector("[data-pdf-page-form]")).toContainElement(screen.getByLabelText("Page number"))
+    expect(zoom).toContainElement(screen.getByRole("button", { name: "Zoom out" }))
+    expect(zoom).toContainElement(screen.getByRole("button", { name: "Zoom in" }))
+    expect(zoom.querySelector("[data-pdf-zoom-value]")).toHaveTextContent("100%")
+    expect(searchRow.querySelector("[data-pdf-search-field]")).toContainElement(screen.getByLabelText("Search PDF text"))
+    const searchNavigation = searchRow.querySelector("[data-pdf-search-navigation]")!
+    expect(searchNavigation).toContainElement(screen.getByRole("button", { name: "Previous search result" }))
+    expect(searchNavigation).toContainElement(screen.getByRole("button", { name: "Next search result" }))
+    expect(searchNavigation.querySelector("[data-pdf-search-status]")).not.toBeNull()
+
+    await resolveViewerDocument()
+    fireEvent.change(screen.getByLabelText("Page number"), { target: { value: "2" } })
+    fireEvent.submit(container.querySelector("[data-pdf-page-form]")!)
+    expect(await screen.findByText("Page 2 of 3")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }))
+    expect(zoom.querySelector("[data-pdf-zoom-value]")).toHaveTextContent("125%")
+    fireEvent.click(screen.getByRole("button", { name: "Zoom out" }))
+    expect(zoom.querySelector("[data-pdf-zoom-value]")).toHaveTextContent("100%")
+    await waitFor(() => expect(pdfjsMock.getTextContent).toHaveBeenCalledWith(3))
+    fireEvent.change(screen.getByLabelText("Search PDF text"), { target: { value: "latent" } })
+    await screen.findByText("2 results")
+    expect(container.querySelector("[data-pdf-search-results]")?.querySelectorAll("[data-pdf-search-result]")).toHaveLength(2)
+    fireEvent.click(screen.getByRole("button", { name: "Next search result" }))
+    expect(await screen.findByText("Page 3 of 3")).toBeInTheDocument()
+  })
+
+  it("retains the opt-in appearance and class on real PDF load failure", async () => {
+    const { container } = renderViewer({ appearance: "paper-agent", className: "agent-pdf" })
+    await waitFor(() => expect(pdfjsMock.getDocument).toHaveBeenCalled())
+    await act(async () => pdfjsMock.rejectDocument())
+    await screen.findByText("PDF could not be rendered; showing text fallback.")
+    expect(container.querySelector('[data-pdf-appearance="paper-agent"]')).toHaveClass("agent-pdf")
+    expect(container.querySelector("[data-pdf-failure]")).toBeInTheDocument()
+    expect(screen.getByText("Text fallback content")).toBeInTheDocument()
+    expect(container.querySelector("[data-pdf-canvas-scroll]")).toBeNull()
+  })
+
   it("shows loading state and loads only through the PDF proxy", async () => {
     renderViewer()
 
@@ -356,6 +485,110 @@ describe("PaperPdfViewer", () => {
     expect(pdfjsMock.getDocument).not.toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://arxiv.org/pdf/2605.00001.pdf" })
     )
+  })
+
+  it.each([
+    ["J v2 exact source", "paper_c9aa5a22011b", "sha256:" + "b".repeat(64), "sha256:" + "a".repeat(64)],
+    ["encoded identity binding", "paper%3Aowned", "sha256%3A" + "b".repeat(64), "sha256%3A" + "a".repeat(64)],
+  ])("loads the %s directly through the same-origin private raw route", async (_label, paperId, revision, fingerprint) => {
+    const pdfUrl = '/api/v1/research/desktop/papers/' + paperId + '/source?sourceRevision=' + revision + '&sourceFingerprint=' + fingerprint
+    const onPageChange = vi.fn()
+    renderViewer({ pdfUrl, appearance: "paper-agent", onPageChange })
+    await resolveViewerDocument()
+    expect(pdfjsMock.getDocument).toHaveBeenCalledOnce()
+    expect(pdfjsMock.getDocument).toHaveBeenCalledWith({
+      disableAutoFetch: true,
+      disableStream: true,
+      rangeChunkSize: 65536,
+      url: pdfUrl,
+      withCredentials: false,
+    })
+    await waitFor(() => expect(onPageChange).toHaveBeenCalledWith(1, 3))
+    expect(screen.getByLabelText("Reader Paper PDF page 1")).toBeInTheDocument()
+    expect(screen.queryByText("Text fallback content")).not.toBeInTheDocument()
+  })
+
+  it("loads a changed private source binding anew rather than reusing an older source", async () => {
+    const fingerprint = 'sha256:' + 'a'.repeat(64)
+    const oldUrl = '/api/v1/research/desktop/papers/paper_c9aa5a22011b/source?sourceRevision=revision-1&sourceFingerprint=' + fingerprint
+    const newUrl = '/api/v1/research/desktop/papers/paper_c9aa5a22011b/source?sourceRevision=revision-2&sourceFingerprint=' + fingerprint
+    const { rerender } = renderViewer({ pdfUrl: oldUrl })
+    await resolveViewerDocument()
+    const getDocumentCalls = pdfjsMock.getDocument.mock.calls.length
+    rerender(<PaperPdfViewer pdfUrl={newUrl} title="Reader Paper" locale="en" fallback={<div>Text fallback content</div>} />)
+    await waitFor(() => expect(pdfjsMock.getDocument).toHaveBeenCalledTimes(getDocumentCalls + 1))
+    expect(pdfjsMock.pdf.destroy).toHaveBeenCalledOnce()
+    expect(pdfjsMock.loadingDestroy).toHaveBeenCalledOnce()
+    expect(pdfjsMock.getDocument).toHaveBeenLastCalledWith(expect.objectContaining({ url: newUrl, withCredentials: false }))
+    await act(async () => pdfjsMock.resolveDocument())
+    expect(await screen.findByText("Page 1 of 3")).toBeInTheDocument()
+  })
+
+  it.each([
+    ["missing revision", "/api/v1/research/desktop/papers/paper-1/source?sourceFingerprint=FINGERPRINT"],
+    ["empty revision", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=&sourceFingerprint=FINGERPRINT"],
+    ["oversize revision", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=" + "x".repeat(513) + "&sourceFingerprint=FINGERPRINT"],
+    ["missing fingerprint", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=revision-1"],
+    ["invalid fingerprint", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=revision-1&sourceFingerprint=sha256:bad"],
+    ["duplicate revision", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceRevision=two&sourceFingerprint=FINGERPRINT"],
+    ["duplicate fingerprint", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT&sourceFingerprint=FINGERPRINT"],
+    ["unknown query", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT&userId=owner-1"],
+    ["encoded duplicate revision", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&%73ourceRevision=two&sourceFingerprint=FINGERPRINT"],
+    ["fragment", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT#page=2"],
+    ["empty fragment", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT#"],
+    ["arbitrary relative path", "/api/admin/secrets?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["non-root relative path", "api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["protocol-relative host", "//evil.test/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["absolute private host", "https://evil.test/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["remote loopback private host", "http://127.0.0.1:8124/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["extra path segment", "/api/v1/research/desktop/papers/paper-1/other/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["dot segment", "/api/v1/research/desktop/papers/../papers/paper-1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["encoded traversal", "/api/v1/research/desktop/papers/%2e%2e/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["embedded traversal", "/api/v1/research/desktop/papers/paper..1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["encoded slash", "/api/v1/research/desktop/papers/paper%2F1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["double encoded slash", "/api/v1/research/desktop/papers/paper%252F1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["encoded backslash", "/api/v1/research/desktop/papers/paper%5C1/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["malformed encoding", "/api/v1/research/desktop/papers/paper%GG/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["invalid UTF-8 encoding", "/api/v1/research/desktop/papers/paper%C0%AF/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["encoded revision controls", "/api/v1/research/desktop/papers/paper-1/source?sourceRevision=one%00two&sourceFingerprint=FINGERPRINT"],
+    ["oversize paper ID", "/api/v1/research/desktop/papers/" + "x".repeat(257) + "/source?sourceRevision=one&sourceFingerprint=FINGERPRINT"],
+    ["filesystem path", "file:///F:/private/paper.pdf"],
+    ["public URL credentials", "https://user:secret@arxiv.org/pdf/2605.00001.pdf"],
+  ])("rejects %s before any PDF transport or proxy request", async (_label, input) => {
+    const onLoadError = vi.fn()
+    const onPageChange = vi.fn()
+    const pdfUrl = input.replaceAll("FINGERPRINT", 'sha256:' + 'a'.repeat(64))
+    renderViewer({ pdfUrl, onLoadError, onPageChange })
+    expect(await screen.findByText("Text fallback content")).toBeInTheDocument()
+    expect(onLoadError).toHaveBeenCalledOnce()
+    expect(onPageChange).not.toHaveBeenCalled()
+    expect(pdfjsMock.getDocument).not.toHaveBeenCalled()
+    expect(pdfjsMock.pdf.getPage).not.toHaveBeenCalled()
+  })
+
+  it.each(["http://arxiv.org/pdf/2605.00001.pdf", "https://arxiv.org/pdf/2605.00001.pdf"])("keeps public HTTP PDFs behind the existing proxy: %s", async pdfUrl => {
+    renderViewer({ pdfUrl })
+    await resolveViewerDocument()
+    expect(pdfjsMock.getDocument).toHaveBeenCalledWith({
+      disableAutoFetch: true,
+      disableStream: true,
+      rangeChunkSize: 65536,
+      url: '/api/papers/pdf?url=' + encodeURIComponent(pdfUrl),
+      withCredentials: false,
+    })
+  })
+
+  it("uses the real viewer failure callback/fallback if a private PDF load is denied", async () => {
+    const pdfUrl = '/api/v1/research/desktop/papers/paper_c9aa5a22011b/source?sourceRevision=sha256:' + 'b'.repeat(64) + '&sourceFingerprint=sha256:' + 'a'.repeat(64)
+    const onLoadError = vi.fn()
+    const onPageChange = vi.fn()
+    renderViewer({ pdfUrl, onLoadError, onPageChange, appearance: "paper-agent" })
+    await waitFor(() => expect(pdfjsMock.getDocument).toHaveBeenCalledWith(expect.objectContaining({ url: pdfUrl })))
+    await act(async () => pdfjsMock.rejectDocument())
+    expect(await screen.findByText("Text fallback content")).toBeInTheDocument()
+    expect(onLoadError).toHaveBeenCalledOnce()
+    expect(onPageChange).not.toHaveBeenCalled()
+    expect(screen.queryByText("Page 1 of 3")).not.toBeInTheDocument()
   })
 
   it("renders page count when the document resolves", async () => {
@@ -573,8 +806,9 @@ describe("PaperPdfViewer", () => {
     expect(zoomOut).toBeDisabled()
   })
 
-  it("renders fallback when PDF loading fails", async () => {
-    renderViewer()
+  it("renders fallback and reports the real PDF loading failure", async () => {
+    const onLoadError = vi.fn()
+    renderViewer({ onLoadError, className: "portal-custom" })
 
     await waitFor(() => expect(pdfjsMock.getDocument).toHaveBeenCalled())
     await act(async () => {
@@ -583,6 +817,12 @@ describe("PaperPdfViewer", () => {
 
     expect(await screen.findByText("PDF could not be rendered; showing text fallback.")).toBeInTheDocument()
     expect(screen.getByText("Text fallback content")).toBeInTheDocument()
+    const banner = screen.getByText("PDF could not be rendered; showing text fallback.").closest("[data-pdf-failure]")
+    expect(banner).toHaveClass("bg-amber-50", "text-amber-900", "dark:bg-amber-950/30", "dark:text-amber-100")
+    expect(banner?.parentElement).toHaveAttribute("data-pdf-appearance", "default")
+    expect(banner?.parentElement).toHaveClass("min-h-[42rem]")
+    expect(banner?.parentElement).not.toHaveClass("portal-custom")
+    expect(onLoadError).toHaveBeenCalledOnce()
   })
 
   it("searches extracted text across pages with case-insensitive matches", async () => {
@@ -770,8 +1010,9 @@ describe("PaperPdfViewer", () => {
     restoreSelection()
   })
 
-  it("renders saved highlights over the current page after scale changes", async () => {
+  it.each(["default", "paper-agent"] as const)("renders saved highlights over the current %s page after scale changes", async (appearance) => {
     renderViewer({
+      appearance,
       notes: [
         {
           noteId: "note-1",
@@ -795,6 +1036,9 @@ describe("PaperPdfViewer", () => {
 
     const highlight = await screen.findByTitle("Diffusion model")
     expect(highlight).toHaveStyle({ left: "12%", top: "14%", width: "28%", height: "3%" })
+    expect(highlight).toHaveClass("bg-emerald-300/35")
+    expect(highlight.parentElement?.parentElement).toHaveAttribute("data-pdf-document")
+    expect(highlight.parentElement?.parentElement?.parentElement).toHaveAttribute("data-pdf-page-flow")
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }))
     expect(await screen.findByText("125%")).toBeInTheDocument()

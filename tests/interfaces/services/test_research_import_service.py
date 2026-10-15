@@ -28,6 +28,20 @@ def test_import_rejects_non_pdf_and_bound_is_enforced(tmp_path: Path) -> None:
         service.create_received(user_id="alice", content=b"%PDF-extra")
 
 
+def test_received_import_rejects_a_fingerprint_that_does_not_match_the_bytes(tmp_path: Path) -> None:
+    service = ResearchImportService(tmp_path / "imports")
+
+    with pytest.raises(ResearchImportError) as mismatch:
+        service.create_received(
+            user_id="alice",
+            content=b"%PDF-1.7\nbody",
+            source_fingerprint="sha256:" + "0" * 64,
+        )
+
+    assert mismatch.value.code == "source_fingerprint_mismatch"
+    assert mismatch.value.status_code == 409
+
+
 def test_completed_import_resolves_only_exact_owner_and_source_identity(tmp_path: Path) -> None:
     service = ResearchImportService(tmp_path / "imports")
     content = b"%PDF-1.7\nbody"

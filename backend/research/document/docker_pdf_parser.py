@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import fitz
+import pymupdf
 
 from framework.execution_environment.errors import ExecutionEnvironmentUnavailableError
 
@@ -141,7 +141,7 @@ def _polygon_points(value: Any) -> list[tuple[float, float]]:
 def rect_to_pdf_points(
     rect: Any,
     *,
-    page_rect: fitz.Rect,
+    page_rect: pymupdf.Rect,
 ) -> tuple[float, float, float, float] | None:
     box = coerce_rect(rect)
     if box is None:
@@ -165,8 +165,8 @@ def rect_to_pdf_points(
     return box
 
 
-def page_rects(pdf_bytes: bytes) -> dict[int, fitz.Rect]:
-    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+def page_rects(pdf_bytes: bytes) -> dict[int, pymupdf.Rect]:
+    document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     try:
         return {index: page.rect for index, page in enumerate(document, start=1)}
     finally:

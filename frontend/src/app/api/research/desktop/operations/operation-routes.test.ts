@@ -90,6 +90,36 @@ describe("desktop operation BFF boundary", () => {
     delete (missingSelection as Partial<typeof request>).selection
     expect(sanitizeAskRequest(missingSelection)).toBeNull()
   })
+  it("allows only exact personal-memory refs and rejects forged owner or content", () => {
+    const personalMemory = {
+      refs: [{ memoryId: `pmem_${"1".repeat(32)}`, revision: 3 }],
+      policyRevision: 2,
+    }
+    const analyze = buildAnalyzeRequest(identity, {
+      ...analyzeSemantic(),
+      personalMemory,
+    })
+    const ask = buildAskRequest(identity, {
+      ...askSemantic(),
+      personalMemory,
+    })
+
+    expect(sanitizeAnalyzeRequest(analyze)).toEqual(analyze)
+    expect(sanitizeAskRequest(ask)).toEqual(ask)
+    expect(sanitizeAskRequest({
+      ...ask,
+      personalMemory: { ...personalMemory, owner: "forged" },
+    })).toBeNull()
+    expect(sanitizeAskRequest({
+      ...ask,
+      personalMemory: {
+        ...personalMemory,
+        refs: [{ ...personalMemory.refs[0], content: "forged" }],
+      },
+    })).toBeNull()
+    expect(sanitizeAskRequest({ ...ask, personalMemory: null })).toBeNull()
+  })
+
   it("preserves a null objective and rejects blank constraints", () => {
     const request = buildAnalyzeRequest(identity, {
       ...analyzeSemantic(),

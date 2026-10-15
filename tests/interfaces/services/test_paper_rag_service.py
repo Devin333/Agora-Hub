@@ -697,3 +697,96 @@ def _visibility_answer() -> GroundedAnswerCandidate:
         cited_evidence_ids=("public", "tenant-a", "tenant-b"),
         claims=claims,
     )
+
+
+def test_gated_service_uses_real_runtime_factory_with_durable_recorder(tmp_path, monkeypatch) -> None:
+    from backend.research.application.paper_rag_session import PaperRAGSession
+    from interfaces.services.paper_rag_factory import PaperRagRuntimeResources
+    from tests.interfaces.services.test_paper_rag_factory import _LifecycleVectorStore
+
+    result = _session_result(
+        status=RAGSessionStatus.ANSWERED,
+        decision_type=RAGDecisionType.RETURN_ANSWER,
+        answer=_answer(abstained=False),
+    )
+    observed = []
+
+    def run(session, *_args, **_kwargs):
+        assert type(session) is PaperRAGSession
+        assert session._event_recorder is not None
+        assert session._event_recorder._store is store
+        observed.append(session)
+        return result
+
+    monkeypatch.setattr(PaperRAGSession, "run", run)
+    resources = PaperRagRuntimeResources(
+        vector_store_factory=_LifecycleVectorStore,
+        visual_store_factory=lambda: None,
+        retrieval_policy_factory=lambda: None,
+        plan_worker_factory=lambda: None,
+        answer_worker_factory=lambda: object(),
+    )
+    store = PaperRagTranscriptFileStore(tmp_path)
+    service = PaperRagApplicationService(
+        runtime_resources=resources, with_reranker=False, transcript_store=store,
+    )
+    try:
+        payload = service.rag_ask(
+            "p1", "How does it work?", generate=True, gated=True,
+            tenant_id="tenant-a", user_id="user-1",
+            memory_namespace="research:tenant:tenant-a:user:user-1",
+            graph_identity=_graph_identity(),
+        )
+        assert len(observed) == 1
+        assert payload["transcript_artifact"]["persisted"] is True
+    finally:
+        service.close()
+        resources.close()
+
+
+def test_service_keeps_provider_live_until_each_answer_worker_invocation() -> None:
+    class Provider:
+        def current(self):
+            pytest.fail("service construction and retrieval must not cache authorization")
+
+    provider = Provider()
+    captured = []
+    result = _session_result(
+        status=RAGSessionStatus.ANSWERED, decision_type=RAGDecisionType.RETURN_ANSWER,
+        answer=_answer(abstained=False),
+    )
+
+    def factory(**kwargs):
+        captured.append(kwargs)
+        return _Session(result)
+
+    service = PaperRagApplicationService(
+        retriever=_Retriever(), session_factory=factory, transcript_store=_RecordingTranscriptStore(),
+    )
+    service.rag_ask("p1", "How?", generate=True, graph_identity=_graph_identity(),
+                    personal_memory_context_provider=provider)
+    service.rag_ask("p1", "How?", generate=True, graph_identity=_graph_identity())
+    assert captured[0]["personal_memory_context_provider"] is provider
+    assert "personal_memory_context" not in captured[0]
+    assert "personal_memory_context_provider" not in captured[1]
+
+
+def test_gated_citation_preserves_actual_evidence_source_and_span_locator() -> None:
+    from interfaces.services.paper_rag_service import _citations_from_answer
+
+    evidence = _pack().accepted_evidence[0]
+    citation = _citations_from_answer(_answer(abstained=False), (evidence,))[0]
+    assert citation["evidence_id"] == evidence.evidence_id
+    assert citation["source_ref"] == evidence.source_ref
+    assert citation["source_locator"] == evidence.metadata["source_locator"]
+    assert citation["span_refs"] == list(_answer(abstained=False).claims[0].span_refs)
+
+
+def test_replay_citation_uses_claimed_verified_spans_not_all_accepted_spans() -> None:
+    from interfaces.services.paper_rag_service import _unique_cited_replay_spans
+
+    answer = {"claims": [
+        {"evidence_ids": ["ev-1"], "span_refs": ["page=7", "page=7", "page=99"]},
+        {"evidence_ids": ["other"], "span_refs": ["page=4"]},
+    ]}
+    assert _unique_cited_replay_spans(answer, "ev-1", {"page=4", "page=7"}) == ["page=7"]

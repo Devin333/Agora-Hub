@@ -12,6 +12,30 @@ import {
 const generation = "gen_0123456789abcdef0123456789abcdef"
 const fingerprint = `sha256:${"a".repeat(64)}`
 
+function groundedAnswerFixture() {
+  return {
+    runId: "run-1",
+    paperId: "2601.01234",
+    sourceRevision: "revision-1",
+    answer: "A grounded answer.",
+    citations: [{
+      id: "citation-1",
+      label: "Methods",
+      evidenceId: "evidence-1",
+      sectionId: "methods",
+      page: 3,
+      excerpt: "bounded source text",
+      valid: true,
+      reasonCode: null,
+    }],
+    confidence: 0.9,
+    evidenceRefs: ["evidence-1"],
+    transcriptId: "rag-transcript://paper_rag_session:0123456789abcdef/1a2b3c4d",
+    answerStatus: "answered",
+    generatedAt: "2026-10-12T00:00:00Z",
+  }
+}
+
 describe("desktop research contracts", () => {
   it("requires the owner-bound generation contract", () => {
     const identity = desktopIdentitySchema.parse({
@@ -233,24 +257,7 @@ describe("desktop research contracts", () => {
   })
 
   it("accepts only the safe grounded-answer projection", () => {
-    const answer = {
-      runId: "run-1",
-      paperId: "2601.01234",
-      sourceRevision: "revision-1",
-      answer: "A grounded answer.",
-      citations: [{
-        id: "citation-1",
-        label: "Methods",
-        evidenceId: "evidence-1",
-        sectionId: "methods",
-        page: 3,
-        excerpt: "bounded source text",
-        valid: true,
-        reasonCode: null,
-      }],
-      confidence: 0.9,
-      generatedAt: "2026-10-12T00:00:00Z",
-    }
+    const answer = groundedAnswerFixture()
     expect(groundedAnswerSchema.parse(answer).sourceRevision).toBe("revision-1")
     expect(() => groundedAnswerSchema.parse({
       ...answer,
@@ -262,4 +269,152 @@ describe("desktop research contracts", () => {
     })).toThrow()
   })
 
+})
+
+
+describe("grounded answer trace contract", () => {
+  it("preserves the accepted desktop answer receipt exactly, including the real transcript URI", () => {
+    const answer = groundedAnswerFixture()
+    expect(groundedAnswerSchema.parse(answer)).toEqual(answer)
+  })
+
+  it.each(["transcriptId", "evidenceRefs", "answerStatus"])("rejects a missing %s without manufacturing a receipt", field => {
+    const answer: Record<string, unknown> = { ...groundedAnswerFixture() }
+    delete answer[field]
+    expect(() => groundedAnswerSchema.parse(answer)).toThrow()
+  })
+
+  it("preserves evidence order and permits several valid locators for one evidence item", () => {
+    const answer = groundedAnswerFixture()
+    const citations = [
+      { ...answer.citations[0], id: "citation-2", evidenceId: "evidence-2" },
+      answer.citations[0],
+      { ...answer.citations[0], id: "citation-3", sectionId: "results", page: 4 },
+    ]
+    const projection = { ...answer, citations, evidenceRefs: ["evidence-2", "evidence-1"] }
+    expect(groundedAnswerSchema.parse(projection)).toEqual(projection)
+    expect(() => groundedAnswerSchema.parse({
+      ...projection, evidenceRefs: ["evidence-1", "evidence-2"],
+    })).toThrow()
+  })
+
+  it("accepts the exact evidence-count bound without dropping refs or citations", () => {
+    const answer = groundedAnswerFixture()
+    const evidenceRefs = Array.from({ length: 1000 }, (_, index) => `evidence-${index}`)
+    const citations = evidenceRefs.map(evidenceId => ({
+      ...answer.citations[0], id: evidenceId, evidenceId,
+    }))
+    const projection = { ...answer, evidenceRefs, citations }
+    expect(groundedAnswerSchema.parse(projection)).toEqual(projection)
+    expect(() => groundedAnswerSchema.parse({
+      ...projection, evidenceRefs: [...evidenceRefs, "evidence-overflow"],
+    })).toThrow()
+    expect(() => groundedAnswerSchema.parse({
+      ...projection, citations: [...citations, { ...citations[0], id: "citation-overflow" }],
+    })).toThrow()
+  })
+
+  it("preserves exact identifier length bounds rather than truncating", () => {
+    const answer = groundedAnswerFixture()
+    const evidenceId = "e".repeat(256)
+    const projection = {
+      ...answer,
+      transcriptId: "t".repeat(256),
+      evidenceRefs: [evidenceId],
+      citations: [{ ...answer.citations[0], evidenceId }],
+    }
+    expect(groundedAnswerSchema.parse(projection)).toEqual(projection)
+    expect(() => groundedAnswerSchema.parse({ ...projection, transcriptId: "t".repeat(257) })).toThrow()
+    expect(() => groundedAnswerSchema.parse({
+      ...projection, evidenceRefs: ["e".repeat(257)],
+    })).toThrow()
+    expect(() => groundedAnswerSchema.parse({
+      ...projection, citations: [{ ...projection.citations[0], evidenceId: "e".repeat(257) }],
+    })).toThrow()
+  })
+
+  it.each([
+    { label: "empty collection", refs: [] },
+    { label: "null", refs: null },
+    { label: "scalar", refs: "evidence-1" },
+    { label: "non-string item", refs: [1] },
+    { label: "empty item", refs: [""] },
+    { label: "blank item", refs: [" "] },
+    { label: "padded item", refs: [" evidence-1"] },
+    { label: "control character", refs: ["evidence-1\n"] },
+    { label: "duplicate items", refs: ["evidence-1", "evidence-1"] },
+    { label: "uncited item", refs: ["evidence-other"] },
+    { label: "missing cited item", refs: ["evidence-1", "evidence-other"] },
+  ])("rejects $label evidence refs without sanitizing the set", ({ refs }) => {
+    expect(() => groundedAnswerSchema.parse({ ...groundedAnswerFixture(), evidenceRefs: refs })).toThrow()
+  })
+
+  it("rejects a citation absent from refs and any invalid or empty citation collection", () => {
+    const answer = groundedAnswerFixture()
+    expect(() => groundedAnswerSchema.parse({
+      ...answer,
+      citations: [...answer.citations, { ...answer.citations[0], id: "citation-2", evidenceId: "evidence-2" }],
+    })).toThrow()
+    expect(() => groundedAnswerSchema.parse({
+      ...answer, citations: [{ ...answer.citations[0], valid: false }],
+    })).toThrow()
+    expect(() => groundedAnswerSchema.parse({ ...answer, citations: [] })).toThrow()
+  })
+
+  it.each([undefined, "", " ", "evidence-1\n"])("rejects a citation with an unusable evidence ID (%s)", evidenceId => {
+    const answer = groundedAnswerFixture()
+    expect(() => groundedAnswerSchema.parse({
+      ...answer, citations: [{ ...answer.citations[0], evidenceId }],
+    })).toThrow()
+  })
+
+  it("requires a usable citation locator while accepting either a section or a page", () => {
+    const answer = groundedAnswerFixture()
+    const sectionOnly = { ...answer, citations: [{ ...answer.citations[0], page: undefined }] }
+    const pageOnly = { ...answer, citations: [{ ...answer.citations[0], sectionId: undefined }] }
+    expect(groundedAnswerSchema.parse(sectionOnly)).toEqual(sectionOnly)
+    expect(groundedAnswerSchema.parse(pageOnly)).toEqual(pageOnly)
+    expect(() => groundedAnswerSchema.parse({
+      ...answer, citations: [{ ...answer.citations[0], sectionId: " ", page: undefined }],
+    })).toThrow()
+  })
+
+  it.each([
+    { label: "null", transcriptId: null },
+    { label: "empty", transcriptId: "" },
+    { label: "blank", transcriptId: " " },
+    { label: "control character", transcriptId: "rag-transcript://session/12345678\n" },
+    { label: "padded", transcriptId: " padded" },
+    { label: "number", transcriptId: 42 },
+    { label: "object", transcriptId: {} },
+    { label: "array", transcriptId: [] },
+  ])("rejects a $label transcript reference without fallback", ({ transcriptId }) => {
+    expect(() => groundedAnswerSchema.parse({ ...groundedAnswerFixture(), transcriptId })).toThrow()
+  })
+
+  it.each(["succeeded", "abstained", "insufficient_evidence", "halted", "failed", "interrupted", "completed", "unknown", "", null])(
+    "does not render the non-answer or unknown answer status %s as an accepted answer", answerStatus => {
+      expect(() => groundedAnswerSchema.parse({ ...groundedAnswerFixture(), answerStatus })).toThrow()
+    },
+  )
+
+  it.each([null, "", " ", "\n"])("rejects an empty or absent answer (%j)", answer => {
+    expect(() => groundedAnswerSchema.parse({ ...groundedAnswerFixture(), answer })).toThrow()
+  })
+
+  it.each([
+    "metadata", "claims", "rawProvider", "raw_provider", "provider", "secret", "apiKey",
+    "transcript", "transcriptArtifact", "decision", "gate_results", "status", "abstained",
+  ])("rejects the non-renderer field %s rather than passing it through", field => {
+    expect(() => groundedAnswerSchema.parse({
+      ...groundedAnswerFixture(), [field]: { sourceRef: "file:///C:/private.pdf", apiKey: "test-only-secret" },
+    })).toThrow()
+  })
+
+  it.each(["url", "source_ref", "rawProvider", "apiKey"])("rejects a non-public citation field %s", field => {
+    const answer = groundedAnswerFixture()
+    expect(() => groundedAnswerSchema.parse({
+      ...answer, citations: [{ ...answer.citations[0], [field]: "file:///C:/private.pdf" }],
+    })).toThrow()
+  })
 })

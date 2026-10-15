@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { safeApiGet, safeApiPut } from "@/lib/api/server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
 import { authFailure, isSameOrigin } from "@/lib/auth/portal-server"
+import { serverOwnedMutationOriginHeaders } from "@/lib/deployment-profile"
 
 export const dynamic = "force-dynamic"
 
@@ -35,6 +36,7 @@ export async function PUT(request: NextRequest) {
   const result = await safeApiPut("/api/v1/research/history", body, {
     headers: {
       ...(token ? { "x-newsroom-session": token } : {}),
+      ...serverOwnedMutationOriginHeaders(),
       "Content-Type": "application/json"
     },
     signal: AbortSignal.timeout(10000)

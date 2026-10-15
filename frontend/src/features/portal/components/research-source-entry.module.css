@@ -1,0 +1,22 @@
+.root {
+  --research-source-status-color: #6d28d9;
+  --research-source-error-color: #a02b47;
+}
+
+.root[data-appearance="paper-agent"] {
+  --research-source-status-color: currentColor;
+  --research-source-error-color: currentColor;
+  color: inherit;
+}
+
+.status {
+  color: var(--research-source-status-color);
+}
+
+.error {
+  color: var(--research-source-error-color);
+}
+
+.status :is(button, a) {
+  color: inherit;
+}

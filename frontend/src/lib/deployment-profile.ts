@@ -9,6 +9,9 @@ export function resolveDeploymentProfile(value = process.env.NEWSROOM_DEPLOYMENT
   throw new Error(`Unsupported NEWSROOM_DEPLOYMENT_PROFILE: ${normalized}`)
 }
 export function isLocalDesktopProfile(value = process.env.NEWSROOM_DEPLOYMENT_PROFILE ?? process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE) { return resolveDeploymentProfile(value) === "local-desktop" }
+export function serverOwnedMutationOriginHeaders(): Record<string, string> {
+  return isLocalDesktopProfile() ? { Origin: desktopCanonicalOrigin() } : {}
+}
 export function desktopCanonicalOrigin(value?: string): string {
   const canonical = process.env.NEWSROOM_CANONICAL_ORIGIN
   const legacyDesktop = process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN

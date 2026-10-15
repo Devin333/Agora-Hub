@@ -7,6 +7,7 @@ from framework.shared.env import env_values_from_root
 from framework.shared.local_desktop import (
     LocalDesktopConfig,
     LocalDesktopConfigError,
+    OWNED_LOCAL_STORAGE_MODE,
     read_runtime_config,
     resolve_local_desktop_config,
 )
@@ -15,6 +16,9 @@ from scripts.local_desktop.storage_contract import resolve_research_storage_path
 REAL_DATA_MODE = "real"
 _PUBLIC_MOCK_ENV_NAMES = frozenset({"NEXT_PUBLIC_NEWSROOM_USE_MOCKS"})
 _FALSE_ENV_VALUES = frozenset({"", "0", "false", "no", "off"})
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+_POSTGRES_REQUIRED_FLAGS = frozenset({"NEWS_MEMORY_POSTGRES_ENABLED"})
+_DATABASE_DSN_SHADOWED_MARKER = "NEWSROOM_DESKTOP_ROOT_DATABASE_DSN_SHADOWED"
 
 _PATH_ENV_NAMES = frozenset(
     {
@@ -68,6 +72,30 @@ def load_config(*, cli_overrides: Mapping[str, Any] | None = None, environ: Mapp
 
 def sanitized_environment(config: LocalDesktopConfig, *, base: Mapping[str, str] | None = None) -> dict[str, str]:
     values = require_real_data_environment(load_root_environment(environ=base))
+    root_database_dsn_present = bool(str(values.get("NEWS_DATABASE_DSN") or "").strip())
+    root_database_dsn_shadowed = (
+        root_database_dsn_present
+        or values.get(_DATABASE_DSN_SHADOWED_MARKER) == "1"
+    )
+    values.pop(_DATABASE_DSN_SHADOWED_MARKER, None)
+    if config.storage_mode == OWNED_LOCAL_STORAGE_MODE:
+        conflicts = sorted(
+            name
+            for name in _POSTGRES_REQUIRED_FLAGS
+            if str(values.get(name) or "").strip().casefold() in _TRUE_ENV_VALUES
+        )
+        if conflicts:
+            raise LocalDesktopConfigError(
+                "desktop_owned_local_storage_conflict",
+                f"owned-local storage conflicts with PostgreSQL-only settings: {', '.join(conflicts)}",
+                field_name=conflicts[0],
+            )
+        # Keep an explicit empty value in every desktop child. Root environment loading
+        # uses override=False, so the empty key prevents a packaged process from
+        # reintroducing the repository's unrelated PostgreSQL DSN.
+        values["NEWS_DATABASE_DSN"] = ""
+        if root_database_dsn_shadowed:
+            values[_DATABASE_DSN_SHADOWED_MARKER] = "1"
     values.update(config.as_environment())
     for name in list(values):
         if name.startswith("NEXT_PUBLIC_") and any(token in name for token in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "CREDENTIAL")):
@@ -84,10 +112,34 @@ def sanitized_environment(config: LocalDesktopConfig, *, base: Mapping[str, str]
     values.update(
         {
             "NEWS_RESEARCH_ARTIFACT_ROOT": str(research_paths.artifact_root),
+            "NEWS_ARTIFACT_ROOT": str(
+                _resolved_default_path(
+                    config,
+                    values,
+                    "NEWS_ARTIFACT_ROOT",
+                    research_paths.artifact_root,
+                )
+            ),
             "NEWS_RESEARCH_ROOT": str(research_paths.research_root),
             "NEWS_RESEARCH_RUN_STORE_ROOT": str(research_paths.run_store_root),
             "NEWS_RESEARCH_RAG_LOCAL_ROOT": str(research_paths.rag_local_root),
             "NEWS_RESEARCH_RAG_TRANSCRIPT_ROOT": str(research_paths.rag_transcript_root),
+            "NEWSROOM_PARSER_RUN_ROOT": str(
+                _resolved_default_path(
+                    config,
+                    values,
+                    "NEWSROOM_PARSER_RUN_ROOT",
+                    config.runtime_root / "parser-runs",
+                )
+            ),
+            "NEWS_AUDIT_LOG_PATH": str(
+                _resolved_default_path(
+                    config,
+                    values,
+                    "NEWS_AUDIT_LOG_PATH",
+                    config.runtime_root / "audit" / "audit.jsonl",
+                )
+            ),
             "NEWSROOM_AUTH_USERS_PATH": str(_resolved_default_path(config, values, "NEWSROOM_AUTH_USERS_PATH", ".newsroom/auth/users.json")),
             "NEWSROOM_AUTH_SESSIONS_PATH": str(_resolved_default_path(config, values, "NEWSROOM_AUTH_SESSIONS_PATH", ".newsroom/auth/sessions.json")),
             "NEWSROOM_AUTH_OTP_PATH": str(_resolved_default_path(config, values, "NEWSROOM_AUTH_OTP_PATH", ".newsroom/auth/otp_challenges.json")),
@@ -118,7 +170,7 @@ def require_real_data_environment(values: Mapping[str, str]) -> dict[str, str]:
     return result
 
 
-def _resolved_default_path(config: LocalDesktopConfig, values: Mapping[str, str], name: str, default: str) -> Path:
+def _resolved_default_path(config: LocalDesktopConfig, values: Mapping[str, str], name: str, default: str | Path) -> Path:
     selected = Path(str(values.get(name) or default)).expanduser()
     if not selected.is_absolute():
         selected = config.project_root / selected

@@ -9,7 +9,23 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote, unquote
 
+from backend.research.application.personal_memory import PersonalMemoryService
 from backend.research.application.research_input_contract import RESEARCH_INPUT_SOURCE_REVISION_OPTION
+from backend.research.domain.personal_memory import (
+    PersonalMemoryOwner,
+    PersonalMemoryRemoteChannel,
+    PersonalMemoryRemotePolicy,
+    PersonalMemorySelection,
+)
+from backend.research.domain.personal_memory_context import (
+    PersonalMemoryContext,
+    PersonalMemoryContextProvider,
+)
+from backend.research.ports.personal_memory import (
+    PersonalMemoryStoreConflictError,
+    PersonalMemoryStoreError,
+    PersonalMemoryStoreNotFoundError,
+)
 from backend.research.ports.request_admission import ResearchDesktopRequestStore
 from interfaces.services.research_desktop_control import (
     ResearchDesktopControlError,
@@ -29,6 +45,7 @@ from interfaces.services.research_service import (
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+_MISSING = object()
 
 
 class ResearchDesktopServiceError(RuntimeError):
@@ -64,6 +81,112 @@ class ResearchDesktopOwner:
         )
 
 
+def _require_personal_memory_policy(
+    policy: PersonalMemoryRemotePolicy,
+    *,
+    owner: PersonalMemoryOwner,
+    expected_revision: int,
+) -> None:
+    if policy.owner != owner:
+        raise ResearchDesktopServiceError(
+            "personal_memory_owner_mismatch",
+            "Personal memory policy does not belong to the authenticated owner",
+            status_code=403,
+            user_action_required=True,
+        )
+    if policy.revision != expected_revision:
+        raise ResearchDesktopServiceError(
+            "personal_memory_policy_conflict",
+            "Personal memory remote-processing policy changed before use",
+            status_code=409,
+            user_action_required=True,
+            details={
+                "expectedPolicyRevision": expected_revision,
+                "actualPolicyRevision": policy.revision,
+            },
+        )
+    if not policy.allows_remote_processing(
+        PersonalMemoryRemoteChannel.MODEL,
+        use_memory=True,
+    ):
+        raise ResearchDesktopServiceError(
+            "personal_memory_remote_processing_disabled",
+            "Personal memory remote processing is disabled",
+            status_code=403,
+            user_action_required=True,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _PersonalMemoryTaskContextProvider:
+    application: PersonalMemoryService
+    owner: PersonalMemoryOwner
+    policy_revision: int
+    selections: tuple[PersonalMemorySelection, ...]
+
+    def current(self) -> PersonalMemoryContext:
+        try:
+            policy = self.application.get_policy(self.owner)
+            _require_personal_memory_policy(
+                policy,
+                owner=self.owner,
+                expected_revision=self.policy_revision,
+            )
+            snapshot = self.application.select_active(
+                self.owner,
+                memory_refs=self.selections,
+            )
+            current_policy = self.application.get_policy(self.owner)
+            _require_personal_memory_policy(
+                current_policy,
+                owner=self.owner,
+                expected_revision=self.policy_revision,
+            )
+            expected_refs = tuple(
+                (selection.memory_id, selection.revision)
+                for selection in self.selections
+            )
+            actual_refs = tuple(
+                (record.memory_id, record.revision)
+                for record in snapshot.records
+            )
+            if snapshot.owner != self.owner or actual_refs != expected_refs:
+                raise ResearchDesktopServiceError(
+                    "personal_memory_selection_conflict",
+                    "Selected personal memory no longer matches the frozen owner and revisions",
+                    status_code=409,
+                    user_action_required=True,
+                )
+            policy = current_policy
+        except ResearchDesktopServiceError:
+            raise
+        except (PersonalMemoryStoreNotFoundError, PersonalMemoryStoreConflictError) as exc:
+            raise ResearchDesktopServiceError(
+                "personal_memory_selection_conflict",
+                "Selected personal memory is no longer available at the requested revision",
+                status_code=409,
+                user_action_required=True,
+            ) from exc
+        except PersonalMemoryStoreError as exc:
+            raise ResearchDesktopServiceError(
+                "personal_memory_unavailable",
+                "Personal memory storage is unavailable",
+                status_code=503,
+                retryable=exc.retryable,
+            ) from exc
+        except (TypeError, ValueError) as exc:
+            raise ResearchDesktopServiceError(
+                "personal_memory_selection_conflict",
+                "Selected personal memory is invalid or unavailable",
+                status_code=409,
+                user_action_required=True,
+            ) from exc
+        return PersonalMemoryContext.from_snapshot(
+            snapshot,
+            policy_revision=policy.revision,
+        )
+
+
 class ResearchDesktopApplicationService:
     """Authenticated desktop facade over existing Research application authorities."""
 
@@ -73,12 +196,47 @@ class ResearchDesktopApplicationService:
         research: ResearchApplicationService,
         imports: ResearchImportService | None = None,
         requests: ResearchDesktopRequestStore | None = None,
+        personal_memory: PersonalMemoryService | None = None,
     ) -> None:
         if not isinstance(research, ResearchApplicationService):
             raise TypeError("research must be ResearchApplicationService")
         self._research = research
         self._imports = imports or ResearchImportService()
         self._requests = requests or research_desktop_request_store_from_env()
+        if personal_memory is not None and not isinstance(
+            personal_memory, PersonalMemoryService
+        ):
+            raise TypeError("personal_memory must be PersonalMemoryService")
+        self._personal_memory = personal_memory
+
+    def _personal_memory_context(
+        self,
+        owner: ResearchDesktopOwner,
+        request: Mapping[str, Any] | None,
+    ) -> PersonalMemoryContextProvider | None:
+        if request is None:
+            return None
+        if self._personal_memory is None:
+            raise ResearchDesktopServiceError(
+                "personal_memory_context_unavailable",
+                "Personal memory task context is not configured",
+                status_code=503,
+                retryable=False,
+            )
+        provider = _PersonalMemoryTaskContextProvider(
+            application=self._personal_memory,
+            owner=_personal_memory_owner(owner),
+            policy_revision=int(request["policyRevision"]),
+            selections=tuple(
+                PersonalMemorySelection(
+                    memory_id=str(item["memoryId"]),
+                    revision=int(item["revision"]),
+                )
+                for item in request["refs"]
+            ),
+        )
+        provider.current()
+        return provider
 
     def generation(self) -> str:
         return self._requests.generation()
@@ -362,12 +520,14 @@ class ResearchDesktopApplicationService:
         pdf_url: str | None = None,
         objective: str | None = None,
         constraints: Sequence[str] = (),
+        personal_memory: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         actual = _owner(owner)
         actual_paper = _safe_id(paper_id, "paperId")
         revision = _required_text(source_revision, "sourceRevision", maximum=512)
         source_digest = _sha256_fingerprint(source_fingerprint, "sourceFingerprint")
         actual_constraints = _text_list(constraints, "constraints", maximum_items=20, maximum_length=500)
+        memory_request = _personal_memory_request(personal_memory)
         semantic_objective = _optional_text(objective, "objective", maximum=2000)
         effective_objective = semantic_objective or f"Analyze paper {actual_paper}"
         source = _optional_url(source_url, "sourceUrl")
@@ -408,6 +568,7 @@ class ResearchDesktopApplicationService:
             "pdfUrl": pdf,
             "objective": semantic_objective,
             "constraints": actual_constraints,
+            **({"personalMemory": memory_request} if memory_request is not None else {}),
         }
         self._validate_request_fingerprint(semantic, request_fingerprint)
         decision = self._requests.admit(
@@ -428,6 +589,9 @@ class ResearchDesktopApplicationService:
                 generation=generation,
                 run_id=run_id,
             )
+            memory_context = self._personal_memory_context(
+                actual, memory_request
+            )
             response = self._research.analyze_paper(
                 ResearchAnalyzeInput(
                     paper_id=actual_paper,
@@ -437,6 +601,7 @@ class ResearchDesktopApplicationService:
                     user_id=actual.user_id,
                     tenant_id=actual.tenant_id,
                     memory_namespace=actual.memory_namespace,
+                    personal_memory_context=memory_context,
                     metadata={
                         "desktop_request_id": request_id,
                         "desktop_generation": generation,
@@ -456,15 +621,61 @@ class ResearchDesktopApplicationService:
             raise _service_error(exc) from exc
         authority_run_id = str(response.get("runId") or run_id)
         projection = self._research.get_run_projection(authority_run_id, actor=actual.actor())
+        result = _analysis_operation_result(projection, source_revision=revision)
         self._record_capability("single-paper-analysis", operation="analyze", authority_id=authority_run_id)
-        if projection.get("eligibleForAcceptedExport"):
-            self._record_capability("accepted-report", operation="analyze", authority_id=authority_run_id)
+        if not _result_identity_matches(
+            projection,
+            run_id=authority_run_id,
+            paper_id=actual_paper,
+            source_revision=revision,
+        ):
+            failed = self._requests.fail(
+                owner_id=actual.user_id,
+                request_id=request_id,
+                generation=generation,
+                error={
+                    "code": "result_identity_mismatch",
+                    "message": "The analysis result does not match the frozen run and source identity",
+                    "retryable": False,
+                },
+                needs_review=True,
+            )
+            return self._operation_response(failed)
+        if not _personal_memory_disclosure_matches(
+            memory_request,
+            projection.get("diagnostics") if isinstance(projection.get("diagnostics"), Mapping) else {},
+        ):
+            failed = self._requests.fail(
+                owner_id=actual.user_id,
+                request_id=request_id,
+                generation=generation,
+                error={
+                    "code": "personal_memory_disclosure_mismatch",
+                    "message": "The analysis memory receipt does not match the frozen request selection",
+                    "retryable": False,
+                },
+                needs_review=True,
+            )
+            return self._operation_response(failed)
+        if not _analysis_result_is_accepted(result):
+            rejected = self._requests.fail(
+                owner_id=actual.user_id,
+                request_id=request_id,
+                generation=generation,
+                error={
+                    "code": "quality_gate_failed",
+                    "message": "The authoritative Research quality gate did not accept the analysis",
+                    "retryable": False,
+                },
+            )
+            return self._operation_response(rejected)
+        self._record_capability("accepted-report", operation="analyze", authority_id=authority_run_id)
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
             generation=generation,
             run_id=authority_run_id,
-            result=_analysis_operation_result(projection, source_revision=revision),
+            result=result,
         )
         return self._operation_response(completed)
 
@@ -482,6 +693,7 @@ class ResearchDesktopApplicationService:
         question: str,
         selection: Mapping[str, Any] | None = None,
         locale: str | None = None,
+        personal_memory: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         actual = _owner(owner)
         actual_run = _safe_id(run_id, "runId")
@@ -491,6 +703,7 @@ class ResearchDesktopApplicationService:
         actual_question = _required_text(question, "question", maximum=4000)
         actual_selection = _ask_selection(selection or {})
         actual_locale = _optional_text(locale, "locale", maximum=32)
+        memory_request = _personal_memory_request(personal_memory)
         semantic = {
             "kind": "ask",
             "runId": actual_run,
@@ -500,6 +713,7 @@ class ResearchDesktopApplicationService:
             "question": actual_question,
             "selection": actual_selection,
             "locale": actual_locale,
+            **({"personalMemory": memory_request} if memory_request is not None else {}),
         }
         self._validate_request_fingerprint(semantic, request_fingerprint)
         self._require_run_revision(
@@ -525,6 +739,9 @@ class ResearchDesktopApplicationService:
                 generation=generation,
                 run_id=actual_run,
             )
+            memory_context = self._personal_memory_context(
+                actual, memory_request
+            )
             response = self._research.ask_paper(
                 actual_paper,
                 ResearchAskInput(
@@ -536,30 +753,81 @@ class ResearchDesktopApplicationService:
                     memory_namespace=actual.memory_namespace,
                     run_id=actual_run,
                     request_id=request_id,
+                    personal_memory_context=memory_context,
                 ),
             )
         except Exception as exc:
             self._record_failure(actual, request_id=request_id, generation=generation, exc=exc)
             raise _service_error(exc) from exc
-        if response.get("abstained") is True or not response.get("answer"):
+        if response.get("abstained") is not False or response.get("status") != "answered" or not response.get("answer"):
             rejected = self._requests.fail(
                 owner_id=actual.user_id,
                 request_id=request_id,
                 generation=generation,
                 error={
-                    "code": "answer_quality_gate_rejected",
+                    "code": _answer_rejection_code(response),
                     "message": "The grounded answer gate did not accept an answer",
                     "retryable": False,
+                    "answerTrace": _answer_trace_for_audit(response),
                 },
             )
             return self._operation_response(rejected)
-        self._record_capability("paper-question-answering", operation="ask", authority_id=str(response.get("transcriptId") or actual_run))
+        result = _ask_operation_result(response, source_revision=revision)
+        if not _ask_result_has_verified_citations(
+            response, paper_id=actual_paper, source_revision=revision
+        ):
+            rejected = self._requests.fail(
+                owner_id=actual.user_id,
+                request_id=request_id,
+                generation=generation,
+                error={
+                    "code": "answer_citation_locator_unverified",
+                    "message": "The grounded answer citation locator could not be verified",
+                    "retryable": False,
+                    "answerTrace": _answer_trace_for_audit(response),
+                },
+            )
+            return self._operation_response(rejected)
+        if not _result_identity_matches(
+            response,
+            run_id=actual_run,
+            paper_id=actual_paper,
+            source_revision=None,  # Ask source identity is verified on every citation above.
+        ):
+            failed = self._requests.fail(
+                owner_id=actual.user_id,
+                request_id=request_id,
+                generation=generation,
+                error={
+                    "code": "result_identity_mismatch",
+                    "message": "The answer result does not match the frozen run and source identity",
+                    "retryable": False,
+                    "answerTrace": _answer_trace_for_audit(response),
+                },
+                needs_review=True,
+            )
+            return self._operation_response(failed)
+        if not _personal_memory_disclosure_matches(memory_request, response):
+            failed = self._requests.fail(
+                owner_id=actual.user_id,
+                request_id=request_id,
+                generation=generation,
+                error={
+                    "code": "personal_memory_disclosure_mismatch",
+                    "message": "The answer memory receipt does not match the frozen request selection",
+                    "retryable": False,
+                    "answerTrace": _answer_trace_for_audit(response),
+                },
+                needs_review=True,
+            )
+            return self._operation_response(failed)
+        self._record_capability("paper-question-answering", operation="ask", authority_id=response["transcriptId"])
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
             generation=generation,
             run_id=actual_run,
-            result=_ask_operation_result(response, source_revision=revision),
+            result=result,
         )
         return self._operation_response(completed)
 
@@ -740,15 +1008,64 @@ class ResearchDesktopApplicationService:
                 raise _service_error(exc) from exc
             status = str(projection.get("status") or "unknown")
             if status == "succeeded":
+                result = _analysis_operation_result(
+                    projection,
+                    source_revision=str(admission.semantic.get("sourceRevision") or ""),
+                )
+                memory_request = (
+                    admission.semantic.get("personalMemory")
+                    if isinstance(admission.semantic.get("personalMemory"), Mapping)
+                    else None
+                )
+                if not _result_identity_matches(
+                    projection,
+                    run_id=admission.run_id,
+                    paper_id=str(admission.semantic.get("paperId") or ""),
+                    source_revision=str(admission.semantic.get("sourceRevision") or ""),
+                ):
+                    return self._requests.fail(
+                        owner_id=owner.user_id,
+                        request_id=admission.request_id,
+                        generation=admission.generation,
+                        error={
+                            "code": "result_identity_mismatch",
+                            "message": "The analysis result does not match the frozen run and source identity",
+                            "retryable": False,
+                        },
+                        needs_review=True,
+                    )
+                if not _personal_memory_disclosure_matches(
+                    memory_request,
+                    projection.get("diagnostics") if isinstance(projection.get("diagnostics"), Mapping) else {},
+                ):
+                    return self._requests.fail(
+                        owner_id=owner.user_id,
+                        request_id=admission.request_id,
+                        generation=admission.generation,
+                        error={
+                            "code": "personal_memory_disclosure_mismatch",
+                            "message": "The analysis memory receipt does not match the frozen request selection",
+                            "retryable": False,
+                        },
+                        needs_review=True,
+                    )
+                if not _analysis_result_is_accepted(result):
+                    return self._requests.fail(
+                        owner_id=owner.user_id,
+                        request_id=admission.request_id,
+                        generation=admission.generation,
+                        error={
+                            "code": "quality_gate_failed",
+                            "message": "The authoritative Research quality gate did not accept the analysis",
+                            "retryable": False,
+                        },
+                    )
                 return self._requests.complete(
                     owner_id=owner.user_id,
                     request_id=admission.request_id,
                     generation=admission.generation,
                     run_id=admission.run_id,
-                    result=_analysis_operation_result(
-                        projection,
-                        source_revision=str(admission.semantic.get("sourceRevision") or ""),
-                    ),
+                    result=result,
                 )
             if status in {"failed", "rejected", "cancelled"}:
                 return self._requests.fail(
@@ -795,26 +1112,76 @@ class ResearchDesktopApplicationService:
                     needs_review=True,
                 )
             if recovered is not None:
-                if recovered.get("abstained") is True or not recovered.get("answer"):
+                if recovered.get("abstained") is not False or recovered.get("status") != "answered" or not recovered.get("answer"):
                     return self._requests.fail(
                         owner_id=owner.user_id,
                         request_id=admission.request_id,
                         generation=admission.generation,
                         error={
-                            "code": "answer_quality_gate_rejected",
+                            "code": _answer_rejection_code(recovered),
                             "message": "The grounded answer gate did not accept an answer",
                             "retryable": False,
+                            "answerTrace": _answer_trace_for_audit(recovered),
                         },
+                    )
+                revision = str(semantic.get("sourceRevision") or "")
+                result = _ask_operation_result(recovered, source_revision=revision)
+                if not _ask_result_has_verified_citations(
+                    recovered,
+                    paper_id=str(semantic.get("paperId") or ""),
+                    source_revision=revision,
+                ):
+                    return self._requests.fail(
+                        owner_id=owner.user_id,
+                        request_id=admission.request_id,
+                        generation=admission.generation,
+                        error={
+                            "code": "answer_citation_locator_unverified",
+                            "message": "The grounded answer citation locator could not be verified",
+                            "retryable": False,
+                            "answerTrace": _answer_trace_for_audit(recovered),
+                        },
+                    )
+                memory_request = (
+                    semantic.get("personalMemory")
+                    if isinstance(semantic.get("personalMemory"), Mapping)
+                    else None
+                )
+                if not _result_identity_matches(
+                    recovered,
+                    run_id=admission.run_id,
+                    paper_id=str(semantic.get("paperId") or ""),
+                    source_revision=None,  # Recovered ask citations carry the exact revision.
+                ):
+                    return self._requests.fail(
+                        owner_id=owner.user_id,
+                        request_id=admission.request_id,
+                        generation=admission.generation,
+                        error={
+                            "code": "result_identity_mismatch",
+                            "message": "The answer result does not match the frozen run and source identity",
+                            "retryable": False,
+                        },
+                        needs_review=True,
+                    )
+                if not _personal_memory_disclosure_matches(memory_request, recovered):
+                    return self._requests.fail(
+                        owner_id=owner.user_id,
+                        request_id=admission.request_id,
+                        generation=admission.generation,
+                        error={
+                            "code": "personal_memory_disclosure_mismatch",
+                            "message": "The answer memory receipt does not match the frozen request selection",
+                            "retryable": False,
+                        },
+                        needs_review=True,
                     )
                 return self._requests.complete(
                     owner_id=owner.user_id,
                     request_id=admission.request_id,
                     generation=admission.generation,
                     run_id=admission.run_id,
-                    result=_ask_operation_result(
-                        recovered,
-                        source_revision=str(semantic.get("sourceRevision") or ""),
-                    ),
+                    result=result,
                 )
         if admission.kind == "import" and admission.import_id:
             try:
@@ -1102,7 +1469,12 @@ class ResearchDesktopApplicationService:
             projected_status = "passed"
         elif status == "needs_review":
             projected_status = "needs_action"
-        elif str(error.get("code") or "") in {"quality_gate_failed", "import_quality_failed", "answer_quality_gate_rejected"}:
+        elif str(error.get("code") or "") in {
+            "quality_gate_failed",
+            "import_quality_failed",
+            "answer_quality_gate_rejected",
+            "answer_citation_locator_unverified",
+        }:
             projected_status = "rejected"
         elif status == "failed":
             projected_status = "failed"
@@ -1131,6 +1503,8 @@ class ResearchDesktopApplicationService:
         payload.update({key: value for key, value in optional.items() if value is not None})
         if result:
             payload["result"] = dict(result)
+        elif isinstance(error.get("answerTrace"), Mapping):
+            payload["result"] = dict(error["answerTrace"])
         return payload
 
 
@@ -1398,6 +1772,28 @@ def _public_http_url(value: Any) -> str | None:
 
 
 
+def _answer_rejection_code(value: Mapping[str, Any]) -> str:
+    metadata = value.get("metadata")
+    if isinstance(metadata, Mapping) and metadata.get("citationLocatorVerified") is False:
+        return "answer_citation_locator_unverified"
+    return "answer_quality_gate_rejected"
+
+
+def _answer_trace_for_audit(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist real failure trace without exposing an unaccepted GroundedAnswer."""
+    trace: dict[str, Any] = {"answerStatus": value.get("status")}
+    transcript_id = value.get("transcriptId")
+    if isinstance(transcript_id, str) and 1 <= len(transcript_id) <= 256:
+        trace["transcriptId"] = transcript_id
+    refs = value.get("evidenceRefs")
+    if isinstance(refs, list):
+        trace["evidenceRefs"] = [ref for ref in refs if isinstance(ref, str) and 1 <= len(ref) <= 256][:1000]
+    decision = value.get("decision")
+    if isinstance(decision, Mapping):
+        trace["decision"] = dict(decision)
+    return trace
+
+
 def _ask_operation_result(value: Mapping[str, Any], *, source_revision: str) -> dict[str, Any]:
     citations = value.get("citations") if isinstance(value.get("citations"), list) else []
     result: dict[str, Any] = {
@@ -1419,6 +1815,14 @@ def _ask_operation_result(value: Mapping[str, Any], *, source_revision: str) -> 
             if isinstance(item, Mapping)
         ],
         "confidence": _public_score(value.get("confidence")),
+        "evidenceRefs": list(value.get("evidenceRefs") or ()),
+        "transcriptId": value.get("transcriptId"),
+        "answerStatus": value.get("status"),
+        **(
+            {"usedPersonalMemory": used}
+            if (used := _used_personal_memory_projection(value.get("usedPersonalMemory")))
+            else {}
+        ),
     }
     generated_at = value.get("generatedAt") or value.get("generated_at")
     if isinstance(generated_at, str) and generated_at.strip():
@@ -1433,10 +1837,24 @@ def _analysis_operation_result(projection: Mapping[str, Any], *, source_revision
         "paperId": str(projection.get("paperId") or ""),
         "status": str(projection.get("status") or "unknown"),
         "sourceRevision": source_revision,
-        "accepted": bool(projection.get("accepted")),
-        "qualityPassed": bool(projection.get("qualityPassed")),
-        "eligibleForAcceptedExport": bool(projection.get("eligibleForAcceptedExport")),
+        "accepted": projection.get("accepted") is True,
+        "qualityPassed": projection.get("qualityPassed") is True,
+        "eligibleForAcceptedExport": projection.get("eligibleForAcceptedExport") is True,
         "artifactStatus": str(projection.get("artifactStatus") or "missing"),
+        **(
+            {"traceRef": trace_ref}
+            if (trace_ref := _citation_text(projection.get("traceRef"), maximum=1000))
+            else {}
+        ),
+        **(
+            {"usedPersonalMemory": used}
+            if (used := _used_personal_memory_projection(
+                (projection.get("diagnostics") or {}).get("usedPersonalMemory")
+                if isinstance(projection.get("diagnostics"), Mapping)
+                else None
+            ))
+            else {}
+        ),
     }
 
 def _report_projection(
@@ -1505,6 +1923,15 @@ def _report_projection(
         "analysis": projected_analysis,
         "quality": projected_quality,
         "citations": citations,
+        **(
+            {"usedPersonalMemory": used_personal_memory}
+            if (used_personal_memory := _used_personal_memory_projection(
+                (run.get("diagnostics") or {}).get("usedPersonalMemory")
+                if isinstance(run.get("diagnostics"), Mapping)
+                else None
+            ))
+            else {}
+        ),
         "artifactRefs": [],
         "traceRef": None,
         "diagnostics": {
@@ -1868,8 +2295,12 @@ def _report_title(run: Mapping[str, Any], paper_id: str) -> str:
 
 def _operation_message(status: str, error_code: Any) -> str | None:
     if status == "needs_action":
+        if error_code == "personal_memory_disclosure_mismatch":
+            return "The personal-memory receipt did not match the frozen request selection."
         return "The previous execution ended without a terminal receipt; review the existing run before creating a new request."
     if status == "rejected":
+        if error_code == "answer_citation_locator_unverified":
+            return "The answer was rejected because its citation locator could not be verified."
         return "The Research quality gate rejected this candidate."
     if status == "failed":
         return f"Research operation failed ({str(error_code or 'operation_failed')[:200]})."
@@ -2181,6 +2612,176 @@ def _normalized_upload_filename(value: Any) -> str:
     if len(name) > 255 or any(ord(char) < 0x20 for char in name):
         raise ResearchDesktopServiceError("invalid_request", "filename is invalid", user_action_required=True)
     return name if name.casefold().endswith(".pdf") else f"{name}.pdf"
+
+
+def _personal_memory_owner(owner: ResearchDesktopOwner) -> PersonalMemoryOwner:
+    namespace = str(owner.memory_namespace or "").strip()
+    if not namespace:
+        namespace = f"research:user:{owner.user_id}"
+    return PersonalMemoryOwner(
+        user_id=owner.user_id,
+        tenant_id=owner.tenant_id,
+        namespace=namespace,
+    )
+
+
+def _personal_memory_request(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"refs", "policyRevision"}:
+        raise ResearchDesktopServiceError(
+            "invalid_request",
+            "personalMemory must contain exactly refs and policyRevision",
+            user_action_required=True,
+        )
+    policy_revision = value.get("policyRevision")
+    refs = value.get("refs")
+    if (
+        isinstance(policy_revision, bool)
+        or not isinstance(policy_revision, int)
+        or policy_revision < 1
+        or not isinstance(refs, list)
+        or not 1 <= len(refs) <= 20
+    ):
+        raise ResearchDesktopServiceError(
+            "invalid_request",
+            "personalMemory policy revision or refs are invalid",
+            user_action_required=True,
+        )
+    normalized: list[dict[str, str | int]] = []
+    seen: set[str] = set()
+    for item in refs:
+        if not isinstance(item, Mapping) or set(item) != {"memoryId", "revision"}:
+            raise ResearchDesktopServiceError(
+                "invalid_request",
+                "personalMemory refs must contain memoryId and revision",
+                user_action_required=True,
+            )
+        memory_id = item.get("memoryId")
+        revision = item.get("revision")
+        if (
+            not isinstance(memory_id, str)
+            or re.fullmatch(r"pmem_[0-9a-f]{32}", memory_id) is None
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 1
+            or memory_id in seen
+        ):
+            raise ResearchDesktopServiceError(
+                "invalid_request",
+                "personalMemory refs are invalid or duplicated",
+                user_action_required=True,
+            )
+        seen.add(memory_id)
+        normalized.append({"memoryId": memory_id, "revision": revision})
+    return {"refs": normalized, "policyRevision": policy_revision}
+
+
+def _used_personal_memory_receipt(
+    value: Any,
+) -> list[dict[str, str | int]] | None:
+    try:
+        normalized = _personal_memory_request(
+            {"refs": value, "policyRevision": 1}
+        )
+    except ResearchDesktopServiceError:
+        return None
+    return list(normalized["refs"]) if normalized is not None else None
+
+
+def _used_personal_memory_projection(value: Any) -> list[dict[str, str | int]]:
+    return _used_personal_memory_receipt(value) or []
+
+
+def _personal_memory_disclosure_matches(
+    request: Mapping[str, Any] | None,
+    result: Mapping[str, Any],
+) -> bool:
+    raw = result.get("usedPersonalMemory", _MISSING)
+    if request is None:
+        return raw is _MISSING
+    if raw is _MISSING:
+        return False
+    expected = request.get("refs")
+    actual = _used_personal_memory_receipt(raw)
+    return isinstance(expected, list) and actual == expected
+
+
+def _result_identity_matches(
+    result: Mapping[str, Any],
+    *,
+    run_id: str,
+    paper_id: str,
+    source_revision: str | None,
+) -> bool:
+    return (
+        str(result.get("runId") or "") == run_id
+        and str(result.get("paperId") or "") == paper_id
+        and (
+            source_revision is None
+            or str(result.get("sourceRevision") or "") == source_revision
+        )
+    )
+
+
+def _analysis_result_is_accepted(result: Mapping[str, Any]) -> bool:
+    return (
+        result.get("status") == "succeeded"
+        and result.get("accepted") is True
+        and result.get("qualityPassed") is True
+        and result.get("eligibleForAcceptedExport") is True
+        and result.get("artifactStatus") == "valid"
+    )
+
+
+def _ask_result_has_verified_citations(
+    value: Mapping[str, Any],
+    *,
+    paper_id: str,
+    source_revision: str,
+) -> bool:
+    if value.get("status") != "answered" or value.get("abstained") is not False:
+        return False
+    transcript_id = value.get("transcriptId")
+    if (
+        not isinstance(transcript_id, str) or not 1 <= len(transcript_id) <= 256
+        or re.search(r"[\s\x00-\x1f\x7f]", transcript_id) is not None
+    ):
+        return False
+    decision = value.get("decision")
+    if not isinstance(decision, Mapping) or decision.get("decision_type") != "return_answer":
+        return False
+    citations = value.get("citations")
+    if not isinstance(citations, list) or not citations or len(citations) > 1000:
+        return False
+    evidence_refs: list[str] = []
+    for item in citations:
+        if not isinstance(item, Mapping) or item.get("valid") is not True:
+            return False
+        if str(item.get("paperId") or "") != paper_id:
+            return False
+        if str(item.get("sourceRevision") or "") != source_revision:
+            return False
+        evidence_id = item.get("evidenceId")
+        if (
+            not isinstance(evidence_id, str) or not 1 <= len(evidence_id) <= 256
+            or re.search(r"[\s\x00-\x1f\x7f]", evidence_id) is not None
+        ):
+            return False
+        if evidence_id not in evidence_refs:
+            evidence_refs.append(evidence_id)
+        section_id = str(item.get("sectionId") or "").strip()
+        page = item.get("page")
+        valid_page = (
+            not isinstance(page, bool)
+            and isinstance(page, int)
+            and 1 <= page <= 100_000
+        )
+        if not section_id and not valid_page:
+            return False
+    return value.get("evidenceRefs") == evidence_refs
 
 
 def _ask_selection(value: Mapping[str, Any]) -> dict[str, Any]:

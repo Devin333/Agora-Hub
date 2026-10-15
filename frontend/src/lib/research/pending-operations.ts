@@ -87,21 +87,80 @@ export async function prepareResearchOperation(input: {
   return operation
 }
 
+export type ResearchOperationUpdate = Partial<
+  Pick<ResearchPendingOperation, "status" | "paperId" | "sourceRevision" | "sourceFingerprint" | "importId" | "runId" | "errorCode">
+>
+
+export function operationReceiptUpdate(
+  operation: ResearchOperation,
+  expected: ResearchPendingOperation,
+): ResearchOperationUpdate | null {
+  if (!operationReceiptMatches(operation, expected)) return null
+  if (operation.status !== "passed") return { status: operation.status }
+
+  const update: ResearchOperationUpdate = {
+    status: operation.status,
+    ...(operation.importId ? { importId: operation.importId } : {}),
+    ...(operation.runId ? { runId: operation.runId } : {}),
+    ...(operation.errorCode ? { errorCode: operation.errorCode } : {}),
+  }
+  if (operation.kind !== "import" && operation.kind !== "prepare") return update
+
+  const result = operation.result && typeof operation.result === "object" && !Array.isArray(operation.result)
+    ? operation.result as Record<string, unknown>
+    : {}
+  const paperId = operation.paperId ?? textResult(result.paperId, 200)
+  const sourceRevision = operation.sourceRevision ?? textResult(result.sourceRevision, 512)
+  const sourceFingerprint = textResult(result.sourceFingerprint, 80)
+  if (
+    (operation.kind === "import" && !operation.importId) ||
+    !paperId ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(paperId) ||
+    (expected.paperId !== undefined && expected.paperId !== paperId) ||
+    (result.paperId !== undefined && result.paperId !== paperId) ||
+    (result.sourceRevision !== undefined && result.sourceRevision !== sourceRevision) ||
+    !sourceRevision ||
+    !sourceFingerprint ||
+    !/^sha256:[0-9a-f]{64}$/.test(sourceFingerprint) ||
+    (expected.semantic.kind === "import" && (sourceRevision !== expected.semantic.sourceRevision || sourceFingerprint !== expected.semantic.sourceFingerprint)) ||
+    (expected.semantic.kind === "prepare" && (paperId !== expected.semantic.paperId || result.status !== "ready"))
+  ) return null
+  return { ...update, paperId, sourceRevision, sourceFingerprint }
+}
+
+export function mergeResearchOperationUpdate(
+  existing: ResearchPendingOperation,
+  patch: ResearchOperationUpdate,
+): ResearchPendingOperation {
+  const next = { ...existing, ...patch, updatedAt: Date.now() } as ResearchPendingOperation
+  if (patch.status !== undefined && patch.status !== "passed") {
+    if (existing.semantic.kind === "import") {
+      delete next.paperId
+      delete next.importId
+    } else if (existing.semantic.kind === "prepare") {
+      delete next.sourceRevision
+      delete next.sourceFingerprint
+    }
+  }
+  return next
+}
+
 export function updateResearchOperation(
   requestId: string,
-  patch: Partial<
-    Pick<ResearchPendingOperation, "status" | "importId" | "runId" | "errorCode">
-  >,
+  patch: ResearchOperationUpdate,
+  expected?: OperationReceiptIdentity,
+  expectedOwner?: string,
 ): boolean {
   const state = historyState()
   const existing = state.workspace.pendingOperations?.find(
     item => item.requestId === requestId,
   )
-  if (!existing || !state.owner) return false
-  return savePendingOperation(
-    { ...existing, ...patch, updatedAt: Date.now() },
-    state.owner,
-  )
+  if (!existing || !state.owner || (expectedOwner !== undefined && state.owner !== expectedOwner) || (expected && !operationReceiptMatches(existing, expected))) return false
+  return savePendingOperation(mergeResearchOperationUpdate(existing, patch), state.owner)
+}
+
+function textResult(value: unknown, maximum: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= maximum ? value : undefined
 }
 
 export function recoverableResearchOperations(kind?: ResearchOperationKind) {

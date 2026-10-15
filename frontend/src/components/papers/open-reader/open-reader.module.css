@@ -1157,3 +1157,63 @@
   object-fit: contain;
 }
 .sourceFigureText { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; font-size: 14px; line-height: 1.8; background: #f7f7fa; }
+
+/* Formal paper-agent workspace appearance. The default portal workspace keeps its original palette. */
+.openReader.workspaceReader.monochromeLightWorkspace {
+  --reader-bg: #f7f7f5;
+  --reader-paper: #ffffff;
+  --reader-ink: #1d1d1b;
+  --reader-muted: #5b5b56;
+  --reader-soft: #e5e5e0;
+  --reader-line: #d1d1cb;
+  --reader-accent: #2b2b28;
+  --reader-accent-soft: #ecece8;
+  --reader-note: #deded6;
+  --reader-confused: #d3d3cc;
+  --reader-green: #4d4d48;
+  --reader-shadow: 0 16px 42px rgba(20, 20, 18, 0.12);
+}
+
+.openReader.workspaceReader.monochromeDarkWorkspace {
+  --reader-bg: #11110f;
+  --reader-paper: #191917;
+  --reader-ink: #f3f3ef;
+  --reader-muted: #b8b8b0;
+  --reader-soft: #292926;
+  --reader-line: #3c3c37;
+  --reader-accent: #e7e7e0;
+  --reader-accent-soft: #30302c;
+  --reader-note: #494942;
+  --reader-confused: #514f49;
+  --reader-green: #c7c7bf;
+  --reader-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.workspaceReader.monochromeLightWorkspace .paperCard,
+.workspaceReader.monochromeDarkWorkspace .paperCard,
+.workspaceReader.monochromeLightWorkspace .paperCompiledTable,
+.workspaceReader.monochromeDarkWorkspace .paperCompiledTable {
+  background: var(--reader-paper);
+  color: var(--reader-ink);
+}
+
+.workspaceReader.monochromeLightWorkspace .selection_exampled,
+.workspaceReader.monochromeDarkWorkspace .selection_exampled,
+.workspaceReader.monochromeLightWorkspace .selection_confused,
+.workspaceReader.monochromeDarkWorkspace .selection_confused {
+  box-shadow: inset 0 -2px 0 var(--reader-muted);
+}
+
+.workspaceReader.monochromeLightWorkspace .assetMissing,
+.workspaceReader.monochromeDarkWorkspace .assetMissing,
+.workspaceReader.monochromeLightWorkspace .dangerMenuItem,
+.workspaceReader.monochromeDarkWorkspace .dangerMenuItem {
+  color: var(--reader-ink);
+}
+
+.workspaceReader.monochromeLightWorkspace .storageWarning,
+.workspaceReader.monochromeDarkWorkspace .storageWarning {
+  color: var(--reader-ink);
+  background: var(--reader-accent-soft);
+  border-bottom: 1px solid var(--reader-line);
+}

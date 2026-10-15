@@ -14,6 +14,8 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request
 
+from framework.shared.windows_paths import resolve_storage_path, storage_io_path
+
 from backend.research.ports.source_resolver import ResolvedPaperSource
 from backend.research.domain.catalog import ResearchSourceSnapshot
 from backend.research.domain.common import SourceLineage, stable_research_id
@@ -72,7 +74,7 @@ class ResearchSourceResolverAdapter:
             user_agent="AgoraHub/1.0 (research-paper-resolver)",
         )
         self._rate_limiter = rate_limiter or DomainRateLimiter()
-        self._local_root = Path(local_root).expanduser().resolve() if local_root else None
+        self._local_root = resolve_storage_path(local_root) if local_root else None
         self._artifact_reader = artifact_reader
         self._fetch_bytes_impl = fetch_bytes
 
@@ -265,9 +267,10 @@ class ResearchSourceResolverAdapter:
         if self._local_root is not None and not _is_descendant(path, self._local_root):
             return self._metadata_only(source, "local", request, "local_path_outside_allowed_root")
         try:
-            if not path.is_file():
+            io_path = storage_io_path(path)
+            if not io_path.is_file():
                 raise FileNotFoundError(str(path))
-            content = path.read_bytes()
+            content = io_path.read_bytes()
             if len(content) > self._fetch_policy.max_bytes:
                 raise ValueError("local source exceeds configured maximum size")
             source_type = "local"
@@ -721,7 +724,7 @@ def _local_path(source: str) -> Path:
         if parsed.netloc and parsed.netloc.casefold() not in {"", "localhost"}:
             decoded = f"//{parsed.netloc}{decoded}"
         value = decoded
-    return Path(value).expanduser().resolve()
+    return resolve_storage_path(value)
 
 
 def _access_status_for_failure(reason: str, exc: Exception | None) -> str:
