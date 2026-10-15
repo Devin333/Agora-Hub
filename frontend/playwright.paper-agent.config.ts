@@ -1,8 +1,7 @@
 import path from "node:path"
-import { fileURLToPath } from "node:url"
 import { defineConfig, devices } from "@playwright/test"
 
-const configDir = path.dirname(fileURLToPath(import.meta.url))
+const configDir = process.cwd()
 const canonicalOrigin = "http://127.0.0.1:3317"
 const apiOrigin = "http://127.0.0.1:8317"
 

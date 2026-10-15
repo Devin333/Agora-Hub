@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process"
-import { once } from "node:events"
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  bindShutdownSignals,
+  createIdempotentShutdown,
+  createOwnedProcessLifecycle,
+} from "./paper-agent-e2e-lifecycle.mjs"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const sourceFrontend = path.resolve(scriptDir, "..")
@@ -69,15 +73,14 @@ const inheritedEnvironmentNames = [
 ]
 
 let isolatedRoot
-let activeChild
-let nextServer
-let shuttingDown = false
+const lifecycle = createOwnedProcessLifecycle({ spawnProcess: spawn })
+const shutdown = createIdempotentShutdown({
+  terminate: () => lifecycle.terminateOwnedTrees({ deadlineMs: stopTimeoutMs }),
+  cleanup: cleanupWorkspace,
+  exit: exitCode => process.exit(exitCode),
+})
 
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.once(signal, () => {
-    void shutdown(0)
-  })
-}
+bindShutdownSignals({ shutdown })
 
 process.once("uncaughtException", error => {
   void shutdown(1, error.stack ?? error.message)
@@ -136,24 +139,25 @@ try {
   const nextCli = path.join(sourceFrontend, "node_modules", "next", "dist", "bin", "next")
   await runBuild(nextCli, isolatedFrontend, childEnvironment)
 
-  nextServer = spawn(
-    process.execPath,
-    [nextCli, "start", isolatedFrontend, "--hostname", "127.0.0.1", "--port", frontendPort],
-    {
-      cwd: isolatedFrontend,
-      env: childEnvironment,
-      stdio: "inherit",
-      windowsHide: true,
-      detached: false,
-    },
+  const nextServer = lifecycle.own(
+    spawn(
+      process.execPath,
+      [nextCli, "start", isolatedFrontend, "--hostname", "127.0.0.1", "--port", frontendPort],
+      {
+        cwd: isolatedFrontend,
+        env: childEnvironment,
+        stdio: "inherit",
+        windowsHide: true,
+        detached: false,
+      },
+    ),
+    "Next production server",
   )
-  activeChild = nextServer
 
   nextServer.once("error", error => {
     void shutdown(1, `Next production server failed to start: ${error.message}`)
   })
   nextServer.once("close", (code, signal) => {
-    if (shuttingDown) return
     const detail = signal ? `signal ${signal}` : `exit code ${code ?? 1}`
     void shutdown(code ?? 1, `Next production server stopped unexpectedly with ${detail}`)
   })
@@ -181,78 +185,29 @@ function sanitizedChildEnvironment(overrides) {
 }
 
 async function runBuild(nextCli, isolatedFrontend, environment) {
-  const build = spawn(
-    process.execPath,
-    [nextCli, "build", isolatedFrontend, "--webpack"],
-    {
-      cwd: isolatedFrontend,
-      env: environment,
-      stdio: "inherit",
-      windowsHide: true,
-      detached: false,
-    },
+  const build = lifecycle.own(
+    spawn(
+      process.execPath,
+      [nextCli, "build", isolatedFrontend, "--webpack"],
+      {
+        cwd: isolatedFrontend,
+        env: environment,
+        stdio: "inherit",
+        windowsHide: true,
+        detached: false,
+      },
+    ),
+    "Next production build",
   )
-  activeChild = build
 
-  let timedOut = false
-  const timeout = setTimeout(() => {
-    timedOut = true
-    void terminateChild(build)
-  }, buildTimeoutMs)
-  timeout.unref()
-
-  const [code, signal] = await once(build, "close")
-  clearTimeout(timeout)
-  if (activeChild === build) activeChild = undefined
-  if (timedOut) throw new Error(`Next production build exceeded ${buildTimeoutMs} ms`)
+  const { code, signal } = await lifecycle.waitForExit(build, {
+    deadlineMs: buildTimeoutMs,
+  })
   if (code !== 0) {
     const detail = signal ? `signal ${signal}` : `exit code ${code ?? 1}`
     throw new Error(`Next production build failed with ${detail}`)
   }
-}
-
-async function shutdown(exitCode, message) {
-  if (shuttingDown) return
-  shuttingDown = true
-  if (message) console.error(message)
-
-  let shutdownFailed = false
-  try {
-    await terminateChild(activeChild ?? nextServer)
-  } catch (error) {
-    shutdownFailed = true
-    console.error(error instanceof Error ? error.stack ?? error.message : String(error))
-  }
-  activeChild = undefined
-
-  try {
-    await cleanupWorkspace()
-  } catch (error) {
-    shutdownFailed = true
-    console.error(error instanceof Error ? error.stack ?? error.message : String(error))
-  }
-
-  process.exit(exitCode === 0 && shutdownFailed ? 1 : exitCode)
-}
-
-async function terminateChild(child) {
-  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return
-
-  const closed = once(child, "close").then(() => true)
-  child.kill("SIGTERM")
-  if (await Promise.race([closed, delay(stopTimeoutMs).then(() => false)])) return
-
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-      detached: false,
-    })
-    await Promise.race([once(killer, "close"), delay(stopTimeoutMs)])
-  } else {
-    child.kill("SIGKILL")
-  }
-  await Promise.race([closed, delay(stopTimeoutMs)])
+  lifecycle.release(build)
 }
 
 async function cleanupWorkspace() {
@@ -275,8 +230,4 @@ function assertDisposableWorkspace(candidate) {
 
 function portablePath(value) {
   return process.platform === "win32" ? value.replaceAll("\\", "/") : value
-}
-
-function delay(milliseconds) {
-  return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
