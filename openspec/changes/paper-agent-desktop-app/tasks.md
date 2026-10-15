@@ -61,3 +61,27 @@
 - [ ] 8.3 在实际 App 完成重开、断网、超时/冲突/磁盘失败和隔离备份恢复验收；不得把 App 重开当作基础 change 的电脑重启证据。（AC-05、AC-09–AC-14）
 - [ ] 8.4 核对 AC-01–AC-16 的实际桌面截图和交互证据；交付中文安装、数据位置、联网、诊断、备份、恢复和已知限制说明。
 - [ ] 8.5 运行 `openspec validate paper-agent-desktop-app --strict` 与必需 `python -m scripts.dev smoke`，绑定最终 release/config/dependency 记录；全部通过后仅提交本变更代码并生成最终安装构建，不擅自推送或归档其他变更。
+
+## 9. 独立轻量桌面交付
+
+依据：`lightweight-delivery.md`、`specs/paper-agent-lightweight-delivery/spec.md` 与 PRD 第 14 节。用户轻量交付要求已明确；量化预算均为建议工程预算，用户尚未确认、尚未实测达标，不作为已签署或已完成合同，也不阻塞有界依赖证明与生产产物工作。
+
+r2 独立基线由主控确认：`61a001371c02f70924453e8a30dc41d93d6077b4`，fullsmoke 4,286 passed / 23 deselected，AgentLoop/source validation 通过，15 路径及启动证据精确提交，40 个 foreign tracked files 当时 hash 无漂移。该结果不替代下列新候选验收；第 1–8 节任务状态保持不变。
+
+职责：规划与验收使用 planner（`gpt-6-astra`，`ultra`）；定向代码/依赖证据使用 explorer（`gpt-5.6-luna`，`medium`）；编码、打包与测试实现使用 worker（`gpt-5.6-sol`，`high`）。后续由父 agent 按运行时并发和嵌套限制调度；本批不创建 agent。
+
+- [ ] 9.1 冻结轻量候选的 v1 文本 PDF/本地能力 profile、r2 基线、实际依赖输入和可修改路径归属；区分硬性离线/安全边界与待确认预算，保留 AC-01–AC-16，不将共享未提交精简当成旧实物已变小。（planner；AC-17–AC-21）
+- [ ] 9.2 定向证明默认入口、配置、动态加载与本地能力的依赖闭包，解释 torch/scipy/numpy 及其他大项用途和当前 `_DEFAULT_IMPORTS` 门禁；逐项记录保留/排除依据，复用已有包体统计，不按包名删包。（explorer；AC-18、AC-19）
+- [ ] 9.3 建立独立且可追溯的 Windows 桌面真实运行依赖锁/profile，固定版本、hash、native DLL、包数据、动态依赖、元数据与许可证；不用 `dev/all` 或开发环境装配发行包。仅在 profile 合同与实际能力证明后重设依赖/能力校验，验证必要依赖缺失会失败，不能简单删除 import 门禁或伪报可用。（worker；AC-18、AC-19）
+- [ ] 9.4 形成固定 Next 版本的 standalone/tracing 真实运行产物，显式带齐 `public`、`.next/static`，为动态/原生依赖补足必要 Includes 与实际运行证据；验证真实 `server.js`/server/BFF、授权及无 cookie 初始化，不能改静态假入口或凭整包 node_modules 名称删除内容。（worker；AC-18、AC-19）
+- [ ] 9.5 在受控源根、归属、路径和内容边界内把 Windows standalone 产物装配为真实普通文件分发树，处理可能的绝对 target junction；保留 reparse 拒绝和完整 hash gate。验证不同安装路径、缺席源码/原始 node_modules/构建机绝对路径时仍运行，以及未知/越界链接失败封闭，不要求用户手工修链或开启开发者模式。（worker；AC-19）
+- [ ] 9.6 集成已证明的 Python 与前端运行集合，构建独立缩包候选，输出同口径 manifest 差异、大小、文件数、依赖与功能影响证据；单独统计完整安装程序、Electron、active release、副本与峰值。安装配置由对应 owner 集成，不覆盖尚未整合的并行变更。（worker；AC-17–AC-20）
+- [ ] 9.7 实现或复用从安装/桌面启动入口至真实工作区可操作的阶段计时，覆盖本地准备、完整校验、API、前端、BFF/transport 与真实授权本地操作；绑定同一 run/release 身份，不以窗口出现、端口开放或后约 13 秒阶段替代完整启动。（worker；AC-20）
+- [ ] 9.8 依据缩包后证据，在相同受控不可变输入和安全操作范围内去除确实重复的枚举、复制、解压、读取/hash；不重复记功 r2 优化，不改跨启动信任模型，不以 size/mtime、marker、抽样或延后验证替代完整 gate。覆盖同大小错误内容、缺项/额外项及 reparse 等既有拒绝行为。（explorer 定向证据、worker 实现；AC-19、AC-20）
+- [ ] 9.9 在另行获准、无开发工具与预热依赖缓存的隔离 Windows 环境执行断网首装和 0.1.1 升级，覆盖空库/已有库、真实文本 PDF 与本地笔记/资料回读、长路径、失败反馈和数据保留；确认无隐式 pip/npm/组件/模型下载、无未授权远程替代或付费调用，不操作用户实际账号或重启其 App/系统。（worker；AC-17–AC-19）
+- [ ] 9.10 按详细文档采样计划记录首装、升级后首次、全部自有进程退出后重开及另行获准测试机系统冷启动；覆盖空库与已有库，披露全部样本/失败、中位数/最大值、硬件、防护、缓存与库规模，未知磁盘类型不猜填。只对建议预算作待确认对照，不以旧证据声称新候选达标。（worker 执行、planner 验收；AC-20）
+- [ ] 9.11 准备拟交付 GitHub Release 单个完整安装程序的文件名、版本、Windows 架构、字节数、SHA-256、源码 commit、构建/依赖/manifest 身份、真实签名状态及中文离线安装说明；核对最终实物，不把 checksum 当签名，不执行发布。（worker 准备、planner 验收；AC-21）
+- [ ] 9.12 后续实现完成后，在同一冻结候选执行范围匹配的依赖/打包/前后端/架构与真实宿主检查、`openspec validate paper-agent-desktop-app --strict` 和必需 `python -m scripts.dev smoke`；根因修复失败，不削弱断言，不以 r2 通过替新候选背书。（worker 执行、planner 验收；AC-19–AC-21）
+- [ ] 9.13 由主控审阅合同、实现及证据，在相关 gate 通过后按批准的精确路径提交；产品合同与后续生产实现分别提交，不 stage-all、不混入 foreign 差异、不擅自 push/发布/归档，不自动核销第 1–8 节或其他 change 任务。未确认预算及未完成验收继续明确标记。（planner / 主控；AC-17–AC-21）
+
+本节为后续实施清单，当前只补充产品合同和验收方法，尚未交付轻量化生产实现。既有启动修复和本批文档校验不替新候选的构建、功能及性能验收背书；未经授权不自动发布、重启用户 App/系统或修改账号。
