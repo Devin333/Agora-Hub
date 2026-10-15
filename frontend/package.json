@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:paper-agent": "playwright test --config=playwright.paper-agent.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
