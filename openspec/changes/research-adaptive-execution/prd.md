@@ -11,6 +11,7 @@
 | 首版产品范围 | 现有 Research 单篇论文分析，以及该 run 内同论文、同源修订范围的补证与分析修复 |
 | 后续范围 | 独立 Reader QA、跨论文比较、批量任务和学习型 router 另行评估，不因本 PRD 自动获得执行资格 |
 | 文档分工 | 本文定义产品与验收；`design.md` 定义技术决策；`specs/` 定义规范；`tasks.md` 跟踪实施；`evidence/research-basis.md` 保存研究依据 |
+| 专项细化 | [Research 受控多轮分析 PRD](analysis-agent-loop-prd.md)：先补齐实验分析的真实工具循环、证据接纳、预算与恢复；不替代本文的总体范围和发布门 |
 
 ## 1. 一句话概述
 
