@@ -2,7 +2,7 @@
 
 本变更把 PRD 的“用户不选执行模式”落实为服务端自动准入和阶段内按需执行，而不是新增一个可任意改图的 planner。首版限于已有 Research 单篇论文分析，以及同一 run、同论文源修订范围的补证与分析修复。
 
-当前代码具备固定分析 Graph、TaskPlan 分析阶段、AgentLoop、确定性 gate 和持久控制面。搜索 `GuidedIntent` 解决检索语义，不是执行计划；分析入口仍依赖 `dynamic_analysis` / `dynamic_task_plan`，输入质量增强也与动态入口耦合。具体代码基线及变动边界见 `prd.md` 第 3 节。
+当前代码具备固定分析 Graph、TaskPlan 分析阶段、AgentLoop、确定性 gate 和持久控制面。搜索 `GuidedIntent` 解决检索语义，不是执行计划；分析入口仍依赖 `dynamic_analysis` / `dynamic_task_plan`，输入质量增强也与动态入口耦合。总体代码基线及变动边界见 `prd.md` 第 3 节。实验分析专项在 `1807ed6d7302f22b31b9b1eed773a60f8ea8bce4` 核对到更具体的接线缺口：默认 worker 调用一次候选生成；可选动态入口的 `_ResearchCandidateLLMClient` 包装 `final_output`，并注入空 `ToolRegistry()`。这不是缺少通用循环组件，而是缺少真实动作、工具与证据验收的业务接线，详见 `analysis-agent-loop-prd.md` 第 2 节。
 
 用户需要的是研究结果和真实进度；Research application 拥有业务合同，Harness 拥有执行权，interface 只调用 application service。运行安全、并行执行、证据质量和桌面生命周期的现有 owner 不发生转移。此文是拟议设计，不声明相关 active changes 已验收。
 
@@ -133,6 +133,52 @@ quality profile 由准入合同和服务端发布策略确定，不由策略候�
 
 **替代方案与取舍：**只比较成功任务或只报少调用会奖励早停和质量退化，拒绝；优先质量/安全门，再看总资源和延迟。
 
+### D9. 首个交付切片是实验分析的真实循环，不附带 planner 或新模型
+
+`research-controlled-analysis-loop` 细化总体能力中一个明确的 worker：同论文、同源修订、已授权材料内的实验分析。结构、贡献等必需角色及固定前后缀不变；不要求先执行完整失败路径，也不因接入 loop 额外生成 TaskPlan、增加 child 或递归委派。材料充分时首轮即可提交候选。
+
+实现复用已有 Graph-bound activity/child 接入，按实际所在路径选择适用适配器，不能以 standalone AgentLoop 绕过生产身份、预算、授权或发布门。Research application/ports 持有目标、失败分类与候选适配；composition 只注入模型、工具和资源；通用 framework 不承载论文业务判断。
+
+真实 LLM client 继续使用已配置、已验收的 route，必须保留 execution identity、usage、errors 和对应调用证据。首版动作是 `tool_call` / `final_output`；中间动作协议与最终实验业务 schema 分离。沿用结构化动作协议时须提供明确的提示与解析合同；使用 provider 原生 `tool_calls` 时须有显式规范化和契约测试，不能假定已有 SDK 返回值自动进入循环。只包装旧 worker 最终结果的 client 不能满足此能力。
+
+既有实验输出的归一化、claims/scores 与下游消费者继续复用；确需扩展时进行版本化，而非另造一套并行结果模型。新增 binding/repair 边界形成新准入版本，不原地改活动 run 的 Graph 或 worker identity。模型仍只提出局部动作和内容候选，Harness 仍掌握 routing、VERIFY、预算及发布。
+
+**替代方案与取舍：**拒绝先训练路由/工具选择模型、强制每个任务走动态 planner 或复制 loop。选择一个完整业务切片会限制首版覆盖面，但能先验证真实收益且不增加必选 checkpoint 部署。
+
+### D10. 工具观察与合法证据是两个不同的接纳事实
+
+先接通已声明的 `retrieval.read_source`，由 ToolRuntime 调用真实文档/证据 service；权限、参数、execution profile、预算、取消及结果边界由代码执行。工具只读当前授权论文及源修订，返回真实文本/解析结果、来源位置、checksum 与结果 refs；较大结果沿用现有 artifact/ref 限制。未解析的表格或不可用材料返回事实性失败，不由 adapter 伪造业务内容。
+
+工具返回成功只能证明一次读取的结果存在，不能直接证明其成为可引用证据。已接纳证据保持原 identity；新增片段必须由既有 evidence/ref authority 校验并持久接纳，形成带来源、修订、checksum、派生关系的新版本 refs。原 evidence pack 不被原地修改，模型不得自行追加合法引用或授权集合。
+
+冻结的是来源授权范围、接纳规则、Graph/quality/policy/bindings；范围内新增的派生 refs 仍须显式接纳。若消费新 refs 需要更新输入投影、grant 或修复 revision，应沿已声明的接纳/repair 合同产生新版本并保留历史，不让旧 identity 自动获得新权限。scope 或 source revision 变化须重新准入。只有合法且仍有效的 refs 能进入候选与后续 gate；受影响的旧输出失效并重新验证，其他仍有效输出按原血缘复用。
+
+**替代方案与取舍：**拒绝只把补读文本拼进 prompt、在 worker 内改写已接纳 evidence pack、或建立旁路 allowlist。接入原 authority 增加合同适配工作，但能保住当前 lineage gate 与回放依据。
+
+### D11. 局部反馈、业务修复和真实调用计量保持分层
+
+loop 内处理普通动作解析/输出结构问题，并在授权内提出补读；Harness 只消费已接纳的 gate/observation facts 来执行声明的业务 repair。失败反馈绑定原因、目标/claim、输入修订、缺口、允许修复范围、预算与事实 ref；模型自由文本、confidence 或“需要更多时间”本身不产生路由资格。
+
+权限拒绝、身份/来源损坏、不可用能力、取消和耗尽不得通过换工具、换路线或委派绕过。基础设施可恢复重试由原执行层处理。失败指纹绑定目标、gate/失败类别、输入修订和已尝试修复类别；改写问题或重复同一查询不算新事实。没有新接纳证据或有效执行事实时停止重复升级。
+
+预算区分逻辑 turn 与实际 provider/tool 调用，包括 transport retry、repair、并行其他角色、恢复和未知结果；全部归属原请求 ledger，先原子预留后按 receipt 结算。attempt 可以从剩余预算重新分配局部上限，但累计消费不清零。M0 为 task/model profile 冻结有限 turn、工具、replan、实际调用、token、wall-clock 与适用成本上限；不能把某个现有 SubAgentSpec 数值当作统一最优默认。缺少可执行限额的 profile 不准入。
+
+复用既有 phase/turn、动作、receipt、证据接纳、候选及 gate 记录。回放只还原事实，不重调模型；恢复后的新执行使用原 identity 与剩余资源。已知完成结果不重复结算；未知状态先核对，只按明确幂等和预算策略重试。并发分支不能串用可变上下文、工具结果、授权或额度；取消后停止新派发，迟到结果仍按原提交资格处理。
+
+**替代方案与取舍：**拒绝“内层各自有限所以总成本有限”、恢复后重建空账本、或任意宣称 exactly-once。复用原执行事实和预算 owner，接受无进展、状态不明或版本缺失时明确停止。
+
+### D12. 专项验收不等于总体自适应发布
+
+以专项 `AL-FR-01` 至 `AL-FR-10`、`AL-AC-01` 至 `AL-AC-16` 建立正式规范、实施任务、自动测试和真实运行证据映射。fake/fixture 测试必须走生产 application/Graph-bound worker/真实工具 adapter/gate 接线，证明工具结果回填，而不是只观察调用过 AgentRunner。它们只证明控制正确性，不能证明模型语义收益。
+
+专项两组评测比较原一次候选生成与受控实验分析 loop，固定原始材料、源修订、模型、价格、质量、权限、可读范围及总预算；新增读取、重试、失败和恢复全部计量。按论文/任务族隔离 pilot 和留出集，独立 rubric 校验值、单位、比较条件与证据支持，保留完整失败分母及置信区间。真实模型运行需要另行取得资源授权。
+
+局部两组可验证实验分析补工作分层的收益及标准任务延迟，不能替代 D8 的三组总体比较，不能以不同基线宣称达到对始终规划的 -2 个百分点非劣界或 15% token 降低门。专项通过不自动勾选覆盖范围更大的父任务，也不打开尚不合格的全局 release。部署沿用现有模型后端，无新增必选 checkpoint；质量与必要角色保持不变。
+
+用户状态只投影“分析、补证、核验、缺口、取消、已完成”等事实；候选成功不冒充总体完成。证据不足仅在原质量 profile 允许时作明确限制性交付，否则停止且不发布。按 scope 准入与回滚只影响新 run，旧 run 保持冻结合同及恢复依赖；不存在用静默 one-shot fallback 放宽已接纳合同的例外。
+
+**替代方案与取舍：**拒绝用类名、fake 成功、单个真实案例或局部两组数据宣称整体上线。先完成实验分析的控制与语义证据，再满足原 owner 和总体产品门，避免将接线工作包装为已验收的自适应系统。
+
 ## Risks / Trade-offs
 
 - [意图候选可能误解目标] → 保留结构校验、范围/证据校验、必要澄清、真实反馈和独立语义评测；不把模型 confidence 当授权。
@@ -147,7 +193,7 @@ quality profile 由准入合同和服务端发布策略确定，不由策略候�
 
 1. 冻结首版 scope、输入合同、policy/quality profile、原因码、总预算归属与评测计划；复核依赖变更真实状态，不因文档存在标记验收通过。
 2. 在现有 application / composition 接入统一准入、意图候选和版本化自适应 Graph，先通过已知结构化请求无额外 planner 的合同测试；生产默认仍保持不变。
-3. 完成真实 loop / TaskPlan / 同论文补证绑定、共享预算、所有策略的同质量 gate、取消和持久恢复；不合格 profile 不进入候选集合。
+3. 先按 `tasks.md` 第 8 节完成实验分析的真实 loop 切片：合同 → 模型动作 → 真实只读工具 → 证据 authority → Graph-bound 输出与验收 → 预算/恢复/状态 → 接线与语义证据；该切片不依赖额外 planner 或新增 TaskPlan。更广的 TaskPlan 接入按原任务独立推进。所有策略的同质量 gate、取消及持久恢复均须合格，不合格 profile 不进入候选集合。
 4. 在受控环境完成错误/注入/恢复测试与配对真实模型评测；满足本 PRD 和上游 release gates 后，按合格 scope 启用服务端 admission。
 5. 同次用户合同切换中移除界面模式开关，明确拒绝旧外部模式字段；新 run 使用已验收的统一合同。内部评测强制策略与运维 rollout 保持独立、不可从用户请求注入。
 6. 仅为已有 run 保留所需的 exact 旧版本恢复绑定与 receipts；清理不再服务新准入的旧路由分支和无必要兼容层。关闭 release 只限制新准入，活动 run 继续按冻结合同完成、取消或安全终止。

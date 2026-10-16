@@ -84,3 +84,46 @@
 - **WHEN** 普通研究运行产生提高策略或 skill 的建议
 - **THEN** 建议 SHALL 仅作为候选进入已授权的观察、memory 或评测流程
 - **AND** 建议 MUST NOT 直接修改 active policy/skill、跳过 held-out eval 或自行发布版本
+
+### Requirement: Controlled analysis loop evaluation proves a real evidence trajectory
+
+实验分析专项 SHALL 在同一原始材料、paper/source revision、模型/工具及价格版本、quality profile、授权与可读范围、请求总预算下，比较既有一次候选生成和 `research-controlled-analysis-loop` 两组执行；新增检索、补证、重试、失败、恢复与未知保守预留 SHALL 全部计量。专项 SHALL 复用本能力既有的论文/任务族隔离、预注册、独立 rubric、完整失败分母及置信区间要求，不建立新的 benchmark 平台或较宽松评测口径。对应专项 PRD AL-FR-02 至 AL-FR-08、AL-AC-01 至 AL-AC-13、9.1 至 9.3。
+
+专项控制证据 SHALL 展示真实生产接线上的动作提出、权限/预算检查、工具 adapter 执行、观察回填、证据接纳、候选及 gate 事实，而非仅记录调用过 Runner。fake/fixture SHALL 只证明相应控制合同；真实模型动作适配、usage 与语义收益 SHALL 分别有受授权的真实运行证据。确定性门、合法引用或 schema 通过 MUST NOT 代替独立核对实验值、单位、比较条件和证据支持。
+
+#### Scenario: A fixture drives the real experiment worker through a tool cycle
+- **WHEN** fake 模型依次提出授权工具调用和最终候选，真实材料 fixture 通过生产 application / Graph-bound worker / 工具 adapter 执行
+- **THEN** 控制测试 SHALL 证明实际观察及合法引用进入下一轮请求，且候选经过原业务 gate
+- **AND** 仅包装固定 `final_output`、未注册工具或未回填观察的路径 MUST NOT 满足该验收
+- **AND** 该证据 MUST NOT 被标记为真实模型语义收益
+
+#### Scenario: Supplementary evidence enables a valid experiment result
+- **WHEN** 预注册的缺证任务在既定分析组未完成，而真实多轮组在相同材料权限和总预算内完成
+- **THEN** 证据 SHALL 关联补读来源、已接纳版本、受影响结果再验证、独立语义判定及完整消费
+- **AND** 原文不存在、引用未接纳或额外材料/额度未记录的成功 MUST NOT 计为有效补足案例
+
+#### Scenario: Existing evidence already covers a standard experiment task
+- **WHEN** 标准任务的合格材料足以支持既有实验输出合同
+- **THEN** 评测 SHALL 允许首轮提交，记录无必要补读与重复轮次，并核对零新增分类/planner/自适应专用 child 调用
+- **AND** 系统 MUST NOT 为制造多轮轨迹强制工具调用或删除未使用工具的有效结果
+
+### Requirement: Loop component qualification does not replace adaptive release evidence
+
+专项 SHALL 保留 `AL-AC-01` 至 `AL-AC-16` 的规范—任务—测试/运行证据映射，并明确控制接线、真实模型收益、依赖资格与总体 release 的不同状态。相对既定分析的实验补工作分层 SHALL 满足质量通过率差的 95% 配对置信区间下界不低于 0，并有真实补足案例；标准任务延迟 SHALL 按父 PRD 规定的任务边界满足 active-time p95 不超过既定路径 1.15 倍的门，不能使用单个 loop 耗时替代。以上 SHALL 被视为拟议目标，不是已测结果，阈值变更仍遵循正式留出前审查规则。对应专项 PRD AL-AC-13 至 AL-AC-16、9.4、9.5。
+
+专项两组结果 MUST NOT 替代固定/始终规划/自适应三组总体比较，MUST NOT 用对一次生成的成本变化宣称满足相对始终规划的 -2 个百分点质量非劣或 15% token 降低门。所有适用控制、质量、依赖与总体发布要求仍 SHALL 同时成立；真实模型运行 SHALL 取得明确资源授权，文档和任务创建 MUST NOT 视为付费实验授权。
+
+#### Scenario: Two loop comparison groups pass while the overall baseline is missing
+- **WHEN** 实验分析专项的两组评测通过，但父级始终规划基线或其他总体发布证据缺失
+- **THEN** 项目 SHALL 仅记录已完成的专项范围及尚未满足的总体门
+- **AND** 系统 MUST NOT 宣称总体三组验收通过、提前启用总体自适应 release 或自动勾选范围更大的父任务
+
+#### Scenario: A component has control evidence but lacks authorized semantic evaluation
+- **WHEN** 接线测试通过，但真实模型评测尚未获授权、未执行或留出证据不足
+- **THEN** 项目 SHALL 分别标记控制证据与语义/发布未验收状态，并保留未完成任务
+- **AND** 控制测试、OpenSpec 校验或预估收益 MUST NOT 代替真实语义验收，也 MUST NOT 自动触发收费调用
+
+#### Scenario: A local latency report omits retries and failed requests
+- **WHEN** 专项报告只统计成功 loop 的耗时，排除任务其他必要步骤、重试或失败
+- **THEN** evaluator SHALL 拒绝将其作为标准任务 1.15 倍延迟门的通过证据
+- **AND** 报告 SHALL 使用冻结的任务边界与完整分母，单列冷启动和人工等待而不选择性删除失败

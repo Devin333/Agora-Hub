@@ -9,7 +9,8 @@
 | 状态 | 待评审的产品需求；本次仅交付文档，不代表代码实现、真实模型评测或发布已完成 |
 | 首版交付范围 | 单篇论文的实验分析 worker，在同论文、同源修订、已授权材料内完成受控多轮补读、候选生成与局部修复 |
 | 总体产品合同 | [Research 自适应执行 PRD](prd.md)；本文件细化其中 bounded AgentLoop 的交付切片，不替代总体 PRD、`design.md` 或 `specs/` |
-| 实施归属 | 现有 [tasks.md](tasks.md) 的 `3.3`，以及该能力所需的合同、证据、质量、预算、恢复、评测和发布任务 |
+| 实施归属 | 现有 [tasks.md](tasks.md) 的 `3.3` 集成验收与第 8 节专项实施细项；共同能力仍归原 owner 和任务，不提前标记父任务完成 |
+| 正式规范 | [受控分析循环](specs/research-controlled-analysis-loop/spec.md)；[评测与资格](specs/research-adaptive-execution-evaluation/spec.md)；技术细化见 `design.md` 的 D9–D12 |
 | 源码核对基线 | `1807ed6d7302f22b31b9b1eed773a60f8ea8bce4`；本轮所查核心源码相对该提交无未提交修改，其他任务的工作区改动不属于本 PRD |
 | 验收证据边界 | 已阅读源码及相关 fake 测试；不将测试存在视为本轮已执行，不将框架测试视为真实 Research 模型效果 |
 
