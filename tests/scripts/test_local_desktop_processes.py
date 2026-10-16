@@ -160,6 +160,33 @@ def test_stale_pid_record_never_stops_reused_process(tmp_path: Path) -> None:
     assert instance["boot_id"] == "b" * 32
 
 
+def test_unknown_ownership_state_is_not_treated_as_stopped(tmp_path: Path) -> None:
+    class UnknownInspector(FakeInspector):
+        def ownership(self, process: ProcessIdentity) -> str:
+            return "unknown"
+
+    config = resolve_local_desktop_config(project_root=tmp_path)
+    config.runtime_root.mkdir(parents=True)
+    inspector = UnknownInspector({42})
+    manager = LifecycleManager(
+        config,
+        release_manager=SimpleNamespace(),
+        doctor=FakeDoctor(),
+        control_plane=FakeControl(),
+        inspector=inspector,
+    )
+    manager._record_state("READY", [_process(42)], release={}, reason_code="desktop_ready")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.stop()
+
+    assert raised.value.reason_code == "desktop_process_inspection_failed"
+    assert inspector.terminated == []
+    instance = manager._instance()
+    assert instance["status"] == "READY"
+    assert instance["processes"][0]["pid"] == 42
+
+
 def test_stop_tolerates_collectors_that_exit_after_service_closes_their_pipes(tmp_path: Path) -> None:
     collectors_by_service = {"frontend": {44, 45}, "api": {41, 42}}
 
@@ -193,6 +220,102 @@ def test_stop_tolerates_collectors_that_exit_after_service_closes_their_pipes(tm
     assert result.status == "STOPPED"
     assert inspector.terminated == [46, 43]
     assert manager._instance()["boot_id"] == "b" * 32
+
+
+def test_stop_batches_services_before_collectors_and_allows_eof_flush(tmp_path: Path) -> None:
+    collector_pids = {"frontend": {44, 45}, "api": {41, 42}}
+    control = FakeControl()
+
+    class CoordinatedInspector(FakeInspector):
+        def __init__(self, owned: set[int]) -> None:
+            super().__init__(owned)
+            self.batches: list[list[str]] = []
+
+        def terminate_many(self, processes: list[ProcessIdentity], *, grace_seconds: float) -> None:
+            assert grace_seconds > 0
+            assert control.drained is True
+            self.batches.append([process.role for process in processes])
+            for process in processes:
+                self.owned.remove(process.pid)
+                self.owned.difference_update(collector_pids.get(process.role, set()))
+
+    config = resolve_local_desktop_config(project_root=tmp_path)
+    config.runtime_root.mkdir(parents=True)
+    inspector = CoordinatedInspector(set(range(41, 47)))
+    manager = LifecycleManager(
+        config,
+        release_manager=SimpleNamespace(),
+        doctor=FakeDoctor(),
+        control_plane=control,
+        inspector=inspector,
+    )
+    roles = ("api:log:stdout", "api:log:stderr", "api", "frontend:log:stdout", "frontend:log:stderr", "frontend")
+    processes = [
+        ProcessIdentity(role, pid, 100, "C:/owned.exe", "digest", "out.log", "err.log")
+        for role, pid in zip(roles, range(41, 47), strict=True)
+    ]
+    manager._record_state("READY", processes, release={}, reason_code="desktop_ready")
+
+    result = manager.stop(process_timeout=4.0)
+
+    assert result.status == "STOPPED"
+    assert inspector.batches == [["frontend", "api"]]
+
+
+def test_stop_forces_only_collectors_that_remain_after_bounded_eof_wait(tmp_path: Path) -> None:
+    class CoordinatedInspector(FakeInspector):
+        def __init__(self, owned: set[int]) -> None:
+            super().__init__(owned)
+            self.batches: list[list[str]] = []
+            self.grace_periods: list[float] = []
+
+        def terminate_many(self, processes: list[ProcessIdentity], *, grace_seconds: float) -> None:
+            self.batches.append([process.role for process in processes])
+            self.grace_periods.append(grace_seconds)
+            self.owned.difference_update(process.pid for process in processes)
+
+    config = resolve_local_desktop_config(project_root=tmp_path)
+    config.runtime_root.mkdir(parents=True)
+    inspector = CoordinatedInspector(set(range(41, 47)))
+    manager = LifecycleManager(
+        config,
+        release_manager=SimpleNamespace(),
+        doctor=FakeDoctor(),
+        control_plane=FakeControl(),
+        inspector=inspector,
+    )
+    roles = ("api:log:stdout", "api:log:stderr", "api", "frontend:log:stdout", "frontend:log:stderr", "frontend")
+    processes = [
+        ProcessIdentity(role, pid, 100, "C:/owned.exe", "digest", "out.log", "err.log")
+        for role, pid in zip(roles, range(41, 47), strict=True)
+    ]
+    manager._record_state("READY", processes, release={}, reason_code="desktop_ready")
+
+    result = manager.stop(process_timeout=0.4)
+
+    assert result.status == "STOPPED"
+    assert inspector.batches == [
+        ["frontend", "api"],
+        ["frontend:log:stderr", "frontend:log:stdout", "api:log:stderr", "api:log:stdout"],
+    ]
+    assert len(inspector.grace_periods) == 2
+    assert 0 < inspector.grace_periods[0] < inspector.grace_periods[1]
+    assert inspector.grace_periods[1] <= 0.4
+
+
+def test_stop_converges_mixed_absent_and_owned_records_without_touching_absent_pid(tmp_path: Path) -> None:
+    manager, inspector = _manager(tmp_path, owned={43})
+    processes = [
+        ProcessIdentity("api:log:stdout", 41, 100, "C:/owned.exe", "digest", "out.log", "err.log"),
+        ProcessIdentity("api:log:stderr", 42, 100, "C:/owned.exe", "digest", "out.log", "err.log"),
+        ProcessIdentity("api", 43, 100, "C:/owned.exe", "digest", "out.log", "err.log"),
+    ]
+    manager._record_state("STOPPING", processes, release={}, reason_code="desktop_stop_failed")
+
+    result = manager.stop()
+
+    assert result.status == "STOPPED"
+    assert inspector.terminated == [43]
 
 
 def test_open_stopped_instance_does_not_launch_browser(tmp_path: Path) -> None:
@@ -357,6 +480,135 @@ def _fake_launch(role: str, *, start_pid: int) -> tuple[list[tuple[FakeChild, Pr
     return processes, pid
 
 
+def test_frontend_command_uses_verified_standalone_server_and_controlled_node(tmp_path: Path, monkeypatch) -> None:
+    manager, _ = _start_manager(tmp_path)
+    frontend_root = manager.release_manager.release_path / "frontend"
+    server = frontend_root / "server.js"
+    closure = frontend_root / "production-closure.json"
+    server.write_text("server", encoding="utf-8")
+    closure.write_text("{}", encoding="utf-8")
+    controlled_node = str(tmp_path / "controlled" / "node.exe")
+    monkeypatch.setattr("scripts.local_desktop.processes.shutil.which", lambda name: controlled_node if name == "node" else None)
+    manifest = {"entrypoints": {"frontend": ["node", "server.js"]}}
+
+    command = manager._frontend_command(manager.release_manager.release_path, manifest)
+
+    assert command == [controlled_node, str(server)]
+
+
+def test_frontend_command_keeps_exact_legacy_next_start_entrypoint(tmp_path: Path, monkeypatch) -> None:
+    manager, _ = _start_manager(tmp_path)
+    controlled_node = str(tmp_path / "controlled" / "node.exe")
+    monkeypatch.setattr("scripts.local_desktop.processes.shutil.which", lambda name: controlled_node if name == "node" else None)
+    manifest = {
+        "entrypoints": {
+            "frontend": [
+                "next",
+                "start",
+                "-H",
+                manager.config.frontend_host,
+                "-p",
+                str(manager.config.frontend_port),
+            ]
+        }
+    }
+    next_cli = manager.release_manager.release_path / "frontend" / "node_modules" / "next" / "dist" / "bin" / "next"
+
+    command = manager._frontend_command(manager.release_manager.release_path, manifest)
+
+    assert command == [
+        controlled_node,
+        str(next_cli),
+        "start",
+        "-H",
+        manager.config.frontend_host,
+        "-p",
+        str(manager.config.frontend_port),
+    ]
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        ["node", "other.js"],
+        ["node", "server.js", "--port", "9999"],
+        ["next", "dev"],
+        ["server.js"],
+    ],
+)
+def test_frontend_command_rejects_unknown_entrypoint_without_guessing_from_server(
+    tmp_path: Path,
+    entrypoint: list[str],
+) -> None:
+    manager, _ = _start_manager(tmp_path)
+    frontend_root = manager.release_manager.release_path / "frontend"
+    (frontend_root / "server.js").write_text("server", encoding="utf-8")
+    (frontend_root / "production-closure.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager._frontend_command(
+            manager.release_manager.release_path,
+            {"entrypoints": {"frontend": entrypoint}},
+        )
+
+    assert raised.value.reason_code == "desktop_release_manifest_invalid"
+
+
+def test_frontend_launch_uses_standalone_command_and_overrides_host_port_environment(tmp_path: Path, monkeypatch) -> None:
+    manager, inspector = _start_manager(tmp_path)
+    frontend_root = manager.release_manager.release_path / "frontend"
+    server = frontend_root / "server.js"
+    closure = frontend_root / "production-closure.json"
+    server.write_text("server", encoding="utf-8")
+    closure.write_text("{}", encoding="utf-8")
+    controlled_node = str(tmp_path / "controlled" / "node.exe")
+    monkeypatch.setattr("scripts.local_desktop.processes.shutil.which", lambda name: controlled_node if name == "node" else None)
+    command = manager._frontend_command(
+        manager.release_manager.release_path,
+        {"entrypoints": {"frontend": ["node", "server.js"]}},
+    )
+    spawned: list[tuple[list[str], dict[str, str], object]] = []
+    next_pid = 900
+
+    class Pipe:
+        def close(self) -> None:
+            return None
+
+    class SpawnedChild(FakeChild):
+        def __init__(self, pid: int, *, has_stdin: bool) -> None:
+            super().__init__(pid)
+            self.stdin = Pipe() if has_stdin else None
+
+        def terminate(self) -> None:
+            return None
+
+    def popen(argv, **kwargs):
+        nonlocal next_pid
+        child = SpawnedChild(next_pid, has_stdin=kwargs.get("stdin") == subprocess.PIPE)
+        inspector.owned.add(next_pid)
+        next_pid += 1
+        spawned.append((list(argv), dict(kwargs["env"]), kwargs.get("stdin")))
+        return child
+
+    manager.popen_factory = popen
+
+    children = manager._launch(
+        "frontend",
+        command,
+        frontend_root,
+        {"HOSTNAME": "attacker.invalid", "PORT": "65535", "SAFE_DEFAULT": "retained"},
+    )
+
+    assert len(children) == 3
+    assert all("HOSTNAME" not in environment and "PORT" not in environment for _, environment, _ in spawned[:2])
+    service_argv, service_environment, service_stdin = spawned[2]
+    assert service_argv == [controlled_node, str(server)]
+    assert service_environment["HOSTNAME"] == manager.config.frontend_host
+    assert service_environment["PORT"] == str(manager.config.frontend_port)
+    assert service_environment["SAFE_DEFAULT"] == "retained"
+    assert service_stdin == subprocess.DEVNULL
+
+
 def test_start_child_environment_prevents_packaged_python_bytecode(tmp_path: Path, monkeypatch) -> None:
     manager, _ = _start_manager(tmp_path)
     release_app = manager.release_manager.release_path / "app"
@@ -422,6 +674,100 @@ def test_start_cleans_every_owned_child_when_frontend_launch_fails(tmp_path: Pat
     assert manager._instance()["status"] == "FAILED"
 
 
+def test_start_cancellation_before_first_child_records_cancelled_without_launch(tmp_path: Path, monkeypatch) -> None:
+    manager, inspector = _start_manager(tmp_path)
+    monkeypatch.setattr(
+        "scripts.local_desktop.processes.check_startup_cancellation",
+        lambda: (_ for _ in ()).throw(DesktopOperationError("desktop_start_cancelled", "cancelled")),
+    )
+    monkeypatch.setattr(manager, "_launch", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cancelled start must not launch")))
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.start()
+
+    assert raised.value.reason_code == "desktop_start_cancelled"
+    assert inspector.terminated == []
+    instance = manager._instance()
+    assert instance["status"] == "FAILED"
+    assert instance["reason_code"] == "desktop_start_cancelled"
+    assert instance["processes"] == []
+
+
+def test_readiness_cancellation_cleans_owned_services_then_collectors_and_records_truth(tmp_path: Path, monkeypatch) -> None:
+    manager, inspector = _start_manager(tmp_path)
+    api_children, next_pid = _fake_launch("api", start_pid=700)
+    frontend_children, _ = _fake_launch("frontend", start_pid=next_pid)
+    all_children = [*api_children, *frontend_children]
+    inspector.owned.update(identity.pid for _, identity in all_children)
+    launched: list[str] = []
+    batches: list[list[str]] = []
+    checks = 0
+
+    def launch(role, *_args):
+        launched.append(role)
+        return api_children if role == "api" else frontend_children
+
+    def terminate_many(processes: list[ProcessIdentity], *, grace_seconds: float) -> None:
+        assert grace_seconds > 0
+        batches.append([process.role for process in processes])
+        inspector.owned.difference_update(process.pid for process in processes)
+
+    def check_cancellation() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 3:
+            raise DesktopOperationError("desktop_start_cancelled", "cancelled during readiness")
+
+    inspector.terminate_many = terminate_many  # type: ignore[attr-defined]
+    monkeypatch.setattr(manager, "_launch", launch)
+    monkeypatch.setattr(manager, "_frontend_command", lambda *_args: ["node", "next"])
+    monkeypatch.setattr("scripts.local_desktop.processes.check_startup_cancellation", check_cancellation)
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.start(readiness_timeout=30.0)
+
+    assert raised.value.reason_code == "desktop_start_cancelled"
+    assert launched == ["api", "frontend"]
+    assert batches == [
+        ["frontend", "api"],
+        ["frontend:log:stderr", "frontend:log:stdout", "api:log:stderr", "api:log:stdout"],
+    ]
+    instance = manager._instance()
+    assert instance["status"] == "FAILED"
+    assert instance["reason_code"] == "desktop_start_cancelled"
+    assert instance["processes"] == []
+
+
+def test_cancelled_start_keeps_owned_records_when_cleanup_cannot_confirm_exit(tmp_path: Path, monkeypatch) -> None:
+    manager, inspector = _start_manager(tmp_path)
+    api_children, _ = _fake_launch("api", start_pid=800)
+    inspector.owned.update(identity.pid for _, identity in api_children)
+    checks = 0
+
+    def check_cancellation() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise DesktopOperationError("desktop_start_cancelled", "cancelled before frontend")
+
+    def terminate_many(_processes: list[ProcessIdentity], *, grace_seconds: float) -> None:
+        assert grace_seconds > 0
+        raise RuntimeError("cleanup transport failed")
+
+    inspector.terminate_many = terminate_many  # type: ignore[attr-defined]
+    monkeypatch.setattr(manager, "_launch", lambda role, *_args: api_children if role == "api" else (_ for _ in ()).throw(AssertionError("frontend must not launch")))
+    monkeypatch.setattr("scripts.local_desktop.processes.check_startup_cancellation", check_cancellation)
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.start()
+
+    assert raised.value.reason_code == "desktop_start_cancelled"
+    instance = manager._instance()
+    assert instance["status"] == "FAILED"
+    assert instance["reason_code"] == "desktop_start_cancelled"
+    assert [item["pid"] for item in instance["processes"]] == [800, 801, 802]
+
+
 def test_repeated_start_returns_existing_owned_instance_without_launch(tmp_path: Path, monkeypatch) -> None:
     manager, inspector = _start_manager(tmp_path)
     children, _ = _fake_launch("api", start_pid=200)
@@ -454,6 +800,38 @@ def test_start_rejects_reused_recorded_pid_without_overwriting_ownership_evidenc
     assert instance["boot_id"] == "b" * 32
 
 
+def test_start_requires_explicit_recovery_for_absent_recorded_topology(tmp_path: Path) -> None:
+    manager, _ = _start_manager(tmp_path)
+    process = _process(42)
+    manager._record_state("FAILED", [process], release={}, reason_code="desktop_stop_failed", boot_id="b" * 32)
+    manager.release_manager.active = lambda: (_ for _ in ()).throw(AssertionError("stale topology must block launch until stop recovery"))
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.start()
+
+    assert raised.value.reason_code == "desktop_process_ownership_incomplete"
+    instance = manager._instance()
+    assert instance["status"] == "FAILED"
+    assert instance["processes"][0]["pid"] == 42
+
+
+def test_start_requires_stop_recovery_for_owned_failed_topology(tmp_path: Path) -> None:
+    manager, inspector = _start_manager(tmp_path)
+    process = _process(42)
+    inspector.owned.add(42)
+    manager._record_state("FAILED", [process], release={}, reason_code="desktop_start_failed", boot_id="b" * 32)
+    manager.release_manager.active = lambda: (_ for _ in ()).throw(AssertionError("owned failed topology must block relaunch"))
+
+    with pytest.raises(DesktopOperationError) as raised:
+        manager.start()
+
+    assert raised.value.reason_code == "desktop_instance_recovery_required"
+    instance = manager._instance()
+    assert instance["status"] == "FAILED"
+    assert instance["reason_code"] == "desktop_instance_recovery_required"
+    assert instance["processes"][0]["pid"] == 42
+
+
 def test_start_rejects_foreign_listening_port_before_loading_release(tmp_path: Path, monkeypatch) -> None:
     manager, _ = _start_manager(tmp_path)
     monkeypatch.setattr("scripts.local_desktop.processes._port_is_listening", lambda host, port: port == manager.config.frontend_port)
@@ -478,7 +856,7 @@ def test_start_readiness_deadline_cleans_owned_processes(tmp_path: Path, monkeyp
     with pytest.raises(DesktopOperationError) as raised:
         manager.start(readiness_timeout=0.01)
     assert raised.value.reason_code == "desktop_readiness_deadline"
-    assert inspector.terminated == [305, 304, 303, 302, 301, 300]
+    assert inspector.terminated == [305, 302, 304, 303, 301, 300]
 
 
 def test_instance_lock_serializes_concurrent_start_operations(tmp_path: Path, monkeypatch) -> None:
@@ -530,7 +908,105 @@ def test_process_inspector_treats_absent_process_as_idempotently_stopped(monkeyp
     inspector.terminate(_process(42), grace_seconds=0.01)
 
 
-def test_windows_graceful_signal_failure_uses_explicit_owned_termination_without_os_kill(monkeypatch) -> None:
+def test_process_inspector_fails_closed_when_wait_reports_unknown_ownership(monkeypatch) -> None:
+    import scripts.local_desktop.processes as process_module
+
+    identity = _process(42)
+
+    class UnknownDuringWaitInspector(ProcessInspector):
+        def __init__(self) -> None:
+            self.lookups = 0
+
+        def ownership(self, process: ProcessIdentity) -> str:
+            self.lookups += 1
+            return "owned" if self.lookups <= 2 else "unknown"
+
+    monkeypatch.setattr(process_module.os, "name", "posix")
+    monkeypatch.setattr(process_module.os, "kill", lambda _pid, _signal: None)
+
+    with pytest.raises(DesktopOperationError) as raised:
+        UnknownDuringWaitInspector().terminate(identity, grace_seconds=1.0)
+
+    assert raised.value.reason_code == "desktop_process_inspection_failed"
+
+
+def test_posix_sigterm_rechecks_each_pid_before_signalling(monkeypatch) -> None:
+    import scripts.local_desktop.processes as process_module
+
+    first = ProcessIdentity("api", 41, 100, "C:/owned.exe", "digest", "out.log", "err.log")
+    second = ProcessIdentity("frontend", 42, 100, "C:/owned.exe", "digest", "out.log", "err.log")
+
+    class ReuseBeforeSignalInspector(ProcessInspector):
+        def __init__(self) -> None:
+            self.lookups: dict[int, int] = {}
+
+        def ownership(self, process: ProcessIdentity) -> str:
+            count = self.lookups.get(process.pid, 0) + 1
+            self.lookups[process.pid] = count
+            if process.pid == second.pid and count >= 2:
+                return "foreign"
+            return "owned"
+
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(process_module.os, "name", "posix")
+    monkeypatch.setattr(process_module.os, "kill", lambda pid, requested_signal: signals.append((pid, requested_signal)))
+
+    with pytest.raises(DesktopOperationError) as raised:
+        ReuseBeforeSignalInspector().terminate_many([first, second], grace_seconds=1.0)
+
+    assert raised.value.reason_code == "desktop_process_not_owned"
+    assert signals == [(first.pid, process_module.signal.SIGTERM)]
+
+
+def test_posix_sigkill_rechecks_pid_after_grace_period(monkeypatch) -> None:
+    import scripts.local_desktop.processes as process_module
+
+    identity = _process(42)
+
+    class ReuseBeforeForceInspector(ProcessInspector):
+        def __init__(self) -> None:
+            self.lookups = 0
+
+        def ownership(self, process: ProcessIdentity) -> str:
+            self.lookups += 1
+            return "owned" if self.lookups <= 4 else "foreign"
+
+    signals: list[int] = []
+    clock = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(process_module.os, "name", "posix")
+    monkeypatch.setattr(process_module.os, "kill", lambda _pid, requested_signal: signals.append(requested_signal))
+    monkeypatch.setattr(process_module.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(DesktopOperationError) as raised:
+        ReuseBeforeForceInspector().terminate(identity, grace_seconds=1.0)
+
+    assert raised.value.reason_code == "desktop_process_not_owned"
+    assert signals == [process_module.signal.SIGTERM]
+
+
+def test_posix_shutdown_preserves_sigterm_graceful_path(monkeypatch) -> None:
+    import scripts.local_desktop.processes as process_module
+
+    identity = _process(42)
+    inspector = ProcessInspector()
+    alive = {42}
+    signals: list[int] = []
+    monkeypatch.setattr(inspector, "identity", lambda pid: (100, "C:/owned.exe") if pid in alive else None)
+    monkeypatch.setattr(process_module.os, "name", "posix")
+
+    def kill(pid: int, requested_signal: int) -> None:
+        signals.append(requested_signal)
+        if requested_signal == process_module.signal.SIGTERM:
+            alive.discard(pid)
+
+    monkeypatch.setattr(process_module.os, "kill", kill)
+
+    inspector.terminate(identity, grace_seconds=5.0)
+
+    assert signals == [process_module.signal.SIGTERM]
+
+
+def test_windows_shutdown_uses_only_revalidated_process_handle_without_console_signal(monkeypatch) -> None:
     import scripts.local_desktop.processes as process_module
 
     identity = _process(42)
@@ -539,35 +1015,85 @@ def test_windows_graceful_signal_failure_uses_explicit_owned_termination_without
     alive = {42}
     monkeypatch.setattr(inspector, "identity", lambda pid: (100, "C:/owned.exe") if pid in alive else None)
     monkeypatch.setattr(process_module.os, "name", "nt")
-    monkeypatch.setattr(process_module, "_send_windows_break", lambda value: calls.append(f"break:{value.pid}") or False)
-    monkeypatch.setattr(process_module, "_terminate_windows_process", lambda value: (calls.append(f"terminate:{value.pid}"), alive.discard(value.pid)))
+    monkeypatch.setattr(
+        process_module,
+        "_send_windows_break",
+        lambda _value: (_ for _ in ()).throw(AssertionError("Windows shutdown must not broadcast console signals")),
+    )
+    monkeypatch.setattr(
+        process_module,
+        "_terminate_windows_process",
+        lambda value: (calls.append(f"terminate:{value.pid}"), alive.discard(value.pid)),
+    )
     monkeypatch.setattr(process_module.os, "kill", lambda *_args: (_ for _ in ()).throw(AssertionError("Windows lifecycle must not call os.kill")))
+    monkeypatch.setattr(process_module.time, "sleep", lambda _seconds: (_ for _ in ()).throw(AssertionError("verified handle termination should converge without grace wait")))
 
-    inspector.terminate(identity, grace_seconds=1e-9)
+    inspector.terminate(identity, grace_seconds=30.0)
 
-    assert calls == ["break:42", "terminate:42"]
+    assert calls == ["terminate:42"]
 
 
-def test_windows_pid_reuse_after_failed_break_is_not_terminated(monkeypatch) -> None:
+def test_windows_pid_reuse_before_handle_termination_is_rejected(monkeypatch) -> None:
     import scripts.local_desktop.processes as process_module
 
     identity = _process(42)
-    identities = iter([(100, "C:/owned.exe"), (101, "C:/reused.exe")])
 
     class ReuseInspector(ProcessInspector):
+        def __init__(self) -> None:
+            self.lookups = 0
+
         def identity(self, pid: int):
-            return next(identities)
+            self.lookups += 1
+            if self.lookups == 1:
+                return (100, "C:/owned.exe")
+            return (101, "C:/reused.exe")
 
     terminated: list[int] = []
     monkeypatch.setattr(process_module.os, "name", "nt")
-    monkeypatch.setattr(process_module, "_send_windows_break", lambda _value: False)
+    monkeypatch.setattr(
+        process_module,
+        "_send_windows_break",
+        lambda _value: (_ for _ in ()).throw(AssertionError("Windows shutdown must not broadcast console signals")),
+    )
     monkeypatch.setattr(process_module, "_terminate_windows_process", lambda value: terminated.append(value.pid))
-    clock = iter((0.0, 2.0))
-    monkeypatch.setattr(process_module.time, "monotonic", lambda: next(clock))
 
-    ReuseInspector().terminate(identity, grace_seconds=1.0)
+    with pytest.raises(DesktopOperationError) as raised:
+        ReuseInspector().terminate(identity, grace_seconds=1.0)
 
+    assert raised.value.reason_code == "desktop_process_not_owned"
     assert terminated == []
+
+
+def test_windows_process_handle_revalidates_created_time_and_executable(monkeypatch) -> None:
+    import scripts.local_desktop.processes as process_module
+
+    class Kernel32:
+        def __init__(self) -> None:
+            self.terminated: list[tuple[object, int]] = []
+            self.closed: list[object] = []
+
+        def OpenProcess(self, _access: int, _inherit: bool, _pid: int) -> object:
+            return object()
+
+        def TerminateProcess(self, process: object, exit_code: int) -> bool:
+            self.terminated.append((process, exit_code))
+            return True
+
+        def CloseHandle(self, process: object) -> bool:
+            self.closed.append(process)
+            return True
+
+    kernel32 = Kernel32()
+    monkeypatch.setattr(process_module, "_windows_kernel32", lambda: kernel32)
+    monkeypatch.setattr(process_module, "_windows_process_is_active", lambda _kernel32, _process: True)
+    monkeypatch.setattr(process_module, "_windows_handle_identity", lambda _kernel32, _process: (101, "C:/reused.exe"))
+
+    with pytest.raises(DesktopOperationError) as raised:
+        process_module._terminate_windows_process(_process(42))
+
+    assert raised.value.reason_code == "desktop_process_not_owned"
+    assert kernel32.terminated == []
+    assert len(kernel32.closed) == 1
 
 
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), 301])

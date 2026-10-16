@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +11,7 @@ import pytest
 import scripts.desktop_app.cli as cli_module
 from scripts.desktop_app.cli import main
 from scripts.local_desktop.common import OperationResult
+from scripts.local_desktop.lifecycle_cancellation import check_startup_cancellation, startup_cancellation_context
 
 
 class FakeRuntime:
@@ -274,3 +277,36 @@ def test_cli_credential_prompt_rejects_zero_negative_and_pointer_text(tmp_path: 
         payload = json.loads(capfd.readouterr().out)
         assert payload["code"] == "desktop_app_cli_invalid"
         assert FakeRuntime.instances == []
+
+
+def test_cli_start_cancellation_emits_one_final_json_and_keeps_diagnostics_on_stderr(
+    tmp_path: Path,
+    capfd,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CancellableRuntime(FakeRuntime):
+        def start(self, *, timeout: float):
+            self.calls.append(("start", timeout))
+            for _ in range(100):
+                check_startup_cancellation()
+                threading.Event().wait(0.001)
+            raise AssertionError("startup cancellation was not observed")
+
+    private_control = b'{"command":"cancel-start"}\n'
+    monkeypatch.setattr(
+        cli_module,
+        "startup_cancellation_context",
+        lambda: startup_cancellation_context(stream=io.BytesIO(private_control)),
+    )
+
+    exit_code = main(_args(tmp_path, "start"), runtime_factory=CancellableRuntime)
+
+    captured = capfd.readouterr()
+    assert exit_code == 4
+    assert captured.out.count("\n") == 1
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["state"] == "ERROR"
+    assert payload["code"] == "desktop_start_cancelled"
+    assert "cancel-start" not in captured.out
+    assert captured.err == "desktop startup cancellation requested\n"

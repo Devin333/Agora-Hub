@@ -14,7 +14,12 @@ export const COMMAND_TIMEOUTS: Readonly<Record<RuntimeCommand, number>> = Object
   // minutes before health readiness. Re-profile after owner lstat/cache optimization and
   // replace this with phase-aware deadlines when the CLI progress contract is frozen.
   start: 10 * 60_000,
-  stop: 75_000,
+  // Python receives 120 s: up to 120 s for API drain, then the lifecycle owner
+  // caps aggregate process convergence at 30 s. The 180 s transport envelope
+  // leaves 30 s for lock admission, final endpoint verification, one final JSON,
+  // and normal process exit. If that deadline expires, the transport separately
+  // retains ownership through its bounded 5 s + 5 s escalation. Timeout is UNKNOWN.
+  stop: 180_000,
   backup: 180_000,
   restore: 300_000,
   "config-show": 30_000,
@@ -37,6 +42,10 @@ const TERMINATE_GRACE_MS = 5_000
 const FORCE_KILL_GRACE_MS = 5_000
 const STDIN_LIMIT = 16 * 1024
 const FINALIZER_READY_TIMEOUT_MS = 20_000
+const START_CANCEL_WRITE_TIMEOUT_MS = 5_000
+// Cancellation waits through backend child cleanup and owner-record convergence; it
+// is intentionally separate from the small control-message write deadline.
+const START_CANCEL_MESSAGE = '{"command":"cancel-start"}\n'
 
 export interface SpawnedProcess extends EventEmitter {
   stdin?: NodeJS.WritableStream
@@ -67,6 +76,11 @@ export interface RuntimeInvokeOptions {
   expectedRevision?: number
   confirmationToken?: string
   parentWindow?: bigint
+}
+
+interface ActiveStartInvocation {
+  stdin: NodeJS.WritableStream
+  cancelRequested: boolean
 }
 
 export interface RuntimeInvocationErrorOptions {
@@ -135,6 +149,8 @@ export function parseRuntimeResponse(raw: string, expectedCommand: RuntimeComman
 }
 
 export class RuntimeClient {
+  private activeStart: ActiveStartInvocation | null = null
+
   constructor(
     readonly layout: RuntimeLayout,
     private readonly spawnRuntime: SpawnRuntime = defaultSpawn,
@@ -151,6 +167,38 @@ export class RuntimeClient {
 
   async invokePrivate(command: "data-clear-apply", payload: unknown): Promise<RuntimeCliResponse> {
     return await this.invokeBounded(command, {}, payload)
+  }
+
+  async cancelStart(): Promise<boolean> {
+    const active = this.activeStart
+    if (!active) return false
+    if (active.cancelRequested) return true
+    active.cancelRequested = true
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const finish = (error?: RuntimeInvocationError) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        // Keep the once-error listener installed after a successful end callback so
+        // a late EPIPE is consumed instead of becoming an unhandled host error.
+        if (error) reject(error)
+        else resolve()
+      }
+      const onError = (error: Error) => finish(new RuntimeInvocationError(
+        "runtime_start_cancel_write_failed",
+        `Runtime start cancellation could not be delivered: ${redactText(error.message, 300)}`,
+        { command: "start" }
+      ))
+      const timer = setTimeout(() => finish(new RuntimeInvocationError(
+        "runtime_start_cancel_write_timeout",
+        "Runtime start cancellation was not delivered within its bounded write deadline",
+        { command: "start" }
+      )), START_CANCEL_WRITE_TIMEOUT_MS)
+      active.stdin.once("error", onError)
+      active.stdin.end(START_CANCEL_MESSAGE, () => finish())
+    })
+    return true
   }
 
   async launchDataClearFinalizer(payload: unknown): Promise<void> {
@@ -233,6 +281,9 @@ export class RuntimeClient {
     })
   }
   private async invokeBounded(command: RuntimeCommand, options: RuntimeInvokeOptions, stdinPayload?: unknown): Promise<RuntimeCliResponse> {
+    if (command === "start" && this.activeStart) {
+      throw new RuntimeInvocationError("runtime_start_already_active", "A runtime start command is already active", { command })
+    }
     const args: string[] = [
       "-B",
       "-m",
@@ -247,6 +298,7 @@ export class RuntimeClient {
       "--api-port",
       "8120",
       ...(command === "data-clear-preview" ? ["--timeout", "150"] : []),
+      ...(command === "stop" ? ["--timeout", "120"] : []),
       command
     ]
     if (command === "backup" && options.backupDestination) args.push("--destination", options.backupDestination)
@@ -281,11 +333,16 @@ export class RuntimeClient {
       windowsHide: true,
       shell: false
     })
-    if (encodedStdin && !child.stdin) {
+    const keepsStartControlOpen = command === "start"
+    if ((encodedStdin || keepsStartControlOpen) && !child.stdin) {
       child.kill("SIGTERM")
       throw new RuntimeInvocationError("runtime_stdin_unavailable", "Runtime private stdin transport is unavailable", { command })
     }
-    if (child.stdin) {
+    const activeStart = keepsStartControlOpen && child.stdin
+      ? { stdin: child.stdin, cancelRequested: false } satisfies ActiveStartInvocation
+      : null
+    if (activeStart) this.activeStart = activeStart
+    if (child.stdin && !keepsStartControlOpen) {
       if (encodedStdin) child.stdin.end(encodedStdin)
       else child.stdin.end()
     }
@@ -307,10 +364,14 @@ export class RuntimeClient {
         if (escalationTimer) clearTimeout(escalationTimer)
         if (forceKillTimer) clearTimeout(forceKillTimer)
       }
+      const releaseStart = () => {
+        if (activeStart && this.activeStart === activeStart) this.activeStart = null
+      }
       const finishReject = (error: RuntimeInvocationError) => {
         if (settled) return
         settled = true
         clearTimers()
+        releaseStart()
         reject(error)
       }
       const beginTermination = (error: RuntimeInvocationError) => {
@@ -357,6 +418,7 @@ export class RuntimeClient {
         }
         settled = true
         clearTimers()
+        releaseStart()
         try {
           const response = parseRuntimeResponse(stdout.toString("utf8"), command)
           if (exitCode !== 0 && response.ok) {
@@ -375,12 +437,3 @@ export class RuntimeClient {
     })
   }
 }
-
-
-
-
-
-
-
-
-

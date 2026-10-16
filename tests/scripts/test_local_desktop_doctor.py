@@ -11,7 +11,18 @@ import pytest
 from framework.shared.local_desktop import CapabilityProjection, CapabilityState, ProbeBudget, resolve_local_desktop_config
 from scripts.local_desktop.common import windows_extended_path
 from scripts.local_desktop.doctor import DoctorCheck, LocalDesktopDoctor, _aggregate_status, _research_parser_contract
-from scripts.local_desktop.release import ACTIVE_RELEASE_SCHEMA, RELEASE_SCHEMA
+from scripts.local_desktop.release import (
+    ACTIVE_RELEASE_SCHEMA,
+    DATA_SCHEMAS,
+    RELEASE_SCHEMA,
+    ReleaseManager,
+    _json_digest,
+    _materialize_next_standalone,
+    _resource_entries,
+    _source_input_digest,
+    _write_source_input_manifest,
+)
+from scripts.local_desktop.runtime_config import read_runtime_config_document, runtime_config_paths
 
 
 def _project(tmp_path: Path) -> tuple[Path, object]:
@@ -33,35 +44,84 @@ def _write_windows_path(path: Path, data: bytes) -> None:
         handle.write(data)
 
 
+def _write_standalone_build(frontend: Path) -> None:
+    package_lock = {
+        "lockfileVersion": 3,
+        "packages": {
+            "": {"name": "newsroom-frontend", "version": "0.1.1"},
+            "node_modules/next": {"name": "next", "version": "16.4.0"},
+        },
+    }
+    for relative, data in {
+        ".next/standalone/server.js": b"require('next')\n",
+        ".next/standalone/node_modules/next/package.json": b'{"name":"next","version":"16.4.0"}',
+        ".next/static/chunks/app.js": b"static-chunk",
+        "public/pdf.worker.min.mjs": b"pdf-worker",
+        "package-lock.json": json.dumps(package_lock, sort_keys=True).encode("utf-8"),
+    }.items():
+        _write_windows_path(frontend / relative, data)
+
+
 def _prepare_active_release(tmp_path: Path) -> tuple[LocalDesktopDoctor, Path, Path]:
     _, config = _project(tmp_path)
     release_id = "20261014T160620Z-b2d933ba0487-portable-860f93d1871e-desktop-54afd7ef8932"
     release = config.release_root / release_id
-    long_relative = Path(
-        "frontend/node_modules/@radix-ui/react-dismissable-layer/node_modules/"
-        "@radix-ui/primitive/dist/internal/is-development.false.d.mts"
-    )
-    resources = {
-        Path("app/interfaces/__init__.py"): b"",
-        Path("frontend/.next/BUILD_ID"): b"doctor-long-path-build",
-        Path("frontend/node_modules/next/dist/bin/next"): b"next-runtime\n",
-        long_relative: b"export type IsDevelopment = false;\n",
+    _write_windows_path(release / "app/interfaces/__init__.py", b"")
+    _write_standalone_build(release / "frontend")
+    source_digest = _source_input_digest(release)
+    _write_source_input_manifest(release, source_digest=source_digest)
+    source_tree = {
+        "package_count": 1,
+        "sha256": "e" * 64,
+        "package_lock_sha256": sha256(windows_extended_path(release / "frontend/package-lock.json").read_bytes()).hexdigest(),
     }
-    for relative, data in resources.items():
-        _write_windows_path(release / relative, data)
+    _materialize_next_standalone(release / "frontend", source_digest=source_digest, source_installed_tree=source_tree)
+    long_relative = Path(
+        "frontend/node_modules/next/dist/compiled/doctor-long-path/segment-one/segment-two/segment-three/"
+        "segment-four/segment-five/nested-runtime-resource-with-a-stable-long-name-and-identity.js"
+    )
+    _write_windows_path(release / long_relative, b"module.exports = 'doctor';\n")
+    closure_path = release / "frontend/production-closure.json"
+    closure = json.loads(windows_extended_path(closure_path).read_text(encoding="utf-8"))
+    resource_data = windows_extended_path(release / long_relative).read_bytes()
+    closure["resources"].append(
+        {"path": long_relative.relative_to("frontend").as_posix(), "size": len(resource_data), "sha256": sha256(resource_data).hexdigest()}
+    )
+    closure["resources"].sort(key=lambda item: item["path"])
+    closure["resources_sha256"] = _json_digest({"resources": closure["resources"]})
+    windows_extended_path(closure_path).write_text(json.dumps(closure), encoding="utf-8")
+
+    manager = ReleaseManager(config)
+    config_identity = manager._configuration_identity_for_document(
+        release,
+        read_runtime_config_document(runtime_config_paths(config).document),
+    )
+    dependencies = manager.dependency_identity(release / "frontend")
+    resources = _resource_entries(release)
     manifest = {
         "schema": RELEASE_SCHEMA,
-        "identity": {"release_id": release_id},
-        "resources": [
-            {"path": relative.as_posix(), "size": len(data), "sha256": sha256(data).hexdigest()}
-            for relative, data in sorted(resources.items(), key=lambda item: item[0].as_posix())
-        ],
+        "identity": {
+            "release_id": release_id,
+            "source_revision": "a" * 40,
+            "source_digest": source_digest,
+            "dependency_digest": _json_digest(dependencies),
+            "config_digest": _json_digest(config_identity),
+        },
+        "config": config_identity,
+        "dependencies": dependencies,
+        "entrypoints": {
+            "api": ["-m", "interfaces.cli.news", "api", "serve", "--host", config.api_host, "--port", str(config.api_port)],
+            "frontend": ["node", "server.js"],
+        },
+        "data_compatibility": {"readable_schemas": DATA_SCHEMAS, "writable_schemas": DATA_SCHEMAS},
+        "resources": resources,
     }
     _write_windows_path(release / "release-manifest.json", json.dumps(manifest).encode("utf-8"))
     pointer = {
         "schema": ACTIVE_RELEASE_SCHEMA,
         "release_id": release_id,
         "release_path": str(release),
+        "identity": manifest["identity"],
     }
     _write_windows_path(config.runtime_root / "active-release.json", json.dumps(pointer).encode("utf-8"))
     doctor = LocalDesktopDoctor(
@@ -217,6 +277,136 @@ def test_pymupdf_mode_does_not_require_docker_check(tmp_path: Path, monkeypatch)
 
 
 
+def test_doctor_accepts_verified_standalone_without_workspace_frontend_install(tmp_path: Path) -> None:
+    doctor, release, _long_relative = _prepare_active_release(tmp_path)
+    (doctor.config.frontend_root / "package.json").unlink()
+    (doctor.config.frontend_root / "package-lock.json").unlink()
+    (doctor.config.frontend_root / "node_modules/.package-lock.json").unlink()
+
+    inspection = doctor._inspect_active_release()
+    lock_check = doctor._frontend_lock_check(inspection)
+    release_check = doctor._release_check(inspection)
+
+    assert lock_check.status == "ok"
+    assert lock_check.reason_code == "desktop_frontend_standalone_verified"
+    assert lock_check.details == {"release_id": release.name, "runtime_mode": "next-standalone"}
+    assert release_check.status == "ok"
+    assert release_check.details == {"release_id": release.name, "runtime_mode": "next-standalone"}
+
+
+def test_doctor_run_verifies_active_release_once_for_both_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    doctor, _release, _long_relative = _prepare_active_release(tmp_path)
+    calls = 0
+    original = ReleaseManager.active
+
+    def counted_active(manager):
+        nonlocal calls
+        calls += 1
+        return original(manager)
+
+    monkeypatch.setattr(ReleaseManager, "active", counted_active)
+    report = doctor.run()
+
+    assert calls == 1
+    assert next(item for item in report.checks if item.check_id == "frontend_lock").status == "ok"
+    assert next(item for item in report.checks if item.check_id == "production_release").status == "ok"
+
+
+def test_doctor_rejects_missing_standalone_resource(tmp_path: Path) -> None:
+    doctor, release, _long_relative = _prepare_active_release(tmp_path)
+    (release / "frontend/server.js").unlink()
+
+    check = doctor._release_check()
+
+    assert check.status == "error"
+    assert check.reason_code == "desktop_active_release_invalid"
+
+
+def test_doctor_rejects_same_size_standalone_tampering(tmp_path: Path) -> None:
+    doctor, release, _long_relative = _prepare_active_release(tmp_path)
+    server = release / "frontend/server.js"
+    original = server.read_bytes()
+    server.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+
+    check = doctor._release_check()
+
+    assert check.status == "error"
+    assert check.reason_code == "desktop_active_release_invalid"
+
+
+def test_doctor_rejects_unmanifested_standalone_resource(tmp_path: Path) -> None:
+    doctor, release, _long_relative = _prepare_active_release(tmp_path)
+    (release / "frontend/unmanifested.js").write_text("unexpected", encoding="utf-8")
+
+    check = doctor._release_check()
+
+    assert check.status == "error"
+    assert check.reason_code == "desktop_active_release_invalid"
+
+
+def test_doctor_rejects_standalone_source_lock_identity_drift(tmp_path: Path) -> None:
+    doctor, release, _long_relative = _prepare_active_release(tmp_path)
+    closure_path = release / "frontend/production-closure.json"
+    closure = json.loads(windows_extended_path(closure_path).read_text(encoding="utf-8"))
+    closure["source_installed_tree"]["package_lock_sha256"] = "f" * 64
+    data = json.dumps(closure).encode("utf-8")
+    closure_path.write_bytes(data)
+    manifest_path = release / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    resource = next(item for item in manifest["resources"] if item["path"] == "frontend/production-closure.json")
+    resource.update({"size": len(data), "sha256": sha256(data).hexdigest()})
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    check = doctor._release_check()
+
+    assert check.status == "error"
+    assert check.reason_code == "desktop_active_release_invalid"
+
+
+def test_doctor_rejects_unknown_standalone_closure_mode(tmp_path: Path) -> None:
+    doctor, release, _long_relative = _prepare_active_release(tmp_path)
+    closure_path = release / "frontend/production-closure.json"
+    closure = json.loads(windows_extended_path(closure_path).read_text(encoding="utf-8"))
+    closure["runtime_mode"] = "unknown-standalone"
+    data = json.dumps(closure).encode("utf-8")
+    closure_path.write_bytes(data)
+    manifest_path = release / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    resource = next(item for item in manifest["resources"] if item["path"] == "frontend/production-closure.json")
+    resource.update({"size": len(data), "sha256": sha256(data).hexdigest()})
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    check = doctor._release_check()
+
+    assert check.status == "error"
+    assert check.reason_code == "desktop_active_release_invalid"
+
+
+def test_doctor_keeps_legacy_workspace_lock_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, config = _project(tmp_path)
+    doctor = LocalDesktopDoctor(config, environ={}, command_runner=lambda _argv, _timeout: None, port_checker=lambda _h, _p: False)
+    legacy_manifest = {
+        "identity": {"release_id": "legacy-release"},
+        "entrypoints": {
+            "api": ["-m", "interfaces.cli.news", "api", "serve", "--host", config.api_host, "--port", str(config.api_port)],
+            "frontend": ["next", "start", "-H", config.frontend_host, "-p", str(config.frontend_port)],
+        },
+    }
+    monkeypatch.setattr(ReleaseManager, "active", lambda _manager: (config.release_root / "legacy-release", legacy_manifest))
+    (config.frontend_root / "node_modules/.package-lock.json").unlink()
+
+    check = doctor._frontend_lock_check()
+
+    assert check.status == "warning"
+    assert check.reason_code == "desktop_frontend_dependencies_unprepared"
+
+    (config.frontend_root / "package-lock.json").unlink()
+    missing_lock_check = doctor._frontend_lock_check()
+
+    assert missing_lock_check.status == "error"
+    assert missing_lock_check.reason_code == "desktop_frontend_lock_missing"
+
+
 @pytest.mark.skipif(os.name != "nt", reason="requires Windows extended-length paths")
 def test_doctor_accepts_active_release_resource_beyond_max_path_with_exact_checksum(tmp_path: Path) -> None:
     doctor, release, long_relative = _prepare_active_release(tmp_path)
@@ -229,7 +419,7 @@ def test_doctor_accepts_active_release_resource_beyond_max_path_with_exact_check
 
     assert check.status == "ok"
     assert check.reason_code == "desktop_active_release_prepared"
-    assert check.details == {"release_id": release.name}
+    assert check.details == {"release_id": release.name, "runtime_mode": "next-standalone"}
     assert str(windows_extended_path(resource)) not in json.dumps(check.to_dict())
 
 

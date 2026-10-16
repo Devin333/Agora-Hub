@@ -63,6 +63,41 @@ describe("RuntimeClient", () => {
     ], expect.objectContaining({ cwd: layout.resourceRoot, windowsHide: true, shell: false, env: { PATH: "ignored", PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1" } }))
   })
 
+  it("keeps start stdin private and writes the canonical cancellation message exactly once", async () => {
+    const child = new FakeChild()
+    const spawn = vi.fn(() => child)
+    const chunks: Buffer[] = []
+    child.stdin.on("data", (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)))
+    const client = new RuntimeClient(layout, spawn)
+
+    const pending = client.invoke("start")
+    expect(child.stdin.writableEnded).toBe(false)
+    await expect(Promise.all([client.cancelStart(), client.cancelStart()])).resolves.toEqual([true, true])
+    expect(Buffer.concat(chunks).toString("utf8")).toBe('{"command":"cancel-start"}\n')
+    expect(child.kill).not.toHaveBeenCalled()
+
+    child.stdout.end(JSON.stringify({
+      ok: false, command: "start", state: "ERROR", code: "desktop_start_cancelled",
+      message: "desktop startup was cancelled", data: {}
+    }))
+    child.emit("close", 4)
+    await expect(pending).resolves.toMatchObject({ ok: false, command: "start", code: "desktop_start_cancelled" })
+    await expect(client.cancelStart()).resolves.toBe(false)
+  })
+
+  it("passes a stop budget that covers drain plus aggregate process termination", async () => {
+    const child = new FakeChild()
+    const spawn = vi.fn(() => child)
+    const client = new RuntimeClient(layout, spawn)
+    const pending = client.invoke("stop")
+    child.stdout.end(JSON.stringify({ ok: true, command: "stop", state: "STOPPED", code: "desktop_stopped", message: "stopped", data: {} }))
+    child.emit("close", 0)
+    await pending
+    const args = (spawn.mock.calls[0] as unknown as [string, string[]])[1]
+    expect(args.slice(-3)).toEqual(["--timeout", "120", "stop"])
+    expect(COMMAND_TIMEOUTS.stop).toBe(180_000)
+  })
+
   it("gives clear preview a realistic bounded owner drain timeout", async () => {
     const child = new FakeChild()
     const spawn = vi.fn(() => child)

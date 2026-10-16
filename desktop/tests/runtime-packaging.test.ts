@@ -44,6 +44,14 @@ afterEach(async () => Promise.all(roots.splice(0).map(root => {
 })))
 
 describe("runtime packaging", () => {
+  it("keeps the desktop release version synchronized at 0.1.2", async () => {
+    const packageJson = JSON.parse(await readFile(path.resolve(__dirname, "../package.json"), "utf8"))
+    const packageLock = JSON.parse(await readFile(path.resolve(__dirname, "../package-lock.json"), "utf8"))
+    expect(packageJson.version).toBe("0.1.2")
+    expect(packageLock.version).toBe(packageJson.version)
+    expect(packageLock.packages[""].version).toBe(packageJson.version)
+  })
+
   it("copies the exact manifest, hidden files, pyc and long licenses without aliases or stage mutation", async () => {
     const { stage, output, destination, longPath, files } = await fixture()
     const owner = await validateRuntimeStage(stage)

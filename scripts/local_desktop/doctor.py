@@ -68,6 +68,13 @@ class DoctorReport:
         }
 
 
+@dataclass(frozen=True)
+class _ActiveReleaseInspection:
+    state: str
+    path: Path | None = None
+    manifest: Mapping[str, Any] | None = None
+
+
 class LocalDesktopDoctor:
     def __init__(
         self,
@@ -93,12 +100,13 @@ class LocalDesktopDoctor:
 
     def run(self, *, probe_network: bool = False, budget: ProbeBudget | None = None) -> DoctorReport:
         actual_budget = budget or ProbeBudget()
+        active_release = self._inspect_active_release()
         checks = [
             self._profile_check(),
             self._python_check(),
             self._node_check(),
-            self._frontend_lock_check(),
-            self._release_check(),
+            self._frontend_lock_check(active_release),
+            self._release_check(active_release),
             self._storage_check(),
             self._port_check("frontend_port", self.config.frontend_host, self.config.frontend_port),
             self._port_check("api_port", self.config.api_host, self.config.api_port),
@@ -165,7 +173,63 @@ class LocalDesktopDoctor:
             return DoctorCheck("node", "error", "desktop_node_missing", "Node.js or npm is unavailable", "Install the project-supported Node.js and rerun doctor.", {"node_found": bool(node), "npm_found": bool(npm)})
         return DoctorCheck("node", "ok", "desktop_node_configured", "Node.js and npm executables are available", details={"node": node, "npm": npm})
 
-    def _frontend_lock_check(self) -> DoctorCheck:
+    def _inspect_active_release(self) -> _ActiveReleaseInspection:
+        from scripts.local_desktop.common import DesktopOperationError
+        from scripts.local_desktop.release import ReleaseManager
+
+        try:
+            path, manifest = ReleaseManager(self.config).active()
+        except DesktopOperationError as exc:
+            if exc.reason_code == "desktop_release_not_activated":
+                return _ActiveReleaseInspection("absent")
+            return _ActiveReleaseInspection("invalid")
+        except (KeyError, OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            return _ActiveReleaseInspection("invalid")
+        return _ActiveReleaseInspection("verified", path=path, manifest=manifest)
+
+    def _verified_frontend_mode(self, active_release: _ActiveReleaseInspection) -> str | None:
+        if active_release.state != "verified" or not isinstance(active_release.manifest, Mapping):
+            return None
+        entrypoints = active_release.manifest.get("entrypoints")
+        if not isinstance(entrypoints, Mapping):
+            return None
+        frontend = entrypoints.get("frontend")
+        if frontend == ["node", "server.js"]:
+            return "next-standalone"
+        if frontend == ["next", "start", "-H", self.config.frontend_host, "-p", str(self.config.frontend_port)]:
+            return "next-start"
+        return None
+
+    def _frontend_lock_check(self, active_release: _ActiveReleaseInspection | None = None) -> DoctorCheck:
+        inspected = active_release or self._inspect_active_release()
+        if inspected.state == "invalid":
+            return DoctorCheck(
+                "frontend_lock",
+                "error",
+                "desktop_active_release_invalid",
+                "the active production release could not be verified",
+                "Run the explicit build command to prepare and activate a fresh release.",
+            )
+        if inspected.state == "verified":
+            mode = self._verified_frontend_mode(inspected)
+            if mode == "next-standalone":
+                release_id = str(inspected.manifest.get("identity", {}).get("release_id") or "")
+                return DoctorCheck(
+                    "frontend_lock",
+                    "ok",
+                    "desktop_frontend_standalone_verified",
+                    "active standalone frontend dependency closure is verified",
+                    details={"release_id": release_id, "runtime_mode": mode},
+                )
+            if mode is None:
+                return DoctorCheck(
+                    "frontend_lock",
+                    "error",
+                    "desktop_active_release_invalid",
+                    "the active production release frontend mode is unsupported",
+                    "Run the explicit build command to prepare and activate a fresh release.",
+                )
+
         lockfile = self.config.frontend_root / "package-lock.json"
         package = self.config.frontend_root / "package.json"
         if not lockfile.is_file() or not package.is_file():
@@ -180,12 +244,9 @@ class LocalDesktopDoctor:
             {"lock_sha256": hash_bytes(lockfile.read_bytes()), "installed_lock_present": installed_lock.is_file()},
         )
 
-    def _release_check(self) -> DoctorCheck:
-        from scripts.local_desktop.common import DesktopOperationError, reject_reparse_path, windows_extended_path
-        from scripts.local_desktop.release import ACTIVE_RELEASE_SCHEMA, RELEASE_SCHEMA
-
-        pointer_path = self.config.runtime_root / "active-release.json"
-        if not pointer_path.is_file():
+    def _release_check(self, active_release: _ActiveReleaseInspection | None = None) -> DoctorCheck:
+        inspected = active_release or self._inspect_active_release()
+        if inspected.state == "absent":
             return DoctorCheck(
                 "production_release",
                 "warning",
@@ -193,42 +254,8 @@ class LocalDesktopDoctor:
                 "no active production release is recorded",
                 "Run the explicit build command before start.",
             )
-        try:
-            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-            if pointer.get("schema") != ACTIVE_RELEASE_SCHEMA:
-                raise ValueError("active pointer schema")
-            release_path = Path(str(pointer["release_path"])).resolve(strict=True)
-            release_root = self.config.release_root.resolve(strict=False)
-            if release_path == release_root or not release_path.is_relative_to(release_root):
-                raise ValueError("active release path")
-            manifest_path = release_path / "release-manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest.get("schema") != RELEASE_SCHEMA or manifest.get("identity", {}).get("release_id") != pointer.get("release_id"):
-                raise ValueError("active release identity")
-            resources = manifest.get("resources")
-            if not isinstance(resources, list) or not resources:
-                raise ValueError("release resources")
-            paths = {str(item.get("path") or "") for item in resources if isinstance(item, Mapping)}
-            required = {
-                "frontend/node_modules/next/dist/bin/next",
-                "app/interfaces/__init__.py",
-            }
-            if not required.issubset(paths) or not any(path.startswith("frontend/.next/") for path in paths):
-                raise ValueError("production entrypoint resources")
-            for item in resources:
-                if not isinstance(item, Mapping):
-                    raise ValueError("release resource")
-                relative = str(item.get("path") or "")
-                lexical_candidate = release_path / relative
-                reject_reparse_path(lexical_candidate, root=release_path)
-                candidate = lexical_candidate.resolve(strict=False)
-                candidate_io = windows_extended_path(candidate)
-                if not relative or candidate == release_path or not candidate.is_relative_to(release_path) or not candidate_io.is_file():
-                    raise ValueError("release resource path")
-                data = candidate_io.read_bytes()
-                if len(data) != item.get("size") or hash_bytes(data) != item.get("sha256"):
-                    raise ValueError("release resource checksum")
-        except (DesktopOperationError, KeyError, OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        mode = self._verified_frontend_mode(inspected)
+        if inspected.state != "verified" or mode is None or not isinstance(inspected.manifest, Mapping):
             return DoctorCheck(
                 "production_release",
                 "error",
@@ -236,12 +263,13 @@ class LocalDesktopDoctor:
                 "the active production release manifest or resources are incomplete",
                 "Run the explicit build command to prepare and activate a fresh release.",
             )
+        release_id = str(inspected.manifest.get("identity", {}).get("release_id") or "")
         return DoctorCheck(
             "production_release",
             "ok",
             "desktop_active_release_prepared",
             "active production release resources match their manifest",
-            details={"release_id": str(pointer["release_id"])},
+            details={"release_id": release_id, "runtime_mode": mode},
         )
 
     def _storage_check(self) -> DoctorCheck:

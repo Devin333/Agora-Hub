@@ -13,6 +13,12 @@ from typing import Any, Protocol
 
 from framework.shared.local_desktop import utc_timestamp
 from scripts.desktop_app.config import DesktopAppConfig, _reject_lexical_reparse_chain, controlled_process_environment
+from scripts.desktop_app.runtime_profile import (
+    DEFAULT_PROFILE_NAME,
+    load_desktop_runtime_profile,
+    validate_portable_runtime_attestation,
+)
+from scripts.local_desktop.lifecycle_cancellation import check_startup_cancellation
 from scripts.local_desktop.common import (
     DesktopOperationError,
     atomic_write_json,
@@ -29,22 +35,9 @@ BINDING_SCHEMA = "newsroom.desktop-app-release-binding/v1"
 PORTABLE_PYTHON_SCHEMA = "newsroom.portable-python/v1"
 PORTABLE_NODE_SCHEMA = "newsroom.portable-node/v1"
 _ORIGINAL_MANIFEST_PATH = ".desktop-app/original-release-manifest.json"
-_DEFAULT_IMPORTS = (
-    "fastapi",
-    "numpy",
-    "pydantic",
-    "pymupdf",
-    "pywintypes",
-    "scipy",
-    "scripts.desktop_app",
-    "sqlite3",
-    "ssl",
-    "torch",
-    "uvicorn",
-    "win32api",
-    "win32security",
-)
-_DEFAULT_IMPORT_ATTRIBUTES = (("scripts.local_desktop.common", "protect_private_path"),)
+_DEFAULT_RUNTIME_PROFILE = load_desktop_runtime_profile(DEFAULT_PROFILE_NAME)
+_DEFAULT_IMPORTS = _DEFAULT_RUNTIME_PROFILE.required_imports
+_DEFAULT_IMPORT_ATTRIBUTES = _DEFAULT_RUNTIME_PROFILE.required_attributes
 _PORTABLE_PYTHON_EXCLUDED_INPUT_PATHS = ("Lib/site-packages/pip-26.2.1.dist-info",)
 _EXTERNAL_CONFIG_ENV_NAMES = ("NEWS_MODELS_CONFIG", "NEWS_RESEARCH_MODELS_CONFIG", "NEWS_SOURCES_CONFIG")
 _SOURCE_PREFIXES = {"app": "", "frontend": "frontend"}
@@ -126,6 +119,7 @@ class PortableBundleManager:
         return envelope
 
     def _verify_bundle_details(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        check_startup_cancellation()
         root = self.config.resource_root
         _reject_lexical_reparse_chain(root)
         envelope_path = root / "desktop-bundle.json"
@@ -156,6 +150,7 @@ class PortableBundleManager:
             raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle resource inventory is empty")
         expected: dict[str, Mapping[str, Any]] = {}
         for item in resources:
+            check_startup_cancellation()
             if not isinstance(item, Mapping):
                 raise DesktopOperationError("desktop_app_bundle_manifest_invalid", "desktop app bundle resource entry is invalid")
             relative = _safe_relative(item.get("path"))
@@ -184,6 +179,7 @@ class PortableBundleManager:
         if envelope.get("bundle_id") != expected_bundle_id:
             raise DesktopOperationError("desktop_app_bundle_identity_mismatch", "desktop app bundle identity does not match its envelope")
         self._verify_runtime(envelope, original, snapshot=snapshot)
+        check_startup_cancellation()
         return envelope, original
 
     def install_and_activate(self) -> dict[str, Any]:
@@ -224,6 +220,7 @@ class PortableBundleManager:
             if preserved is not None:
                 active_manifest, pointer, preserved_runtime_configuration = preserved
             else:
+                check_startup_cancellation()
                 active_manifest, pointer = self.release_manager.verify_and_activate(destination)
                 preserved_runtime_configuration = False
             return {
@@ -240,7 +237,9 @@ class PortableBundleManager:
         reject_reparse_path(staging_root, root=self.config.desktop.release_root)
         stage = Path(tempfile.mkdtemp(prefix="binding-", dir=staging_root))
         try:
+            check_startup_cancellation()
             self._materialize_release(stage, original)
+            check_startup_cancellation()
             dependencies = self.release_manager.dependency_identity(stage / "frontend")
             _validate_relocated_dependency_identity(original["dependencies"], dependencies)
             config_identity = {
@@ -267,7 +266,7 @@ class PortableBundleManager:
                 "dependencies": dependencies,
                 "entrypoints": {
                     "api": ["-m", "interfaces.cli.news", "api", "serve", "--host", self.config.desktop.api_host, "--port", str(self.config.desktop.api_port)],
-                    "frontend": ["next", "start", "-H", self.config.desktop.frontend_host, "-p", str(self.config.desktop.frontend_port)],
+                    "frontend": _bound_frontend_entrypoint(original, host=self.config.desktop.frontend_host, port=self.config.desktop.frontend_port),
                 },
                 "desktop_app_binding": {
                     "schema": BINDING_SCHEMA,
@@ -396,8 +395,14 @@ class PortableBundleManager:
         if os.path.normcase(str(actual_python)) != os.path.normcase(str(self.config.python_executable.resolve(strict=False))):
             raise DesktopOperationError("desktop_app_wrong_python", "desktop app CLI must run with the bundled interpreter")
         required_imports = tuple(python.get("required_imports") or ())
-        if not set(_DEFAULT_IMPORTS).issubset(required_imports):
-            raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle Python capability imports are incomplete")
+        if set(required_imports) != set(_DEFAULT_IMPORTS):
+            raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle Python capability imports do not match the selected profile")
+        if python.get("profile") != _DEFAULT_RUNTIME_PROFILE.identity():
+            raise DesktopOperationError("desktop_app_runtime_profile_mismatch", "desktop app bundle Python profile identity is invalid")
+        if not isinstance(python.get("builder"), Mapping) or not isinstance(python.get("base_python"), Mapping) or not isinstance(python.get("wheelhouse"), Mapping):
+            raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle Python build provenance is incomplete")
+        if not isinstance(python.get("record_count"), int) or int(python["record_count"]) < 1 or not isinstance(python.get("license_count"), int) or int(python["license_count"]) < 1:
+            raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle Python package evidence is incomplete")
         if python.get("required_attributes") != _attribute_descriptors(_DEFAULT_IMPORT_ATTRIBUTES):
             raise DesktopOperationError("desktop_app_bundle_runtime_invalid", "desktop app bundle Python capability attributes are incomplete")
         python_probe = _python_probe(
@@ -407,6 +412,10 @@ class PortableBundleManager:
             self.config.resource_root,
             self.command_runner,
         )
+        if _normalized_package_identity(python_probe.get("packages")) != {
+            _normalize_distribution_name(name): version for name, version in _DEFAULT_RUNTIME_PROFILE.packages
+        }:
+            raise DesktopOperationError("desktop_app_runtime_profile_mismatch", "bundled Python distributions do not match the selected profile")
         if (
             _json_digest(python_probe) != python.get("probe_digest")
             or python.get("distribution_count") != len(python_probe["packages"])
@@ -432,6 +441,22 @@ class PortableBundleManager:
             raise DesktopOperationError("desktop_app_bundle_release_manifest_invalid", "original release dependency identity is incomplete")
         if python_probe.get("version") != original_python.get("version") or python_probe.get("packages") != original_python.get("packages"):
             raise DesktopOperationError("desktop_app_python_dependency_mismatch", "portable Python dependencies do not match the verified release")
+        expected_profile_provenance = original_python.get("runtime_profile")
+        actual_profile_provenance = {
+            "profile": dict(python["profile"]),
+            "base_python": {
+                "source_sha256": python["base_python"].get("source_sha256"),
+                "manifest_sha256": python["base_python"].get("manifest_sha256"),
+            },
+            "wheelhouse": {
+                "manifest_sha256": python["wheelhouse"].get("manifest_sha256"),
+                "receipt_sha256": python["wheelhouse"].get("receipt_sha256"),
+                "artifact_count": python["wheelhouse"].get("artifact_count"),
+            },
+            "builder": dict(python["builder"]),
+        }
+        if expected_profile_provenance != actual_profile_provenance:
+            raise DesktopOperationError("desktop_app_runtime_profile_mismatch", "portable Python provenance does not match the verified release dependency identity")
         if node_version != original_node.get("version") or npm_version != original_node.get("npm_version"):
             raise DesktopOperationError("desktop_app_node_dependency_mismatch", "portable Node.js dependencies do not match the verified release")
 
@@ -489,7 +514,9 @@ def stage_portable_bundle(
         output,
         {"source_release": release_path, "portable_python": python_source, "portable_node": node_source},
     )
+    _reject_nonportable_venv(python_source)
     python_attestation = _portable_attestation(python_source / "portable-python.json", PORTABLE_PYTHON_SCHEMA)
+    validate_portable_runtime_attestation(python_attestation, _DEFAULT_RUNTIME_PROFILE)
     node_attestation = _portable_attestation(node_source / "portable-node.json", PORTABLE_NODE_SCHEMA)
     _reject_nonportable_venv(python_source)
     _require_attested_relative(python_attestation, "executable", "python.exe")
@@ -508,6 +535,7 @@ def stage_portable_bundle(
         )
         _copy_tree_checked(node_source, stage / "node")
         for item in source_manifest["resources"]:
+            check_startup_cancellation()
             original_relative = _safe_relative(item.get("path"))
             source = ensure_contained(release_path, release_path / original_relative, field="source release resource")
             reject_reparse_path(source, root=release_path)
@@ -525,11 +553,12 @@ def stage_portable_bundle(
             if not _is_file_long_path(required):
                 raise DesktopOperationError("desktop_app_portable_runtime_incomplete", f"portable runtime resource is missing: {required.relative_to(stage).as_posix()}")
         normalized_imports = tuple(dict.fromkeys(required_imports))
-        if not set(_DEFAULT_IMPORTS).issubset(normalized_imports):
+        if set(normalized_imports) != set(_DEFAULT_IMPORTS):
             raise DesktopOperationError(
                 "desktop_app_portable_python_capabilities_incomplete",
-                "portable Python validation imports cannot omit required desktop capabilities",
+                "portable Python validation imports must match the selected desktop capability profile",
             )
+        check_startup_cancellation()
         python_probe = _python_probe(
             python_executable,
             normalized_imports,
@@ -537,6 +566,7 @@ def stage_portable_bundle(
             stage,
             runner,
         )
+        check_startup_cancellation()
         node_version = _tool_output([str(node_executable), "--version"], runner, timeout=15)
         npm_version = _tool_output([str(node_executable), str(npm_cli), "--version"], runner, timeout=20)
         _validate_attested_probe(python_attestation, python_probe, runtime="Python")
@@ -544,6 +574,7 @@ def stage_portable_bundle(
             raise DesktopOperationError("desktop_app_portable_node_attestation_mismatch", "portable Node.js version does not match its attestation")
         if str(node_attestation.get("npm_version") or "") != npm_version:
             raise DesktopOperationError("desktop_app_portable_node_attestation_mismatch", "portable npm version does not match its attestation")
+        check_startup_cancellation()
         runtime_dependencies = release_manager.dependency_identity_for_runtime(
             stage / "frontend",
             python_executable=python_executable,
@@ -558,7 +589,9 @@ def stage_portable_bundle(
         portable_manifest = _portable_release_manifest(source_manifest, portable_dependencies)
         atomic_write_json(original_manifest_path, portable_manifest)
 
+        check_startup_cancellation()
         resources = _resource_entries(stage, excluded={"desktop-bundle.json"})
+        check_startup_cancellation()
         original_bytes = read_bytes_long_path(original_manifest_path)
         runtime = {
             "python": {
@@ -578,6 +611,12 @@ def stage_portable_bundle(
                     "arguments": list(_PYTHON_LAUNCH_REQUIREMENTS["arguments"]),
                     "environment": dict(_PYTHON_LAUNCH_REQUIREMENTS["environment"]),
                 },
+                "profile": dict(python_attestation["profile"]),
+                "builder": dict(python_attestation["builder"]),
+                "base_python": dict(python_attestation["base_python"]),
+                "wheelhouse": dict(python_attestation["wheelhouse"]),
+                "record_count": python_attestation["record_count"],
+                "license_count": len(python_attestation["licenses"]),
             },
             "node": {
                 "path": "node/node.exe",
@@ -607,6 +646,7 @@ def stage_portable_bundle(
             "resources": resources,
         }
         atomic_write_json(stage / "desktop-bundle.json", envelope)
+        check_startup_cancellation()
         if output.exists():
             output.rmdir()
         os.replace(stage, output)
@@ -616,6 +656,16 @@ def stage_portable_bundle(
             shutil.rmtree(stage, ignore_errors=True)
         raise
 
+
+
+def _bound_frontend_entrypoint(original: Mapping[str, Any], *, host: str, port: int) -> list[str]:
+    entrypoints = original.get("entrypoints")
+    frontend = entrypoints.get("frontend") if isinstance(entrypoints, Mapping) else None
+    if frontend == ["node", "server.js"]:
+        return ["node", "server.js"]
+    if not isinstance(frontend, list) or len(frontend) != 6 or frontend[:3] != ["next", "start", "-H"] or frontend[4] != "-p":
+        raise DesktopOperationError("desktop_release_manifest_invalid", "frontend entrypoint is invalid")
+    return ["next", "start", "-H", host, "-p", str(port)]
 
 def _absolute_bundle_path(value: str | Path, *, field: str) -> Path:
     selected = Path(value).expanduser()
@@ -651,28 +701,42 @@ def _python_probe(
     application_root: Path,
     runner: Callable[..., subprocess.CompletedProcess[Any]],
 ) -> dict[str, Any]:
+    forbidden = list(_DEFAULT_RUNTIME_PROFILE.forbidden_default_modules)
     script = (
-        "import importlib, importlib.metadata, json, platform, sqlite3, ssl, sys, sysconfig;"
+        "import importlib,importlib.metadata,json,os,platform,sqlite3,ssl,sys,sysconfig,tempfile;"
         f"sys.path.insert(0,{str(application_root)!r});"
-        f"mods={list(required_imports)!r};attrs={list(required_attributes)!r};"
+        f"mods={list(required_imports)!r};attrs={list(required_attributes)!r};forbidden={forbidden!r};"
         "loaded={name:importlib.import_module(name) for name in mods};"
         "[getattr(importlib.import_module(module),attribute) for module,attribute in attrs];"
-        "connection=sqlite3.connect(':memory:');"
-        "sqlite_runtime=connection.execute('select sqlite_version()').fetchone()[0];connection.close();"
-        "ssl.create_default_context();loaded['win32api'].GetUserName();"
-        "document=loaded['pymupdf'].open();document.close();"
+        "api=loaded['interfaces.api.app'].app;routes=sorted({getattr(route,'path','') for route in api.routes if getattr(route,'path','')});"
+        "document=loaded['pymupdf'].open();page=document.new_page();page.insert_text((72,72),'Agora desktop text PDF');blob=document.tobytes();document.close();"
+        "reopened=loaded['pymupdf'].open(stream=blob,filetype='pdf');pdf_text=''.join(page.get_text() for page in reopened);reopened.close();"
+        "database=tempfile.NamedTemporaryFile(suffix='.sqlite3',delete=False);database.close();"
+        "connection=sqlite3.connect(database.name);journal=connection.execute('pragma journal_mode=wal').fetchone()[0];"
+        "connection.execute('create table capability(value text not null)');connection.execute(\"insert into capability values ('memory')\");connection.commit();"
+        "stored=connection.execute('select value from capability').fetchone()[0];sqlite_runtime=connection.execute('select sqlite_version()').fetchone()[0];connection.close();os.unlink(database.name);"
+        "ssl.create_default_context();"
+        "email=loaded['email_validator'].validate_email('reader@example.com',check_deliverability=False).normalized;"
+        "phone=loaded['phonenumbers'].is_valid_number(loaded['phonenumbers'].parse('+14155552671',None));"
+        "loaded['authlib.jose'].JsonWebToken(['HS256']);"
+        "username=loaded['win32api'].GetUserName();token=loaded['win32security'].OpenProcessToken(loaded['win32api'].GetCurrentProcess(),8);"
+        "sid=loaded['win32security'].GetTokenInformation(token,loaded['win32security'].TokenUser)[0];sid_text=loaded['win32security'].ConvertSidToStringSid(sid);"
+        "unexpected=sorted(name for name in forbidden if name in sys.modules);"
         "packages=sorted([[d.metadata.get('Name',''),d.version] for d in importlib.metadata.distributions() if d.metadata.get('Name')]);"
+        "capabilities={'api_routes':len(routes),'api_health':('/api/v1/health' in routes or '/health' in routes),'text_pdf':('Agora desktop text PDF' in pdf_text),"
+        "'sqlite_wal':(journal.lower()=='wal' and stored=='memory'),'auth':(email=='reader@example.com' and phone),"
+        "'credential_acl':(bool(username) and bool(sid_text)),'tls':True,'optional_modules_loaded':unexpected};"
         "print(json.dumps({'version':sys.version.split()[0],'implementation':platform.python_implementation(),"
         "'cache_tag':sys.implementation.cache_tag,'abi':sysconfig.get_config_var('SOABI') or '',"
         "'platform':sysconfig.get_platform(),'packages':packages,'sqlite_version':sqlite_runtime,"
-        "'openssl_version':ssl.OPENSSL_VERSION},sort_keys=True,separators=(',',':')))"
+        "'openssl_version':ssl.OPENSSL_VERSION,'capabilities':capabilities},sort_keys=True,separators=(',',':')))"
     )
     try:
         result = runner(
             [str(executable), "-B", "-I", "-c", script],
             capture_output=True,
             text=False,
-            timeout=60,
+            timeout=90,
             check=False,
             shell=False,
             env=_isolated_runtime_environment(),
@@ -687,14 +751,39 @@ def _python_probe(
         payload = json.loads(_decode_stdout(result.stdout))
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
         raise DesktopOperationError("desktop_app_python_probe_invalid", "portable Python probe returned invalid UTF-8 JSON") from exc
+    capabilities = payload.get("capabilities") if isinstance(payload, Mapping) else None
     if (
         not isinstance(payload, dict)
         or not isinstance(payload.get("packages"), list)
         or not str(payload.get("sqlite_version") or "")
         or not str(payload.get("openssl_version") or "")
+        or not isinstance(capabilities, Mapping)
+        or not all(capabilities.get(name) is True for name in ("api_health", "text_pdf", "sqlite_wal", "auth", "credential_acl", "tls"))
+        or int(capabilities.get("api_routes") or 0) < 1
+        or capabilities.get("optional_modules_loaded") != []
     ):
-        raise DesktopOperationError("desktop_app_python_probe_invalid", "portable Python probe result is incomplete")
+        raise DesktopOperationError("desktop_app_python_capability_probe_failed", "portable Python default desktop capability probe did not pass")
     return payload
+
+def _normalize_distribution_name(value: str) -> str:
+    return value.strip().casefold().replace("_", "-").replace(".", "-")
+
+
+def _normalized_package_identity(value: Any) -> dict[str, str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, list)
+        or len(item) != 2
+        or not all(isinstance(part, str) and part for part in item)
+        for item in value
+    ):
+        return {}
+    result: dict[str, str] = {}
+    for name, version in value:
+        normalized = _normalize_distribution_name(name)
+        if normalized in result:
+            return {}
+        result[normalized] = version
+    return result
 
 
 def _attribute_descriptors(attributes: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
@@ -821,6 +910,11 @@ def _portable_release_manifest(source_manifest: Mapping[str, Any], dependencies:
         "identity": identity,
         "dependencies": dict(dependencies),
         "desktop_app_source_release_identity": dict(source_manifest["identity"]),
+        "desktop_runtime_profile_transition": {
+            "profile": _DEFAULT_RUNTIME_PROFILE.identity(),
+            "source_dependency_digest": str(source_manifest["identity"]["dependency_digest"]),
+            "selected_dependency_digest": dependency_digest,
+        },
     }
 
 
@@ -986,10 +1080,12 @@ def _copy_tree_checked(
         onerror=_raise_bundle_walk_error,
         followlinks=False,
     ):
+        check_startup_cancellation()
         lexical_directory = source / Path(directory).relative_to(windows_extended_path(source))
         _reject_lexical_reparse_chain(lexical_directory)
         reject_reparse_path(lexical_directory, root=source)
         for name in list(names):
+            check_startup_cancellation()
             lexical = lexical_directory / name
             _reject_lexical_reparse_chain(lexical)
             reject_reparse_path(lexical, root=source)
@@ -1003,6 +1099,7 @@ def _copy_tree_checked(
             target = destination / lexical.relative_to(source)
             windows_extended_path(target).mkdir(exist_ok=True)
         for name in files:
+            check_startup_cancellation()
             lexical = lexical_directory / name
             _reject_lexical_reparse_chain(lexical)
             reject_reparse_path(lexical, root=source)
@@ -1020,6 +1117,7 @@ def _copy_tree_checked(
                 handle.write(data)
             shutil.copystat(windows_extended_path(lexical), target_io, follow_symlinks=False)
             source_files[relative] = (len(data), sha256(data).hexdigest())
+    check_startup_cancellation()
     copied = _resource_identity_long_path(destination)
     if copied != source_files:
         raise DesktopOperationError(

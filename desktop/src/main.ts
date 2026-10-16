@@ -160,49 +160,56 @@ async function confirmCloseWithNativeDialog(reason: "window-close" | "app-quit",
   return result.response === 1
 }
 
+function setHostExitTitle(status: string): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.setTitle(`Agora Paper Agent — ${status}`)
+}
+
 async function stopOwnedRuntime(): Promise<boolean> {
   if (!coordinator) return true
   const before = coordinator.status
-  const shouldStop = Boolean(before.instanceKey) || before.phase === "ready" || before.phase === "starting" || before.phase === "degraded"
-  if (!shouldStop) {
-    await logger?.write("runtime_stop_skipped", { phase: before.phase, code: before.code })
-    return true
-  }
+  setHostExitTitle("正在安全收敛本机服务…")
   await logger?.write("runtime_stop_requested", { phase: before.phase, code: before.code })
   const stopped = await coordinator.stop()
   if (stopped.phase === "stopped") {
+    setHostExitTitle("本机服务已停止，正在退出…")
     await logger?.write("runtime_stopped", { state: stopped.state, code: stopped.code })
     return true
   }
+  setHostExitTitle("退出未完成（本机服务状态未知）")
   await logger?.write("runtime_stop_unconfirmed", { phase: stopped.phase, state: stopped.state, code: stopped.code })
   if (!mainWindow || mainWindow.isDestroyed()) return false
-  const choice = await dialog.showMessageBox(mainWindow, {
+  await dialog.showMessageBox(mainWindow, {
     type: "warning",
     title: "本机服务状态未确认",
-    message: "既有 runtime manager 未确认安全停止。",
-    detail: `${stopped.message}\n不会终止身份不明的进程。可以保留窗口重试，或仅关闭宿主窗口并保留服务状态。`,
-    buttons: ["保留窗口", "仅关闭宿主"],
+    message: "runtime manager 未确认完成 drain 与进程收敛，宿主将保持打开。",
+    detail: `${stopped.message}\n不会终止身份不明的进程，也不会把无 JSON、超时或取消确认当作已停止。请保留窗口；待当前启动命令或 owner 状态收敛后，可再次关闭以重新执行 stop 核验，或查看只读诊断。`,
+    buttons: ["保留窗口"],
     defaultId: 0,
     cancelId: 0,
     noLink: true
   })
-  return choice.response === 1
+  return false
 }
 
 async function requestClose(reason: "window-close" | "app-quit"): Promise<void> {
-  if (clearData.destructiveExitPending && !dataClearExitArmed) {
-    const options: MessageBoxOptions = {
-      type: "warning", title: "数据清除仍在受控恢复中", message: "当前存在 PREPARED 或 finalizer 未就绪的清除事务。",
-      detail: "为避免未确认的 finalizer 在普通退出后删除数据，宿主保持打开。请在当前页面重新预览并明确确认，或检查状态。",
-      buttons: ["返回清除恢复"], defaultId: 0, cancelId: 0, noLink: true
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, options)
-    else await dialog.showMessageBox(options)
-    return
-  }
   if (closeInProgress) return
   closeInProgress = true
+  const originalTitle = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getTitle() : null
+  let exitApproved = false
+  let retainExitStatus = false
   try {
+    if (clearData.destructiveExitPending && !dataClearExitArmed) {
+      const options: MessageBoxOptions = {
+        type: "warning", title: "数据清除仍在受控恢复中", message: "当前存在 PREPARED 或 finalizer 未就绪的清除事务。",
+        detail: "为避免未确认的 finalizer 在普通退出后删除数据，宿主保持打开。请在当前页面重新预览并明确确认，或检查状态。",
+        buttons: ["返回清除恢复"], defaultId: 0, cancelId: 0, noLink: true
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, options)
+      else await dialog.showMessageBox(options)
+      return
+    }
+    setHostExitTitle("正在确认页面状态…")
     let rendererAssessment: RendererQuitAssessment = {
       status: "unknown",
       reason: "renderer-unavailable",
@@ -214,7 +221,11 @@ async function requestClose(reason: "window-close" | "app-quit"): Promise<void> 
       await logger?.write("renderer_quit_state_unknown", { reason: rendererAssessment.reason, revision: rendererAssessment.lastKnownState.revision })
     }
     if (requiresNativeQuitConfirmation(rendererAssessment) && !(await confirmCloseWithNativeDialog(reason, rendererAssessment))) return
-    if (!(await stopOwnedRuntime())) return
+    if (!(await stopOwnedRuntime())) {
+      retainExitStatus = true
+      return
+    }
+    exitApproved = true
     allowWindowClose = true
     allowAppQuit = true
     lifecycle.cancelPending()
@@ -222,6 +233,9 @@ async function requestClose(reason: "window-close" | "app-quit"): Promise<void> 
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
     app.quit()
   } finally {
+    if (!exitApproved && !retainExitStatus && originalTitle && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setTitle(originalTitle)
+    }
     closeInProgress = false
   }
 }

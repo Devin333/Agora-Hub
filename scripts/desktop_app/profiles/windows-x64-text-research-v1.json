@@ -1,0 +1,99 @@
+{
+  "capabilities": {
+    "api_and_local_auth": {
+      "probe": "fastapi_application",
+      "required": true
+    },
+    "credential_acl": {
+      "probe": "win32_identity",
+      "required": true
+    },
+    "dense_retrieval": {
+      "available_by_default": false,
+      "reason_code": "desktop_optional_capability_not_selected",
+      "required": false
+    },
+    "local_llm": {
+      "available_by_default": false,
+      "reason_code": "desktop_optional_capability_not_selected",
+      "required": false
+    },
+    "ocr": {
+      "available_by_default": false,
+      "reason_code": "desktop_optional_capability_not_selected",
+      "required": false
+    },
+    "rerank": {
+      "available_by_default": false,
+      "reason_code": "desktop_optional_capability_not_selected",
+      "required": false
+    },
+    "sqlite_materials_notes_memory": {
+      "probe": "sqlite_wal",
+      "required": true
+    },
+    "text_pdf": {
+      "probe": "pymupdf_document",
+      "required": true
+    },
+    "tls_transport": {
+      "probe": "ssl_context",
+      "required": true
+    }
+  },
+  "constraints": {
+    "path": "windows-x64-text-research-v1.constraints.json",
+    "sha256": "5d584cc7ed40a16d6c4b88f38a3ec38caf447b20cac7c08bca66e785d003682d"
+  },
+  "description": "Windows x64 desktop v1 runtime for local text-PDF reading, materials, notes, confirmed memory, authentication, API and SQLite persistence.",
+  "excluded_default_distributions": [
+    "numpy",
+    "scikit-learn",
+    "scipy",
+    "sentence-transformers",
+    "torch",
+    "transformers"
+  ],
+  "forbidden_default_modules": [
+    "numpy",
+    "scipy",
+    "torch",
+    "sklearn",
+    "transformers",
+    "sentence_transformers"
+  ],
+  "profile_id": "windows-x64-text-research-v1",
+  "required_attributes": [
+    {
+      "attribute": "protect_private_path",
+      "module": "scripts.local_desktop.common"
+    }
+  ],
+  "required_imports": [
+    "authlib",
+    "authlib.jose",
+    "cryptography",
+    "email_validator",
+    "fastapi",
+    "interfaces.api.app",
+    "jsonschema",
+    "phonenumbers",
+    "psycopg",
+    "psycopg_pool",
+    "pydantic",
+    "pymupdf",
+    "pywintypes",
+    "scripts.desktop_app",
+    "sqlite3",
+    "ssl",
+    "uvicorn",
+    "win32api",
+    "win32security",
+    "yaml"
+  ],
+  "requirements": {
+    "path": "windows-x64-text-research-v1.requirements.txt",
+    "sha256": "225811399ca99a0d4d10cbe23873591be6a343eb60f19ccfa0165c304631b8a2"
+  },
+  "schema": "newsroom.desktop-python-profile/v1"
+}

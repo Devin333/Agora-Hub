@@ -9,8 +9,15 @@ from typing import Any
 
 from framework.shared.redaction import redact_sensitive_values
 from scripts.local_desktop.common import DesktopOperationError, OperationResult
+from scripts.local_desktop.lifecycle_cancellation import (
+    MAX_STARTUP_CONTROL_BYTES as _MAX_STARTUP_CONTROL_BYTES,
+    parse_startup_control_message as _parse_startup_control_message,
+)
 
 MAX_PROTOCOL_BYTES = 64 * 1024
+MAX_STARTUP_CONTROL_BYTES = _MAX_STARTUP_CONTROL_BYTES
+parse_startup_control_message = _parse_startup_control_message
+
 _MAX_DEPTH = 7
 _MAX_ITEMS = 50
 _MAX_STRING = 1024

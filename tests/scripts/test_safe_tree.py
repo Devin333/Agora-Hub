@@ -9,6 +9,7 @@ import pytest
 
 import scripts.local_desktop.safe_tree as safe_tree_module
 from scripts.local_desktop.common import DesktopOperationError
+from scripts.local_desktop.lifecycle_cancellation import DesktopStartCancelled
 
 
 def _scan(root: Path):
@@ -311,3 +312,28 @@ def test_scan_tree_rejects_path_change_after_read(
 
     assert raised.value.reason_code == reason_code
     assert file_lstat_calls == 2
+
+
+def test_scan_tree_checks_startup_cancellation_between_file_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "runtime"
+    root.mkdir()
+    (root / "large-resource.bin").write_bytes(b"x" * 128)
+    checks = 0
+
+    def cancel_during_hash() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 12:
+            raise DesktopStartCancelled()
+
+    monkeypatch.setattr(safe_tree_module, "_READ_CHUNK_SIZE", 4)
+    monkeypatch.setattr(safe_tree_module, "check_startup_cancellation", cancel_during_hash)
+
+    with pytest.raises(DesktopStartCancelled) as raised:
+        _scan(root)
+
+    assert raised.value.reason_code == "desktop_start_cancelled"
+    assert checks == 12

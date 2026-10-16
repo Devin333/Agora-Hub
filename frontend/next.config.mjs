@@ -31,7 +31,11 @@ const nextConfig = {
   reactStrictMode: true,
   devIndicators: false,
   ...(deploymentProfile === "local-desktop"
-    ? { experimental: { isrFlushToDisk: false } }
+    ? {
+        output: "standalone",
+        outputFileTracingRoot: configDir,
+        experimental: { isrFlushToDisk: false },
+      }
     : {}),
   env: { NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE: deploymentProfile },
   async rewrites() {

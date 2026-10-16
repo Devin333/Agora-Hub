@@ -14,6 +14,7 @@ from scripts.desktop_app.owned_clear import OwnedDataClearOwner
 from scripts.desktop_app.protocol import MAX_PROTOCOL_BYTES, CommandResponse, project_error, project_operation, read_bounded_stdin_json
 from scripts.desktop_app.runtime import DesktopAppRuntime
 from scripts.local_desktop.common import DesktopOperationError
+from scripts.local_desktop.lifecycle_cancellation import check_startup_cancellation, startup_cancellation_context
 from scripts.local_desktop.runtime_config import parse_candidate_json
 
 
@@ -158,7 +159,9 @@ def main(
                     _require_packaged_launch_isolation(config)
                     result = runtime_factory(config).data_clear_preview(timeout=args.timeout)
         else:
-            result, config = _run_normal_command(args, command, runtime_factory=runtime_factory, clear_owner_factory=clear_owner_factory)
+            startup_control = startup_cancellation_context() if command == "start" else nullcontext()
+            with startup_control:
+                result, config = _run_normal_command(args, command, runtime_factory=runtime_factory, clear_owner_factory=clear_owner_factory)
         response = project_operation(result, command=command, canonical_origin=config.desktop.canonical_origin if config else canonical_origin, api_base_url=config.desktop.api_base_url if config else api_base_url, instance_key=config.desktop.instance_key if config else instance_key, extra={"storage_mode": config.desktop.storage_mode if config else "owned-local"})
     except (DesktopOperationError, LocalDesktopConfigError, CliUsageError, ValueError) as exc:
         if command.startswith("data-clear-"):
@@ -173,17 +176,24 @@ def main(
 
 
 def _run_normal_command(args, command: str, *, runtime_factory, clear_owner_factory):
+    if command == "start":
+        check_startup_cancellation()
     fixed_layout = Path(args.data_root).is_absolute() and Path(args.data_root).name.casefold() == "runtime"
     owner = clear_owner_factory(resource_root=args.resource_root, data_root=args.data_root) if fixed_layout else None
     writer_commands = {"start", "stop", "backup", "config-preview", "config-apply", "credential-prompt", "credential-delete", "build", "restore"}
     lease = owner.normal_command_guard(writer=command in writer_commands) if owner is not None else nullcontext()
     with lease:
+        if command == "start":
+            check_startup_cancellation()
         config = resolve_desktop_app_config(resource_root=args.resource_root, data_root=args.data_root, frontend_port=args.frontend_port, api_port=args.api_port)
         _require_packaged_launch_isolation(config)
+        if command == "start":
+            check_startup_cancellation()
         runtime = runtime_factory(config)
         if owner is not None:
             setattr(runtime, "_desktop_clear_guard_held", True)
         if command == "start":
+            check_startup_cancellation()
             result = runtime.start(timeout=args.timeout)
         elif command == "status":
             result = runtime.status()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import stat
 import sys
 from collections import Counter
 from hashlib import sha256
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.local_desktop.release as release_module
 import scripts.local_desktop.safe_tree as safe_tree_module
 from framework.shared.local_desktop import resolve_local_desktop_config
 from scripts.local_desktop.common import DesktopOperationError
@@ -595,3 +597,317 @@ def test_release_dependency_inspection_rejects_non_utf8_json_output(tmp_path: Pa
 
     assert raised.value.reason_code == "desktop_command_output_encoding_invalid"
     assert raised.value.details == {"command": "npm.cmd", "stream": "stdout"}
+
+
+
+_STRICT_SOURCE_NPM_TREE_BASE = {"package_count": 3, "sha256": "e" * 64}
+
+
+def _strict_source_npm_tree(frontend: Path) -> dict[str, object]:
+    return {
+        **_STRICT_SOURCE_NPM_TREE_BASE,
+        "package_lock_sha256": sha256((frontend / "package-lock.json").read_bytes()).hexdigest(),
+    }
+
+
+def _write_standalone_build(frontend: Path) -> None:
+    package_lock = {
+        "lockfileVersion": 3,
+        "packages": {
+            "": {"name": "newsroom-frontend", "version": "0.1.1"},
+            "node_modules/next": {"name": "next", "version": "16.4.0"},
+            "node_modules/react": {"name": "react", "version": "19.3.0"},
+            "node_modules/traced-package": {"name": "traced-package", "version": "1.0.0"},
+        },
+    }
+    for relative, data in {
+        ".next/standalone/server.js": b"require('next')\n",
+        ".next/standalone/node_modules/next/package.json": b'{"name":"next","version":"16.4.0"}',
+        ".next/standalone/node_modules/react/package.json": b'{"name":"react","version":"19.3.0"}',
+        ".next/static/chunks/app.js": b"static-chunk",
+        "public/pdf.worker.min.mjs": b"pdf-worker",
+        "package-lock.json": json.dumps(package_lock, sort_keys=True).encode("utf-8"),
+    }.items():
+        target = frontend / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+
+def test_materialize_next_standalone_replaces_dev_tree_with_hashed_production_closure(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    _write_standalone_build(frontend)
+    (frontend / "node_modules/typescript").mkdir(parents=True)
+    (frontend / "node_modules/typescript/package.json").write_text('{"name":"typescript","version":"5.9.3"}', encoding="utf-8")
+    source_installed_tree = _strict_source_npm_tree(frontend)
+
+    release_module._materialize_next_standalone(frontend, source_digest="a" * 64, source_installed_tree=source_installed_tree)
+
+    closure = json.loads((frontend / "production-closure.json").read_text(encoding="utf-8"))
+    assert closure["schema"] == "newsroom.next-standalone-closure/v1"
+    assert closure["runtime_mode"] == "next-standalone"
+    assert closure["entrypoint"] == "server.js"
+    assert closure["source_digest"] == "a" * 64
+    assert closure["source_installed_tree"] == source_installed_tree
+    assert closure["materialized_links"] == []
+    assert closure["packages"] == [
+        {
+            "lock_association": {
+                "kind": "source-lock",
+                "name": "next",
+                "path": "node_modules/next",
+                "version": "16.4.0",
+            },
+            "name": "next",
+            "path": "node_modules/next",
+            "version": "16.4.0",
+        },
+        {
+            "lock_association": {
+                "kind": "source-lock",
+                "name": "react",
+                "path": "node_modules/react",
+                "version": "19.3.0",
+            },
+            "name": "react",
+            "path": "node_modules/react",
+            "version": "19.3.0",
+        },
+    ]
+    assert (frontend / "server.js").is_file()
+    assert (frontend / "public/pdf.worker.min.mjs").is_file()
+    assert (frontend / ".next/static/chunks/app.js").is_file()
+    assert not (frontend / "node_modules/typescript").exists()
+    identity = release_module._production_frontend_identity(frontend)
+    assert identity is not None
+    assert identity["runtime_mode"] == "next-standalone"
+    assert identity["installed_tree"]["package_count"] == 2
+    assert identity["installed_tree"]["source_npm_tree"] == source_installed_tree
+
+
+def test_production_frontend_identity_rejects_unmanifested_runtime_file(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    _write_standalone_build(frontend)
+    release_module._materialize_next_standalone(frontend, source_digest="a" * 64, source_installed_tree=_strict_source_npm_tree(frontend))
+    (frontend / "unexpected.js").write_text("unexpected", encoding="utf-8")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        release_module._production_frontend_identity(frontend)
+
+    assert raised.value.reason_code == "desktop_frontend_production_closure_drift"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows junction reparse tags")
+def test_materialize_next_standalone_accepts_controlled_junction_and_records_relative_evidence(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    _write_standalone_build(frontend)
+    real_package = frontend / "node_modules-real" / "traced-package"
+    real_package.mkdir(parents=True)
+    (real_package / "package.json").write_text('{"name":"traced-package","version":"1.0.0"}', encoding="utf-8")
+    junction = frontend / ".next/standalone/node_modules/traced-package"
+    junction.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(real_package)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"junction unavailable: {result.stderr or result.stdout}")
+
+    release_module._materialize_next_standalone(frontend, source_digest="b" * 64, source_installed_tree=_strict_source_npm_tree(frontend))
+
+    closure = json.loads((frontend / "production-closure.json").read_text(encoding="utf-8"))
+    assert closure["materialized_links"] == [
+        {
+            "kind": "mount-point",
+            "tag": "0xa0000003",
+            "source": ".next/standalone/node_modules/traced-package",
+            "target": "node_modules-real/traced-package",
+        }
+    ]
+    materialized = frontend / "node_modules/traced-package"
+    metadata = materialized.lstat()
+    assert not stat.S_ISLNK(metadata.st_mode)
+    assert not (getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def test_source_input_manifest_preserves_prebuild_frontend_identity_after_standalone_replacement(tmp_path: Path) -> None:
+    root = tmp_path / "release-stage"
+    (root / "app/interfaces").mkdir(parents=True)
+    (root / "app/interfaces/__init__.py").write_text("", encoding="utf-8")
+    (root / "frontend/src").mkdir(parents=True)
+    (root / "frontend/src/page.tsx").write_text("export default function Page() { return null }", encoding="utf-8")
+    digest = release_module._source_input_digest(root)
+
+    release_module._write_source_input_manifest(root, source_digest=digest)
+    snapshot = release_module._scan_release_tree(
+        root,
+        captured={release_module._SOURCE_INPUT_MANIFEST},
+    )
+
+    assert release_module._verified_source_input_digest(snapshot) == digest
+
+
+
+def test_materialize_next_standalone_rejects_traced_package_absent_from_source_lock(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    _write_standalone_build(frontend)
+    unowned = frontend / ".next/standalone/node_modules/unowned/package.json"
+    unowned.parent.mkdir(parents=True)
+    unowned.write_text('{"name":"unowned","version":"1.0.0"}', encoding="utf-8")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        release_module._materialize_next_standalone(
+            frontend,
+            source_digest="c" * 64,
+            source_installed_tree=_strict_source_npm_tree(frontend),
+        )
+
+    assert raised.value.reason_code == "desktop_frontend_standalone_package_unlocked"
+    assert (frontend / "package-lock.json").is_file()
+
+
+def test_materialize_next_standalone_allows_only_explicit_next_vendored_compiled_ownership(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    _write_standalone_build(frontend)
+    vendored = frontend / ".next/standalone/node_modules/next/dist/compiled/vendored/package.json"
+    vendored.parent.mkdir(parents=True)
+    vendored.write_text('{"name":"vendored","version":"2.0.0"}', encoding="utf-8")
+
+    release_module._materialize_next_standalone(
+        frontend,
+        source_digest="d" * 64,
+        source_installed_tree=_strict_source_npm_tree(frontend),
+    )
+
+    closure = json.loads((frontend / "production-closure.json").read_text(encoding="utf-8"))
+    package = next(item for item in closure["packages"] if item["name"] == "vendored")
+    assert package["lock_association"] == {
+        "kind": "next-vendored",
+        "owner_name": "next",
+        "owner_path": "node_modules/next",
+        "owner_version": "16.4.0",
+    }
+
+
+def test_local_desktop_build_runs_strict_source_npm_gate_before_standalone_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text('{"name":"fixture","version":"0.1.1"}', encoding="utf-8")
+    (frontend / "package-lock.json").write_text(
+        json.dumps({"lockfileVersion": 3, "packages": {"": {"name": "fixture", "version": "0.1.1"}}}),
+        encoding="utf-8",
+    )
+    config = resolve_local_desktop_config(project_root=tmp_path)
+    manager = ReleaseManager(config)
+    events: list[str] = []
+
+    monkeypatch.setattr(manager, "_require_build_inputs", lambda: None)
+    monkeypatch.setattr(manager, "_git_revision", lambda: "a" * 40)
+    monkeypatch.setattr(release_module.shutil, "which", lambda _name: "npm.cmd")
+
+    def run(argv, **_kwargs):
+        events.append("npm-build" if argv[1:] == ["run", "build"] else "npm-ci")
+
+    def installed_tree(frontend_root, npm_executable, **_kwargs):
+        assert events == ["npm-ci", "npm-build"]
+        assert npm_executable == "npm.cmd"
+        assert (frontend_root / "package-lock.json").is_file()
+        events.append("strict-installed-tree")
+        return dict(_STRICT_SOURCE_NPM_TREE_BASE)
+
+    def materialize(frontend_root, *, source_digest, source_installed_tree):
+        assert events[-1] == "strict-installed-tree"
+        assert len(source_digest) == 64
+        assert source_installed_tree == _strict_source_npm_tree(frontend_root)
+        events.append("materialize")
+        (frontend_root / "server.js").write_text("server", encoding="utf-8")
+
+    monkeypatch.setattr(manager, "_run", run)
+    monkeypatch.setattr(manager, "_node_dependency_tree_identity", installed_tree)
+    monkeypatch.setattr(manager, "_dependency_identity", lambda _root=None, **_kwargs: {"python": {}, "node": {}})
+    monkeypatch.setattr(manager, "verify_and_activate", lambda destination: (json.loads((destination / "release-manifest.json").read_text(encoding="utf-8")), {}))
+    monkeypatch.setattr(release_module, "_materialize_next_standalone", materialize)
+
+    manifest = manager.build()
+
+    assert events == ["npm-ci", "npm-build", "strict-installed-tree", "materialize"]
+    assert manifest["entrypoints"]["frontend"] == ["node", "server.js"]
+
+
+def test_materialize_traced_tree_rejects_unknown_reparse_tag_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontend = tmp_path / "frontend"
+    source = frontend / ".next/standalone"
+    source.mkdir(parents=True)
+    destination = tmp_path / "materialized"
+    extended_source = release_module.windows_extended_path(source)
+    original_lstat = Path.lstat
+
+    def lstat(path, *args, **kwargs):
+        if path == source or path == extended_source:
+            return type(
+                "UnknownReparseStat",
+                (),
+                {
+                    "st_file_attributes": getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400),
+                    "st_mode": stat.S_IFDIR,
+                    "st_reparse_tag": 0xDEADBEEF,
+                },
+            )()
+        return original_lstat(path, *args, **kwargs)
+
+    # Inject the filesystem metadata, not a partial Path stand-in: path
+    # normalization must retain real extended-length Path semantics.
+    monkeypatch.setattr(Path, "lstat", lstat)
+
+    with pytest.raises(DesktopOperationError) as raised:
+        release_module._materialize_traced_tree(source, destination, allowed_root=frontend)
+
+    assert raised.value.reason_code == "desktop_frontend_standalone_reparse_tag_unsupported"
+    assert raised.value.details == {"source": ".next/standalone", "tag": 0xDEADBEEF}
+    assert not destination.exists()
+
+
+def test_materialize_next_standalone_rejects_source_lock_drift_before_copy(tmp_path: Path) -> None:
+    frontend = tmp_path / "frontend"
+    _write_standalone_build(frontend)
+    source_tree = _strict_source_npm_tree(frontend)
+    source_tree["package_lock_sha256"] = "0" * 64
+
+    with pytest.raises(DesktopOperationError) as raised:
+        release_module._materialize_next_standalone(
+            frontend,
+            source_digest="f" * 64,
+            source_installed_tree=source_tree,
+        )
+
+    assert raised.value.reason_code == "desktop_frontend_source_lock_drift"
+    assert (frontend / ".next/standalone/server.js").is_file()
+    assert not (frontend / "production-closure.json").exists()
+
+
+def test_standalone_subpath_descriptors_require_locked_materialized_owner(tmp_path):
+    import scripts.local_desktop.release as release_module
+    runtime = tmp_path / "runtime"
+    helpers = runtime / "node_modules/@swc/helpers"
+    descriptor = helpers / "_/interop/package.json"
+    descriptor.parent.mkdir(parents=True)
+    descriptor.write_text('{"main":"../../cjs/interop.cjs"}', encoding="utf-8")
+    (helpers / "package.json").write_text('{"name":"@swc/helpers","version":"0.5.0"}', encoding="utf-8")
+    next_root = runtime / "node_modules/next"
+    next_root.mkdir(parents=True)
+    (next_root / "package.json").write_text('{"name":"next","version":"15.0.0"}', encoding="utf-8")
+    lock = tmp_path / "package-lock.json"
+    lock.write_text(json.dumps({"packages":{"node_modules/@swc/helpers":{"version":"0.5.0"},"node_modules/next":{"version":"15.0.0"}}}), encoding="utf-8")
+    packages = release_module._standalone_package_inventory(runtime, source_lock=lock)
+    assert {item["name"] for item in packages} == {"@swc/helpers", "next"}
+    (helpers / "package.json").write_text('{"name":"@swc/helpers","version":"9.0.0"}', encoding="utf-8")
+    with pytest.raises(DesktopOperationError):
+        release_module._standalone_package_inventory(runtime, source_lock=lock)

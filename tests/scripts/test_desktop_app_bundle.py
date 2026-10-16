@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import zipfile
 from collections import Counter
 from hashlib import sha256
 from pathlib import Path
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import scripts.desktop_app.bundle as bundle_module
+import scripts.desktop_app.runtime_profile as runtime_profile_module
 import scripts.local_desktop.safe_tree as safe_tree_module
 from scripts.desktop_app.bundle import BUNDLE_SCHEMA, PortableBundleManager, stage_portable_bundle
 from scripts.desktop_app.config import resolve_desktop_app_config
@@ -33,14 +35,51 @@ def _inventory(root: Path) -> list[dict[str, object]]:
 
 def _probe() -> dict[str, object]:
     return {
-        "version": "3.12.7",
+        "version": "3.12.14",
         "implementation": "CPython",
         "cache_tag": "cpython-312",
-        "abi": "cp312-win_amd64",
+        "abi": "",
         "platform": "win-amd64",
-        "packages": [["fastapi", "1.0"]],
+        "packages": [[name, version] for name, version in bundle_module._DEFAULT_RUNTIME_PROFILE.packages],
         "sqlite_version": "3.53.1",
         "openssl_version": "OpenSSL 3.5.8",
+        "capabilities": {
+            "api_routes": 42,
+            "api_health": True,
+            "text_pdf": True,
+            "sqlite_wal": True,
+            "auth": True,
+            "credential_acl": True,
+            "tls": True,
+            "optional_modules_loaded": [],
+        },
+    }
+
+
+def _profile_provenance() -> dict[str, object]:
+    artifacts = [
+        {"name": name, "version": version, "file": f"{name}-{version}.whl", "sha256": "a" * 64, "requires_dist": []}
+        for name, version in bundle_module._DEFAULT_RUNTIME_PROFILE.packages
+    ]
+    return {
+        "profile": bundle_module._DEFAULT_RUNTIME_PROFILE.identity(),
+        "builder": {
+            "implementation": "CPython",
+            "version": "3.12.7",
+            "cache_tag": "cpython-312",
+            "platform": "win-amd64",
+            "executable_sha256": "f" * 64,
+            "pip_version": "25.2",
+        },
+        "base_python": {"source_sha256": "b" * 64, "manifest_sha256": "c" * 64},
+        "wheelhouse": {
+            "manifest_sha256": "d" * 64,
+            "receipt_sha256": _digest({"artifacts": artifacts}),
+            "artifact_count": len(artifacts),
+            "artifacts": artifacts,
+        },
+        "record_count": len(artifacts),
+        "licenses": [{"name": name, "version": version} for name, version in bundle_module._DEFAULT_RUNTIME_PROFILE.packages],
     }
 
 
@@ -66,9 +105,26 @@ def _manifest(root: Path) -> dict[str, object]:
         "created_at": "2026-10-14T00:00:00Z",
         "identity": {"release_id": "20261014T000000Z-test", "source_revision": "a" * 40, "source_digest": "b" * 64, "dependency_digest": "c" * 64, "config_digest": "d" * 64},
         "config": {"schema": "newsroom.local-desktop-config/v1", "profile": "local-desktop", "canonical_origin": "http://127.0.0.1:3000", "api_base_url": "http://127.0.0.1:8000", "parser_mode": "pymupdf", "storage_mode": "owned-local", "data_mode": "real", "external_config_dependencies": config_dependencies},
-        "dependencies": {"python": {"executable": "C:/build/python.exe", "executable_sha256": "1" * 64, "version": "3.12.7", "packages": [["fastapi", "1.0"]]}, "node": {"executable": "C:/build/node.exe", "executable_sha256": "2" * 64, "version": "v24.10.0", "npm_executable": "C:/build/npm.cmd", "npm_executable_sha256": "3" * 64, "npm_version": "11.6.1"}},
+        "dependencies": {
+            "python": {
+                "executable": "C:/build/python.exe",
+                "executable_sha256": "1" * 64,
+                "version": "3.12.14",
+                "packages": _probe()["packages"],
+                "runtime_profile": {
+                    "profile": _profile_provenance()["profile"],
+                    "builder": _profile_provenance()["builder"],
+                    "base_python": _profile_provenance()["base_python"],
+                    "wheelhouse": {
+                        key: _profile_provenance()["wheelhouse"][key]
+                        for key in ("manifest_sha256", "receipt_sha256", "artifact_count")
+                    },
+                },
+            },
+            "node": {"executable": "C:/build/node.exe", "executable_sha256": "2" * 64, "version": "v24.10.0", "npm_executable": "C:/build/npm.cmd", "npm_executable_sha256": "3" * 64, "npm_version": "11.6.1"},
+        },
         "data_compatibility": {"readable_schemas": DATA_SCHEMAS, "writable_schemas": DATA_SCHEMAS},
-        "entrypoints": {"api": ["old"], "frontend": ["old"]},
+        "entrypoints": {"api": ["-m", "interfaces.cli.news", "api", "serve", "--host", "127.0.0.1", "--port", "8000"], "frontend": ["next", "start", "-H", "127.0.0.1", "-p", "3000"]},
         "resources": release_resources,
         "exclusions": [],
     }
@@ -101,7 +157,7 @@ def _write_bundle(tmp_path: Path):
         "schema": BUNDLE_SCHEMA,
         "release": {"manifest_path": ".desktop-app/original-release-manifest.json", "manifest_sha256": sha256(original.read_bytes()).hexdigest(), "original_identity": manifest["identity"]},
         "runtime": {
-            "python": {"path": ".venv/Scripts/python.exe", "sha256": sha256((root / ".venv/Scripts/python.exe").read_bytes()).hexdigest(), "required_imports": list(bundle_module._DEFAULT_IMPORTS), "required_attributes": bundle_module._attribute_descriptors(bundle_module._DEFAULT_IMPORT_ATTRIBUTES), "probe_digest": _digest(probe), "distribution_count": len(probe["packages"]), "excluded_input_paths": [], "launch_requirements": {"arguments": ["-B", "-s"], "environment": {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}}, "sqlite_version": probe["sqlite_version"], "openssl_version": probe["openssl_version"]},
+            "python": {"path": ".venv/Scripts/python.exe", "sha256": sha256((root / ".venv/Scripts/python.exe").read_bytes()).hexdigest(), "required_imports": list(bundle_module._DEFAULT_IMPORTS), "required_attributes": bundle_module._attribute_descriptors(bundle_module._DEFAULT_IMPORT_ATTRIBUTES), "probe_digest": _digest(probe), "distribution_count": len(probe["packages"]), "excluded_input_paths": [], "launch_requirements": {"arguments": ["-B", "-s"], "environment": {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"}}, "sqlite_version": probe["sqlite_version"], "openssl_version": probe["openssl_version"], **_profile_provenance(), "license_count": len(_profile_provenance()["licenses"])},
             "node": {"path": "node/node.exe", "sha256": sha256((root / "node/node.exe").read_bytes()).hexdigest(), "version": "v24.10.0", "npm": {"path": "node/npm.cmd", "sha256": sha256((root / "node/npm.cmd").read_bytes()).hexdigest(), "version": "11.6.1", "cli_path": "node/node_modules/npm/bin/npm-cli.js"}},
         },
         "relocation_policy": {"allowed": list(bundle_module._ALLOWED_RELOCATIONS), "forbidden": list(bundle_module._FORBIDDEN_RELOCATIONS)},
@@ -137,7 +193,22 @@ class FakeReleaseManager:
         return ReleaseManager(self.config.desktop).configuration_identity_for_runtime(release_path)
 
     def dependency_identity(self, frontend_root: Path):
-        return {"python": {"executable": str(Path(bundle_module.sys.executable)), "executable_sha256": "1" * 64, "version": "3.12.7", "packages": [["fastapi", "1.0"]]}, "node": {"executable": "node.exe", "executable_sha256": "2" * 64, "version": "v24.10.0", "npm_executable": "npm.cmd", "npm_executable_sha256": "3" * 64, "npm_version": "11.6.1"}}
+        provenance = _profile_provenance()
+        return {
+            "python": {
+                "executable": str(Path(bundle_module.sys.executable)),
+                "executable_sha256": "1" * 64,
+                "version": "3.12.14",
+                "packages": _probe()["packages"],
+                "runtime_profile": {
+                    "profile": provenance["profile"],
+                    "builder": provenance["builder"],
+                    "base_python": provenance["base_python"],
+                    "wheelhouse": {key: provenance["wheelhouse"][key] for key in ("manifest_sha256", "receipt_sha256", "artifact_count")},
+                },
+            },
+            "node": {"executable": "node.exe", "executable_sha256": "2" * 64, "version": "v24.10.0", "npm_executable": "npm.cmd", "npm_executable_sha256": "3" * 64, "npm_version": "11.6.1"},
+        }
 
     def verify(self, release):
         path = Path(release)
@@ -417,11 +488,15 @@ def test_staging_uses_probed_portable_identity_and_excludes_only_duplicate_pip_m
         "version": "3.12.14",
         "implementation": "CPython",
         "cache_tag": "cpython-312",
-        "abi": "cp312-win_amd64",
+        "abi": "",
         "platform": "win-amd64",
-        "packages": [["fastapi", "1.0"], ["pip", "25.0"]],
+        "packages": [[name, version] for name, version in bundle_module._DEFAULT_RUNTIME_PROFILE.packages],
         "sqlite_version": "3.53.1",
         "openssl_version": "OpenSSL 3.5.8",
+        "capabilities": {
+            "api_routes": 42, "api_health": True, "text_pdf": True, "sqlite_wal": True,
+            "auth": True, "credential_acl": True, "tls": True, "optional_modules_loaded": [],
+        },
     }
     python_root = tmp_path / "portable-python"
     (python_root / "Lib/site-packages/pip-26.2.1.dist-info").mkdir(parents=True)
@@ -437,6 +512,8 @@ def test_staging_uses_probed_portable_identity_and_excludes_only_duplicate_pip_m
                 "executable": "python.exe",
                 "executable_sha256": sha256((python_root / "python.exe").read_bytes()).hexdigest(),
                 **{key: python_probe[key] for key in ("version", "implementation", "cache_tag", "abi", "platform")},
+                **_profile_provenance(),
+                "packages": python_probe["packages"],
             }
         ),
         encoding="utf-8",
@@ -479,6 +556,16 @@ def test_staging_uses_probed_portable_identity_and_excludes_only_duplicate_pip_m
                     "executable_sha256": sha256(runtime["python_executable"].read_bytes()).hexdigest(),
                     "version": python_probe["version"],
                     "packages": python_probe["packages"],
+                    "runtime_profile": {
+                        "profile": bundle_module._DEFAULT_RUNTIME_PROFILE.identity(),
+                        "builder": _profile_provenance()["builder"],
+                        "base_python": {"source_sha256": "b" * 64, "manifest_sha256": "c" * 64},
+                        "wheelhouse": {
+                            "manifest_sha256": "d" * 64,
+                            "receipt_sha256": _profile_provenance()["wheelhouse"]["receipt_sha256"],
+                            "artifact_count": len(bundle_module._DEFAULT_RUNTIME_PROFILE.packages),
+                        },
+                    },
                 },
                 "node": {
                     "executable": str(runtime["node_executable"]),
@@ -532,18 +619,10 @@ def test_staging_uses_probed_portable_identity_and_excludes_only_duplicate_pip_m
     assert portable_manifest["dependencies"]["python"]["version"] == "3.12.14"
     assert portable_manifest["dependencies"]["python"]["packages"] == python_probe["packages"]
     assert envelope["runtime"]["python"]["distribution_count"] == len(python_probe["packages"])
-    assert set(envelope["runtime"]["python"]["required_imports"]) >= {
-        "numpy",
-        "pymupdf",
-        "pywintypes",
-        "scipy",
-        "scripts.desktop_app",
-        "sqlite3",
-        "ssl",
-        "torch",
-        "win32api",
-        "win32security",
-    }
+    assert set(envelope["runtime"]["python"]["required_imports"]) == set(bundle_module._DEFAULT_IMPORTS)
+    assert not {"numpy", "scipy", "torch", "sklearn", "transformers", "sentence_transformers"}.intersection(
+        envelope["runtime"]["python"]["required_imports"]
+    )
     assert envelope["runtime"]["python"]["required_attributes"] == [
         {"module": "scripts.local_desktop.common", "attribute": "protect_private_path"}
     ]
@@ -557,7 +636,7 @@ def test_staging_uses_probed_portable_identity_and_excludes_only_duplicate_pip_m
     assert not (output / ".venv/Scripts/Lib/site-packages/pip-26.2.1.dist-info").exists()
     assert (output / ".venv/Scripts/Lib/site-packages/pip-25.0.dist-info/METADATA").is_file()
     assert runner.environments
-    assert runner.timeouts == [60, 15, 20]
+    assert runner.timeouts == [90, 15, 20]
     assert runner.argv[0][1:4] == ["-B", "-I", "-c"]
     assert all(environment.get("PYTHONNOUSERSITE") == "1" for environment in runner.environments)
     assert all("PYTHONHOME" not in environment and "PYTHONPATH" not in environment for environment in runner.environments)
@@ -829,3 +908,260 @@ def test_first_binding_and_reopen_use_real_release_configuration_and_verifier(
         assert active_manifest["config"] == owner.configuration_identity_for_runtime(active)
         assert active_manifest["config"]["runtime_configuration"]["research"]["llm"] is None
     assert _inventory(root) == payload_before
+
+
+
+def _write_fixture_wheel(path: Path, *, name: str, version: str, requires_dist: tuple[str, ...] = ()) -> None:
+    dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
+    requirements = "".join(f"Requires-Dist: {requirement}\n" for requirement in requires_dist)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            f"{dist_info}/METADATA",
+            f"Metadata-Version: 2.4\nName: {name}\nVersion: {version}\nLicense: MIT\n{requirements}",
+        )
+        archive.writestr(f"{dist_info}/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
+
+
+def test_desktop_runtime_profile_is_fixed_to_verified_python_and_explicit_optional_boundary() -> None:
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+
+    assert profile.constraints["python"] == {
+        "implementation": "CPython",
+        "version": "3.12.14",
+        "cache_tag": "cpython-312",
+        "abi": "",
+        "platform": "win-amd64",
+    }
+    assert {"psycopg", "psycopg-binary", "psycopg-pool"}.issubset({name for name, _version in profile.packages})
+    assert {"numpy", "scipy", "torch", "sklearn", "transformers", "sentence_transformers"} == set(profile.forbidden_default_modules)
+    assert {"numpy", "scipy", "torch", "scikit-learn", "transformers", "sentence-transformers"} == set(
+        profile.excluded_default_distributions
+    )
+    assert profile.identity()["profile_sha256"] == sha256(profile.path.read_bytes()).hexdigest()
+    assert profile.identity()["constraints_sha256"] == sha256(profile.constraints_path.read_bytes()).hexdigest()
+    assert profile.identity()["requirements_sha256"] == sha256(profile.requirements_path.read_bytes()).hexdigest()
+
+
+def test_wheelhouse_receipt_hashes_every_exact_constrained_artifact(tmp_path: Path) -> None:
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    for index, (name, version) in enumerate(profile.packages):
+        requirements = ("attrs==26.1.0",) if index == 0 else ()
+        _write_fixture_wheel(
+            wheelhouse / f"artifact-{index}.whl",
+            name=name,
+            version=version,
+            requires_dist=requirements,
+        )
+
+    receipt = runtime_profile_module.create_wheelhouse_receipt(wheelhouse_root=wheelhouse)
+
+    assert receipt["profile"] == profile.identity()
+    assert receipt["artifacts_sha256"] == _digest({"artifacts": receipt["artifacts"]})
+    assert len(receipt["artifacts"]) == len(profile.packages)
+    assert all(len(item["sha256"]) == 64 for item in receipt["artifacts"])
+    assert any(item["requires_dist"] == ["attrs==26.1.0"] for item in receipt["artifacts"])
+    persisted = json.loads((wheelhouse / "desktop-wheelhouse.json").read_text(encoding="utf-8"))
+    assert persisted == receipt
+
+
+def test_wheelhouse_receipt_rejects_hash_drift_before_runtime_install(tmp_path: Path) -> None:
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    for index, (name, version) in enumerate(profile.packages):
+        _write_fixture_wheel(wheelhouse / f"artifact-{index}.whl", name=name, version=version)
+    receipt = runtime_profile_module.create_wheelhouse_receipt(wheelhouse_root=wheelhouse)
+    selected = wheelhouse / receipt["artifacts"][0]["file"]
+    selected.write_bytes(b"tampered")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        runtime_profile_module._validate_wheelhouse(profile, wheelhouse, receipt)
+
+    assert raised.value.reason_code == "desktop_wheelhouse_artifact_mismatch"
+
+
+def test_prepare_base_python_excludes_old_site_packages_and_scripts_but_preserves_runtime_and_license(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "portable-source"
+    for relative, data in {
+        "python.exe": b"python-build-standalone",
+        "python312.dll": b"python-dll",
+        "Lib/os.py": b"stdlib",
+        "Lib/site-packages/torch/__init__.py": b"large-dev-package",
+        "Scripts/pip.exe": b"pip",
+        "LICENSE.txt": b"python license",
+    }.items():
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    source_receipt = {
+        "schema": "newsroom.portable-python/v1",
+        "portable": True,
+        "executable": "python.exe",
+        "executable_sha256": sha256((source / "python.exe").read_bytes()).hexdigest(),
+    }
+    (source / "portable-python.json").write_text(json.dumps(source_receipt), encoding="utf-8")
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+    expected_python = profile.constraints["python"]
+
+    def runner(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, json.dumps(expected_python).encode("utf-8"), b"")
+
+    output = tmp_path / "base-python"
+    manifest = runtime_profile_module.prepare_base_python(
+        source_root=source,
+        output_root=output,
+        command_runner=runner,
+    )
+
+    assert manifest["schema"] == "newsroom.desktop-base-python/v1"
+    assert manifest["source_kind"] == "python-build-standalone-portable-runtime"
+    assert manifest["excluded_source_paths"] == ["Lib/site-packages", "Scripts", "portable-python.json"]
+    assert (output / "python.exe").is_file()
+    assert (output / "python312.dll").is_file()
+    assert (output / "Lib/os.py").is_file()
+    assert (output / "LICENSE.txt").is_file()
+    assert not (output / "Lib/site-packages").exists()
+    assert not (output / "Scripts").exists()
+    expected_resources = runtime_profile_module._regular_file_inventory(output, excluded={"base-python.json"})
+    assert runtime_profile_module._resource_map(manifest["resources"], reason_code="test") == expected_resources
+
+
+def test_portable_attestation_requires_profile_base_and_hashed_wheel_receipt() -> None:
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+    artifacts = [
+        {"name": name, "version": version, "file": f"{name}-{version}.whl", "sha256": "a" * 64, "requires_dist": []}
+        for name, version in profile.packages
+    ]
+    attestation = {
+        "schema": "newsroom.portable-python/v1",
+        "portable": True,
+        "executable": "python.exe",
+        "executable_sha256": "e" * 64,
+        **dict(profile.constraints["python"]),
+        "profile": profile.identity(),
+        "builder": {
+            "implementation": "CPython",
+            "version": "3.12.7",
+            "cache_tag": "cpython-312",
+            "platform": "win-amd64",
+            "executable_sha256": "f" * 64,
+            "pip_version": "25.2",
+        },
+        "base_python": {"source_sha256": "b" * 64, "manifest_sha256": "c" * 64},
+        "wheelhouse": {
+            "manifest_sha256": "d" * 64,
+            "receipt_sha256": _digest({"artifacts": artifacts}),
+            "artifact_count": len(artifacts),
+            "artifacts": artifacts,
+        },
+        "packages": [[name, version] for name, version in profile.packages],
+        "record_count": len(profile.packages),
+        "licenses": [{"name": name, "version": version} for name, version in profile.packages],
+    }
+
+    runtime_profile_module.validate_portable_runtime_attestation(attestation, profile)
+    attestation["wheelhouse"]["receipt_sha256"] = "0" * 64
+    with pytest.raises(DesktopOperationError) as raised:
+        runtime_profile_module.validate_portable_runtime_attestation(attestation, profile)
+    assert raised.value.reason_code == "desktop_app_portable_runtime_attestation_invalid"
+
+
+def test_build_installer_is_explicit_cp312_windows_tooling_and_not_the_runtime_base(tmp_path: Path) -> None:
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+    installer = tmp_path / "builder-python.exe"
+    installer.write_bytes(b"controlled-builder")
+    calls: list[list[str]] = []
+
+    def runner(argv, **_kwargs):
+        calls.append(list(argv))
+        if argv[-1] == "--version":
+            stdout = b"pip 25.2 from controlled-site-packages (python 3.12)\n"
+        else:
+            stdout = json.dumps(
+                {
+                    "version": "3.12.7",
+                    "implementation": "CPython",
+                    "cache_tag": "cpython-312",
+                    "platform": "win-amd64",
+                }
+            ).encode("utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout, b"")
+
+    identity = runtime_profile_module._build_installer_identity(installer, profile, runner)
+
+    assert identity["version"] == "3.12.7"
+    assert identity["pip_version"] == "25.2"
+    assert identity["executable_sha256"] == sha256(installer.read_bytes()).hexdigest()
+    assert calls[0][0] == str(installer.absolute())
+    assert calls[1][1:] == ["-I", "-m", "pip", "--version"]
+
+
+def test_runtime_profile_build_command_requires_explicit_installer_python() -> None:
+    parser = runtime_profile_module._build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "build",
+                "--base-python-root", "base",
+                "--wheelhouse-root", "wheels",
+                "--output-root", "runtime",
+            ]
+        )
+
+    parsed = parser.parse_args(
+        [
+            "build",
+            "--base-python-root", "base",
+            "--wheelhouse-root", "wheels",
+            "--output-root", "runtime",
+            "--installer-python", r"E:\Anaconda3\python.exe",
+        ]
+    )
+    assert parsed.installer_python == r"E:\Anaconda3\python.exe"
+
+
+def test_wheelhouse_receipt_rejects_unreceipted_input_file(tmp_path: Path) -> None:
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    for index, (name, version) in enumerate(profile.packages):
+        _write_fixture_wheel(wheelhouse / f"artifact-{index}.whl", name=name, version=version)
+    (wheelhouse / "unexpected.txt").write_text("not a wheel", encoding="utf-8")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        runtime_profile_module.create_wheelhouse_receipt(wheelhouse_root=wheelhouse)
+
+    assert raised.value.reason_code == "desktop_wheelhouse_manifest_invalid"
+
+
+def test_wheel_metadata_dependency_closure_rejects_active_requirement_outside_profile() -> None:
+    profile = runtime_profile_module.load_desktop_runtime_profile()
+    receipt = [
+        {
+            "name": name,
+            "version": version,
+            "file": f"{name}-{version}.whl",
+            "sha256": "a" * 64,
+            "requires_dist": ["not-in-desktop-profile>=1"] if index == 0 else [],
+        }
+        for index, (name, version) in enumerate(profile.packages)
+    ]
+
+    def runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 1, b'{"invalid":["not-in-desktop-profile>=1"]}', b"")
+
+    with pytest.raises(DesktopOperationError) as raised:
+        runtime_profile_module._validate_wheel_dependency_closure(
+            profile,
+            receipt,
+            {"executable": r"E:\Anaconda3\python.exe"},
+            runner,
+        )
+
+    assert raised.value.reason_code == "desktop_wheelhouse_dependency_closure_invalid"
+    assert raised.value.details == {"returncode": 1, "invalid": ["not-in-desktop-profile>=1"]}

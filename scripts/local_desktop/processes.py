@@ -30,7 +30,7 @@ from scripts.local_desktop.release import ReleaseManager
 
 INSTANCE_SCHEMA = "newsroom.local-desktop-instance/v1"
 PROCESS_SCHEMA = "newsroom.local-desktop-process/v1"
-RUNNING_STATES = {"STARTING", "READY", "DEGRADED", "STOPPING"}
+RUNNING_STATES = {"STARTING", "READY", "DEGRADED"}
 
 
 @dataclass(frozen=True)
@@ -92,40 +92,117 @@ class ProcessInspector:
         return self.ownership(process) == "owned"
 
     def terminate(self, process: ProcessIdentity, *, grace_seconds: float) -> None:
+        self.terminate_many([process], grace_seconds=grace_seconds)
+
+    def terminate_many(self, processes: list[ProcessIdentity], *, grace_seconds: float) -> None:
         grace_seconds = validate_lifecycle_timeout(grace_seconds, field_name="process_timeout")
-        ownership = self.ownership(process)
-        if ownership == "absent":
+        active = self._owned_or_raise(
+            processes,
+            message="refusing to stop non-owned or reused PIDs",
+        )
+        if not active:
             return
-        if ownership == "foreign":
-            raise DesktopOperationError("desktop_process_not_owned", f"refusing to stop non-owned or reused PID for {process.role}")
-        if os.name == "nt":
-            _send_windows_break(process)
-        else:
-            try:
-                os.kill(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                return
         deadline = time.monotonic() + grace_seconds
-        while time.monotonic() < deadline:
-            if self.ownership(process) != "owned":
-                return
-            time.sleep(0.1)
-        if self.ownership(process) != "owned":
-            return
         if os.name == "nt":
-            _terminate_windows_process(process)
+            # CREATE_NO_WINDOW children have no safe console-control channel. A CTRL_BREAK
+            # event can target a shared console instead of the recorded child, so Windows
+            # convergence is performed only through a revalidated process handle.
+            for process in active:
+                ownership = self._checked_ownership(process)
+                if ownership == "foreign":
+                    raise DesktopOperationError(
+                        "desktop_process_not_owned",
+                        f"refusing to terminate a reused Windows PID for {process.role}",
+                    )
+                if ownership == "owned":
+                    _terminate_windows_process(process)
+            self._wait_until_not_owned(active, deadline=deadline)
+            still_owned = self._owned_or_raise(
+                active,
+                message="one or more Windows PIDs were reused during process termination",
+            )
         else:
-            try:
-                os.kill(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            for process in active:
+                ownership = self._checked_ownership(process)
+                if ownership == "foreign":
+                    raise DesktopOperationError(
+                        "desktop_process_not_owned",
+                        f"refusing to signal a reused POSIX PID for {process.role}",
+                    )
+                if ownership == "absent":
+                    continue
+                try:
+                    os.kill(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    continue
+            graceful_deadline = _graceful_process_deadline(deadline)
+            self._wait_until_not_owned(active, deadline=graceful_deadline)
+            remaining = self._owned_or_raise(
+                active,
+                message="one or more POSIX PIDs were reused during graceful termination",
+            )
+            for process in remaining:
+                ownership = self._checked_ownership(process)
+                if ownership == "foreign":
+                    raise DesktopOperationError(
+                        "desktop_process_not_owned",
+                        f"refusing to force a reused POSIX PID for {process.role}",
+                    )
+                if ownership == "absent":
+                    continue
+                try:
+                    os.kill(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    continue
+            self._wait_until_not_owned(remaining, deadline=deadline)
+            still_owned = self._owned_or_raise(
+                remaining,
+                message="one or more POSIX PIDs were reused during forced termination",
+            )
+        if still_owned:
+            raise DesktopOperationError(
+                "desktop_process_termination_failed",
+                "owned processes did not exit before the shared termination deadline",
+                details={"roles": [process.role for process in still_owned]},
+            )
+
+    def _checked_ownership(self, process: ProcessIdentity) -> str:
+        state = str(self.ownership(process))
+        if state not in {"absent", "owned", "foreign"}:
+            raise DesktopOperationError(
+                "desktop_process_inspection_failed",
+                "process ownership inspection returned an unsupported state",
+                details={"role": process.role, "state": state},
+            )
+        return state
+
+    def _owned_or_raise(self, processes: list[ProcessIdentity], *, message: str) -> list[ProcessIdentity]:
+        states = [(process, self._checked_ownership(process)) for process in processes]
+        foreign = [process.role for process, state in states if state == "foreign"]
+        if foreign:
+            raise DesktopOperationError(
+                "desktop_process_not_owned",
+                message,
+                details={"roles": foreign},
+            )
+        return [process for process, state in states if state == "owned"]
+
+    def _wait_until_not_owned(self, processes: list[ProcessIdentity], *, deadline: float) -> None:
+        while processes:
+            states = [(process, self._checked_ownership(process)) for process in processes]
+            foreign = [process.role for process, state in states if state == "foreign"]
+            if foreign:
+                raise DesktopOperationError(
+                    "desktop_process_not_owned",
+                    "one or more recorded PIDs were reused while waiting for process exit",
+                    details={"roles": foreign},
+                )
+            if all(state == "absent" for _, state in states):
                 return
-        forced_deadline = time.monotonic() + grace_seconds
-        while time.monotonic() < forced_deadline:
-            if self.ownership(process) != "owned":
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return
-            time.sleep(0.1)
-        if self.ownership(process) == "owned":
-            raise DesktopOperationError("desktop_process_termination_failed", f"owned process did not exit before the termination deadline for {process.role}")
+            time.sleep(min(0.1, remaining))
 
 
 class LifecycleManager:
@@ -176,9 +253,8 @@ class LifecycleManager:
             current = self._instance()
             recorded = [ProcessIdentity.from_dict(raw) for raw in current.get("processes", [])]
             ownership = {process.role: self._process_ownership(process) for process in recorded}
-            foreign = [process for process in recorded if ownership[process.role] == "foreign"]
             owned = [process for process in recorded if ownership[process.role] == "owned"]
-            if foreign or (owned and len(owned) != len(recorded)):
+            if recorded and len(owned) != len(recorded):
                 self._record_state(
                     "FAILED",
                     recorded,
@@ -199,13 +275,18 @@ class LifecycleManager:
                         self.opener(self.config.canonical_origin)
                     return OperationResult(True, "start", state, "desktop_instance_already_running", "owned local desktop instance is already running", self._public_instance(current))
                 raise DesktopOperationError("desktop_instance_unhealthy", "owned instance is running but did not pass readiness", details=health)
-            if current.get("processes") and not owned:
+            if owned:
                 self._record_state(
                     "FAILED",
-                    [],
+                    recorded,
                     release=current.get("release"),
-                    reason_code="desktop_stale_process_record",
+                    reason_code="desktop_instance_recovery_required",
                     boot_id=current.get("boot_id"),
+                )
+                raise DesktopOperationError(
+                    "desktop_instance_recovery_required",
+                    "owned child processes remain from an incomplete lifecycle; run stop before starting again",
+                    details={"roles": [process.role for process in owned]},
                 )
             conflicts = [endpoint for endpoint in ((self.config.frontend_host, self.config.frontend_port), (self.config.api_host, self.config.api_port)) if _port_is_listening(*endpoint)]
             if conflicts:
@@ -234,14 +315,17 @@ class LifecycleManager:
             children: list[tuple[subprocess.Popen[Any], ProcessIdentity]] = []
             self._record_state("STARTING", [], release=release_identity, reason_code="desktop_starting", boot_id=boot_id)
             try:
+                check_startup_cancellation()
                 api_command = [str(self.config.python_executable), *manifest["entrypoints"]["api"]]
                 children.extend(self._launch("api", api_command, release_path / "app", environment))
                 frontend_command = self._frontend_command(release_path, manifest)
+                check_startup_cancellation()
                 children.extend(self._launch("frontend", frontend_command, release_path / "frontend", environment))
                 identities = [identity for _, identity in children]
                 self._require_complete_process_roles(identities)
                 self._record_state("STARTING", identities, release=release_identity, reason_code="desktop_waiting_for_readiness", boot_id=boot_id)
                 readiness = self._wait_for_readiness(children, runtime_identity, deadline=time.monotonic() + readiness_timeout)
+                check_startup_cancellation()
                 if not all(readiness[item] for item in ("api", "frontend", "bff", "raw_rewrite")):
                     raise DesktopOperationError("desktop_readiness_deadline", "local desktop did not become ready before the deadline", details=readiness)
                 status = "DEGRADED" if doctor_report.status == "warning" or not readiness["runtime"] else "READY"
@@ -250,14 +334,21 @@ class LifecycleManager:
                 if open_browser:
                     self.opener(self.config.canonical_origin)
                 return OperationResult(True, "start", status, "desktop_started", "local desktop transport is ready", {"origin": self.config.canonical_origin, "release": release_identity, "health": readiness})
-            except Exception:
-                for _, identity in reversed(children):
-                    try:
-                        self.inspector.terminate(identity, grace_seconds=3)
-                    except DesktopOperationError:
-                        pass
-                self._record_state("FAILED", [], release=release_identity, reason_code="desktop_start_failed", boot_id=boot_id)
+            except Exception as exc:
+                identities = [identity for _, identity in children]
+                try:
+                    self._stop_process_topology(identities, process_timeout=3.0)
+                except Exception:
+                    pass
+                remaining = self._remaining_processes(identities)
+                reason_code = (
+                    "desktop_start_cancelled"
+                    if isinstance(exc, DesktopOperationError) and exc.reason_code == "desktop_start_cancelled"
+                    else "desktop_start_failed"
+                )
+                self._record_state("FAILED", remaining, release=release_identity, reason_code=reason_code, boot_id=boot_id)
                 raise
+
     def stop(self, *, drain_timeout: float = 30.0, process_timeout: float = 10.0) -> OperationResult:
         drain_timeout = validate_lifecycle_timeout(drain_timeout, field_name="drain_timeout")
         process_timeout = validate_lifecycle_timeout(process_timeout, field_name="process_timeout")
@@ -301,21 +392,11 @@ class LifecycleManager:
             if ownership.get("api") == "owned":
                 self.control_plane.begin_drain(timeout_seconds=drain_timeout)
             try:
-                for process in reversed(processes):
-                    current_ownership = self._process_ownership(process)
-                    if current_ownership == "absent":
-                        continue
-                    if current_ownership == "foreign":
-                        raise DesktopOperationError(
-                            "desktop_process_not_owned",
-                            f"refusing to stop non-owned or reused PID for {process.role}",
-                        )
-                    self.inspector.terminate(process, grace_seconds=process_timeout)
+                self._stop_process_topology(processes, process_timeout=process_timeout)
             except Exception:
-                remaining = [process for process in processes if self._process_ownership(process) != "absent"]
                 self._record_state(
                     "FAILED",
-                    remaining,
+                    self._remaining_processes(processes),
                     release=current.get("release"),
                     reason_code="desktop_stop_failed",
                     boot_id=current.get("boot_id"),
@@ -352,6 +433,105 @@ class LifecycleManager:
                 boot_id=current.get("boot_id"),
             )
             return OperationResult(True, "stop", "STOPPED", "desktop_stopped", "owned local desktop processes stopped after drain", {})
+
+    def _stop_process_topology(self, processes: list[ProcessIdentity], *, process_timeout: float) -> None:
+        if not processes:
+            return
+        deadline = time.monotonic() + process_timeout
+        services = [process for process in reversed(processes) if not _is_log_collector(process)]
+        collectors = [process for process in reversed(processes) if _is_log_collector(process)]
+        collector_reserve = _collector_shutdown_reserve(process_timeout) if collectors else 0.0
+        service_deadline = deadline - collector_reserve
+        self._terminate_process_group(services, deadline=service_deadline)
+        collector_eof_deadline = min(service_deadline, time.monotonic() + _collector_eof_wait(process_timeout))
+        self._wait_for_process_exit(collectors, deadline=collector_eof_deadline)
+        self._terminate_process_group(collectors, deadline=deadline)
+
+    def _terminate_process_group(self, processes: list[ProcessIdentity], *, deadline: float) -> None:
+        active: list[ProcessIdentity] = []
+        for process in processes:
+            ownership = self._process_ownership(process)
+            if ownership == "foreign":
+                raise DesktopOperationError(
+                    "desktop_process_not_owned",
+                    f"refusing to stop non-owned or reused PID for {process.role}",
+                )
+            if ownership == "owned":
+                active.append(process)
+        if not active:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise DesktopOperationError(
+                "desktop_process_termination_failed",
+                "shared process shutdown deadline expired before owned processes converged",
+                details={"roles": [process.role for process in active]},
+            )
+        terminate_many = getattr(self.inspector, "terminate_many", None)
+        if callable(terminate_many):
+            terminate_many(active, grace_seconds=remaining)
+        else:
+            for process in active:
+                ownership = self._process_ownership(process)
+                if ownership == "absent":
+                    continue
+                if ownership == "foreign":
+                    raise DesktopOperationError(
+                        "desktop_process_not_owned",
+                        f"refusing to stop non-owned or reused PID for {process.role}",
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise DesktopOperationError(
+                        "desktop_process_termination_failed",
+                        "shared process shutdown deadline expired before owned processes converged",
+                        details={"roles": [item.role for item in active if self._process_ownership(item) == "owned"]},
+                    )
+                self.inspector.terminate(process, grace_seconds=remaining)
+        states = {process.role: self._process_ownership(process) for process in active}
+        foreign = [role for role, state in states.items() if state == "foreign"]
+        if foreign:
+            raise DesktopOperationError(
+                "desktop_process_not_owned",
+                "one or more recorded PIDs were reused during process termination",
+                details={"roles": foreign},
+            )
+        still_owned = [role for role, state in states.items() if state == "owned"]
+        if still_owned:
+            raise DesktopOperationError(
+                "desktop_process_termination_failed",
+                "owned processes remained after bounded process termination",
+                details={"roles": still_owned},
+            )
+
+    def _wait_for_process_exit(self, processes: list[ProcessIdentity], *, deadline: float) -> None:
+        while processes:
+            states = {process.role: self._process_ownership(process) for process in processes}
+            foreign = [role for role, state in states.items() if state == "foreign"]
+            if foreign:
+                raise DesktopOperationError(
+                    "desktop_process_not_owned",
+                    "one or more recorded PIDs were reused while waiting for process exit",
+                    details={"roles": foreign},
+                )
+            if all(state == "absent" for state in states.values()):
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))
+
+    def _remaining_processes(self, processes: list[ProcessIdentity]) -> list[ProcessIdentity]:
+        remaining: list[ProcessIdentity] = []
+        for process in processes:
+            try:
+                ownership = self._process_ownership(process)
+            except Exception:
+                remaining.append(process)
+                continue
+            if ownership != "absent":
+                remaining.append(process)
+        return remaining
 
     def restart(self, *, readiness_timeout: float = 60.0, drain_timeout: float = 30.0) -> OperationResult:
         readiness_timeout = validate_lifecycle_timeout(readiness_timeout, field_name="readiness_timeout")
@@ -409,6 +589,9 @@ class LifecycleManager:
         common_environment = dict(environment)
         for name in self.api_environment_names:
             common_environment.pop(name, None)
+        if role == "frontend":
+            common_environment.pop("HOSTNAME", None)
+            common_environment.pop("PORT", None)
         collectors: list[tuple[subprocess.Popen[Any], ProcessIdentity]] = []
         try:
             collectors.append(self._launch_log_collector(f"{role}:log:stdout", stdout_path, cwd, common_environment))
@@ -421,6 +604,9 @@ class LifecycleManager:
             raise
         try:
             child_environment = self._child_environment(role, common_environment)
+            if role == "frontend":
+                child_environment["HOSTNAME"] = self.config.frontend_host
+                child_environment["PORT"] = str(self.config.frontend_port)
         except Exception:
             for collector, _ in collectors:
                 if collector.stdin is not None:
@@ -523,19 +709,44 @@ class LifecycleManager:
         return process, identity
 
     def _frontend_command(self, release_path: Path, manifest: Mapping[str, Any]) -> list[str]:
-        node = shutil.which("node")
-        next_cli = release_path / "frontend" / "node_modules" / "next" / "dist" / "bin" / "next"
-        if not node or not next_cli.is_file():
-            raise DesktopOperationError("desktop_frontend_runtime_missing", "release does not contain the prepared Next.js runtime")
-        entrypoint = list(manifest["entrypoints"]["frontend"])
-        if not entrypoint or entrypoint[0] != "next":
+        entrypoints = manifest.get("entrypoints")
+        raw_entrypoint = entrypoints.get("frontend") if isinstance(entrypoints, Mapping) else None
+        if not isinstance(raw_entrypoint, list) or any(not isinstance(item, str) for item in raw_entrypoint):
             raise DesktopOperationError("desktop_release_manifest_invalid", "frontend entrypoint is invalid")
+        entrypoint = list(raw_entrypoint)
+        legacy_entrypoint = [
+            "next",
+            "start",
+            "-H",
+            self.config.frontend_host,
+            "-p",
+            str(self.config.frontend_port),
+        ]
+        if entrypoint not in (["node", "server.js"], legacy_entrypoint):
+            raise DesktopOperationError("desktop_release_manifest_invalid", "frontend entrypoint is invalid")
+        node = shutil.which("node")
+        if not node:
+            raise DesktopOperationError("desktop_frontend_runtime_missing", "controlled Node.js runtime is unavailable on PATH")
+        frontend_root = release_path / "frontend"
+        if entrypoint == ["node", "server.js"]:
+            server = frontend_root / "server.js"
+            closure = frontend_root / "production-closure.json"
+            if not server.is_file() or not closure.is_file():
+                raise DesktopOperationError(
+                    "desktop_frontend_runtime_missing",
+                    "verified standalone frontend runtime resources are unavailable",
+                )
+            return [node, str(server)]
+        next_cli = frontend_root / "node_modules" / "next" / "dist" / "bin" / "next"
+        if not next_cli.is_file():
+            raise DesktopOperationError("desktop_frontend_runtime_missing", "release does not contain the prepared Next.js runtime")
         return [node, str(next_cli), *entrypoint[1:]]
 
     def _wait_for_readiness(self, children: list[tuple[subprocess.Popen[Any], ProcessIdentity]], expected: Mapping[str, str], *, deadline: float) -> dict[str, Any]:
         last = {"api": False, "frontend": False, "bff": False, "raw_rewrite": False, "runtime": False, "reason_code": "desktop_readiness_pending"}
         delay = 0.1
         while time.monotonic() < deadline:
+            check_startup_cancellation()
             exited = [identity.role for process, identity in children if process.poll() is not None]
             if exited:
                 return {**last, "reason_code": "desktop_child_exited", "exited": exited}
@@ -615,7 +826,14 @@ class LifecycleManager:
     def _process_ownership(self, process: ProcessIdentity) -> str:
         ownership = getattr(self.inspector, "ownership", None)
         if callable(ownership):
-            return str(ownership(process))
+            state = str(ownership(process))
+            if state not in {"absent", "owned", "foreign"}:
+                raise DesktopOperationError(
+                    "desktop_process_inspection_failed",
+                    "process ownership inspection returned an unsupported state",
+                    details={"role": process.role, "state": state},
+                )
+            return state
         actual = self.inspector.identity(process.pid)
         if actual is None:
             return "absent"
@@ -659,6 +877,33 @@ class LifecycleManager:
             "processes": [{"role": item.get("role"), "pid": item.get("pid"), "created": item.get("created"), "executable": item.get("executable")} for item in value.get("processes", [])],
             "updated_at": value.get("updated_at"),
         })
+
+
+def check_startup_cancellation() -> None:
+    # Import lazily: lifecycle_cancellation depends on desktop_app.protocol, while the
+    # desktop_app package imports this module through its runtime composition root.
+    from scripts.local_desktop.lifecycle_cancellation import check_startup_cancellation as check
+
+    check()
+
+
+def _is_log_collector(process: ProcessIdentity) -> bool:
+    return ":log:" in process.role
+
+
+def _collector_shutdown_reserve(process_timeout: float) -> float:
+    return min(2.0, process_timeout * 0.25)
+
+
+def _collector_eof_wait(process_timeout: float) -> float:
+    return min(1.0, process_timeout * 0.1)
+
+
+def _graceful_process_deadline(deadline: float) -> float:
+    now = time.monotonic()
+    remaining = max(0.0, deadline - now)
+    forced_exit_reserve = min(1.0, remaining * 0.2)
+    return deadline - forced_exit_reserve
 
 
 def _argv_digest(argv: list[str]) -> str:

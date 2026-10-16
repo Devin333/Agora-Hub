@@ -33,7 +33,11 @@ from scripts.local_desktop.storage_contract import STORAGE_SCHEMAS
 
 DATA_SCHEMAS = STORAGE_SCHEMAS
 _BACKEND_SOURCE_ROOTS = ("backend", "framework", "infrastructure", "interfaces", "configs", "sdk", "scripts")
-_FRONTEND_RUNTIME_ITEMS = (".next", "public", "node_modules", "package.json", "package-lock.json", "next.config.mjs", "root-env.mjs")
+_LEGACY_FRONTEND_RUNTIME_ITEMS = (".next", "public", "node_modules", "package.json", "package-lock.json", "next.config.mjs", "root-env.mjs")
+_FRONTEND_PRODUCTION_CLOSURE = "production-closure.json"
+_FRONTEND_PRODUCTION_SCHEMA = "newsroom.next-standalone-closure/v1"
+_SOURCE_INPUT_SCHEMA = "newsroom.local-desktop-source-inputs/v1"
+_SOURCE_INPUT_MANIFEST = "app/.desktop-app/source-inputs.json"
 _EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".ruff_cache", ".git", ".newsroom", "node_modules", ".env"}
 _EXTERNAL_CONFIG_ENV_NAMES = ("NEWS_MODELS_CONFIG", "NEWS_RESEARCH_MODELS_CONFIG", "NEWS_SOURCES_CONFIG")
 
@@ -93,12 +97,27 @@ class ReleaseManager:
             if source_revision == "unavailable":
                 raise DesktopOperationError("desktop_source_revision_unavailable", "a production release requires a resolvable source revision")
             source_digest = _source_input_digest(stage)
+            _write_source_input_manifest(stage, source_digest=source_digest)
             self._run([npm, "ci"], cwd=frontend_root, env=environment, timeout=900)
             self._run([npm, "run", "build"], cwd=frontend_root, env=environment, timeout=1200)
             _remove_tree_long_path(frontend_root / ".next" / "cache", ignore_errors=True)
-            for name in _FRONTEND_RUNTIME_ITEMS:
-                if not windows_extended_path(frontend_root / name).exists():
-                    raise DesktopOperationError("desktop_release_incomplete", f"frontend build resource is missing: {name}")
+            if self.config.deployment_profile == "local-desktop":
+                source_installed_tree = self._node_dependency_tree_identity(frontend_root, npm, environment=environment)
+                source_installed_tree = {
+                    **source_installed_tree,
+                    "package_lock_sha256": _file_sha256(frontend_root / "package-lock.json"),
+                }
+                _materialize_next_standalone(
+                    frontend_root,
+                    source_digest=source_digest,
+                    source_installed_tree=source_installed_tree,
+                )
+                frontend_entrypoint = ["node", "server.js"]
+            else:
+                for name in _LEGACY_FRONTEND_RUNTIME_ITEMS:
+                    if not windows_extended_path(frontend_root / name).exists():
+                        raise DesktopOperationError("desktop_release_incomplete", f"frontend build resource is missing: {name}")
+                frontend_entrypoint = ["next", "start", "-H", self.config.frontend_host, "-p", str(self.config.frontend_port)]
             dependencies = self._dependency_identity(frontend_root)
             dependency_digest = _json_digest(dependencies)
             config_identity = {
@@ -124,7 +143,7 @@ class ReleaseManager:
                 "data_compatibility": {"readable_schemas": DATA_SCHEMAS, "writable_schemas": DATA_SCHEMAS},
                 "entrypoints": {
                     "api": ["-m", "interfaces.cli.news", "api", "serve", "--host", self.config.api_host, "--port", str(self.config.api_port)],
-                    "frontend": ["next", "start", "-H", self.config.frontend_host, "-p", str(self.config.frontend_port)],
+                    "frontend": frontend_entrypoint,
                 },
                 "resources": resources,
                 "exclusions": [".env", ".env.*", ".newsroom", "development caches", "provider credentials", "user data", "source links and junctions"],
@@ -158,7 +177,7 @@ class ReleaseManager:
         snapshot = scan_tree(
             path,
             excluded={"release-manifest.json"},
-            captured={"release-manifest.json", ".desktop-app/config/models.json"},
+            captured={"release-manifest.json", ".desktop-app/config/models.json", _SOURCE_INPUT_MANIFEST},
             filesystem_reason_code="desktop_release_filesystem_scan_failed",
             filesystem_message="release filesystem could not be inventoried safely",
             node_type_reason_code="desktop_release_resource_type_invalid",
@@ -202,12 +221,18 @@ class ReleaseManager:
         if not isinstance(entrypoints, dict) or set(entrypoints) != {"api", "frontend"}:
             raise DesktopOperationError("desktop_release_manifest_invalid", "release entrypoints are incomplete")
         expected_api = ["-m", "interfaces.cli.news", "api", "serve", "--host", self.config.api_host, "--port", str(self.config.api_port)]
-        expected_frontend = ["next", "start", "-H", self.config.frontend_host, "-p", str(self.config.frontend_port)]
+        standalone_frontend = "frontend/production-closure.json" in snapshot.resources
+        expected_frontend = (
+            ["node", "server.js"]
+            if standalone_frontend
+            else ["next", "start", "-H", self.config.frontend_host, "-p", str(self.config.frontend_port)]
+        )
         if entrypoints.get("api") != expected_api:
             raise DesktopOperationError("desktop_release_manifest_invalid", "release API entrypoint is invalid")
         if entrypoints.get("frontend") != expected_frontend:
             raise DesktopOperationError("desktop_release_manifest_invalid", "release frontend entrypoint is invalid")
-        if "frontend/node_modules/next/dist/bin/next" not in snapshot.resources:
+        required_frontend_resource = "frontend/server.js" if standalone_frontend else "frontend/node_modules/next/dist/bin/next"
+        if required_frontend_resource not in snapshot.resources:
             raise DesktopOperationError("desktop_release_incomplete", "release Next.js runtime is missing")
         identity = manifest.get("identity")
         if not isinstance(identity, Mapping):
@@ -218,8 +243,8 @@ class ReleaseManager:
             raise DesktopOperationError("desktop_release_manifest_invalid", "release source revision is invalid")
         if len(source_digest) != 64 or any(char not in "0123456789abcdef" for char in source_digest):
             raise DesktopOperationError("desktop_release_manifest_invalid", "release source digest is invalid")
-        if _source_input_digest_from_snapshot(snapshot) != identity.get("source_digest"):
-            raise DesktopOperationError("desktop_release_source_drift", "packaged source does not match the release identity")
+        if _verified_source_input_digest(snapshot) != identity.get("source_digest"):
+            raise DesktopOperationError("desktop_release_source_drift", "packaged source provenance does not match the release identity")
         config_identity = manifest.get("config")
         if not isinstance(config_identity, Mapping) or _json_digest(config_identity) != identity.get("config_digest"):
             raise DesktopOperationError("desktop_release_config_drift", "release configuration identity is invalid")
@@ -561,6 +586,7 @@ class ReleaseManager:
     ) -> dict[str, Any]:
         """Return the dependency identity of the interpreter and tools running this manager."""
         dependency_root = frontend_root or self.config.frontend_root
+        frontend_identity = _production_frontend_identity(dependency_root, verified_resources=verified_resources)
         lockfile = dependency_root / "package-lock.json"
         installed_lock = dependency_root / "node_modules" / ".package-lock.json"
         python_packages = sorted(
@@ -576,6 +602,7 @@ class ReleaseManager:
                 "executable_sha256": _file_sha256(Path(sys.executable)),
                 "version": sys.version.split()[0],
                 "packages": python_packages,
+                **({"runtime_profile": provenance} if (provenance := _python_runtime_provenance(Path(sys.executable))) is not None else {}),
             },
             "node": {
                 "executable": str(Path(node_executable).resolve(strict=False)) if node_executable else None,
@@ -584,17 +611,22 @@ class ReleaseManager:
                 "npm_executable": str(Path(npm_executable).resolve(strict=False)) if npm_executable else None,
                 "npm_executable_sha256": _file_sha256(Path(npm_executable)) if npm_executable else None,
                 "npm_version": self._tool_version([npm_executable, "--version"]) if npm_executable else None,
-                "package_lock_sha256": _optional_verified_sha256(
-                    lockfile,
-                    relative="package-lock.json",
-                    verified_resources=verified_resources,
+                "package_lock_sha256": (
+                    frontend_identity["package_lock_sha256"]
+                    if frontend_identity is not None
+                    else _optional_verified_sha256(lockfile, relative="package-lock.json", verified_resources=verified_resources)
                 ),
-                "installed_lock_sha256": _optional_verified_sha256(
-                    installed_lock,
-                    relative="node_modules/.package-lock.json",
-                    verified_resources=verified_resources,
+                "installed_lock_sha256": (
+                    None
+                    if frontend_identity is not None
+                    else _optional_verified_sha256(installed_lock, relative="node_modules/.package-lock.json", verified_resources=verified_resources)
                 ),
-                "installed_tree": self._node_dependency_tree_identity(dependency_root, npm_executable) if npm_executable else None,
+                "installed_tree": (
+                    frontend_identity["installed_tree"]
+                    if frontend_identity is not None
+                    else self._node_dependency_tree_identity(dependency_root, npm_executable) if npm_executable else None
+                ),
+                "runtime_mode": frontend_identity["runtime_mode"] if frontend_identity is not None else "next-start",
             },
         }
 
@@ -671,6 +703,7 @@ class ReleaseManager:
             for item in packages
         ):
             raise DesktopOperationError("desktop_python_dependency_probe_invalid", "Python package identity is incomplete")
+        frontend_identity = _production_frontend_identity(dependency_root)
         lockfile = dependency_root / "package-lock.json"
         installed_lock = dependency_root / "node_modules" / ".package-lock.json"
         return {
@@ -679,6 +712,7 @@ class ReleaseManager:
                 "executable_sha256": _file_sha256(python),
                 "version": python_identity["version"],
                 "packages": packages,
+                **({"runtime_profile": provenance} if (provenance := _python_runtime_provenance(python)) is not None else {}),
             },
             "node": {
                 "executable": str(node),
@@ -687,9 +721,14 @@ class ReleaseManager:
                 "npm_executable": str(npm),
                 "npm_executable_sha256": _file_sha256(npm),
                 "npm_version": self._required_tool_version([str(npm), "--version"], environment=environment),
-                "package_lock_sha256": _optional_file_sha256(lockfile),
-                "installed_lock_sha256": _optional_file_sha256(installed_lock),
-                "installed_tree": self._node_dependency_tree_identity(dependency_root, str(npm), environment=environment),
+                "package_lock_sha256": frontend_identity["package_lock_sha256"] if frontend_identity is not None else _optional_file_sha256(lockfile),
+                "installed_lock_sha256": None if frontend_identity is not None else _optional_file_sha256(installed_lock),
+                "installed_tree": (
+                    frontend_identity["installed_tree"]
+                    if frontend_identity is not None
+                    else self._node_dependency_tree_identity(dependency_root, str(npm), environment=environment)
+                ),
+                "runtime_mode": frontend_identity["runtime_mode"] if frontend_identity is not None else "next-start",
             },
         }
 
@@ -902,6 +941,351 @@ class ReleaseManager:
             raise
 
 
+
+def _materialize_next_standalone(
+    frontend_root: Path,
+    *,
+    source_digest: str,
+    source_installed_tree: Mapping[str, Any],
+) -> None:
+    standalone = frontend_root / ".next" / "standalone"
+    public = frontend_root / "public"
+    static_assets = frontend_root / ".next" / "static"
+    source_lock = frontend_root / "package-lock.json"
+    for required in (standalone / "server.js", public, static_assets, source_lock):
+        if not windows_extended_path(required).exists():
+            raise DesktopOperationError(
+                "desktop_frontend_standalone_incomplete",
+                f"Next standalone build resource is missing: {required.relative_to(frontend_root).as_posix()}",
+            )
+    source_lock_sha256 = _file_sha256(source_lock)
+    if (
+        not isinstance(source_installed_tree.get("package_count"), int)
+        or int(source_installed_tree["package_count"]) < 1
+        or not _valid_sha256(source_installed_tree.get("sha256"))
+        or source_installed_tree.get("package_lock_sha256") != source_lock_sha256
+    ):
+        raise DesktopOperationError(
+            "desktop_frontend_source_lock_drift",
+            "frontend source lock or strict installed dependency tree changed before standalone materialization",
+        )
+    runtime = _make_temp_directory_long_path(frontend_root.parent, prefix="frontend-standalone-")
+    try:
+        materialized_links = [
+            *_materialize_traced_tree(standalone, runtime, allowed_root=frontend_root),
+            *_materialize_traced_tree(public, runtime / "public", allowed_root=frontend_root),
+            *_materialize_traced_tree(static_assets, runtime / ".next" / "static", allowed_root=frontend_root),
+        ]
+        materialized_links.sort(key=lambda item: item["source"])
+        if not _is_file_long_path(runtime / "server.js"):
+            raise DesktopOperationError("desktop_frontend_standalone_incomplete", "Next standalone server.js is missing after materialization")
+        packages = _standalone_package_inventory(runtime, source_lock=source_lock)
+        resources = _resource_entries(runtime)
+        closure = {
+            "schema": _FRONTEND_PRODUCTION_SCHEMA,
+            "runtime_mode": "next-standalone",
+            "entrypoint": "server.js",
+            "source_digest": source_digest,
+            "package_lock_sha256": source_lock_sha256,
+            "source_installed_tree": dict(source_installed_tree),
+            "packages": packages,
+            "packages_sha256": _json_digest({"packages": packages}),
+            "resources": resources,
+            "resources_sha256": _json_digest({"resources": resources}),
+            "materialized_links": materialized_links,
+            "materialized_links_sha256": _json_digest({"materialized_links": materialized_links}),
+        }
+        _atomic_write_json_long_path(runtime / _FRONTEND_PRODUCTION_CLOSURE, closure)
+        _remove_tree_long_path(frontend_root)
+        _replace_long_path(runtime, frontend_root)
+    except Exception:
+        if windows_extended_path(runtime).exists():
+            _remove_tree_long_path(runtime, ignore_errors=True)
+        raise
+
+
+def _materialize_traced_tree(source: Path, destination: Path, *, allowed_root: Path) -> list[dict[str, str]]:
+    # Resolve and enumerate Win32 extended-length paths consistently. Mixing a
+    # plain MAX_PATH-limited resolve() with long-path lstat/copy makes otherwise
+    # valid traced resources appear missing before materialization.
+    source = windows_extended_path(source).absolute()
+    destination = windows_extended_path(destination).absolute()
+    allowed = windows_extended_path(allowed_root).resolve(strict=True)
+    evidence: list[dict[str, str]] = []
+    symlink_tag = 0xA000000C
+    mount_point_tag = 0xA0000003
+    accepted_tags = {symlink_tag: "symlink", mount_point_tag: "mount-point"}
+
+    def copy_entry(current_source: Path, current_destination: Path, ancestors: tuple[Path, ...]) -> None:
+        try:
+            metadata = windows_extended_path(current_source).lstat()
+        except OSError as exc:
+            raise DesktopOperationError("desktop_frontend_standalone_materialization_failed", "Next standalone source could not be inspected") from exc
+        attributes = getattr(metadata, "st_file_attributes", 0)
+        reparse_attribute = bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+        is_symbolic = stat.S_ISLNK(metadata.st_mode)
+        is_reparse = reparse_attribute or is_symbolic
+        if is_reparse:
+            tag = getattr(metadata, "st_reparse_tag", None)
+            if tag not in accepted_tags:
+                raise DesktopOperationError(
+                    "desktop_frontend_standalone_reparse_tag_unsupported",
+                    "Next standalone contains an unknown or unsupported reparse point",
+                    details={"source": current_source.absolute().relative_to(allowed).as_posix(), "tag": tag},
+                )
+            try:
+                resolved = current_source.resolve(strict=True)
+            except OSError as exc:
+                raise DesktopOperationError("desktop_frontend_standalone_link_broken", "Next standalone link target is unavailable") from exc
+            if not resolved.is_relative_to(allowed):
+                raise DesktopOperationError(
+                    "desktop_frontend_standalone_link_outside_root",
+                    "Next standalone link target is outside the controlled frontend build root",
+                )
+            evidence.append(
+                {
+                    "kind": accepted_tags[tag],
+                    "tag": f"0x{tag:08x}",
+                    "source": current_source.absolute().relative_to(allowed).as_posix(),
+                    "target": resolved.relative_to(allowed).as_posix(),
+                }
+            )
+        else:
+            resolved = current_source
+        resolved_key = resolved.resolve(strict=True)
+        if resolved_key in ancestors:
+            raise DesktopOperationError("desktop_frontend_standalone_link_cycle", "Next standalone contains a link cycle")
+        if resolved.is_dir():
+            windows_extended_path(current_destination).mkdir(parents=True, exist_ok=True)
+            try:
+                children = sorted(os.scandir(windows_extended_path(resolved)), key=lambda item: item.name.casefold())
+            except OSError as exc:
+                raise DesktopOperationError("desktop_frontend_standalone_materialization_failed", "Next standalone directory could not be enumerated") from exc
+            for child in children:
+                copy_entry(resolved / child.name, current_destination / child.name, (*ancestors, resolved_key))
+            return
+        if not resolved.is_file():
+            raise DesktopOperationError("desktop_frontend_standalone_type_invalid", "Next standalone contains a non-file runtime resource")
+        windows_extended_path(current_destination.parent).mkdir(parents=True, exist_ok=True)
+        _copy_file_long_path(resolved, current_destination)
+
+    copy_entry(source, destination, ())
+    return evidence
+
+def _standalone_package_inventory(root: Path, *, source_lock: Path) -> list[dict[str, Any]]:
+    root = windows_extended_path(root)
+    try:
+        lock = json.loads(_read_text_long_path(source_lock))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise DesktopOperationError("desktop_frontend_source_lock_invalid", "frontend package lock is invalid") from exc
+    lock_packages = lock.get("packages") if isinstance(lock, Mapping) else None
+    if not isinstance(lock_packages, Mapping):
+        raise DesktopOperationError("desktop_frontend_source_lock_invalid", "frontend package lock package map is missing")
+    packages: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for package_json in sorted(root.rglob("package.json")):
+        relative = package_json.relative_to(root).as_posix()
+        if "node_modules/" not in relative and not relative.startswith("node_modules/"):
+            continue
+        _reject_existing_reparse_chain(package_json)
+        try:
+            payload = json.loads(_read_text_long_path(package_json))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise DesktopOperationError("desktop_frontend_standalone_package_invalid", f"invalid package metadata: {relative}") from exc
+        if not isinstance(payload, Mapping):
+            raise DesktopOperationError("desktop_frontend_standalone_package_invalid", f"invalid package metadata: {relative}")
+        if not str(payload.get("name") or "") or not str(payload.get("version") or ""):
+            # Node subpath export descriptors (for example @swc/helpers/_/*) are
+            # package.json resources, not independently installed distributions.
+            # Accept them only beneath a materialized, source-locked package owner.
+            owner = package_json.parent.parent
+            owned_descriptor = False
+            while owner.is_relative_to(root) and owner != root:
+                owner_relative = owner.relative_to(root).as_posix()
+                locked_owner = lock_packages.get(owner_relative)
+                if isinstance(locked_owner, Mapping) and locked_owner.get("version"):
+                    owner_metadata_path = owner / "package.json"
+                    if _is_file_long_path(owner_metadata_path):
+                        owner_metadata = json.loads(_read_text_long_path(owner_metadata_path))
+                        owned_descriptor = (
+                            isinstance(owner_metadata, Mapping)
+                            and bool(owner_metadata.get("name"))
+                            and str(owner_metadata.get("version") or "") == str(locked_owner["version"])
+                            and str(locked_owner.get("name") or owner_metadata["name"]) == owner_metadata["name"]
+                        )
+                    break
+                owner = owner.parent
+            if owned_descriptor:
+                continue
+            raise DesktopOperationError("desktop_frontend_standalone_package_invalid", f"unowned subpath metadata: {relative}")
+        package_root = package_json.parent.relative_to(root).as_posix()
+        if package_root in seen_paths:
+            raise DesktopOperationError("desktop_frontend_standalone_package_invalid", "duplicate standalone package path")
+        seen_paths.add(package_root)
+        name = str(payload["name"])
+        version = str(payload["version"])
+        locked = lock_packages.get(package_root)
+        if isinstance(locked, Mapping) and str(locked.get("version") or "") == version:
+            locked_name = str(locked.get("name") or name)
+            if locked_name != name:
+                raise DesktopOperationError("desktop_frontend_standalone_package_unlocked", f"traced package name differs from source lock: {package_root}")
+            association: dict[str, str] = {
+                "kind": "source-lock",
+                "path": package_root,
+                "name": locked_name,
+                "version": version,
+            }
+        elif package_root.startswith("node_modules/next/dist/compiled/"):
+            next_locked = lock_packages.get("node_modules/next")
+            next_version = str(next_locked.get("version") or "") if isinstance(next_locked, Mapping) else ""
+            if not next_version:
+                raise DesktopOperationError("desktop_frontend_standalone_package_unlocked", "Next vendored package has no locked Next owner")
+            next_name = str(next_locked.get("name") or "next")
+            if next_name != "next":
+                raise DesktopOperationError("desktop_frontend_standalone_package_unlocked", "Next vendored package owner differs from source lock")
+            association = {
+                "kind": "next-vendored",
+                "owner_path": "node_modules/next",
+                "owner_name": next_name,
+                "owner_version": next_version,
+            }
+        else:
+            raise DesktopOperationError("desktop_frontend_standalone_package_unlocked", f"traced package is not owned by the source lock: {package_root}")
+        packages.append({"path": package_root, "name": name, "version": version, "lock_association": association})
+    if not packages or not any(item["name"] == "next" for item in packages):
+        raise DesktopOperationError("desktop_frontend_standalone_incomplete", "Next standalone production package closure is incomplete")
+    return sorted(packages, key=lambda item: item["path"])
+
+def _production_frontend_identity(
+    root: Path,
+    *,
+    verified_resources: Mapping[str, tuple[int, str]] | None = None,
+) -> dict[str, Any] | None:
+    closure_path = root / _FRONTEND_PRODUCTION_CLOSURE
+    if not _is_file_long_path(closure_path):
+        return None
+    try:
+        closure = json.loads(_read_text_long_path(closure_path))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend production closure is invalid JSON") from exc
+    if not isinstance(closure, Mapping) or closure.get("schema") != _FRONTEND_PRODUCTION_SCHEMA or closure.get("runtime_mode") != "next-standalone":
+        raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend production closure schema is unsupported")
+    resources = closure.get("resources")
+    packages = closure.get("packages")
+    materialized_links = closure.get("materialized_links")
+    if not isinstance(resources, list) or not isinstance(packages, list) or not isinstance(materialized_links, list):
+        raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend production closure is incomplete")
+    normalized_links: list[dict[str, str]] = []
+    for item in materialized_links:
+        if not isinstance(item, Mapping) or item.get("kind") not in {"symlink", "mount-point"}:
+            raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend materialized link evidence is invalid")
+        source = _safe_relative(item.get("source"))
+        target = _safe_relative(item.get("target"))
+        tag = str(item.get("tag") or "")
+        expected_tag = "0xa000000c" if item.get("kind") == "symlink" else "0xa0000003"
+        if tag != expected_tag:
+            raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend materialized link tag evidence is invalid")
+        normalized_links.append({"kind": str(item["kind"]), "tag": tag, "source": source, "target": target})
+    normalized_links.sort(key=lambda item: item["source"])
+    if normalized_links != materialized_links or closure.get("materialized_links_sha256") != _json_digest({"materialized_links": materialized_links}):
+        raise DesktopOperationError("desktop_frontend_production_closure_drift", "frontend materialized link evidence changed")
+    expected_resources: dict[str, tuple[int, str]] = {}
+    for item in resources:
+        if not isinstance(item, Mapping):
+            raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend production resource entry is invalid")
+        relative = _safe_relative(item.get("path"))
+        expected_resources[relative] = (item.get("size"), item.get("sha256"))
+    actual_resources = (
+        {relative: identity for relative, identity in verified_resources.items() if relative != _FRONTEND_PRODUCTION_CLOSURE}
+        if verified_resources is not None
+        else _scan_release_tree(root, excluded={_FRONTEND_PRODUCTION_CLOSURE}).resources
+    )
+    if actual_resources != expected_resources or closure.get("resources_sha256") != _json_digest({"resources": resources}):
+        raise DesktopOperationError("desktop_frontend_production_closure_drift", "frontend standalone resources do not match the production closure")
+    source_installed_tree = closure.get("source_installed_tree")
+    if (
+        not isinstance(source_installed_tree, Mapping)
+        or not isinstance(source_installed_tree.get("package_count"), int)
+        or int(source_installed_tree["package_count"]) < 1
+        or not _valid_sha256(source_installed_tree.get("sha256"))
+        or source_installed_tree.get("package_lock_sha256") != closure.get("package_lock_sha256")
+    ):
+        raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend source npm tree identity is invalid")
+    normalized_packages: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in packages:
+        if not isinstance(item, Mapping):
+            raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend production package entry is invalid")
+        path = _safe_relative(item.get("path"))
+        name = str(item.get("name") or "")
+        version = str(item.get("version") or "")
+        association = item.get("lock_association")
+        if not name or not version or path in seen or not isinstance(association, Mapping):
+            raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend production package entry is incomplete")
+        kind = association.get("kind")
+        if kind == "source-lock":
+            normalized_association: dict[str, str] = {
+                "kind": "source-lock",
+                "path": _safe_relative(association.get("path")),
+                "name": str(association.get("name") or ""),
+                "version": str(association.get("version") or ""),
+            }
+            if (
+                normalized_association["path"] != path
+                or normalized_association["name"] != name
+                or normalized_association["version"] != version
+            ):
+                raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend package source-lock association is invalid")
+        elif kind == "next-vendored":
+            owner_path = _safe_relative(association.get("owner_path"))
+            owner_name = str(association.get("owner_name") or "")
+            owner_version = str(association.get("owner_version") or "")
+            if (
+                owner_path != "node_modules/next"
+                or owner_name != "next"
+                or not owner_version
+                or not path.startswith("node_modules/next/dist/compiled/")
+            ):
+                raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend Next vendored package association is invalid")
+            normalized_association = {
+                "kind": "next-vendored",
+                "owner_path": owner_path,
+                "owner_name": owner_name,
+                "owner_version": owner_version,
+            }
+        else:
+            raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend package lock association kind is unsupported")
+        seen.add(path)
+        normalized_packages.append({"path": path, "name": name, "version": version, "lock_association": normalized_association})
+    normalized_packages.sort(key=lambda item: item["path"])
+    next_package = next((item for item in normalized_packages if item["path"] == "node_modules/next"), None)
+    if next_package is None or next_package["name"] != "next":
+        raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend Next owner package is missing from the production closure")
+    if any(
+        item["lock_association"]["kind"] == "next-vendored"
+        and item["lock_association"]["owner_version"] != next_package["version"]
+        for item in normalized_packages
+    ):
+        raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend Next vendored ownership version does not match the locked Next package")
+    if normalized_packages != packages or closure.get("packages_sha256") != _json_digest({"packages": packages}):
+        raise DesktopOperationError("desktop_frontend_production_closure_drift", "frontend standalone package closure changed")
+    package_lock_sha256 = str(closure.get("package_lock_sha256") or "")
+    if not _valid_sha256(package_lock_sha256):
+        raise DesktopOperationError("desktop_frontend_production_closure_invalid", "frontend source lock identity is invalid")
+    return {
+        "runtime_mode": "next-standalone",
+        "package_lock_sha256": package_lock_sha256,
+        "installed_tree": {
+            "package_count": len(packages),
+            "sha256": str(closure["packages_sha256"]),
+            "source_npm_tree": dict(source_installed_tree),
+        },
+    }
+
+
+def _valid_sha256(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
 def _reject_existing_reparse_chain(path: Path) -> None:
     lexical = path.expanduser().absolute()
     reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -1111,6 +1495,66 @@ def _read_text_long_path(path: Path) -> str:
     return read_bytes_long_path(path).decode("utf-8", errors="strict")
 
 
+
+def _python_runtime_provenance(executable: Path) -> dict[str, Any] | None:
+    attestation_path = executable.parent / "portable-python.json"
+    if not _is_file_long_path(attestation_path):
+        return None
+    try:
+        attestation = json.loads(_read_text_long_path(attestation_path))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise DesktopOperationError("desktop_python_runtime_attestation_invalid", "portable Python attestation is invalid") from exc
+    profile = attestation.get("profile") if isinstance(attestation, Mapping) else None
+    wheelhouse = attestation.get("wheelhouse") if isinstance(attestation, Mapping) else None
+    base_python = attestation.get("base_python") if isinstance(attestation, Mapping) else None
+    builder = attestation.get("builder") if isinstance(attestation, Mapping) else None
+    if not all(isinstance(item, Mapping) for item in (profile, wheelhouse, base_python, builder)):
+        raise DesktopOperationError("desktop_python_runtime_attestation_invalid", "portable Python provenance is incomplete")
+    provenance = {
+        "profile": dict(profile),
+        "base_python": {
+            "source_sha256": base_python.get("source_sha256"),
+            "manifest_sha256": base_python.get("manifest_sha256"),
+        },
+        "wheelhouse": {
+            "manifest_sha256": wheelhouse.get("manifest_sha256"),
+            "receipt_sha256": wheelhouse.get("receipt_sha256"),
+            "artifact_count": wheelhouse.get("artifact_count"),
+        },
+        "builder": {
+            "implementation": builder.get("implementation"),
+            "version": builder.get("version"),
+            "cache_tag": builder.get("cache_tag"),
+            "platform": builder.get("platform"),
+            "executable_sha256": builder.get("executable_sha256"),
+            "pip_version": builder.get("pip_version"),
+        },
+    }
+    digests = [
+        provenance["profile"].get("profile_sha256"),
+        provenance["profile"].get("constraints_sha256"),
+        provenance["profile"].get("requirements_sha256"),
+        provenance["base_python"].get("source_sha256"),
+        provenance["base_python"].get("manifest_sha256"),
+        provenance["wheelhouse"].get("manifest_sha256"),
+        provenance["wheelhouse"].get("receipt_sha256"),
+        provenance["builder"].get("executable_sha256"),
+    ]
+    builder_strings = [
+        provenance["builder"].get("implementation"),
+        provenance["builder"].get("version"),
+        provenance["builder"].get("cache_tag"),
+        provenance["builder"].get("platform"),
+        provenance["builder"].get("pip_version"),
+    ]
+    if (
+        any(not _valid_sha256(value) for value in digests)
+        or not isinstance(provenance["wheelhouse"]["artifact_count"], int)
+        or any(not isinstance(value, str) or not value for value in builder_strings)
+    ):
+        raise DesktopOperationError("desktop_python_runtime_attestation_invalid", "portable Python provenance digests are invalid")
+    return provenance
+
 def _optional_file_sha256(path: Path) -> str | None:
     return _file_sha256(path) if _is_file_long_path(path) else None
 
@@ -1200,17 +1644,85 @@ def _external_config_identity(
         dependencies.append({"name": name, "mode": "external", "path": str(path), "size": len(data), "sha256": sha256(data).hexdigest()})
     return dependencies
 
-def _source_input_digest(root: Path) -> str:
-    digest = sha256()
+
+def _write_source_input_manifest(root: Path, *, source_digest: str) -> None:
+    entries = _source_input_entries(root)
+    calculated = _source_digest_from_entries(entries)
+    if calculated != source_digest:
+        raise DesktopOperationError("desktop_release_source_identity_invalid", "source input inventory does not match its digest")
+    _atomic_write_json_long_path(
+        root / _SOURCE_INPUT_MANIFEST,
+        {
+            "schema": _SOURCE_INPUT_SCHEMA,
+            "source_digest": source_digest,
+            "entries": entries,
+            "entries_sha256": _json_digest({"entries": entries}),
+        },
+    )
+
+
+def _source_input_entries(root: Path) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     app_root = root / "app" if windows_extended_path(root / "app").is_dir() else root
-    roots = [*((app_root / name, f"app/{name}") for name in _BACKEND_SOURCE_ROOTS), (root / "frontend", "frontend")]
-    for source_root, label in roots:
-        if not windows_extended_path(source_root).exists():
+    selected_roots = [*((app_root / name, f"app/{name}") for name in _BACKEND_SOURCE_ROOTS), (root / "frontend", "frontend")]
+    for source_root, label in selected_roots:
+        if not windows_extended_path(source_root).is_dir():
             continue
         snapshot = _scan_release_tree(source_root)
-        _update_source_digest(digest, snapshot.resources, label=label)
+        for relative, (size, digest) in sorted(snapshot.resources.items()):
+            relative_path = Path(relative)
+            if any(_release_source_excluded(part) for part in relative_path.parts):
+                continue
+            if label == "frontend" and _frontend_generated_source_input(relative_path.name):
+                continue
+            entries.append({"path": f"{label}/{relative}", "size": size, "sha256": digest})
+    return entries
+
+
+def _source_digest_from_entries(entries: Iterable[Mapping[str, Any]]) -> str:
+    digest = sha256()
+    seen: set[str] = set()
+    for item in entries:
+        path = str(item.get("path") or "")
+        resource_digest = str(item.get("sha256") or "")
+        size = item.get("size")
+        if (
+            not path
+            or path in seen
+            or not isinstance(size, int)
+            or size < 0
+            or len(resource_digest) != 64
+            or any(character not in "0123456789abcdef" for character in resource_digest)
+        ):
+            raise DesktopOperationError("desktop_release_source_identity_invalid", "source input inventory entry is invalid")
+        seen.add(path)
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(resource_digest))
     return digest.hexdigest()
 
+
+def _verified_source_input_digest(snapshot: SafeTreeSnapshot) -> str:
+    data = snapshot.captured.get(_SOURCE_INPUT_MANIFEST)
+    if data is None:
+        return _source_input_digest_from_snapshot(snapshot)
+    manifest = _decode_json_object(
+        data,
+        reason_code="desktop_release_source_identity_invalid",
+        message="source input provenance is invalid",
+    )
+    entries = manifest.get("entries")
+    if manifest.get("schema") != _SOURCE_INPUT_SCHEMA or not isinstance(entries, list):
+        raise DesktopOperationError("desktop_release_source_identity_invalid", "source input provenance schema is invalid")
+    if manifest.get("entries_sha256") != _json_digest({"entries": entries}):
+        raise DesktopOperationError("desktop_release_source_identity_invalid", "source input provenance inventory changed")
+    calculated = _source_digest_from_entries(entries)
+    if calculated != manifest.get("source_digest"):
+        raise DesktopOperationError("desktop_release_source_identity_invalid", "source input provenance digest is invalid")
+    return calculated
+
+def _source_input_digest(root: Path) -> str:
+    return _source_digest_from_entries(_source_input_entries(root))
 
 def _source_input_digest_from_snapshot(snapshot: SafeTreeSnapshot) -> str:
     digest = sha256()

@@ -76,4 +76,44 @@ Windows NSIS 候选仍使用 electron-builder 的标准 installer、升级和 un
 
 每次 `preflight`、旧安装归属检查、`install`、`seal` 或 `uninstall` 都启动一个独立 bootstrap invocation；每次 invocation 有 **15 分钟真实 wall-clock deadline**，其 7za 子进程另有最多 5 分钟且受该总 deadline 截断的上限，超时会终止活动子进程并以非零退出。NSIS 的 `nsExec /TIMEOUT=960000` 只是 16 分钟的插件无输出 watchdog，不是 wall deadline；bootstrap 捕获且不向 NSIS 转发 7za stdout，因此不能靠持续输出延长 Node 的 wall budget。整个安装/升级当前没有跨 invocation 共享的一只总计时器：相关阶段和 stock 旧卸载的有界重试会顺序累加，但每次均有固定上限。任一阶段失败都保持非成功/可能部分完成的真实状态，不继续注册或启动，不宣称回滚。卸载删除计划形成后，每个文件、目录及其祖先在实际删除前还会再次核对 plain/type/dev/ino/size/link identity；发生树替换会中止并保留可诊断的 partial 结果。
 
-最终交付必须包含真实安装包、checksum、source/release/config/dependency 身份、实际签名状态和中文限制说明。当前不承诺已安装、已签名、免安全提示或已完成非开发环境验收。
+最终交付必须包含真实安装包、checksum、source/release/config/dependency 身份、实际签名状态和中文限制说明。本机候选升级结果以同批 evidence 为准；不承诺已签名、免安全提示或已完成无开发工具环境验收，也不表示已发布到 GitHub。
+
+
+## 精简 Windows 运行包的构建方式（0.1.2 候选）
+
+普通使用者应获取一个完整的 `Agora-Paper-Agent-<version>-x64.exe`，无需安装 Python、Node、Docker，也不会在首次启动时运行 pip/npm。这里只说明维护者的构建步骤，不表示候选已发布到 GitHub Release。最终安装包的实际签名状态、SHA-256、源码冻结与验收结果见同批 evidence；checksum 不等于代码签名。
+
+默认 `windows-x64-text-research-v1` profile 保留真实 API、授权、BFF、SQLite 与文本 PDF 解析；不预装本地 LLM、OCR、embedding/reranker 或科学计算栈。远程功能仍须用户提供合格配置并明确发起，不会在缺少本地组件时偷偷下载模型或发送付费请求。扫描件 OCR 等不在此 profile 的默认能力内，不应据此声称已完成所有产品验收。
+
+维护者需要独立的项目构建环境、带 pip 的构建工具 Python，以及已取得并验证的 CPython **3.12.14 / Windows x64** portable 输入和 Node portable 输入。构建工具 Python 与最终用户运行 Python 是不同职责；不要向源码 `.venv` 或已封存的 portable 输入就地安装/删除依赖。下例中的输入、输出路径由维护者指定，输出必须是新的独立目录。
+
+```powershell
+# 仅维护者准备构建输入时联网下载；固定完整集合，不让 resolver 隐式扩展。
+python -m pip download --only-binary=:all: --no-deps `
+  --platform win_amd64 --python-version 3.12 --implementation cp --abi cp312 `
+  --dest <wheelhouse-root> `
+  -r scripts/desktop_app/profiles/windows-x64-text-research-v1.requirements.txt
+
+python -m scripts.desktop_app.runtime_profile prepare-base `
+  --source-root <verified-cpython-3.12.14-root> --output-root <new-base-root>
+python -m scripts.desktop_app.runtime_profile wheelhouse-receipt `
+  --wheelhouse-root <wheelhouse-root>
+python -m scripts.desktop_app.runtime_profile build `
+  --base-python-root <new-base-root> --wheelhouse-root <wheelhouse-root> `
+  --output-root <new-selected-python-root> --installer-python <builder-python-with-pip.exe>
+
+python -m scripts.desktop_app --json --resource-root <checkout-root> `
+  --data-root <isolated-build-data-root> build `
+  --bundle-output <new-runtime-stage-root> `
+  --portable-python-root <new-selected-python-root> `
+  --portable-node-root <verified-portable-node-root>
+
+$env:AGORA_DESKTOP_RUNTIME_STAGE = '<new-runtime-stage-root>'
+npm --prefix desktop run dist
+```
+
+下载产物须保留 wheelhouse receipt；构建核对固定版本、wheel SHA-256、实际 METADATA 依赖闭包、RECORD、license、base 输入和 profile 身份，并执行真实导入、PDF、SQLite 与 TLS probe。前端仅在构建时安装完整构建依赖，最终采用受 source lock 约束的 Next standalone 服务端闭包和 static/public 资源，仍运行真实 BFF；不是把完整开发 `node_modules` 打包，也不是静态导出替代服务端。
+
+构建和打包须始终使用同一受控 Node/npm；最终 stage 和安装 payload 仍进行完整文件集合、SHA-256、reparse/hardlink 与 release/config/dependency 身份验证。未纳入闭包的包、未知链接和未绑定 owner 的 package descriptor 应失败，不得手工删文件或重写 manifest 来通过。运行包收缩并未引入跨启动 mtime/marker 信任缓存。
+
+退出先业务 drain，再收敛已核实的服务与日志进程；启动中的关闭会请求协作取消，并继续核对真实停止结果。活动请求、未保存草稿或状态未知时仍保留原生确认和失败窗口，不承诺带任务退出与空闲退出同样快。

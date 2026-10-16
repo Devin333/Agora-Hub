@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from scripts.local_desktop.common import DesktopOperationError, reject_reparse_path, windows_extended_path
+from scripts.local_desktop.lifecycle_cancellation import check_startup_cancellation
 
 _READ_CHUNK_SIZE = 1024 * 1024
 
@@ -40,6 +41,7 @@ def scan_tree(
     re-established for every operation.
     """
 
+    check_startup_cancellation()
     root = Path(root)
     reject_reparse_path(root, root=root)
     root_metadata = _lstat(
@@ -60,6 +62,7 @@ def scan_tree(
     stack: list[tuple[Path, tuple[str, ...], os.stat_result]] = [(root, (), root_metadata)]
 
     while stack:
+        check_startup_cancellation()
         lexical_directory, parent_parts, discovered_metadata = stack.pop()
         before_scan = _lstat(
             lexical_directory,
@@ -76,6 +79,7 @@ def scan_tree(
             node_type_reason_code=node_type_reason_code,
         )
         try:
+            check_startup_cancellation()
             with os.scandir(windows_extended_path(lexical_directory)) as iterator:
                 entries = sorted(iterator, key=lambda item: (item.name.casefold(), item.name))
         except OSError as exc:
@@ -99,6 +103,7 @@ def scan_tree(
 
         child_directories: list[tuple[Path, tuple[str, ...], os.stat_result]] = []
         for entry in entries:
+            check_startup_cancellation()
             relative_parts = (*parent_parts, entry.name)
             relative = Path(*relative_parts).as_posix()
             lexical = root.joinpath(*relative_parts)
@@ -131,6 +136,7 @@ def scan_tree(
         stack.extend(reversed(child_directories))
 
     for relative in deferred_order:
+        check_startup_cancellation()
         pending = deferred_files.get(relative)
         if pending is None:
             continue
@@ -153,6 +159,7 @@ def scan_tree(
         key=lambda item: (-len(Path(item[0]).parts) if item[0] else 0, item[0]),
     )
     for _relative, (directory, expected_metadata) in final_directories:
+        check_startup_cancellation()
         completed_metadata = _lstat(
             directory,
             filesystem_reason_code=filesystem_reason_code,
@@ -167,7 +174,9 @@ def scan_tree(
             filesystem_message=filesystem_message,
             node_type_reason_code=node_type_reason_code,
         )
+    check_startup_cancellation()
     reject_reparse_path(root, root=root)
+    check_startup_cancellation()
 
     return SafeTreeSnapshot(
         resources=resources,
@@ -190,6 +199,7 @@ def _record_file(
     filesystem_message: str,
     node_type_reason_code: str,
 ) -> None:
+    check_startup_cancellation()
     if relative in excluded and relative not in captured:
         return
     size, digest, data = _hash_file(
@@ -290,6 +300,7 @@ def _hash_file(
     size = 0
     captured = bytearray() if capture else None
     try:
+        check_startup_cancellation()
         with open(windows_extended_path(path), "rb") as handle:
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode) or not _same_identity(metadata, opened) or not _same_content_state(metadata, opened):
@@ -297,11 +308,16 @@ def _hash_file(
                     filesystem_reason_code,
                     f"{filesystem_message}: tree entry changed while it was being opened",
                 )
-            while chunk := handle.read(_READ_CHUNK_SIZE):
+            while True:
+                check_startup_cancellation()
+                chunk = handle.read(_READ_CHUNK_SIZE)
+                if not chunk:
+                    break
                 digest.update(chunk)
                 size += len(chunk)
                 if captured is not None:
                     captured.extend(chunk)
+                check_startup_cancellation()
             completed = os.fstat(handle.fileno())
             if not _same_identity(opened, completed) or not _same_change_state(opened, completed) or size != completed.st_size:
                 raise DesktopOperationError(

@@ -272,7 +272,7 @@ def test_desktop_app_doctor_allows_local_start_without_remote_business_configura
         "_release_check",
         "_storage_check",
     ):
-        monkeypatch.setattr(doctor, method_name, lambda check=ok_check: check)
+        monkeypatch.setattr(doctor, method_name, lambda *_args, check=ok_check: check)
     monkeypatch.setattr(doctor, "_port_check", lambda *_args: ok_check)
     monkeypatch.setattr(
         doctor,
@@ -313,7 +313,7 @@ def test_desktop_app_doctor_keeps_local_service_and_parser_failures_fatal(tmp_pa
         "_release_check",
         "_storage_check",
     ):
-        monkeypatch.setattr(doctor, method_name, lambda check=ok_check: check)
+        monkeypatch.setattr(doctor, method_name, lambda *_args, check=ok_check: check)
     monkeypatch.setattr(doctor, "_port_check", lambda *_args: ok_check)
     monkeypatch.setattr(
         doctor,

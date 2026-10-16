@@ -19,6 +19,7 @@ from scripts.desktop_app.credentials import (
 )
 from scripts.local_desktop.common import DesktopOperationError, OperationResult
 from scripts.local_desktop.doctor import LocalDesktopDoctor
+from scripts.local_desktop.lifecycle_cancellation import check_startup_cancellation
 from scripts.local_desktop.processes import LifecycleManager
 from scripts.local_desktop.recovery import BackupManager, RestoreManager, StorageInventoryResolver
 from scripts.local_desktop.runtime_config import RuntimeConfigManager
@@ -130,16 +131,24 @@ class DesktopAppRuntime:
         )
 
     def start(self, *, timeout: float = 60.0) -> OperationResult:
+        check_startup_cancellation()
         owner = self._clear_owner() if self.config.data_root.name.casefold() == "runtime" else None
         guard_held = bool(getattr(self, "_desktop_clear_guard_held", False))
         guard = owner.startup_guard() if owner is not None and not guard_held else nullcontext()
         with guard:
+            check_startup_cancellation()
             clear_registered = owner.register_for_start(lock_held=True) if owner is not None else None
+            check_startup_cancellation()
             initialize_data_root(self.config)
+            check_startup_cancellation()
             configuration_recovery = self.runtime_config_manager.recover_pending()
+            check_startup_cancellation()
             self._reproject_runtime_configuration()
+            check_startup_cancellation()
             with controlled_process_environment(self.config):
+                check_startup_cancellation()
                 activation = self.bundle_manager.install_and_activate() if self.config.packaged else None
+                check_startup_cancellation()
                 result = self.lifecycle.start(open_browser=False, readiness_timeout=timeout)
             details = dict(result.details)
             if configuration_recovery is not None:
@@ -217,6 +226,9 @@ class DesktopAppRuntime:
             return self.lifecycle.status()
 
     def stop(self, *, timeout: float = 30.0) -> OperationResult:
+        # The host passes 120 seconds for drain admission. Process termination uses
+        # one shared topology deadline capped at 30 seconds, so the Python owner
+        # budget is at most 150 seconds before final endpoint/state verification.
         with controlled_process_environment(self.config):
             return self.lifecycle.stop(drain_timeout=timeout, process_timeout=min(timeout, 30.0))
 
