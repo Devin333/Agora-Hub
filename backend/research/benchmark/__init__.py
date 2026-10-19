@@ -25,3 +25,25 @@ __all__ = [
     "validate_score_range",
     "validate_sota_claim_status",
 ]
+
+from backend.research.benchmark.reportbench import (
+    CrossSourceResearchResult,
+    ReportBenchCitation,
+    ReportBenchExecution,
+    ReportBenchIssue,
+    ReportBenchSource,
+    ReportBenchTask,
+    validate_result,
+    validate_tasks,
+)
+
+__all__ += [
+    "CrossSourceResearchResult",
+    "ReportBenchCitation",
+    "ReportBenchExecution",
+    "ReportBenchIssue",
+    "ReportBenchSource",
+    "ReportBenchTask",
+    "validate_result",
+    "validate_tasks",
+]

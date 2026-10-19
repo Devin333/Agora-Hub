@@ -25,6 +25,8 @@ AGENT_LOOP_SMOKE_ARTIFACT_ROOT = ".newsroom/smoke"
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "reportbench":
+        return int(args.handler(args))
     env = _command_env()
 
     if args.command == "compile":
@@ -157,6 +159,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m scripts.dev")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    from interfaces.cli.commands.reportbench import register as register_reportbench
+
+    register_reportbench(subparsers)
     subparsers.add_parser("compile", help="Compile project Python modules")
     subparsers.add_parser("test", help="Run the full pytest suite")
     subparsers.add_parser("test-graph", help="Run Harness Graph tests")
