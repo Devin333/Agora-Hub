@@ -47,6 +47,25 @@ def test_field_chunk_store_indexes_and_searches_selected_fields():
     assert hits[0].metadata["field_text_sources"]
 
 
+def test_field_chunk_store_searches_multiple_fields_in_one_filter():
+    store = PaperFieldChunkStore(InMemoryVectorStore())
+    store.ensure_collection()
+    store.index_chunks([
+        _chunk("fig-arch", caption="Transformer architecture overview."),
+        _chunk("fig-baseline", caption="Baseline chart."),
+    ])
+
+    hits = store.search_field_vectors(
+        "p1",
+        "architecture overview",
+        field_names=("caption", "body"),
+        limit=5,
+    )
+
+    assert hits
+    assert hits[0].chunk_id == "fig-arch"
+
+
 def test_field_chunk_store_deletes_paper_vectors():
     store = PaperFieldChunkStore(InMemoryVectorStore())
     store.ensure_collection()

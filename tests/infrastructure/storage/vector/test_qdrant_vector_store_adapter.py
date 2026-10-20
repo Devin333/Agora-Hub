@@ -76,6 +76,43 @@ def test_qdrant_store_search_translates_filter_and_results() -> None:
     assert results[0].score == 0.87
 
 
+def test_qdrant_store_reuses_query_embedding_for_repeated_text() -> None:
+    client = _FakeQdrantClient()
+    embedding_model = _CountingEmbeddingModel(dimension=8)
+    store = QdrantVectorStore(
+        client,
+        embedding_model=embedding_model,
+        vector_size=8,
+    )
+
+    query = VectorSearchQuery(collection="evidence_items", text="same query", limit=3)
+    store.search(query)
+    store.search(query)
+
+    assert embedding_model.calls == ["same query"]
+
+
+def test_qdrant_filter_supports_multiple_payload_values() -> None:
+    client = _FakeQdrantClient()
+    store = QdrantVectorStore(
+        client,
+        embedding_model=DeterministicEmbeddingModel(dimension=8),
+        vector_size=8,
+    )
+
+    store.search(
+        VectorSearchQuery(
+            collection="paper_field_chunks",
+            text="caption",
+            filters={"field_name": ["caption", "body"]},
+        )
+    )
+
+    condition = client.query_calls[0]["query_filter"].must[0]
+    assert condition.key == "field_name"
+    assert condition.match.any == ["caption", "body"]
+
+
 def test_qdrant_store_bootstraps_missing_collections_and_reports_existing() -> None:
     client = _FakeQdrantClient(existing_collections={"report_sections"})
     store = QdrantVectorStore(
@@ -222,3 +259,13 @@ class _FakePoint:
 class _FakeCollectionInfo:
     def __init__(self, payload_schema) -> None:
         self.payload_schema = payload_schema
+
+
+class _CountingEmbeddingModel(DeterministicEmbeddingModel):
+    def __init__(self, *, dimension: int) -> None:
+        super().__init__(dimension=dimension)
+        self.calls: list[str] = []
+
+    def embed_text(self, text: str) -> list[float]:
+        self.calls.append(text)
+        return super().embed_text(text)

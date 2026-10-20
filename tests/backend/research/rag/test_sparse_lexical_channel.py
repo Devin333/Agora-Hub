@@ -63,6 +63,31 @@ def test_sparse_channel_uses_persisted_bm25_index(tmp_path, monkeypatch) -> None
     assert trace.degradations == []
 
 
+def test_sparse_channel_reuses_unchanged_persisted_bm25_index(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(tmp_path / "runs"))
+    chunk = _chunk("rare", "Exact raremetric42 ablation results.")
+    write_bm25_index("p1", [chunk])
+    channel = SparseLexicalChannel(_ChunkStore([chunk]))
+
+    first = channel.recall_chunks(
+        paper_id="p1",
+        query_text="raremetric42",
+        filters={},
+        limit=1,
+        trace=_trace(),
+    )
+    second = channel.recall_chunks(
+        paper_id="p1",
+        query_text="raremetric42",
+        filters={},
+        limit=1,
+        trace=_trace(),
+    )
+
+    assert first[0][0].metadata["sparse_candidate_source"] == "bm25_index"
+    assert second[0][0].metadata["sparse_candidate_source"] == "bm25_index"
+
+
 def test_sparse_channel_missing_index_falls_back_observably(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(tmp_path / "runs"))
     generic = _chunk("generic", "Generic benchmark results.")

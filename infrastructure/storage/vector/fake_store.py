@@ -85,7 +85,14 @@ class InMemoryVectorStore:
 
 def _matches_filters(doc: VectorDocument, filters: dict[str, Any]) -> bool:
     payload = doc.to_payload()
-    return all(payload.get(key) == value for key, value in filters.items())
+    for key, expected in filters.items():
+        actual = payload.get(key)
+        if isinstance(expected, (list, tuple, set, frozenset)):
+            if actual not in expected:
+                return False
+        elif actual != expected:
+            return False
+    return True
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

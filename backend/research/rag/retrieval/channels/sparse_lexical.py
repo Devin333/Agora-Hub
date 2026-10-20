@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
+from threading import RLock
 from typing import Any, Iterable
 
 from framework.rag.retrieval import weighted_component_score
@@ -11,7 +13,11 @@ from backend.research.document.models import PaperChunk
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.rag.adapters.paper_field_text import extract_field_texts
 from backend.research.rag.formula_normalizer import FormulaRetrievalMetadata, normalize_formula_metadata
-from backend.research.rag.retrieval.bm25_index import PaperBM25Index, load_bm25_index
+from backend.research.rag.retrieval.bm25_index import (
+    PaperBM25Index,
+    default_bm25_index_path,
+    load_bm25_index,
+)
 from backend.research.rag.retrieval.channels.base import RankedHit, RankedList
 from backend.research.rag.retrieval.trace import RetrievalDegradation, RetrievalTrace
 
@@ -84,6 +90,8 @@ class SparseLexicalChannel:
 
     def __init__(self, chunk_store: ChunkStorePort) -> None:
         self._store = chunk_store
+        self._bm25_cache: dict[str, tuple[tuple[int, int], PaperBM25Index]] = {}
+        self._bm25_cache_lock = RLock()
 
     def recall(
         self,
@@ -185,8 +193,19 @@ class SparseLexicalChannel:
         paper_id: str,
         trace: RetrievalTrace | None,
     ) -> tuple[PaperBM25Index, str, list[PaperChunk]]:
+        index_path = default_bm25_index_path(paper_id)
+        signature = _file_signature(index_path)
+        if signature is not None:
+            with self._bm25_cache_lock:
+                cached = self._bm25_cache.get(paper_id)
+                if cached is not None and cached[0] == signature:
+                    index = cached[1]
+                    return index, "bm25_index", index.chunks
         try:
-            index = load_bm25_index(paper_id)
+            index = load_bm25_index(paper_id, path=index_path)
+            if signature is not None:
+                with self._bm25_cache_lock:
+                    self._bm25_cache[paper_id] = (signature, index)
             return index, "bm25_index", index.chunks
         except FileNotFoundError:
             if trace is not None:
@@ -209,6 +228,14 @@ class SparseLexicalChannel:
         chunks = self._store.list_chunks(paper_id)
         return PaperBM25Index.build(paper_id, chunks), "bm25_list_chunks_fallback", chunks
 
+    def invalidate_bm25_cache(self, paper_id: str | None = None) -> None:
+        """Invalidate persisted-index cache after a paper reindex operation."""
+        with self._bm25_cache_lock:
+            if paper_id is None:
+                self._bm25_cache.clear()
+            else:
+                self._bm25_cache.pop(str(paper_id), None)
+
 
 def chunk_matches_filters(chunk: PaperChunk, filters: dict[str, Any]) -> bool:
     for key, expected in (filters or {}).items():
@@ -218,6 +245,14 @@ def chunk_matches_filters(chunk: PaperChunk, filters: dict[str, Any]) -> bool:
         if actual != expected:
             return False
     return True
+
+
+def _file_signature(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
 
 
 def sparse_lexical_score(query_text: str, chunk: PaperChunk) -> float:

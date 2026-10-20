@@ -109,16 +109,21 @@ class PaperFieldChunkStore:
     ) -> list[FieldEmbeddingHit]:
         names = _normalized_field_names(field_names)
         combined_filters = {"paper_id": paper_id, **(filters or {})}
-        results = []
         if names:
-            for field_name in names:
-                results.extend(self._search_one_field(
-                    query_text,
-                    filters={**combined_filters, "field_name": field_name},
-                    limit=limit,
-                ))
+            # One Qdrant query over all requested fields avoids embedding and
+            # network work once per field. Overfetch by the number of fields so
+            # the final global top-k has the same candidate envelope as the
+            # previous per-field queries.
+            combined_filters["field_name"] = list(names)
+            search_limit = max(limit, limit * len(names))
         else:
-            results.extend(self._search_one_field(query_text, filters=combined_filters, limit=limit))
+            search_limit = limit
+
+        results = self._search_one_field(
+            query_text,
+            filters=combined_filters,
+            limit=search_limit,
+        )
 
         results.sort(key=lambda hit: hit.score, reverse=True)
         return results[:limit]

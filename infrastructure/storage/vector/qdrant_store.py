@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from collections import defaultdict
+from threading import RLock
 from typing import Any, Mapping, cast
 from uuid import NAMESPACE_URL, uuid5
 
@@ -38,10 +40,14 @@ class QdrantVectorStore:
         *,
         embedding_model: EmbeddingModel | None = None,
         vector_size: int = DEFAULT_VECTOR_SIZE,
+        query_embedding_cache_size: int = 512,
     ) -> None:
         self.client = client
         self.embedding_model = embedding_model or embedding_model_from_env(vector_size=vector_size)
         self.vector_size = vector_size
+        self._query_embedding_cache_size = max(0, int(query_embedding_cache_size))
+        self._query_embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._query_embedding_cache_lock = RLock()
 
     def upsert_documents(self, docs: list[VectorDocument]) -> None:
         grouped: dict[str, list[VectorDocument]] = defaultdict(list)
@@ -66,7 +72,7 @@ class QdrantVectorStore:
             self.client.upsert(collection_name=collection, points=points, wait=True)
 
     def search(self, query: VectorSearchQuery) -> list[VectorSearchResult]:
-        query_vector = query.vector or self.embedding_model.embed_text(query.text)
+        query_vector = query.vector or self._query_embedding(query.text)
         response = self.client.query_points(
             collection_name=query.collection,
             query=query_vector,
@@ -82,6 +88,29 @@ class QdrantVectorStore:
             VectorSearchResult.from_payload(score=point.score, payload=dict(point.payload or {}))
             for point in points
         ]
+
+    def clear_query_embedding_cache(self) -> None:
+        """Clear cached query vectors after an embedding configuration change."""
+        with self._query_embedding_cache_lock:
+            self._query_embedding_cache.clear()
+
+    def _query_embedding(self, text: str) -> list[float]:
+        normalized_text = str(text or "").strip()
+        if self._query_embedding_cache_size <= 0:
+            return list(self.embedding_model.embed_text(normalized_text))
+        with self._query_embedding_cache_lock:
+            cached = self._query_embedding_cache.get(normalized_text)
+            if cached is not None:
+                self._query_embedding_cache.move_to_end(normalized_text)
+                return list(cached)
+
+        vector = list(self.embedding_model.embed_text(normalized_text))
+        with self._query_embedding_cache_lock:
+            self._query_embedding_cache[normalized_text] = vector
+            self._query_embedding_cache.move_to_end(normalized_text)
+            while len(self._query_embedding_cache) > self._query_embedding_cache_size:
+                self._query_embedding_cache.popitem(last=False)
+        return list(vector)
 
     def get_document(self, collection: str, document_id: str) -> VectorSearchResult | None:
         response = self.client.scroll(
@@ -202,11 +231,17 @@ def _qdrant_filter(filters: dict[str, Any]) -> models.Filter | None:
     if not filters:
         return None
     return models.Filter(
-        must=[
-            models.FieldCondition(key=key, match=models.MatchValue(value=value))
-            for key, value in filters.items()
-        ]
+        must=[_qdrant_field_condition(key, value) for key, value in filters.items()]
     )
+
+
+def _qdrant_field_condition(key: str, value: Any) -> models.FieldCondition:
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return models.FieldCondition(
+            key=key,
+            match=models.MatchAny(any=list(value)),
+        )
+    return models.FieldCondition(key=key, match=models.MatchValue(value=value))
 
 
 def _vector_size_from_env(values: Mapping[str, str]) -> int:
