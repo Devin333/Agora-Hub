@@ -788,12 +788,16 @@ def score_grounded_answer(
     candidate_facts: Sequence[CandidateFactProjection] = (),
     evidence_facts: Sequence[EvidenceFactProjection] = (),
     resolutions: Sequence[SemanticResolution] = (),
+    claim_citations_available: bool = True,
 ) -> GroundedScoreResult:
     """Score an answer that has no reference: grounding, contradiction, citations.
 
     ``context_kind`` names what the context is (for example ``model_context`` or
     ``cited_quotes``) so a report can never present quote-level grounding as
     support by the full sources. Reference-only metrics are not applicable.
+    ``claim_citations_available=False`` declares that the answer format does not
+    bind citations to positions in the text, so claim-level citation metrics are
+    not applicable instead of being scored as uncited.
     """
 
     resolution_index = index_resolutions(resolutions)
@@ -858,16 +862,19 @@ def score_grounded_answer(
     coverage = _score_citation_coverage(
         claims=claims, assessments=assessments, bindings=bindings, provenance=provenance, evidence=evidence,
     )
-    measured = {
-        item.metric_id: item
-        for item in _attributed(
-            (contradicted, over_inference, unresolved, faithfulness, support, coverage), bool(resolvers),
-        )
-    }
+    scored = (contradicted, over_inference, unresolved, faithfulness)
+    if claim_citations_available:
+        scored = (*scored, support, coverage)
+    measured = {item.metric_id: item for item in _attributed(scored, bool(resolvers))}
+    citation_metrics = {"answer.citation_support", "answer.citation_coverage"}
     observations = tuple(
         measured.get(metric_id) or _na_observation(
             metric_id=metric_id,
-            reason="metric requires a reference answer, which this case does not have",
+            reason=(
+                "answer format does not bind citations to positions in the text"
+                if metric_id in citation_metrics
+                else "metric requires a reference answer, which this case does not have"
+            ),
             provenance={"input_boundary": boundary, "reference": "absent", "context_kind": context_kind},
             evidence=evidence,
         )

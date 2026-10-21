@@ -31,9 +31,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Validate Research RAG evaluation assets",
     )
     operations = rag_eval.add_subparsers(dest="rag_eval_command", required=True)
+    from interfaces.cli.commands.answer_eval import register as register_answer
     from interfaces.cli.commands.qasper_eval import register as register_qasper
 
     register_qasper(operations)
+    register_answer(operations)
     validate = operations.add_parser(
         "validate-dataset",
         help="Validate the read-only three-object dataset contract",

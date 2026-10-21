@@ -104,13 +104,19 @@ def build_entailment_requests(
     pending: Sequence[PendingJudgment],
     *,
     candidate: GroundedAnswerCandidate,
-    reference: ReferenceLabel,
+    reference: ReferenceLabel | None,
     actual_context: RAGContextPack | None,
 ) -> tuple[FactEntailmentRequest, ...]:
-    """Group pending pairs into one request per (claim, target kind)."""
+    """Group pending pairs into one request per (claim, target kind).
+
+    ``reference`` is None for reference-free (grounding-only) scoring, where
+    only passage pairs can be pending.
+    """
 
     claims = {item.claim_id: item for item in candidate.claims}
-    reference_claims = {item.claim_id: item for item in reference.reference_claims}
+    reference_claims = (
+        {item.claim_id: item for item in reference.reference_claims} if reference is not None else {}
+    )
     passages = (
         {item.evidence_id: item for item in actual_context.accepted_evidence}
         if actual_context is not None else {}
@@ -129,7 +135,7 @@ def build_entailment_requests(
         for target_id in target_ids:
             if kind is ComparisonTargetKind.REFERENCE:
                 reference_claim = reference_claims.get(target_id)
-                if reference_claim is None:
+                if reference is None or reference_claim is None:
                     raise ValueError(f"pending judgment references unknown reference claim {target_id!r}")
                 excerpts = tuple(
                     anchor.source_excerpt for anchor in reference.evidence_anchors

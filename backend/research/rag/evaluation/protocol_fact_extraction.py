@@ -117,13 +117,18 @@ class FactVerificationReport(ProtocolModel):
     extractor_rules: tuple[NonEmptyStr, ...]
     targets: int = Field(ge=0, strict=True)
     projected_targets: int = Field(ge=0, strict=True)
+    fixed_targets: int = Field(default=0, ge=0, strict=True)
     drafts: int = Field(ge=0, strict=True)
     accepted_drafts: int = Field(ge=0, strict=True)
     rejections: tuple[FactRejection, ...] = ()
 
     @model_validator(mode="after")
     def _counts(self) -> "FactVerificationReport":
-        if self.projected_targets > self.targets or self.accepted_drafts > self.drafts:
+        if (
+            self.projected_targets > self.targets
+            or self.fixed_targets > self.projected_targets
+            or self.accepted_drafts > self.drafts
+        ):
             raise ValueError("verification counts are inconsistent")
         return self
 
@@ -213,13 +218,14 @@ def _single_accepted(
     source_texts: Sequence[str],
     alignment_targets: Sequence[AlignmentTarget] = (),
     rejections: list[FactRejection],
+    failure: str | None = None,
 ) -> tuple[_Verified | None, int, int]:
     """Verify all drafts of one target; a target projects only one atomic fact."""
 
     if result is None:
         rejections.append(FactRejection(
             role=role, target_id=target_id, statement=None,
-            reason="no extraction result for this target",
+            reason=failure or "no extraction result for this target",
         ))
         return None, 0, 0
     accepted: list[_Verified] = []
@@ -262,17 +268,30 @@ def _extractor_rules(results: Mapping[str, FactExtractionResult]) -> tuple[str, 
 def build_reference_projections(
     reference: ReferenceLabel,
     results: Mapping[str, FactExtractionResult],
+    *,
+    fixed: Sequence[ReferenceFactProjection] = (),
+    failures: Mapping[str, str] | None = None,
 ) -> tuple[tuple[ReferenceFactProjection, ...], FactVerificationReport]:
     """Project each reference claim to at most one verified, anchored fact.
 
     ``results`` is keyed by reference claim id. A reference fact may quote the
-    claim text or one of the claim's own evidence anchor excerpts.
+    claim text or one of the claim's own evidence anchor excerpts. ``fixed``
+    holds projections a dataset rule already determined (for example yes/no
+    polarity); those claims are not extracted. ``failures`` maps a claim id to
+    why its extraction could not be obtained.
     """
 
+    claim_ids = {item.claim_id for item in reference.reference_claims}
+    fixed_by_id = {item.reference_claim_id: item for item in fixed}
+    if len(fixed_by_id) != len(fixed) or not set(fixed_by_id) <= claim_ids:
+        raise ValueError("fixed reference facts must map one-to-one onto reference claims")
+    failure_reasons = failures or {}
     rejections: list[FactRejection] = []
-    projections: list[ReferenceFactProjection] = []
+    projections: list[ReferenceFactProjection] = list(fixed_by_id.values())
     drafts = accepted = 0
     for claim in reference.reference_claims:
+        if claim.claim_id in fixed_by_id:
+            continue
         anchors = [item for item in reference.evidence_anchors if claim.claim_id in item.claim_ids]
         result = results.get(claim.claim_id)
         verified, seen, kept = _single_accepted(
@@ -281,6 +300,7 @@ def build_reference_projections(
             target_id=claim.claim_id,
             source_texts=(claim.claim_text, *(item.source_excerpt for item in anchors)),
             rejections=rejections,
+            failure=failure_reasons.get(claim.claim_id),
         )
         drafts += seen
         if verified is None:
@@ -308,6 +328,7 @@ def build_reference_projections(
         extractor_rules=_extractor_rules(results),
         targets=len(reference.reference_claims),
         projected_targets=len(projections),
+        fixed_targets=len(fixed_by_id),
         drafts=drafts,
         accepted_drafts=accepted,
         rejections=tuple(rejections),
@@ -321,6 +342,7 @@ def build_candidate_projections(
     *,
     alignment_targets: Sequence[AlignmentTarget],
     reference_facts: Sequence[ReferenceFactProjection] = (),
+    failures: Mapping[str, str] | None = None,
 ) -> tuple[tuple[CandidateFactProjection, ...], FactVerificationReport]:
     """Project each atomic answer claim to at most one verified fact.
 
@@ -347,6 +369,7 @@ def build_candidate_projections(
             source_texts=(claim.text,),
             alignment_targets=alignment_targets,
             rejections=rejections,
+            failure=(failures or {}).get(claim.claim_id),
         )
         drafts += seen
         if verified is None:
@@ -398,6 +421,8 @@ def build_candidate_projections(
 def build_evidence_projections(
     context: RAGContextPack,
     results: Mapping[str, FactExtractionResult],
+    *,
+    failures: Mapping[str, str] | None = None,
 ) -> tuple[tuple[EvidenceFactProjection, ...], FactVerificationReport]:
     """Project accepted context passages to verified, exactly quoted facts.
 
@@ -414,7 +439,7 @@ def build_evidence_projections(
         if result is None:
             rejections.append(FactRejection(
                 role=FactSourceRole.EVIDENCE, target_id=evidence.evidence_id, statement=None,
-                reason="no extraction result for this evidence",
+                reason=(failures or {}).get(evidence.evidence_id) or "no extraction result for this evidence",
             ))
             continue
         identity = evidence_source_identity(evidence)
