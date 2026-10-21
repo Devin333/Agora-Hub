@@ -41,9 +41,9 @@
 ## 尚未完成的验收
 
 1. **门禁已完成，按范围提交**：完整 smoke 为 4947 passed、1 skipped、23 deselected，AgentLoop smoke 与 source validation 通过；最终 QASPER/边界 246 passed，隔离必要依赖快照 467 passed，compile 与两个相关 OpenSpec strict validation 均通过。smoke 在最后一批回归新增前开始，因此新增测试单独复验，不能将旧 collection 当作新增覆盖。只提交 QASPER、必要协议/CLI 依赖和精确共享文件 hunk，不夹带其余解析器/桌面/RAG 改动。
-2. **七组完整实验与参数 sweep（6.3）**：六组单查询可用；现有 cache 对 844 道可评测题的 multi-query 共需 1779 个 query key，其中缺少 982 个，全部 844 道题受影响。外部 `cache-audit.json` 和 `missing-multi-query-embeddings.jsonl` 保存清单。不得用原 query 向量替代、跳过变体、合成向量或隐式调用付费 provider。提供同模型完整缓存后在新目录重跑；失败组不能记为成功。
+2. **七组完整实验（6.3）**：修复后七组均已运行；六组单查询成功，24 点 full-hybrid 参数 sweep 也已全部成功；现有 cache 对 844 道可评测题的 multi-query 共需 1779 个 query key，其中缺少 982 个，全部 844 道题受影响。外部 `cache-audit.json` 和 `missing-multi-query-embeddings.jsonl` 保存清单。不得用原 query 向量替代、跳过变体、合成向量或隐式调用付费 provider。提供同模型完整缓存后在新目录重跑；失败组不能记为成功。
 3. **人工审核（6.4）**：外部 `human-review-packet.json` 已准备 40 例（20 高差异、10 对照、10 mapping needs_review），SHA-256 为 `53bfb4e2a1b2ba55a9c63b0c0b4b14214bb0e05802bd98a2c9c2a901784bb410`，含原始标注、冻结路径及 top10 候选正文。全部仍为 `pending_human_review`。需要人类确认 evidence groups、exact child、Equivalent 充分性和阈值，再冻结策略；LLM 不得自批。
-4. **文档/工件**：使用说明、PRD、交接和 evidence README 已更新；修复后七组消融位于 `final-ablation`，score 已复核 7035 个逐题结果，report 已生成。小型摘要见 `openspec/changes/qasper-retrieval-evaluation-optimization/evidence/qasper-dev-ablation-20261021.json`。完整参数网格正在外部 `final-sweep` 顺序执行，不把未完成网格记为成功。
+4. **文档/工件**：使用说明、PRD、交接和 evidence README 已更新；修复后七组消融位于 `final-ablation`，score 已复核 7035 个逐题结果，report 已生成。小型摘要见 `openspec/changes/qasper-retrieval-evaluation-optimization/evidence/qasper-dev-ablation-20261021.json`。24 点参数网格已在外部 `final-sweep` 完成，保留 24120 个逐题结果，0 system failure、0 external request；摘要见 `evidence/qasper-dev-sweep-20261021.json`。代码提交为 `87aa6e15`，未夹带其余工作区改动。
 
 修复前的 `qasper-seven-profiles-v2-debug` 和 `ablation` 工件仅用于诊断，不作为最终评分验收，不覆写它们。修复后运行必须另取目录、保存实际代码指纹，并重新确定 score/report 的执行范围。
 
@@ -67,3 +67,7 @@ python -m scripts.dev smoke
 提交候选以 `HEAD` 导出为基底，只叠加本次必要文件及共享文件的精确 hunk；467 个测试、compile、真实 mapping validate 在该快照通过，未依赖工作区其余未提交的 `document_fidelity`、PDF parser 或桌面改动。测试快照未纳入无关 legacy comparison adapter 测试及其尚未提交的实现。
 
 本地快照 fetch 曾报告历史对象 `018707f3bb5ae7c3437ceeb9009e035861aad93e` 不可读；随后改用 `git archive HEAD` 和只读 objects alternates 完成隔离验证，未对主仓库执行 repair/reset/clean，也未验证远端 push。不要把本地检查通过等同于完整历史对象健康。
+
+中文逐题人工清单位于外部 `human-review-checklist.md`，SHA-256 `ae4f1f88c0e9159f74460c39ee86ab05ae9837924a8a8d6a0dd4eb0b560bd024`。它与 JSON 含相同 40 例，保留完整原标注、冻结映射和候选正文；仍有 0 例人工签署，不得据此关闭人工验收任务。
+
+2026-10-22 补充：24 点网格最终 `report` 已通过，内部完成 24120 个逐题工件的 score/hash 复核。`final-sweep/report.json` 与 `report.md` 完整生成，SHA-256 已归档到小型 sweep 摘要；尚未完成的只有任务 `6.3` 的 multi-query 成功复跑与 `6.4` 的人工审批。

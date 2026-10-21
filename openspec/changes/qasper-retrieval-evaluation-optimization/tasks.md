@@ -37,4 +37,13 @@
 - [x] 6.2 运行 `openspec validate qasper-retrieval-evaluation-optimization --strict` 并修复所有问题。
 - [ ] 6.3 完成至少七组通道消融和一轮参数 sweep，保存逐题结果与报告。
 - [ ] 6.4 对高差异样本进行人工抽检，冻结 mapping overlap 阈值与 metric version。
-- [ ] 6.5 更新 PRD、交接文档和使用说明；若要改变生产默认策略，另开变更，不在本变更中直接切换。
+- [x] 6.5 更新 PRD、交接文档和使用说明；若要改变生产默认策略，另开变更，不在本变更中直接切换。
+
+### 2026-10-21—22 验收备注
+
+- 修复后七组消融均已执行并保留逐题工件；六组成功，multi-query 因 982 个缺失 query embedding 造成 844 个系统失败。`6.3` 不能据此关闭。
+- full-hybrid 参数网格共 24 个唯一组合（candidate limit 50/100 × overfetch 3/5 × RRF k 20/60 × rerank threshold 0/0.15/0.3），全部成功；保存 24120 个逐题结果，未隐式调用 provider。
+- 40 例人工复核 JSON 与中文清单已准备，但 reviewed cases 仍为 0。`6.4` 保持待办，overlap 阈值尚未批准。
+- 完整 smoke、最终定向回归、隔离提交快照、compile、OpenSpec strict 均通过，见 `evidence/` 下两个 20261021 摘要。未改变生产默认策略或将 fixture 延迟冒充生产测量。
+
+参数网格最终 `report` 于 2026-10-22 通过，内部复核全部 24120 个逐题工件及 score/hash；`20261021` 命名保留运行发起日期，不覆写历史工件。

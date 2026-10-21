@@ -188,6 +188,8 @@ not_applicable
 
 ### 本轮自动化验收
 
-完整 smoke 通过（4947 passed、1 skipped、23 deselected），另以最终源码补跑 QASPER/架构边界 246 tests，并以仅含本次必要变更的隔离快照验证 467 tests、compile 和真实 mapping validate。修复后七组结果及哈希见 `evidence/qasper-dev-ablation-20261021.json`：六组成功，第七组明确记录 844 个缓存失败，不可声称七组全部通过。full-hybrid 的 StrictHit@5 为 0.6303、EquivalentHit@5 为 0.6967，有效分母均为 844；这些开发集 fixture 读数不与历史不同分母作提升比较，也不证明生产质量。
+完整 smoke 通过（4947 passed、1 skipped、23 deselected），另以最终源码补跑 QASPER/架构边界 246 tests，并以仅含本次必要变更的隔离快照验证 467 tests、compile 和真实 mapping validate。修复后七组结果及哈希见 `openspec/changes/qasper-retrieval-evaluation-optimization/evidence/qasper-dev-ablation-20261021.json`：六组成功，第七组明确记录 844 个缓存失败，不可声称七组全部通过。full-hybrid 的 StrictHit@5 为 0.6303、EquivalentHit@5 为 0.6967，有效分母均为 844；这些开发集 fixture 读数不与历史不同分母作提升比较，也不证明生产质量。
 
 40 例外部人工复核包已生成，仍待人类审查；完整同模型 multi-query 缓存和 overlap 阈值人工批准仍是剩余验收条件。
+
+full-hybrid 的 24 点参数 sweep 已全部执行成功，保留 24120 个逐题结果、20256 个有效计分题次，0 system failure、0 external request；全部组合而非仅最好结果保存在外部 `final-sweep`，小型摘要为 `qasper-dev-sweep-20261021.json`。七组完整成功仍受 multi-query 缓存缺口阻塞；人工复核仍是独立验收门槛。

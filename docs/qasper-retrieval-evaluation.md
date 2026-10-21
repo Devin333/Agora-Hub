@@ -57,3 +57,9 @@ QASPER Dev 是开发集，调参结果不能当作 held-out 泛化证据，也�
 `report.json` 保存完整切片和失败归因，`report.md` 与各 variant 的 `*-report.md` 提供可读入口。切片覆盖 question type、paper、section/field、evidence count、mapping status 和 first-hit rank；延迟/成本明确区分 index、request、judge 及各执行阶段。真实 QASPER 输入未提供 question type 时，只为诊断使用版本化 `qasper-question-type-rules/v1`，标记 `derived_not_gold`，不写回 gold 或冻结 mapping。
 
 `score` / `report` 的 `valid=true` 表示保存工件、哈希和评分复核通过，不代表每个 experiment 执行成功，更不是生产 quality gate。判断执行情况必须检查每组 `denominators.system_failure`；缺失缓存组会保留所有失败题，不伪装为零召回或删除分母。
+
+## 本轮实测与剩余动作
+
+修复后七组消融位于外部 `F:/datasets/qasper/results/qasper-retrieval-eval-20261021/final-ablation`；六组成功，multi-query 因上述缓存缺口明确失败。`final-sweep` 保留 24 个 full-hybrid 参数组合和 24120 个逐题结果，全部执行成功且无外部请求。仓库中的小型身份/指标摘要位于 `openspec/changes/qasper-retrieval-evaluation-optimization/evidence/qasper-dev-ablation-20261021.json` 与 `qasper-dev-sweep-20261021.json`。这不是生产默认参数变更或 held-out 结论。
+
+外部 `human-review-packet.json` 与 `human-review-checklist.md` 提供 40 例审阅材料。人类需核对 required groups、exact child 完整路径和 Equivalent 证据充分性，并以新文件记录审阅者、时间、依据和阈值决定；原包不可覆盖。当前全部为 `pending_human_review`，不能用 LLM 自动解释代替审核。

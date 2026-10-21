@@ -58,7 +58,7 @@
 
 先前 `qasper-seven-profiles-v2-debug` 与本轮 `ablation` 目录是诊断工件：六组有测量，第七组记录缓存失败。随后审查发现 CLI 的 RRF 类型、候选截断、空 rerank 阶段和 coverage 汇总等实现问题；修复前工件不作为最终验收或生产质量证据，不覆写这些历史记录。最终重跑应使用新的独立目录和最终代码指纹。
 
-`6.3` 仍需完整七组成功实验和参数 sweep；`6.4` 仍需人工复核并冻结阈值。自动化生成候选清单不等于人工审核，LLM 不得自行批准。
+24 点参数 sweep 已完成；`6.3` 仍需补齐 multi-query 缓存并完成第七组成功实验；`6.4` 仍需人工复核并冻结阈值。自动化生成候选清单不等于人工审核，LLM 不得自行批准。
 
 ### 修复后验收进展
 
@@ -67,3 +67,13 @@
 - QASPER 和 Harness caller inventory 对应 OpenSpec strict validation 均通过。
 - 修复后七组消融位于外部 `final-ablation`：run `577ea4b5-086c-43e9-b0b1-03c5c4bd9cd0`；六组各 844 valid、0 system failure，第七组 0 valid、844 system failure（缺失精确 multi-query cache）。每组仍保留 1005 planned、101 needs_review、60 not_applicable。score 复核 7035 个逐题结果；report 完整生成。
 - 外部 `human-review-packet.json` 包含 20 个高 Strict/Equivalent 差异样本、10 个对照和 10 个 needs_review mapping。SHA-256 `53bfb4e2a1b2ba55a9c63b0c0b4b14214bb0e05802bd98a2c9c2a901784bb410`，全部为 `pending_human_review`，尚无 reviewer 或阈值批准。
+
+### 最终参数网格复核（2026-10-22）
+
+24 个唯一 full-hybrid 参数组合已全部成功执行，保留 24120 个逐题结果（20256 valid、2424 needs_review、1440 not_applicable），0 system failure、0 external request。`report` 内部重新执行 score/hash 校验，完整复核并生成 `report.json` / `report.md`；小型指标、完整参数和工件 SHA-256 见 `qasper-dev-sweep-20261021.json`。目录和文件中的 `20261021` 是运行发起日期，最终报告复核于 2026-10-22 完成。
+
+本轮固定参数的无重排 full-hybrid 为 StrictHit@5 0.6303、EquivalentHit@5 0.6967；24 点 fixture lexical reranker 网格的对应范围为 0.3448–0.3626 与 0.6090–0.6220。这是开发集、固定冻结分母上的诊断观察，不是生产 reranker 结论、显著性检验或发布决定；没有据此改变任何生产默认策略。
+
+中文逐题清单 `human-review-checklist.md` 的 SHA-256 为 `ae4f1f88c0e9159f74460c39ee86ab05ae9837924a8a8d6a0dd4eb0b560bd024`。JSON 和 Markdown 原文均留在仓库外，reviewed cases 仍为 0。
+
+代码与必要依赖已提交 `87aa6e15`。仅剩 `6.3` 的完整 multi-query 缓存/成功复跑，以及 `6.4` 的人工审核与 overlap 策略批准；变更尚不应归档为全部完成。
