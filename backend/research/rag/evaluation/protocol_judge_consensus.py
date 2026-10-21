@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from pydantic import Field, model_validator
 
@@ -210,20 +211,47 @@ async def _ask(
     return _validated(request, judgment) or judgment
 
 
-async def resolve_by_consensus(
+@dataclass(frozen=True)
+class JudgmentCollection:
+    """Every judge's validated answer (or failure reason) for every request."""
+
+    judge_keys: tuple[str, ...]
+    requests: tuple[FactEntailmentRequest, ...]
+    answers: tuple[tuple[FactEntailmentJudgment | str, ...], ...]
+
+    def labels_for(self, request_index: int, target_id: str) -> dict[str, EntailmentLabel] | None:
+        """Labels by judge for one target, or None when any judge failed."""
+
+        per_request = self.answers[request_index]
+        if any(isinstance(item, str) for item in per_request):
+            return None
+        labels: dict[str, EntailmentLabel] = {}
+        for key, judgment in zip(self.judge_keys, per_request, strict=True):
+            assert not isinstance(judgment, str)
+            labels[key] = next(
+                entry.label for entry in judgment.judgments if entry.target_id == target_id
+            )
+        return labels
+
+
+def _validate_panel(judges: Sequence[FactEntailmentJudgePort]) -> tuple[str, ...]:
+    if len(judges) < 2:
+        raise ValueError("consensus requires at least two judges")
+    providers = [judge.identity.provider.casefold() for judge in judges]
+    if len(set(providers)) != len(providers):
+        raise ValueError("consensus judges must come from distinct providers")
+    return tuple(judge.identity.key for judge in judges)
+
+
+async def collect_judgments(
     requests: Sequence[FactEntailmentRequest],
     judges: Sequence[FactEntailmentJudgePort],
     *,
     max_concurrency: int = 4,
-) -> tuple[tuple[SemanticResolution, ...], ConsensusReport]:
-    """Resolve pending pairs only where all independent judges agree."""
+) -> JudgmentCollection:
+    """Ask every independent judge every request, bounded by ``max_concurrency``."""
 
-    if len(judges) < 2:
-        raise ValueError("consensus requires at least two judges")
-    keys = [judge.identity.key for judge in judges]
-    providers = [judge.identity.provider.casefold() for judge in judges]
-    if len(set(providers)) != len(providers):
-        raise ValueError("consensus judges must come from distinct providers")
+    keys = _validate_panel(judges)
     if max_concurrency < 1:
         raise ValueError("max_concurrency must be positive")
     semaphore = asyncio.Semaphore(max_concurrency)
@@ -231,13 +259,26 @@ async def resolve_by_consensus(
         asyncio.gather(*(_ask(judge, request, semaphore) for judge in judges))
         for request in requests
     ))
+    return JudgmentCollection(
+        judge_keys=keys,
+        requests=tuple(requests),
+        answers=tuple(tuple(item) for item in answers),
+    )
+
+
+def merge_consensus(
+    collection: JudgmentCollection,
+) -> tuple[tuple[SemanticResolution, ...], ConsensusReport]:
+    """Turn unanimous labels into resolutions; account for every other pair."""
+
+    keys = list(collection.judge_keys)
     resolver = f"{JUDGE_CONSENSUS_RULE_VERSION}:" + "|".join(sorted(keys))
     resolutions: list[SemanticResolution] = []
     disagreements: list[ConsensusDisagreement] = []
     failures: list[ConsensusFailure] = []
     label_counts: dict[str, Counter[str]] = {key: Counter() for key in keys}
     pending_pairs = unjudged = 0
-    for request, per_request in zip(requests, answers, strict=True):
+    for request, per_request in zip(collection.requests, collection.answers, strict=True):
         pending_pairs += len(request.targets)
         failed = [
             (key, item) for key, item in zip(keys, per_request, strict=True) if isinstance(item, str)
@@ -283,8 +324,8 @@ async def resolve_by_consensus(
             ))
     report = ConsensusReport(
         judges=tuple(sorted(keys)),
-        requests=len(requests),
-        judge_calls=len(requests) * len(judges),
+        requests=len(collection.requests),
+        judge_calls=len(collection.requests) * len(keys),
         pending_pairs=pending_pairs,
         resolved_pairs=len(resolutions),
         disagreements=tuple(disagreements),
@@ -295,11 +336,26 @@ async def resolve_by_consensus(
     return tuple(resolutions), report
 
 
+async def resolve_by_consensus(
+    requests: Sequence[FactEntailmentRequest],
+    judges: Sequence[FactEntailmentJudgePort],
+    *,
+    max_concurrency: int = 4,
+) -> tuple[tuple[SemanticResolution, ...], ConsensusReport]:
+    """Resolve pending pairs only where all independent judges agree."""
+
+    collection = await collect_judgments(requests, judges, max_concurrency=max_concurrency)
+    return merge_consensus(collection)
+
+
 __all__ = [
     "JUDGE_CONSENSUS_RULE_VERSION",
     "ConsensusDisagreement",
     "ConsensusFailure",
     "ConsensusReport",
+    "JudgmentCollection",
     "build_entailment_requests",
+    "collect_judgments",
+    "merge_consensus",
     "resolve_by_consensus",
 ]
