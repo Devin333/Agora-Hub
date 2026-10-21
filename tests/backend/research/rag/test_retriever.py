@@ -312,6 +312,32 @@ def test_numerical_result_records_multi_route_plan_and_filter_groups():
     } >= {"table_chunks", "result_paragraphs"}
 
 
+def test_table_query_falls_back_to_table_reference_paragraph_when_table_chunk_is_missing():
+    paragraph = _chunk(
+        "para-table-reference",
+        section_title="Dataset Statistics",
+        content="The number of training, development, and test datapoints is shown in Table 2.",
+    )
+    store = _ScriptedChunkStore([paragraph], search_order=["para-table-reference"])
+    retriever = ResearchRetriever(store, policy=RetrievalPolicy(overfetch_multiplier=1))
+
+    result = retriever.retrieve(
+        RetrievalRequest(
+            paper_id="p1",
+            question="What does the text say is shown in Table 2 regarding the datasets?",
+            limit=5,
+        )
+    )
+
+    assert result.intent == "table_query"
+    assert [chunk.chunk_id for chunk in result.child_chunks] == ["para-table-reference"]
+    assert result.metadata["candidate_filter_group_count"] == 2
+    assert {tuple(sorted(call["filters"].items())) for call in store.calls} >= {
+        (("chunk_type", "table"),),
+        (("chunk_type", "paragraph"),),
+    }
+
+
 def test_tenant_filter_merges_with_route_filters_and_excludes_other_tenants():
     tenant_table = _chunk(
         "tbl-tenant-a",

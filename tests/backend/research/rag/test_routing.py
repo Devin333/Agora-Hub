@@ -164,3 +164,7 @@ def test_live_answer_table_result_questions_keep_table_route_precedence(question
     assert classify_query_intent(question) == "table_query"
     assert route.intent == "table_query"
     assert route.recall_routes == ("table_chunks", "caption_fields", "table_context", "result_context")
+    assert route.candidate_filter_groups == (
+        {"chunk_type": "table"},
+        {"chunk_type": "paragraph"},
+    )

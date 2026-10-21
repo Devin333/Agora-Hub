@@ -93,9 +93,28 @@ class RetrievalPipeline:
         child_chunks = filter_chunks_for_request(ranking_result.child_chunks, request)
         child_chunks = self._structural_expander.expand(child_chunks, request, route)
         child_chunks = filter_chunks_for_request(child_chunks, request)
+        # Table queries should remain table-first when a real table chunk exists.
+        # Paragraph candidates are still queried as a fallback for parsers that
+        # only preserve the table reference in surrounding prose. Apply this
+        # preference after supplemental table lookup because the table may have
+        # been recovered there when a paragraph ranked above it.
         supplemental_table_chunks = self._supplemental_table_expander.expand(child_chunks, request, route)
         supplemental_table_chunks = filter_chunks_for_request(supplemental_table_chunks, request)
         child_chunks.extend(supplemental_table_chunks)
+        if route.intent == "table_query":
+            table_anchors = [
+                chunk for chunk in child_chunks
+                if chunk.chunk_type == "table"
+                or chunk.has_table
+                or bool(chunk.metadata.get("table_id"))
+                or bool(chunk.metadata.get("parent_table_chunk_id"))
+            ]
+            if table_anchors:
+                table_ids = {chunk.chunk_id for chunk in table_anchors}
+                child_chunks = [
+                    chunk for chunk in child_chunks
+                    if chunk.chunk_id in table_ids or bool(chunk.metadata.get("expansion_reason"))
+                ]
         top_score = scored[0][1] if scored else 0.0
 
         parent_chunks, parent_metrics = self._parent_expander.expand(child_chunks, request, route)

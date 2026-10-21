@@ -688,12 +688,26 @@ def _needs_extractive_fallback(answer: str) -> bool:
 
 def _looks_like_abstention_answer(answer: str) -> bool:
     lowered = str(answer or "").casefold()
+    if any(anchor in lowered for anchor in ("provided context", "provided passage", "provided passages", "the passages")):
+        if re.search(r"\bnot\s+(?:a|an|the|any)\b", lowered):
+            return True
     return any(
         marker in lowered
         for marker in (
             "provided context does not",
             "provided passages do not",
             "not in the provided context",
+            "does not disclose",
+            "does not report",
+            "does not address",
+            "do not contain",
+            "do not report",
+            "do not address",
+            "insufficient to answer",
+            "contains no",
+            "contain no",
+            "contains nothing about",
+            "contain nothing about",
             "insufficient evidence",
             "cannot determine",
             "cannot answer",

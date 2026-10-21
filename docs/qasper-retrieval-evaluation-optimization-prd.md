@@ -175,3 +175,13 @@ not_applicable
 7. 最后再考虑 embedding 模型比较
 8. 形成生产配置变更提案
 ```
+
+## 9. 实施与验收状态（2026-10-21）
+
+实现与使用入口见 `docs/qasper-retrieval-evaluation.md`，可恢复的工作状态见 `codex-handoff-qasper-retrieval-evaluation-optimization.md` 和 OpenSpec `tasks.md`。基线身份只代表对应的历史/重建运行，不覆写其分母或补造历史代码指纹。
+
+当前冻结映射覆盖全部 1005 道问题，分为 844 道 valid mapping、101 道 needs_review、60 道 not_applicable；这不等价于历史摘要的 888 道可映射题。253 条 float evidence 与 163 条 unanswerable annotation 继续作为独立单位保留，不从 planned denominator 中静默删除。
+
+现有离线 cache 对 multi-query 缺少 982 个必需精确文本 key，影响全部 844 道可评测题。六个单查询 profile 有诊断结果，第七个 profile 的失败不计作实验完成；需要完整同模型 cache 后再验收七组消融。未授权的 provider 调用、向量替代和跳过 query 变体均不可用于消除该缺口。
+
+人工差异样本复核和 overlap 阈值冻结仍未完成。程序可以生成候选包，但不能自批人类审核；`pending_human_review` 保留。生产策略默认值不变，任何生产切换继续需要独立变更。

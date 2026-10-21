@@ -220,9 +220,16 @@ def build_retrieval_route(question: str) -> RetrievalRoute:
     if intent == "table_query":
         return RetrievalRoute(
             intent=intent,
-            chunk_type_filter=["table"],
+            # A table question is often answered by the prose that introduces,
+            # interprets, or summarizes a table. Keep table chunks first, but
+            # do not hard-filter paragraphs: parsers may expose the table
+            # reference without producing a standalone table chunk.
+            chunk_type_filter=["table", "paragraph"],
             recall_routes=("table_chunks", "caption_fields", "table_context", "result_context"),
-            extra_filters={"chunk_type": "table"},
+            candidate_filter_groups=(
+                {"chunk_type": "table"},
+                {"chunk_type": "paragraph"},
+            ),
         )
 
     if intent == "formula_query":

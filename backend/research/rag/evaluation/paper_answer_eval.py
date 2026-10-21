@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +15,17 @@ _ABSTAIN_MARKERS = (
     "cannot answer",
     "does not contain",
     "does not discuss",
+    "does not disclose",
+    "does not report",
+    "does not address",
+    "do not contain",
+    "do not report",
+    "do not address",
+    "insufficient to answer",
+    "contains no",
+    "contain no",
+    "contains nothing about",
+    "contain nothing about",
     "insufficient evidence",
     "not enough evidence",
     "not stated",
@@ -46,9 +59,20 @@ OVERCONSERVATIVE_ABSTENTION_REASON = "abstained_over_conservative"
 WRONG_ABSTENTION_REASON = "abstention_wrong"
 
 
+def _looks_like_eval_abstention(answer: str) -> bool:
+    text = " ".join(str(answer or "").casefold().split())
+    if looks_like_abstention(text, abstain_markers=_ABSTAIN_MARKERS):
+        return True
+    has_context_anchor = any(
+        anchor in text
+        for anchor in ("provided context", "provided passage", "provided passages", "the passages")
+    )
+    return has_context_anchor and bool(re.search(r"\bnot\s+(?:a|an|the|any)\b", text))
+
+
 def abstention_failure_reason(expected_behavior: str, answer: str) -> str:
     expected = str(expected_behavior or "answer").strip().casefold()
-    abstained = looks_like_abstention(str(answer or ""), abstain_markers=_ABSTAIN_MARKERS)
+    abstained = _looks_like_eval_abstention(str(answer or ""))
     if expected == "answer" and abstained:
         return OVERCONSERVATIVE_ABSTENTION_REASON
     if expected == "abstain" and not abstained:

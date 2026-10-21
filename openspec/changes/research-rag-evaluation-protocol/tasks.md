@@ -1,4 +1,4 @@
-本清单用于后续实现；本次仅提交规格，所有实现、人工标注及 live 验收任务保持未完成。按依赖顺序推进；代码就绪不等于真实数据或质量验收就绪。人工审核、材料使用范围、凭据、预算和正式阈值必须取得真实输入，不得用 fixture 或自动审批替代。
+本清单用于分阶段实现与验收；2026-10-14 已开始在 `codex/research-rag-evaluation-protocol` 分支实现。勾选只表示该项已有对应代码/证据，未勾选的人工标注及 live 验收不能由合同测试替代。按依赖顺序推进；代码就绪不等于真实数据或质量验收就绪。人工审核、材料使用范围、凭据、预算和正式阈值必须取得真实输入，不得用 fixture 或自动审批替代。
 
 每个代码提交前运行范围匹配的检查及 `python -m scripts.dev smoke`；检查失败须修复根因，不能削弱断言或以本变更外的脏文件替代交付。实现过程中保持 `openspec validate research-rag-evaluation-protocol --strict` 通过。真实实验的质量结果允许为 `fail`；不得为了让结果变成 `pass` 而泄漏 gold、修改 held-out、隐藏失败或反复挑选输出。
 
@@ -14,18 +14,18 @@
 
 ## 1. 契约与现有入口基线
 
-- [ ] 1.1 核对既有 evaluator、application/composition、报告、CLI 和 CI 的实际调用链，记录复用点及与 `research-evidence-context-quality-foundation` 的边界；不另建 evaluator 或 run/event store。
-- [ ] 1.2 固定 `DatasetManifest`、`EvaluationCase`、`EvaluationRun`、`EvaluationScore` 的版本化 schema、枚举、显式空值、内容摘要和跨记录引用规则，统一既有 `EvidenceQAPair` 的消费边界。
-- [ ] 1.3 实现 `QuestionInput` / `ReferenceLabel` 的物理及类型分离、严格字段校验和清洁运行控制参数；加入完整 case、额外 gold 字段及答案册路径/回调不能进入 A/C 的负向测试。
+- [x] 1.1 核对既有 evaluator、application/composition、报告、CLI 和 CI 的实际调用链，记录复用点及与 `research-evidence-context-quality-foundation` 的边界；不另建 evaluator 或 run/event store。
+- [x] 1.2 固定 `DatasetManifest`、`EvaluationCase`、`EvaluationRun`、`EvaluationScore` 的版本化 schema、枚举、显式空值、内容摘要和跨记录引用规则，统一既有 `EvidenceQAPair` 的消费边界。
+- [x] 1.3 实现 `QuestionInput` / `ReferenceLabel` 的物理及类型分离、严格字段校验和清洁运行控制参数；加入完整 case、额外 gold 字段及答案册路径/回调不能进入 A/C 的负向测试。
 - [ ] 1.4 扩展既有结构化 evaluation options 与 application service 接口，明确 track/profile、manifest、注入端口、工件引用和恢复选项，保证库调用不依赖 CLI argv。
-- [ ] 1.5 建立指标注册合同，声明 metric/version、输入、适用性、scope、粒度、方向、聚合与缺失策略；实现 nullable score 到有效 `MetricValue` 的受控投影。
-- [ ] 1.6 为旧命令参数、诊断返回码、旧阈值算法和基础报告字段建立兼容测试；验证旧 live/real-corpus 调用不会自动取得 production 资格。
+- [x] 1.5 建立指标注册合同，声明 metric/version、输入、适用性、scope、粒度、方向、聚合与缺失策略；实现 nullable score 到有效 `MetricValue` 的受控投影。
+- [x] 1.6 为旧命令参数、诊断返回码、旧阈值算法和基础报告字段建立兼容测试；验证旧 live/real-corpus 调用不会自动取得 production 资格。
 
 ## 2. 独立题库制作、来源和冻结
 
 - [ ] 2.1 实现独立候选制作与导入流程，记录 `abstract_only` / `real_user` / `fulltext_targeted` / 合成来源；保存出题输入指纹、问题冻结时间和独立全文标注记录，禁止正式 run 动态造题。
 - [ ] 2.2 实现 `draft -> annotated -> reviewed -> frozen` 生命周期及人审终审记录；将材料缺失、无法裁定与经完整原文核查的 `unanswerable` 分开，拒绝 LLM 自动冒充审核者。
-- [ ] 2.3 实现版本化原文锚点、原子 `reference_claims` 及必要证据组/替代充分集合校验，覆盖 PDF/LaTeX、段落、表格、公式与图形定位，不只绑定 chunk ID。
+- [x] 2.3 实现版本化原文锚点、原子 `reference_claims` 及必要证据组/替代充分集合校验，覆盖 PDF/LaTeX、段落、表格、公式与图形定位，不只绑定 chunk ID。
 - [ ] 2.4 实现完整源语料 manifest 与独立 scope 校验，保留非 gold 内容和声明的干扰论文；区分源材料不全与待测 parser 漏证据，后者保留失败及分母。
 - [ ] 2.5 实现按 parser/chunker/index snapshot 生成的锚点映射工件，支持跨 chunk、部分覆盖、等价与歧义；增加过期映射、重复证据、有效原文被解析丢失的测试。
 - [ ] 2.6 实现 paper/version/near-duplicate family 分组、dev/heldout 成员校验及暴露史；允许合法索引 heldout 原文，但拒绝标签、答案、题目派生笔记或调参反馈污染。
@@ -33,7 +33,7 @@
 
 ## 3. 既有 79 题审计与开发试点材料
 
-- [ ] 3.1 对 `F:/github/NewsRoom/data/eval/golden_set.json` 和现有语料做只读盘点，输出题目/论文/暴露史清单，并将 79 题固定划分为四个不重叠审计批次，每批不超过 20 题。
+- [x] 3.1 对 `F:/github/NewsRoom/data/eval/golden_set.json` 和现有语料做只读盘点，输出题目/论文/暴露史清单，并将 79 题固定划分为四个不重叠审计批次，每批不超过 20 题。
 - [ ] 3.2 完成第一批来源、可答性、参考事实和证据位置核查，逐题记录 `reviewed` / `retired` / `needs_review` 去向及真实审核信息，不回填不存在的历史。
 - [ ] 3.3 按同一审核协议完成第二批审计，保存原始 case ID 与新契约的映射及未解决项。
 - [ ] 3.4 按同一审核协议完成第三批审计，保存原始 case ID 与新契约的映射及未解决项。
@@ -67,7 +67,7 @@
 - [ ] 6.3 实现引用解析与 claim/原文精确绑定、数值/单位/显式实验条件规则，保存 rule/version 和证据；无法确定的语义转 judge/复核，不以格式正确或关键词相同判支持。
 - [ ] 6.4 实现事实、完整性、faithfulness、citation support/coverage 的独立观察及输入边界，验证事实正确但无上下文支持、忠实但遗漏、引用不支持和无引用事实答案等场景。
 - [ ] 6.5 实现 reviewed answerability 驱动的正确拒答率与误拒答率，版本化部分回答/夹带结论识别；测试空答案、runtime error、零分母和应引用未引用不能自动满分。
-- [ ] 6.6 实现 `ok/error/not_applicable/needs_review`、planned/applicable/valid/error/NA/pending 计数及端到端 known_success/known_failure/unknown 分母；验证 runtime 失败不删题，judge 失败不冒充模型错误或通过。
+- [x] 6.6 实现 `ok/error/not_applicable/needs_review`、planned/applicable/valid/error/NA/pending 计数及端到端 known_success/known_failure/unknown 分母；验证 runtime 失败不删题，judge 失败不冒充模型错误或通过。
 - [ ] 6.7 实现分阶段耗时、P50/P95、样本量、冷热缓存、并发和 timeout/SLO 记录；报告成功请求分位数的条件范围，不以幸存请求掩盖失败。
 
 ## 7. 可选语义 judge 与人工校准

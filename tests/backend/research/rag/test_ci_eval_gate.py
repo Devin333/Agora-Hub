@@ -33,6 +33,18 @@ def test_ci_eval_gate_writes_evidence_and_promotion_reports(tmp_path: Path) -> N
 
     assert evidence["metadata"]["mode"] == "live_retrieval"
     assert evidence["metadata"]["answer_eval_mode"] == "deterministic"
+    assert evidence["metadata"]["protocol"] == "legacy_evidence_regression_diagnostic"
+    assert evidence["metadata"]["track"] == "retrieval"
+    assert evidence["metadata"]["execution_profile"] == "fixture"
+    assert evidence["metadata"]["purpose"] == "diagnostic_regression"
+    assert evidence["metadata"]["component_identity"]["retrieval_adapter"] == (
+        "in_memory_chunk_store_with_sha256_hash_field_index"
+    )
+    assert evidence["metadata"]["component_identity"]["answer_adapter"] == (
+        "deterministic_gold_supported_answer"
+    )
+    assert evidence["metadata"]["gold_context_used"] is True
+    assert evidence["metadata"]["production_qualification"]["eligible"] is False
     assert evidence["metadata"]["total_pairs"] > 0
     assert evidence["metadata"]["expected_behavior_counts"]["abstain"] > 0
     assert evidence["metadata"]["expected_behavior_counts"]["answer"] > 0
