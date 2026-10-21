@@ -5,6 +5,19 @@
   "classification_values": ["migrate", "trusted_exemption", "blocked"],
   "callers": [
     {
+      "id": "research-omnidocbench-offline-scorer-process",
+      "kind": "subprocess",
+      "path": "backend/research/rag/evaluation/omnidocbench_adapter.py",
+      "symbol": "_git; _terminate_windows_process_tree; run_omnidocbench_official_scorer",
+      "classification": "blocked",
+      "state": "follow-up-required",
+      "owner": "research-parsing-evaluation",
+      "rationale": "The optional frozen official OmniDocBench evaluator owns bounded offline checkout inspection, scorer launch and process-tree cleanup. These subprocess call sites are not yet migrated to an admitted execution-environment profile; inventory registration does not approve production use.",
+      "non_harness_managed_proof": "This adapter scores immutable staged annotation/prediction artifacts only; it is not a PDF parser or recovery provider. Its diagnostic process result is not a production Harness execution receipt. Production parsing, promotion and held-out acceptance must not use these subprocesses as proof of production execution.",
+      "review_by": "2026-11-21",
+      "check": "tests/backend/research/rag/test_omnidocbench_adapter.py; tests/architecture/test_production_caller_inventory.py"
+    },
+    {
       "id": "docker-provider-process",
       "kind": "subprocess",
       "path": "infrastructure/execution_environment/docker.py",
@@ -120,6 +133,19 @@
       "non_harness_managed_proof": "Research constructs its existing durable event runtime independently of RuntimeExecutionComposition; execution wiring neither binds nor replaces that authority.",
       "review_by": "2026-11-26",
       "check": "tests/interfaces/composition/test_research_composition.py"
+    },
+    {
+      "id": "qasper-readonly-git-identity-process",
+      "kind": "subprocess",
+      "path": "infrastructure/research/qasper_evaluation.py",
+      "symbol": "FilesystemQasperAssets._git_probe; FilesystemQasperAssets.read_code_identity",
+      "classification": "blocked",
+      "state": "follow-up-required",
+      "owner": "research-evaluation",
+      "rationale": "The local QASPER diagnostic adapter reads repository revision and scoped porcelain status to bind immutable evaluation provenance. These git subprocesses are not admitted as production Harness execution and registration does not authorize production use.",
+      "non_harness_managed_proof": "Read-only repository metadata only; QASPER runs remain offline fixtures and do not execute production tools, mutate indexes, or produce Harness execution receipts. This identity probe cannot authorize production routing, quality, or publication decisions.",
+      "review_by": "2026-11-21",
+      "check": "tests/backend/research/application/test_qasper_assets.py; tests/architecture/test_production_caller_inventory.py"
     }
   ]
 }

@@ -32,7 +32,7 @@ _DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]*$")
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COLLECTION_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
-_PARSER_BACKENDS = {"marker", "mineru", "pymupdf"}
+_PARSER_BACKENDS = {"marker", "pymupdf"}
 _RESEARCH_RUN_SCHEMA_VERSIONS = ("v1", "v2")
 
 
@@ -741,7 +741,7 @@ def _research_parser_settings_from_env(
                     "NEWS_RESEARCH_PARSER_BACKENDS",
                     "NEWSROOM_PDF_PARSER_CASCADE",
                 ),
-                "mineru,marker",
+                "marker",
             )
         ),
         allow_abstract_fallback=_env_bool(

@@ -114,7 +114,6 @@ from backend.research.graphs.task_plan import (
 )
 from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
-    RESEARCH_MINERU_PROFILE_ID,
 )
 from interfaces.models.actor import ActorContext
 
@@ -813,13 +812,6 @@ def test_default_research_pdf_parser_fails_closed_when_docker_is_unavailable(
     )
     registry.register(provider)
     profiles = ExecutionProfileRegistry()
-    profiles.register(
-        RESEARCH_MINERU_PROFILE_ID,
-        ExecutionProfile.external_process(
-            provider_id="docker",
-            allowed_argv_prefixes=(("mineru",),),
-        ),
-    )
     profiles.register(
         RESEARCH_MARKER_PROFILE_ID,
         ExecutionProfile.external_process(

@@ -47,7 +47,7 @@ def test_from_env_builds_immutable_defaults_without_creating_storage(
     assert settings.llm.provider == "openai-compatible"
     assert settings.llm.api_key_env == "DASHSCOPE_API_KEY"
     assert settings.llm.max_attempts == 2
-    assert settings.parser.backends == ("mineru", "marker")
+    assert settings.parser.backends == ("marker",)
     assert settings.parser.allow_abstract_fallback is True
     assert settings.rag.backend == "local"
     assert settings.rag.qdrant_url is None
@@ -318,7 +318,7 @@ def test_from_env_uses_existing_shared_llm_artifact_and_parser_names(
         "NEWS_LLM_API_KEY_ENV": "SHARED_LLM_KEY",
         "SHARED_LLM_KEY": "shared-secret",
         "NEWS_ARTIFACT_ROOT": "shared-runs",
-        "NEWSROOM_PDF_PARSER_CASCADE": "mineru,pymupdf",
+        "NEWSROOM_PDF_PARSER_CASCADE": "marker,pymupdf",
     }
 
     settings = ResearchRuntimeSettings.from_env(env, cwd=tmp_path)
@@ -327,7 +327,7 @@ def test_from_env_uses_existing_shared_llm_artifact_and_parser_names(
     assert settings.llm.model == "shared-model"
     assert settings.llm.api_key_env == "SHARED_LLM_KEY"
     assert settings.artifact.root == (tmp_path / "shared-runs").resolve()
-    assert settings.parser.backends == ("mineru", "pymupdf")
+    assert settings.parser.backends == ("marker", "pymupdf")
 
 
 def test_from_env_uses_standard_openai_credential_when_no_key_indirection_is_set(
@@ -445,6 +445,7 @@ def test_from_env_rejects_unsafe_endpoint_or_secret_indirection_without_echo(
     [
         ("NEWS_RESEARCH_SOURCE_PROVIDER", "rss", "research.source.provider"),
         ("NEWS_RESEARCH_PARSER_BACKENDS", "marker,marker", "research.parser.backends"),
+        ("NEWS_RESEARCH_PARSER_BACKENDS", "mineru,marker", "research.parser.backends"),
         ("NEWS_RESEARCH_ALLOW_ABSTRACT_FALLBACK", "sometimes", "research.parser.abstract_fallback"),
         ("NEWS_RESEARCH_RAG_BACKEND", "memory", "research.rag.backend"),
         ("NEWS_RESEARCH_RAG_COLLECTION", "bad collection", "research.rag.collection"),

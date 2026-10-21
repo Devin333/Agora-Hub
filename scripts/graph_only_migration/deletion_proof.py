@@ -203,13 +203,7 @@ class Reference:
 def build_deletion_proof(project_root: Path) -> dict[str, Any]:
     tracked = _tracked_files(project_root)
     deleted = _deleted_paths(project_root)
-    source_files = [
-        path
-        for path in tracked
-        if path.endswith(".py")
-        and _in_production_roots(path)
-        and not path.startswith("scripts/graph_only_migration/")
-    ]
+    source_files = _tracked_source_files(project_root, tracked)
     references, allowlisted_references = _scan_sources(project_root, source_files)
     grouped_deletions = {
         group: sorted(
@@ -296,8 +290,27 @@ def _migration_boundary_proof(project_root: Path) -> dict[str, Any]:
 
 
 def _tracked_files(project_root: Path) -> list[str]:
-    output = _git(project_root, ["ls-files", "-z"])
+    return _git_path_list(project_root, ["ls-files", "-z"])
+
+
+def _git_path_list(project_root: Path, args: list[str]) -> list[str]:
+    output = _git(project_root, args)
     return sorted(item for item in output.split("\0") if item)
+
+
+def _tracked_source_files(project_root: Path, tracked: Iterable[str]) -> list[str]:
+    """Return tracked production sources excluding explicit worktree deletions."""
+    worktree_deleted = set(
+        _git_path_list(project_root, ["ls-files", "--deleted", "-z"])
+    )
+    return sorted(
+        path
+        for path in tracked
+        if path.endswith(".py")
+        and _in_production_roots(path)
+        and not path.startswith("scripts/graph_only_migration/")
+        and path not in worktree_deleted
+    )
 
 
 def _deleted_paths(project_root: Path) -> list[str]:

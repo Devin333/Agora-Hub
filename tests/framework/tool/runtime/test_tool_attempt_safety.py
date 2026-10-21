@@ -6,6 +6,7 @@ import time
 import pytest
 
 import framework.tool.runtime.executor as executor_module
+import framework.tool.runtime.timeout as timeout_module
 from framework.shared.attempts import (
     AttemptContext,
     AttemptSupervisor,
@@ -31,6 +32,11 @@ def attempt_clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     now = [0.0]
     monkeypatch.setattr(
         executor_module,
+        "AttemptSupervisor",
+        lambda **options: AttemptSupervisor(clock=lambda: now[0], **options),
+    )
+    monkeypatch.setattr(
+        timeout_module,
         "AttemptSupervisor",
         lambda **options: AttemptSupervisor(clock=lambda: now[0], **options),
     )
@@ -157,7 +163,9 @@ def test_confirmed_read_only_timeout_retries_with_stable_logical_key(
     assert terminal_events[0].payload["indeterminate"] is False
 
 
-def test_external_write_timeout_is_indeterminate_even_after_confirmed_exit() -> None:
+def test_external_write_timeout_is_indeterminate_even_after_confirmed_exit(
+    attempt_clock: list[float],
+) -> None:
     calls = 0
     effects: list[str] = []
 
@@ -165,6 +173,9 @@ def test_external_write_timeout_is_indeterminate_even_after_confirmed_exit() -> 
         nonlocal calls
         calls += 1
         effects.append("accepted")
+        # Expire the deadline only after the external write has entered execution.
+        # The safety contract under test starts at that boundary, not at thread launch.
+        attempt_clock[0] = 0.02
         context = current_attempt_context()
         assert context is not None
         assert context.cancel_event.wait(1)
@@ -196,12 +207,15 @@ def test_external_write_timeout_is_indeterminate_even_after_confirmed_exit() -> 
     assert observation.result.indeterminate is True
     assert observation.result.error_envelope is not None
     assert observation.result.error_envelope["retryable"] is False
+    assert observation.result.retry_count == 0
     assert calls == 1
     assert effects == ["accepted"]
-    terminal = next(
-        event for event in executor.list_events() if event.event_type == "attempt_terminal"
-    )
-    assert terminal.payload["state"] == "INDETERMINATE"
+    terminal_events = [
+        event for event in executor.list_events()
+        if event.event_type == "attempt_terminal"
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0].payload["state"] == "INDETERMINATE"
 
 
 def test_external_write_ordinary_failure_is_indeterminate_and_not_retried() -> None:
@@ -247,11 +261,14 @@ def test_external_write_ordinary_failure_is_indeterminate_and_not_retried() -> N
 
 
 class _BlockingMCPClient:
-    def __init__(self) -> None:
+    def __init__(self, attempt_clock: list[float]) -> None:
+        self._attempt_clock = attempt_clock
         self.release = threading.Event()
         self.finished = threading.Event()
 
     def list_tools(self, _server: MCPServerConfig) -> list[dict[str, object]]:
+        # Keep the short deadline deterministic while exercising a real worker.
+        self._attempt_clock[0] = 0.02
         self.release.wait(1)
         self.finished.set()
         return []
@@ -265,8 +282,10 @@ class _BlockingMCPClient:
         return None
 
 
-def test_mcp_timeout_does_not_report_future_cancellation_as_termination() -> None:
-    client = _BlockingMCPClient()
+def test_mcp_timeout_does_not_report_future_cancellation_as_termination(
+    attempt_clock: list[float],
+) -> None:
+    client = _BlockingMCPClient(attempt_clock)
     adapter = MCPToolAdapter(client)
     server = MCPServerConfig(
         server_id="blocking",

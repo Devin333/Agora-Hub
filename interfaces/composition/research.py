@@ -65,12 +65,12 @@ from backend.research.document.cascade_parser import (
     PyMuPDFTextDocumentParser,
     SelectableTextPdfDocumentParser,
 )
+from backend.research.ports.document_parser import DocumentParserPort
 from backend.research.document.format_router import MultiFormatDocumentParser
 from backend.research.document.chunk_manifest import ChunkManifestManager
 from backend.research.document.chunker import PaperDocumentChunker
 from backend.research.document.latex_compiler import ArxivLatexDocumentCompiler
 from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
-from backend.research.document.mineru_pdf_parser import MinerUPdfDocumentParser
 from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
@@ -164,7 +164,6 @@ from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.research.document_execution_adapter import ResearchParserExecutionAdapter
 from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
-    RESEARCH_MINERU_PROFILE_ID,
     build_research_execution_composition,
 )
 from framework.harness.ports import HarnessTransitionPort
@@ -2936,14 +2935,12 @@ def _build_research_pdf_parser(
     settings: ResearchParserSettings,
     *,
     execution_composition: Any | None = None,
-) -> CascadeDocumentParser:
+) -> DocumentParserPort:
     factories: dict[str, Callable[[], Any]] = {
         "marker": MarkerPdfDocumentParser,
-        "mineru": MinerUPdfDocumentParser,
     }
     profile_ids = {
         "marker": RESEARCH_MARKER_PROFILE_ID,
-        "mineru": RESEARCH_MINERU_PROFILE_ID,
     }
     backends = [
         (
@@ -2962,6 +2959,8 @@ def _build_research_pdf_parser(
         for backend in settings.backends
         if backend != "pymupdf"
     ]
+    if not backends:
+        return PyMuPDFTextDocumentParser()
     return CascadeDocumentParser(
         backends,
         fallback=PyMuPDFTextDocumentParser(),
