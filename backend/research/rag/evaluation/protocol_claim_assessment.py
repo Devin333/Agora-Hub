@@ -253,9 +253,14 @@ def assess_claim(
     actual_context: RAGContextPack | None,
     evidence_by_id: Mapping[str, tuple[EvidenceFactProjection, ...]],
     resolutions: ResolutionIndex,
+    reference_available: bool = True,
 ) -> ClaimFactAssessment:
+    """Assess one claim; without a reference only context grounding is decided."""
+
     fact = projection.fact if projection is not None else None
     bound_id = projection.reference_claim_id if projection is not None else None
+    if not reference_available and bound_id is not None:
+        raise ValueError("a claim cannot be aligned to a reference claim when no reference exists")
     reference = _assess_reference(
         claim.claim_id,
         fact,
@@ -263,7 +268,7 @@ def assess_claim(
         reference_by_id=reference_by_id,
         reference_claim_ids=reference_claim_ids,
         resolutions=resolutions,
-    )
+    ) if reference_available else _NO_REFERENCE
     context = _assess_context(
         claim.claim_id,
         fact,
@@ -311,6 +316,19 @@ class _ContextAssessment:
     passages: tuple[PassageDecision, ...]
     comparisons: tuple[TargetComparison, ...]
     applied: tuple[SemanticResolution, ...]
+
+
+# Without a reference, no claim is "covered by gold": the verdict then depends
+# only on whether the actual context grounds the claim.
+_NO_REFERENCE = _ReferenceAssessment(
+    decision=SemanticDecision.UNSUPPORTED,
+    aligned_id=None,
+    supported=(),
+    pending=(),
+    recall_pending=(),
+    comparisons=(),
+    applied=(),
+)
 
 
 def _assess_reference(

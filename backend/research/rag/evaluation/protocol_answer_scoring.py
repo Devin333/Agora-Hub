@@ -297,12 +297,11 @@ class AbstentionAggregateResult(ProtocolModel):
         return _observations_to_scores(self.observations, identity)
 
 
-class AnswerScoreResult(ProtocolModel):
+class _ScoreResultBase(ProtocolModel):
     case_id: NonEmptyStr
     candidate_answer_id: NonEmptyStr | None
     context_pack_id: NonEmptyStr | None
     citation_bindings: tuple[CitationBinding, ...]
-    abstention: AbstentionCaseObservation
     observations: tuple[AnswerMetricObservation, ...]
     claim_assessments: tuple[ClaimFactAssessment, ...] = ()
 
@@ -362,6 +361,18 @@ class AnswerScoreResult(ProtocolModel):
         if identity.case_id != self.case_id:
             raise ValueError("score identity case_id must match the scored case")
         return _observations_to_scores(self.observations, identity)
+
+
+class AnswerScoreResult(_ScoreResultBase):
+    """Scores of one answer against a reviewed reference."""
+
+    abstention: AbstentionCaseObservation
+
+
+class GroundedScoreResult(_ScoreResultBase):
+    """Reference-free scores: only grounding in the material actually given."""
+
+    context_kind: NonEmptyStr
 
 
 def parse_citation_bindings(
@@ -757,6 +768,124 @@ def score_answer(
 
 
 score_answer_candidate = score_answer
+
+_REFERENCE_ONLY_METRICS: frozenset[str] = frozenset({
+    "answer.fact_precision",
+    "answer.fact_recall",
+    "answer.fact_f1",
+    "answer.numeric_accuracy",
+    "answer.unit_accuracy",
+    "answer.condition_accuracy",
+})
+
+
+def score_grounded_answer(
+    *,
+    case_id: str,
+    candidate: GroundedAnswerCandidate,
+    actual_context: RAGContextPack,
+    context_kind: str,
+    candidate_facts: Sequence[CandidateFactProjection] = (),
+    evidence_facts: Sequence[EvidenceFactProjection] = (),
+    resolutions: Sequence[SemanticResolution] = (),
+) -> GroundedScoreResult:
+    """Score an answer that has no reference: grounding, contradiction, citations.
+
+    ``context_kind`` names what the context is (for example ``model_context`` or
+    ``cited_quotes``) so a report can never present quote-level grounding as
+    support by the full sources. Reference-only metrics are not applicable.
+    """
+
+    resolution_index = index_resolutions(resolutions)
+    if any(kind is ComparisonTargetKind.REFERENCE for _, kind, _ in resolution_index):
+        raise ValueError("reference resolutions cannot apply without a reference")
+    claims = tuple(candidate.claims)
+    if len({item.claim_id for item in claims}) != len(claims):
+        raise ValueError("candidate claim_id values must be unique")
+    candidate_by_id: dict[str, CandidateFactProjection] = {}
+    claim_ids = {item.claim_id for item in claims}
+    for projection in candidate_facts:
+        if projection.answer_claim_id not in claim_ids or projection.answer_claim_id in candidate_by_id:
+            raise ValueError("candidate facts must map one-to-one onto known answer claims")
+        candidate_by_id[projection.answer_claim_id] = projection
+    evidence_by_id = index_evidence_facts(evidence_facts, actual_context)
+    assessments = tuple(
+        assess_claim(
+            claim,
+            projection=candidate_by_id.get(claim.claim_id),
+            reference_by_id={},
+            reference_claim_ids=(),
+            actual_context=actual_context,
+            evidence_by_id=evidence_by_id,
+            resolutions=resolution_index,
+            reference_available=False,
+        )
+        for claim in claims
+    )
+    applied = [item for assessment in assessments for item in assessment.resolutions]
+    unused = set(resolution_index) - {item.key for item in applied}
+    if unused:
+        raise ValueError("resolutions target pairs that are not pending")
+    resolvers = sorted({item.resolver for item in applied})
+    bindings = parse_citation_bindings(
+        candidate=candidate, actual_context=actual_context, evidence_facts=evidence_facts,
+    )
+    evidence = (f"answer://{candidate.answer_id}", f"context://{actual_context.pack_id}")
+    provenance = {
+        "rule_version": DETERMINISTIC_SEMANTIC_RULE_VERSION,
+        "context_kind": context_kind,
+        "reference": "absent",
+        "candidate_projection_rules": sorted({
+            rule_key(item.rule_id, item.rule_version) for item in candidate_by_id.values()
+        }),
+        "evidence_projection_rules": sorted({
+            rule_key(item.rule_id, item.rule_version)
+            for values in evidence_by_id.values() for item in values
+        }),
+        "evidence_resolutions": len(applied),
+        "evidence_resolvers": resolvers,
+    }
+    contradicted, over_inference, unresolved = _score_claim_verdicts(
+        assessments=assessments, provenance=provenance, evidence=evidence,
+    )
+    faithfulness = _score_faithfulness(
+        assessments=assessments, actual_context=actual_context, provenance=provenance,
+        evidence=(evidence[0],),
+    )
+    support = _score_citation_support(
+        claims=claims, assessments=assessments, bindings=bindings, provenance=provenance, evidence=evidence,
+    )
+    coverage = _score_citation_coverage(
+        claims=claims, assessments=assessments, bindings=bindings, provenance=provenance, evidence=evidence,
+    )
+    measured = {
+        item.metric_id: item
+        for item in _attributed(
+            (contradicted, over_inference, unresolved, faithfulness, support, coverage), bool(resolvers),
+        )
+    }
+    observations = tuple(
+        measured.get(metric_id) or _na_observation(
+            metric_id=metric_id,
+            reason="metric requires a reference answer, which this case does not have",
+            provenance={"input_boundary": boundary, "reference": "absent", "context_kind": context_kind},
+            evidence=evidence,
+        )
+        for metric_id, boundary in _CASE_METRIC_BOUNDARIES
+    )
+    assert all(
+        item.status is ScoreStatus.NOT_APPLICABLE
+        for item in observations if item.metric_id in _REFERENCE_ONLY_METRICS
+    )
+    return GroundedScoreResult(
+        case_id=case_id,
+        candidate_answer_id=candidate.answer_id,
+        context_pack_id=actual_context.pack_id,
+        citation_bindings=bindings,
+        observations=observations,
+        claim_assessments=assessments,
+        context_kind=context_kind,
+    )
 
 
 def _score_answerable_case(
@@ -1647,6 +1776,7 @@ __all__ = [
     "ClaimVerdict",
     "ComparisonTargetKind",
     "EvidenceFactProjection",
+    "GroundedScoreResult",
     "PassageDecision",
     "PendingJudgment",
     "ResolvedDimension",
@@ -1670,4 +1800,5 @@ __all__ = [
     "register_answer_metrics",
     "score_answer",
     "score_answer_candidate",
+    "score_grounded_answer",
 ]

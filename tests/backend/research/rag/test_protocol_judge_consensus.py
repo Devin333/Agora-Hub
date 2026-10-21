@@ -250,3 +250,40 @@ def test_claim_without_a_projection_can_still_be_judged() -> None:
     final = score_answer(**inputs, resolutions=resolutions)
     assert final.claim_assessments[0].verdict is ClaimVerdict.OVER_INFERENCE
     assert final.unsupported_inference_rate.value == 1.0
+
+
+def test_grounded_scoring_without_reference_decides_only_context_metrics() -> None:
+    from backend.research.rag.evaluation.protocol_answer_scoring import score_grounded_answer
+
+    inputs = _inputs(with_split=True)
+    unbound = inputs["candidate_facts"][0].model_copy(update={"reference_claim_id": None})
+    result = score_grounded_answer(
+        case_id="report-1",
+        candidate=inputs["candidate"],
+        actual_context=inputs["actual_context"],
+        context_kind="cited_quotes",
+        candidate_facts=(unbound,),
+        evidence_facts=inputs["evidence_facts"],
+    )
+    assert result.context_kind == "cited_quotes"
+    assert result.claim_assessments[0].verdict is ClaimVerdict.GROUNDED_EXTRA
+    assert result.faithfulness.value == 1.0
+    assert result.unsupported_inference_rate.value == 0.0
+    for metric in ("answer.fact_precision", "answer.fact_recall", "answer.numeric_accuracy"):
+        assert result.observation(metric).status is ScoreStatus.NOT_APPLICABLE
+    assert all(item.target_kind is ComparisonTargetKind.EVIDENCE for item in result.pending_judgments())
+
+
+def test_grounded_scoring_rejects_reference_alignment() -> None:
+    from backend.research.rag.evaluation.protocol_answer_scoring import score_grounded_answer
+
+    inputs = _inputs()
+    with pytest.raises(ValueError, match="no reference exists"):
+        score_grounded_answer(
+            case_id="report-1",
+            candidate=inputs["candidate"],
+            actual_context=inputs["actual_context"],
+            context_kind="cited_quotes",
+            candidate_facts=inputs["candidate_facts"],
+            evidence_facts=inputs["evidence_facts"],
+        )
