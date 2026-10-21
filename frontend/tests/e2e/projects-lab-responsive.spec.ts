@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Page } from "./fixtures"
 
 const widths = [320, 375, 414, 768, 1024, 1280, 1440]
 

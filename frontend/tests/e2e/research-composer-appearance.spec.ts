@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test"
+import { expect, test } from "./fixtures"
 
 test("research composer has one rounded focus surface, grows with drafts and keeps accessible controls", async ({ page }, testInfo) => {
   let intentCalls = 0

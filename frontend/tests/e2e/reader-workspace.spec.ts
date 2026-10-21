@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test"
+import { expect, test } from "./fixtures"
 
 const slug = "sibyl-autoresearch-autonomous-research-needs-self-evolving-trial-and-error-harnesses-not-paper-g"
 const readerUrl = `/design-demo/papers/${slug}/read?returnTo=${encodeURIComponent("/design-demo/papers?q=Agent&topic=cs.AI")}`

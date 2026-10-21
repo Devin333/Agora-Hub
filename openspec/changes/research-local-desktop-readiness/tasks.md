@@ -1,6 +1,6 @@
 # Research 本机日常使用版实施任务
 
-当前状态：Automated validation complete。第 1–10 章 101 项实现任务与第 11 章集中验证已完成。前端最终 clean-install、729 项单元测试、typecheck、lint、75 项浏览器用例及 local-desktop/mock=false production build 已通过；递归 Node 依赖树为零问题，6 项既有 Studio 跳过和 17 项依赖审计告警明确记录。后端最终全量为 9187 passed / 0 failed / 117 skipped / 24 deselected；必需 smoke 为 4192 passed / 23 deselected，AgentLoop offline 与 sources validation 均通过。源码、解释器、依赖及前端构建身份已在最终检查后重新核对。第 12 章 14 项真实使用、恢复和部署验收尚未执行；本 change 保持 active。
+当前状态：第 1–10 章实现与原候选 `72fbd1d` 的第 11 章集中验证已完成，旧结果仅证明该候选。第 12 章替代生产版本 v9 `20261013T142952Z-1006169e2757` 的启动、重复启动、正常停止、端口冲突、异常退出/清理、restart、日志轮换及两轮 42,383 资源严格校验均通过；前端 14 个已检查文件与包一致。v8 自然 smoke 通过、full 有 1 失败，catalog 与超时测试均已根因修复。共享工作区 v9 full/smoke 自然执行期间被另一项 RAG 开发改写输入；共享 smoke 已自然退出（3 failed、4,189 passed），共享 full 也自然退出（1 failed、9,245 passed、117 skipped），原始结果完整保留；full 的失败测试 bytes 与 v9 相同，已确认缺少确定性执行入口前提并私有验证 test-only 补丁，已集成到最终隔离 worktree `.tmp/dvf`；原 `.tmp/dv9` 的 2,624 个冻结 Python 文件及实际 source_digest 与 v9 完全一致，smoke 自然通过（4,192 passed），full 自然失败（1 failed、9,245 passed、117 skipped），原因是未跟踪的原始 compatibility policy 未复制到隔离输入。最终 `.tmp/dvf` 已补齐历史原字节 pending policy、将非 Python 输入纳入前后绑定并集成确定性测试修复，testfix1 smoke 已自然通过；旧 full 句柄 76448 消失且无最终 metadata，属于未完成。2026-10-14 已在同一冻结输入恢复完整 full，长临时路径下出现快照持久化失败；同源码短/长路径对照为 2 passed / 2 failed，已准备短路径完整门禁，待当前运行自然终止后只启动一次。124 项任务已勾选 112 项，第 12 章为 2/14；真实账号、合格模型、标准资料恢复和用户实机步骤未完成，本 change 保持 active。
 
 执行顺序：**先完成第 1–10 章的全部生产代码、迁移/运行工具及必要测试代码，再执行第 11 章集中验证，之后执行第 12 章真实验收与本机部署。** 实现阶段允许静态代码阅读、合同审查、diff 与规格校验；不提前运行测试套件、typecheck、lint、build、compile 或 smoke。测试编写随实现完成，运行结果单独留在 11/12 章。
 
@@ -175,14 +175,20 @@
 
 准入：11 已通过，使用同一候选构建与准备好的真实配置。对应 D12 和全部 AC；不得用 route mock/fixture 替代真实成功流程，不自动重启用户电脑。
 
+第 12 章执行状态（2026-10-13—2026-10-14，Asia/Shanghai）：真实 preflight 已修复 owned-local 环境、JSON stdout、catalog 发布路径、Windows UTF-8、未登录 BFF、runtime 写入边界、Windows collector EOF、第三 root 恢复 provenance 及 RAG transcript composition；全部历史失败记录保留。v8 自然 smoke 为 4192 passed，full 为 1 failed / 9239 passed / 117 skipped，失败根因是超时回归错误依赖 10ms 内的 OS 线程调度；修复仅注入受控 clock 并保留取消/预算安全断言，生产 deadline 未修改，50 项相关测试及 1000 次受控回归通过。catalog reader/restore 已在折叠前拒绝非 canonical 原始绝对路径，86 项定向测试和 v9 包内 9-case 检查通过，拒绝时 artifact/marker 原始 bytes 不变。实际 v9 生产版本 `20261013T142952Z-1006169e2757` 的 Windows 生命周期、readiness/API/BFF/loopback、日志轮换和两轮全部 42,383 个发布资源严格检查通过，12.2/12.8 证据见 `live-v9-runtime-acceptance-20261013.json`。共享 full/smoke 输入漂移保留于 `live-v9-parallel-workspace-scope-20261013.json`，原隔离验证使用 `live-v9-isolated-candidate-binding-20261013.json` 的独立 worktree，smoke 自然通过、full 因漏带必要 pending policy 自然失败；详见 `live-v9-isolated-full-20261013.json` 和 `live-v9-isolated-auxiliary-input-repair-20261013.json`。不能据共享运行或原 smoke 单独核销最终门禁；最终完整冻结输入位于 `.tmp/dvf`；testfix1 smoke 自然通过，旧 full 句柄 76448 消失且无最终退出证据，不能核销门禁。2026-10-14 恢复的 full 保持自然执行并保留长临时路径失败；2 项同源码对照在 35 字符临时根通过、91 字符临时根失败，观察到 `REF_SNAPSHOT_WRITE_FAILED` / Windows rename 目标过长。已准备 36 字符、保持全部默认选例的短路径完整门禁，等待当前 full 自然终止后受控启动一次；不修改断言或冻结生产代码。真实匿名双分辨率与键盘记录只覆盖未初始化页面，不代替认证工作台或实际 OS 125% 缩放；续接证据见 `live-v9-continuation-20261014.json`。真实登录页已打开但 initialized=false；配置模型仍 native mode none、projection=false、paid calls=0。标准 backup 在运行时拒绝未停止实例、停止后拒绝缺少 auth_users，均无归档；保护快照/catalog 副本不替代标准恢复。认证 PDF/笔记/分析/问答/报告、真实两版本恢复、OS 125% 缩放和用户实际电脑重启仍待验收，实例 DEGRADED。
+
+2026-10-14 新增只读前置：v8 `20261013T112201Z-3a4c3705242c` 严格资源/配置/依赖校验自然通过，与 v9 声明的 15 个 owner schema 相同，但未进行真实数据版本切换或不兼容拒绝，12.10 不勾选。实际两台 Windows 显示器均为 100% 缩放，最近电脑启动为 `2026-10-08T08:49:48.5Z`，12.11/12.12 仍缺认证后 OS 125% 与部署后真实重启证据。待提交范围 27 个 Python、14 个 frontend 文件与冻结/既有 checked-source 一致，13 份 frontend 日志摘要校验通过，但完整 full 自然结果尚未取得，不能授予最终门禁通过或混入并行 RAG 改动。
+
+2026-10-14 最新门禁状态：长临时根完整 full 已自然 exit 1（37 failed / 9201 passed / 117 skipped / 8 errors / 24 deselected），前后冻结绑定通过且一致；该失败完整保留。受控 helper 随后只启动一次 36 字符临时根的完整默认 full，实际 runner 65936 与 venv launcher 55152 的身份已独立核实，当前自然结果仍待取得，不能授予最终门禁通过或提交待验证代码。真实默认 Doctor 的当前三态已补齐但不代表模型验证或业务通过，详见上述新证据。任务复选框不变。
+
 - [ ] 12.1 准备有界真实验收计划：来源、PDF、模型/profile、调用/费用预算、隔离数据位置及回收范围；创建现有真实资料的有效备份。
-- [ ] 12.2 在 Windows 启动候选 production release，执行 doctor/readiness，核实实际 API/BFF、loopback、构建和依赖身份。
+- [x] 12.2 在 Windows 启动候选 production release，执行 doctor/readiness，核实实际 API/BFF、loopback、构建和依赖身份。
 - [ ] 12.3 用真实本地账号完成初始化（仅未初始化时）、登录/刷新/退出/再登录；核对既有账号不被覆盖和私有 API 无绕过。
 - [ ] 12.4 用真实浏览器完成正式入口/旧链接、搜索与 arXiv/DOI/GitHub 引用流程，记录真实来源、错误恢复及关键 request 身份。
 - [ ] 12.5 导入至少一份真实 PDF，验证解析/发布后阅读、笔记、分组、材料复用和精确续读；保留 import/run/source/artifact 证据。
 - [ ] 12.6 使用真实 provider 完成单论文分析与问答，核对质量结果、引用定位、报告保存、Markdown/JSON 导出与再次打开。
 - [ ] 12.7 演练双标签冲突、会话变化、网络/响应中断后的输入保留和既有运行核对；确认不重复执行、不伪报取消或通过。
-- [ ] 12.8 在实际 Windows 环境验证重复 start、端口占用、异常退出、stop/restart、日志和资源清理，不影响无关进程。
+- [x] 12.8 在实际 Windows 环境验证重复 start、端口占用、异常退出、stop/restart、日志和资源清理，不影响无关进程。
 - [ ] 12.9 对真实资料执行备份与隔离恢复演练，在原业务根对校验进程不可读时重新登录核对材料/笔记/论文/报告；验证旧请求不自动重放，保留 manifest/checksum/恢复代际和结果。
 - [ ] 12.10 用两个明确 release 身份完成兼容版本恢复与不兼容拒绝演练，核对依赖可用和资料保留，再回到目标候选版本。
 - [ ] 12.11 完成两种桌面分辨率、125% 缩放、键盘和真实加载/空白/失败状态验收，修复影响主流程的问题后补齐受影响验证。

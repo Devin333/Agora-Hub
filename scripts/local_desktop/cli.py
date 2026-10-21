@@ -30,7 +30,7 @@ _CONFIG_ARGUMENTS = (
     (("--release-root",), "release_root", {"help": "不可变 production release 目录"}),
     (("--backup-root",), "backup_root", {"help": "默认备份目录"}),
     (("--control-path",), "control_path", {"help": "application admission control metadata 文件"}),
-    (("--parser-mode",), "parser_mode", {"choices": ("pymupdf", "marker", "mineru"), "help": "选定的 PDF parser"}),
+    (("--parser-mode",), "parser_mode", {"choices": ("pymupdf", "marker"), "help": "选定的 PDF parser"}),
     (("--data-root", "--research-root"), "research_root", {"help": "Research durable data 根目录"}),
     (("--artifact-root",), "artifact_root", {"help": "Research/Harness artifact 根目录"}),
 )

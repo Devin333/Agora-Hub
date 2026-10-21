@@ -11,6 +11,22 @@ The system SHALL 使用显式 `local-desktop` profile、单一配置解析和固
 - **WHEN** 配置包含冲突 origin、非法路径或非 loopback bind
 - **THEN** 工具以非零退出和脱敏 reason code 终止，且不启动部分开放实例
 
+### Requirement: Explicit owned local storage selection
+The system SHALL 将桌面存储模式作为非秘密运行配置的严格枚举处理，默认 `root-environment` 保留根环境数据库合同。只有显式选择 `owned-local` 才 SHALL 在 desktop effective child environment 中以空 `NEWS_DATABASE_DSN` 隔离根 PostgreSQL DSN，根 `.env`、既有数据库和业务资料 SHALL 保持不变。doctor、inventory、build、start、backup、restore 和 rollback SHALL 使用同一 effective environment。release config identity SHALL 绑定此模式并拒绝模式漂移。显式启用 PostgreSQL-only capability 时 SHALL 返回 typed conflict，不静默禁用该能力。
+
+#### Scenario: Select owned-local with a root PostgreSQL DSN
+- **WHEN** 根环境含 PostgreSQL DSN，运行配置显式选择 `owned-local`，且未启用 PostgreSQL-only capability
+- **THEN** 桌面进程只使用既有 owned local storage adapters，子进程再次读取根环境也不会重新引入该 DSN
+- **AND** doctor 只报告所选模式与是否隔离根 DSN，不输出 DSN、账号或口令
+
+#### Scenario: Root environment mode or conflicting PostgreSQL capability
+- **WHEN** 未显式选择 `owned-local`，或在选择该模式时显式启用 PostgreSQL-only capability
+- **THEN** 默认模式保留外置数据库备份拒绝合同，冲突模式以稳定 reason code 拒绝启动且不修改配置或资料
+
+#### Scenario: Storage mode changes after release build
+- **WHEN** release manifest 的存储模式与当前 runtime 配置不同
+- **THEN** 启动拒绝该 release，要求重新构建并验收对应候选
+
 ### Requirement: Reproducible production release identity
 The system SHALL 固定项目虚拟环境与前端 lockfile，生成带源码/依赖/配置身份和资源清单的 production release，并只在完整构建后激活。正常 start SHALL NOT 静默安装依赖、下载模型或复用未匹配的旧 `.next`；运行 SHALL 不依赖可变开发工作树。
 
@@ -21,6 +37,30 @@ The system SHALL 固定项目虚拟环境与前端 lockfile，生成带源码/�
 #### Scenario: Dependency drift or incomplete release
 - **WHEN** 目标 release 缺文件、checksum 错误或实际解释器/依赖与 manifest 不符
 - **THEN** 启动拒绝该 release，并保留原可用版本与数据
+
+
+#### Scenario: UTF-8 build output on Windows
+- **WHEN** Node/npm 产生 UTF-8 非 ASCII 输出，或任一输出流包含非法 UTF-8 bytes
+- **THEN** 发布命令在主线程严格解码捕获 bytes；合法文本可正常构建，非法流以稳定 reason code 拒绝，不以子进程零退出码掩盖 reader 错误
+
+#### Scenario: Runtime starts without changing release resources
+- **WHEN** 同一 production release 在 Windows 启动、停止并再次启动
+- **THEN** Python bytecode cache 不写入 immutable release；原资源清单和 checksum 仍可完整校验，未知新增文件仍被拒绝
+
+#### Scenario: Build regenerates Next.js declarations
+- **WHEN** 构建前存在开发环境生成的 Next.js declaration 或 TypeScript incremental metadata
+- **THEN** source identity 只绑定规范源码输入，明确生成文件由 production build 重建并纳入严格发布资源清单，不因合法生成内容变化伪报源码漂移
+
+#### Scenario: Runtime route revalidation preserves immutable frontend files
+- **WHEN** local-desktop production requests trigger Next.js route, page or fetch cache revalidation
+- **THEN** 可变缓存 SHALL 不写入 immutable release；使用有界内存缓存或实例拥有的外置缓存，构建时预渲染资源继续保持原 checksum
+- **AND** 完整资源清单在实际页面访问及 stop/restart 后仍可重新严格验证，未知新增文件不会被排除或登记成构建资源
+
+#### Scenario: Audit records stay outside immutable production resources
+- **WHEN** local-desktop production 在 release app 工作目录启动，真实 HTTP 授权/诊断流程产生审计记录
+- **THEN** 保留启用的 audit writer，默认 sink 使用当前实例 runtime root 下的绝对路径，显式相对路径以受信 project root 解析
+- **AND** 通用 artifact 默认绑定受信 Research artifact root，parser run 默认绑定实例 runtime root，合法业务 writer 不以 release cwd 创建默认数据目录
+- **AND** 审计写入不得落在 immutable release app，完整 resource inventory 在请求、停止和重启后仍通过，不能忽略额外文件或改写 manifest
 
 ### Requirement: Bounded capability diagnosis
 The system SHALL 提供 `doctor`，区分 configured/reachable/verified，检查实际解释器、依赖、配置、端口、存储和所选能力。默认检查 SHALL 不调用外部 provider；显式网络探测 SHALL 有超时、次数与费用预算。缺可选能力 SHALL 标识影响，缺必需能力 SHALL 阻止相应可用声明。
@@ -43,6 +83,16 @@ The system SHALL 提供 Windows `start/stop/restart/status`，使用单实例锁
 #### Scenario: Port belongs to an unrelated process
 - **WHEN** 所需端口被其他进程占用或旧 PID 已复用
 - **THEN** 报告冲突/过期记录并保持无关进程不变，不直接 kill 或静默换端口
+
+#### Scenario: A logger exits naturally during shutdown
+- **WHEN** 本实例服务停止后，其日志收集器因 EOF 自行退出，后续清理检查发现对应 PID 已不存在
+- **THEN** 停止动作 SHALL 幂等确认已退出并继续收敛其余自有资源，不能把 absent 等同于 foreign/reused
+- **AND** 如果 PID 仍存在但创建时间或 executable 不匹配，系统 SHALL 拒绝信号并保留明确 ownership 失败
+
+#### Scenario: A Windows service launcher owns a child process
+- **WHEN** Python launcher 或服务 root 通过已受校验的 launch 创建实际运行 child
+- **THEN** stop SHALL 在有界预算内收敛已证明归属于该 launch 的运行进程及日志资源，不能只退出 shim 后遗留 API listener
+- **AND** stop/start/failed 状态记录保留该尝试的 boot/release 身份，不因 phase transition 丢失追踪依据
 
 ### Requirement: Real readiness and bounded startup recovery
 The system SHALL 通过实际进程、API、BFF 和所需能力检查区分 STOPPED/STARTING/READY/DEGRADED/STOPPING/FAILED。readiness SHALL 有截止时间；失败启动 SHALL 只清理本次拥有的资源。任何自动重启 SHALL 有预算/退避和稳定失败态。

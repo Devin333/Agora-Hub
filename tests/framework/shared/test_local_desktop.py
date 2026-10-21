@@ -59,6 +59,15 @@ def test_local_desktop_rejects_unknown_runtime_field(tmp_path: Path) -> None:
     assert raised.value.reason_code == "desktop_config_unknown_field"
 
 
+def test_local_desktop_rejects_removed_mineru_parser_mode(tmp_path: Path) -> None:
+    with pytest.raises(LocalDesktopConfigError, match="parser_mode must be pymupdf or marker") as raised:
+        resolve_local_desktop_config(
+            project_root=tmp_path,
+            cli_overrides={"parser_mode": "mineru"},
+        )
+    assert raised.value.reason_code == "desktop_parser_mode_invalid"
+
+
 def test_capability_projection_preserves_three_distinct_states() -> None:
     item = CapabilityProjection(
         "analysis",

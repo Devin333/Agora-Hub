@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Page } from "./fixtures"
 import type { ResearchWorkspace } from "../../src/lib/research/history-model"
 
 const historyKey = "agora-research-history:v2"

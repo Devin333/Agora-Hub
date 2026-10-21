@@ -240,10 +240,9 @@ def test_doctor_treats_invalid_llm_route_as_unconfigured_instead_of_crashing(tmp
 
 
 def test_parser_contract_matches_registered_research_execution_profiles() -> None:
-    from interfaces.composition.runtime_execution import RESEARCH_MARKER_PROFILE_ID, RESEARCH_MINERU_PROFILE_ID
+    from interfaces.composition.runtime_execution import RESEARCH_MARKER_PROFILE_ID
 
     marker = _research_parser_contract("marker", {"NEWSROOM_MARKER_DOCKER_IMAGE": "marker@sha256:abc", "NEWSROOM_MARKER_CACHE_DIR": "C:/cache/marker"})
-    mineru = _research_parser_contract("mineru", {"NEWSROOM_MINERU_DOCKER_IMAGE": "mineru@sha256:def", "NEWSROOM_MINERU_MODEL_SOURCE": "modelscope", "NEWSROOM_MINERU_CACHE_DIR": "C:/cache/mineru", "NEWSROOM_MINERU_CONFIG_DIR": "C:/config/mineru"})
 
     assert marker == {
         "parser_mode": "marker",
@@ -256,12 +255,8 @@ def test_parser_contract_matches_registered_research_execution_profiles() -> Non
         "cache_configured": True,
         "runtime_owner": "ResearchParserExecutionAdapter",
     }
-    assert mineru["profile_id"] == RESEARCH_MINERU_PROFILE_ID
-    assert mineru["provider_id"] == "docker"
-    assert mineru["network_policy"] == "deny"
-    assert mineru["allowed_argv_prefix"] == ["mineru"]
-    assert mineru["cache_configured"] is True
-    assert mineru["config_configured"] is True
+    with pytest.raises(ValueError, match="unsupported docker parser mode"):
+        _research_parser_contract("mineru", {})
 
 
 def test_pymupdf_mode_does_not_require_docker_check(tmp_path: Path, monkeypatch) -> None:

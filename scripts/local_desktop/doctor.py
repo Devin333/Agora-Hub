@@ -112,7 +112,7 @@ class LocalDesktopDoctor:
             self._port_check("api_port", self.config.api_host, self.config.api_port),
         ]
         capabilities = self._offline_capabilities()
-        if self.config.parser_mode in {"marker", "mineru"}:
+        if self.config.parser_mode == "marker":
             docker_check, parser_capability = self._docker_check(capabilities)
             checks.append(docker_check)
             capabilities = tuple(parser_capability if item.capability_id == "pdf_import" else item for item in capabilities)
@@ -332,7 +332,7 @@ class LocalDesktopDoctor:
             CapabilityProjection("single_paper_analysis", True, _state(llm), reason_code=None if llm else (settings_reason or "desktop_llm_not_configured"), checked_at=checked, remediation=(() if llm else ("Configure a model route and its referenced API key environment variable.",))),
             CapabilityProjection("paper_question_answering", True, _state(llm), reason_code=None if llm else (settings_reason or "desktop_llm_not_configured"), checked_at=checked, remediation=(() if llm else ("Configure a model route and its referenced API key environment variable.",))),
             CapabilityProjection("artifact_storage", True, _state(artifact_configured), reachable=_state(artifact_configured), verified=CapabilityState.UNKNOWN, reason_code=None if artifact_configured else "desktop_artifact_storage_unavailable", checked_at=checked, details={"root": str(artifact_root)}),
-            CapabilityProjection("ocr", False, _state(self.config.parser_mode in {"marker", "mineru"}), reason_code="desktop_optional_capability_not_selected" if self.config.parser_mode == "pymupdf" else None, checked_at=checked),
+            CapabilityProjection("ocr", False, _state(self.config.parser_mode == "marker"), reason_code="desktop_optional_capability_not_selected" if self.config.parser_mode == "pymupdf" else None, checked_at=checked),
             CapabilityProjection("dense_retrieval", False, _state(bool(self.environ.get("NEWS_QDRANT_URL"))), reason_code=None if self.environ.get("NEWS_QDRANT_URL") else "desktop_optional_capability_not_configured", checked_at=checked),
         )
 
@@ -508,7 +508,7 @@ class LocalDesktopDoctor:
             return CapabilityProjection("llm_transport", True, CapabilityState.YES, CapabilityState.NO, CapabilityState.UNKNOWN, "desktop_llm_probe_budget_exhausted", checked, ("Check the provider endpoint or increase the explicit bounded probe timeout.",), {"error_type": type(exc).__name__, "timeout_seconds": budget.timeout_seconds, "request_budget": 1})
 
 def _research_parser_contract(parser_mode: str, environ: Mapping[str, str]) -> dict[str, Any]:
-    from interfaces.composition.runtime_execution import RESEARCH_MARKER_PROFILE_ID, RESEARCH_MINERU_PROFILE_ID
+    from interfaces.composition.runtime_execution import RESEARCH_MARKER_PROFILE_ID
 
     if parser_mode == "marker":
         return {
@@ -522,18 +522,7 @@ def _research_parser_contract(parser_mode: str, environ: Mapping[str, str]) -> d
             "cache_configured": bool(str(environ.get("NEWSROOM_MARKER_CACHE_DIR") or "").strip()),
             "runtime_owner": "ResearchParserExecutionAdapter",
         }
-    return {
-        "parser_mode": parser_mode,
-        "profile_id": RESEARCH_MINERU_PROFILE_ID,
-        "provider_id": "docker",
-        "network_policy": "deny",
-        "allowed_argv_prefix": ["mineru"],
-        "image": str(environ.get("NEWSROOM_MINERU_DOCKER_IMAGE") or "mineru:latest").strip(),
-        "model_source": str(environ.get("NEWSROOM_MINERU_MODEL_SOURCE") or "modelscope").strip(),
-        "cache_configured": bool(str(environ.get("NEWSROOM_MINERU_CACHE_DIR") or "").strip()),
-        "config_configured": bool(str(environ.get("NEWSROOM_MINERU_CONFIG_DIR") or "").strip()),
-        "runtime_owner": "ResearchParserExecutionAdapter",
-    }
+    raise ValueError(f"unsupported docker parser mode: {parser_mode}")
 
 
 def _redact_doctor_details(value: Mapping[str, Any]) -> dict[str, Any]:

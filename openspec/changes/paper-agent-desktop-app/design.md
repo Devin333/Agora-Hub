@@ -127,6 +127,18 @@ PRD 的独立“删除全部数据”不能用恢复覆盖、卸载或手工删�
 - 安装资源中的固定 finalizer 等待精确宿主 PID 与 OS 创建身份退出后，才作为唯一文件删除执行者清理整个已授权 userData 和该 profile 专属 vault 槽位；不按端口/名称杀进程，不触及外部备份、导出、导入原件、安装资源或其他 profile。
 - 维护 journal 位于目标外的固定受保护位置，仅含最小操作身份摘要和状态，范围预览必须披露。pending、删除部分失败或凭据状态未知时阻止普通启动，绝不自动继续删除或创建空资料假装恢复；需要新的明确授权才能重试。
 - root 置换、过期/replay、scope/CAS 变化、reparse/alias、停止失败或文件锁定都必须有确定性的失败测试。最终实际验收还包括真实原生确认、退出后 CLEARED、正常重开首次 bootstrap，以及外部文件未改动；只测 helper 或收到 PREPARED 不足以核销 task 7.3。
+### D11. Windows 安装、业务持久化与恢复必须支持真实长路径
+
+实际 NSIS exit0 但缺4个ARM PE与5个深层license，以及较长用户目录下真实PDF的run intent原子临时文件写入失败，都是交付阻断，不能通过删资源、改manifest、缩短测试目录或修改系统LongPathsEnabled绕过。
+
+- 保持锁定的标准electron-builder/NSIS安装、升级和uninstaller路径。项目使用官方include/customHeader与经实际编译证明的窄shim替换解压宏；生成文件只include经完整hash固定的上游模板并重定义目标宏，不fork整个builder、不修改node_modules、不接管整个installer脚本。模板顺序、版本或digest漂移必须阻断构建。
+- 内嵌固定digest的现代decoder、已验证stage Node和确定性bootstrap。执行任何内嵌程序前，由独立NSIS hash能力核对工具/脚本/manifest/archive；只用固定绝对路径与固定argv，移除可变Node/工具环境，不从PATH、用户配置或网络选择执行程序。decoder许可证完整随包保留。
+- 安装归属准入须发生在旧版本卸载或覆盖pre-file之前，解压入口再次核对最终目标；新空目录和本次固定pre-file可被严格识别，未知非空目录、路径别名、reparse或身份变化不能被自动接管。归属marker只是证据之一，不能单独授权删除任意目录。
+- 现代decoder直接解压至获准安装树，不再经过丢长路径的旧decoder或CopyFiles。以有界总时限执行与核验：完整Electron payload和runtime资源集合、每项size/full SHA、目录/链接类型及extra/stale文件均必须通过，才允许标准注册、快捷方式或启动。exit0、文件数量相同或抽样9项不能替代完整gate。
+- 默认卸载与真实升级必须处理modern decoder创建的长路径安装树，且默认保留独立userData。若标准删除无法完成，使用官方窄customRemoveFiles hook与固定、受验证且归属受控的执行者修复；不删除profile、不按名称杀进程、不把未知残留报告为成功。升级失败须披露旧二进制和新安装的真实状态，不承诺未实现的原子rollback。
+- 业务JSON锁、完整UUID原子临时文件、fsync/replace和备份snapshot/archive/isolated restore使用内部extended-length I/O路径，公共业务身份、路径字段、引用和manifest仍为正常规范路径。文件锁、失败清理、源文件字节/WAL不变、owner隔离与checksum规则不得弱化；同样不能只修安装解压而留下首次导入或恢复失败。
+- 验收覆盖LongPathsEnabled=0的真实长目录、ARM过滤器、完整license、同大小错误字节/缺项/extra、环境投毒、超时、锁定/权限/磁盘失败、实际卸载和升级的数据保留，以及正常默认profile的真实App闭环。用户同权限恶意竞态或内核永久挂起不被描述为已建立安全隔离/绝对wall-clock保证；检测到未知归属或无法核验时失败封闭并保留证据。
+
 ## Risks / Trade-offs
 
 - [现有后端有入口但真实 provider/材料尚未通过验收] → capabilities 如实降级，先补合格配置与真实闭环，不把待配置作为发布通过。

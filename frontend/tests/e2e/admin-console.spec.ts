@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test"
+import { expect, test } from "./fixtures"
 
 test("admin console supports bilingual navigation and core selections", async ({ page }) => {
   await page.goto("/admin")

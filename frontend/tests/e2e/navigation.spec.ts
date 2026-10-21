@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Page } from "./fixtures"
 
 const routes = [
   "/",
@@ -63,7 +63,7 @@ for (const route of ["/papers/tasks/agents", "/papers/methods/react"]) {
 }
 
 test("/ renders the Portal homepage modules", async ({ page }) => {
-  await useEnglishLocale(page)
+  await setEnglishLocale(page)
   await page.goto("/")
 
   await expect(page.getByRole("heading", { name: /AI intelligence front page/i })).toBeVisible()
@@ -219,7 +219,7 @@ test("/topics evidence graph renders the structured PRD-07 surface", async ({ pa
 })
 
 async function authenticate(page: Page, baseURL: string | undefined) {
-  await useEnglishLocale(page)
+  await setEnglishLocale(page)
   await page.route("**/api/auth/session", async (route) => {
     await route.fulfill({
       status: 200,
@@ -249,7 +249,7 @@ async function authenticate(page: Page, baseURL: string | undefined) {
   ])
 }
 
-async function useEnglishLocale(page: Page) {
+async function setEnglishLocale(page: Page) {
   await page.addInitScript(() => {
     window.localStorage.setItem(
       "newsroom-ui",

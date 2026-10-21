@@ -60,3 +60,28 @@ The system SHALL 在恢复旧 release 前验证其代码、构建、依赖、配
 #### Scenario: Previous release is incompatible or incomplete
 - **WHEN** 旧版本缺依赖资源或不能读取当前 schema
 - **THEN** rollback 拒绝，保留当前数据与版本，说明需要的兼容备份或资源
+
+### Requirement: Portable catalog chunk manifest references
+The system SHALL 在 catalog artifact 发布边界将实际 chunk manifest 路径校验并持久化为规范化 owner-relative POSIX 路径，随后计算 artifact digest 与 commit identity。为恢复本次调查确认的既有真实资料，旧 `research-chunk-manifest` envelope 中的绝对 `payload.manifest_path` SHALL 仅通过受信原 catalog root 到隔离目标的显式 owner 映射读取；验证原 bytes 的 digest、commit marker、type、scope、paper 与目标 containment 后，application adapter SHALL 只访问隔离目标。旧 artifact bytes/id SHALL 保持不变，其他绝对路径和未知格式 SHALL 保持拒绝。
+
+#### Scenario: Publish a new catalog chunk manifest
+- **WHEN** application 发布合法 catalog owner 内同 scope/paper 的 chunk manifest
+- **THEN** 持久化 artifact 引用 owner-relative `chunk-manifests/<scope>/<paper>/chunk_manifest.json`，其 digest 不包含机器的原绝对根
+
+#### Scenario: Restore an existing absolute catalog chunk manifest
+- **WHEN** 旧 artifact 的原 envelope 验证通过，绝对路径属于受信原 catalog owner，同 scope/paper 的 staged manifest 存在，原业务根不可读
+- **THEN** adapter 只读取 staged target 并保留旧 artifact bytes、digest 和 commit identity
+
+#### Scenario: Untrusted catalog path or reference identity
+- **WHEN** 引用来源为未知原 root、跨 scope/paper、traversal、reparse、digest 失配或目标不存在
+- **THEN** 恢复以明确 reason code 失败，不回跳原 owner root、不按任意路径后缀猜测目标
+
+#### Scenario: Recompose the restored production catalog
+- **WHEN** 已验证备份在隔离 owner 激活后重新创建 production application/composition，旧 artifact 的绝对来源根不等于当前 catalog root，原目录不可读
+- **THEN** 恢复时建立的 owner 来源关联经持久化校验后供真实 catalog adapter 使用；重新装配不得退回只信任当前 root 而丢失该关联
+- **AND** 关联限定具体 owner、artifact 身份和已验证来源，不作为原目录 I/O 授权；origin、owner、artifact digest 或目标关联被篡改时拒绝
+- **AND** 再次备份并恢复到第三个 root 时仍只读取当前隔离目标，保留原 artifact bytes/commit identity，不向 Research 业务层引入桌面脚本或 interface 依赖
+
+#### Scenario: A committed legacy absolute path contains noncanonical segments
+- **WHEN** 已提交旧 chunk manifest artifact 的原始绝对 `manifest_path` 含 `.`、`..` 或重复分隔符，即使规范化后的目标仍位于合法 owner/scope/paper
+- **THEN** reader 与恢复 provenance 建立边界在任何规范化映射前拒绝原始字符串，不读取目标、不建立 provenance，并保留原 artifact/marker bytes；合法规范旧绝对路径继续按精确 owner 映射恢复

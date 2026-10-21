@@ -284,8 +284,8 @@ def resolve_local_desktop_config(
     if control_path.is_dir():
         raise LocalDesktopConfigError("desktop_control_path_invalid", "control_path must name a file", field_name="control_path")
     parser_mode = str(merged["parser_mode"]).strip().lower()
-    if parser_mode not in {"pymupdf", "marker", "mineru"}:
-        raise LocalDesktopConfigError("desktop_parser_mode_invalid", "parser_mode must be pymupdf, marker, or mineru", field_name="parser_mode")
+    if parser_mode not in {"pymupdf", "marker"}:
+        raise LocalDesktopConfigError("desktop_parser_mode_invalid", "parser_mode must be pymupdf or marker", field_name="parser_mode")
     storage_mode = str(merged["storage_mode"]).strip().lower()
     if storage_mode not in {ROOT_ENVIRONMENT_STORAGE_MODE, OWNED_LOCAL_STORAGE_MODE}:
         raise LocalDesktopConfigError(

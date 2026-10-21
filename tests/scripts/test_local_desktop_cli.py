@@ -144,8 +144,6 @@ def test_json_cli_stdout_is_a_single_json_document(command: str, tmp_path: Path)
             "NEWS_VISUAL_DESCRIPTION_IMAGE_ROOT": str(data_root / "visual" / "descriptions"),
             "NEWSROOM_PARSER_RUN_ROOT": str(data_root / "parser-runs"),
             "NEWSROOM_MARKER_CACHE_DIR": str(data_root / "marker-cache"),
-            "NEWSROOM_MINERU_CACHE_DIR": str(data_root / "mineru-cache"),
-            "NEWSROOM_MINERU_CONFIG_DIR": str(data_root / "mineru-config"),
             "NEWSROOM_PAPERS_DATA_PATH": str(data_root / "papers.json"),
             "NEWS_DATABASE_DSN": "",
             "NEWS_MEMORY_POSTGRES_ENABLED": "",
