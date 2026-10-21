@@ -3,7 +3,10 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 
+import pytest
+
 from backend.research.rag.evaluation.protocol_common import content_digest
+from backend.research.rag.evaluation.protocol_semantic_facts import FactRelation
 from backend.research.rag.evaluation.protocol_dataset import (
     AlternativeSufficientSet,
     AuthorInputManifest,
@@ -23,11 +26,13 @@ from backend.research.rag.evaluation.protocol_answer_scoring import (
     AnswerScoreIdentity,
     CandidateFactProjection,
     CitationParseState,
+    ClaimVerdict,
     EvidenceFactProjection,
     ExactSourceExcerpt,
     NumericUnit,
     ReferenceFactProjection,
     SemanticCondition,
+    SemanticDecision,
     SemanticFact,
     aggregate_abstention_metrics,
     build_answer_metric_registry,
@@ -757,3 +762,170 @@ def test_non_identical_exact_quote_wording_routes_to_review() -> None:
     )
     assert result.fact_precision.status is ScoreStatus.NEEDS_REVIEW
     assert result.fact_completeness.status is ScoreStatus.NEEDS_REVIEW
+
+
+def _score_with(
+    *,
+    candidate_fact: SemanticFact,
+    evidence_fact: SemanticFact,
+    reference_fact: SemanticFact | None = None,
+    bound: bool = True,
+    source_text: str = "The model obtains 0.95 accuracy on test under seed 7.",
+):
+    claim_text = "Model A claim under evaluation."
+    reference = ReferenceFactProjection(
+        reference_claim_id="ref-1",
+        fact=reference_fact or _fact(0.95, NumericUnit.FRACTION),
+        evidence_anchor_ids=("anchor-1",),
+        rule_id="numeric-result",
+        rule_version="1.0",
+    )
+    candidate = CandidateFactProjection(
+        answer_claim_id="claim-1",
+        reference_claim_id="ref-1" if bound else None,
+        fact=candidate_fact,
+        rule_id="numeric-result",
+        rule_version="1.0",
+    )
+    evidence = EvidenceFactProjection(
+        evidence_id="ev-1",
+        fact=evidence_fact,
+        source=_source(source_text),
+        rule_id="numeric-result",
+        rule_version="1.0",
+    )
+    result = score_answer(
+        case_id="case-1",
+        reference=_reference(),
+        candidate=_candidate(claim_text, claim_text=claim_text),
+        actual_context=_context(source_text),
+        reference_facts=(reference,),
+        candidate_facts=(candidate,),
+        evidence_facts=(evidence,),
+    )
+    registry = build_answer_metric_registry()
+    assert all(registry.validate_score(score) for score in result.to_evaluation_scores(_identity()))
+    return result
+
+
+def test_wrong_value_against_reference_is_contradicted_and_counted_as_wrong_fact() -> None:
+    result = _score_with(
+        candidate_fact=_fact(93.0, NumericUnit.PERCENT),
+        evidence_fact=_fact(0.95, NumericUnit.FRACTION),
+    )
+    assert result.claim_assessments[0].verdict is ClaimVerdict.CONTRADICTED
+    assert result.fact_precision.value == 0.0
+    assert result.contradicted_fact_rate.value == 1.0
+    assert result.unsupported_inference_rate.value == 0.0
+    assert result.numeric_accuracy.value == 0.0
+    assert result.unit_accuracy.value == 1.0
+    assert result.condition_accuracy.value == 1.0
+    assert result.faithfulness.value == 0.0
+    assert result.faithfulness.provenance["known_contradicted"] == 1
+
+
+def test_right_number_under_wrong_condition_is_attributed_to_condition_accuracy() -> None:
+    result = _score_with(
+        candidate_fact=_fact(95.0, NumericUnit.PERCENT, seed="8"),
+        evidence_fact=_fact(0.95, NumericUnit.FRACTION),
+    )
+    assert result.claim_assessments[0].verdict is ClaimVerdict.CONTRADICTED
+    assert result.numeric_accuracy.value == 1.0
+    # dataset, split, and seed are stated; only the seed is wrong.
+    assert (result.condition_accuracy.numerator, result.condition_accuracy.denominator) == (2, 3)
+
+
+def test_claim_outside_reference_and_context_is_over_inference() -> None:
+    other_dataset = _fact(80.0, NumericUnit.PERCENT).model_copy(update={"dataset_id": "dataset-b"})
+    result = _score_with(
+        candidate_fact=other_dataset,
+        evidence_fact=_fact(0.95, NumericUnit.FRACTION),
+        bound=False,
+    )
+    assessment = result.claim_assessments[0]
+    assert assessment.reference_decision is SemanticDecision.UNSUPPORTED
+    assert assessment.context_decision is SemanticDecision.UNSUPPORTED
+    assert assessment.verdict is ClaimVerdict.OVER_INFERENCE
+    assert result.unsupported_inference_rate.value == 1.0
+    assert result.contradicted_fact_rate.value == 0.0
+    assert result.fact_precision.value == 0.0
+    # An unaligned claim is not scored on per-dimension accuracy.
+    assert result.numeric_accuracy.status is ScoreStatus.NOT_APPLICABLE
+
+
+def test_claim_outside_reference_but_grounded_in_context_is_not_over_inference() -> None:
+    other_dataset = _fact(80.0, NumericUnit.PERCENT).model_copy(update={"dataset_id": "dataset-b"})
+    evidence = _fact(0.80, NumericUnit.FRACTION).model_copy(update={"dataset_id": "dataset-b"})
+    result = _score_with(candidate_fact=other_dataset, evidence_fact=evidence, bound=False)
+    assert result.claim_assessments[0].verdict is ClaimVerdict.GROUNDED_EXTRA
+    assert result.faithfulness.value == 1.0
+    assert result.unsupported_inference_rate.value == 0.0
+    assert result.fact_precision.value == 0.0
+    assert result.fact_completeness.value == 0.0
+
+
+def test_unresolved_claims_keep_rates_unknown_but_unresolved_rate_is_known() -> None:
+    no_split = _fact(95.0, NumericUnit.PERCENT).model_copy(update={"split_id": None})
+    result = _score_with(
+        candidate_fact=no_split,
+        evidence_fact=_fact(0.95, NumericUnit.FRACTION),
+    )
+    assessment = result.claim_assessments[0]
+    assert assessment.verdict is ClaimVerdict.UNRESOLVED
+    assert result.contradicted_fact_rate.status is ScoreStatus.NEEDS_REVIEW
+    assert result.unsupported_inference_rate.status is ScoreStatus.NEEDS_REVIEW
+    assert result.unresolved_claim_rate.value == 1.0
+    assert result.numeric_accuracy.status is ScoreStatus.NEEDS_REVIEW
+    assert assessment.reference_comparisons[0].comparison.relation is FactRelation.UNDETERMINED
+
+
+def test_yes_no_polarity_contradiction_is_deterministic() -> None:
+    yes = SemanticFact(polarity=True, object_id="model-a", statistic="uses_pretraining")
+    no = yes.model_copy(update={"polarity": False})
+    result = _score_with(candidate_fact=no, evidence_fact=yes, reference_fact=yes)
+    assert result.claim_assessments[0].verdict is ClaimVerdict.CONTRADICTED
+    assert result.contradicted_fact_rate.value == 1.0
+    assert result.numeric_accuracy.status is ScoreStatus.NOT_APPLICABLE
+
+
+def test_candidate_aligned_to_unknown_reference_claim_is_rejected() -> None:
+    candidate = CandidateFactProjection(
+        answer_claim_id="claim-1",
+        reference_claim_id="ref-missing",
+        fact=_fact(95.0, NumericUnit.PERCENT),
+        rule_id="numeric-result",
+        rule_version="1.0",
+    )
+    claim_text = "Model A claim under evaluation."
+    with pytest.raises(ValueError, match="unknown reference claim"):
+        score_answer(
+            case_id="case-1",
+            reference=_reference(),
+            candidate=_candidate(claim_text, claim_text=claim_text),
+            actual_context=_context(),
+            candidate_facts=(candidate,),
+        )
+
+
+def test_every_case_branch_emits_the_full_metric_set() -> None:
+    expected = {
+        "answer.fact_precision", "answer.fact_recall", "answer.fact_f1",
+        "answer.contradicted_fact_rate", "answer.unsupported_inference_rate",
+        "answer.unresolved_claim_rate", "answer.numeric_accuracy", "answer.unit_accuracy",
+        "answer.condition_accuracy", "answer.faithfulness", "answer.citation_support",
+        "answer.citation_coverage",
+    }
+    runtime = score_answer(
+        case_id="case-1", reference=_reference(), candidate=None,
+        actual_context=None, runtime_error="timeout",
+    )
+    negative = score_answer(
+        case_id="case-1", reference=_reference("unanswerable"), candidate=_refusal(),
+        actual_context=_context(),
+    )
+    answered = _score_with(
+        candidate_fact=_fact(95.0, NumericUnit.PERCENT),
+        evidence_fact=_fact(0.95, NumericUnit.FRACTION),
+    )
+    for result in (runtime, negative, answered):
+        assert {item.metric_id for item in result.observations} == expected
