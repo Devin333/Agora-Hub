@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping
+
+from backend.research.rag.evaluation.paper_evaluation_compare import EvidenceABComparator
+from backend.research.rag.evaluation.protocol_comparison import PairedComparisonConfig, PairedComparisonResult
+from backend.research.rag.evaluation.protocol_dataset import DatasetManifest
+from backend.research.rag.evaluation.protocol_execution import EvaluationOptions, EvaluationTrack
+from backend.research.rag.evaluation.protocol_scoring import EvaluationScore, MetricRegistry
 
 from backend.research.rag.evaluation.paper_benchmark_suite import (
     BenchmarkSuiteConfig,
@@ -72,16 +78,20 @@ class BenchmarkMatrixConfig:
 class BenchmarkMatrixResult:
     output_dir: Path
     dataset_results: dict[str, BenchmarkSuiteResult]
+    protocol_comparisons: dict[str, PairedComparisonResult] = field(default_factory=dict)
 
     @property
     def ready_for_promotion(self) -> bool:
+        # A saved-score comparison is observation, never a publication gate.
+        if self.protocol_comparisons:
+            return False
         return all(
             result.policy_promotion_checklist.ready_for_promotion
             for result in self.dataset_results.values()
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "output_dir": str(self.output_dir),
             "ready_for_promotion": self.ready_for_promotion,
             "datasets": {
@@ -89,6 +99,12 @@ class BenchmarkMatrixResult:
                 for name, result in sorted(self.dataset_results.items())
             },
         }
+
+        if self.protocol_comparisons:
+            payload["protocol_comparisons"] = {
+                name: result.to_dict() for name, result in sorted(self.protocol_comparisons.items())
+            }
+        return payload
 
     def to_markdown(self) -> str:
         payload = self.to_dict()
@@ -121,7 +137,44 @@ class BenchmarkMatrixResult:
                 f"`{_format_optional_metric(item['unsupported_claim_rate'])}` | "
                 f"`{_format_optional_metric(item['judge_human_agreement'])}` |"
             )
+        if self.protocol_comparisons:
+            lines.extend(["", "## Saved-score paired comparisons (not a promotion decision)", ""])
+            for name, result in sorted(self.protocol_comparisons.items()):
+                lines.extend([f"### {name}", "", result.report(), ""])
         return "\n".join(lines).rstrip() + "\n"
+
+
+def compare_saved_benchmark_matrix(
+    *, output_dir: Path, baseline_options: EvaluationOptions,
+    baseline_scores: Iterable[EvaluationScore],
+    candidate_options: Mapping[str, EvaluationOptions],
+    candidate_scores: Mapping[str, Iterable[EvaluationScore]],
+    dataset_manifest: DatasetManifest, registry: MetricRegistry,
+    config: PairedComparisonConfig, baseline_name: str = "baseline",
+) -> BenchmarkMatrixResult:
+    """Extend the existing matrix with pure saved-score comparisons.
+
+    Names are display keys only. Missing variants remain explicitly incomplete;
+    oracle entries remain diagnostic and cannot become production rankings.
+    This function does not create directories, artifacts, or execute the suite.
+    """
+    unknown = candidate_scores.keys() - candidate_options.keys()
+    if unknown:
+        raise ValueError(f"scores supplied without typed variant options: {sorted(unknown)}")
+    baseline_observations = tuple(baseline_scores)
+    results: dict[str, PairedComparisonResult] = {}
+    for name, options in candidate_options.items():
+        observations = tuple(candidate_scores.get(name, ()))
+        oracle = options.selected_variant.track is EvaluationTrack.ORACLE_GENERATION
+        results[name] = EvidenceABComparator.compare_saved_scores(
+            baseline_options=options if oracle else baseline_options,
+            candidate_options=options,
+            baseline_scores=observations if oracle else baseline_observations,
+            candidate_scores=observations, dataset_manifest=dataset_manifest,
+            registry=registry, config=config,
+            baseline_name=name if oracle else baseline_name, candidate_name=name,
+        )
+    return BenchmarkMatrixResult(output_dir=Path(output_dir), dataset_results={}, protocol_comparisons=results)
 
 
 def run_benchmark_matrix(config: BenchmarkMatrixConfig) -> BenchmarkMatrixResult:
@@ -279,4 +332,5 @@ __all__ = [
     "BenchmarkMatrixResult",
     "load_benchmark_matrix_datasets",
     "run_benchmark_matrix",
+    "compare_saved_benchmark_matrix",
 ]

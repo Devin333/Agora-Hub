@@ -3,7 +3,7 @@ from __future__ import annotations
 from hashlib import sha256
 from typing import Any
 
-import fitz
+import pymupdf
 
 from backend.research.domain.document import ResearchDocument, ResearchFigure, ResearchTable
 
@@ -35,7 +35,7 @@ def merge_pdf_visual_sidecar(
         raise ValueError("pdf sidecar must start with %PDF")
 
     pdf_source_ref = f"arxiv://{actual_paper_id.replace('_', '.')}/pdf"
-    with fitz.open(stream=pdf_bytes, filetype="pdf") as pdf_doc:
+    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as pdf_doc:
         page_texts = _extract_page_text_evidence(pdf_doc)
         surya_error = ""
         try:

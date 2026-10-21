@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +19,7 @@ from backend.research.rag.evaluation.document_parsing_protocol import (
     ParsingBudget,
     ParsingEvaluationManifest,
     ParsingExecutionIdentity,
+    PerformanceRunConditions,
     ParsingFingerprints,
     ParsingTrack,
     RequestedPage,
@@ -266,3 +269,74 @@ def test_successful_metric_must_have_value_and_non_success_reason():
             status=MetricStatus.TIMEOUT,
             aggregation_unit=AggregationUnit.PAGE,
         )
+
+
+
+def test_page_metric_is_unique_per_page_even_with_distinct_support_ids():
+    first = MetricOutcome(
+        metric="CDM",
+        status=MetricStatus.SUCCEEDED,
+        aggregation_unit=AggregationUnit.PAGE,
+        value=0.5,
+        support_id="page-1/first",
+    )
+    second = first.model_copy(update={"support_id": "page-1/second", "value": 0.7})
+
+    with pytest.raises(ValidationError, match="unique per page metric"):
+        PageOutcome(page_id="page-1", status=PageStatus.SUCCEEDED, metrics=(first, second))
+
+
+@pytest.mark.parametrize("unit", [AggregationUnit.SAMPLE, AggregationUnit.OBJECT])
+def test_non_page_metric_requires_traceable_support_identity(unit):
+    with pytest.raises(ValidationError, match="require a support_id"):
+        MetricOutcome(
+            metric="TEDS",
+            status=MetricStatus.NOT_APPLICABLE,
+            aggregation_unit=unit,
+            reason="support was not identified",
+        )
+
+
+def test_denominators_include_planned_metrics_without_reported_outcomes():
+    payload = _manifest().model_dump(mode="python")
+    payload["status"] = RunStatus.PLANNED
+    payload["outcomes"] = (PageOutcome(page_id="page-1", status=PageStatus.PLANNED),)
+    manifest = ParsingEvaluationManifest.model_validate(payload)
+
+    denominator = metric_denominators(manifest)["CDM:page"]
+
+    assert denominator["planned_pages"] == 1
+    assert denominator["reported_pages"] == 0
+    assert denominator["requested_outcomes"] == 0
+    assert denominator["reported_outcomes"] == 0
+    assert denominator["scored_denominator"] == 0
+    assert denominator["status_counts"] == {}
+
+
+
+def test_legacy_manifest_without_runtime_conditions_remains_readable_as_unknown():
+    payload = _manifest().model_dump(mode="json")
+    payload.pop("performance_conditions")
+
+    manifest = ParsingEvaluationManifest.model_validate_json(json.dumps(payload), strict=True)
+
+    assert manifest.performance_conditions is None
+
+
+def test_performance_run_conditions_are_typed_and_cache_unknown_is_explicit():
+    from backend.research.rag.evaluation.document_parsing_protocol import CacheState
+
+    conditions = PerformanceRunConditions(
+        concurrency=2,
+        cache_state=CacheState.UNKNOWN,
+        timing_scope_version=IdentityValue(unknown_reason="legacy timer did not declare its scope"),
+    )
+
+    assert conditions.model_dump(mode="json") == {
+        "concurrency": 2,
+        "cache_state": "unknown",
+        "timing_scope_version": {
+            "value": None,
+            "unknown_reason": "legacy timer did not declare its scope",
+        },
+    }

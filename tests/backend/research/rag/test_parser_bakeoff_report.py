@@ -6,6 +6,22 @@ from pathlib import Path
 import pytest
 
 from backend.research.rag.cli.run_parser_bakeoff_report import _build_parser, _parse_thresholds
+from backend.research.rag.evaluation.document_parsing_protocol import (
+    AggregationUnit,
+    ExecutionKind,
+    IdentityValue,
+    MetricOutcome,
+    MetricStatus,
+    PageOutcome,
+    PageStatus,
+    ParsingEvaluationManifest,
+    ParsingExecutionIdentity,
+    ParsingTrack,
+    RunStatus,
+    write_parsing_evaluation_manifest,
+)
+from tests.backend.research.rag.test_document_parsing_protocol import _manifest
+
 from backend.research.rag.evaluation.paper_parser_bakeoff_report import (
     ParserArtifactInput,
     ParserBakeoffReportConfig,
@@ -77,10 +93,13 @@ def test_build_parser_bakeoff_report_summarizes_parser_artifacts(tmp_path: Path)
     assert metrics["bbox_coverage"] == 1.0
     assert payload["parsers"]["marker"]["rag_metrics"]["hit_at_5"] == 0.5
     assert payload["parsers"]["marker"]["rag_metrics"]["table_qa_evidence_coverage_at_5"] == 0.9
+    assert payload["parsers"]["marker"]["parsing_protocol"]["status"] == "not_evaluated"
     assert (tmp_path / "report.json").exists()
     markdown = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "Parser-Level Metrics" in markdown
     assert "RAG-Level Metrics" in markdown
+    assert "Document Parsing Protocol" in markdown
+    assert "not_evaluated" in markdown
 
 
 def test_build_parser_bakeoff_report_reads_benchmark_suite_candidate_schema(tmp_path: Path) -> None:
@@ -351,6 +370,147 @@ def test_run_parser_bakeoff_report_parses_acceptance_thresholds() -> None:
     }
     with pytest.raises(ValueError, match="KEY=VALUE"):
         _parse_thresholds(["min_requested_papers"])
+
+
+
+def _write_failed_production_parsing_manifest(path: Path) -> Path:
+    base = _manifest()
+    fingerprints = base.fingerprints.model_copy(update={
+        "document_schema": IdentityValue(value="ResearchDocument@v1"),
+        "normalizer": IdentityValue(value="research-normalizer@v1"),
+    })
+    manifest = ParsingEvaluationManifest.model_validate(
+        base.model_dump(mode="python")
+        | {
+            "status": RunStatus.FAILED,
+            "track": ParsingTrack.PRODUCTION_DOCUMENT,
+            "execution": ParsingExecutionIdentity(
+                kind=ExecutionKind.PRODUCTION,
+                composition=IdentityValue(value="ResearchComposition@v1"),
+                execution_receipt_refs=("artifact://receipt/run-001",),
+                parser_invocation=IdentityValue(value="MarkerPdfDocumentParser/invoke-v1"),
+            ),
+            "fingerprints": fingerprints,
+            "outcomes": (
+                PageOutcome(
+                    page_id="page-1",
+                    status=PageStatus.FAILED,
+                    reason="parser timed out",
+                    elapsed_seconds=7.5,
+                    metrics=(
+                        MetricOutcome(
+                            metric="CDM",
+                            status=MetricStatus.TIMEOUT,
+                            aggregation_unit=AggregationUnit.PAGE,
+                            reason="page parsing exceeded its time budget",
+                        ),
+                    ),
+                ),
+            ),
+        }
+    )
+    write_parsing_evaluation_manifest(manifest, path)
+    return path
+
+
+def test_bakeoff_report_includes_production_parsing_protocol_and_failure_denominators(
+    tmp_path: Path,
+) -> None:
+    parser_dir = tmp_path / "papers-marker"
+    _write_doc(
+        parser_dir / "paper1" / "research_document.json",
+        paper_id="paper1",
+        sections=[{"text": "valid legacy artifact"}],
+        figures=[],
+        tables=[],
+        equations=[],
+    )
+    parsing_manifest = _write_failed_production_parsing_manifest(
+        tmp_path / "parsing-manifest.json"
+    )
+    config = ParserBakeoffReportConfig(
+        inputs=(ParserArtifactInput(
+            "marker",
+            parser_dir,
+            parsing_manifest_path=parsing_manifest,
+        ),),
+        output_json=tmp_path / "report.json",
+        output_markdown=tmp_path / "report.md",
+    )
+
+    report = build_parser_bakeoff_report(config)
+
+    parser = report.to_dict()["parsers"]["marker"]
+    parsing = parser["parsing_protocol"]
+    assert parsing["status"] == "reported"
+    assert parsing["track"] == "production_document"
+    assert parsing["run_status"] == "failed"
+    assert parsing["metric_denominators"]["CDM:page"]["status_counts"] == {"timeout": 1}
+    assert parsing["metric_denominators"]["CDM:page"]["scored_denominator"] == 0
+    assert parsing["fingerprints"]["parser"]["value"] == "MarkerPdfDocumentParser"
+    assert parsing["fingerprints"]["parser_config_sha256"]["value"].startswith("sha256:")
+    assert parsing["quality_gate"] == {
+        "evaluated": False,
+        "passed": None,
+        "reason": "summary is descriptive only; no quality or publication decision was evaluated",
+    }
+    legacy_report = build_parser_bakeoff_report(ParserBakeoffReportConfig(
+        inputs=(ParserArtifactInput("marker", parser_dir),),
+        output_json=tmp_path / "legacy-report.json",
+        output_markdown=tmp_path / "legacy-report.md",
+    ))
+    legacy_parser = legacy_report.to_dict()["parsers"]["marker"]
+    assert parser["penalized_metrics"] == legacy_parser["penalized_metrics"]
+    assert report.to_dict()["recommendations"]["cascade_acceptance"] == (
+        legacy_report.to_dict()["recommendations"]["cascade_acceptance"]
+    )
+    payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert payload["parsers"]["marker"]["parsing_protocol"] == parsing
+    markdown = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "production_document" in markdown
+    assert "CDM:page=0/1" in markdown
+    assert "n=1, total=7.50s, median=7.50s, p95=7.50s" in markdown
+    assert "parser=MarkerPdfDocumentParser" in markdown
+    assert "descriptive only" in markdown
+
+
+def test_bakeoff_report_marks_present_invalid_parsing_manifest_invalid(
+    tmp_path: Path,
+) -> None:
+    parser_dir = tmp_path / "papers-marker"
+    _write_doc(
+        parser_dir / "paper1" / "research_document.json",
+        paper_id="paper1",
+        sections=[{"text": "valid legacy artifact"}],
+        figures=[],
+        tables=[],
+        equations=[],
+    )
+    invalid_manifest = tmp_path / "invalid-parsing-manifest.json"
+    invalid_manifest.write_text('{"run_id": NaN}', encoding="utf-8")
+
+    report = build_parser_bakeoff_report(ParserBakeoffReportConfig(
+        inputs=(ParserArtifactInput(
+            "marker",
+            parser_dir,
+            parsing_manifest_path=invalid_manifest,
+        ),),
+        output_json=tmp_path / "report.json",
+        output_markdown=tmp_path / "report.md",
+    ))
+
+    parser = report.to_dict()["parsers"]["marker"]
+    parsing = parser["parsing_protocol"]
+    assert parsing["status"] == "invalid"
+    assert "run_status" not in parsing
+    assert "metric_denominators" not in parsing
+    assert parsing["quality_gate"] == {
+        "evaluated": False,
+        "passed": None,
+    }
+    assert parser["penalized_metrics"]["raw_quality_score"] is not None
+    markdown = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "| marker | invalid |" in markdown
 
 
 def _write_doc(

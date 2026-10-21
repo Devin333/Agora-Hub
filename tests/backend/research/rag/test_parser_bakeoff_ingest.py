@@ -40,7 +40,7 @@ class _FakePdfParser:
                 )
             ],
             lineage=SourceLineage(source_refs=[f"arxiv://{paper_id}/pdf"], source_hash="hash"),
-            metadata={"parse_source": "mineru"},
+            metadata={"parse_source": "marker"},
         )
 
 
@@ -55,7 +55,7 @@ def test_parser_bakeoff_ingest_fetches_pdf_and_writes_manifest(tmp_path: Path) -
 
     report = ingest_parser_bakeoff_pdfs(
         ["https://arxiv.org/pdf/1706.03762.pdf", "1706.03762", "2006.11239"],
-        backend="mineru",
+        backend="marker",
         papers_dir=tmp_path / "papers",
         manifest_path=manifest,
         fetcher=_FakePdfFetcher(),
@@ -69,7 +69,7 @@ def test_parser_bakeoff_ingest_fetches_pdf_and_writes_manifest(tmp_path: Path) -
     assert parser.calls[0][1].startswith(b"%PDF")
     payload = json.loads((tmp_path / "papers" / "1706.03762" / "research_document.json").read_text(encoding="utf-8"))
     assert payload["paper_id"] == "1706.03762"
-    assert payload["metadata"]["parse_source"] == "mineru"
+    assert payload["metadata"]["parse_source"] == "marker"
     assert (tmp_path / "papers" / "1706.03762" / "1706.03762_original.pdf").exists()
     assert json.loads(manifest.read_text(encoding="utf-8"))["succeeded"] == 2
 
@@ -81,7 +81,7 @@ def test_parser_bakeoff_ingest_skips_existing_documents(tmp_path: Path) -> None:
 
     report = ingest_parser_bakeoff_pdfs(
         ["1706.03762"],
-        backend="mineru",
+        backend="marker",
         papers_dir=tmp_path / "papers",
         fetcher=_FakePdfFetcher(),
         parser=_FakePdfParser(),
@@ -94,7 +94,7 @@ def test_parser_bakeoff_ingest_skips_existing_documents(tmp_path: Path) -> None:
 def test_parser_bakeoff_ingest_records_failures(tmp_path: Path) -> None:
     report = ingest_parser_bakeoff_pdfs(
         ["1706.03762"],
-        backend="mineru",
+        backend="marker",
         papers_dir=tmp_path / "papers",
         fetcher=_FakePdfFetcher(),
         parser=_FailingPdfParser(),

@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from backend.research.domain.document import ResearchDocument, ResearchEquation, ResearchFigure, ResearchTable
+from backend.research.domain.document_fidelity import DocumentBlock
 from backend.research.document.citation_spans import build_paragraph_span_metadata
 from backend.research.document.models import ChunkType, PaperChunk, ParseSource, SectionRole
 from backend.research.document.section_detector import classify_section_role, is_abstract_section
@@ -230,9 +231,9 @@ def _table_rows_to_lines(rows: list[dict[str, Any]], columns: list[str]) -> list
     lines: list[str] = []
     for row in rows:
         if columns:
-            values = [str(row.get(column, "")) for column in columns]
+            values = ["" if row.get(column) is None else str(row.get(column, "")) for column in columns]
         else:
-            values = [str(value) for value in row.values()]
+            values = ["" if value is None else str(value) for value in row.values()]
         lines.append(" | ".join(values))
     return lines
 
@@ -370,6 +371,359 @@ def _table_to_text(
         ("source_locator", source_locator),
     )
     return "\n".join(lines), sources
+
+
+_FIDELITY_CHUNK_MAP_LIMIT = 128
+_FIDELITY_CHUNK_MATH_MAP_LIMIT = 128
+
+
+def _paragraph_text_ranges(text: str) -> list[tuple[str, int, int]]:
+    ranges: list[tuple[str, int, int]] = []
+    range_start = 0
+    for separator in _PARAGRAPH_SEP.finditer(text):
+        range_end = separator.start()
+        stripped_start, stripped_end = range_start, range_end
+        while stripped_start < stripped_end and text[stripped_start].isspace():
+            stripped_start += 1
+        while stripped_end > stripped_start and text[stripped_end - 1].isspace():
+            stripped_end -= 1
+        if stripped_start < stripped_end:
+            ranges.append((text[stripped_start:stripped_end], stripped_start, stripped_end))
+        range_start = separator.end()
+    stripped_start, stripped_end = range_start, len(text)
+    while stripped_start < stripped_end and text[stripped_start].isspace():
+        stripped_start += 1
+    while stripped_end > stripped_start and text[stripped_end - 1].isspace():
+        stripped_end -= 1
+    if stripped_start < stripped_end:
+        ranges.append((text[stripped_start:stripped_end], stripped_start, stripped_end))
+    return ranges
+
+
+def _paragraph_source_range(
+    blocks: list[DocumentBlock],
+    *,
+    section_text: str,
+    paragraph_text: str,
+    paragraph_index: int,
+) -> tuple[DocumentBlock, int, int] | None:
+    section_paragraphs = _split_paragraphs(section_text)
+    if not (0 <= paragraph_index < len(section_paragraphs)):
+        return None
+    if section_paragraphs[paragraph_index] != paragraph_text:
+        return None
+
+    candidates: list[tuple[str, DocumentBlock, int, int]] = []
+    for block in blocks:
+        # Marker section projections include the section heading in provenance,
+        # but the heading text itself is not copied into ResearchSection.text.
+        if block.kind == "heading":
+            continue
+        candidates.extend(
+            (text, block, start_offset, end_offset)
+            for text, start_offset, end_offset in _paragraph_text_ranges(block.text)
+        )
+
+    candidate_index = 0
+    aligned: list[tuple[DocumentBlock, int, int]] = []
+    for paragraph in section_paragraphs:
+        match: tuple[DocumentBlock, int, int] | None = None
+        while candidate_index < len(candidates):
+            candidate_text, block, start_offset, end_offset = candidates[candidate_index]
+            candidate_index += 1
+            if candidate_text == paragraph:
+                match = (block, start_offset, end_offset)
+                break
+        if match is None:
+            return None
+        aligned.append(match)
+    return aligned[paragraph_index]
+
+
+def _raw_math_span_uses_block_text(
+    block: DocumentBlock,
+    span: Any,
+    *,
+    raw_text: str | None,
+) -> bool:
+    if span.offset_text_version != "raw":
+        return True
+    return raw_text is not None and raw_text == block.text
+
+
+def _paragraph_mapping_scope(
+    excluded_chunk_content: tuple[str, ...],
+) -> dict[str, Any]:
+    return {
+        "mapping_scope": "paragraph_source_text",
+        "chunk_content_coverage": "partial" if excluded_chunk_content else "complete",
+        "excluded_chunk_content": list(excluded_chunk_content),
+    }
+
+
+def _fidelity_chunk_source_map(
+    document: ResearchDocument,
+    *,
+    metadata: dict[str, Any],
+    element_ref: str | None = None,
+    section_text: str | None = None,
+    paragraph_text: str | None = None,
+    paragraph_index: int | None = None,
+    excluded_chunk_content: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    fidelity = document.fidelity
+    if fidelity is None:
+        return None
+    if fidelity.source_hash != document.source_hash:
+        return {
+            "schema_version": fidelity.schema_version,
+            "source_hash": fidelity.source_hash,
+            "mapping_status": "quarantined",
+            "reason": "fidelity_source_hash_mismatch",
+            "expected_block_count": 0,
+            "matched_block_count": 0,
+            "missing_block_count": 0,
+            "omitted_block_count": 0,
+            "blocks": [],
+        }
+    provenance = metadata.get("marker_provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    raw_ids: list[str] = []
+    raw_text_by_block_id: dict[str, str] = {}
+    if isinstance(provenance.get("blocks"), list):
+        for item in provenance["blocks"]:
+            if not isinstance(item, dict) or not item.get("block_id"):
+                continue
+            block_id = str(item["block_id"])
+            raw_ids.append(block_id)
+            if isinstance(item.get("raw_text"), str):
+                raw_text_by_block_id[block_id] = item["raw_text"]
+    if provenance.get("block_id"):
+        block_id = str(provenance["block_id"])
+        raw_ids.append(block_id)
+        if isinstance(provenance.get("raw_text"), str):
+            raw_text_by_block_id[block_id] = provenance["raw_text"]
+    if isinstance(provenance.get("caption_block_ids"), list):
+        raw_ids.extend(str(item) for item in provenance["caption_block_ids"] if item)
+    requested_ids = list(dict.fromkeys(raw_ids))
+    requested = set(requested_ids)
+    paragraph_mapping_requested = (
+        section_text is not None or paragraph_text is not None or paragraph_index is not None
+    )
+    mapped_text_ranges: dict[str, list[tuple[int, int]]] = {}
+    if requested:
+        selected = [block for block in fidelity.blocks if block.block_id in requested]
+        missing_count = len(requested.difference(block.block_id for block in selected))
+        expected_count = len(requested)
+    elif element_ref:
+        selected = [block for block in fidelity.blocks if block.element_ref == element_ref]
+        missing_count = 0 if selected else 1
+        expected_count = 1
+    else:
+        return {
+            "schema_version": fidelity.schema_version,
+            "normalization_version": fidelity.normalization_version,
+            "source_hash": fidelity.source_hash,
+            "mapping_status": "unavailable",
+            **({"reason": "paragraph_source_range_unavailable"} if paragraph_mapping_requested else {}),
+            **(_paragraph_mapping_scope(excluded_chunk_content) if paragraph_mapping_requested else {}),
+            "expected_block_count": 1 if paragraph_mapping_requested else None,
+            "matched_block_count": 0,
+            "missing_block_count": 1 if paragraph_mapping_requested else None,
+            "omitted_block_count": 0,
+            "blocks": [],
+        }
+    if paragraph_mapping_requested:
+        if section_text is None or paragraph_text is None or paragraph_index is None:
+            paragraph_source = None
+        else:
+            selected_by_id = {block.block_id: block for block in selected}
+            provenance_ordered_blocks = [
+                selected_by_id[block_id]
+                for block_id in requested_ids
+                if block_id in selected_by_id
+            ]
+            paragraph_source = _paragraph_source_range(
+                provenance_ordered_blocks,
+                section_text=section_text,
+                paragraph_text=paragraph_text,
+                paragraph_index=paragraph_index,
+            )
+        if paragraph_source is None:
+            return {
+                "schema_version": fidelity.schema_version,
+                "normalization_version": fidelity.normalization_version,
+                "source_hash": fidelity.source_hash,
+                "mapping_status": "unavailable",
+                "reason": "paragraph_source_range_unavailable",
+                **_paragraph_mapping_scope(excluded_chunk_content),
+                "expected_block_count": 1,
+                "matched_block_count": 0,
+                "missing_block_count": 1,
+                "omitted_block_count": 0,
+                "blocks": [],
+            }
+        block, start_offset, end_offset = paragraph_source
+        selected = [block]
+        expected_count = 1
+        missing_count = 0
+        mapped_text_ranges[block.block_id] = [(start_offset, end_offset)]
+    selected.sort(key=lambda block: (block.page_number, block.reading_order, block.source_order, block.block_id))
+    visible = selected[:_FIDELITY_CHUNK_MAP_LIMIT]
+    entries: list[dict[str, Any]] = []
+    math_budget = _FIDELITY_CHUNK_MATH_MAP_LIMIT
+    omitted_math_count = 0
+    for block in visible:
+        text_ranges = mapped_text_ranges.get(block.block_id)
+        raw_text = raw_text_by_block_id.get(block.block_id)
+        raw_spans = tuple(
+            span for span in block.inline_math
+            if span.offset_text_version == "raw"
+        )
+        if text_ranges is None:
+            relevant_spans = block.inline_math
+            unmapped_spans: tuple[Any, ...] = ()
+        else:
+            comparable_spans = tuple(
+                span for span in block.inline_math
+                if _raw_math_span_uses_block_text(block, span, raw_text=raw_text)
+            )
+            unmapped_spans = tuple(
+                span for span in block.inline_math
+                if not _raw_math_span_uses_block_text(block, span, raw_text=raw_text)
+            )
+            relevant_spans = tuple(
+                span
+                for span in comparable_spans
+                if any(
+                    span.start_offset >= start_offset and span.end_offset <= end_offset
+                    for start_offset, end_offset in text_ranges
+                )
+            )
+        spans = relevant_spans[:math_budget]
+        math_budget -= len(spans)
+        budget_omitted_spans = len(relevant_spans) - len(spans)
+        omitted_spans = budget_omitted_spans + len(unmapped_spans)
+        omitted_math_count += omitted_spans
+        entries.append({
+            "block_id": block.block_id,
+            "page_number": block.page_number,
+            "parent_id": block.parent_id,
+            "kind": block.kind,
+            "source_order": block.source_order,
+            "reading_order": block.reading_order,
+            "order_status": block.order_status,
+            **({"order_reason": block.order_reason} if block.order_reason else {}),
+            "source_locator": block.source_locator,
+            **({"element_ref": block.element_ref} if block.element_ref else {}),
+            **({"bbox": block.bbox.model_dump(mode="json")} if block.bbox else {}),
+            **({"block_text_ranges": [{
+                "start_offset": start_offset,
+                "end_offset": end_offset,
+                "offset_basis": "unicode_codepoint",
+                "offset_text_version": "normalized",
+            } for start_offset, end_offset in text_ranges]} if text_ranges is not None else {}),
+            "inline_math_candidate_span_count": len(block.inline_math),
+            **({"raw_math_offset_compatibility": (
+                "confirmed" if raw_text == block.text
+                else "mismatch" if raw_text is not None
+                else "unavailable"
+            )} if text_ranges is not None and raw_spans else {}),
+            "inline_math_span_count": len(relevant_spans),
+            "unmapped_inline_math_span_count": len(unmapped_spans),
+            "budget_omitted_inline_math_span_count": budget_omitted_spans,
+            "omitted_inline_math_span_count": omitted_spans,
+            "inline_math_spans": [{
+                "start_offset": span.start_offset,
+                "end_offset": span.end_offset,
+                "offset_text_version": span.offset_text_version,
+                "display": span.display,
+                "source_locator": span.source_locator,
+            } for span in spans],
+        })
+    omitted_count = len(selected) - len(visible)
+    return {
+        "schema_version": fidelity.schema_version,
+        "normalization_version": fidelity.normalization_version,
+        "source_hash": fidelity.source_hash,
+        "mapping_status": (
+            "unavailable" if not selected
+            else "partial" if (
+                missing_count or omitted_count or omitted_math_count or excluded_chunk_content
+            )
+            else "complete"
+        ),
+        "expected_block_count": expected_count,
+        "matched_block_count": len(selected),
+        "missing_block_count": missing_count,
+        "omitted_block_count": omitted_count,
+        "omitted_inline_math_span_count": omitted_math_count,
+        "inline_math_mapping_scope": "included_blocks",
+        **(_paragraph_mapping_scope(excluded_chunk_content) if paragraph_mapping_requested else {}),
+        "blocks": entries,
+    }
+
+
+def _table_grid_source_map(
+    tbl: ResearchTable,
+    *,
+    body_row_start: int,
+    body_row_end: int,
+) -> dict[str, Any] | None:
+    grid = tbl.grid
+    if grid is None:
+        return None
+    cells_by_row: dict[int, list[Any]] = {}
+    for cell in grid.cells:
+        cells_by_row.setdefault(cell.row_index, []).append(cell)
+
+    def references(row_indexes: list[int]) -> list[dict[str, Any]]:
+        return [
+            {
+                "cell_id": cell.cell_id,
+                "row_index": cell.row_index,
+                "column_index": cell.column_index,
+                "status": cell.status,
+                "source_locator": cell.source_locator,
+                **({"covered_by_cell_id": cell.covered_by_cell_id} if cell.covered_by_cell_id else {}),
+            }
+            for row_index in row_indexes
+            for cell in sorted(cells_by_row.get(row_index, []), key=lambda item: item.column_index)
+        ]
+
+    # The legacy rows projection treats source row 0 as its columns row. This
+    # explicit mapping keeps that transformation traceable without asserting
+    # that an unmarked source row is semantically a header.
+    projection_header = references([0])
+    source_rows = [
+        row_index + 1
+        for row_index in range(max(0, body_row_start), min(body_row_end + 1, len(tbl.rows)))
+        if row_index + 1 < grid.row_count
+    ]
+    projected = references(source_rows)
+    reference_count = len(projection_header) + len(projected)
+    result: dict[str, Any] = {
+        "schema_version": "research-table-chunk-map.v1",
+        "table_id": grid.table_id,
+        "source_locator": grid.source_locator,
+        "row_count": grid.row_count,
+        "column_count": grid.column_count,
+        "has_header": grid.has_header,
+        "header_paths": [path.model_dump(mode="json") for path in grid.header_paths],
+        "projection_header_row": 0,
+        "projected_body_row_range": (
+            [body_row_start, body_row_end] if body_row_end >= body_row_start else []
+        ),
+        "source_grid_body_rows": source_rows,
+    }
+    if reference_count > 2_000:
+        result["cell_mapping_status"] = "omitted_size_limit"
+        result["cell_mapping_cell_count"] = reference_count
+        return result
+    result["cell_mapping_status"] = "complete"
+    result["projection_header_cells"] = projection_header
+    result["projected_body_cells"] = projected
+    return result
 
 
 def _table_semantic_text(tbl: ResearchTable, rows: list[dict[str, Any]]) -> str:
@@ -850,6 +1204,9 @@ class PaperDocumentChunker:
                         "section_level": section.level,
                         "page_start": section.page_start,
                         "page_end": section.page_end,
+                        **({"fidelity_source_map": _fidelity_chunk_source_map(
+                            doc, metadata=section.metadata,
+                        )} if doc.fidelity is not None else {}),
                     },
                 ),
             ))
@@ -889,6 +1246,7 @@ class PaperDocumentChunker:
 
                 has_figure, fig_key = _find_figure_ref(para_text)
                 figure_id = ""
+                generated_element_context = False
                 visual_references: list[dict[str, Any]] = []
                 if has_figure and fig_key:
                     figure_id = next(
@@ -897,6 +1255,7 @@ class PaperDocumentChunker:
                     if figure_id:
                         fig = elements.figures[figure_id]
                         para_text = para_text + f"\n[{fig.figure_id}: {fig.caption}]"
+                        generated_element_context = True
                 for ref in _body_visual_references(raw_para):
                     lookup = figure_lookup if ref["kind"] == "figure" else table_lookup
                     element = lookup.get(ref["label"])
@@ -945,6 +1304,21 @@ class PaperDocumentChunker:
                             "needs_proposition_decomposition": need_propositions,
                             "formula_references": formula_references,
                             "visual_references": visual_references,
+                            **({"fidelity_source_map": _fidelity_chunk_source_map(
+                                doc,
+                                metadata=section.metadata,
+                                section_text=section.text,
+                                paragraph_text=raw_para,
+                                paragraph_index=para_idx,
+                                excluded_chunk_content=tuple(
+                                    reason
+                                    for reason, excluded in (
+                                        ("overlap_prefix", bool(overlap_text)),
+                                        ("generated_element_context", generated_element_context),
+                                    )
+                                    if excluded
+                                ),
+                            )} if doc.fidelity is not None else {}),
                             **build_paragraph_span_metadata(
                                 content=para_text,
                                 overlap_text=overlap_text,
@@ -1003,6 +1377,9 @@ class PaperDocumentChunker:
                         "formula_referenced_text": formula_referenced_text,
                         "reference_labels": sorted(_formula_reference_keys(eq)),
                         "formula_parent_match_strategy": match_strategy,
+                        **({"fidelity_source_map": _fidelity_chunk_source_map(
+                            doc, metadata=eq.metadata, element_ref=eq.equation_id,
+                        )} if doc.fidelity is not None else {}),
                     },
                 ),
             ))
@@ -1075,6 +1452,9 @@ class PaperDocumentChunker:
                         "content_sources": content_sources,
                         "figure_chunk_identity": figure_identity,
                         "figure_chunk_occurrence": figure_chunk_occurrence,
+                        **({"fidelity_source_map": _fidelity_chunk_source_map(
+                            doc, metadata=fig.metadata, element_ref=fig.figure_id,
+                        )} if doc.fidelity is not None else {}),
                     },
                 ),
             ))
@@ -1150,6 +1530,13 @@ class PaperDocumentChunker:
                         "row_count": len(tbl.rows),
                         "table_chunk_identity": table_identity,
                         "table_chunk_occurrence": table_chunk_occurrence,
+                        **({"fidelity_source_map": _fidelity_chunk_source_map(
+                            doc, metadata=tbl.metadata, element_ref=tbl.table_id,
+                        )} if doc.fidelity is not None else {}),
+                        **({"table_grid_source_map": _table_grid_source_map(
+                            tbl, body_row_start=0,
+                            body_row_end=min(len(tbl.rows), _TABLE_PARENT_ROW_LIMIT) - 1,
+                        )} if tbl.grid is not None else {}),
                     },
                 ),
             ))
@@ -1205,6 +1592,12 @@ class PaperDocumentChunker:
                             "row_end": row_end - 1,
                             "parent_table_chunk_id": table_chunk_id,
                             "is_table_row_group": True,
+                            **({"fidelity_source_map": _fidelity_chunk_source_map(
+                                doc, metadata=tbl.metadata, element_ref=tbl.table_id,
+                            )} if doc.fidelity is not None else {}),
+                            **({"table_grid_source_map": _table_grid_source_map(
+                                tbl, body_row_start=row_start, body_row_end=row_end - 1,
+                            )} if tbl.grid is not None else {}),
                             "table_chunk_identity": table_identity,
                             "table_chunk_occurrence": table_chunk_occurrence,
                         },
@@ -1255,6 +1648,9 @@ class PaperDocumentChunker:
                         "token_start": chunk_idx,
                         "token_end": min(chunk_idx + token_limit, len(words)),
                         "formula_references": formula_references,
+                        **({"fidelity_source_map": _fidelity_chunk_source_map(
+                            doc, metadata={}, paragraph_text=content,
+                        )} if doc.fidelity is not None else {}),
                     },
                 ),
             ))

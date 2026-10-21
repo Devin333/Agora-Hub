@@ -109,7 +109,7 @@ def test_url_bakeoff_ingest_fetches_pdf_and_rewrites_source_refs(tmp_path: Path)
 def test_url_bakeoff_ingest_records_failures(tmp_path: Path) -> None:
     report = ingest_parser_bakeoff_pdf_urls(
         ["https://example.test/paper.pdf"],
-        backend="mineru",
+        backend="marker",
         papers_dir=tmp_path / "papers",
         fetcher=_FakeUrlFetcher(),
         parser=_FailingParser(),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gzip
 
-import fitz
+import pymupdf
 import pytest
 
 from backend.research.document.cascade_parser import (
@@ -12,6 +12,7 @@ from backend.research.document.cascade_parser import (
     PdfTextExtractionError,
     PyMuPDFTextDocumentParser,
     SelectableTextPdfDocumentParser,
+    build_default_pdf_cascade_parser,
     parser_cascade_backend_names,
 )
 from backend.research.domain.common import SourceLineage
@@ -87,7 +88,7 @@ def _doc(
 
 
 def _pdf(text_pages: list[str]) -> bytes:
-    doc = fitz.open()
+    doc = pymupdf.open()
     for text in text_pages:
         page = doc.new_page()
         page.insert_text((50, 72), text)
@@ -120,39 +121,44 @@ def _identity() -> GraphExecutionIdentity:
 
 
 def test_cascade_returns_first_backend_when_quality_passes() -> None:
-    first = _Parser(_doc("paper-1", "mineru", sections=2, chars=80))
+    first = _Parser(_doc("paper-1", "marker", sections=2, chars=80))
     second = _Parser(_doc("paper-1", "marker", sections=2, chars=80))
-    parser = CascadeDocumentParser([("mineru", first), ("marker", second)], probe=_probe())
+    parser = CascadeDocumentParser([("marker", first), ("marker", second)], probe=_probe())
 
     doc = parser.parse("paper-1", b"%PDF-1.7")
 
-    assert doc.metadata["parse_source"] == "mineru"
-    assert doc.metadata["parser_cascade"]["used_backend"] == "mineru"
+    assert doc.metadata["parse_source"] == "marker"
+    assert doc.metadata["parser_cascade"]["used_backend"] == "marker"
     assert doc.metadata["parser_cascade"]["attempts"][0]["status"] == "success"
+    assert doc.metadata["parser_cascade"]["attempts"][0]["quality"]["metrics"]["dimensions"]["execution"]["status"] == "completed"
+    assert doc.metadata["parser_cascade"]["attempts"][0]["quality"]["metrics"]["dimensions"]["structure_and_source"]["status"] == "unknown"
     assert second.calls == 0
 
 
 def test_cascade_falls_through_after_parse_error() -> None:
     first = _Parser(exc=RuntimeError("boom"))
     second = _Parser(_doc("paper-1", "marker", sections=2, chars=80))
-    parser = CascadeDocumentParser([("mineru", first), ("marker", second)], probe=_probe())
+    parser = CascadeDocumentParser([("marker", first), ("marker", second)], probe=_probe())
 
     doc = parser.parse("paper-1", b"%PDF-1.7")
 
     attempts = doc.metadata["parser_cascade"]["attempts"]
     assert doc.metadata["parse_source"] == "marker"
-    assert attempts[0]["backend"] == "mineru"
+    assert attempts[0]["backend"] == "marker"
     assert attempts[0]["status"] == "parse_error"
     assert "RuntimeError: boom" in attempts[0]["reason"]
     assert attempts[1]["backend"] == "marker"
     assert attempts[1]["status"] == "success"
+    assert attempts[1]["quality"]["metrics"]["dimensions"]["execution"]["attempt_count"] == 2
+    assert attempts[1]["quality"]["metrics"]["dimensions"]["execution"]["status"] == "recovered"
+    assert attempts[1]["quality"]["metrics"]["dimensions"]["execution"]["failed_attempt_count"] == 1
 
 
 def test_cascade_forwards_exact_execution_identity_to_aware_backend() -> None:
     backend = _ExecutionAwareParser(
-        _doc("paper-1", "mineru", sections=2, chars=80)
+        _doc("paper-1", "marker", sections=2, chars=80)
     )
-    parser = CascadeDocumentParser([("mineru", backend)], probe=_probe())
+    parser = CascadeDocumentParser([("marker", backend)], probe=_probe())
     identity = _identity()
 
     parser.parse(
@@ -169,7 +175,7 @@ def test_cascade_propagates_execution_denial_without_fallback() -> None:
     second = _Parser(_doc("paper-1", "marker", sections=2, chars=80))
     fallback = _Parser(_doc("paper-1", "pymupdf", sections=2, chars=80))
     parser = CascadeDocumentParser(
-        [("mineru", denied), ("marker", second)],
+        [("marker", denied), ("marker", second)],
         probe=_probe(),
         fallback=fallback,
     )
@@ -183,9 +189,9 @@ def test_cascade_propagates_execution_denial_without_fallback() -> None:
 
 
 def test_cascade_falls_through_after_quality_rejection() -> None:
-    first = _Parser(_doc("paper-1", "mineru", sections=1, chars=10))
+    first = _Parser(_doc("paper-1", "marker", sections=1, chars=10))
     second = _Parser(_doc("paper-1", "marker", sections=2, chars=80))
-    parser = CascadeDocumentParser([("mineru", first), ("marker", second)], probe=_probe())
+    parser = CascadeDocumentParser([("marker", first), ("marker", second)], probe=_probe())
 
     doc = parser.parse("paper-1", b"%PDF-1.7")
 
@@ -194,12 +200,13 @@ def test_cascade_falls_through_after_quality_rejection() -> None:
     assert attempts[0]["status"] == "quality_rejected"
     assert attempts[0]["reason"] == "sections_below_threshold"
     assert attempts[0]["quality"]["passed"] is False
+    assert attempts[0]["quality"]["metrics"]["dimensions"]["content"]["status"] == "degraded"
 
 
 def test_cascade_uses_pymupdf_fallback_after_all_attempts_fail() -> None:
     parser = CascadeDocumentParser(
         [
-            ("mineru", _Parser(exc=RuntimeError("mineru failed"))),
+            ("marker", _Parser(exc=RuntimeError("marker failed"))),
             ("marker", _Parser(_doc("paper-1", "marker", sections=1, chars=5))),
         ],
         probe=_probe(),
@@ -219,7 +226,7 @@ def test_cascade_uses_pymupdf_fallback_after_all_attempts_fail() -> None:
 def test_pymupdf_fallback_extracts_gzipped_pdf_via_cascade_arxiv_parser() -> None:
     latex = _LatexParser()
     pdf_parser = CascadeDocumentParser(
-        [("mineru", _Parser(exc=RuntimeError("down")))],
+        [("marker", _Parser(exc=RuntimeError("down")))],
         probe=_probe(),
         fallback=PyMuPDFTextDocumentParser(),
     )
@@ -273,9 +280,9 @@ def test_selectable_text_pdf_parser_rejects_garbled_extraction() -> None:
 
 def test_cascade_arxiv_parser_forwards_execution_identity_to_pdf_cascade() -> None:
     backend = _ExecutionAwareParser(
-        _doc("paper-1", "mineru", sections=2, chars=80)
+        _doc("paper-1", "marker", sections=2, chars=80)
     )
-    pdf_parser = CascadeDocumentParser([("mineru", backend)], probe=_probe())
+    pdf_parser = CascadeDocumentParser([("marker", backend)], probe=_probe())
     parser = CascadeArxivDocumentParser(
         latex_parser=_LatexParser(),
         pdf_parser=pdf_parser,
@@ -294,7 +301,7 @@ def test_cascade_arxiv_parser_forwards_execution_identity_to_pdf_cascade() -> No
 def test_cascade_arxiv_parser_keeps_latex_routing() -> None:
     latex = _LatexParser()
     pdf_parser = CascadeDocumentParser(
-        [("mineru", _Parser(exc=RuntimeError("should not run")))],
+        [("marker", _Parser(exc=RuntimeError("should not run")))],
         probe=_probe(),
     )
     parser = CascadeArxivDocumentParser(latex_parser=latex, pdf_parser=pdf_parser)
@@ -306,9 +313,41 @@ def test_cascade_arxiv_parser_keeps_latex_routing() -> None:
 
 
 def test_parser_cascade_backend_names_validates_env(monkeypatch) -> None:
-    monkeypatch.setenv("NEWSROOM_PDF_PARSER_CASCADE", "mineru,marker")
+    monkeypatch.setenv("NEWSROOM_PDF_PARSER_CASCADE", "marker,pymupdf")
 
-    assert parser_cascade_backend_names() == ("mineru", "marker")
+    assert parser_cascade_backend_names() == ("marker", "pymupdf")
 
-    with pytest.raises(ValueError, match="mineru, marker, pymupdf"):
+    with pytest.raises(ValueError, match="marker, pymupdf"):
         parser_cascade_backend_names("docling")
+    with pytest.raises(ValueError, match="marker, pymupdf"):
+        parser_cascade_backend_names("mineru,marker")
+
+
+def test_default_pdf_parser_supports_pymupdf_only_mode(monkeypatch) -> None:
+    monkeypatch.setenv("NEWSROOM_PDF_PARSER_CASCADE", "pymupdf")
+
+    parser = build_default_pdf_cascade_parser()
+
+    assert isinstance(parser, PyMuPDFTextDocumentParser)
+    document = parser.parse("paper-1", _pdf(["Native text only."]))
+    assert document.metadata["parser_backend"] == "pymupdf"
+
+
+@pytest.mark.parametrize(
+    ("metadata", "reason"),
+    [
+        ({"fidelity_status": "unavailable"}, "source_fidelity_unavailable"),
+        ({"parser_warning_codes": [{"code": "formula_source_missing", "block_index": 2}]}, "formula_source_missing"),
+    ],
+)
+def test_quality_probe_rejects_unmapped_structure_and_missing_formula(
+    metadata: dict[str, object], reason: str,
+) -> None:
+    document = _doc("paper-quality-failure", "marker", sections=2, chars=120)
+    document.metadata.update(metadata)
+
+    result = _probe().evaluate(document)
+
+    assert result.passed is False
+    assert result.reason == reason
+    assert result.metrics["dimensions"]["content"]["status"] == "degraded"

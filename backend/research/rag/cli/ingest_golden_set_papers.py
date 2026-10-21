@@ -42,7 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--pdf-parser-backend",
-        choices=("nougat", "mineru", "marker", "cascade"),
+        choices=("nougat", "marker", "cascade"),
         default=None,
     )
     parser.add_argument("--with-pdf-sidecar", action="store_true")

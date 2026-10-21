@@ -110,13 +110,13 @@ def _find_original_pdf(paper_dir: Path, paper_id: str) -> Path | None:
 
 
 def _render_pdf_page(pdf_path: Path, image_path: Path, *, page: int) -> None:
-    import fitz
+    import pymupdf
 
     image_path.parent.mkdir(parents=True, exist_ok=True)
-    with fitz.open(str(pdf_path)) as document:
+    with pymupdf.open(str(pdf_path)) as document:
         if page < 1 or page > len(document):
             return
-        pixmap = document[page - 1].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+        pixmap = document[page - 1].get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False)
         pixmap.save(str(image_path))
 
 

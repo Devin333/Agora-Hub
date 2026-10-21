@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from backend.research.rag.evaluation.document_parsing_protocol import (
+    load_parsing_evaluation_manifest,
+    summarize_parsing_evaluation_manifest,
+)
+
 
 DEFAULT_ACCEPTANCE_THRESHOLDS: dict[str, float] = {
     "min_requested_papers": 20.0,
@@ -24,6 +29,7 @@ class ParserArtifactInput:
     papers_dir: Path
     rag_report_path: Path | None = None
     ingest_manifest_path: Path | None = None
+    parsing_manifest_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,7 @@ def build_parser_bakeoff_report(config: ParserBakeoffReportConfig) -> ParserBake
             rag_report_path=parser_input.rag_report_path,
             ingest_manifest_path=parser_input.ingest_manifest_path,
             ingest_manifest=ingest_manifest,
+            parsing_manifest_path=parser_input.parsing_manifest_path,
         )
     report = ParserBakeoffReport(
         parser_count=len(parser_payloads),
@@ -163,6 +170,7 @@ def _parser_summary(
     rag_report_path: Path | None,
     ingest_manifest_path: Path | None,
     ingest_manifest: dict[str, Any] | None,
+    parsing_manifest_path: Path | None,
 ) -> dict[str, Any]:
     succeeded = [doc for doc in documents if not doc.get("_load_error")]
     failed = [doc for doc in documents if doc.get("_load_error")]
@@ -188,9 +196,37 @@ def _parser_summary(
             for doc in documents
             if isinstance(doc.get("_paper_id_mismatch"), dict)
         ],
+        "parsing_protocol": _parsing_protocol_summary(parsing_manifest_path),
     }
     summary["penalized_metrics"] = _penalized_metrics(summary)
     return summary
+
+
+def _parsing_protocol_summary(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {
+            "status": "not_evaluated",
+            "manifest_path": None,
+            "reason": "no parsing evaluation manifest was provided",
+            "quality_gate": {"evaluated": False, "passed": None},
+        }
+    try:
+        manifest = load_parsing_evaluation_manifest(path)
+    except (OSError, UnicodeError, ValueError):
+        return {
+            "status": "invalid",
+            "manifest_path": str(path),
+            "reason": "parsing evaluation manifest is unavailable or invalid",
+            "quality_gate": {"evaluated": False, "passed": None},
+        }
+
+    summary = summarize_parsing_evaluation_manifest(manifest)
+    return {
+        "status": "reported",
+        "manifest_path": str(path),
+        "fingerprints": manifest.fingerprints.model_dump(mode="json"),
+        **summary,
+    }
 
 
 def _manifest_summary(
@@ -791,6 +827,53 @@ def _markdown(payload: dict[str, Any]) -> str:
             ])
             + " |"
         )
+    lines.extend([
+        "",
+        "## Document Parsing Protocol (descriptive; not an acceptance gate)",
+        "",
+        "| Parser | status | run | track | run status | reported / planned pages | metric denominators | measured runtime |",
+        "|---|---|---|---|---|---:|---|---|",
+    ])
+    for name, item in (payload.get("parsers") or {}).items():
+        parsing = item.get("parsing_protocol") or {"status": "not_evaluated"}
+        page_summary = parsing.get("page_summary") or {}
+        denominator_summary = parsing.get("metric_denominators") or {}
+        runtime = parsing.get("runtime_summary") or {}
+        runtime_text = (
+            f"n={runtime.get('measured_pages', 0)}, total={_fmt_num(runtime.get('total_seconds'))}s, "
+            f"median={_fmt_num(runtime.get('median_seconds'))}s, p95={_fmt_num(runtime.get('p95_seconds'))}s"
+            if runtime.get("measured_pages")
+            else "not recorded"
+        )
+        denominators = ", ".join(
+            f"{metric}={details.get('scored_denominator', 0)}/{details.get('reported_outcomes', 0)}"
+            for metric, details in sorted(denominator_summary.items())
+        ) or "-"
+        lines.append(
+            "| " + " | ".join([
+                name,
+                str(parsing.get("status") or "not_evaluated"),
+                str(parsing.get("run_id") or "-"),
+                str(parsing.get("track") or "-"),
+                str(parsing.get("run_status") or "-"),
+                f"{page_summary.get('reported_pages', 0)} / {page_summary.get('planned_pages', 0)}",
+                denominators,
+                runtime_text,
+            ]) + " |"
+        )
+        fingerprints = parsing.get("fingerprints") or {}
+        fingerprint_refs = []
+        for key in ("parser", "parser_image_digest", "parser_config_sha256", "code_revision"):
+            identity = fingerprints.get(key) or {}
+            fingerprint_refs.append(f"{key}={identity.get('value') or '-'}")
+        if parsing.get("status") == "reported":
+            lines.append(f"  - {name} fingerprint refs: " + "; ".join(fingerprint_refs))
+        if parsing.get("reason"):
+            lines.append(f"  - {name} parsing manifest: {parsing['reason']}")
+    lines.extend([
+        "",
+        "Parsing protocol summaries (including runtime where recorded) are descriptive only; they do not change legacy parser scoring or acceptance.",
+    ])
     lines.extend([
         "",
         "## Parser Scoring",

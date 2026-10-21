@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,19 @@ class ResearchParserExecutionAdapter:
         )
         self._cancellation_grace_seconds = float(cancellation_grace_seconds)
         self.last_outcome: ExecutionOutcome | None = None
+
+    def cache_identity(self) -> dict[str, Any]:
+        """Return stable declared execution configuration, never run state."""
+        return {
+            "schema": "research-parser-execution-adapter.v1",
+            "profile": self._profile.to_dict(),
+            "resource_limits": self._resource_limits.to_dict(),
+            "cancellation_grace_seconds": self._cancellation_grace_seconds,
+            # The registry has no declared immutable provider identity API. Do
+            # not inspect its provider internals or dynamic capability state.
+            "provider_identity": "unknown",
+            "adapter_source_sha256": sha256(Path(__file__).read_bytes()).hexdigest(),
+        }
 
     def __call__(
         self,

@@ -9,8 +9,11 @@ import pytest
 from framework.shared.windows_paths import storage_io_path
 
 from backend.research.document.chunk_manifest import ChunkManifestManager
-from backend.research.document.chunker import PaperDocumentChunker
+from backend.research.document.chunker import PaperDocumentChunker, _fidelity_chunk_source_map
 from backend.research.document.models import PaperChunk
+from backend.research.domain.document_fidelity import (
+    DocumentBlock, DocumentFidelity, DocumentPage, InlineMathSpan, TableCell, TableGrid,
+)
 from backend.research.document.section_detector import classify_section_role, is_abstract_section
 from backend.research.document.special_element_scanner import scan_special_elements
 from backend.research.rag.retrieval.paper_policy import build_retrieval_route, classify_query_intent
@@ -488,6 +491,96 @@ def test_table_chunk_produced():
     assert "tab1" in table_chunks[0].content
 
 
+def test_table_chunk_renders_missing_slots_as_empty_without_literal_none():
+    table = make_table("tab-missing", "Ragged", ["Metric", "Value"]).model_copy(update={
+        "rows": [{"Metric": "recall", "Value": None}],
+    })
+    doc = make_doc(sections=[make_section("s1", "Results", "See the table.")]).model_copy(
+        update={"tables": [table]},
+    )
+    chunk = next(item for item in CHUNKER.chunk(doc, "marker") if item.chunk_type == "table")
+    assert "recall | " in chunk.content
+    assert "None" not in chunk.content
+
+
+def test_table_chunk_carries_cell_level_source_mapping():
+    table_id = "tab-grid"
+    locator = "paper://paper-1/pdf#page=4&table=1"
+    grid = TableGrid(
+        table_id=table_id,
+        block_id="marker-table-1",
+        row_count=2,
+        column_count=2,
+        has_header=False,
+        source_locator=locator,
+        cells=(
+            TableCell(cell_id="h-a", row_index=0, column_index=0, status="content", text="Metric",
+                      source_locator=f"{locator}&cell=0,0", bbox_unknown_reason="not provided"),
+            TableCell(cell_id="h-b", row_index=0, column_index=1, status="content", text="Value",
+                      source_locator=f"{locator}&cell=0,1", bbox_unknown_reason="not provided"),
+            TableCell(cell_id="v-a", row_index=1, column_index=0, status="content", text="recall",
+                      source_locator=f"{locator}&cell=1,0", bbox_unknown_reason="not provided"),
+            TableCell(cell_id="v-b", row_index=1, column_index=1, status="blank",
+                      source_locator=f"{locator}&cell=1,1", bbox_unknown_reason="not provided"),
+        ),
+    )
+    table = make_table(table_id, "Results", ["Metric", "Value"]).model_copy(update={
+        "rows": [{"Metric": "recall", "Value": ""}],
+        "grid": grid,
+        "metadata": {"source_locator": locator},
+    })
+    doc = make_doc(sections=[make_section("s1", "Results", "The table lists recall.")]).model_copy(
+        update={"tables": [table]},
+    )
+
+    chunk = next(item for item in CHUNKER.chunk(doc, "marker") if item.chunk_type == "table")
+    mapping = chunk.metadata["table_grid_source_map"]
+    assert mapping["cell_mapping_status"] == "complete"
+    assert mapping["source_grid_body_rows"] == [1]
+    assert [item["cell_id"] for item in mapping["projection_header_cells"]] == ["h-a", "h-b"]
+    assert [item["cell_id"] for item in mapping["projected_body_cells"]] == ["v-a", "v-b"]
+    assert mapping["projected_body_cells"][1]["status"] == "blank"
+
+
+def test_table_visual_description_remains_separate_from_cell_content_and_grid_truth():
+    table_id = "tab-visual-separation"
+    locator = "paper://paper-1/pdf#page=4&table=1"
+    grid = TableGrid(
+        table_id=table_id, block_id="marker-table-visual", row_count=2, column_count=1,
+        has_header=False, source_locator=locator, cells=(
+            TableCell(cell_id="metric-cell", row_index=0, column_index=0, status="content",
+                      text="Metric", source_locator=f"{locator}&cell=0,0",
+                      bbox_unknown_reason="not provided"),
+            TableCell(cell_id="value-cell", row_index=1, column_index=0, status="content",
+                      text="accuracy 0.91", source_locator=f"{locator}&cell=1,0",
+                      bbox_unknown_reason="not provided"),
+        ),
+    )
+    table = make_table(table_id, "Results", ["Metric"]).model_copy(update={
+        "rows": [{"Metric": "accuracy 0.91"}], "grid": grid,
+        "metadata": {"source_locator": locator,
+                     "visual_description": "A red arrow suggests the value is 0.99."},
+    })
+    document = make_doc(sections=[make_section("results", "Results", "Table results.")]).model_copy(
+        update={"tables": [table]},
+    )
+
+    chunk = next(item for item in CHUNKER.chunk(document, "marker") if item.chunk_type == "table")
+
+    assert "accuracy 0.91" in chunk.content
+    assert "0.99" not in chunk.content
+    assert chunk.metadata["visual_description"] == "A red arrow suggests the value is 0.99."
+    source_map = chunk.metadata["table_grid_source_map"]
+    assert [(cell["cell_id"], cell["status"], cell["source_locator"])
+            for cell in source_map["projection_header_cells"]] == [
+        ("metric-cell", "content", f"{locator}&cell=0,0"),
+    ]
+    assert [(cell["cell_id"], cell["status"], cell["source_locator"])
+            for cell in source_map["projected_body_cells"]] == [
+        ("value-cell", "content", f"{locator}&cell=1,0"),
+    ]
+
+
 def test_table_chunk_includes_context_rows_and_trace_metadata():
     section = make_section(
         "s2",
@@ -662,7 +755,7 @@ def test_structure_detected_flag():
 
 def test_parse_source_propagated():
     doc = _structured_doc()
-    for source in ("latex", "marker", "pymupdf", "nougat", "mineru"):
+    for source in ("latex", "marker", "pymupdf", "nougat"):
         chunks = CHUNKER.chunk(doc, source)  # type: ignore[arg-type]
         assert all(c.parse_source == source for c in chunks)
 
@@ -701,7 +794,12 @@ def test_build_retrieval_route_table():
     route = build_retrieval_route("What does Table 2 report?")
     assert route.intent == "table_query"
     assert "table" in route.chunk_type_filter
-    assert route.extra_filters["chunk_type"] == "table"
+    assert "paragraph" in route.chunk_type_filter
+    assert route.extra_filters == {}
+    assert route.candidate_filter_groups == (
+        {"chunk_type": "table"},
+        {"chunk_type": "paragraph"},
+    )
 
 
 def test_build_retrieval_route_method():
@@ -982,3 +1080,405 @@ def test_boilerplate_content_and_meta_question_guards():
     assert _is_meta_question("Which section presents the BERT results?")
     assert _is_meta_question("What are the exact names after the funding statement?")
     assert not _is_meta_question("How does multi-head attention scale queries?")
+
+
+def test_production_chunks_carry_bounded_fidelity_order_and_locator_maps():
+    source_hash = "sha256-source"
+    source_ref = "paper://paper-1/pdf"
+    equation = make_equation("eq-fidelity", "x^2 + y^2 = z^2", source_ref).model_copy(update={
+        "page": 1,
+        "metadata": {
+            "source_locator": f"{source_ref}#page=1",
+            "marker_provenance": {"block_id": "equation-block"},
+        },
+    })
+    section = make_section("fidelity-section", "Results", "The result follows from the equation.",
+                           source_ref=f"{source_ref}#page=1").model_copy(update={
+        "page_start": 1, "page_end": 1,
+        "metadata": {
+            "source_locator": f"{source_ref}#page=1",
+            "marker_provenance": {"blocks": [
+                {"block_id": "body-block"},
+            ]},
+        },
+    })
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1",
+        normalization_version="normalizer/v1", source_hash=source_hash,
+        parser_fingerprint="sha256:parser", profile_fingerprint="sha256:profile",
+        content_checksum="sha256:raw",
+        pages=(DocumentPage(pdf_page_number=1, width=612, height=792, dimension_unit="pt"),),
+        blocks=(
+            DocumentBlock(block_id="body-block", page_number=1, kind="text", source_order=0,
+                          reading_order=0, order_status="preserved", source_locator=f"{source_ref}#page=1",
+                          bbox_unknown_reason="geometry unavailable", text=section.text,
+                          content_owner_id="body-block"),
+            DocumentBlock(block_id="equation-block", page_number=1, kind="equation", source_order=1,
+                          reading_order=1, order_status="preserved", element_ref=equation.equation_id,
+                          source_locator=f"{source_ref}#page=1",
+                          bbox_unknown_reason="geometry unavailable", text=equation.latex,
+                          content_owner_id="equation-block"),
+        ),
+    )
+    document = make_doc(sections=[
+        make_section("intro", "Introduction", "An introduction."),
+        section,
+        make_section("conclusion", "Conclusion", "A conclusion."),
+    ]).model_copy(update={
+        "source_hash": source_hash, "equations": [equation], "fidelity": fidelity,
+    })
+
+    chunks = CHUNKER.chunk(document, "marker")
+    section_parent = next(chunk for chunk in chunks if chunk.chunk_type == "paragraph" and chunk.metadata.get("section_id") == "fidelity-section")
+    formula_chunk = next(chunk for chunk in chunks if chunk.chunk_type == "formula")
+
+    section_map = section_parent.metadata["fidelity_source_map"]
+    assert section_map["mapping_status"] == "complete"
+    assert [item["block_id"] for item in section_map["blocks"]] == ["body-block"]
+    assert [item["reading_order"] for item in section_map["blocks"]] == [0]
+    formula_map = formula_chunk.metadata["fidelity_source_map"]
+    assert formula_map["mapping_status"] == "complete"
+    assert formula_map["blocks"][0]["element_ref"] == equation.equation_id
+    assert formula_map["blocks"][0]["source_locator"].endswith("#page=1")
+    serialized_formula = formula_chunk.model_dump(mode="json", exclude_none=True)
+    assert serialized_formula["metadata"]["fidelity_source_map"] == formula_map
+
+    unmapped_parent = next(
+        chunk for chunk in chunks
+        if chunk.chunk_type == "paragraph" and chunk.metadata.get("section_id") == "intro"
+    )
+    assert unmapped_parent.metadata["fidelity_source_map"]["mapping_status"] == "unavailable"
+
+    mismatched_document = document.model_copy(update={"source_hash": "sha256-different-source"})
+    mismatched_chunks = CHUNKER.chunk(mismatched_document, "marker")
+    mismatched_parent = next(
+        chunk for chunk in mismatched_chunks
+        if chunk.chunk_type == "paragraph" and chunk.metadata.get("section_id") == "fidelity-section"
+    )
+    assert mismatched_parent.metadata["fidelity_source_map"]["mapping_status"] == "quarantined"
+    assert mismatched_parent.metadata["fidelity_source_map"]["blocks"] == []
+
+
+def test_paragraph_children_map_cross_page_duplicate_text_and_raw_inline_math_offsets():
+    source_ref = "paper://paper-1/pdf"
+    repeated = "Repeated paragraph."
+    page_two_text = "Repeated paragraph.\n\nInline $x+y$ closes."
+    inline_start = page_two_text.index("$x+y$")
+    target_text = f"{repeated}\n\n{page_two_text}"
+    target = make_section(
+        "cross-page", "Results", target_text, source_ref=f"{source_ref}#page=1"
+    ).model_copy(update={
+        "page_start": 1,
+        "page_end": 2,
+        "metadata": {
+            "source_locator": f"{source_ref}#page=1",
+            "marker_provenance": {
+                "blocks": [
+                    {"block_id": "page-1-body", "raw_text": repeated},
+                    {"block_id": "page-2-body", "raw_text": page_two_text},
+                ],
+            },
+        },
+    })
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1",
+        normalization_version="normalizer/v1",
+        source_hash="sha256-test",
+        parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile",
+        content_checksum="sha256:raw",
+        pages=(
+            DocumentPage(pdf_page_number=1, width=612, height=792, dimension_unit="pt"),
+            DocumentPage(pdf_page_number=2, width=612, height=792, dimension_unit="pt"),
+        ),
+        blocks=(
+            DocumentBlock(
+                block_id="page-1-body", page_number=1, kind="text", source_order=0,
+                reading_order=0, order_status="preserved", text=repeated,
+                source_locator=f"{source_ref}#page=1",
+                bbox_unknown_reason="geometry unavailable", content_owner_id="page-1-body",
+            ),
+            DocumentBlock(
+                block_id="page-2-body", page_number=2, kind="text", source_order=0,
+                reading_order=0, order_status="preserved", text=page_two_text,
+                source_locator=f"{source_ref}#page=2",
+                bbox_unknown_reason="geometry unavailable", content_owner_id="page-2-body",
+                inline_math=(InlineMathSpan(
+                    start_offset=inline_start, end_offset=inline_start + len("$x+y$"),
+                    offset_text_version="raw", raw_latex="$x+y$",
+                    source_locator=f"{source_ref}#page=2",
+                ),),
+            ),
+        ),
+    )
+    document = make_doc(sections=[
+        make_section("intro", "Introduction", "Intro body."),
+        target,
+        make_section("conclusion", "Conclusion", "Conclusion body."),
+    ]).model_copy(update={"fidelity": fidelity})
+
+    chunks = CHUNKER.chunk(document, "marker")
+    children = [
+        chunk for chunk in chunks
+        if chunk.chunk_type == "paragraph"
+        and chunk.metadata.get("section_id") == "cross-page"
+        and chunk.metadata.get("is_parent") is False
+    ]
+
+    assert len(children) == 3
+    source_maps = [child.metadata["fidelity_source_map"] for child in children]
+    assert [mapping["mapping_status"] for mapping in source_maps] == [
+        "complete", "complete", "partial",
+    ]
+    assert [mapping["blocks"][0]["block_id"] for mapping in source_maps] == [
+        "page-1-body", "page-2-body", "page-2-body",
+    ]
+    assert [mapping["blocks"][0]["page_number"] for mapping in source_maps] == [1, 2, 2]
+    assert source_maps[1]["blocks"][0]["inline_math_spans"] == []
+    inline_entry = source_maps[2]["blocks"][0]
+    inline_paragraph_start = page_two_text.index("Inline")
+    assert inline_entry["block_text_ranges"] == [{
+        "start_offset": inline_paragraph_start,
+        "end_offset": len(page_two_text),
+        "offset_basis": "unicode_codepoint",
+        "offset_text_version": "normalized",
+    }]
+    assert inline_entry["raw_math_offset_compatibility"] == "confirmed"
+    assert inline_entry["inline_math_spans"] == [{
+        "start_offset": inline_start,
+        "end_offset": inline_start + len("$x+y$"),
+        "offset_text_version": "raw",
+        "display": False,
+        "source_locator": f"{source_ref}#page=2",
+    }]
+    assert inline_entry["inline_math_spans"][0]["start_offset"] > 0
+    assert source_maps[2]["mapping_scope"] == "paragraph_source_text"
+    assert source_maps[2]["chunk_content_coverage"] == "partial"
+    assert source_maps[2]["excluded_chunk_content"] == ["overlap_prefix"]
+
+    persisted = json.loads(json.dumps(
+        [child.model_dump(mode="json", exclude_none=True) for child in children]
+    ))
+    restored = [PaperChunk.model_validate(item) for item in persisted]
+    assert restored[2].metadata["fidelity_source_map"] == source_maps[2]
+
+
+def test_paragraph_child_does_not_apply_normalized_range_to_mismatched_raw_math_offsets():
+    source_ref = "paper://paper-1/pdf"
+    normalized_text = "Normalized π before $x$ after."
+    raw_text = "Normalized pi before $x$ after."
+    raw_start = raw_text.index("$x$")
+    target = make_section(
+        "raw-offset-mismatch", "Results", normalized_text, source_ref=f"{source_ref}#page=1"
+    ).model_copy(update={
+        "metadata": {
+            "source_locator": f"{source_ref}#page=1",
+            "marker_provenance": {
+                "blocks": [{"block_id": "normalized-body", "raw_text": raw_text}],
+            },
+        },
+    })
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1",
+        normalization_version="normalizer/v1",
+        source_hash="sha256-test",
+        parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile",
+        content_checksum="sha256:raw",
+        pages=(DocumentPage(pdf_page_number=1, width=612, height=792, dimension_unit="pt"),),
+        blocks=(DocumentBlock(
+            block_id="normalized-body", page_number=1, kind="text", source_order=0,
+            reading_order=0, order_status="preserved", text=normalized_text,
+            source_locator=f"{source_ref}#page=1",
+            bbox_unknown_reason="geometry unavailable", content_owner_id="normalized-body",
+            inline_math=(InlineMathSpan(
+                start_offset=raw_start, end_offset=raw_start + len("$x$"),
+                offset_text_version="raw", raw_latex="$x$",
+                source_locator=f"{source_ref}#page=1",
+            ),),
+        ),),
+    )
+    document = make_doc(sections=[
+        make_section("intro", "Introduction", "Intro body."),
+        target,
+        make_section("conclusion", "Conclusion", "Conclusion body."),
+    ]).model_copy(update={"fidelity": fidelity})
+
+    child = next(
+        chunk for chunk in CHUNKER.chunk(document, "marker")
+        if chunk.chunk_type == "paragraph"
+        and chunk.metadata.get("section_id") == "raw-offset-mismatch"
+        and chunk.metadata.get("is_parent") is False
+    )
+
+    source_map = child.metadata["fidelity_source_map"]
+    block_map = source_map["blocks"][0]
+    assert source_map["mapping_status"] == "partial"
+    assert source_map["mapping_scope"] == "paragraph_source_text"
+    assert source_map["chunk_content_coverage"] == "complete"
+    assert source_map["omitted_inline_math_span_count"] == 1
+    assert block_map["block_text_ranges"] == [{
+        "start_offset": 0,
+        "end_offset": len(normalized_text),
+        "offset_basis": "unicode_codepoint",
+        "offset_text_version": "normalized",
+    }]
+    assert block_map["inline_math_candidate_span_count"] == 1
+    assert block_map["raw_math_offset_compatibility"] == "mismatch"
+    assert block_map["inline_math_span_count"] == 0
+    assert block_map["unmapped_inline_math_span_count"] == 1
+    assert block_map["budget_omitted_inline_math_span_count"] == 0
+    assert block_map["omitted_inline_math_span_count"] == 1
+    assert block_map["inline_math_spans"] == []
+
+
+def test_paragraph_child_fidelity_map_is_unavailable_when_source_range_cannot_be_proven():
+    target = make_section("unaligned", "Results", "Projected paragraph.").model_copy(update={
+        "metadata": {
+            "marker_provenance": {"blocks": [{"block_id": "different-source"}]},
+        },
+    })
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1",
+        normalization_version="normalizer/v1",
+        source_hash="sha256-test",
+        parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile",
+        content_checksum="sha256:raw",
+        pages=(DocumentPage(pdf_page_number=1, width=612, height=792, dimension_unit="pt"),),
+        blocks=(DocumentBlock(
+            block_id="different-source", page_number=1, kind="text", source_order=0,
+            reading_order=0, order_status="preserved", text="Different source text.",
+            source_locator="paper://paper-1#page=1",
+            bbox_unknown_reason="geometry unavailable", content_owner_id="different-source",
+        ),),
+    )
+    document = make_doc(sections=[
+        make_section("intro", "Introduction", "Intro body."),
+        target,
+        make_section("conclusion", "Conclusion", "Conclusion body."),
+    ]).model_copy(update={"fidelity": fidelity})
+
+    child = next(
+        chunk for chunk in CHUNKER.chunk(document, "marker")
+        if chunk.chunk_type == "paragraph"
+        and chunk.metadata.get("section_id") == "unaligned"
+        and chunk.metadata.get("is_parent") is False
+    )
+
+    source_map = child.metadata["fidelity_source_map"]
+    assert source_map["mapping_status"] == "unavailable"
+    assert source_map["reason"] == "paragraph_source_range_unavailable"
+    assert source_map["blocks"] == []
+
+
+def test_fallback_paragraph_chunk_reports_unavailable_fidelity_mapping():
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1",
+        normalization_version="normalizer/v1",
+        source_hash="sha256-test",
+        parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile",
+        content_checksum="sha256:raw",
+        pages=(DocumentPage(pdf_page_number=1, width=612, height=792, dimension_unit="pt"),),
+        blocks=(DocumentBlock(
+            block_id="fallback-source", page_number=1, kind="text", source_order=0,
+            reading_order=0, order_status="preserved", text="Fallback body.",
+            source_locator="paper://paper-1#page=1",
+            bbox_unknown_reason="geometry unavailable", content_owner_id="fallback-source",
+        ),),
+    )
+    document = make_doc(sections=[
+        make_section("only", "Body", "Fallback body."),
+    ]).model_copy(update={"fidelity": fidelity})
+
+    paragraph = next(chunk for chunk in CHUNKER.chunk(document, "marker") if chunk.chunk_type == "paragraph")
+
+    source_map = paragraph.metadata["fidelity_source_map"]
+    assert source_map["mapping_status"] == "unavailable"
+    assert source_map["reason"] == "paragraph_source_range_unavailable"
+    assert source_map["blocks"] == []
+
+
+def test_fidelity_chunk_source_map_reports_truncation_instead_of_silently_omitting_blocks():
+    source_ref = "paper://large-document/pdf"
+    blocks = tuple(DocumentBlock(
+        block_id=f"block-{index}", page_number=1, kind="text", source_order=index,
+        reading_order=index, order_status="preserved",
+        source_locator=f"{source_ref}#page=1&block={index}",
+        bbox_unknown_reason="geometry unavailable", content_owner_id=f"block-{index}",
+    ) for index in range(129))
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1", normalization_version="normalizer/v1",
+        source_hash="sha256-large", parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile", content_checksum="sha256:raw",
+        pages=(DocumentPage(pdf_page_number=1, width=612, height=792, dimension_unit="pt"),),
+        blocks=blocks,
+    )
+    document = make_doc(sections=[make_section("large", "Large", "Content")]).model_copy(update={
+        "source_hash": "sha256-large", "fidelity": fidelity,
+    })
+    marker_metadata = {"marker_provenance": {
+        "blocks": [{"block_id": f"block-{index}"} for index in range(129)],
+    }}
+
+    source_map = _fidelity_chunk_source_map(document, metadata=marker_metadata)
+
+    assert source_map is not None
+    assert source_map["mapping_status"] == "partial"
+    assert source_map["expected_block_count"] == 129
+    assert source_map["matched_block_count"] == 129
+    assert source_map["omitted_block_count"] == 1
+    assert len(source_map["blocks"]) == 128
+
+
+def test_fidelity_chunk_source_map_orders_pages_before_page_local_order():
+    blocks = tuple(DocumentBlock(
+        block_id=f"p{page}-b{index}", page_number=page, kind="text", source_order=index,
+        reading_order=index, order_status="preserved", source_locator=f"paper://test#page={page}",
+        bbox_unknown_reason="unavailable", content_owner_id=f"p{page}-b{index}",
+    ) for page in (1, 2) for index in (0, 1))
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1", normalization_version="normalizer/v1",
+        source_hash="sha256-test", parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile", content_checksum="sha256:raw",
+        pages=tuple(DocumentPage(pdf_page_number=page, width=612, height=792, dimension_unit="pt")
+                    for page in (1, 2)), blocks=blocks,
+    )
+    document = make_doc().model_copy(update={"fidelity": fidelity})
+    mapping = _fidelity_chunk_source_map(document, metadata={"marker_provenance": {
+        "blocks": [{"block_id": block.block_id} for block in reversed(blocks)],
+    }})
+    assert mapping["mapping_status"] == "complete"
+    assert [entry["block_id"] for entry in mapping["blocks"]] == [
+        "p1-b0", "p1-b1", "p2-b0", "p2-b1",
+    ]
+
+
+def test_fidelity_chunk_math_map_caps_total_spans_and_reports_omissions():
+    blocks = tuple(DocumentBlock(
+        block_id=f"math-{index}", page_number=1, kind="text", source_order=index,
+        reading_order=index, order_status="preserved", source_locator="paper://test#page=1",
+        bbox_unknown_reason="unavailable", content_owner_id=f"math-{index}", text="x" * 100,
+        inline_math=tuple(InlineMathSpan(
+            start_offset=i, end_offset=i + 1, offset_text_version="normalized",
+            raw_latex="x", source_locator="paper://test#page=1",
+        ) for i in range(100)),
+    ) for index in (0, 1))
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1", normalization_version="normalizer/v1",
+        source_hash="sha256-test", parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile", content_checksum="sha256:raw",
+        pages=(DocumentPage(pdf_page_number=1, width=612, height=792, dimension_unit="pt"),),
+        blocks=blocks,
+    )
+    document = make_doc().model_copy(update={"fidelity": fidelity})
+    mapping = _fidelity_chunk_source_map(document, metadata={"marker_provenance": {
+        "blocks": [{"block_id": block.block_id} for block in blocks],
+    }})
+    assert mapping["mapping_status"] == "partial"
+    assert mapping["omitted_block_count"] == 0
+    assert mapping["omitted_inline_math_span_count"] == 72
+    assert [len(entry["inline_math_spans"]) for entry in mapping["blocks"]] == [100, 28]
+    assert mapping["blocks"][1]["inline_math_span_count"] == 100
+    assert mapping["blocks"][1]["omitted_inline_math_span_count"] == 72

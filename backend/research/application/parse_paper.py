@@ -3,9 +3,13 @@ from __future__ import annotations
 import inspect
 import logging
 import mimetypes
+import os
+from types import ModuleType
 from time import monotonic
 from threading import RLock
 from hashlib import sha256
+from pathlib import Path
+import json
 from datetime import UTC, datetime
 from typing import Any, Mapping, Protocol, runtime_checkable
 from urllib.parse import parse_qs, urlsplit
@@ -24,6 +28,7 @@ from backend.research.domain.catalog import (
 )
 from backend.research.domain.common import SourceLineage, require_text, stable_research_id, unique_texts
 from backend.research.domain.document import ResearchDocument, ResearchSection
+from backend.research.domain.document_fidelity import DocumentFidelity
 from backend.research.domain.evidence import ResearchEvidencePack
 from backend.research.domain.paper import PaperSourceRecord, ResearchPaper
 from backend.research.document.chunk_manifest import ChunkManifestManager
@@ -301,6 +306,246 @@ class InMemoryResearchEventSink:
                 **dict(payload),
             }
         )
+
+
+def _parse_cache_fingerprint(
+    parser: Any,
+    compiler: Any,
+    chunker: Any,
+    options: Mapping[str, Any],
+    content_type: str,
+) -> str | None:
+    """Fingerprint the implementation and inputs that shape stored parse/chunk output.
+
+    Missing source identity fails closed: legacy documents or opaque runtime components
+    are reparsed rather than silently reused across a potentially changed pipeline.
+    """
+    components = [parser, compiler, chunker]
+    parser_configuration = _known_document_parser_configuration(parser)
+    if parser_configuration is None:
+        return None
+    modules: dict[str, str] = {}
+    pending = [component for component in components if component is not None]
+    visited: set[int] = set()
+    while pending:
+        component = pending.pop()
+        if id(component) in visited:
+            continue
+        visited.add(id(component))
+        cls = component if inspect.isclass(component) else type(component)
+        module_name = str(getattr(cls, "__module__", ""))
+        try:
+            source_path = Path(inspect.getfile(cls))
+            source_digest = sha256(source_path.read_bytes()).hexdigest()
+        except (OSError, TypeError):
+            return None
+        modules[module_name] = source_digest
+        # Include directly imported local implementation helpers as well as the
+        # owning class module: adapters such as Marker delegate geometry/table
+        # conversion to sibling modules whose edits also change stored output.
+        implementation_module = inspect.getmodule(cls)
+        for value in getattr(implementation_module, "__dict__", {}).values():
+            dependency = value if isinstance(value, ModuleType) else inspect.getmodule(value)
+            dependency_name = str(getattr(dependency, "__name__", ""))
+            if not dependency_name.startswith(("backend.", "framework.")):
+                continue
+            try:
+                dependency_path = Path(inspect.getfile(dependency))
+                dependency_digest = sha256(dependency_path.read_bytes()).hexdigest()
+            except (OSError, TypeError):
+                continue
+            modules[dependency_name] = dependency_digest
+        # Parser cascades and format routers own nested parser instances. Include
+        # those implementation modules so changing a child invalidates the cache.
+        attributes = getattr(component, "__dict__", {})
+        for value in attributes.values():
+            pending.extend(_nested_parser_components(value))
+    try:
+        for schema_type in (ResearchDocument, DocumentFidelity):
+            schema_path = Path(inspect.getfile(schema_type))
+            modules[schema_type.__module__] = sha256(schema_path.read_bytes()).hexdigest()
+        payload = {
+            "version": "research-parse-cache.v1",
+            "components": dict(sorted(modules.items())),
+            "parser_configuration": parser_configuration,
+            "options": dict(options),
+            "content_type": str(content_type),
+            "document_schema": "research-document.v1",
+            "fidelity_schema": "research-document-fidelity.v1",
+            "runtime_config": {
+                key: value
+                for key, value in sorted(os.environ.items())
+                if key.startswith((
+                    "NEWSROOM_MARKER_",
+                    "NEWSROOM_PDF_PARSER_",
+                    "NEWSROOM_PARSER_QUALITY_",
+                ))
+            },
+        }
+        encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+    return sha256(encoded.encode("utf-8")).hexdigest()
+
+
+
+def _known_document_parser_configuration(parser: Any) -> dict[str, Any] | None:
+    """Serialize declared configuration for known production document parsers.
+
+    Runtime counters and arbitrary instance state are deliberately excluded. An
+    unrecognized production document parser is opaque and cannot reuse cached
+    output. Test/custom parsers remain source-fingerprinted as before.
+    """
+    if parser is None:
+        return {"type": None}
+    cls = parser if inspect.isclass(parser) else type(parser)
+    module_name = str(getattr(cls, "__module__", ""))
+    class_name = str(getattr(cls, "__qualname__", getattr(cls, "__name__", "")))
+    if not module_name.startswith("backend.research.document."):
+        return {
+            "type": f"{module_name}.{class_name}",
+            "configuration": "not_declared",
+        }
+
+    identity = f"{module_name}.{class_name}"
+    attributes = getattr(parser, "__dict__", {})
+    if (
+        module_name == "backend.research.document.format_router"
+        and class_name == "MultiFormatDocumentParser"
+    ):
+        from backend.research.document.format_router import MultiFormatDocumentParser
+
+        if cls is not MultiFormatDocumentParser:
+            return None
+        arxiv_parser = _known_document_parser_configuration(attributes.get("_arxiv"))
+        html_parser = _known_document_parser_configuration(attributes.get("_html"))
+        pdf_parser = _known_document_parser_configuration(attributes.get("_pdf"))
+        if arxiv_parser is None or html_parser is None or pdf_parser is None:
+            return None
+        return {
+            "type": identity,
+            "arxiv": arxiv_parser,
+            "html": html_parser,
+            "pdf": pdf_parser,
+        }
+    if module_name == "backend.research.document.html_parser" and class_name == "HtmlDocumentParser":
+        from backend.research.document.html_parser import HtmlDocumentParser
+
+        if cls is not HtmlDocumentParser or attributes:
+            return None
+        return {"type": identity}
+    if module_name == "backend.research.document.cascade_parser":
+        if class_name == "DocumentQualityProbe":
+            names = (
+                "min_sections",
+                "min_body_chars",
+                "min_non_empty_section_ratio",
+                "max_replacement_char_ratio",
+                "min_table_row_coverage_if_tables",
+            )
+            return {
+                "type": identity,
+                "thresholds": {name: getattr(parser, name) for name in names},
+            }
+        if class_name == "PyMuPDFTextDocumentParser":
+            if "_max_pages" not in attributes or "_max_text_chars" not in attributes:
+                return None
+            return {
+                "type": identity,
+                "max_pages": attributes["_max_pages"],
+                "max_text_chars": attributes["_max_text_chars"],
+            }
+        if class_name == "SelectableTextPdfDocumentParser":
+            probe = _known_document_parser_configuration(attributes.get("_probe"))
+            extractor = _known_document_parser_configuration(attributes.get("_extractor"))
+            if probe is None or extractor is None:
+                return None
+            return {"type": identity, "probe": probe, "extractor": extractor}
+        if class_name == "CascadeDocumentParser":
+            probe = _known_document_parser_configuration(attributes.get("_probe"))
+            fallback = _known_document_parser_configuration(attributes.get("_fallback"))
+            backends = attributes.get("_backends")
+            if probe is None or fallback is None or not isinstance(backends, tuple):
+                return None
+            ordered_backends: list[dict[str, Any]] = []
+            for item in backends:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    return None
+                name, backend_parser = item
+                backend_identity = _known_document_parser_configuration(backend_parser)
+                if not isinstance(name, str) or backend_identity is None:
+                    return None
+                ordered_backends.append({"name": name, "parser": backend_identity})
+            return {
+                "type": identity,
+                "backends": ordered_backends,
+                "probe": probe,
+                "fallback": fallback,
+            }
+        if class_name == "CascadeArxivDocumentParser":
+            from backend.research.document.cascade_parser import CascadeArxivDocumentParser
+
+            if cls is not CascadeArxivDocumentParser:
+                return None
+            latex_parser = attributes.get("_latex")
+            latex_cls = type(latex_parser)
+            if (
+                getattr(latex_cls, "__module__", "")
+                != "backend.research.document.latex_compiler"
+                or getattr(latex_cls, "__name__", "") != "LatexSourceParser"
+                or getattr(latex_parser, "__dict__", {})
+            ):
+                return None
+            pdf_parser = _known_document_parser_configuration(attributes.get("_pdf"))
+            if pdf_parser is None:
+                return None
+            return {
+                "type": identity,
+                "latex_parser": "backend.research.document.latex_compiler.LatexSourceParser",
+                "pdf_parser": pdf_parser,
+            }
+
+    if (
+        module_name == "backend.research.document.marker_pdf_parser"
+        and class_name == "MarkerPdfDocumentParser"
+    ):
+        from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
+
+        if cls is not MarkerPdfDocumentParser:
+            return None
+        cache_identity = getattr(parser, "cache_identity", None)
+        if not callable(cache_identity):
+            return None
+        try:
+            declared_identity = cache_identity()
+        except Exception:
+            return None
+        if not isinstance(declared_identity, dict):
+            return None
+        execution_adapter = declared_identity.get("execution_adapter")
+        if not isinstance(execution_adapter, dict):
+            return None
+        return {"type": identity, **declared_identity}
+
+    return None
+
+
+def _nested_parser_components(value: Any) -> list[Any]:
+    found: list[Any] = []
+    pending = [value]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        if isinstance(current, Mapping):
+            pending.extend(current.values())
+        elif isinstance(current, (tuple, list, set, frozenset)):
+            pending.extend(current)
+        elif callable(getattr(current, "parse", None)) or callable(getattr(current, "compile", None)):
+            found.append(current)
+    return found
 
 
 class ParsePaperUseCase:
@@ -610,7 +855,19 @@ class ParsePaperUseCase:
                     catalog_status=catalog_status,
                 )
 
-            existing = self._existing_document(paper.paper_id, snapshot, actor_scope=actor_scope)
+            parse_cache_fingerprint = _parse_cache_fingerprint(
+                self._parser,
+                self._compiler,
+                self._chunker,
+                request.options,
+                resolved.content_type,
+            )
+            existing = self._existing_document(
+                paper.paper_id,
+                snapshot,
+                parse_cache_fingerprint=parse_cache_fingerprint,
+                actor_scope=actor_scope,
+            )
             published_artifacts: dict[str, str] = {}
             # Documents are keyed by paper/source hash and remain immutable;
             # refresh adds a source observation but may reuse the same parsed
@@ -653,6 +910,7 @@ class ParsePaperUseCase:
                             **dict(document.metadata),
                             "quality_report": quality_report,
                             "degraded": document_status == "degraded",
+                            "parse_cache_fingerprint": parse_cache_fingerprint,
                         },
                     }
                 )
@@ -1354,6 +1612,7 @@ class ParsePaperUseCase:
         paper_id: str,
         snapshot: ResearchSourceSnapshot,
         *,
+        parse_cache_fingerprint: str | None,
         actor_scope: Mapping[str, str] | None = None,
     ) -> ResearchDocument | None:
         if self._document_repository is None:
@@ -1367,7 +1626,15 @@ class ParsePaperUseCase:
         if existing is None or not isinstance(existing, ResearchDocument):
             return None
         expected = snapshot.source_hash or snapshot.checksum
-        return existing if expected and existing.source_hash == expected else None
+        cached_fingerprint = existing.metadata.get("parse_cache_fingerprint")
+        return (
+            existing
+            if expected
+            and existing.source_hash == expected
+            and parse_cache_fingerprint is not None
+            and cached_fingerprint == parse_cache_fingerprint
+            else None
+        )
 
     def _build_evidence(self, document: ResearchDocument) -> ResearchEvidencePack | None:
         if not document.sections:
@@ -1403,11 +1670,19 @@ class ParsePaperUseCase:
                     paper.paper_id,
                     actor_scope=actor_scope,
                 )
-                # A checksum-identical ingest is a read/reuse operation. Do
-                # not rewrite the manifest with a new run id or create a new
-                # history entry. If the prior manifest is absent, materialize
-                # it once so a partially migrated store can self-heal.
-                if not reuse_existing or not manifest_path.exists():
+                pipeline_fingerprint = str(
+                    document.metadata.get("parse_cache_fingerprint") or ""
+                ) or None
+                manifest_is_current = self._chunk_manifest.is_current(
+                    paper.paper_id,
+                    document_id=document.document_id,
+                    source_hash=document.source_hash,
+                    pipeline_fingerprint=pipeline_fingerprint,
+                    actor_scope=actor_scope,
+                )
+                # Reuse is safe only when source, document and the complete
+                # parser/chunker pipeline identity match the committed projection.
+                if not reuse_existing or not manifest_is_current:
                     manifest_path = self._chunk_manifest.write(
                         paper.paper_id,
                         chunks,
@@ -1932,6 +2207,25 @@ def _is_local_content_identity(snapshot: ResearchSourceSnapshot) -> bool:
 
 
 def _snapshot_for_scope(snapshot: ResearchSourceSnapshot, actor_scope: Mapping[str, str], content: bytes | None = None) -> ResearchSourceSnapshot:
+    if content is not None:
+        actual_hash = sha256(content).hexdigest()
+        declared_hash = str(snapshot.source_hash or snapshot.checksum or "").strip().casefold()
+        declared_hash = declared_hash.removeprefix("sha256:")
+        if declared_hash and declared_hash != actual_hash:
+            raise ParsePaperError(
+                "source_integrity_mismatch",
+                "resolved source bytes do not match the source snapshot fingerprint",
+                status_code=409,
+                retryable=False,
+            )
+        snapshot = snapshot.model_copy(
+            update={
+                "source_hash": actual_hash,
+                "checksum": actual_hash,
+                "lineage": snapshot.lineage.model_copy(update={"source_hash": actual_hash}),
+                "metadata": {**dict(snapshot.metadata), "source_content_sha256": actual_hash},
+            }
+        )
     updates: dict[str, Any] = {
         "actor_scope": dict(actor_scope),
         "lineage": snapshot.lineage.model_copy(update={"metadata": {**dict(snapshot.lineage.metadata), **dict(actor_scope)}}),
@@ -2164,7 +2458,14 @@ def _quality_report(
     # valid; when elements exist, require their locators to be represented.
     structured_count = len(document.figures) + len(document.tables) + len(document.equations) + len(document.references)
     element_score = 1.0 if structured_count == 0 else min(1.0, locator_count / (len(document.sections) + structured_count))
-    integrity_score = 1.0 if document.source_hash and document.lineage.source_hash == document.source_hash else 0.0
+    lineage_hash_matches = bool(
+        document.source_hash and document.lineage.source_hash == document.source_hash
+    )
+    fidelity_hash_matches = (
+        document.fidelity is None
+        or document.fidelity.source_hash == document.source_hash
+    )
+    integrity_score = 1.0 if lineage_hash_matches and fidelity_hash_matches else 0.0
     title_present = bool((document.title or (paper.title if paper is not None else "") or "").strip())
     abstract_present = bool((document.abstract or "").strip())
     author_present = bool(document.authors or (paper.authors if paper is not None else []))
@@ -2264,9 +2565,66 @@ def _quality_report(
                 len(document.references),
                 located_references == len(document.references),
             )
+    attempts = _parser_attempts(document)
+    failed_attempts = [
+        item for item in attempts
+        if str(item.get("status") or "").casefold() in {"parse_error", "quality_rejected", "failed", "timeout", "cancelled"}
+    ]
+    cascade = document.metadata.get("parser_cascade")
+    cascade_degraded = isinstance(cascade, Mapping) and cascade.get("degraded") is True
+    execution_degraded = (
+        bool(document.metadata.get("degraded"))
+        or cascade_degraded
+        or document.status == "degraded"
+    )
+    quarantined_reasons = []
+    if not lineage_hash_matches:
+        quarantined_reasons.append("source_lineage_hash_mismatch")
+    if not fidelity_hash_matches:
+        quarantined_reasons.append("fidelity_source_hash_mismatch")
+    for code in quarantined_reasons:
+        hard_failures.append({"code": code, "observed": False, "expected": True})
+    fidelity_status = str(document.metadata.get("fidelity_status") or "").casefold()
+    fidelity_unavailable = fidelity_status == "unavailable"
+    if fidelity_unavailable:
+        hard_failures.append({
+            "code": "source_fidelity_unavailable",
+            "observed": document.metadata.get("fidelity_unavailable_reason") or "unknown",
+            "expected": "all source blocks map to validated pages and Research entities",
+        })
+    parser_warning_codes = document.metadata.get("parser_warning_codes")
+    parser_warning_codes = parser_warning_codes if isinstance(parser_warning_codes, list) else []
+    missing_formula_source_count = sum(
+        isinstance(item, Mapping) and item.get("code") == "formula_source_missing"
+        for item in parser_warning_codes
+    )
+    if not parser_warning_codes:
+        parser_warnings = document.metadata.get("parser_warnings")
+        parser_warnings = parser_warnings if isinstance(parser_warnings, list) else []
+        missing_formula_source_count = sum(
+            "equation block has no usable source content" in str(warning)
+            for warning in parser_warnings
+        )
+    if missing_formula_source_count:
+        hard_failures.append({"code": "formula_source_missing", "observed": missing_formula_source_count, "expected": 0})
+    if execution_degraded:
+        hard_failures.append({
+            "code": "parser_execution_degraded",
+            "observed": [str(item.get("status") or "unknown") for item in failed_attempts],
+            "expected": "the configured parse path completes without degraded recovery",
+        })
     passed = not hard_failures
-    document_status = "parsed" if passed else "degraded"
-    parse_status = "parsed" if passed else ("catalog_partial" if profile == "catalog" else "degraded")
+    document_status = (
+        "quarantined" if quarantined_reasons
+        else "degraded" if not passed or document.status == "degraded"
+        else "parsed"
+    )
+    parse_status = (
+        "quarantined" if document_status == "quarantined"
+        else "parsed" if passed and document_status == "parsed"
+        else "catalog_partial" if profile == "catalog"
+        else "degraded"
+    )
     scores = {
         "structure_score": round(structure_score, 6),
         "text_score": round(text_score, 6),
@@ -2295,13 +2653,53 @@ def _quality_report(
         "quality_score": round(quality_score, 6),
         "qualityScore": round(quality_score, 6),
         "formula_version": "research-quality-v1",
+        "qualityPolicyVersion": "research-document-quality-policy/v1",
+        "dimensions": {
+            "execution": {
+                "status": (
+                    "degraded" if execution_degraded
+                    else "recovered" if failed_attempts
+                    else "completed"
+                ),
+                "used_backend": document.parser_backend,
+                "attempt_count": len(attempts),
+                "failed_attempt_count": len(failed_attempts),
+                "cascade_degraded": cascade_degraded,
+            },
+            "structure_and_source": {
+                "status": (
+                    "quarantined" if quarantined_reasons
+                    else "degraded" if fidelity_unavailable
+                    else "validated" if document.fidelity is not None
+                    else "unknown"
+                ),
+                "reason_codes": quarantined_reasons + (["source_fidelity_unavailable"] if fidelity_unavailable else []),
+                "source_hash_matches_lineage": lineage_hash_matches,
+                "fidelity_available": document.fidelity is not None,
+                "fidelity_schema_version": (
+                    document.fidelity.schema_version if document.fidelity is not None else None
+                ),
+                "page_count": len(document.fidelity.pages) if document.fidelity is not None else None,
+                "block_count": len(document.fidelity.blocks) if document.fidelity is not None else None,
+                "table_grid_count": len(document.fidelity.tables) if document.fidelity is not None else None,
+            },
+            "content": {
+                "status": "passed" if passed else "degraded",
+                "hard_failure_count": len(hard_failures),
+                "missing_formula_source_count": missing_formula_source_count,
+                "section_count": len(document.sections),
+                "body_chars": body_chars,
+                "element_count": element_count,
+                "locator_coverage": round(locator_score, 6),
+            },
+        },
         "profile": profile,
         "thresholds": thresholds,
         "hardFailures": hard_failures,
         "diagnostics": (
-            [{"code": "abstract_missing", "severity": "info"}]
-            if not abstract_present and profile != "metadata"
-            else []
+            ([{"code": "abstract_missing", "severity": "info"}] if not abstract_present and profile != "metadata" else [])
+            + ([{"code": "source_fidelity_unavailable", "severity": "error"}] if fidelity_unavailable else [])
+            + ([{"code": "formula_source_missing", "severity": "error", "count": missing_formula_source_count}] if missing_formula_source_count else [])
         ),
         "passed": passed,
         "documentStatus": document_status,

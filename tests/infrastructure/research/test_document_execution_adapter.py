@@ -79,7 +79,7 @@ def _adapter(tmp_path: Path, captured: list[object]) -> ResearchParserExecutionA
     registry.register(FakeExecutionEnvironment(capabilities, outcome_factory))
     profile = ExecutionProfile.external_process(
         provider_id="test-provider",
-        allowed_argv_prefixes=(("mineru",),),
+        allowed_argv_prefixes=(("marker",),),
     )
     # The adapter is provider-neutral; the provider id is the only value it
     # needs to resolve.  Reuse the profile with the fake provider.
@@ -87,6 +87,20 @@ def _adapter(tmp_path: Path, captured: list[object]) -> ResearchParserExecutionA
         execution_environment=registry,
         profile=profile,
     )
+
+
+def test_parser_adapter_cache_identity_uses_only_declared_configuration(tmp_path: Path) -> None:
+    adapter = _adapter(tmp_path, [])
+
+    first = adapter.cache_identity()
+    adapter.last_outcome = object()
+
+    assert adapter.cache_identity() == first
+    assert first["profile"] == adapter._profile.to_dict()
+    assert first["resource_limits"] == adapter._resource_limits.to_dict()
+    assert first["cancellation_grace_seconds"] == 5.0
+    assert first["provider_identity"] == "unknown"
+    assert "last_outcome" not in first
 
 
 def test_parser_adapter_maps_roots_environment_and_identity(tmp_path: Path) -> None:
@@ -100,13 +114,13 @@ def test_parser_adapter_maps_roots_environment_and_identity(tmp_path: Path) -> N
             "run",
             "--rm",
             "-e",
-            "MINERU_MODEL_SOURCE=modelscope",
+            "MARKER_MODEL_SOURCE=modelscope",
             "-v",
             f"{input_dir}:/input",
             "-v",
             f"{output_dir}:/output",
-            "mineru:latest",
-            "mineru",
+            "marker:latest",
+            "marker",
             "-p",
             "/input/input.pdf",
             "-o",
@@ -115,19 +129,19 @@ def test_parser_adapter_maps_roots_environment_and_identity(tmp_path: Path) -> N
         timeout_seconds=60,
         execution_identity=_identity(),
         paper_id="paper-1",
-        backend="mineru",
+        backend="marker",
     )
 
     assert outcome.receipt.status is ExecutionStatus.SUCCEEDED
     request = captured[0]
     assert request.graph_identity == _identity()
     assert request.profile.mode.value == "external_process"
-    assert request.image == "mineru:latest"
-    assert request.argv[:2] == ("mineru", "-p")
+    assert request.image == "marker:latest"
+    assert request.argv[:2] == ("marker", "-p")
     assert Path(request.argv[2]).resolve() == (input_dir / "input.pdf").resolve()
     assert request.read_roots == (str(input_dir.resolve()),)
     assert request.write_roots == (str(output_dir.resolve()),)
-    assert request.environment == {"MINERU_MODEL_SOURCE": "modelscope"}
+    assert request.environment == {"MARKER_MODEL_SOURCE": "modelscope"}
 
 
 def test_parser_adapter_requires_exact_graph_identity(tmp_path: Path) -> None:
@@ -142,14 +156,14 @@ def test_parser_adapter_requires_exact_graph_identity(tmp_path: Path) -> None:
                 f"{tmp_path / 'input'}:/input",
                 "-v",
                 f"{tmp_path / 'output'}:/output",
-                "mineru:latest",
-                "mineru",
+                "marker:latest",
+                "marker",
                 "-p",
                 "/input/input.pdf",
             ],
             timeout_seconds=60,
             execution_identity=None,
             paper_id="paper-1",
-            backend="mineru",
+            backend="marker",
         )
     assert error.value.reason_code == "graph_identity_required"

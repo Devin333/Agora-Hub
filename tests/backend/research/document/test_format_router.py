@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 
-import fitz
+import pymupdf
 
 from backend.research.document.format_router import MultiFormatDocumentParser
 from backend.research.domain.common import SourceLineage
@@ -33,7 +33,7 @@ class _Parser:
 
 
 def _pdf() -> bytes:
-    document = fitz.open()
+    document = pymupdf.open()
     document.new_page().insert_text((50, 72), "Selectable PDF text")
     content = document.tobytes()
     document.close()

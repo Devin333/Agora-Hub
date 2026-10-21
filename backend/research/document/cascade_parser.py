@@ -101,7 +101,61 @@ class DocumentQualityProbe:
         table_count = len(document.tables)
         tables_with_rows = sum(1 for table in document.tables if table.rows)
         table_row_coverage = (tables_with_rows / table_count) if table_count else 1.0
+        fidelity = document.fidelity
+        fidelity_source_matches = (
+            fidelity is None or fidelity.source_hash == document.source_hash
+        )
+        cascade = document.metadata.get("parser_cascade")
+        cascade_degraded = isinstance(cascade, dict) and cascade.get("degraded") is True
+        fidelity_unavailable = str(document.metadata.get("fidelity_status") or "").casefold() == "unavailable"
+        parser_warning_codes = document.metadata.get("parser_warning_codes")
+        parser_warning_codes = parser_warning_codes if isinstance(parser_warning_codes, list) else []
+        missing_formula_sources = sum(
+            isinstance(item, dict) and item.get("code") == "formula_source_missing"
+            for item in parser_warning_codes
+        )
+        if not parser_warning_codes:
+            parser_warnings = document.metadata.get("parser_warnings")
+            parser_warnings = parser_warnings if isinstance(parser_warnings, list) else []
+            missing_formula_sources = sum(
+                "equation block has no usable source content" in str(warning)
+                for warning in parser_warnings
+            )
+        parser_attempts = document.parser_attempts or document.metadata.get("parser_attempts", [])
+        parser_attempts = parser_attempts if isinstance(parser_attempts, list) else []
         metrics = {
+            "quality_policy_version": "research-document-quality-policy/v1",
+            "dimensions": {
+                "execution": {
+                    "status": "degraded" if cascade_degraded or document.status == "degraded" else "completed",
+                    "used_backend": document.parser_backend,
+                    "attempt_count": len(parser_attempts),
+                    "cascade_degraded": cascade_degraded,
+                },
+                "structure_and_source": {
+                    "status": (
+                        "quarantined" if not fidelity_source_matches
+                        else "degraded" if fidelity_unavailable
+                        else "validated" if fidelity is not None
+                        else "unknown"
+                    ),
+                    "source_hash_matches": fidelity_source_matches,
+                    "fidelity_schema_version": fidelity.schema_version if fidelity is not None else None,
+                    "page_count": len(fidelity.pages) if fidelity is not None else None,
+                    "block_count": len(fidelity.blocks) if fidelity is not None else None,
+                    "reading_order_uncertain_blocks": (
+                        sum(block.order_status == "uncertain" for block in fidelity.blocks)
+                        if fidelity is not None else None
+                    ),
+                    "unknown_geometry_blocks": (
+                        sum(block.bbox is None for block in fidelity.blocks)
+                        if fidelity is not None else None
+                    ),
+                    "fidelity_unavailable": fidelity_unavailable,
+                    "missing_formula_source_count": missing_formula_sources,
+                },
+                "content": {"status": "measured"},
+            },
             "sections_count": section_count,
             "body_char_count": body_chars,
             "non_empty_section_ratio": round(non_empty_ratio, 4),
@@ -117,17 +171,28 @@ class DocumentQualityProbe:
                 "min_table_row_coverage_if_tables": self.min_table_row_coverage_if_tables,
             },
         }
+        def result(passed: bool, reason: str | None) -> QualityProbeResult:
+            metrics["dimensions"]["content"]["status"] = "passed" if passed else "degraded"
+            metrics["dimensions"]["content"]["reason"] = reason
+            return QualityProbeResult(passed, reason, metrics)
+
+        if fidelity_unavailable:
+            return result(False, "source_fidelity_unavailable")
+        if missing_formula_sources:
+            return result(False, "formula_source_missing")
         if section_count < self.min_sections:
-            return QualityProbeResult(False, "sections_below_threshold", metrics)
+            return result(False, "sections_below_threshold")
         if body_chars < self.min_body_chars:
-            return QualityProbeResult(False, "body_chars_below_threshold", metrics)
+            return result(False, "body_chars_below_threshold")
         if non_empty_ratio < self.min_non_empty_section_ratio:
-            return QualityProbeResult(False, "non_empty_section_ratio_below_threshold", metrics)
+            return result(False, "non_empty_section_ratio_below_threshold")
         if replacement_ratio > self.max_replacement_char_ratio:
-            return QualityProbeResult(False, "replacement_char_ratio_above_threshold", metrics)
+            return result(False, "replacement_char_ratio_above_threshold")
         if table_count and table_row_coverage < self.min_table_row_coverage_if_tables:
-            return QualityProbeResult(False, "table_row_coverage_below_threshold", metrics)
-        return QualityProbeResult(True, None, metrics)
+            return result(False, "table_row_coverage_below_threshold")
+        if not fidelity_source_matches:
+            return result(False, "fidelity_source_hash_mismatch")
+        return result(True, None)
 
 
 class PyMuPDFTextDocumentParser:
@@ -303,6 +368,30 @@ class CascadeDocumentParser:
                     elapsed_ms=_elapsed_ms(started),
                     quality=quality.to_dict(),
                 ))
+                attempts = [
+                    ParserAttempt(
+                        backend=item.backend,
+                        status=item.status,
+                        reason=item.reason,
+                        elapsed_ms=item.elapsed_ms,
+                        quality={**dict(item.quality or {}), "dimensions": {
+                            **dict((item.quality or {}).get("dimensions", {})),
+                            "execution": {
+                                **dict((item.quality or {}).get("dimensions", {}).get("execution", {})),
+                                "attempt_count": len(attempts),
+                                "failed_attempt_count": sum(
+                                    prior.status in {"parse_error", "quality_rejected"}
+                                    for prior in attempts
+                                ),
+                                "status": "recovered" if any(
+                                    prior.status in {"parse_error", "quality_rejected"}
+                                    for prior in attempts
+                                ) else "completed",
+                            },
+                        }},
+                    )
+                    for item in attempts
+                ]
                 return _with_cascade_metadata(
                     document,
                     used_backend=backend,
@@ -346,7 +435,7 @@ class CascadeArxivDocumentParser:
     def __init__(
         self,
         latex_parser: LatexSourceParser | None = None,
-        pdf_parser: CascadeDocumentParser | None = None,
+        pdf_parser: DocumentParserPort | None = None,
     ) -> None:
         self._latex = latex_parser or LatexSourceParser()
         self._pdf = pdf_parser or build_default_pdf_cascade_parser()
@@ -360,7 +449,8 @@ class CascadeArxivDocumentParser:
     ) -> ResearchDocument:
         fmt, canonical = detect_source_format(source_bytes)
         if fmt is SourceFormat.PDF:
-            return self._pdf.parse(
+            return _parse_with_execution_identity(
+                self._pdf,
                 paper_id,
                 canonical,
                 execution_identity=execution_identity,
@@ -373,29 +463,30 @@ class CascadeArxivDocumentParser:
         return self._latex.parse(paper_id, source_bytes)
 
 
-def build_default_pdf_cascade_parser() -> CascadeDocumentParser:
+def build_default_pdf_cascade_parser() -> DocumentParserPort:
     from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
-    from backend.research.document.mineru_pdf_parser import MinerUPdfDocumentParser
 
     factories: dict[str, Any] = {
-        "mineru": MinerUPdfDocumentParser,
         "marker": MarkerPdfDocumentParser,
     }
     backends: list[tuple[str, DocumentParserPort]] = []
-    for name in parser_cascade_backend_names():
+    names = parser_cascade_backend_names()
+    for name in names:
         if name == "pymupdf":
             continue
         factory = factories.get(name)
         if factory is None:
             raise ValueError(
-                "NEWSROOM_PDF_PARSER_CASCADE must contain only: mineru, marker, pymupdf"
+                "NEWSROOM_PDF_PARSER_CASCADE must contain only: marker, pymupdf"
             )
         backends.append((name, factory()))
+    if not backends:
+        return PyMuPDFTextDocumentParser()
     return CascadeDocumentParser(backends=backends, probe=DocumentQualityProbe.from_env())
 
 
 def parser_cascade_backend_names(value: str | None = None) -> tuple[str, ...]:
-    raw = (value or os.environ.get("NEWSROOM_PDF_PARSER_CASCADE") or "mineru,marker").strip()
+    raw = (value or os.environ.get("NEWSROOM_PDF_PARSER_CASCADE") or "marker").strip()
     names = tuple(
         part.strip().lower()
         for part in raw.split(",")
@@ -403,15 +494,12 @@ def parser_cascade_backend_names(value: str | None = None) -> tuple[str, ...]:
     )
     if not names:
         raise ValueError("NEWSROOM_PDF_PARSER_CASCADE must contain at least one backend")
-    allowed = {"mineru", "marker", "pymupdf"}
+    allowed = {"marker", "pymupdf"}
     unknown = sorted(set(names) - allowed)
     if unknown:
         raise ValueError(
-            "NEWSROOM_PDF_PARSER_CASCADE must contain only: mineru, marker, pymupdf"
+            "NEWSROOM_PDF_PARSER_CASCADE must contain only: marker, pymupdf"
         )
-    structured = tuple(name for name in names if name != "pymupdf")
-    if not structured:
-        raise ValueError("NEWSROOM_PDF_PARSER_CASCADE must include mineru or marker before fallback")
     return names
 
 
@@ -425,10 +513,35 @@ def _with_cascade_metadata(
     metadata = dict(document.metadata)
     metadata["parse_source"] = used_backend
     metadata["parser_backend"] = used_backend
+    attempt_payloads: list[dict[str, Any]] = []
+    recovered = any(attempt.status in {"parse_error", "quality_rejected"} for attempt in attempts)
+    failed_count = sum(attempt.status in {"parse_error", "quality_rejected"} for attempt in attempts)
+    for attempt in attempts:
+        payload = attempt.to_dict()
+        quality = payload.get("quality")
+        if isinstance(quality, dict):
+            metrics_payload = quality.get("metrics")
+            metrics_payload = metrics_payload if isinstance(metrics_payload, dict) else {}
+            dimensions = metrics_payload.get("dimensions")
+            if isinstance(dimensions, dict):
+                execution = dimensions.get("execution")
+                if isinstance(execution, dict):
+                    dimensions["execution"] = {
+                        **execution,
+                        "status": "recovered" if recovered and attempt.status == "success" else (
+                            "degraded" if attempt.status in {"parse_error", "quality_rejected", "fallback"}
+                            else "completed"
+                        ),
+                        "attempt_count": len(attempts),
+                        "failed_attempt_count": failed_count,
+                    }
+                metrics_payload["dimensions"] = dimensions
+                quality["metrics"] = metrics_payload
+        attempt_payloads.append(payload)
     metadata["parser_cascade"] = {
         "used_backend": used_backend,
         "degraded": degraded,
-        "attempts": [attempt.to_dict() for attempt in attempts],
+        "attempts": attempt_payloads,
     }
     if degraded:
         metadata["degraded"] = True

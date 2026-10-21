@@ -56,6 +56,26 @@ class ChunkManifestManager:
         root = self._manifest_path / scope_key if scope_key != "public" else self._manifest_path
         return root / paper_id / "chunk_manifest.json"
 
+    def is_current(
+        self,
+        paper_id: str,
+        *,
+        document_id: str,
+        source_hash: str | None,
+        pipeline_fingerprint: str | None,
+        actor_scope: Mapping[str, str] | None = None,
+    ) -> bool:
+        """Return whether the committed projection matches the complete input identity."""
+        if not pipeline_fingerprint or not source_hash:
+            return False
+        manifest = self._load(paper_id, actor_scope=actor_scope)
+        return (
+            manifest.get("document_id") == document_id
+            and manifest.get("source_hash") == source_hash
+            and manifest.get("pipeline_fingerprint") == pipeline_fingerprint
+            and manifest.get("version") == _MANIFEST_VERSION
+        )
+
     def resolve_chunk_ids(
         self,
         paper_id: str,
@@ -150,7 +170,10 @@ class ChunkManifestManager:
             scope = _normalized_scope(actor_scope or metadata.get("actor_scope"))
             observed_text = _iso_timestamp(observed_at)
             previous_manifest_id = str(previous.get("manifest_id") or "") or None
-            manifest_id = _manifest_id(paper_id, document_id, source_hash, observed_text)
+            pipeline_fingerprint = str(metadata.get("parse_cache_fingerprint") or "") or None
+            manifest_id = _manifest_id(
+                paper_id, document_id, source_hash, pipeline_fingerprint, observed_text
+            )
             previous_entries = [entry for entry in previous.get("chunks", []) if isinstance(entry, dict)]
             entries = [
                 _manifest_entry(
@@ -170,6 +193,7 @@ class ChunkManifestManager:
                         "manifest_id": previous_manifest_id,
                         "document_id": previous.get("document_id"),
                         "source_hash": previous.get("source_hash"),
+                        "pipeline_fingerprint": previous.get("pipeline_fingerprint"),
                         "observed_at": previous.get("observed_at"),
                         "run_id": previous.get("run_id"),
                         "chunks": previous_entries,
@@ -182,6 +206,7 @@ class ChunkManifestManager:
                 "paper_id": paper_id,
                 "document_id": document_id,
                 "source_hash": source_hash,
+                "pipeline_fingerprint": pipeline_fingerprint,
                 "observed_at": observed_text,
                 "run_id": str(run_id).strip() if run_id else None,
                 "actor_scope": scope,
@@ -384,9 +409,10 @@ def _manifest_id(
     paper_id: str,
     document_id: str,
     source_hash: str | None,
+    pipeline_fingerprint: str | None,
     observed_at: str,
 ) -> str:
-    encoded = "|".join((paper_id, document_id, source_hash or "", observed_at))
+    encoded = "|".join((paper_id, document_id, source_hash or "", pipeline_fingerprint or "", observed_at))
     return "manifest:" + sha256(encoded.encode("utf-8")).hexdigest()
 
 
