@@ -1,0 +1,194 @@
+{
+  "schema_version": "1.0",
+  "protocol_version": "qasper-retrieval-evaluation/v1",
+  "baseline_id": "qasper-dev-v0.3-diagnostic-baseline",
+  "dataset_id": "qasper-dev-v0.3",
+  "dataset_version": "qasper-v0.3",
+  "dataset_sha256": "2ae7ee62a65b1c4225791c70de80c2aad4e8998cf1fd4f09a53103db4f21af93",
+  "corpus_id": "qasper-full-text-research-document-observed-reconstruction",
+  "corpus_version": "observed-reconstruction/v1",
+  "corpus_sha256": "a8bc31b7c45112ed25d64334f8ba0ae6171801265e669fb996852781a2b6bc71",
+  "chunking_version": "PaperDocumentChunker/html/observed-reconstruction-v1",
+  "chunk_count": 17048,
+  "dataset_case_count": 1005,
+  "evaluable_case_count": 881,
+  "embedding_cache_id": "dashscope/text-embedding-v4",
+  "embedding_cache_sha256": "57a2b191e3330a04d451f25d4d05f5abb51532a920c7224f9fbe23b6ba8cfff6",
+  "embedding_model_id": "dashscope/text-embedding-v4",
+  "embedding_model_version": "text-embedding-v4",
+  "embedding_dimension": 1024,
+  "embedding_cache_identity": {
+    "rows": 45068,
+    "dimension": 1024,
+    "dtype": "float32",
+    "keys_sha256": "c780792ecfbf2df576c5f724b79b734ae4ca6d7829cd3b26edc40498d0f9e1b1"
+  },
+  "raw_result_sha256": "e259baf46cf0cecfd759d3df2b184c74e6f69e00e7f77896d25877c929d21b6d",
+  "historical_code_claim": {
+    "git_revision": "f9b2530db83e2297cee7d2218fec9d75886d9c22",
+    "source": "user-provided handoff",
+    "claim": "unverified handoff claim; not a historical observed runtime identity",
+    "verification": "unverified_handoff_claim"
+  },
+  "observed_reconstruction_code_identity": {
+    "git_revision": "b7eba85f4a8f3ccd3d15fb326b24fcbd23272fac",
+    "workspace_content_fingerprint": "ce412a466fcbe6bf956c212885773c5cd245a42c41a8648e01271de4a7ac0999",
+    "mutable_patch_fingerprints": [
+      "57e40d85dea22eced80da98586edcf5969427cd9388a2d894a1f641bf6da991c"
+    ],
+    "dirty": true,
+    "code_fingerprint": "c6e2c72bffd027f38fe966c85f5847a8aca13fd890b64da63a90e2e0749bc70c"
+  },
+  "legacy_summary": [
+    {
+      "metric_id": "legacy_strict_hit_at_5",
+      "value": 0.6002252252252253,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_strict_hit_at_10",
+      "value": 0.7522522522522522,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_strict_evidence_coverage_at_5",
+      "value": 0.46367325620421596,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_strict_evidence_coverage_at_10",
+      "value": 0.628852929539849,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_strict_mrr",
+      "value": 0.39628735878735877,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_strict_ndcg_at_5",
+      "value": 0.3589165029488042,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_strict_ndcg_at_10",
+      "value": 0.41919301399128067,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_equivalent_hit_at_5",
+      "value": 0.661036036036036,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_equivalent_hit_at_10",
+      "value": 0.7972972972972973,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_equivalent_coverage_at_5",
+      "value": 0.5491613010672608,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_equivalent_coverage_at_10",
+      "value": 0.7091320627601587,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_equivalent_mrr",
+      "value": 0.4733087389337389,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_equivalent_ndcg_at_5",
+      "value": 0.5787469115012024,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    },
+    {
+      "metric_id": "legacy_equivalent_ndcg_at_10",
+      "value": 0.691477419563965,
+      "denominator": 888,
+      "provenance": "legacy_summary_only"
+    }
+  ],
+  "legacy_count_policy": "explicit_diagnostic_mismatch",
+  "chunk_sha256": "b1b5d17cc5d680ca03ef4de58ad04d6ad87c3871a0ff2400293086a9b037e688",
+  "paper_count": 281,
+  "float_evidence_count": 253,
+  "unanswerable_annotation_count": 163,
+  "sources": [
+    {
+      "role": "dataset",
+      "artifact": {
+        "reference_id": "qasper-baseline/dataset/2ae7ee62a65b1c4225791c70de80c2aad4e8998cf1fd4f09a53103db4f21af93",
+        "kind": "dataset",
+        "uri": "external-sha256://2ae7ee62a65b1c4225791c70de80c2aad4e8998cf1fd4f09a53103db4f21af93",
+        "content_sha256": "2ae7ee62a65b1c4225791c70de80c2aad4e8998cf1fd4f09a53103db4f21af93"
+      }
+    },
+    {
+      "role": "corpus",
+      "artifact": {
+        "reference_id": "qasper-baseline/corpus/a8bc31b7c45112ed25d64334f8ba0ae6171801265e669fb996852781a2b6bc71",
+        "kind": "corpus",
+        "uri": "external-sha256://a8bc31b7c45112ed25d64334f8ba0ae6171801265e669fb996852781a2b6bc71",
+        "content_sha256": "a8bc31b7c45112ed25d64334f8ba0ae6171801265e669fb996852781a2b6bc71"
+      }
+    },
+    {
+      "role": "chunks",
+      "artifact": {
+        "reference_id": "qasper-baseline/chunks/b1b5d17cc5d680ca03ef4de58ad04d6ad87c3871a0ff2400293086a9b037e688",
+        "kind": "chunks",
+        "uri": "external-sha256://b1b5d17cc5d680ca03ef4de58ad04d6ad87c3871a0ff2400293086a9b037e688",
+        "content_sha256": "b1b5d17cc5d680ca03ef4de58ad04d6ad87c3871a0ff2400293086a9b037e688"
+      }
+    },
+    {
+      "role": "embedding_cache",
+      "artifact": {
+        "reference_id": "qasper-baseline/embedding_cache/57a2b191e3330a04d451f25d4d05f5abb51532a920c7224f9fbe23b6ba8cfff6",
+        "kind": "embedding_cache",
+        "uri": "external-sha256://57a2b191e3330a04d451f25d4d05f5abb51532a920c7224f9fbe23b6ba8cfff6",
+        "content_sha256": "57a2b191e3330a04d451f25d4d05f5abb51532a920c7224f9fbe23b6ba8cfff6"
+      }
+    },
+    {
+      "role": "raw_result",
+      "artifact": {
+        "reference_id": "qasper-baseline/legacy_result/e259baf46cf0cecfd759d3df2b184c74e6f69e00e7f77896d25877c929d21b6d",
+        "kind": "legacy_result",
+        "uri": "external-sha256://e259baf46cf0cecfd759d3df2b184c74e6f69e00e7f77896d25877c929d21b6d",
+        "content_sha256": "e259baf46cf0cecfd759d3df2b184c74e6f69e00e7f77896d25877c929d21b6d"
+      }
+    },
+    {
+      "role": "reconstruction_script",
+      "artifact": {
+        "reference_id": "qasper-baseline/reconstruction_script/5a4aab610523615e1444f3c3dcf4d77502f497f15b9c58e4e07ce7839f0a0d63",
+        "kind": "reconstruction_script",
+        "uri": "external-sha256://5a4aab610523615e1444f3c3dcf4d77502f497f15b9c58e4e07ce7839f0a0d63",
+        "content_sha256": "5a4aab610523615e1444f3c3dcf4d77502f497f15b9c58e4e07ce7839f0a0d63"
+      }
+    }
+  ],
+  "execution_profile": "fixture",
+  "historical_runtime_evidence": "unavailable",
+  "qualification": "diagnostic_only",
+  "qualification_reason": "Legacy summary has no per-case runtime/code proof and no versioned metric identity.",
+  "digest": "0a4611062b852b2cf463ff531503dca1a51a9eef29d4259648c37dbe642f8e91"
+}
