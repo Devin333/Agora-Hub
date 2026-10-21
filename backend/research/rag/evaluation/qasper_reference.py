@@ -215,25 +215,37 @@ def _anchors(
     return tuple(anchors)
 
 
+_READ_THE_PAPER = frozenset({"yes", "somewhat"})
+
+
 def _provenance(
     identity: QasperGoldIdentity,
     *,
     case_id: str,
     question_id: str,
+    question_writer: str,
+    paper_read: str,
     question_digest: str,
     annotation_id: str,
     annotator_id: str,
     source_record: SourceRecord,
 ) -> CaseProvenance:
+    # QASPER question writers saw titles and abstracts; a few report having read
+    # the paper (``paper_read``), whose questions are then full-text targeted.
+    read_paper = paper_read.strip().casefold() in _READ_THE_PAPER
+    materials = (
+        ("title", "abstract", "fulltext", "declared_scope") if read_paper
+        else ("title", "abstract", "declared_scope")
+    )
     return CaseProvenance(
-        authoring_method="abstract_only",
+        authoring_method="fulltext_targeted" if read_paper else "abstract_only",
         original_dataset_id=identity.dataset_id,
         original_case_id=question_id,
         derived_from_case_ids=(),
-        question_author_id=f"qasper-question-writer:{question_id}",
+        question_author_id=f"qasper-question-writer:{question_writer}",
         author_input_manifest=AuthorInputManifest(
-            visible_materials=("title", "abstract", "declared_scope"),
-            input_digest=content_digest({"case_id": case_id, "materials": "title+abstract"}),
+            visible_materials=materials,
+            input_digest=content_digest({"case_id": case_id, "materials": list(materials)}),
         ),
         question_digest=question_digest,
         question_frozen_at=identity.questions_frozen_at,
@@ -353,7 +365,10 @@ def build_qasper_gold(
                 annotator_id = str(annotation.get("worker_id") or annotation_id)
                 prefix = f"{case_id}#{annotation_id}"
                 provenance = _provenance(
-                    identity, case_id=case_id, question_id=question_id, question_digest=question_digest,
+                    identity, case_id=case_id, question_id=question_id,
+                    question_writer=str(qa.get("question_writer") or question_id),
+                    paper_read=str(qa.get("paper_read") or ""),
+                    question_digest=question_digest,
                     annotation_id=annotation_id, annotator_id=annotator_id, source_record=source_record,
                 )
                 common = dict(

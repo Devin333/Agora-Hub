@@ -1,0 +1,99 @@
+name: RAG Answer Fact Eval
+
+# Manual only: this run sends QASPER paper text and generated answers to the
+# configured model providers and costs money. Fixture contracts run in CI.
+"on":
+  workflow_dispatch:
+    inputs:
+      max_cases:
+        description: "QASPER dev questions to evaluate"
+        required: true
+        default: "50"
+      replay_mode:
+        description: "record (call providers, store responses) or replay (stored responses only)"
+        required: true
+        default: "record"
+        type: choice
+        options:
+          - record
+          - replay
+      min_calibration_variants:
+        description: "Injected-error variants required before judges may resolve pairs"
+        required: true
+        default: "50"
+
+jobs:
+  answer-fact-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      QASPER_DEV_SHA256: 2ae7ee62a65b1c4225791c70de80c2aad4e8998cf1fd4f09a53103db4f21af93
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev]"
+
+      - name: Check provider secrets
+        if: ${{ inputs.replay_mode == 'record' && (env.OPENAI_BASE_URL == '' || env.OPENAI_API_KEY == '' || env.DASHSCOPE_API_KEY == '') }}
+        run: |
+          echo "record mode needs OPENAI_BASE_URL, OPENAI_API_KEY and DASHSCOPE_API_KEY secrets" >&2
+          exit 1
+
+      - name: Download and verify QASPER v0.3 dev
+        run: |
+          mkdir -p .newsroom/datasets/qasper
+          curl -fsSL https://qasper-dataset.s3.us-west-2.amazonaws.com/qasper-train-dev-v0.3.tgz \
+            -o .newsroom/datasets/qasper/qasper-train-dev-v0.3.tgz
+          tar -xzf .newsroom/datasets/qasper/qasper-train-dev-v0.3.tgz -C .newsroom/datasets/qasper
+          echo "${QASPER_DEV_SHA256}  .newsroom/datasets/qasper/qasper-dev-v0.3.json" | sha256sum -c -
+
+      - name: Restore recorded model responses
+        uses: actions/cache@v4
+        with:
+          path: .newsroom/eval/answer-fact/replay
+          key: answer-fact-replay-${{ github.sha }}
+          restore-keys: answer-fact-replay-
+
+      - name: Run QASPER answer fact evaluation
+        run: |
+          python -m scripts.dev rag-eval answer qasper-run \
+            --dataset-path .newsroom/datasets/qasper/qasper-dev-v0.3.json \
+            --output-dir ".newsroom/eval/answer-fact/run-${{ github.run_id }}" \
+            --replay-dir .newsroom/eval/answer-fact/replay \
+            --replay-mode "${{ inputs.replay_mode }}" \
+            --dataset-version 0.3 \
+            --questions-frozen-at "${{ vars.QASPER_QUESTIONS_FROZEN_AT }}" \
+            --answers-started-at "${{ vars.QASPER_ANSWERS_STARTED_AT }}" \
+            --retrieved-at "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" \
+            --profile bm25_only \
+            --max-cases "${{ inputs.max_cases }}" \
+            --min-calibration-variants "${{ inputs.min_calibration_variants }}" \
+            --run-id "qasper-answer-${{ github.run_id }}" \
+            --answer-model "{\"provider\":\"openai-compatible\",\"base_url\":\"${OPENAI_BASE_URL}\",\"model\":\"${OPENAI_MODEL:-gpt-5.4-mini}\",\"api_key_env\":\"OPENAI_API_KEY\"}" \
+            --extractor-model "{\"provider\":\"dashscope\",\"base_url\":\"https://dashscope.aliyuncs.com/compatible-mode/v1\",\"model\":\"deepseek-v4-flash\",\"api_key_env\":\"DASHSCOPE_API_KEY\"}" \
+            --judge-model "{\"provider\":\"openai-compatible\",\"base_url\":\"${OPENAI_BASE_URL}\",\"model\":\"${OPENAI_MODEL:-gpt-5.4-mini}\",\"api_key_env\":\"OPENAI_API_KEY\"}" \
+            --judge-model "{\"provider\":\"dashscope\",\"base_url\":\"https://dashscope.aliyuncs.com/compatible-mode/v1\",\"model\":\"deepseek-v4-flash\",\"api_key_env\":\"DASHSCOPE_API_KEY\"}"
+
+      - name: Upload answer fact evaluation artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-answer-fact-eval
+          path: .newsroom/eval/answer-fact/run-${{ github.run_id }}
+          if-no-files-found: warn

@@ -53,7 +53,8 @@ def _raw() -> dict:
                     "evidence": [],
                 }},
             ]},
-            {"question_id": "q-span", "question": "Which encoder is used?", "answers": [
+            {"question_id": "q-span", "question": "Which encoder is used?", "paper_read": "yes",
+             "question_writer": "writer-7", "answers": [
                 {"annotation_id": "a3", "worker_id": "w3", "answer": {
                     "unanswerable": False, "yes_no": None, "extractive_spans": ["BERT", "BERT"],
                     "free_form_answer": "", "evidence": ["We fine-tune BERT on SQuAD."],
@@ -94,7 +95,11 @@ def test_each_annotation_is_an_alternative_with_dataset_gold_authority() -> None
     assert unanswerable.reference.answerability == "unanswerable"
     assert unanswerable.reference.expected_behavior == "abstain"
 
+    assert yes_no.reference.provenance.authoring_method == "abstract_only"
     span, figure_only = cases["paper-1:q-span"].alternatives
+    # A writer who read the paper produced a full-text-targeted question.
+    assert span.reference.provenance.authoring_method == "fulltext_targeted"
+    assert span.reference.provenance.question_author_id == "qasper-question-writer:writer-7"
     assert [item.claim_text for item in span.reference.reference_claims] == ["BERT"]
     assert span.reference.evidence_anchors[0].location.section == "Method"
     assert figure_only.reference.answerability == "needs_review"
