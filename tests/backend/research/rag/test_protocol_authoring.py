@@ -28,7 +28,7 @@ from backend.research.rag.evaluation.protocol_dataset import (
     CaseProvenance,
     DatasetManifest,
     ExposureHistory,
-    HumanReview,
+    ReferenceReview,
     QuestionInput,
     QuestionScope,
     ReferenceLabel,
@@ -175,8 +175,8 @@ def _pending_review(
     completeness: str = "complete",
     checked: bool = False,
     unanswerable_reason: str | None = None,
-) -> HumanReview:
-    return HumanReview(
+) -> ReferenceReview:
+    return ReferenceReview(
         status=status,
         reviewer_id=None,
         reviewer_kind=None,
@@ -189,7 +189,7 @@ def _pending_review(
     )
 
 
-def _answerable_reference(provenance: CaseProvenance, *, review: HumanReview | None = None) -> ReferenceLabel:
+def _answerable_reference(provenance: CaseProvenance, *, review: ReferenceReview | None = None) -> ReferenceLabel:
     excerpt = "The paper optimizes an evidence-grounded contrastive objective."
     return ReferenceLabel(
         answerability="answerable",
@@ -240,8 +240,8 @@ def _answerable_reference(provenance: CaseProvenance, *, review: HumanReview | N
     )
 
 
-def _approved_review(*, minute: int = 4, evidence: str = "artifact://review/case-1") -> HumanReview:
-    return HumanReview(
+def _approved_review(*, minute: int = 4, evidence: str = "artifact://review/case-1") -> ReferenceReview:
+    return ReferenceReview(
         status="approved",
         reviewer_id="case-reviewer",
         reviewer_kind="human",
@@ -456,6 +456,25 @@ def test_annotation_cannot_autoapprove_and_llm_cannot_impersonate_review() -> No
                 source="llm_assistance",
                 evidence="artifact://review/case-1",
             ),
+        )
+    benchmark_gold = ReferenceReview.model_validate({
+        **_approved_review().model_dump(),
+        "authority": "dataset_gold",
+        "reviewer_kind": "rule",
+        "gold_source": {
+            "dataset_id": "qasper",
+            "dataset_version": "0.3",
+            "dataset_digest": "b" * 64,
+            "original_case_id": "question-1",
+            "annotation_fields": ("free_form_answer",),
+            "annotator_count": 1,
+        },
+    })
+    with pytest.raises(AuthoringLifecycleError, match="final human approval"):
+        review_candidate(
+            annotated,
+            review=benchmark_gold,
+            reviewed_by=_action("review_case", 4, actor_id="case-reviewer", evidence="artifact://review/case-1"),
         )
 
 

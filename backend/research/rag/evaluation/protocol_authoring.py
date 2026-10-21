@@ -34,7 +34,7 @@ from backend.research.rag.evaluation.protocol_dataset import (
     DatasetSplit,
     EvaluationCase,
     ExposureHistory,
-    HumanReview,
+    ReferenceReview,
     QuestionInput,
     QuestionRecord,
     QuestionType,
@@ -514,10 +514,14 @@ def annotate_candidate(
 def review_candidate(
     candidate: AuthoringCandidate,
     *,
-    review: HumanReview,
+    review: ReferenceReview,
     reviewed_by: AuthoringAction,
 ) -> AuthoringCandidate:
-    """Apply an existing HumanReview contract and construct EvaluationCase."""
+    """Apply a human ReferenceReview and construct EvaluationCase.
+
+    This is the hand-authored lifecycle; benchmark gold and automated consensus
+    labels are built by their own adapters, never through this human workflow.
+    """
 
     _require_active(candidate)
     if (
@@ -528,12 +532,16 @@ def review_candidate(
         raise AuthoringLifecycleError("only annotated candidates can be reviewed")
     if reviewed_by.action != "review_case" or reviewed_by.actor_kind != "human":
         raise AuthoringLifecycleError("final review requires a named human review action")
-    if review.status != "approved" or review.reviewer_kind != "human":
+    if (
+        review.status != "approved"
+        or review.authority != "human"
+        or review.reviewer_kind != "human"
+    ):
         raise AuthoringLifecycleError("LLM/rule output cannot be used as final human approval")
     if review.reviewer_id != reviewed_by.actor_id or review.reviewed_at != reviewed_by.occurred_at:
-        raise AuthoringLifecycleError("review action must match HumanReview reviewer and timestamp")
+        raise AuthoringLifecycleError("review action must match ReferenceReview reviewer and timestamp")
     if review.evidence_reference != reviewed_by.evidence_reference:
-        raise AuthoringLifecycleError("review action must bind the HumanReview external evidence reference")
+        raise AuthoringLifecycleError("review action must bind the ReferenceReview external evidence reference")
     provenance = candidate.reference_label.provenance
     if review.reviewed_at is None or review.reviewed_at <= provenance.annotation_started_at:
         raise AuthoringLifecycleError("final review must occur after full-text annotation starts")

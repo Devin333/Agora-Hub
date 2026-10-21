@@ -32,6 +32,7 @@ Answerability = Literal["answerable", "unanswerable", "needs_review"]
 ExpectedBehavior = Literal["answer", "abstain"]
 ReviewStatus = Literal["pending", "needs_review", "approved", "rejected"]
 ActorKind = Literal["human", "llm", "rule"]
+ReviewAuthority = Literal["human", "dataset_gold", "automated_consensus"]
 AuthoringMethod = Literal["abstract_only", "real_user", "fulltext_targeted", "template", "legacy_import"]
 ExposureStatus = Literal["clean", "exposed", "unknown"]
 ExposureSubject = Literal["paper_fulltext", "question", "reference", "score_feedback"]
@@ -233,8 +234,70 @@ class ExposureHistory(ProtocolModel):
         return self
 
 
-class HumanReview(ProtocolModel):
+class GoldAnnotationSource(ProtocolModel):
+    """Identity of a published benchmark's own gold annotations."""
+
+    dataset_id: NonEmptyStr
+    dataset_version: ImmutableVersionStr
+    dataset_digest: Sha256Digest
+    original_case_id: NonEmptyStr
+    annotation_fields: tuple[NonEmptyStr, ...] = Field(min_length=1)
+    annotator_count: int = Field(ge=1, strict=True)
+
+    @model_validator(mode="after")
+    def _unique_fields(self) -> "GoldAnnotationSource":
+        _ensure_unique(self.annotation_fields, "gold_source.annotation_fields")
+        return self
+
+
+class ConsensusJudge(ProtocolModel):
+    provider: NonEmptyStr
+    model_id: NonEmptyStr
+    model_revision: NonEmptyStr | None
+    prompt_version: ImmutableVersionStr
+
+
+class AutomatedConsensusRecord(ProtocolModel):
+    """Independent multi-provider agreement backed by a calibration run."""
+
+    judges: tuple[ConsensusJudge, ...] = Field(min_length=2)
+    unanimous: bool
+    calibration_run_id: NonEmptyStr
+    calibration_detection_rate: float = Field(ge=0.0, le=1.0)
+    calibration_false_alarm_rate: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _independent_judges(self) -> "AutomatedConsensusRecord":
+        providers = [item.provider.casefold() for item in self.judges]
+        if len(providers) != len(set(providers)):
+            raise ValueError("automated consensus requires judges from distinct providers")
+        return self
+
+
+_AUTHORITY_ACTOR: dict[str, str] = {
+    "human": "human",
+    "dataset_gold": "rule",
+    "automated_consensus": "llm",
+}
+
+
+def _require_authority_actor(authority: str, reviewer_kind: str | None, subject: str) -> None:
+    expected = _AUTHORITY_ACTOR[authority]
+    if reviewer_kind != expected:
+        raise ValueError(f"{subject} with authority {authority!r} requires reviewer_kind={expected!r}")
+
+
+class ReferenceReview(ProtocolModel):
+    """Approval of one reference label, attributed to an explicit authority.
+
+    ``human`` is a named person; ``dataset_gold`` adopts a published benchmark's
+    own annotations verified by deterministic rules; ``automated_consensus`` is
+    unanimous agreement of independent judges backed by a calibration run.
+    Which authorities a scoring run accepts is a separate ReviewAcceptancePolicy.
+    """
+
     status: ReviewStatus
+    authority: ReviewAuthority = "human"
     reviewer_id: NonEmptyStr | None
     reviewer_kind: ActorKind | None
     reviewed_at: datetime | None
@@ -243,6 +306,8 @@ class HumanReview(ProtocolModel):
     checked_scope: QuestionScope | None
     unanswerable_reason: NonEmptyStr | None
     evidence_reference: NonEmptyStr | None
+    gold_source: GoldAnnotationSource | None = None
+    consensus: AutomatedConsensusRecord | None = None
 
     @field_validator("evidence_reference")
     @classmethod
@@ -250,16 +315,80 @@ class HumanReview(ProtocolModel):
         return None if value is None else _reject_local_path(value, "evidence_reference")
 
     @model_validator(mode="after")
-    def _validate_review(self) -> "HumanReview":
+    def _validate_review(self) -> "ReferenceReview":
         _aware(self.reviewed_at, "reviewed_at")
+        if (self.gold_source is not None) != (self.authority == "dataset_gold"):
+            raise ValueError("gold_source is required for, and only for, dataset_gold authority")
+        if (self.consensus is not None) != (self.authority == "automated_consensus"):
+            raise ValueError("consensus is required for, and only for, automated_consensus authority")
         if self.status == "approved":
-            if self.reviewer_kind != "human" or self.reviewer_id is None or self.reviewed_at is None:
-                raise ValueError("approved review requires a named human reviewer and reviewed_at")
+            if self.reviewer_id is None or self.reviewed_at is None:
+                raise ValueError("approved review requires a named reviewer and reviewed_at")
+            if self.authority == "human" and self.reviewer_kind != "human":
+                raise ValueError("approved human review requires a named human reviewer and reviewed_at")
+            _require_authority_actor(self.authority, self.reviewer_kind, "approved review")
+            if self.consensus is not None and not self.consensus.unanimous:
+                raise ValueError("automated consensus approval requires unanimous judges")
             if self.source_completeness != "complete" or self.checked_scope is None:
                 raise ValueError("approved review requires complete sources and an explicitly checked scope")
             if self.evidence_reference is None:
                 raise ValueError("approved review requires an external evidence reference")
         return self
+
+
+class ReviewAcceptancePolicy(ProtocolModel):
+    """Which review authorities a scoring or release step treats as approved."""
+
+    policy_id: NonEmptyStr
+    policy_version: ImmutableVersionStr
+    accepted_authorities: tuple[ReviewAuthority, ...] = Field(min_length=1)
+    min_consensus_judges: int = Field(default=2, ge=2, strict=True)
+    min_calibration_detection_rate: float = Field(default=0.95, ge=0.0, le=1.0)
+    max_calibration_false_alarm_rate: float = Field(default=0.05, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _unique_authorities(self) -> "ReviewAcceptancePolicy":
+        _ensure_unique(self.accepted_authorities, "accepted_authorities")
+        return self
+
+    def rejection_reason(self, review: ReferenceReview) -> str | None:
+        """Return why a review is not accepted, or None when it is accepted."""
+
+        if review.status != "approved":
+            return f"review status is {review.status!r}"
+        if review.authority not in self.accepted_authorities:
+            return f"review authority {review.authority!r} is not accepted by policy {self.policy_id!r}"
+        consensus = review.consensus
+        if consensus is not None:
+            if len(consensus.judges) < self.min_consensus_judges:
+                return "automated consensus has fewer judges than the policy requires"
+            if consensus.calibration_detection_rate < self.min_calibration_detection_rate:
+                return "judge calibration detection rate is below the policy threshold"
+            if consensus.calibration_false_alarm_rate > self.max_calibration_false_alarm_rate:
+                return "judge calibration false-alarm rate exceeds the policy threshold"
+        return None
+
+    def accepts(self, review: ReferenceReview) -> bool:
+        return self.rejection_reason(review) is None
+
+    def provenance(self) -> dict[str, Any]:
+        return {
+            "policy_id": self.policy_id,
+            "policy_version": self.policy_version,
+            "accepted_authorities": list(self.accepted_authorities),
+        }
+
+
+HUMAN_ONLY_REVIEW_POLICY = ReviewAcceptancePolicy(
+    policy_id="human-only",
+    policy_version="1.0",
+    accepted_authorities=("human",),
+)
+AUTOMATED_REVIEW_POLICY = ReviewAcceptancePolicy(
+    policy_id="automated-gold-and-consensus",
+    policy_version="1.0",
+    accepted_authorities=("human", "dataset_gold", "automated_consensus"),
+)
 
 
 class ReferenceClaim(ProtocolModel):
@@ -359,7 +488,7 @@ class ReferenceLabel(ProtocolModel):
     evidence_anchors: tuple[EvidenceAnchor, ...]
     required_evidence_groups: tuple[RequiredEvidenceGroup, ...]
     provenance: CaseProvenance
-    review: HumanReview
+    review: ReferenceReview
 
 
 class QuestionRecord(ProtocolModel):
@@ -420,7 +549,7 @@ class _EvaluationCaseContent(ProtocolModel):
     required_evidence_groups: tuple[RequiredEvidenceGroup, ...]
     provenance: CaseProvenance
     exposure_history: ExposureHistory
-    review: HumanReview
+    review: ReferenceReview
 
     @model_validator(mode="after")
     def _validate_case_content(self) -> "_EvaluationCaseContent":
@@ -464,7 +593,7 @@ class _EvaluationCaseContent(ProtocolModel):
             if not self.reference_claims or not self.required_evidence_groups or not self.evidence_anchors:
                 raise ValueError("answerable cases require claims, evidence anchors, and all-of evidence groups")
             if self.review.status != "approved" or self.review.checked_scope != self.scope:
-                raise ValueError("answerable cases require final human approval of the exact question scope")
+                raise ValueError("answerable cases require an approved review of the exact question scope")
             grouped_claims = {claim_id for group in self.required_evidence_groups for claim_id in group.claim_ids}
             if grouped_claims != claim_id_set:
                 raise ValueError("every answerable reference claim must belong to a required evidence group")
@@ -474,13 +603,15 @@ class _EvaluationCaseContent(ProtocolModel):
             if self.required_evidence_groups:
                 raise ValueError("unanswerable cases must use an explicit empty evidence-group list")
             if self.review.status != "approved" or self.review.unanswerable_reason is None or self.review.checked_scope != self.scope:
-                raise ValueError("unanswerable approval requires human approval, a reason, and the exact checked scope")
+                raise ValueError("unanswerable approval requires an approved review, a reason, and the exact checked scope")
         else:
             if self.expected_behavior is not None or self.reference_answer is not None:
                 raise ValueError("needs_review cases require explicit null behavior and reference_answer")
             if self.review.status != "needs_review":
                 raise ValueError("needs_review answerability requires review.status='needs_review'")
         if self.split == "heldout" and self.review.status == "approved":
+            if self.review.authority == "automated_consensus":
+                raise ValueError("heldout qualification cases cannot be approved by automated consensus alone")
             if self.provenance.authoring_method == "legacy_import":
                 raise ValueError("legacy imports cannot be approved as heldout cases")
             if self.exposure_history.status != "clean" or any(event.purpose in _TUNING_PURPOSES for event in self.exposure_history.events):
@@ -621,6 +752,7 @@ class SplitManifest(ProtocolModel):
 
 class DatasetReviewManifest(ProtocolModel):
     status: ReviewStatus
+    authority: ReviewAuthority = "human"
     reviewer_id: NonEmptyStr | None
     reviewer_kind: ActorKind | None
     reviewed_at: datetime | None
@@ -640,8 +772,11 @@ class DatasetReviewManifest(ProtocolModel):
         _ensure_unique(self.approved_case_ids, "review_manifest.approved_case_ids")
         _aware(self.reviewed_at, "reviewed_at")
         if self.status == "approved":
-            if self.reviewer_kind != "human" or self.reviewer_id is None or self.reviewed_at is None:
+            if self.reviewer_id is None or self.reviewed_at is None:
+                raise ValueError("dataset approval requires a named reviewer and reviewed_at")
+            if self.authority == "human" and self.reviewer_kind != "human":
                 raise ValueError("dataset approval requires a named human reviewer and reviewed_at")
+            _require_authority_actor(self.authority, self.reviewer_kind, "dataset approval")
             if not (self.corpus_checked and self.split_checked and self.contract_checked):
                 raise ValueError("dataset approval requires corpus, split, and contract checks")
             if self.evidence_reference is None:
@@ -795,4 +930,4 @@ class DatasetManifest(_DatasetManifestContent):
                 raise ValueError(f"needs_review case {case_id!r} cannot enter a frozen dataset")
 
 
-__all__ = ["DatasetLifecycleState", "ReleasePurpose", "DatasetSplit", "QuestionType", "Answerability", "ExpectedBehavior", "ReviewStatus", "ActorKind", "AuthoringMethod", "ExposureStatus", "ExposureSubject", "ExposurePurpose", "SourceCompleteness", "AnchorContentType", "VisibleMaterial", "ScopedPaper", "QuestionScope", "QuestionInput", "AssistanceRecord", "AuthorInputManifest", "SourceRecord", "CaseProvenance", "ExposureEvent", "ExposureHistory", "HumanReview", "ReferenceClaim", "EvidenceLocation", "EvidenceAnchor", "AlternativeSufficientSet", "RequiredEvidenceGroup", "ReferenceLabel", "QuestionRecord", "ReferenceRecord", "EvaluationCase", "CaseManifestEntry", "PaperGroup", "SplitManifest", "DatasetReviewManifest", "LicenseReference", "AuthoringProtocol", "DatasetManifest"]
+__all__ = ["DatasetLifecycleState", "ReleasePurpose", "DatasetSplit", "QuestionType", "Answerability", "ExpectedBehavior", "ReviewStatus", "ActorKind", "ReviewAuthority", "AuthoringMethod", "ExposureStatus", "ExposureSubject", "ExposurePurpose", "SourceCompleteness", "AnchorContentType", "VisibleMaterial", "ScopedPaper", "QuestionScope", "QuestionInput", "AssistanceRecord", "AuthorInputManifest", "SourceRecord", "CaseProvenance", "ExposureEvent", "ExposureHistory", "GoldAnnotationSource", "ConsensusJudge", "AutomatedConsensusRecord", "ReferenceReview", "ReviewAcceptancePolicy", "HUMAN_ONLY_REVIEW_POLICY", "AUTOMATED_REVIEW_POLICY", "ReferenceClaim", "EvidenceLocation", "EvidenceAnchor", "AlternativeSufficientSet", "RequiredEvidenceGroup", "ReferenceLabel", "QuestionRecord", "ReferenceRecord", "EvaluationCase", "CaseManifestEntry", "PaperGroup", "SplitManifest", "DatasetReviewManifest", "LicenseReference", "AuthoringProtocol", "DatasetManifest"]

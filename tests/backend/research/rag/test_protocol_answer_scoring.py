@@ -13,7 +13,9 @@ from backend.research.rag.evaluation.protocol_dataset import (
     CaseProvenance,
     EvidenceAnchor,
     EvidenceLocation,
-    HumanReview,
+    GoldAnnotationSource,
+    HUMAN_ONLY_REVIEW_POLICY,
+    ReferenceReview,
     QuestionScope,
     ReferenceClaim,
     ReferenceLabel,
@@ -92,7 +94,7 @@ def _reference(answerability: str = "answerable", *, claim_count: int = 1) -> Re
         ),),
     )
     review_status = "needs_review" if answerability == "needs_review" else "approved"
-    review = HumanReview(
+    review = ReferenceReview(
         status=review_status,
         reviewer_id=None if review_status == "needs_review" else "reviewer-1",
         reviewer_kind=None if review_status == "needs_review" else "human",
@@ -905,6 +907,53 @@ def test_candidate_aligned_to_unknown_reference_claim_is_rejected() -> None:
             actual_context=_context(),
             candidate_facts=(candidate,),
         )
+
+
+def _gold_reference() -> ReferenceLabel:
+    reference = _reference()
+    review = reference.review.model_copy(update={
+        "authority": "dataset_gold",
+        "reviewer_id": "qasper-gold-builder",
+        "reviewer_kind": "rule",
+        "gold_source": GoldAnnotationSource(
+            dataset_id="qasper",
+            dataset_version="0.3",
+            dataset_digest="b" * 64,
+            original_case_id="question-1",
+            annotation_fields=("free_form_answer", "evidence"),
+            annotator_count=1,
+        ),
+    })
+    return reference.model_copy(update={"review": ReferenceReview.model_validate(review.model_dump())})
+
+
+def test_review_policy_decides_whether_benchmark_gold_is_scored() -> None:
+    source_text = "The model obtains 0.95 accuracy on test under seed 7."
+    claim_text = "Model A obtains 95% accuracy on the test split under seed 7."
+    reference_fact, candidate_fact, evidence = _projections(
+        _fact(95.0, NumericUnit.PERCENT),
+        _fact(0.95, NumericUnit.FRACTION),
+        source_text,
+    )
+    kwargs = dict(
+        case_id="case-1",
+        reference=_gold_reference(),
+        candidate=_candidate(claim_text, claim_text=claim_text),
+        actual_context=_context(source_text),
+        reference_facts=(reference_fact,),
+        candidate_facts=(candidate_fact,),
+        evidence_facts=(evidence,),
+    )
+    automated = score_answer(**kwargs)
+    assert automated.fact_precision.value == 1.0
+    assert automated.abstention.reviewed_class.value == "positive"
+    assert automated.fact_precision.provenance["review_authority"] == "dataset_gold"
+    assert automated.fact_precision.provenance["review_policy"] == "automated-gold-and-consensus@1.0"
+
+    human_only = score_answer(**kwargs, review_policy=HUMAN_ONLY_REVIEW_POLICY)
+    assert all(item.status is ScoreStatus.NEEDS_REVIEW for item in human_only.observations)
+    assert "not accepted by policy 'human-only'" in (human_only.fact_precision.reason or "")
+    assert human_only.abstention.review_policy_id == "human-only@1.0"
 
 
 def test_every_case_branch_emits_the_full_metric_set() -> None:

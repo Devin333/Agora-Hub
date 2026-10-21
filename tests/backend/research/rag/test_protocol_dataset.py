@@ -435,6 +435,25 @@ def test_abstract_only_and_machine_approval_boundaries_are_enforced() -> None:
         EvaluationCase.create(**auto_approved)
 
 
+def test_automated_consensus_cannot_qualify_heldout_cases() -> None:
+    content = _case_content(split="heldout")
+    content["review"].update({  # type: ignore[union-attr]
+        "authority": "automated_consensus",
+        "reviewer_kind": "llm",
+        "consensus": {
+            "judges": [
+                {"provider": "openai", "model_id": "m1", "model_revision": None, "prompt_version": "1.0"},
+                {"provider": "dashscope", "model_id": "m2", "model_revision": None, "prompt_version": "1.0"},
+            ],
+            "unanimous": True,
+            "calibration_run_id": "calibration-1",
+            "calibration_detection_rate": 0.99,
+            "calibration_false_alarm_rate": 0.01,
+        },
+    })
+    with pytest.raises(ValidationError, match="automated consensus alone"):
+        EvaluationCase.create(**content)
+
 
 def test_question_first_requires_independent_annotation_and_strict_stage_order() -> None:
     same_actor = _case_content()

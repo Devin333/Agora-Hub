@@ -28,7 +28,11 @@ from backend.research.rag.evaluation.protocol_common import (
     content_digest,
 )
 from backend.research.rag.evaluation.protocol_dataset import (
-    EvaluationCase, EvidenceLocation, ReferenceLabel,
+    AUTOMATED_REVIEW_POLICY,
+    EvaluationCase,
+    EvidenceLocation,
+    ReferenceLabel,
+    ReviewAcceptancePolicy,
 )
 from backend.research.rag.evaluation.protocol_semantic_facts import (
     DETERMINISTIC_SEMANTIC_RULE_VERSION,
@@ -408,6 +412,7 @@ class AbstentionCaseObservation(ProtocolModel):
     runtime_failure: bool
     reason: NonEmptyStr
     rubric_version: ImmutableVersionStr
+    review_policy_id: NonEmptyStr
 
 
 class AbstentionAggregateResult(ProtocolModel):
@@ -587,10 +592,11 @@ def classify_abstention(
     candidate: GroundedAnswerCandidate | None,
     runtime_error: str | None = None,
     rubric: AbstentionRubric = AbstentionRubric(),
+    review_policy: ReviewAcceptancePolicy = AUTOMATED_REVIEW_POLICY,
 ) -> AbstentionCaseObservation:
     """Classify refusal behavior without inferring the frozen answerability label."""
 
-    reviewed_class = _reviewed_class(reference)
+    reviewed_class = _reviewed_class(reference, review_policy)
     if runtime_error is not None or candidate is None:
         classification = AbstentionClassification.RUNTIME_ERROR
         abstained: bool | None = False
@@ -647,6 +653,7 @@ def classify_abstention(
         runtime_failure=classification is AbstentionClassification.RUNTIME_ERROR,
         reason=reason,
         rubric_version=rubric.version,
+        review_policy_id=_policy_key(review_policy),
     )
 
 
@@ -656,6 +663,7 @@ def classify_case_abstention(
     candidate: GroundedAnswerCandidate | None,
     runtime_error: str | None = None,
     rubric: AbstentionRubric = AbstentionRubric(),
+    review_policy: ReviewAcceptancePolicy = AUTOMATED_REVIEW_POLICY,
 ) -> AbstentionCaseObservation:
     """Classify one native frozen case without constructing a parallel QA model."""
 
@@ -666,6 +674,7 @@ def classify_case_abstention(
         candidate=candidate,
         runtime_error=runtime_error,
         rubric=rubric,
+        review_policy=review_policy,
     )
 
 
@@ -675,6 +684,7 @@ def aggregate_planned_abstention(
     candidates: Mapping[str, GroundedAnswerCandidate],
     runtime_errors: Mapping[str, str] | None = None,
     rubric: AbstentionRubric = AbstentionRubric(),
+    review_policy: ReviewAcceptancePolicy = AUTOMATED_REVIEW_POLICY,
 ) -> AbstentionAggregateResult:
     """Keep every planned native case, including failures and unresolved labels."""
 
@@ -691,6 +701,7 @@ def aggregate_planned_abstention(
             candidate=candidates.get(case.case_id),
             runtime_error=runtime_error_map.get(case.case_id),
             rubric=rubric,
+        review_policy=review_policy,
         )
         for case in cases
     )
@@ -715,6 +726,7 @@ def aggregate_abstention_metrics(
         "abstention-plan://empty",
     )
     rubrics = sorted({item.rubric_version for item in observations})
+    policies = sorted({item.review_policy_id for item in observations})
     neg_metric = _aggregate_ratio_observation(
         metric_id="answer.abstention_recall",
         event_count=neg_success,
@@ -723,6 +735,7 @@ def aggregate_abstention_metrics(
         provenance={
             "reviewed_class": "negative",
             "rubric_versions": rubrics,
+            "review_policies": policies,
             "runtime_failures": sum(item.runtime_failure for item in negative),
             "planned_denominator": len(negative),
         },
@@ -738,6 +751,7 @@ def aggregate_abstention_metrics(
         provenance={
             "reviewed_class": "positive",
             "rubric_versions": rubrics,
+            "review_policies": policies,
             "runtime_failures": sum(item.runtime_failure for item in positive),
             "planned_denominator": len(positive),
         },
@@ -819,6 +833,7 @@ def score_answer(
     evidence_facts: Sequence[EvidenceFactProjection] = (),
     runtime_error: str | None = None,
     rubric: AbstentionRubric = AbstentionRubric(),
+    review_policy: ReviewAcceptancePolicy = AUTOMATED_REVIEW_POLICY,
 ) -> AnswerScoreResult:
     """Produce independent deterministic observations with isolated inputs."""
 
@@ -828,6 +843,7 @@ def score_answer(
         candidate=candidate,
         runtime_error=runtime_error,
         rubric=rubric,
+        review_policy=review_policy,
     )
     answer_ref = f"answer://{candidate.answer_id}" if candidate else f"answer://{case_id}/missing"
     reference_ref = f"reference://{case_id}/{content_digest(reference)}"
@@ -853,13 +869,17 @@ def score_answer(
         actual_context=actual_context,
         evidence_facts=evidence_facts,
     )
-    reviewed_class = _reviewed_class(reference)
+    reviewed_class = _reviewed_class(reference, review_policy)
     assessments: tuple[ClaimFactAssessment, ...] = ()
     if reference.answerability == "needs_review" or reviewed_class is ReviewedClass.NEEDS_REVIEW:
         observations = tuple(_state_observation(
             metric_id=metric_id,
             status=ScoreStatus.NEEDS_REVIEW,
-            reason="answerability or reference review is not frozen and approved",
+            reason=(
+                "answerability is not frozen" if reference.answerability == "needs_review"
+                else review_policy.rejection_reason(reference.review)
+                or "reference review is not accepted"
+            ),
             provenance={"input_boundary": boundary},
             evidence=base_evidence,
         ) for metric_id, boundary in _CASE_METRIC_BOUNDARIES)
@@ -881,6 +901,7 @@ def score_answer(
             bindings=bindings,
             base_evidence=base_evidence,
         )
+    observations = _with_provenance(observations, _review_provenance(reference, review_policy))
     return AnswerScoreResult(
         case_id=case_id,
         candidate_answer_id=candidate.answer_id,
@@ -1492,20 +1513,34 @@ def _score_citation_coverage(
     )
 
 
-def _reviewed_class(reference: ReferenceLabel) -> ReviewedClass:
-    review = reference.review
-    approved = (
-        review.status == "approved"
-        and review.reviewer_kind == "human"
-        and review.reviewer_id is not None
-        and review.reviewed_at is not None
-        and review.source_completeness == "complete"
-        and review.checked_scope is not None
-        and review.evidence_reference is not None
-    )
-    if not approved or reference.answerability == "needs_review":
+def _policy_key(policy: ReviewAcceptancePolicy) -> str:
+    return f"{policy.policy_id}@{policy.policy_version}"
+
+
+def _reviewed_class(reference: ReferenceLabel, policy: ReviewAcceptancePolicy) -> ReviewedClass:
+    if reference.answerability == "needs_review" or not policy.accepts(reference.review):
         return ReviewedClass.NEEDS_REVIEW
     return ReviewedClass.POSITIVE if reference.answerability == "answerable" else ReviewedClass.NEGATIVE
+
+
+def _review_provenance(reference: ReferenceLabel, policy: ReviewAcceptancePolicy) -> dict[str, Any]:
+    return {
+        "review_authority": reference.review.authority,
+        "review_policy": _policy_key(policy),
+    }
+
+
+def _with_provenance(
+    observations: Sequence[AnswerMetricObservation],
+    extra: Mapping[str, Any],
+) -> tuple[AnswerMetricObservation, ...]:
+    return tuple(
+        AnswerMetricObservation.model_validate({
+            **item.model_dump(),
+            "provenance": {**item.provenance, **extra},
+        })
+        for item in observations
+    )
 
 
 def _claim_span_overrides(candidate: GroundedAnswerCandidate) -> Mapping[str, Any]:
