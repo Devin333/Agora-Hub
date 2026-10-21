@@ -11,15 +11,38 @@ import math
 from collections import Counter
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
-from pydantic import Field, field_validator, model_validator
-
-from backend.research.rag.evaluation.protocol_common import (
-    NonEmptyStr,
-    ProtocolModel,
-    Sha256Digest,
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
 )
+
+
+NonEmptyStr = Annotated[
+    str,
+    StringConstraints(strict=True, strip_whitespace=True, min_length=1),
+]
+Sha256Digest = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$"),
+]
+
+
+class ProtocolModel(BaseModel):
+    """Strict immutable base for document parsing evaluation records."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_default=True,
+    )
+
 
 PARSING_EVALUATION_PROTOCOL = "research-document-parsing-eval/v1"
 
@@ -79,6 +102,12 @@ class AggregationUnit(StrEnum):
     PAGE = "page"
     OBJECT = "object"
     SAMPLE = "sample"
+
+
+class CacheState(StrEnum):
+    UNKNOWN = "unknown"
+    COLD = "cold"
+    WARM = "warm"
 
 
 class IdentityValue(ProtocolModel):
@@ -154,6 +183,14 @@ class ParsingExecutionIdentity(ProtocolModel):
         return self
 
 
+class PerformanceRunConditions(ProtocolModel):
+    """Conditions needed to compare page wall-clock elapsed measurements."""
+
+    concurrency: int | None = Field(default=None, gt=0)
+    cache_state: CacheState = CacheState.UNKNOWN
+    timing_scope_version: IdentityValue | None = None
+
+
 class ParsingBudget(ProtocolModel):
     max_pages: int = Field(gt=0)
     timeout_seconds_per_page: float = Field(gt=0, allow_inf_nan=False)
@@ -217,8 +254,13 @@ class MetricOutcome(ProtocolModel):
 
     @model_validator(mode="after")
     def _status_value_consistency(self) -> Self:
-        if self.aggregation_unit is AggregationUnit.OBJECT and self.support_id is None:
-            raise ValueError("object-level metric outcomes require a support_id")
+        if (
+            self.aggregation_unit in {AggregationUnit.OBJECT, AggregationUnit.SAMPLE}
+            and self.support_id is None
+        ):
+            raise ValueError(
+                f"{self.aggregation_unit.value}-level metric outcomes require a support_id"
+            )
         if self.status is MetricStatus.SUCCEEDED:
             if self.value is None:
                 raise ValueError("successful metric outcome requires a value")
@@ -236,6 +278,7 @@ class PageOutcome(ProtocolModel):
     page_id: NonEmptyStr
     status: PageStatus
     reason: NonEmptyStr | None = None
+    elapsed_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     metrics: tuple[MetricOutcome, ...] = ()
 
     @model_validator(mode="after")
@@ -244,9 +287,16 @@ class PageOutcome(ProtocolModel):
             raise ValueError("successful page outcome must not include a failure reason")
         if self.status in {PageStatus.FAILED, PageStatus.SKIPPED, PageStatus.INVALID} and self.reason is None:
             raise ValueError("failed, skipped, and invalid page outcomes require a reason")
-        metric_keys = [(metric.metric, metric.aggregation_unit, metric.support_id) for metric in self.metrics]
+        metric_keys = [
+            (
+                metric.metric,
+                metric.aggregation_unit,
+                None if metric.aggregation_unit is AggregationUnit.PAGE else metric.support_id,
+            )
+            for metric in self.metrics
+        ]
         if len(metric_keys) != len(set(metric_keys)):
-            raise ValueError("page metric outcomes must have unique metric/unit/support identities")
+            raise ValueError("page metric outcomes must be unique per page metric or traceable support")
         if self.status is not PageStatus.SUCCEEDED and any(
             metric.status is MetricStatus.SUCCEEDED for metric in self.metrics
         ):
@@ -262,6 +312,7 @@ class ParsingEvaluationManifest(ProtocolModel):
     execution: ParsingExecutionIdentity
     fingerprints: ParsingFingerprints
     budget: ParsingBudget
+    performance_conditions: PerformanceRunConditions | None = None
     metrics: tuple[MetricSpec, ...]
     requested_pages: tuple[RequestedPage, ...]
     outcomes: tuple[PageOutcome, ...]
@@ -389,18 +440,25 @@ def load_parsing_evaluation_manifest(path: str | Path) -> ParsingEvaluationManif
 
 
 def metric_denominators(manifest: ParsingEvaluationManifest) -> dict[str, dict[str, Any]]:
-    """Summarize metric support without dropping failed or not-applicable rows."""
+    """Summarize every planned metric, including metrics with no reported rows."""
 
-    grouped: dict[tuple[str, AggregationUnit], list[MetricOutcome]] = {}
+    grouped: dict[tuple[str, AggregationUnit], list[tuple[str, MetricOutcome]]] = {
+        (spec.metric, spec.aggregation_unit): [] for spec in manifest.metrics
+    }
     for page in manifest.outcomes:
         for result in page.metrics:
-            grouped.setdefault((result.metric, result.aggregation_unit), []).append(result)
+            grouped[(result.metric, result.aggregation_unit)].append((page.page_id, result))
+
     summary: dict[str, dict[str, Any]] = {}
-    for (name, unit), results in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1].value)):
+    for (name, unit), reported in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1].value)):
+        results = [result for _, result in reported]
         counts = Counter(result.status.value for result in results)
         key = f"{name}:{unit.value}"
         summary[key] = {
+            "planned_pages": len(manifest.requested_pages),
+            "reported_pages": len({page_id for page_id, _ in reported}),
             "requested_outcomes": len(results),
+            "reported_outcomes": len(results),
             "scored_denominator": counts[MetricStatus.SUCCEEDED.value],
             "status_counts": dict(sorted(counts.items())),
             "support_ids": sorted(result.support_id for result in results if result.support_id is not None),
@@ -408,8 +466,95 @@ def metric_denominators(manifest: ParsingEvaluationManifest) -> dict[str, dict[s
     return summary
 
 
+def summarize_parsing_evaluation_manifest(manifest: ParsingEvaluationManifest) -> dict[str, Any]:
+    """Return a deterministic descriptive summary without making a quality decision."""
+
+    page_status_counts = Counter(outcome.status.value for outcome in manifest.outcomes)
+    metric_values: dict[tuple[str, str], list[float]] = {}
+    for outcome in manifest.outcomes:
+        for metric in outcome.metrics:
+            if metric.value is not None:
+                key = (metric.metric, metric.aggregation_unit.value)
+                metric_values.setdefault(key, []).append(metric.value)
+
+    metric_value_summary: dict[str, dict[str, float | int | None]] = {}
+    for (name, unit), values in sorted(metric_values.items()):
+        ordered_values = sorted(values)
+        metric_value_summary[f"{name}:{unit}"] = {
+            "successful_value_count": len(ordered_values),
+            "successful_value_mean": math.fsum(value / len(ordered_values) for value in ordered_values),
+        }
+
+    denominators = metric_denominators(manifest)
+    for key in denominators:
+        metric_value_summary.setdefault(
+            key,
+            {"successful_value_count": 0, "successful_value_mean": None},
+        )
+
+    elapsed_values = sorted(
+        outcome.elapsed_seconds
+        for outcome in manifest.outcomes
+        if outcome.elapsed_seconds is not None
+    )
+    if elapsed_values:
+        percentile_95_index = max(0, math.ceil(0.95 * len(elapsed_values)) - 1)
+        middle = len(elapsed_values) // 2
+        median = (
+            elapsed_values[middle]
+            if len(elapsed_values) % 2
+            else math.fsum((elapsed_values[middle - 1] / 2, elapsed_values[middle] / 2))
+        )
+        runtime_summary: dict[str, float | int | None] = {
+            "measured_pages": len(elapsed_values),
+            "total_seconds": math.fsum(elapsed_values),
+            "median_seconds": median,
+            "p95_seconds": elapsed_values[percentile_95_index],
+        }
+    else:
+        runtime_summary = {
+            "measured_pages": 0,
+            "total_seconds": None,
+            "median_seconds": None,
+            "p95_seconds": None,
+        }
+
+    terminal_page_statuses = {"succeeded", "failed", "skipped", "invalid"}
+    reported_pages = sum(
+        outcome.status.value in terminal_page_statuses for outcome in manifest.outcomes
+    )
+    in_progress_pages = sum(
+        outcome.status.value in {"planned", "running"} for outcome in manifest.outcomes
+    )
+
+    return {
+        "operation": "summarize-parsing",
+        "protocol": manifest.protocol,
+        "run_id": manifest.run_id,
+        "run_status": manifest.status.value,
+        "track": manifest.track.value,
+        "execution_kind": manifest.execution.kind.value,
+        "budget": manifest.budget.model_dump(mode="json"),
+        "page_summary": {
+            "planned_pages": len(manifest.requested_pages),
+            "reported_pages": reported_pages,
+            "in_progress_pages": in_progress_pages,
+            "outcome_status_counts": dict(sorted(page_status_counts.items())),
+        },
+        "metric_denominators": denominators,
+        "metric_value_summary": metric_value_summary,
+        "runtime_summary": runtime_summary,
+        "quality_gate": {
+            "evaluated": False,
+            "passed": None,
+            "reason": "summary is descriptive only; no quality or publication decision was evaluated",
+        },
+    }
+
+
 __all__ = [
     "AggregationUnit",
+    "CacheState",
     "ExecutionKind",
     "Exposure",
     "IdentityValue",
@@ -421,6 +566,7 @@ __all__ = [
     "PageOutcome",
     "PageStatus",
     "ParsingBudget",
+    "PerformanceRunConditions",
     "ParsingEvaluationManifest",
     "ParsingExecutionIdentity",
     "ParsingFingerprints",
@@ -429,5 +575,6 @@ __all__ = [
     "RunStatus",
     "load_parsing_evaluation_manifest",
     "metric_denominators",
+    "summarize_parsing_evaluation_manifest",
     "write_parsing_evaluation_manifest",
 ]

@@ -263,3 +263,7 @@ __marimo__/
 data/eval/*.log
 data/eval/ingest_report.json
 data/eval/*.whl
+
+# local run artifacts and root tooling caches
+/.artifacts/
+/node_modules/

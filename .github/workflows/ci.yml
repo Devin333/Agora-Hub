@@ -36,8 +36,19 @@ jobs:
       - name: Run service tests
         run: python -m scripts.dev test-services
 
-      - name: Run RAG eval promotion gate
+      - name: Run offline RAG diagnostic gate
         run: python -m scripts.dev test-rag-eval-gate
+
+      - name: Run offline RAG evaluation protocol contracts
+        run: python -m scripts.dev test-rag-eval-contracts
+
+      - name: Upload offline RAG protocol test artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-eval-protocol-fixture-contracts
+          path: .newsroom/eval/protocol-contracts
+          if-no-files-found: warn
 
       - name: Run PRD-aligned daily regression sweep
         run: python -m scripts.dev test-prd-daily

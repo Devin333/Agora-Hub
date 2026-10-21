@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from framework.harness.context.models import ContextEnvelope
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.subagents.execution_control import current_child_execution_control
 from framework.harness.subagents.gates import (
     FakeSubAgentGateSuite,
     SubAgentGateResult,
@@ -772,7 +773,14 @@ def _invoke_worker_callable(
     args: tuple[Any, ...],
     execution_identity: GraphExecutionIdentity | None,
 ) -> Any:
-    if execution_identity is None or not _accepts_execution_identity(worker):
+    accepts_identity = execution_identity is not None and _accepts_execution_identity(worker)
+    # Context/ref admission and callback introspection may outlive cancellation
+    # of the enclosing cohort. Recheck its lexical authority at the actual
+    # worker boundary, not only when the supervisor adapter was entered.
+    control = current_child_execution_control()
+    if control is not None:
+        control.raise_if_active()
+    if not accepts_identity:
         return worker(*args)
     return worker(*args, execution_identity=execution_identity)
 

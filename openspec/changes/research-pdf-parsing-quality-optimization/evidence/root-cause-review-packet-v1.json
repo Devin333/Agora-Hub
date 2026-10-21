@@ -1,0 +1,63 @@
+{
+  "schema_version": "research-parsing-root-cause-review-packet/v1",
+  "status": "prepared_not_manually_reviewed",
+  "official_scorer_commit": "f133a71e9e91c3621c7ce8994200a7b394a06eb3",
+  "annotation_sha256": "a45cd84b04ad8b793e775089640e6b681209abea33ead54c1828ddca35fae496",
+  "heldout": false,
+  "selection_rule": {
+    "formula_bad": "CDM < .5, worst first",
+    "formula_control": "CDM >= .99, best first",
+    "table_bad": "TEDS < .5, worst first",
+    "table_control": "TEDS >= .99, best first",
+    "reading_order_bad": "Edit_dist > .3, worst first",
+    "reading_order_control": "Edit_dist == 0",
+    "each_selection_count": 10,
+    "tie_break": "image_name, immutable official row index",
+    "note": "Post-score dev diagnostic case selection, not pre-registered acceptance or representative prevalence."
+  },
+  "counts": {
+    "formula": {
+      "bad_available": 248,
+      "control_available": 205,
+      "bad_selected": 10,
+      "control_selected": 10
+    },
+    "table": {
+      "bad_available": 17,
+      "control_available": 10,
+      "bad_selected": 10,
+      "control_selected": 10
+    },
+    "reading_order": {
+      "bad_available": 65,
+      "control_available": 66,
+      "bad_selected": 10,
+      "control_selected": 10
+    }
+  },
+  "official_results": [
+    {
+      "path": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\official-b0-frozen-runtime-v1\\result\\predictions_quick_match_display_formula_result.json",
+      "sha256": "a8ea027bc6c3d3cb464dc87aceb0ae5f27a7d54da3df8db8ddf633b84e872692",
+      "rows": 597
+    },
+    {
+      "path": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\official-b0-frozen-runtime-v1\\result\\predictions_quick_match_table_result.json",
+      "sha256": "64a8d3a51f461acd26a1fbfd63705ffc91539aced3cad244a99e8a3e255985b2",
+      "rows": 123
+    },
+    {
+      "path": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\official-b0-frozen-runtime-v1\\result\\predictions_quick_match_reading_order_result.json",
+      "sha256": "16c4f3ae928ceaca8b4ff4ecae7aeaee881bde5d96f2258a0ccdd0d3907458ef",
+      "rows": 212
+    }
+  ],
+  "limitations": [
+    "Score and matched prediction alone do not establish a parser/normalizer/chunker root cause.",
+    "Case keys bind a row inside an immutable file only; do not use row index as cross-run gold support identity.",
+    "Historical production document and downstream projection are missing; OpenSpec task 1.3 remains incomplete."
+  ],
+  "packet_artifact": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\root-cause-review-packet-v1.json",
+  "packet_sha256": "7b50caadfbf175b326a139f74d114a6e35412ef86045d206d39b1083d694f159",
+  "selected_case_count": 60
+}

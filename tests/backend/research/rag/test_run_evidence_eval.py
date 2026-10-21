@@ -79,6 +79,14 @@ def test_run_evidence_eval_writes_summary_report(tmp_path) -> None:
     assert payload["metadata"]["total_pairs"] == 2
     assert payload["metadata"]["qa_type_counts"] == {"citation_qa": 1, "negative_qa": 1}
     assert payload["metadata"]["answer_eval_mode"] == "none"
+    assert payload["metadata"]["protocol"] == "legacy_evidence_regression_diagnostic"
+    assert payload["metadata"]["track"] == "not_applicable"
+    assert payload["metadata"]["execution_profile"] == "not_applicable"
+    assert payload["metadata"]["purpose"] == "diagnostic_regression"
+    assert payload["metadata"]["component_identity"]["retrieval_adapter"] == "not_executed"
+    assert payload["metadata"]["component_identity"]["generation_adapter"] == "not_executed"
+    assert payload["metadata"]["gold_context_used"] is False
+    assert payload["metadata"]["production_qualification"]["eligible"] is False
     assert (output / "evidence_regression_report.md").exists()
 
 
@@ -104,6 +112,40 @@ def test_run_evidence_eval_core_accepts_structured_options(tmp_path) -> None:
     payload = json.loads((output / "evidence_regression_report.json").read_text(encoding="utf-8"))
     assert payload["metadata"]["golden_set"] == str(golden)
     assert payload["thresholds"] == {"retrieval.evidence_coverage": 0.8}
+
+
+def test_run_evidence_eval_core_classifies_deterministic_gold_answer_without_model(tmp_path) -> None:
+    golden = tmp_path / "golden.json"
+    output = tmp_path / "report"
+    save_evidence_golden_set([
+        EvidenceQAPair(
+            question="What improves retrieval?",
+            paper_id="p1",
+            qa_type="citation_qa",
+            gold_chunk_ids=["para-1"],
+            answer_facts=["The architecture improves retrieval."],
+        )
+    ], golden)
+
+    exit_code = run_evidence_eval_core(EvidenceEvalOptions(
+        golden_set=golden,
+        output_dir=output,
+        deterministic_answer_eval=True,
+    ))
+
+    assert exit_code == 0
+    payload = json.loads((output / "evidence_regression_report.json").read_text(encoding="utf-8"))
+    metadata = payload["metadata"]
+    assert metadata["answer_eval_mode"] == "deterministic"
+    assert metadata["track"] == "not_applicable"
+    assert metadata["execution_profile"] == "fixture"
+    assert metadata["component_identity"]["answer_adapter"] == "deterministic_gold_supported_answer"
+    assert metadata["component_identity"]["generation_adapter"] == (
+        "not_applicable_no_generation_model_executed"
+    )
+    assert metadata["gold_context_used"] is True
+    assert metadata["gold_context_scope"] == "deterministic_answer_construction"
+    assert metadata["production_qualification"]["eligible"] is False
 
 
 def test_build_golden_set_entrypoint_uses_evidence_pairs_with_negatives() -> None:
@@ -224,6 +266,17 @@ def test_run_evidence_eval_records_live_answer_eval_mode(tmp_path) -> None:
     assert exit_code == 0
     payload = json.loads((output / "evidence_regression_report.json").read_text(encoding="utf-8"))
     assert payload["metadata"]["answer_eval_mode"] == "live"
+    assert payload["metadata"]["track"] == "not_applicable"
+    assert "cannot claim an end-to-end track" in payload["metadata"]["track_reason"]
+    assert payload["metadata"]["execution_profile"] == "fixture"
+    assert payload["metadata"]["component_identity"]["answer_adapter"] == (
+        "injected_live_answer_callable"
+    )
+    assert payload["metadata"]["gold_context_used"] is True
+    assert payload["metadata"]["gold_context_scope"] == (
+        "full_evaluation_pair_exposed_to_injected_callable"
+    )
+    assert payload["metadata"]["production_qualification"]["eligible"] is False
     assert payload["answer"]["abstention_accuracy"] == 1.0
 
 
@@ -314,6 +367,13 @@ def test_run_evidence_eval_can_run_live_retrieval_from_parsed_papers(tmp_path) -
     assert exit_code == 0
     payload = json.loads((output / "evidence_regression_report.json").read_text(encoding="utf-8"))
     assert payload["metadata"]["mode"] == "live_retrieval"
+    assert payload["metadata"]["track"] == "retrieval"
+    assert payload["metadata"]["execution_profile"] == "fixture"
+    assert payload["metadata"]["component_identity"]["retrieval_adapter"] == (
+        "in_memory_chunk_store_with_sha256_hash_field_index"
+    )
+    assert payload["metadata"]["gold_context_used"] is False
+    assert payload["metadata"]["production_qualification"]["eligible"] is False
     assert payload["metadata"]["chunks_total"] > 0
     assert payload["retrieval"]["answerable_total"] > 0
     distribution = payload["retrieval"]["field_embedding_distribution"]
@@ -614,3 +674,23 @@ def _research_document_payload() -> dict:
         },
         "metadata": {"parse_source": "nougat"},
     }
+
+
+def test_diagnostic_identity_accounts_for_retrieval_inside_the_gated_answer_session() -> None:
+    from backend.research.rag.evaluation.evidence_eval_runner import _diagnostic_execution_identity
+
+    identity = _diagnostic_execution_identity(
+        EvidenceEvalOptions(live_answer_eval=True, live_retrieval=False),
+        answer_adapter="paper_rag_session_unity_llm",
+    )
+
+    assert identity["track"] == "end_to_end"
+    assert identity["execution_profile"] == "fixture"
+    assert identity["component_identity"]["retrieval_adapter"] == (
+        "in_memory_chunk_store_with_sha256_hash_field_index"
+    )
+    assert identity["component_identity"]["generation_adapter"] == (
+        "configured_unity_llm_via_gated_paper_rag_session"
+    )
+    assert identity["gold_context_used"] is False
+    assert identity["production_qualification"]["eligible"] is False

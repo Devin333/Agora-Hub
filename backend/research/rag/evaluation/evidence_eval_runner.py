@@ -152,23 +152,34 @@ def run_evidence_eval_core(
             explicit=options.lightweight_reranker,
         )
     answer = None
+    answer_adapter = "not_executed"
     if options.deterministic_answer_eval:
+        answer_adapter = "deterministic_gold_supported_answer"
         answer = EvidenceAnswerEvaluator().evaluate(_build_deterministic_answer_samples(pairs))
     elif options.live_answer_eval:
-        ask = live_answer_ask or _build_live_answer_ask(
-            chunks,
-            retrieval_policy=options.retrieval_policy,
-            visual_enabled=options.visual,
-            image_root=Path(options.image_root) if options.image_root else None,
-            lightweight_reranker=options.lightweight_reranker,
-            limit=options.answer_eval_limit,
-        )
+        if live_answer_ask is not None:
+            answer_adapter = "injected_live_answer_callable"
+            ask = live_answer_ask
+        else:
+            answer_adapter = "paper_rag_session_unity_llm"
+            ask = _build_live_answer_ask(
+                chunks,
+                retrieval_policy=options.retrieval_policy,
+                visual_enabled=options.visual,
+                image_root=Path(options.image_root) if options.image_root else None,
+                lightweight_reranker=options.lightweight_reranker,
+                limit=options.answer_eval_limit,
+            )
         answer = EvidenceAnswerEvaluator().evaluate(
             _build_live_answer_samples(
                 pairs,
                 ask=ask,
             )
         )
+    metadata.update(_diagnostic_execution_identity(
+        options,
+        answer_adapter=answer_adapter,
+    ))
     report = EvidenceRegressionReport(
         retrieval=retrieval,
         answer=answer,
@@ -178,6 +189,97 @@ def run_evidence_eval_core(
     report.write(options.output_dir)
     print(report.to_markdown(), end="")
     return 0 if report.passed() else 1
+
+
+def _diagnostic_execution_identity(
+    options: EvidenceEvalOptions,
+    *,
+    answer_adapter: str,
+) -> dict[str, Any]:
+    """Describe what the legacy diagnostic actually assembled without granting qualification."""
+    retrieval_executed = bool(options.live_retrieval)
+    answer_executed = answer_adapter != "not_executed"
+    if options.live_answer_eval and retrieval_executed:
+        track = "end_to_end"
+        track_reason = "The diagnostic executed retrieval plus an answer candidate path."
+    elif answer_adapter == "paper_rag_session_unity_llm":
+        track = "end_to_end"
+        track_reason = "The in-memory gated answer session retrieved context and generated a candidate."
+    elif retrieval_executed:
+        track = "retrieval"
+        track_reason = "The diagnostic executed the in-memory retrieval evaluator."
+    else:
+        track = "not_applicable"
+        if not answer_executed:
+            track_reason = "Summary-only diagnostics do not execute a retrieval or generation track."
+        elif options.deterministic_answer_eval:
+            track_reason = "The deterministic gold-answer diagnostic is not a generation-model track."
+        else:
+            track_reason = (
+                "The core executed an injected answer callable without assembling or verifying a "
+                "retrieval path, so it cannot claim an end-to-end track."
+            )
+
+    execution_profile = "fixture" if retrieval_executed or answer_executed else "not_applicable"
+    execution_profile_reason = (
+        "Legacy diagnostics are fixture-scoped and do not confer production qualification."
+        if execution_profile == "fixture"
+        else "Summary-only diagnostics do not assemble an execution profile."
+    )
+    gold_context_used = options.deterministic_answer_eval or answer_adapter == "injected_live_answer_callable"
+    if options.deterministic_answer_eval:
+        gold_context_scope = "deterministic_answer_construction"
+    elif answer_adapter == "injected_live_answer_callable":
+        gold_context_scope = "full_evaluation_pair_exposed_to_injected_callable"
+    elif retrieval_executed or answer_executed:
+        gold_context_scope = "scoring_only"
+    else:
+        gold_context_scope = "not_applicable"
+
+    retrieval_adapter = "not_executed"
+    if retrieval_executed or answer_adapter == "paper_rag_session_unity_llm":
+        retrieval_adapter = "in_memory_chunk_store_with_sha256_hash_field_index"
+        if options.visual:
+            retrieval_adapter += "_and_deterministic_visual_embedding"
+
+    generation_adapter = "not_executed"
+    if answer_adapter == "paper_rag_session_unity_llm":
+        generation_adapter = "configured_unity_llm_via_gated_paper_rag_session"
+    elif answer_adapter == "injected_live_answer_callable":
+        generation_adapter = "injected_callable_implementation_not_inspected"
+    elif answer_adapter == "deterministic_gold_supported_answer":
+        generation_adapter = "not_applicable_no_generation_model_executed"
+
+    return {
+        "protocol": "legacy_evidence_regression_diagnostic",
+        "track": track,
+        "track_reason": track_reason,
+        "execution_profile": execution_profile,
+        "execution_profile_reason": execution_profile_reason,
+        "purpose": "diagnostic_regression",
+        "component_identity": {
+            "corpus_adapter": (
+                "parsed_research_document_directory" if options.papers_dir else "not_executed"
+            ),
+            "golden_set_adapter": (
+                "runtime_generated_from_evaluation_corpus"
+                if options.build_golden_set
+                else "loaded_evidence_qa_pairs"
+            ),
+            "retrieval_adapter": retrieval_adapter,
+            "answer_adapter": answer_adapter,
+            "generation_adapter": generation_adapter,
+            "threshold_gate": "legacy_minimum_threshold_issue_calculation",
+        },
+        "gold_context_used": gold_context_used,
+        "gold_context_scope": gold_context_scope,
+        "production_qualification": {
+            "eligible": False,
+            "reason": (
+                "A passing legacy diagnostic regression report is not a production qualification."
+            ),
+        },
+    }
 
 
 def _build_deterministic_answer_samples(pairs: list[EvidenceQAPair]) -> list[EvidenceAnswerSample]:

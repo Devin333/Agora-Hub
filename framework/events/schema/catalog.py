@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from threading import Lock
 from types import CodeType, FunctionType, ModuleType
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -259,7 +260,9 @@ class EventSchemaCatalog:
     def __init__(self, *, telemetry: EventTelemetry | None = None) -> None:
         self._registrations: dict[tuple[str, str], EventSchemaRegistration] = {}
         self._current: dict[str, str] = {}
-        self._telemetry = telemetry or _default_schema_telemetry()
+        self._telemetry = (
+            _default_schema_telemetry() if telemetry is None else telemetry
+        )
 
     def register(self, registration: EventSchemaRegistration) -> None:
         key = (registration.event_type, registration.data_schema)
@@ -671,13 +674,48 @@ HARNESS_GRAPH_TRANSITION_EVENT_SCHEMAS: Mapping[str, str] = MappingProxyType(
 )
 
 
+# A single immutable default set, not a shared catalog or a user-schema cache.
+# Keep publication under the lock: concurrent cold callers must not observe a
+# partial build (or repeat the expensive metaschema checks).
+_DEFAULT_SCHEMA_REGISTRATIONS_LOCK = Lock()
+_DEFAULT_SCHEMA_REGISTRATIONS: tuple[EventSchemaRegistration, ...] | None = None
+
+
 def default_event_schema_catalog(
     *,
     telemetry: EventTelemetry | None = None,
 ) -> EventSchemaCatalog:
     catalog = EventSchemaCatalog(telemetry=telemetry)
+    for registration in _default_event_schema_registrations():
+        catalog.register(registration)
+    return catalog
+
+
+def _default_event_schema_registrations() -> tuple[EventSchemaRegistration, ...]:
+    global _DEFAULT_SCHEMA_REGISTRATIONS
+    with _DEFAULT_SCHEMA_REGISTRATIONS_LOCK:
+        if _DEFAULT_SCHEMA_REGISTRATIONS is not None:
+            return _DEFAULT_SCHEMA_REGISTRATIONS
+        registrations = _build_default_event_schema_registrations()
+        # Registration freezes schemas recursively and SensitivityPolicy owns
+        # immutable rules.  Callables are different: their globals/code can
+        # change after construction.  Never memoize their purity admission, or
+        # registrations/policies with subclass-owned mutable state.
+        if all(
+            type(registration) is EventSchemaRegistration
+            and type(registration.sensitivity_policy) is SensitivityPolicy
+            and registration.custom_validator is None
+            and registration.upcaster is None
+            for registration in registrations
+        ):
+            _DEFAULT_SCHEMA_REGISTRATIONS = registrations
+        return registrations
+
+
+def _build_default_event_schema_registrations() -> tuple[EventSchemaRegistration, ...]:
+    registrations: list[EventSchemaRegistration] = []
     for event_type in BUDGET_EVENT_TYPES:
-        catalog.register(
+        registrations.append(
             EventSchemaRegistration(
                 event_type=event_type,
                 data_schema=BUDGET_EVENT_DATA_SCHEMA,
@@ -688,7 +726,7 @@ def default_event_schema_catalog(
             )
         )
     for event_type in ATTEMPT_EVENT_TYPES:
-        catalog.register(
+        registrations.append(
             EventSchemaRegistration(
                 event_type=event_type,
                 data_schema=ATTEMPT_EVENT_DATA_SCHEMA,
@@ -699,7 +737,7 @@ def default_event_schema_catalog(
             )
         )
     for event_type in HARNESS_GRAPH_EVENT_ALIASES:
-        catalog.register(
+        registrations.append(
             EventSchemaRegistration(
                 event_type=event_type,
                 data_schema=HARNESS_GRAPH_EVENT_DATA_SCHEMA,
@@ -709,7 +747,7 @@ def default_event_schema_catalog(
             )
         )
     for event_type in HARNESS_GRAPH_COMMIT_EVENT_TYPES:
-        catalog.register(
+        registrations.append(
             EventSchemaRegistration(
                 event_type=event_type,
                 data_schema=HARNESS_GRAPH_COMMIT_DATA_SCHEMA,
@@ -718,7 +756,7 @@ def default_event_schema_catalog(
                 current=event_type != "harness_graph_projection_committed",
             )
         )
-    catalog.register(
+    registrations.append(
         EventSchemaRegistration(
             event_type="harness_graph_projection_committed",
             data_schema=HARNESS_GRAPH_PROJECTION_RECORD_DATA_SCHEMA,
@@ -728,7 +766,7 @@ def default_event_schema_catalog(
         )
     )
     for event_type, data_schema in HARNESS_GRAPH_TRANSITION_EVENT_SCHEMAS.items():
-        catalog.register(
+        registrations.append(
             EventSchemaRegistration(
                 event_type=event_type,
                 data_schema=data_schema,
@@ -740,7 +778,7 @@ def default_event_schema_catalog(
                 current=event_type not in HARNESS_GRAPH_COMMIT_EVENT_TYPES,
             )
         )
-    catalog.register(
+    registrations.append(
         EventSchemaRegistration(
             event_type="harness_ref_authority_committed",
             data_schema="newsroom.harness-ref-authority-committed/v1",
@@ -762,7 +800,7 @@ def default_event_schema_catalog(
         )
     )
     for event_type in TASK_PLAN_EVENT_TYPES:
-        catalog.register(
+        registrations.append(
             EventSchemaRegistration(
                 event_type=event_type,
                 data_schema=TASK_PLAN_EVENT_SCHEMA_V3,
@@ -780,7 +818,7 @@ def default_event_schema_catalog(
         # single event type.
         if event_type in {"context_compaction_planned", "context_compaction_rejected"}:
             continue
-        catalog.register(
+        registrations.append(
             EventSchemaRegistration(
                 event_type=event_type,
                 data_schema=RUNTIME_EVENT_DATA_SCHEMA,
@@ -789,7 +827,7 @@ def default_event_schema_catalog(
                 current=True,
             )
         )
-    return catalog
+    return tuple(registrations)
 
 
 def _runtime_event_payload_schema() -> dict[str, Any]:

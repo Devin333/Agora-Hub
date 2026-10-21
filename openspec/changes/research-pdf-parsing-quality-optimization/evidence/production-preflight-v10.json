@@ -1,0 +1,133 @@
+{
+  "schema_version": "research-production-preflight-v10/v1",
+  "status": "evaluation_export_failed_after_real_parser_success",
+  "run_id": "pdf-current-dev-pilot-1-v10",
+  "run_result_sha256": "7eef6a371f61fe32c4e28e89be40ac9d1702abddba6d31404705b3636c21375e",
+  "runtime_source_manifest_sha256": "8fd6cb6f741721d56fd0a9f54a39449b7bef2f7626dce7fc7db404295bf4006d",
+  "heldout": false,
+  "requested_documents": 1,
+  "completed_evaluation_documents": 0,
+  "failure": {
+    "details": {
+      "chunk_id": "chunk_e43aab9ec086",
+      "message": "persisted chunk content hash differs from metadata or manifest"
+    },
+    "document_id": "pdf-b2341aedbaac550548f22ab4",
+    "error_type": "ProductionParsingEvaluationError",
+    "expected_pages": 1,
+    "reason_code": "chunk_content_hash_mismatch",
+    "run_id": "pdf-current-dev-pilot-1-v10-0001-b2341aedbaac",
+    "source_sha256": "b2341aedbaac550548f22ab45ed65126fe5575cb2876251168731d814b4b6797",
+    "status": "failed",
+    "terminal_pages": 1
+  },
+  "cause": "Exporter compares a semantic content_hash (equation text identity) with the fingerprint of the fully formatted chunk payload. These are different owner contracts; fix validation at the integrity boundary, not by overwriting chunk semantic hashes.",
+  "actual_persisted_document": {
+    "artifact_file_sha256": "ad3815fba63753572e427a279cc80bf26ed41b753d0816002bfbc26fc5e8c277",
+    "status": "degraded",
+    "execution_status": "succeeded",
+    "execution_receipt_ref": "execution-receipt://exec:marker:8a3d281a9259ba4e71e0f1b8de152581db62786b7a9d7439346fc6d6d42144b7",
+    "execution_receipt_checksum": "sha256:681b3655c776cf50706f92aaefaac743d4fb732c233267841195fb17627044ac",
+    "execution_evidence_artifact_ref": "artifact://research/parser-execution-evidence/58807c30fc4622e5034f69cbc7e8f49d44c568d429d66999f772469f85a2f89b",
+    "sections": 1,
+    "equations": 4,
+    "tables": 0,
+    "quality_report": {
+      "bodyChars": 794,
+      "catalogEligible": false,
+      "degraded": true,
+      "diagnostics": [
+        {
+          "code": "abstract_missing",
+          "severity": "info"
+        }
+      ],
+      "dimensions": {
+        "content": {
+          "body_chars": 794,
+          "element_count": 5,
+          "hard_failure_count": 2,
+          "locator_coverage": 0.8,
+          "missing_formula_source_count": 0,
+          "section_count": 1,
+          "status": "degraded"
+        },
+        "execution": {
+          "attempt_count": 0,
+          "cascade_degraded": false,
+          "failed_attempt_count": 0,
+          "status": "completed",
+          "used_backend": "marker"
+        },
+        "structure_and_source": {
+          "block_count": 10,
+          "fidelity_available": true,
+          "fidelity_schema_version": "research-document-fidelity.v1",
+          "page_count": 1,
+          "reason_codes": [],
+          "source_hash_matches_lineage": true,
+          "status": "validated",
+          "table_grid_count": 0
+        }
+      },
+      "documentStatus": "degraded",
+      "equations": 4,
+      "figures": 0,
+      "formula_version": "research-quality-v1",
+      "hardFailures": [
+        {
+          "code": "body_too_short",
+          "expected": 3000,
+          "observed": 794
+        },
+        {
+          "code": "sections_insufficient",
+          "expected": 3,
+          "observed": 1
+        }
+      ],
+      "locatorCoverage": 0.8,
+      "metadataCompleteness": {
+        "abstract": false,
+        "authors": false,
+        "externalId": true,
+        "title": true
+      },
+      "nonEmptySectionRatio": 1.0,
+      "parseStatus": "degraded",
+      "passed": false,
+      "profile": "reading",
+      "qualityPolicyVersion": "research-document-quality-policy/v1",
+      "qualityScore": 0.5795,
+      "quality_score": 0.5795,
+      "references": 0,
+      "replacementCharRatio": 0.0,
+      "scores": {
+        "element_score": 0.8,
+        "integrity_score": 1.0,
+        "locator_score": 0.8,
+        "structure_score": 0.333333,
+        "text_score": 0.264667
+      },
+      "sections": 1,
+      "tables": 0,
+      "thresholds": {
+        "abstract_present": "diagnostic_only",
+        "body_chars_min": 3000,
+        "locator_coverage_min": 0.8,
+        "non_empty_section_ratio_min": 0.8,
+        "replacement_char_ratio_max": 0.02,
+        "sections_min": 3,
+        "title_present": true
+      },
+      "weights": {
+        "element_score": 0.15,
+        "integrity_score": 0.15,
+        "locator_score": 0.2,
+        "structure_score": 0.25,
+        "text_score": 0.25
+      }
+    }
+  },
+  "paper_quality_not_promoted": true
+}

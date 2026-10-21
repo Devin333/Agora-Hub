@@ -1,0 +1,1232 @@
+{
+  "fixture_schema": "research-production-parsing-durable-regression/v1",
+  "provenance": {
+    "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+    "source": "production-pilot-first-source-v9/_runtime/research/artifacts/_records/events.sqlite3",
+    "selection": "phase transitions and physical activity call/result/commit; original canonical envelopes unchanged"
+  },
+  "receipt": {
+    "attempt_id": "attempt:marker:6b31eba07cb25fea635733c8113f7657d4742cc19f726a9f5c43640ea8c3f7ed",
+    "execution_id": "exec:marker:6b31eba07cb25fea635733c8113f7657d4742cc19f726a9f5c43640ea8c3f7ed",
+    "exit_code": 0,
+    "finished_at": "2026-10-21T18:07:23.126906Z",
+    "graph_identity": {
+      "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+      "attempt": 1,
+      "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+      "graph_id": "research-production-parsing-evaluation",
+      "graph_ref": "research-production-parsing-evaluation@1",
+      "graph_version": "1",
+      "node_id": "parse_document",
+      "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+      "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+    },
+    "operation_id": "research-parser:marker:paper_627d8e202d75",
+    "output_bytes": 2926,
+    "output_checksum": "sha256:b42c55078780a82a81e6a7c0b5385f312a4453cb2b3a68aba95f78ba3590a190",
+    "provider_capability_checksum": "sha256:e0faa1f717f8a42cbcccc250e10513fcab71bb2ccf8b02f35b71ca657e604bf0",
+    "provider_id": "docker",
+    "reason_code": "process_exit",
+    "receipt_checksum": "sha256:b549d3d46429045399504e66710199c86d47bce463e68c01b95af1e62a5ab621",
+    "schema_version": "newsroom.execution-receipt/v1",
+    "started_at": "2026-10-21T18:01:09.908486Z",
+    "status": "succeeded",
+    "termination_confirmed": true,
+    "tool_id": "research.document-parser.marker"
+  },
+  "events": [
+    {
+      "business_context": {
+        "agent_id": null,
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:3094029f9da2df488194edf0ef67a02e048137f740e06b2dbfc160da6ec0c2f4",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:20194582ed446add272b66c143668654d84a54824ddd2bbf487eb03abf80fbfd",
+      "event_type": "graph_phase_transition_recorded",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-event",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:e77a6f74f434291d249679a2ea46dfdc39e354bae485911b59c30b6db67787f5",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": null,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": {
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          }
+        },
+        "harness": {
+          "metadata": {
+            "omitted_metadata_count": 1,
+            "omitted_metadata_ref": "sha256:a6a1ae8346f68efd75696a29a38ef7064f4942e32c3a6497890dacf85a9529dc"
+          }
+        }
+      },
+      "observed_at": "2026-10-21T18:01:06.755561Z",
+      "occurred_at": "2026-10-21T18:01:06.572162Z",
+      "payload": {
+        "graph_phase_transition": {
+          "attempt": 0,
+          "boundary": "entry",
+          "context": {
+            "compiler_version": "newsroom.harness-graph-compiler/v2",
+            "execution_identity": null,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+            "graph_version": "1",
+            "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+            "schema": "newsroom.graph-event-context/v2",
+            "stage_identity": {
+              "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+              "graph_id": "research-production-parsing-evaluation",
+              "graph_ref": "research-production-parsing-evaluation@1",
+              "graph_version": "1",
+              "node_id": "parse_document",
+              "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+              "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+            }
+          },
+          "event_sequence": 7,
+          "gate_evidence_refs": [],
+          "occurred_at": "2026-10-21T18:01:06.572162Z",
+          "phase": "plan",
+          "record_checksum": "sha256:d11b42f3feb5fcecfff5b2ccd885001354f19816d867444f47e1143c8d62073e",
+          "schema": "newsroom.harness-graph-phase-transition/v1"
+        }
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:4dea5bd619551f4d685266e1fecd0812515d9299ed6199ff62955e4de05410d5",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 7,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:b02e5c11b143dc88079b148ce8b127ecfb012ee0a54536e4853cafd81f5df91c",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:08602252b69cd501e93fb56d0f62ea1403c02c6fa80ddd4bc57b18932a966294",
+      "event_type": "graph_phase_transition_recorded",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-event",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:e77a6f74f434291d249679a2ea46dfdc39e354bae485911b59c30b6db67787f5",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": null,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": {
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          }
+        },
+        "harness": {
+          "metadata": {
+            "omitted_metadata_count": 1,
+            "omitted_metadata_ref": "sha256:a6a1ae8346f68efd75696a29a38ef7064f4942e32c3a6497890dacf85a9529dc"
+          }
+        }
+      },
+      "observed_at": "2026-10-21T18:01:06.840092Z",
+      "occurred_at": "2026-10-21T18:01:06.572167Z",
+      "payload": {
+        "graph_phase_transition": {
+          "attempt": 0,
+          "boundary": "exit",
+          "context": {
+            "compiler_version": "newsroom.harness-graph-compiler/v2",
+            "execution_identity": null,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+            "graph_version": "1",
+            "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+            "schema": "newsroom.graph-event-context/v2",
+            "stage_identity": {
+              "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+              "graph_id": "research-production-parsing-evaluation",
+              "graph_ref": "research-production-parsing-evaluation@1",
+              "graph_version": "1",
+              "node_id": "parse_document",
+              "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+              "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+            }
+          },
+          "event_sequence": 12,
+          "gate_evidence_refs": [],
+          "occurred_at": "2026-10-21T18:01:06.572167Z",
+          "phase": "plan",
+          "record_checksum": "sha256:1c9c829085d38682cdd47af6299a230d6a58f35984be4e5bc3741a2db79596ad",
+          "schema": "newsroom.harness-graph-phase-transition/v1"
+        }
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:7332ecf254540c07c2864de2bb525991c83f2bfd410421517f56a224cd9e4fb1",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 12,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:2addd725b3e2d978e089b585ff3ab951d2980f965c5b01d97ad5bfaa80eaf285",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:1680f96a2b71595e5f1a84291a34bb6ba735bc56c4086531e9a3d136831fdd07",
+      "event_type": "graph_worker_called",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-event",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:e77a6f74f434291d249679a2ea46dfdc39e354bae485911b59c30b6db67787f5",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": null,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": {
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          }
+        },
+        "harness": {
+          "metadata": {
+            "omitted_metadata_count": 1,
+            "omitted_metadata_ref": "sha256:a6a1ae8346f68efd75696a29a38ef7064f4942e32c3a6497890dacf85a9529dc"
+          }
+        }
+      },
+      "observed_at": "2026-10-21T18:01:06.978608Z",
+      "occurred_at": "2026-10-21T18:01:06.572168Z",
+      "payload": {
+        "activity_attempt": 1,
+        "activity_checksum": "sha256:b7f1e6ebe54e917a1b178e26b6284e760c133e1325a61911cf10257442345f8c",
+        "activity_contract_version": "1",
+        "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+        "activity_input_ref": "sha256:8bf801be99c947eae8cda49295f86bc86754019d4aa438691703b7f1811a0407",
+        "activity_ref": {
+          "contract_id": "research.production-parsing.parse",
+          "contract_kind": "activity",
+          "version": "1"
+        },
+        "graph_ref": {
+          "checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "condition_policy_version": "newsroom.harness-graph-condition-policy/v1",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": {
+            "contract_id": "research-production-parsing-evaluation",
+            "contract_kind": "graph",
+            "version": "1"
+          },
+          "schema_version": "newsroom.harness-normalized-graph/v2"
+        },
+        "idempotency_key": "hga_idem_3d86032e72a234151262a4dd2d755aa6072971752ee9a152d53d5cd8b7e2428c",
+        "input_count": 1,
+        "input_ref": "sha256:cc5968ca4f7d14569d9e63ae2265258c8064a55e18602a63d924fb9b47b95933",
+        "metadata_ref": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "node_id": "parse_document",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "projection_schema": "harness-safe-summary/v1",
+        "step_ref": {
+          "contract_id": "research-production-parsing-evaluation:parse_document",
+          "contract_kind": "step",
+          "version": "1"
+        },
+        "worker_ref": {
+          "contract_id": "parse_document",
+          "contract_kind": "worker",
+          "version": "1"
+        },
+        "worker_type": "function"
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:cc7f52c2c5351dfa7cd0c7cb7767c4846d8c4869f0189bac5a63b58077ec79ee",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 15,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "execution_identity": {
+          "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+          "attempt": 1,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_version": "1",
+          "node_id": "parse_document",
+          "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+        },
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:fa6da44cb6f4f3a572556c143ed004f7988c65d81bed51cb935463e30ca7063a",
+      "content_type": "application/vnd.newsroom.replay-activity-record+json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:f2c86bc3d215a17c46694487ae37fbbf9bd4c08715a8c87d9aa675c97f3936ac",
+      "event_type": "graph_worker_result_recorded",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": {
+              "accepted_at": "2026-10-21T18:01:06.572168Z",
+              "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+              "activity_kind": "tool",
+              "attempt": 1,
+              "context": {
+                "activity_checksum": "sha256:b7f1e6ebe54e917a1b178e26b6284e760c133e1325a61911cf10257442345f8c",
+                "activity_ref": {
+                  "contract_id": "research.production-parsing.parse",
+                  "contract_kind": "activity",
+                  "version": "1"
+                },
+                "causal_decision_checksum": "sha256:0e91ed2142d4625c1034495fe13175008d0d3679f70ad85b8b1e526a4aa314f9",
+                "graph_ref": {
+                  "checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+                  "compiler_version": "newsroom.harness-graph-compiler/v2",
+                  "condition_policy_version": "newsroom.harness-graph-condition-policy/v1",
+                  "graph_id": "research-production-parsing-evaluation",
+                  "graph_ref": {
+                    "contract_id": "research-production-parsing-evaluation",
+                    "contract_kind": "graph",
+                    "version": "1"
+                  },
+                  "schema_version": "newsroom.harness-normalized-graph/v2"
+                },
+                "node_id": "parse_document",
+                "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+                "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+                "step_ref": {
+                  "contract_id": "research-production-parsing-evaluation:parse_document",
+                  "contract_kind": "step",
+                  "version": "1"
+                },
+                "worker_ref": {
+                  "contract_id": "parse_document",
+                  "contract_kind": "worker",
+                  "version": "1"
+                }
+              },
+              "contract_version": "1",
+              "handler_version": "1",
+              "idempotency_key": "hga_idem_3d86032e72a234151262a4dd2d755aa6072971752ee9a152d53d5cd8b7e2428c",
+              "input_checksum": "sha256:8bf801be99c947eae8cda49295f86bc86754019d4aa438691703b7f1811a0407",
+              "input_ref": {
+                "content_type": "application/json",
+                "expected_checksum": "sha256:8bf801be99c947eae8cda49295f86bc86754019d4aa438691703b7f1811a0407",
+                "size_bytes": 1073,
+                "uri": "secure-activity://research-runtime/hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0/input"
+              },
+              "security_classification": "confidential",
+              "tenant_id": "research-runtime"
+            },
+            "graph_id": "harness-graph-activity",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": {
+              "content_type": "application/vnd.newsroom.replay-activity-record+json",
+              "expected_checksum": "sha256:db966187c3bcb69a0bddcc0edc93b94847eaeb73faf0792a09660f70ec270cb8",
+              "size_bytes": 2644,
+              "uri": "secure-activity://research-runtime/hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0/record"
+            },
+            "schema_id": "newsroom.harness-graph-control-commit",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:3c702c5c6b7f6637b1a48d8694611479b2779fdcd9e9e6ae6bafdd82af2df22b",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": {
+            "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+            "attempt": 1,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          },
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": null
+        },
+        "harness_graph_activity": {
+          "accepted_at": "2026-10-21T18:01:06.572168Z",
+          "activity": {
+            "activity_checksum": "sha256:b7f1e6ebe54e917a1b178e26b6284e760c133e1325a61911cf10257442345f8c",
+            "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+            "activity_ref": {
+              "contract_id": "research.production-parsing.parse",
+              "contract_kind": "activity",
+              "version": "1"
+            },
+            "attempt": 1,
+            "causal_decision_checksum": "sha256:0e91ed2142d4625c1034495fe13175008d0d3679f70ad85b8b1e526a4aa314f9",
+            "causal_decision_sequence": 13,
+            "fencing_generation": 1,
+            "graph_ref": {
+              "checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+              "compiler_version": "newsroom.harness-graph-compiler/v2",
+              "condition_policy_version": "newsroom.harness-graph-condition-policy/v1",
+              "graph_id": "research-production-parsing-evaluation",
+              "graph_ref": {
+                "contract_id": "research-production-parsing-evaluation",
+                "contract_kind": "graph",
+                "version": "1"
+              },
+              "schema_version": "newsroom.harness-normalized-graph/v2"
+            },
+            "idempotency_key": "hga_idem_3d86032e72a234151262a4dd2d755aa6072971752ee9a152d53d5cd8b7e2428c",
+            "identity_scope_ref": "sha256:a94c4b4442aabaccf4175316381cc1fb757fe8d04aa9faf08123d9bc69c8317d",
+            "input_ref": "sha256:8bf801be99c947eae8cda49295f86bc86754019d4aa438691703b7f1811a0407",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+            "schema_version": "newsroom.harness-graph-activity/v1",
+            "step_ref": {
+              "contract_id": "research-production-parsing-evaluation:parse_document",
+              "contract_kind": "step",
+              "version": "1"
+            },
+            "subject_scope_ref": "sha256:c098e554bbd2d5527e2ea178fc509d6e2103770feb1b502c8e93fdecc764696d",
+            "tenant_scope_ref": "sha256:a94c4b4442aabaccf4175316381cc1fb757fe8d04aa9faf08123d9bc69c8317d",
+            "worker_ref": {
+              "contract_id": "parse_document",
+              "contract_kind": "worker",
+              "version": "1"
+            }
+          },
+          "completed_at": "2026-10-21T18:01:06.572169Z",
+          "error_class": null,
+          "error_ref": null,
+          "input_ref": {
+            "content_type": "application/json",
+            "expected_checksum": "sha256:8bf801be99c947eae8cda49295f86bc86754019d4aa438691703b7f1811a0407",
+            "size_bytes": 1073,
+            "uri": "secure-activity://research-runtime/hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0/input"
+          },
+          "output_ref": {
+            "content_type": "application/json",
+            "expected_checksum": "sha256:74e57dd9dd80084165a7cc0749d5f0aa076c113202804a04e0e060d5096d7649",
+            "size_bytes": 737,
+            "uri": "secure-activity://research-runtime/hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0/output"
+          },
+          "schema": "newsroom.replay-activity-record/v1",
+          "started_at": "2026-10-21T18:01:06.572168Z",
+          "status": "succeeded"
+        }
+      },
+      "observed_at": "2026-10-21T18:07:23.265966Z",
+      "occurred_at": "2026-10-21T18:01:06.572169Z",
+      "payload": null,
+      "payload_ref": {
+        "content_type": "application/vnd.newsroom.replay-activity-record+json",
+        "expected_checksum": "sha256:db966187c3bcb69a0bddcc0edc93b94847eaeb73faf0792a09660f70ec270cb8",
+        "size_bytes": 2644,
+        "uri": "secure-activity://research-runtime/hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0/record"
+      },
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:39ad7b02c1220aab05b31dcea5edb37ec4ecb6871106a1484def53d748829d6e",
+      "security_classification": "confidential",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 16,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "execution_identity": {
+          "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+          "attempt": 1,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_version": "1",
+          "node_id": "parse_document",
+          "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+        },
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:412254c3e4ee77e1821141c3423175bc907278cd8b39034a819f2cdf42737a1e",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-control-commit/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:cb508624eff266e28e052874d1e5422fe1ec55bc2721d41ddaedb3a9a97a723a",
+      "event_type": "harness_graph_activity_result_committed",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-control-commit",
+            "schema_version": "newsroom.harness-graph-control-commit/v1"
+          },
+          "record_checksum": "sha256:82116b6b74cef199569ff2975b51033a7be00083fa7526c8ac6a8998c39e59eb",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": {
+            "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+            "attempt": 1,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          },
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": null
+        }
+      },
+      "observed_at": "2026-10-21T18:07:23.325651Z",
+      "occurred_at": "2026-10-21T18:01:06.572170Z",
+      "payload": {
+        "commit": {
+          "commit_checksum": "sha256:4616d026ec8715c6932f7812760d978f5b20dc8b3527bff3bb4e4ce718f2fdb8",
+          "commit_kind": "activity_result",
+          "occurred_at": "2026-10-21T18:01:06.572170Z",
+          "result": {
+            "activity_id": "hga_b55d8cce655d2fd01ddebe4501e7e48f76a9add09b00e299eed788a98b4161c0",
+            "activity_ref": {
+              "contract_id": "research.production-parsing.parse",
+              "contract_kind": "activity",
+              "version": "1"
+            },
+            "attempt": 1,
+            "evidence_ref": "sha256:a253220579c07d91f03903b45b9d0f9e56850428107be4a078e67d42ff4ac507",
+            "fencing_generation": 1,
+            "idempotency_key": "hga_idem_3d86032e72a234151262a4dd2d755aa6072971752ee9a152d53d5cd8b7e2428c",
+            "identity_scope_ref": "sha256:a94c4b4442aabaccf4175316381cc1fb757fe8d04aa9faf08123d9bc69c8317d",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "payload_ref": "sha256:4d8cf2ccf1ed61ea34e07502de928fd38b27fd85abf01598d15fb1bad951f8db",
+            "result_checksum": "sha256:211328f4bac6a7a3d60e282ce71252ee0ca0f8653d3801647ed315bdc7c39fe9",
+            "schema_version": "newsroom.harness-graph-activity-result/v1",
+            "status": "succeeded",
+            "subject_scope_ref": "sha256:c098e554bbd2d5527e2ea178fc509d6e2103770feb1b502c8e93fdecc764696d",
+            "tenant_scope_ref": "sha256:a94c4b4442aabaccf4175316381cc1fb757fe8d04aa9faf08123d9bc69c8317d",
+            "termination_confirmed": true
+          },
+          "schema_version": "newsroom.harness-graph-control-commit/v1",
+          "sequence": 17
+        }
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:e9089e33eb31e64f0f988bb781f2087bf8c40bf2ea062f1c2f3bfe1543fe0142",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 17,
+      "subject": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:952ba1adb4bec2be03469a362f7532541d22e49aa9262f42dce42fd65f20bb53",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:41bcb3725d374fb64c42e220cfeff79ce532b86c744d937925d661cc3094e16b",
+      "event_type": "graph_phase_transition_recorded",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-event",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:e77a6f74f434291d249679a2ea46dfdc39e354bae485911b59c30b6db67787f5",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": null,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": {
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          }
+        },
+        "harness": {
+          "metadata": {
+            "omitted_metadata_count": 1,
+            "omitted_metadata_ref": "sha256:a6a1ae8346f68efd75696a29a38ef7064f4942e32c3a6497890dacf85a9529dc"
+          }
+        }
+      },
+      "observed_at": "2026-10-21T18:07:23.422538Z",
+      "occurred_at": "2026-10-21T18:01:06.572176Z",
+      "payload": {
+        "graph_phase_transition": {
+          "attempt": 1,
+          "boundary": "entry",
+          "context": {
+            "compiler_version": "newsroom.harness-graph-compiler/v2",
+            "execution_identity": null,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+            "graph_version": "1",
+            "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+            "schema": "newsroom.graph-event-context/v2",
+            "stage_identity": {
+              "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+              "graph_id": "research-production-parsing-evaluation",
+              "graph_ref": "research-production-parsing-evaluation@1",
+              "graph_version": "1",
+              "node_id": "parse_document",
+              "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+              "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+            }
+          },
+          "event_sequence": 21,
+          "gate_evidence_refs": [],
+          "occurred_at": "2026-10-21T18:01:06.572176Z",
+          "phase": "execute",
+          "record_checksum": "sha256:bea9cc3615ee5eaa2f7fd441f55bdf02bae100b7c663dcd0ee7e26eee4e6fc0e",
+          "schema": "newsroom.harness-graph-phase-transition/v1"
+        }
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:6ab669097f2de9479008fb11d64a8c80adfdb5ad0348f8162c1e7cc5f15d484d",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 21,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:efb144f37d175a26dd5d777581a940b1133357eea0b06d96b887e8ed14b39a89",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:518a34106dce4e7cd40163276b1bad551d65af6b4085a0c3f56375629e1b2476",
+      "event_type": "graph_phase_transition_recorded",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-event",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:e77a6f74f434291d249679a2ea46dfdc39e354bae485911b59c30b6db67787f5",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": null,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": {
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          }
+        },
+        "harness": {
+          "metadata": {
+            "omitted_metadata_count": 1,
+            "omitted_metadata_ref": "sha256:a6a1ae8346f68efd75696a29a38ef7064f4942e32c3a6497890dacf85a9529dc"
+          }
+        }
+      },
+      "observed_at": "2026-10-21T18:07:23.450564Z",
+      "occurred_at": "2026-10-21T18:01:06.572177Z",
+      "payload": {
+        "graph_phase_transition": {
+          "attempt": 1,
+          "boundary": "exit",
+          "context": {
+            "compiler_version": "newsroom.harness-graph-compiler/v2",
+            "execution_identity": null,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+            "graph_version": "1",
+            "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+            "schema": "newsroom.graph-event-context/v2",
+            "stage_identity": {
+              "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+              "graph_id": "research-production-parsing-evaluation",
+              "graph_ref": "research-production-parsing-evaluation@1",
+              "graph_version": "1",
+              "node_id": "parse_document",
+              "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+              "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+            }
+          },
+          "event_sequence": 22,
+          "gate_evidence_refs": [],
+          "occurred_at": "2026-10-21T18:01:06.572177Z",
+          "phase": "execute",
+          "record_checksum": "sha256:5c4f03d05c8747a883c6548004d4f51b619053aefb8eeaeaada35c103d72487f",
+          "schema": "newsroom.harness-graph-phase-transition/v1"
+        }
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:f7bcafa6d08f427bc5067ad6d2b3f5a90c6a6ef6c0daf7b28dbdc4b4663b18af",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 22,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:1074f47595f6710a6355a5c6e0b6d513f893b2d7322ebf44fe6fc4c72f049645",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:fb24b6dcc14cee2a4ac72fd374e74cddfd004194936cfbc064ef25b347ff1fa7",
+      "event_type": "graph_phase_transition_recorded",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-event",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:e77a6f74f434291d249679a2ea46dfdc39e354bae485911b59c30b6db67787f5",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": null,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": {
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          }
+        },
+        "harness": {
+          "metadata": {
+            "omitted_metadata_count": 1,
+            "omitted_metadata_ref": "sha256:a6a1ae8346f68efd75696a29a38ef7064f4942e32c3a6497890dacf85a9529dc"
+          }
+        }
+      },
+      "observed_at": "2026-10-21T18:07:23.580768Z",
+      "occurred_at": "2026-10-21T18:01:06.572180Z",
+      "payload": {
+        "graph_phase_transition": {
+          "attempt": 1,
+          "boundary": "entry",
+          "context": {
+            "compiler_version": "newsroom.harness-graph-compiler/v2",
+            "execution_identity": null,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+            "graph_version": "1",
+            "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+            "schema": "newsroom.graph-event-context/v2",
+            "stage_identity": {
+              "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+              "graph_id": "research-production-parsing-evaluation",
+              "graph_ref": "research-production-parsing-evaluation@1",
+              "graph_version": "1",
+              "node_id": "parse_document",
+              "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+              "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+            }
+          },
+          "event_sequence": 25,
+          "gate_evidence_refs": [],
+          "occurred_at": "2026-10-21T18:01:06.572180Z",
+          "phase": "verify",
+          "record_checksum": "sha256:fa2cf90c9e74f94f9707f59cf0f558d25a55dc2ab405033a4df8442ff413b250",
+          "schema": "newsroom.harness-graph-phase-transition/v1"
+        }
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:98c2fdd8e77a5e9a373ed927012a60e5ae2d1c9a49c5e969d1822840f7c18541",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 25,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    },
+    {
+      "business_context": {
+        "agent_id": null,
+        "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+        "graph_id": "research-production-parsing-evaluation",
+        "graph_ref": "research-production-parsing-evaluation@1",
+        "graph_version": "1",
+        "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+        "request_id": null,
+        "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+        "stage_id": "parse_document",
+        "task_id": null,
+        "tool_call_id": null
+      },
+      "causation_id": null,
+      "content_checksum": "sha256:935412aa5b23c021c2851b1354cb05a96435e945f24d2614b7530a6c3a2e6e74",
+      "content_type": "application/json",
+      "correlation_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "data_schema": "newsroom.harness-graph-event/v1",
+      "envelope_schema": "newsroom.event-envelope/v2",
+      "event_id": "harness-event-v2:ab52989cca46fc2a28e0cbb770771287bb9095159d8650afc92c9a7e311b12c2",
+      "event_type": "graph_phase_transition_recorded",
+      "extensions": {
+        "deterministic_history": {
+          "commands": [],
+          "handler_input": {},
+          "policy": {
+            "expected_activity": null,
+            "graph_id": "harness-events",
+            "graph_version": "1",
+            "handler_id": "harness-control-plane",
+            "handler_version": "newsroom.harness-graph-state-reducer/v1",
+            "policy_id": "harness-control-policy",
+            "policy_version": "newsroom.harness-graph-control-policy/v1",
+            "recorded_activity_ref": null,
+            "schema_id": "newsroom.harness-graph-event",
+            "schema_version": "newsroom.harness-graph-event/v1"
+          },
+          "record_checksum": "sha256:e77a6f74f434291d249679a2ea46dfdc39e354bae485911b59c30b6db67787f5",
+          "schema": "newsroom.deterministic-history/v1"
+        },
+        "graph_context": {
+          "compiler_version": "newsroom.harness-graph-compiler/v2",
+          "execution_identity": null,
+          "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "graph_id": "research-production-parsing-evaluation",
+          "graph_ref": "research-production-parsing-evaluation@1",
+          "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+          "graph_version": "1",
+          "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+          "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+          "schema": "newsroom.graph-event-context/v2",
+          "stage_identity": {
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_version": "1",
+            "node_id": "parse_document",
+            "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+          }
+        },
+        "harness": {
+          "metadata": {
+            "omitted_metadata_count": 1,
+            "omitted_metadata_ref": "sha256:a6a1ae8346f68efd75696a29a38ef7064f4942e32c3a6497890dacf85a9529dc"
+          }
+        }
+      },
+      "observed_at": "2026-10-21T18:07:24.172202Z",
+      "occurred_at": "2026-10-21T18:01:06.572204Z",
+      "payload": {
+        "graph_phase_transition": {
+          "attempt": 1,
+          "boundary": "exit",
+          "context": {
+            "compiler_version": "newsroom.harness-graph-compiler/v2",
+            "execution_identity": null,
+            "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "graph_id": "research-production-parsing-evaluation",
+            "graph_ref": "research-production-parsing-evaluation@1",
+            "graph_schema_version": "newsroom.harness-normalized-graph/v2",
+            "graph_version": "1",
+            "normalized_graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+            "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+            "schema": "newsroom.graph-event-context/v2",
+            "stage_identity": {
+              "graph_checksum": "sha256:e689e03a7846eafab30dfd1fef45b911f70cfb94762304ccfbade9a3422b3d58",
+              "graph_id": "research-production-parsing-evaluation",
+              "graph_ref": "research-production-parsing-evaluation@1",
+              "graph_version": "1",
+              "node_id": "parse_document",
+              "node_instance_id": "hni_82bf5d939bb26eadbaf7fce3459a7b83749db4c66af126badd660baed637ad14",
+              "run_id": "pdf-current-dev-pilot-1-v9-0001-b2341aedbaac"
+            }
+          },
+          "event_sequence": 49,
+          "gate_evidence_refs": [
+            "sha256:2de04766fea622e26f0855990a743325cf12e22b087d6163efcc2dd18ca3fe78",
+            "sha256:2ef4d9fb477a111301c40d8b35bd00a0aa9fc526c4f4ec5bb43ab6e81d7a9402",
+            "sha256:56580dc0ab059563f26f471fc01a8f9b95f050bd087c4273f4009f58725d3da5",
+            "sha256:7de1c8f4836336f48e780ee6e1ac1c3dee4560cdce322cd892a69440dcaa60dd",
+            "sha256:92c1d348b44d75567bf96303dd2620ffd52ee5597d86c3bebf4ae849920f5c36",
+            "sha256:a46d14ac81dfa964a1ec89379161f252eaa5bd134634c4a237292c7e9a0c8edf",
+            "sha256:b474dc4bb27afd3f560c33649ce33d5843714bdb0a6b467ec9de83004aacd5f4"
+          ],
+          "occurred_at": "2026-10-21T18:01:06.572204Z",
+          "phase": "verify",
+          "record_checksum": "sha256:b68674b9d401e241b0d9022b2dd6f92fbb504beb4354c1774c3cc64d90902ddd",
+          "schema": "newsroom.harness-graph-phase-transition/v1"
+        }
+      },
+      "payload_ref": null,
+      "producer": {
+        "component": "framework.harness.control_plane",
+        "instance_id": null,
+        "version": "1"
+      },
+      "record_checksum": "sha256:c5c83f3a1ac4cf2319a68fafc5e22f39543360fe04b83161f6ed8c79fdb2b58f",
+      "security_classification": "internal",
+      "source": "io.newsroom.harness.control-plane",
+      "stream_id": "run:pdf-current-dev-pilot-1-v9-0001-b2341aedbaac",
+      "stream_sequence": 49,
+      "subject": "parse_document",
+      "tenant_id": "research-runtime",
+      "trace": null
+    }
+  ]
+}

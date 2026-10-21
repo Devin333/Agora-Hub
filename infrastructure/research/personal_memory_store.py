@@ -991,6 +991,10 @@ def _validate_database_path(value: str | os.PathLike[str]) -> Path:
     if not parent_io.exists() or not parent_io.is_dir():
         raise ValueError("database_path parent must be an existing directory")
     _reject_linked_path(parent)
+    # Check the leaf with lstat semantics before exists()/is_symlink() can
+    # follow it; dangling links may appear absent in the Windows I/O namespace.
+    if _is_link_or_reparse(path):
+        raise ValueError("database files must not be symlinks or reparse points")
     if path_io.exists() or path_io.is_symlink():
         _assert_regular_file(path)
         if not os.access(path_io, os.W_OK):

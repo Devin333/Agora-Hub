@@ -89,7 +89,8 @@ class FilesystemResearchCatalogStore:
             self._mutate(lambda state: state["catalog"].__setitem__(_scoped_key(value.paper_id, value.metadata.get("actor_scope")), _dump(value)))
             return
         if isinstance(value, ResearchPaperIdentity):
-            self._mutate(lambda state: state["identities"].__setitem__(_scoped_key(value.paper_id, value.metadata.get("actor_scope")), _dump(value)))
+            key = _scoped_key(value.paper_id, value.metadata.get("actor_scope"))
+            self._mutate(lambda state: _put_identity(state, key, value))
             return
         if isinstance(value, ResearchPaperRelation):
             self._mutate(lambda state: state["relations"].__setitem__(_scoped_key(value.relation_id, value.metadata.get("actor_scope")), _dump(value)))
@@ -1448,6 +1449,42 @@ def _dump(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", exclude_none=True)
     raise TypeError(f"value does not support model_dump: {type(value).__name__}")
+
+
+def _put_identity(
+    state: dict[str, Any],
+    key: str,
+    value: ResearchPaperIdentity,
+) -> None:
+    """Persist append-only identity provenance inside the file transaction.
+
+    Application services own canonical identity resolution. The store protects
+    observation provenance from stale concurrent writers by merging against the
+    latest durable identity while the catalog file lock is held.
+    """
+
+    identities = state["identities"]
+    existing = _model(ResearchPaperIdentity, identities.get(key))
+    merged_fields: dict[str, Any] = {}
+    if existing is not None:
+        if existing.paper_id != value.paper_id:
+            raise ResearchCatalogStoreError("paper identity key conflicts with an existing paper_id")
+        # Concatenate observations only; domain validators own normalization and
+        # deduplication, including synchronization of snapshot ids and refs.
+        merged_fields = {
+            "source_snapshot_ids": [*existing.source_snapshot_ids, *value.source_snapshot_ids],
+            "source_snapshot_refs": [*existing.source_snapshot_refs, *value.source_snapshot_refs],
+            "field_provenance": {
+                field_name: [
+                    *existing.field_provenance.get(field_name, []),
+                    *value.field_provenance.get(field_name, []),
+                ]
+                for field_name in set(existing.field_provenance) | set(value.field_provenance)
+            },
+        }
+    identities[key] = _dump(
+        ResearchPaperIdentity.model_validate(value.model_dump(mode="python") | merged_fields)
+    )
 
 
 def _put_immutable_snapshot(state: dict[str, Any], key: str, snapshot: ResearchSourceSnapshot) -> None:

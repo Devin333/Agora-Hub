@@ -1365,11 +1365,13 @@ def test_reconcile_closed_child_reuses_original_receipt_without_worker_reinvocat
     worker_calls = 0
     fail_once = True
     release_sibling = Event()
+    sibling_started = Event()
 
     def invoke(instance):
         nonlocal worker_calls
         worker_calls += 1
         if instance.task_id == "task-2":
+            sibling_started.set()
             assert release_sibling.wait(timeout=2)
         return _result(plan, instance)
 
@@ -1378,6 +1380,7 @@ def test_reconcile_closed_child_reuses_original_receipt_without_worker_reinvocat
         durable_events.append(dict(event))
         if event["event_type"] == "TASK_WAVE_DISPATCHED" and fail_once:
             fail_once = False
+            assert sibling_started.wait(timeout=2)
             raise RuntimeError("simulated parent crash after dispatch")
 
     coordinator = ParallelAgentCoordinator(

@@ -1,0 +1,99 @@
+{
+  "schema_version": "research-production-preflight-history/v1",
+  "production_quality_run_completed": false,
+  "heldout": false,
+  "selection": "first source of frozen exposed-dev manifest, not quality-selected",
+  "runs": [
+    {
+      "run_id": "pdf-current-dev-pilot-1-v1",
+      "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v3/run.json",
+      "sha256": "d7354b3866bdbd390189cd856b286f4c8ccffa68515421495730f71bdfec1667",
+      "completed_documents": 0,
+      "failed_documents": 1,
+      "requested_documents": 1,
+      "reasons": [
+        "HarnessValidationError"
+      ]
+    },
+    {
+      "run_id": "pdf-current-dev-pilot-1-v4",
+      "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v4/run.json",
+      "sha256": "d54ccf512b118496f178b46d9981cca137258cacb06e7e9bcf85d71c71898d9a",
+      "completed_documents": 0,
+      "failed_documents": 1,
+      "requested_documents": 1,
+      "reasons": [
+        "side_effect_scope_missing"
+      ]
+    },
+    {
+      "run_id": "pdf-current-dev-pilot-1-v4",
+      "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v4-diagnostic/run.json",
+      "sha256": "ed0ee085c175601b604da84865cbb911403bc6e42d3741bbb4d835cfd3d9d192",
+      "completed_documents": 0,
+      "failed_documents": 1,
+      "requested_documents": 1,
+      "reasons": [
+        "graph_runtime_scope_mismatch"
+      ]
+    },
+    {
+      "run_id": "pdf-current-dev-pilot-1-v5",
+      "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v5-diagnostic/run.json",
+      "sha256": "8211fed7139c1c196008da510cfc360154a8291cc072442ea139ec32fd3df4ff",
+      "completed_documents": 0,
+      "failed_documents": 1,
+      "requested_documents": 1,
+      "reasons": [
+        "production_parsing_graph_failed"
+      ]
+    },
+    {
+      "run_id": "pdf-current-dev-pilot-1-v6",
+      "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v6/run.json",
+      "sha256": "796d843a5e601d0cb7ec0d44c974b4c5b801a078e1f6c80309d67e480d6de882",
+      "completed_documents": 0,
+      "failed_documents": 1,
+      "requested_documents": 1,
+      "reasons": [
+        "production_parsing_graph_failed"
+      ]
+    },
+    {
+      "run_id": "pdf-current-dev-pilot-1-v7",
+      "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v7/run.json",
+      "sha256": "07cfec034d2d59ff7ee8e60a9a68f3650da8b29cf0effd6343d89afe88677370",
+      "completed_documents": 0,
+      "failed_documents": 1,
+      "requested_documents": 1,
+      "reasons": [
+        "production_parsing_graph_failed"
+      ]
+    },
+    {
+      "run_id": "pdf-current-dev-pilot-1-v8",
+      "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v8/run.json",
+      "sha256": "556d5947e8d97ea8880028dee07574e0fa5ca3b7a0bb094d7e36a44b2a55ea38",
+      "completed_documents": 0,
+      "failed_documents": 1,
+      "requested_documents": 1,
+      "reasons": [
+        "production_parsing_graph_failed"
+      ]
+    }
+  ],
+  "v8_diagnostic_root": {
+    "artifact": ".artifacts/pdf-parsing-quality-optimization/production-pilot-first-source-v8-exception-trace.jsonl",
+    "sha256": "a3f39767772e2c9b89c658ba7a3932da7738b34af7886de94a79553549e9877f",
+    "type": "ExecutionEnvironmentUnavailableError",
+    "receipt_status": "failed",
+    "process_reason": "process_exit_nonzero",
+    "root": "Marker attempted downloading an absent runtime font under network=none. Keep isolation; freeze font offline and admit its exact cache path.",
+    "instrumentation": "Exception-only worker-thread tracing; no worker result, request, receipt, gate or routing was modified."
+  },
+  "restrictions": [
+    "Do not count failed preflights as parser quality measurements.",
+    "Do not compare direct capability probes to production B1.",
+    "Do not replace missing production output from raw artifacts."
+  ]
+}

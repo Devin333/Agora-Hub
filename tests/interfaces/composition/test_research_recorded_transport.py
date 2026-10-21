@@ -112,7 +112,7 @@ def _recorded_environment(tmp_path: Path) -> dict[str, str]:
         "NEWS_MODELS_CONFIG": str(models_config),
         "NEWS_RESEARCH_MODELS_CONFIG": str(models_config),
         "NEWS_RESEARCH_SOURCE_PROVIDER": "arxiv",
-        "NEWS_RESEARCH_PARSER_BACKENDS": "mineru,marker",
+        "NEWS_RESEARCH_PARSER_BACKENDS": "marker",
         "NEWS_RESEARCH_ALLOW_ABSTRACT_FALLBACK": "1",
         "NEWS_RESEARCH_RAG_BACKEND": "local",
         "NEWS_RESEARCH_ROOT": str(tmp_path / "research"),

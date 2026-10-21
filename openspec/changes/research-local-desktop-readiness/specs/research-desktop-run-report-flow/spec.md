@@ -63,6 +63,11 @@ The system SHALL 提供调用现有真实分析与论文问答路径的前端入
 - **THEN** 对应操作不可成功提交或返回明确 typed failure，并保留用户输入
 - **AND** 该实例不能据此标记真实分析验收完成
 
+#### Scenario: Configured RAG service persists transcripts to its owned root
+- **WHEN** production configured composition 首次通过 lazy provider 构造真实论文 RAG application service
+- **THEN** factory 显式传入已解析的 RAG transcript root，service 在该绝对 owned root 持久化并按原有 owner/checksum 合同读取 transcript
+- **AND** release app 或调用者工作目录不会被选作 transcript 输出路径
+
 ### Requirement: Research report projections retain source and quality identity
 The system SHALL 经 application projection 从既有 Research result/artifact 构造报告，保留 owner、run、source revision、quality 和 citation 身份。用户草稿、多材料整理、候选/失败结果与接受报告 SHALL 可区分；本变更 SHALL NOT 自动生成新的跨论文自主综述或报告 truth store。
 

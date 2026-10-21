@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
+import json
 from pathlib import Path
 
 import pytest
@@ -15,10 +17,18 @@ from backend.research.application.parse_paper import (
     ParsePaperError,
     ParsePaperRequest,
     ParsePaperUseCase,
+    PARSE_OPTION_MAX_TIMEOUT_SECONDS,
     ResolvedPaperSource,
     infer_source_type,
     validate_parse_options,
+    _parse_cache_fingerprint,
+    _parse_cache_identity,
     _quality_report,
+)
+from backend.research.document.cascade_parser import (
+    CascadeDocumentParser,
+    DocumentQualityProbe,
+    PyMuPDFTextDocumentParser,
 )
 from backend.research.document.chunk_manifest import ChunkManifestManager
 from backend.research.document.chunker import PaperDocumentChunker
@@ -31,6 +41,7 @@ from backend.research.domain import (
     ResearchSourceSnapshot,
     SourceLineage,
 )
+from backend.research.domain.document_fidelity import DocumentFidelity, DocumentPage
 from backend.research.domain.paper import PaperSourceRecord
 
 
@@ -70,6 +81,9 @@ class _Resolver:
 
 
 class _Parser:
+    def cache_identity(self):
+        return {"version": "1", "configuration": "catalog-contract-parser"}
+
     def __init__(self) -> None:
         self.calls = 0
 
@@ -205,6 +219,310 @@ def test_equivalent_sources_merge_by_fingerprint_and_retain_provenance(tmp_path:
     )
     assert third.idempotent is True
     assert len(repository.list_for_paper(first.paper_id, actor_scope={"tenant_id": "tenant-a", "user_id": "user-a"})) == 2
+
+    manifest_payload = __import__("json").loads(manifest_files[0].read_text(encoding="utf-8"))
+    with pytest.raises(ParsePaperError) as blocked:
+        use_case.parse(
+            ParsePaperRequest(
+                source="https://publisher.example/alternate",
+                run_id="run-4",
+                tenant_id="tenant-a",
+                user_id="user-a",
+                options={"quality_profile": "reading"},
+            )
+        )
+    assert blocked.value.code == "parse_snapshot_activation_blocked"
+    assert blocked.value.details["blocker"] == "index_snapshot_atomic_activation_unavailable"
+    assert parser.calls == 1
+    assert __import__("json").loads(manifest_files[0].read_text(encoding="utf-8")) == manifest_payload
+
+
+
+
+def test_parse_cache_identity_binds_source_schema_profile_normalizer_and_instances() -> None:
+    parser = CascadeDocumentParser(
+        backends=(("text", PyMuPDFTextDocumentParser(max_pages=100, max_text_chars=100_000)),),
+        probe=DocumentQualityProbe(min_sections=3, min_body_chars=3000),
+    )
+    identity = _parse_cache_identity(
+        parser,
+        None,
+        PaperDocumentChunker(),
+        {"quality_profile": "reading", "parser_backend": "cascade"},
+        "application/pdf",
+        source_hash="sha256:source-a",
+    )
+
+    assert identity is not None
+    assert identity["source"] == {"hash": "sha256:source-a", "content_type": "application/pdf"}
+    assert identity["profile"] == {"quality_profile": "reading", "parser_backend": "cascade"}
+    assert identity["schemas"]["document_sha256"]
+    assert identity["schemas"]["fidelity_sha256"]
+    assert identity["normalizer"]["module_sha256"]
+    assert identity["parser"]["probe"]["thresholds"]["min_sections"] == 3
+    assert identity["chunker"]["configuration"] == "stateless"
+    changed_source = _parse_cache_fingerprint(
+        parser,
+        None,
+        PaperDocumentChunker(),
+        {"quality_profile": "reading", "parser_backend": "cascade"},
+        "application/pdf",
+        source_hash="sha256:source-b",
+    )
+    assert changed_source != _parse_cache_fingerprint(
+        parser,
+        None,
+        PaperDocumentChunker(),
+        {"quality_profile": "reading", "parser_backend": "cascade"},
+        "application/pdf",
+        source_hash="sha256:source-a",
+    )
+
+
+def test_parse_cache_identity_fails_closed_for_opaque_production_chunker() -> None:
+    class OpaqueChunker(PaperDocumentChunker):
+        __module__ = "backend.research.document.opaque_chunker"
+
+        def __init__(self) -> None:
+            self.window_size = 99
+
+    assert _parse_cache_identity(
+        _Parser(),
+        None,
+        OpaqueChunker(),
+        {},
+        "text/html",
+        source_hash="sha256:source",
+    ) is None
+
+def test_parse_cache_fingerprint_tracks_known_parser_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    probe = DocumentQualityProbe(min_sections=3, min_body_chars=3000)
+    first_backend = PyMuPDFTextDocumentParser(max_pages=100, max_text_chars=100_000)
+    second_backend = PyMuPDFTextDocumentParser(max_pages=200, max_text_chars=200_000)
+    parser = CascadeDocumentParser(
+        backends=(("first", first_backend), ("second", second_backend)),
+        probe=probe,
+    )
+
+    def fingerprint(candidate: CascadeDocumentParser) -> str | None:
+        return _parse_cache_fingerprint(candidate, None, None, {}, "application/pdf")
+
+    original = fingerprint(parser)
+    assert original is not None
+    assert fingerprint(parser) == original
+
+    # Mutable operational state is intentionally excluded from cache identity.
+    first_backend.calls = 1
+    assert fingerprint(parser) == original
+
+    changed_probe = CascadeDocumentParser(
+        backends=(("first", first_backend), ("second", second_backend)),
+        probe=DocumentQualityProbe(min_sections=4, min_body_chars=3000),
+    )
+    assert fingerprint(changed_probe) != original
+
+    reversed_backends = CascadeDocumentParser(
+        backends=(("second", second_backend), ("first", first_backend)),
+        probe=probe,
+    )
+    assert fingerprint(reversed_backends) != original
+
+    monkeypatch.setenv("NEWSROOM_PARSER_QUALITY_MIN_BODY_CHARS", "4100")
+    assert fingerprint(parser) != original
+
+
+
+def test_parse_cache_fingerprint_tracks_production_compiler_instance_configuration() -> None:
+    from backend.research.document.latex_compiler import ArxivLatexDocumentCompiler
+    from infrastructure.research.document_compiler import ResearchDocumentCompilerAdapter
+
+    class _Fetcher:
+        def cache_identity(self):
+            return {"version": "1", "configuration": "catalog-contract-fetcher"}
+
+    fetcher = _Fetcher()
+    pdf_parser = CascadeDocumentParser(
+        backends=(("text", PyMuPDFTextDocumentParser(max_pages=100, max_text_chars=100_000)),),
+        probe=DocumentQualityProbe(),
+    )
+    enabled = ResearchDocumentCompilerAdapter(
+        fetcher,
+        latex_compiler=ArxivLatexDocumentCompiler(fetcher),
+        pdf_parser=pdf_parser,
+        allow_abstract_fallback=True,
+    )
+    disabled = ResearchDocumentCompilerAdapter(
+        fetcher,
+        latex_compiler=ArxivLatexDocumentCompiler(fetcher),
+        pdf_parser=pdf_parser,
+        allow_abstract_fallback=False,
+    )
+
+    enabled_fingerprint = _parse_cache_fingerprint(
+        _Parser(), enabled, PaperDocumentChunker(), {}, "application/pdf"
+    )
+    disabled_fingerprint = _parse_cache_fingerprint(
+        _Parser(), disabled, PaperDocumentChunker(), {}, "application/pdf"
+    )
+
+    assert enabled_fingerprint is not None
+    assert disabled_fingerprint is not None
+    assert enabled_fingerprint != disabled_fingerprint
+
+def test_parse_cache_fingerprint_fails_closed_for_opaque_production_parser() -> None:
+    from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
+
+    assert _parse_cache_fingerprint(
+        MarkerPdfDocumentParser(), None, None, {}, "application/pdf"
+    ) is None
+
+
+def _configure_marker_cache_test_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    weights = tmp_path / "marker-cache" / "models" / "model.safetensors"
+    weights.parent.mkdir(parents=True, exist_ok=True)
+    weights.write_bytes(b"contract-test-weights")
+    manifest = tmp_path / "marker-weights-manifest.json"
+    manifest.write_text(json.dumps({
+        "schema": "newsroom-marker-weights-manifest.v1",
+        "files": [{
+            "path": "models/model.safetensors",
+            "sha256": sha256(b"contract-test-weights").hexdigest(),
+            "size": len(b"contract-test-weights"),
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setenv(
+        "NEWSROOM_MARKER_DOCKER_IMAGE",
+        f"registry.example/newsroom-marker@sha256:{'a' * 64}",
+    )
+    monkeypatch.setenv("NEWSROOM_MARKER_CACHE_DIR", str(weights.parents[1].resolve()))
+    monkeypatch.setenv("NEWSROOM_MARKER_WEIGHTS_MANIFEST", str(manifest.resolve()))
+    monkeypatch.setenv("NEWSROOM_MARKER_TEST_BINDING", json.dumps({
+        "schema": "newsroom-marker-weights-binding.v1",
+        "host_cache_dir": str(weights.parents[1].resolve()),
+        "container_cache_dir": "/root/.cache",
+        "verified_manifest_sha256": sha256(json.dumps({
+            "schema": "newsroom-marker-weights-manifest.v1",
+            "files": [{
+                "path": "models/model.safetensors",
+                "sha256": sha256(b"contract-test-weights").hexdigest(),
+                "size": len(b"contract-test-weights"),
+            }],
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+    }))
+    monkeypatch.delenv("NEWSROOM_MARKER_DOCKER_ARGS", raising=False)
+
+
+def test_marker_cache_configuration_requires_execution_adapter_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from backend.research.application.parse_paper import _known_document_parser_configuration
+    from backend.research.document.marker_pdf_parser import (
+        MarkerPdfDocumentParser,
+        MarkerReadingOrderProfile,
+    )
+
+    _configure_marker_cache_test_identity(monkeypatch, tmp_path)
+
+    class DeclaredRunner:
+        def __call__(self, *_args, **_kwargs):
+            return None
+
+        def cache_identity(self):
+            return {
+                "profile": {"mode": "external_process"},
+                "provider_identity": "test-provider/v1",
+                "marker_weights_binding": json.loads(__import__("os").environ["NEWSROOM_MARKER_TEST_BINDING"]),
+            }
+
+    class OpaqueRunner:
+        def __call__(self, *_args, **_kwargs):
+            return None
+
+    configured = _known_document_parser_configuration(
+        MarkerPdfDocumentParser(command_runner=DeclaredRunner())
+    )
+    assert configured is not None
+    assert configured["execution_adapter"]["profile"] == {"mode": "external_process"}
+    assert configured["execution_adapter"]["marker_weights_binding"]["container_cache_dir"] == "/root/.cache"
+    assert configured["reading_order_profile"] == "backend_preserved"
+    assert configured["instance_configuration"]["reading_order_profile"] == "backend_preserved"
+    admitted = MarkerPdfDocumentParser(
+        command_runner=DeclaredRunner(),
+        reading_order_profile=MarkerReadingOrderProfile.LAYOUT_ADMITTED_V1,
+    )
+    admitted_config = _known_document_parser_configuration(admitted)
+    assert admitted_config is not None
+    assert admitted_config["instance_configuration"]["reading_order_profile"] == "layout_admitted_v1"
+    assert _parse_cache_fingerprint(
+        admitted, None, PaperDocumentChunker(), {}, "application/pdf"
+    ) != _parse_cache_fingerprint(
+        MarkerPdfDocumentParser(command_runner=DeclaredRunner()),
+        None,
+        PaperDocumentChunker(),
+        {},
+        "application/pdf",
+    )
+    assert _known_document_parser_configuration(
+        MarkerPdfDocumentParser(command_runner=OpaqueRunner())
+    ) is None
+
+
+def test_multiformat_cache_fingerprint_tracks_marker_adapter_and_ignores_dynamic_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from backend.research.document.cascade_parser import (
+        CascadeArxivDocumentParser,
+        CascadeDocumentParser,
+        DocumentQualityProbe,
+    )
+    from backend.research.document.format_router import MultiFormatDocumentParser
+    from backend.research.document.html_parser import HtmlDocumentParser
+    from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
+
+    _configure_marker_cache_test_identity(monkeypatch, tmp_path)
+
+    class DeclaredRunner:
+        def __init__(self):
+            self.last_outcome = None
+
+        def __call__(self, *_args, **_kwargs):
+            return None
+
+        def cache_identity(self):
+            return {
+                "adapter": "declared-v1",
+                "provider_identity": "test-provider/v1",
+                "marker_weights_binding": json.loads(__import__("os").environ["NEWSROOM_MARKER_TEST_BINDING"]),
+            }
+
+    runner = DeclaredRunner()
+    marker = MarkerPdfDocumentParser(command_runner=runner)
+    pdf_cascade = CascadeDocumentParser(
+        backends=(("marker", marker),),
+        probe=DocumentQualityProbe(),
+    )
+    parser = MultiFormatDocumentParser(
+        arxiv_parser=CascadeArxivDocumentParser(pdf_parser=pdf_cascade),
+        html_parser=HtmlDocumentParser(),
+        pdf_parser=None,
+    )
+
+    initial = _parse_cache_fingerprint(parser, None, None, {}, "application/pdf")
+    assert initial is not None
+    runner.last_outcome = {"execution_id": "dynamic-run-1"}
+    assert _parse_cache_fingerprint(parser, None, None, {}, "application/pdf") == initial
+
+    opaque_parser = MultiFormatDocumentParser(
+        arxiv_parser=CascadeArxivDocumentParser(
+            pdf_parser=CascadeDocumentParser(
+                backends=(("marker", MarkerPdfDocumentParser(command_runner=lambda *_a, **_k: None)),),
+                probe=DocumentQualityProbe(),
+            )
+        ),
+        html_parser=HtmlDocumentParser(),
+        pdf_parser=None,
+    )
+    assert _parse_cache_fingerprint(opaque_parser, None, None, {}, "application/pdf") is None
 
 
 def test_metadata_only_never_claims_a_document() -> None:
@@ -523,6 +841,30 @@ def test_parser_retry_is_bounded_and_recorded_as_durable_phase_event() -> None:
     assert retry_events[0]["max_retries"] == 1
 
 
+
+def test_parser_retry_budget_never_exceeds_max_attempts() -> None:
+    class _AlwaysRetryingUseCase(ParsePaperUseCase):
+        attempts = 0
+
+        def _parse_document(self, paper, snapshot, resolved):  # type: ignore[no-untyped-def]
+            self.attempts += 1
+            raise ConnectionError("transient parser worker failure")
+
+    use_case = _AlwaysRetryingUseCase(
+        source_resolver=_Resolver(
+            source_url="https://publisher.example/retry-cap",
+            paper_id="retry-cap-paper",
+            content=b"retryable source",
+        ),
+        document_parser=_Parser(),
+        max_retries=5,
+    )
+
+    with pytest.raises(ParsePaperError) as failed:
+        use_case.parse(ParsePaperRequest(source="https://publisher.example/retry-cap", run_id="retry-cap"))
+    assert failed.value.code == "parse_failed"
+    assert use_case.attempts == 5
+
 def test_source_retry_is_bounded_and_recorded_before_identity_resolution() -> None:
     repository = InMemoryResearchCatalogRepository()
     events: list[dict] = []
@@ -611,8 +953,9 @@ def test_parse_options_are_allowlisted_and_bounded() -> None:
 
     with pytest.raises(ParsePaperError):
         validate_parse_options({"max_attempts": 6})
+    assert validate_parse_options({"timeout_seconds": PARSE_OPTION_MAX_TIMEOUT_SECONDS})["timeout_seconds"] == PARSE_OPTION_MAX_TIMEOUT_SECONDS
     with pytest.raises(ParsePaperError):
-        validate_parse_options({"timeout_seconds": 601})
+        validate_parse_options({"timeout_seconds": PARSE_OPTION_MAX_TIMEOUT_SECONDS + 1})
 
     with pytest.raises(ParsePaperError) as parsed:
         ParsePaperUseCase().parse(
@@ -681,6 +1024,10 @@ def test_quality_profile_emits_hard_failures_and_catalog_eligibility() -> None:
     assert report["catalogEligible"] is True
     assert report["hardFailures"] == []
     assert report["thresholds"]["body_chars_min"] == 3000
+    assert report["qualityPolicyVersion"] == "research-document-quality-policy/v1"
+    assert report["dimensions"]["execution"]["status"] == "completed"
+    assert report["dimensions"]["structure_and_source"]["status"] == "unknown"
+    assert report["dimensions"]["content"]["status"] == "passed"
 
 
 def test_quality_profile_treats_missing_abstract_as_diagnostic_and_metadata_allows_external_id() -> None:
@@ -961,3 +1308,81 @@ def test_local_content_identity_separates_different_bytes_and_owners() -> None:
     assert repository.get_document(alice_first.paper_id, actor_scope=bob_scope) is None
     assert repository.get_identity(alice_first.paper_id, actor_scope=bob_scope) is None
     assert parser.calls == 3
+
+
+def test_quality_policy_separates_recovered_execution_from_document_quality() -> None:
+    digest = "c" * 64
+    document = ResearchDocument(
+        paper_id="recovered-quality-paper",
+        source_hash=digest,
+        title="Recovered paper",
+        authors=["Author"],
+        lineage=SourceLineage(source_refs=["paper://recovered"], source_hash=digest),
+        metadata={"parser_attempts": [
+            {"backend": "primary", "status": "parse_error"},
+            {"backend": "fallback", "status": "success"},
+        ]},
+    )
+
+    report = _quality_report(document, profile="metadata")
+
+    assert report["documentStatus"] == "parsed"
+    assert report["dimensions"]["execution"]["status"] == "recovered"
+    assert report["dimensions"]["execution"]["failed_attempt_count"] == 1
+    assert report["dimensions"]["structure_and_source"]["status"] == "unknown"
+
+
+def test_quality_policy_quarantines_fidelity_source_identity_mismatch() -> None:
+    digest = "d" * 64
+    fidelity = DocumentFidelity(
+        schema_version="research-document-fidelity.v1",
+        normalization_version="normalizer/v1",
+        source_hash="different-source",
+        parser_fingerprint="sha256:parser",
+        profile_fingerprint="sha256:profile",
+        content_checksum="sha256:content",
+        pages=(DocumentPage(
+            pdf_page_number=1,
+            width=612,
+            height=792,
+            dimension_unit="pt",
+        ),),
+    )
+    document = ResearchDocument(
+        paper_id="mismatched-quality-paper",
+        source_hash=digest,
+        title="Mismatched paper",
+        authors=["Author"],
+        lineage=SourceLineage(source_refs=["paper://mismatch"], source_hash=digest),
+        fidelity=fidelity,
+    )
+
+    report = _quality_report(document, profile="metadata")
+
+    assert report["documentStatus"] == "quarantined"
+    assert report["parseStatus"] == "quarantined"
+    assert report["passed"] is False
+    assert {item["code"] for item in report["hardFailures"]} >= {"fidelity_source_hash_mismatch"}
+    assert report["dimensions"]["structure_and_source"]["status"] == "quarantined"
+
+
+def test_quality_policy_degrades_when_marker_source_fidelity_or_formula_is_missing() -> None:
+    digest = "e" * 64
+    base = ResearchDocument(
+        paper_id="incomplete-marker-paper",
+        source_hash=digest,
+        title="Incomplete Marker paper",
+        authors=["Author"],
+        lineage=SourceLineage(source_refs=["paper://incomplete"], source_hash=digest),
+        metadata={"fidelity_status": "unavailable", "fidelity_unavailable_reason": "unmapped block",
+                  "parser_warning_codes": [{"code": "formula_source_missing", "block_index": 4}]},
+    )
+
+    report = _quality_report(base, profile="metadata")
+
+    codes = {item["code"] for item in report["hardFailures"]}
+    assert report["passed"] is False
+    assert report["documentStatus"] == "degraded"
+    assert report["dimensions"]["structure_and_source"]["status"] == "degraded"
+    assert codes >= {"source_fidelity_unavailable", "formula_source_missing"}
+    assert report["dimensions"]["content"]["missing_formula_source_count"] == 1

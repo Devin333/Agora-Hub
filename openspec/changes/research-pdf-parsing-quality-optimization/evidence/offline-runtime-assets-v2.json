@@ -1,0 +1,23 @@
+{
+  "schema_version": "research-marker-offline-asset-provenance/v1",
+  "status": "downloaded_and_manifested_not_parser_execution",
+  "observed_at": "2026-10-21T17:55:37.220248+00:00",
+  "font_source_url": "https://models.datalab.to/artifacts/GoNotoCurrent-Regular.ttf",
+  "font_final_url": "https://models.datalab.to/artifacts/GoNotoCurrent-Regular.ttf",
+  "http_status": 200,
+  "font_relative_path": "static/fonts/GoNotoCurrent-Regular.ttf",
+  "font_sha256": "882afbab965608c2d2bc627fd8016b962aa5a6be2d358f9de24a7b5967c5632e",
+  "font_bytes": 14700060,
+  "base_cache_unchanged": "F:\\benchmarks\\AgoraHub-OmniDocBench\\marker-cache",
+  "offline_cache": "F:\\benchmarks\\AgoraHub-OmniDocBench\\marker-cache-offline-v2",
+  "manifest": {
+    "schema": "newsroom-marker-weights-manifest.v1",
+    "manifest_path": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\marker-offline-assets-v2.json",
+    "file_count": 49,
+    "total_bytes": 3462089484,
+    "verified_manifest_sha256": "sha256:8af75fa0d0487302ffbca4a5ccec0a89261ae0b7b6112dfa113c02e231a4b27f"
+  },
+  "boundary": "Asset preparation only, outside production sandbox. Production remains network=none with read-only mounted cache; no asset is committed or redistributed.",
+  "asset_preparation_is_not_quality_improvement": true,
+  "v1_weights_manifest_preserved": ".artifacts\\pdf-parsing-quality-optimization\\marker-weights-v1.json"
+}

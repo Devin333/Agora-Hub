@@ -16,7 +16,6 @@ ParseSource = Literal[
     "marker",
     "pymupdf",
     "nougat",
-    "mineru",
     "arxiv_abstract",
 ]
 ChunkType = Literal["abstract", "paragraph", "proposition", "formula", "figure", "table"]

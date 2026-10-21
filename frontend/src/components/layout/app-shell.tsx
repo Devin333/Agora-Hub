@@ -23,6 +23,7 @@ export function AppShell({ children, surface = "portal" }: { children: ReactNode
     return <div className="min-h-screen bg-background text-foreground">{children}</div>
   }
 
+  const isPaperAgentLabRoute = pathname === "/paper-agent-lab" || pathname === "/paper-agent-lab/"
   const isPaperAgentRoute = pathname === "/paper-agent" || pathname === "/paper-agent/"
   const isLocalDesktopLoginRoute = isLocalDesktopProfile() && (pathname === "/login" || pathname === "/login/")
   const isPortalHomeRoute = pathname === "/"
@@ -32,7 +33,7 @@ export function AppShell({ children, surface = "portal" }: { children: ReactNode
   const isTaxonomyDirectory = pathname === "/papers/methods" || pathname === "/papers/tasks"
   const usesResearchFrame = pathname.startsWith("/papers") || pathname.startsWith("/projects") || isPortalHomeRoute
 
-  if (isPaperAgentRoute || isLocalDesktopLoginRoute) {
+  if (isPaperAgentLabRoute || isPaperAgentRoute || isLocalDesktopLoginRoute) {
     return <div className="min-h-screen">{children}</div>
   }
 

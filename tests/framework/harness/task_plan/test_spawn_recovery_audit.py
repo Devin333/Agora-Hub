@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -70,9 +71,13 @@ def crashed_wave():
     request = _request(plan)
     events, calls = [], []
     supervisor = ChildAgentSupervisor(max_children=2)
+    started = {task_id: Event() for task_id in ("task-1", "task-2")}
 
     def append(event):
         if event["event_type"] == "TASK_ATTEMPT_SPAWN_CONFIRMED":
+            # This fixture recovers already-executing callbacks, not queued
+            # children whose admission is revoked when the parent exits.
+            assert all(event.wait(timeout=2) for event in started.values())
             raise RuntimeError("crash before receipt commit")
         events.append(event)
 
@@ -81,6 +86,7 @@ def crashed_wave():
 
     def invoke(item):
         calls.append(item.task_id)
+        started[item.task_id].set()
         return _result(plan, item)
 
     with pytest.raises(RuntimeError, match="crash before receipt"):
@@ -330,6 +336,7 @@ def test_indeterminate_event_write_failure_retries_same_coordinator_without_dupl
     request = _request(plan)
     events = []
     calls = []
+    started = {task_id: Event() for task_id in ("task-1", "task-2")}
     supervisor = ChildAgentSupervisor(max_children=2)
     receipt_failed = False
     indeterminate_failures = 0
@@ -338,6 +345,7 @@ def test_indeterminate_event_write_failure_retries_same_coordinator_without_dupl
         nonlocal receipt_failed, indeterminate_failures
         if event["event_type"] == "TASK_ATTEMPT_SPAWN_CONFIRMED" and not receipt_failed:
             receipt_failed = True
+            assert all(event.wait(timeout=2) for event in started.values())
             raise RuntimeError("receipt write failure")
         if event["event_type"] == "TASK_GROUP_INDETERMINATE" and indeterminate_failures < 2:
             indeterminate_failures += 1
@@ -352,6 +360,7 @@ def test_indeterminate_event_write_failure_retries_same_coordinator_without_dupl
 
     def invoke(item):
         calls.append(item.task_id)
+        started[item.task_id].set()
         return _result(plan, item)
 
     try:

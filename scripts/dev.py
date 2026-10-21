@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -20,6 +22,21 @@ COMPILE_PATHS = [
 
 SMOKE_TOPIC = "AI agents"
 AGENT_LOOP_SMOKE_ARTIFACT_ROOT = ".newsroom/smoke"
+RAG_EVAL_CONTRACT_ARTIFACT_ROOT = ".newsroom/eval/protocol-contracts"
+RAG_EVAL_CONTRACT_TEST_PATHS = (
+    "tests/backend/research/rag/test_legacy_dataset_inventory.py",
+    "tests/backend/research/application/test_evaluation_application.py",
+    "tests/infrastructure/research/test_evaluation_dataset.py",
+    "tests/interfaces/cli/test_rag_eval.py",
+    "tests/scripts/test_rag_eval_dev.py",
+    "tests/backend/research/rag/test_run_evidence_eval.py",
+    "tests/backend/research/rag/test_ci_eval_gate.py",
+    "tests/backend/research/rag/test_live_answer_eval.py",
+    "tests/architecture/test_research_boundaries.py",
+    "tests/architecture/test_business_boundary.py",
+    "tests/architecture/test_infrastructure_boundary.py",
+    "tests/architecture/test_graph_only_freeze.py",
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -27,6 +44,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command in {"rag-eval", "reportbench"}:
         return int(args.handler(args))
+    if args.command == "test-rag-eval-contracts":
+        return _run_rag_eval_contract_tests()
+
     env = _command_env()
 
     if args.command == "compile":
@@ -174,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("test-graph-domain", help="Run Graph domain tests")
     subparsers.add_parser("test-services", help="Run interface service tests")
     subparsers.add_parser("test-rag-eval-gate", help="Run the deterministic Paper RAG eval CI gate")
+    subparsers.add_parser(
+        "test-rag-eval-contracts",
+        help="Run offline fixture protocol contracts; not a production RAG quality measurement",
+    )
     live_answer_eval_parser = subparsers.add_parser(
         "run-live-answer-eval",
         help="Run the live Paper RAG answer eval",
@@ -422,6 +446,50 @@ def _replay_rag(args: argparse.Namespace) -> int:
     replay = replay_rag_session(transcript)
     print(json.dumps(replay.to_dict(), ensure_ascii=False, sort_keys=True))
     return 0 if replay.replayable else 1
+
+
+
+def _fixture_evaluation_env() -> dict[str, str]:
+    """Do not load .env or forward provider credentials to the offline gate."""
+    prefixes = ("OPENAI_", "AZURE_OPENAI_", "ANTHROPIC_", "GEMINI_", "UNITY_")
+    suffixes = ("_API_KEY", "_ACCESS_TOKEN", "_SECRET", "_PASSWORD")
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().startswith(prefixes) and not key.upper().endswith(suffixes)
+    }
+    env["NEWS_RAG_EVAL_EXECUTION_PROFILE"] = "fixture"
+    return env
+
+
+def _run_rag_eval_contract_tests() -> int:
+    root = Path(__file__).resolve().parents[1]
+    protocol_paths = tuple(
+        path.relative_to(root).as_posix()
+        for path in sorted((root / "tests/backend/research/rag").glob("test_protocol_*.py"))
+    )
+    if not protocol_paths:
+        raise RuntimeError("RAG evaluation protocol contract tests are missing")
+    output_root = Path(RAG_EVAL_CONTRACT_ARTIFACT_ROOT)
+    output_root.mkdir(parents=True, exist_ok=True)
+    classification = {
+        "scope": "fixture_contract_tests",
+        "execution_profile": "fixture",
+        "product_quality_measured": False,
+        "production_qualification": False,
+        "test_paths": [*protocol_paths, *RAG_EVAL_CONTRACT_TEST_PATHS],
+    }
+    # This describes test artifacts, not a run/score record or quality decision.
+    (output_root / "classification.json").write_text(
+        json.dumps(classification, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return _run(
+        _pytest_command(
+            *protocol_paths, *RAG_EVAL_CONTRACT_TEST_PATHS, "-q",
+            f"--junitxml={output_root.as_posix()}/junit.xml",
+        ),
+        env=_fixture_evaluation_env(),
+    )
 
 
 def _run_many(commands: Sequence[Sequence[str]], *, env: dict[str, str], keep_going: bool) -> int:

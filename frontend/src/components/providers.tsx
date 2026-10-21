@@ -48,6 +48,7 @@ function GlobalResearchCommands() {
 }
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
   const [queryClient] = React.useState(
     () =>
       new QueryClient({
@@ -59,6 +60,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
         }
       })
   )
+  const isPaperAgentLab = pathname === "/paper-agent-lab" || pathname === "/paper-agent-lab/"
+
+  if (isPaperAgentLab) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider delayDuration={180}>{children}</TooltipProvider>
+      </QueryClientProvider>
+    )
+  }
 
   return (
     <QueryClientProvider client={queryClient}>

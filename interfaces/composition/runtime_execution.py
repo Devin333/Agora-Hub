@@ -27,7 +27,6 @@ PRODUCTION_RUNTIME_COMPOSITION_ID = "newsroom-runtime"
 PRODUCTION_RUNTIME_COMPOSITION_VERSION = "1"
 RUNTIME_TRUSTED_PROFILE_ID = "runtime-trusted-in-process"
 RESEARCH_MARKER_PROFILE_ID = "research-parser-marker"
-RESEARCH_MINERU_PROFILE_ID = "research-parser-mineru"
 
 # Keep the Research names as aliases while all process roots resolve the same
 # manifest.  The parser profiles are part of the shared policy catalog even
@@ -71,14 +70,8 @@ def build_process_execution_composition(
         RESEARCH_MARKER_PROFILE_ID,
         ExecutionProfile.external_process(
             provider_id="docker",
-            allowed_argv_prefixes=(("marker_single",),),
-        ),
-    )
-    profile_registry.register(
-        RESEARCH_MINERU_PROFILE_ID,
-        ExecutionProfile.external_process(
-            provider_id="docker",
-            allowed_argv_prefixes=(("mineru",),),
+            allowed_argv_prefixes=(("/usr/local/bin/marker_single",),),
+            max_processes=1,
         ),
     )
     manifest = RuntimeCompositionManifest.from_registries(
@@ -92,12 +85,10 @@ def build_process_execution_composition(
                 "sandboxed": [],
                 "external_process": [
                     RESEARCH_MARKER_PROFILE_ID,
-                    RESEARCH_MINERU_PROFILE_ID,
                 ],
             },
             "parser_profiles": {
                 "marker": RESEARCH_MARKER_PROFILE_ID,
-                "mineru": RESEARCH_MINERU_PROFILE_ID,
             },
         },
         deployment_capability_evidence=deployment_capability_evidence,
@@ -124,7 +115,6 @@ __all__ = [
     "PRODUCTION_RUNTIME_COMPOSITION_ID",
     "PRODUCTION_RUNTIME_COMPOSITION_VERSION",
     "RESEARCH_MARKER_PROFILE_ID",
-    "RESEARCH_MINERU_PROFILE_ID",
     "RESEARCH_RUNTIME_COMPOSITION_ID",
     "RESEARCH_RUNTIME_COMPOSITION_VERSION",
     "RUNTIME_TRUSTED_PROFILE_ID",

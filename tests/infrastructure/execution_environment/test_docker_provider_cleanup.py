@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from pathlib import Path
 import subprocess
 from threading import Event
 
@@ -346,3 +348,28 @@ def test_unsupported_cpu_limit_is_rejected_before_docker_launch(
 
     assert raised.value.details["missing"] == ["cpu_limits"]
     assert raised.value.details["denial_code"] == "execution_resource_limits_unsupported"
+
+
+def test_build_run_command_translates_environment_paths_into_read_mount(
+    tmp_path: Path,
+) -> None:
+    cache_root = tmp_path / "marker-cache"
+    cache_root.mkdir()
+    request = replace(
+        _request(),
+        read_roots=(str(cache_root.resolve()),),
+        environment={"HF_HOME": str((cache_root / "huggingface").resolve())},
+    )
+    provider = object.__new__(DockerExecutionEnvironment)
+    provider._docker = "docker"
+    target = "/workspace/read/0"
+
+    command = provider._build_run_command(
+        request,
+        mounts=((cache_root.resolve(), target, False),),
+        path_map={docker_module._normal_path(str(cache_root.resolve())): target},
+        working_directory=None,
+    )
+
+    assert f"HF_HOME={target}/huggingface" in command
+    assert str(cache_root.resolve()) not in command[command.index("-i") + 1 :]

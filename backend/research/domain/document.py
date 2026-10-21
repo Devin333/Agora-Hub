@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import Field, field_validator, model_validator
 
 from backend.foundation import PrimitiveModel
+from backend.research.domain.document_fidelity import DocumentFidelity, TableGrid
 from backend.research.domain.common import (
     SourceLineage,
     ensure_utc,
@@ -63,6 +64,7 @@ class ResearchTable(PrimitiveModel):
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     page: int | None = None
+    grid: TableGrid | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("table_id", "caption", "source_ref")
@@ -74,6 +76,12 @@ class ResearchTable(PrimitiveModel):
     @classmethod
     def _unique_columns(cls, value: list[str]) -> list[str]:
         return unique_texts(value)
+
+    @model_validator(mode="after")
+    def _validate_grid_identity(self) -> "ResearchTable":
+        if self.grid is not None and self.grid.table_id != self.table_id:
+            raise ValueError("table grid identity must match its ResearchTable")
+        return self
 
 
 class ResearchEquation(PrimitiveModel):
@@ -129,6 +137,7 @@ class ResearchDocument(PrimitiveModel):
     artifact_refs: list[str] = Field(default_factory=list)
     parser_attempts: list[dict[str, Any]] = Field(default_factory=list)
     quality_report: dict[str, Any] = Field(default_factory=dict)
+    fidelity: DocumentFidelity | None = None
     status: Literal["parsed", "degraded", "quarantined"] = "parsed"
     source_locators: list[str] = Field(default_factory=list)
     created_at: datetime | None = None

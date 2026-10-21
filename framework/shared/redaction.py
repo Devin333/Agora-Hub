@@ -24,8 +24,14 @@ _SECRET_PREFIX = "sk" + "-"
 _SECRET_PATTERNS = (
     re.compile(rf"(?<![A-Za-z0-9_-]){_SECRET_PREFIX}[A-Za-z0-9_-]{{8,}}(?![A-Za-z0-9_-])"),
     re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE),
-    re.compile(r"([a-z][a-z0-9+.-]*://)([^/\s:@?#]+):([^@\s/?#]+)@", re.IGNORECASE),
 )
+# Match the former [a-z]/IGNORECASE grammar, including its four Unicode letters.
+_URI_SCHEME_LETTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\u0130\u0131\u017f\u212a"
+)
+_URI_SCHEME_CONTINUATION = _URI_SCHEME_LETTERS | frozenset("0123456789+.-")
+_URI_USER_TERMINATORS = frozenset("/:@?#")
+_URI_PASSWORD_TERMINATORS = frozenset("/@?#")
 
 
 @dataclass(frozen=True)
@@ -78,8 +84,68 @@ class Redactor:
         replacement = self.rules[0].replacement if self.rules else REDACTED_VALUE
         redacted = _SECRET_PATTERNS[0].sub(replacement, redacted)
         redacted = _SECRET_PATTERNS[1].sub(replacement, redacted)
-        redacted = _SECRET_PATTERNS[2].sub(lambda match: f"{match.group(1)}{replacement}@", redacted)
-        return redacted
+        return _redact_uri_credentials(redacted, replacement)
+
+
+def _redact_uri_credentials(value: str, replacement: str) -> str:
+    """Redact URI user/password pairs with one forward scan.
+
+    The old regex attempted the unbounded ``scheme`` prefix at every character,
+    which made strings without ``://`` quadratic.  This scanner locates each
+    delimiter once, validates the maximal scheme run, and then consumes the
+    credential fields only until their URI delimiters.  Every later ``://``
+    terminates both a scheme run and any preceding credential scan, so failed
+    candidates cannot repeatedly rescan a shared suffix.  It intentionally keeps
+    the original URI grammar, including schemes embedded in a larger token.
+    """
+
+    pieces: list[str] = []
+    output_start = 0
+    search_start = 0
+    length = len(value)
+    while True:
+        delimiter = value.find("://", search_start)
+        if delimiter < 0:
+            break
+        if not _has_uri_scheme(value, delimiter):
+            search_start = delimiter + 3
+            continue
+        user_start = delimiter + 3
+        user_end = _first_uri_delimiter(value, user_start, _URI_USER_TERMINATORS)
+        if user_end >= length or value[user_end] != ":" or user_end == user_start:
+            search_start = delimiter + 3
+            continue
+        password_start = user_end + 1
+        password_end = _first_uri_delimiter(value, password_start, _URI_PASSWORD_TERMINATORS)
+        if password_end >= length or value[password_end] != "@" or password_end == password_start:
+            search_start = delimiter + 3
+            continue
+        pieces.append(value[output_start:user_start])
+        pieces.append(replacement)
+        pieces.append("@")
+        output_start = password_end + 1
+        search_start = output_start
+    if not pieces:
+        return value
+    pieces.append(value[output_start:])
+    return "".join(pieces)
+
+
+def _has_uri_scheme(value: str, delimiter: int) -> bool:
+    index = delimiter - 1
+    has_letter = False
+    while index >= 0 and value[index] in _URI_SCHEME_CONTINUATION:
+        has_letter = has_letter or value[index] in _URI_SCHEME_LETTERS
+        index -= 1
+    return has_letter
+
+
+def _first_uri_delimiter(value: str, start: int, terminators: frozenset[str]) -> int:
+    index = start
+    length = len(value)
+    while index < length and value[index] not in terminators and not value[index].isspace():
+        index += 1
+    return index
 
 
 def redact_sensitive_values(value: Any) -> Any:

@@ -1,0 +1,2326 @@
+{
+  "schema_version": "newsroom-marker-fidelity-regression.v1",
+  "dataset_identity": "OmniDocBench academic-literature exposed development regression",
+  "heldout": false,
+  "sources": [
+    {
+      "case_range": "omnidoc-academic-0000",
+      "original_path": "F:\\benchmarks\\AgoraHub-OmniDocBench\\parser-runs\\marker\\omnidoc-academic-0000\\output\\input\\input.json",
+      "sha256": "32c814af7890c39c0107bdbc0d65198f54ee8d09d70bfe452e5a62c195d8f5e1"
+    },
+    {
+      "case_range": "omnidoc-academic-0025",
+      "original_path": "F:\\benchmarks\\AgoraHub-OmniDocBench\\parser-runs\\marker\\omnidoc-academic-0025\\output\\input\\input.json",
+      "sha256": "626e18c996ee3b8c4ce2be68eb9730bc8e38d6e173f1030658351d12fe2539dc"
+    }
+  ],
+  "reading_order_payload": {
+    "children": [
+      {
+        "id": "/page/0/Page/72",
+        "block_type": "Page",
+        "html": "<content-ref src='/page/0/PageHeader/0'></content-ref><content-ref src='/page/0/Text/1'></content-ref><content-ref src='/page/0/Equation/2'></content-ref><content-ref src='/page/0/Text/3'></content-ref><content-ref src='/page/0/Equation/4'></content-ref><content-ref src='/page/0/Text/5'></content-ref><content-ref src='/page/0/Equation/6'></content-ref><content-ref src='/page/0/Text/7'></content-ref><content-ref src='/page/0/Equation/8'></content-ref>",
+        "polygon": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1653.0,
+            0.0
+          ],
+          [
+            1653.0,
+            2339.0
+          ],
+          [
+            0.0,
+            2339.0
+          ]
+        ],
+        "bbox": [
+          0.0,
+          0.0,
+          1653.0,
+          2339.0
+        ],
+        "children": [
+          {
+            "id": "/page/0/PageHeader/0",
+            "block_type": "PageHeader",
+            "html": "",
+            "polygon": [
+              [
+                250.2099609375,
+                243.26513671875
+              ],
+              [
+                1028.2822265625,
+                243.26513671875
+              ],
+              [
+                1028.2822265625,
+                270.72106444373196
+              ],
+              [
+                250.2099609375,
+                270.72106444373196
+              ]
+            ],
+            "bbox": [
+              250.2099609375,
+              243.26513671875,
+              1028.2822265625,
+              270.72106444373196
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Text/1",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">The new elements are written <math display=\"inline\">a_{rc}^{(2)}</math> to indicate that this is the second time that a number has been stored in the matrix at location (r, c). The result after step 2 is</p>",
+            "polygon": [
+              [
+                248.595703125,
+                312.9326171875
+              ],
+              [
+                1351.5,
+                312.9326171875
+              ],
+              [
+                1350.75,
+                392.95799935876886
+              ],
+              [
+                248.595703125,
+                390.5947265625
+              ]
+            ],
+            "bbox": [
+              248.595703125,
+              312.9326171875,
+              1351.5,
+              392.95799935876886
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Equation/2",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\"><math display=\"block\">\\begin{bmatrix} a_{11}^{(1)} &amp; a_{12}^{(1)} &amp; a_{13}^{(1)} &amp; \\cdots &amp; a_{1N}^{(1)} &amp; a_{1N+1}^{(1)} \\\\ 0 &amp; a_{22}^{(2)} &amp; a_{23}^{(2)} &amp; \\cdots &amp; a_{2N}^{(2)} &amp; a_{2N+1}^{(2)} \\\\ 0 &amp; a_{32}^{(2)} &amp; a_{33}^{(2)} &amp; \\cdots &amp; a_{3N}^{(2)} &amp; a_{3N+1}^{(2)} \\\\ \\vdots &amp; \\vdots &amp; &amp; \\vdots &amp; &amp; \\vdots \\\\ 0 &amp; a_{N2}^{(2)} &amp; a_{N3}^{(2)} &amp; \\cdots &amp; a_{NN}^{(2)} &amp; a_{NN+1}^{(2)} \\end{bmatrix}.</math></p>",
+            "polygon": [
+              [
+                486.0,
+                411.70599551138184
+              ],
+              [
+                1111.5,
+                411.70599551138184
+              ],
+              [
+                1111.5,
+                749.2109375
+              ],
+              [
+                486.0,
+                749.2109375
+              ]
+            ],
+            "bbox": [
+              486.0,
+              411.70599551138184,
+              1111.5,
+              749.2109375
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Text/3",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">Step 3. If necessary, switch the second row with some row below it so that <math display=\"inline\">a_{22}^{(2)} \\neq 0</math>; then eliminate <math display=\"inline\">x_2</math> in rows 3 through N. In this process, <math display=\"inline\">m_{r2}</math> is the multiple of row 2 that is subtracted from row r.</p>",
+            "polygon": [
+              [
+                248.595703125,
+                772.052734375
+              ],
+              [
+                1356.75,
+                772.052734375
+              ],
+              [
+                1356.75,
+                881.693359375
+              ],
+              [
+                248.595703125,
+                881.693359375
+              ]
+            ],
+            "bbox": [
+              248.595703125,
+              772.052734375,
+              1356.75,
+              881.693359375
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Equation/4",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\">for <math display=\"block\">r = 3: N</math><br/>\n<math>m_{r2} = a_{r2}^{(2)}/a_{22}^{(2)};</math><br/>\n<math>a_{r2}^{(3)} = 0;</math><br/>\nfor <math>c = 3: N + 1</math><br/>\n<math>a_{rc}^{(3)} = a_{rc}^{(2)} - m_{r2} * a_{2c}^{(2)};</math><br/>\\nend<br/>\\nend</p>",
+            "polygon": [
+              [
+                573.86865234375,
+                914.9022122475152
+              ],
+              [
+                977.25,
+                914.9022122475152
+              ],
+              [
+                969.0,
+                1194.6223148445015
+              ],
+              [
+                573.86865234375,
+                1194.6223148445015
+              ]
+            ],
+            "bbox": [
+              573.86865234375,
+              914.9022122475152,
+              977.25,
+              1194.6223148445015
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Text/5",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">The new elements are written <math display=\"inline\">a_{rc}^{(3)}</math> to indicate that this is the third time that a number has been stored in the matrix at location (r, c). The result after step 3 is</p>",
+            "polygon": [
+              [
+                255.0,
+                1231.1728515625
+              ],
+              [
+                1356.75,
+                1231.1728515625
+              ],
+              [
+                1356.75,
+                1312.3597306829113
+              ],
+              [
+                254.25,
+                1308.8349609375
+              ]
+            ],
+            "bbox": [
+              254.25,
+              1231.1728515625,
+              1356.75,
+              1312.3597306829113
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Equation/6",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\"><math display=\"block\">\\begin{bmatrix} a_{11}^{(1)} &amp; a_{12}^{(1)} &amp; a_{13}^{(1)} &amp; \\cdots &amp; a_{1N}^{(1)} &amp; a_{1N+1}^{(1)} \\\\ 0 &amp; a_{22}^{(2)} &amp; a_{23}^{(2)} &amp; \\cdots &amp; a_{2N}^{(2)} &amp; a_{2N+1}^{(2)} \\\\ 0 &amp; 0 &amp; a_{33}^{(3)} &amp; \\cdots &amp; a_{3N}^{(3)} &amp; a_{3N+1}^{(3)} \\\\ \\vdots &amp; \\vdots &amp; &amp; \\vdots &amp; &amp; \\vdots \\\\ 0 &amp; 0 &amp; a_{N3}^{(3)} &amp; \\cdots &amp; a_{NN}^{(3)} &amp; a_{NN+1}^{(3)} \\end{bmatrix}.</math></p>",
+            "polygon": [
+              [
+                468.0,
+                1331.107726835524
+              ],
+              [
+                1113.0,
+                1331.107726835524
+              ],
+              [
+                1113.0,
+                1666.321898044245
+              ],
+              [
+                468.0,
+                1666.321898044245
+              ]
+            ],
+            "bbox": [
+              468.0,
+              1331.107726835524,
+              1113.0,
+              1666.321898044245
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Text/7",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">Step p+1. This is the general step. If necessary, switch row p with some row beneath it so that <math display=\"inline\">a_{pp}^{(p)} \\neq 0</math>; then eliminate <math display=\"inline\">x_p</math> in rows p+1 through N. Here <math display=\"inline\">m_{rp}</math> is the multiple of row p that is subtracted from row r.</p>",
+            "polygon": [
+              [
+                255.0,
+                1688.0087890625
+              ],
+              [
+                1359.0,
+                1688.0087890625
+              ],
+              [
+                1359.0,
+                1805.0570695735812
+              ],
+              [
+                254.25,
+                1806.5569092657904
+              ]
+            ],
+            "bbox": [
+              254.25,
+              1688.0087890625,
+              1359.0,
+              1806.5569092657904
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/0/Equation/8",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\">for <math display=\"block\">r = p + 1 : N</math><br/>\n<math>m_{rp} = \\frac{a_{rp}^{(p)}}{a_{pp}^{(p)}};</math><br/>\n<math>a_{rp}^{(p+1)} = 0;</math></p>",
+            "polygon": [
+              [
+                581.25,
+                1835.33837890625
+              ],
+              [
+                846.75,
+                1835.33837890625
+              ],
+              [
+                846.75,
+                1965.53662109375
+              ],
+              [
+                581.25,
+                1965.53662109375
+              ]
+            ],
+            "bbox": [
+              581.25,
+              1835.33837890625,
+              846.75,
+              1965.53662109375
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          }
+        ],
+        "section_hierarchy": {},
+        "images": null
+      },
+      {
+        "id": "/page/2/Page/143",
+        "block_type": "Page",
+        "html": "<content-ref src='/page/2/PageHeader/0'></content-ref><content-ref src='/page/2/Text/1'></content-ref><content-ref src='/page/2/Equation/2'></content-ref><content-ref src='/page/2/Text/3'></content-ref><content-ref src='/page/2/Equation/4'></content-ref><content-ref src='/page/2/Text/5'></content-ref><content-ref src='/page/2/Equation/6'></content-ref><content-ref src='/page/2/Text/7'></content-ref><content-ref src='/page/2/Equation/8'></content-ref><content-ref src='/page/2/Text/9'></content-ref><content-ref src='/page/2/Equation/10'></content-ref><content-ref src='/page/2/Text/11'></content-ref><content-ref src='/page/2/Equation/12'></content-ref><content-ref src='/page/2/Text/13'></content-ref>",
+        "polygon": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1700.0,
+            0.0
+          ],
+          [
+            1700.0,
+            2200.0
+          ],
+          [
+            0.0,
+            2200.0
+          ]
+        ],
+        "bbox": [
+          0.0,
+          0.0,
+          1700.0,
+          2200.0
+        ],
+        "children": [
+          {
+            "id": "/page/2/PageHeader/0",
+            "block_type": "PageHeader",
+            "html": "",
+            "polygon": [
+              [
+                1327.294921875,
+                264.2578125
+              ],
+              [
+                1351.3012792236434,
+                264.2578125
+              ],
+              [
+                1351.3012792236434,
+                287.18473074301295
+              ],
+              [
+                1327.294921875,
+                287.18473074301295
+              ]
+            ],
+            "bbox": [
+              1327.294921875,
+              264.2578125,
+              1351.3012792236434,
+              287.18473074301295
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Text/1",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">return in Section 3 below. In terms of <math display=\"inline\">\\hat{R}</math> and *, <math display=\"inline\">\\hat{W}</math> can also be expressed as</p>",
+            "polygon": [
+              [
+                346.4490516100573,
+                322.265625
+              ],
+              [
+                1351.3012792236434,
+                322.265625
+              ],
+              [
+                1351.3012792236434,
+                356.640625
+              ],
+              [
+                346.4490516100573,
+                356.640625
+              ]
+            ],
+            "bbox": [
+              346.4490516100573,
+              322.265625,
+              1351.3012792236434,
+              356.640625
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Equation/2",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\"><math display=\"block\">\\hat{W} = \\frac{1}{2}(\\hat{R} + * \\circ \\hat{R} \\circ *) + \\frac{\\operatorname{scal}_g}{12}I,\\tag{10}</math></p>",
+            "polygon": [
+              [
+                602.9113365681517,
+                370.60546875
+              ],
+              [
+                1346.8019408910454,
+                370.60546875
+              ],
+              [
+                1346.8019408910454,
+                437.20703125000006
+              ],
+              [
+                602.9113365681517,
+                437.20703125000006
+              ]
+            ],
+            "bbox": [
+              602.9113365681517,
+              370.60546875,
+              1346.8019408910454,
+              437.20703125000006
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Text/3",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">where <math display=\"inline\">I: \\Lambda^2 \\longrightarrow \\Lambda^2</math> is the identity operator. Using (10) and the fact that * is <math display=\"inline\">\\langle \\, , \\, \\rangle_g</math>-self-adjoint, it follows easily that the eigenspaces <math display=\"inline\">\\Lambda^\\pm</math> are <math display=\"inline\">\\hat{W}</math>-invariant. Thus, along with <math display=\"inline\">\\Lambda^2 = \\Lambda^+ \\oplus \\Lambda^-</math>, there is a decomposition <math display=\"inline\">\\hat{W} = W^+ \\oplus W^-</math> into endomorphisms <math display=\"inline\">W^\\pm \\colon \\Lambda^\\pm \\longrightarrow \\Lambda^\\pm</math>, respectively. An oriented Riemannian 4-manifold is said to be self-dual if <math display=\"inline\">W^- = 0</math> and anti-self-dual if <math display=\"inline\">W^+ = 0</math>. In terms of (9), <math display=\"inline\">W^\\pm = 0 \\Longleftrightarrow A = \\pm B</math> (see (14)-(15) below), which, recalling <math display=\"inline\">\\widehat{W} = e^{2f}W</math>, makes it clear that these are conformally invariant conditions. The final map that we will need is W's associated quadratic form. To define it, let <math display=\"inline\">G_p \\subseteq \\Lambda^2</math> denote the set of decomposable 2-vectors of <math display=\"inline\">\\langle \\, , \\, \\rangle_g</math>-length 1; i.e., all 2-vectors <math display=\"inline\">\\xi \\in \\Lambda^2</math> of the form <math display=\"inline\">\\xi = v \\wedge w</math> for some <math display=\"inline\">v, w \\in T_pM</math>, with <math display=\"inline\">\\langle \\xi, \\xi \\rangle_g = 1</math>; these are also called 2-planes at <math display=\"inline\">T_pM</math>. These, too, can be characterized by * in dimension four: <math display=\"inline\">G_p = \\{\\xi^+ + \\xi^- : \\xi^\\pm \\in \\Lambda^\\pm, \\langle \\xi^\\pm, \\xi^\\pm \\rangle_g = 1/2\\}</math>; see, e.g., [ST69]. The quadratic form of <math display=\"inline\">\\hat{W}</math> is then the map defined by</p>",
+            "polygon": [
+              [
+                344.94927216585796,
+                448.3980913428766
+              ],
+              [
+                1351.3012792236434,
+                448.3980913428766
+              ],
+              [
+                1351.3012792236434,
+                933.5378323108386
+              ],
+              [
+                344.94927216585796,
+                933.5378323108386
+              ]
+            ],
+            "bbox": [
+              344.94927216585796,
+              448.3980913428766,
+              1351.3012792236434,
+              933.5378323108386
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Equation/4",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\"><math display=\"block\">P \\mapsto \\langle \\hat{W}P, P \\rangle_g \\quad , \\quad P \\in G_p.</math> (11)</p>",
+            "polygon": [
+              [
+                617.9091310101455,
+                952.2835719154738
+              ],
+              [
+                1346.8019408910454,
+                952.8320312500001
+              ],
+              [
+                1346.8019408910454,
+                989.3554687500001
+              ],
+              [
+                616.4093515659462,
+                989.3554687500001
+              ]
+            ],
+            "bbox": [
+              616.4093515659462,
+              952.2835719154738,
+              1346.8019408910454,
+              989.3554687500001
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Text/5",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">(Notice its relation to (8), exactly as sectional curvature related to the curvature operator (1).) This map, and its Lorentzian analogue in [Tho69a] (a variant of which will appear in Definition 2 below), will play a fundamental role in our study of the condition <math display=\"inline\">W(T, \\cdot, \\cdot, T) = 0</math>, to which we now turn.</p>",
+            "polygon": [
+              [
+                347.9488310542567,
+                1005.4687500000001
+              ],
+              [
+                1352.8010586678429,
+                1005.4687500000001
+              ],
+              [
+                1352.8010586678429,
+                1145.7396046353103
+              ],
+              [
+                347.9488310542567,
+                1145.7396046353103
+              ]
+            ],
+            "bbox": [
+              347.9488310542567,
+              1005.4687500000001,
+              1352.8010586678429,
+              1145.7396046353103
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Equation/6",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\">3. The condition <math display=\"block\">W(T, \\cdot, \\cdot, T) = 0</math></p>",
+            "polygon": [
+              [
+                602.9113365681517,
+                1181.640625
+              ],
+              [
+                1094.8389942655492,
+                1181.640625
+              ],
+              [
+                1094.8389942655492,
+                1211.7246080436266
+              ],
+              [
+                602.9113365681517,
+                1211.7246080436266
+              ]
+            ],
+            "bbox": [
+              602.9113365681517,
+              1181.640625,
+              1094.8389942655492,
+              1211.7246080436266
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Text/7",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">We now proceed to our objects of study, oriented Riemannian 4-manifolds (M, g) whose Weyl tensors W satisfy the pointwise condition</p>",
+            "polygon": [
+              [
+                347.9488310542567,
+                1239.6484375
+              ],
+              [
+                1351.3012792236434,
+                1239.6484375
+              ],
+              [
+                1351.3012792236434,
+                1304.1015625
+              ],
+              [
+                347.9488310542567,
+                1304.1015625
+              ]
+            ],
+            "bbox": [
+              347.9488310542567,
+              1239.6484375,
+              1351.3012792236434,
+              1304.1015625
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Equation/8",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\"><math display=\"block\">W(T, \\cdot, \\cdot, T) = 0</math> , some unit <math>T \\in T_p M</math>. (12)</p>",
+            "polygon": [
+              [
+                527.9223643581826,
+                1320.21484375
+              ],
+              [
+                1346.8019408910454,
+                1320.21484375
+              ],
+              [
+                1346.8019408910454,
+                1352.692569870484
+              ],
+              [
+                527.9223643581826,
+                1352.692569870484
+              ]
+            ],
+            "bbox": [
+              527.9223643581826,
+              1320.21484375,
+              1346.8019408910454,
+              1352.692569870484
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Text/9",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">This is a conformally invariant condition, trivial g is locally conformally flat. For an example that is not locally conformally flat (or Einstein), consider the metric g defined on <math display=\"inline\">M := \\{(r, x, y, z) \\in \\mathbb{R}^4 : x &gt; 0\\}</math> by</p>",
+            "polygon": [
+              [
+                347.9488310542567,
+                1375.9372869802319
+              ],
+              [
+                1351.3012792236434,
+                1375.9372869802319
+              ],
+              [
+                1351.3012792236434,
+                1477.05078125
+              ],
+              [
+                347.9488310542567,
+                1477.05078125
+              ]
+            ],
+            "bbox": [
+              347.9488310542567,
+              1375.9372869802319,
+              1351.3012792236434,
+              1477.05078125
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Equation/10",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\"><math display=\"block\">g := (2x)^3 (dr)^2 + (dx)^2 + (2x)^{-3} (dy)^2 + (dz)^2.</math></p>",
+            "polygon": [
+              [
+                536.1711513012792,
+                1491.015625
+              ],
+              [
+                1157.0798411998235,
+                1491.015625
+              ],
+              [
+                1157.0798411998235,
+                1533.984375
+              ],
+              [
+                536.1711513012792,
+                1533.984375
+              ]
+            ],
+            "bbox": [
+              536.1711513012792,
+              1491.015625,
+              1157.0798411998235,
+              1533.984375
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Text/11",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">The components of the Weyl tensor of g, relative to the orthonormal basis <math display=\"inline\">\\{e_1, e_2, e_3, e_4\\} := \\{\\partial_r/\\sqrt{8x^3}, \\partial_x, \\sqrt{8x^3}\\partial_y, \\partial_z\\}</math>, are given by</p>",
+            "polygon": [
+              [
+                347.9488310542567,
+                1546.875
+              ],
+              [
+                1351.3012792236434,
+                1546.875
+              ],
+              [
+                1351.3012792236434,
+                1615.625
+              ],
+              [
+                347.9488310542567,
+                1615.625
+              ]
+            ],
+            "bbox": [
+              347.9488310542567,
+              1546.875,
+              1351.3012792236434,
+              1615.625
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Equation/12",
+            "block_type": "Equation",
+            "html": "<p block-type=\"Equation\"><math display=\"block\">\\hat{W} = \\begin{bmatrix} W_{1212} &amp; W_{1312} &amp; W_{1412} &amp; W_{3412} &amp; W_{4212} &amp; W_{2312} \\\\ W_{1213} &amp; W_{1313} &amp; W_{1413} &amp; W_{3413} &amp; W_{4213} &amp; W_{2313} \\\\ W_{1214} &amp; W_{1314} &amp; W_{1414} &amp; W_{3414} &amp; W_{4214} &amp; W_{2314} \\\\ W_{1234} &amp; W_{1334} &amp; W_{1434} &amp; W_{3434} &amp; W_{4234} &amp; W_{2334} \\\\ W_{1242} &amp; W_{1342} &amp; W_{1442} &amp; W_{3442} &amp; W_{4242} &amp; W_{2342} \\\\ W_{1223} &amp; W_{1323} &amp; W_{1423} &amp; W_{3423} &amp; W_{4223} &amp; W_{2323} \\end{bmatrix} = \\frac{3}{2x^2} \\begin{bmatrix} 0 &amp; 0 &amp; 0 &amp; 0 &amp; 0 &amp; 0 &amp; 0 \\\\ 0 &amp; -1 &amp; 0 &amp; 0 &amp; 0 &amp; 0 &amp; 0 \\\\ 0 &amp; 0 &amp; 1 &amp; 0 &amp; 0 &amp; 0 &amp; 0 \\\\ 0 &amp; 0 &amp; 0 &amp; 0 &amp; 0 &amp; 0</math></p>",
+            "polygon": [
+              [
+                358.59375,
+                1641.3769597818678
+              ],
+              [
+                1354.3008381120424,
+                1641.3769597818678
+              ],
+              [
+                1354.3008381120424,
+                1786.8438991138378
+              ],
+              [
+                358.59375,
+                1786.8438991138378
+              ]
+            ],
+            "bbox": [
+              358.59375,
+              1641.3769597818678,
+              1354.3008381120424,
+              1786.8438991138378
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          },
+          {
+            "id": "/page/2/Text/13",
+            "block_type": "Text",
+            "html": "<p block-type=\"Text\">It can be verified that <math display=\"inline\">T := \\frac{1}{\\sqrt{2}}(e_1 \\pm e_2), \\frac{1}{\\sqrt{2}}(e_3 \\pm e_4)</math> all satisfy <math display=\"inline\">W(T, \\cdot, \\cdot, T) = 0</math> on M. On the other hand, here are two classes of Riemannian 4-manifolds that are both \"close\" to being locally conformally flat but which nevertheless do not satisfy (12):</p>",
+            "polygon": [
+              [
+                346.4490516100573,
+                1797.1679687500002
+              ],
+              [
+                1351.3012792236434,
+                1797.1679687500002
+              ],
+              [
+                1351.3012792236434,
+                1949.7070312500002
+              ],
+              [
+                346.4490516100573,
+                1949.7070312500002
+              ]
+            ],
+            "bbox": [
+              346.4490516100573,
+              1797.1679687500002,
+              1351.3012792236434,
+              1949.7070312500002
+            ],
+            "children": null,
+            "section_hierarchy": {},
+            "images": {}
+          }
+        ],
+        "section_hierarchy": {},
+        "images": null
+      }
+    ]
+  },
+  "math_cases": {
+    "matrix_display": {
+      "id": "/page/0/Equation/2",
+      "block_type": "Equation",
+      "html": "<p block-type=\"Equation\"><math display=\"block\">\\begin{bmatrix} a_{11}^{(1)} &amp; a_{12}^{(1)} &amp; a_{13}^{(1)} &amp; \\cdots &amp; a_{1N}^{(1)} &amp; a_{1N+1}^{(1)} \\\\ 0 &amp; a_{22}^{(2)} &amp; a_{23}^{(2)} &amp; \\cdots &amp; a_{2N}^{(2)} &amp; a_{2N+1}^{(2)} \\\\ 0 &amp; a_{32}^{(2)} &amp; a_{33}^{(2)} &amp; \\cdots &amp; a_{3N}^{(2)} &amp; a_{3N+1}^{(2)} \\\\ \\vdots &amp; \\vdots &amp; &amp; \\vdots &amp; &amp; \\vdots \\\\ 0 &amp; a_{N2}^{(2)} &amp; a_{N3}^{(2)} &amp; \\cdots &amp; a_{NN}^{(2)} &amp; a_{NN+1}^{(2)} \\end{bmatrix}.</math></p>",
+      "polygon": [
+        [
+          486.0,
+          411.70599551138184
+        ],
+        [
+          1111.5,
+          411.70599551138184
+        ],
+        [
+          1111.5,
+          749.2109375
+        ],
+        [
+          486.0,
+          749.2109375
+        ]
+      ],
+      "bbox": [
+        486.0,
+        411.70599551138184,
+        1111.5,
+        749.2109375
+      ],
+      "children": null,
+      "section_hierarchy": {},
+      "images": {}
+    },
+    "inline_training_text": {
+      "id": "/page/1/Text/15",
+      "block_type": "Text",
+      "html": "<p block-type=\"Text\"><b>Training Details</b> All RWKV-7 models were trained under bfloat16 format on nodes of <math display=\"inline\">8 \\times 10^{-18}</math> Nvidia H800. The AdamW optimizer was configured with <math display=\"inline\">\\beta_1 = 0.9</math>, <math display=\"inline\">\\beta_2 = 0.99</math>, <math display=\"inline\">\\epsilon = 1 \\times 10^{-18}</math>, and a weight decay of 0.1 applied exclusively to linear layers and embedding weights. The choice of such a small <math display=\"inline\">\\epsilon</math> value is motivated by the theory proposed by Molybog et al. (2023), which suggests that</p>",
+      "polygon": [
+        [
+          292.1875,
+          1914.314928425358
+        ],
+        [
+          1407.5430083811204,
+          1914.314928425358
+        ],
+        [
+          1407.5430083811204,
+          2035.6445312500002
+        ],
+        [
+          292.1875,
+          2035.6445312500002
+        ]
+      ],
+      "bbox": [
+        292.1875,
+        1914.314928425358,
+        1407.5430083811204,
+        2035.6445312500002
+      ],
+      "children": null,
+      "section_hierarchy": {},
+      "images": {}
+    },
+    "multiline_display": {
+      "id": "/page/12/Equation/8",
+      "block_type": "Equation",
+      "html": "<p block-type=\"Equation\"><math display=\"block\">\n\\mathcal{N}_{4} = \\left( \\int_{Q'} \\left( \\sum_{Q \\subseteq Q'} \\mu(Q)^{\\eta \\cdot \\frac{1}{r}} \\prod_{i=1}^{2} |b_{i,Q'} - b_{i,Q}| \\langle f_{i} \\rangle_{Q,r} \\|f_{3}^{r}\\|_{L(\\log L)^{r},Q}^{1/r} \\chi_{Q}(x) \\right)^{\\delta} d\\mu \\right)^{\\frac{1}{\\delta}} \\\\\n\\leq \\mathcal{N}_{41} + \\mathcal{N}_{42} + \\mathcal{N}_{43} + \\mathcal{N}_{44}.\n</math></p>",
+      "polygon": [
+        [
+          291.7071018967799,
+          1356.73828125
+        ],
+        [
+          1397.0445522717246,
+          1356.73828125
+        ],
+        [
+          1399.2942214380237,
+          1530.76171875
+        ],
+        [
+          293.9567710630789,
+          1530.76171875
+        ]
+      ],
+      "bbox": [
+        291.7071018967799,
+        1356.73828125,
+        1399.2942214380237,
+        1530.76171875
+      ],
+      "children": null,
+      "section_hierarchy": {
+        "2": "/page/5/SectionHeader/4",
+        "3": "/page/10/SectionHeader/9"
+      },
+      "images": {}
+    }
+  },
+  "table_cell_math": {
+    "id": "/page/23/Table/10",
+    "block_type": "Table",
+    "html": "<table><tbody><tr><th>Name</th><th>postE</th><th>preE</th><th>Learned Sub-invariant</th></tr><tr><td>Gambler</td><td>z</td><td><math>x \\cdot (y - x)</math></td><td><math display=\"block\">z + [x > 0 \\text{ and } y > x] \\cdot \\\\ x \\cdot (y - x)</math></td></tr><tr><td>Geo0</td><td>z</td><td><math display=\"block\">\n\\begin{aligned}\n[flip &== 0] \\cdot \\\\\n(1 - p_1))\n\\end{aligned}\n</math></td><td><math display=\"block\">z + [flip == 0] \\cdot (1 - p_1)</math></td></tr><tr><td>LinExp</td><td>z</td><td><math display=\"block\">z + [n > 0] \\cdot 2</math></td><td><math display=\"block\">[n>0]\\cdot(n+1)</math></td></tr><tr><td>RevBin</td><td>z</td><td><math display=\"block\">z + [n > 0] \\cdot 2 \\cdot n</math><math display=\"block\">z + [x > 0] \\cdot x</math><math display=\"block\">z</math></td><td><math display=\"block\">z + [n > 0] \\cdot 2 \\cdot n</math><math display=\"block\">z + [x > 0] \\cdot x/p</math><math display=\"block\">z</math></td></tr></tbody></table>",
+    "polygon": [
+      [
+        891.935546875,
+        145.943359375
+      ],
+      [
+        1525.251953125,
+        145.943359375
+      ],
+      [
+        1525.251953125,
+        489.99414062500006
+      ],
+      [
+        891.935546875,
+        489.99414062500006
+      ]
+    ],
+    "bbox": [
+      891.935546875,
+      145.943359375,
+      1525.251953125,
+      489.99414062500006
+    ],
+    "children": [
+      {
+        "id": "/page/23/TableCell/202",
+        "block_type": "TableCell",
+        "html": "<th>Name</th>",
+        "polygon": [
+          [
+            896.809830068648,
+            150.44310370770836
+          ],
+          [
+            1006.6686743562527,
+            150.44310370770836
+          ],
+          [
+            1006.6686743562527,
+            188.6909305357295
+          ],
+          [
+            896.809830068648,
+            188.6909305357295
+          ]
+        ],
+        "bbox": [
+          896.809830068648,
+          150.44310370770836,
+          1006.6686743562527,
+          188.6909305357295
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/203",
+        "block_type": "TableCell",
+        "html": "<th>postE</th>",
+        "polygon": [
+          [
+            1005.9187846341531,
+            151.1930610964931
+          ],
+          [
+            1091.7811578145677,
+            151.1930610964931
+          ],
+          [
+            1091.7811578145677,
+            188.6909305357295
+          ],
+          [
+            1005.9187846341531,
+            188.6909305357295
+          ]
+        ],
+        "bbox": [
+          1005.9187846341531,
+          151.1930610964931,
+          1091.7811578145677,
+          188.6909305357295
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/204",
+        "block_type": "TableCell",
+        "html": "<th>preE</th>",
+        "polygon": [
+          [
+            1091.4062129535178,
+            151.56803979088545
+          ],
+          [
+            1288.2522650046867,
+            151.56803979088545
+          ],
+          [
+            1288.2522650046867,
+            188.6909305357295
+          ],
+          [
+            1091.4062129535178,
+            188.6909305357295
+          ]
+        ],
+        "bbox": [
+          1091.4062129535178,
+          151.56803979088545,
+          1288.2522650046867,
+          188.6909305357295
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/205",
+        "block_type": "TableCell",
+        "html": "<th>Learned Sub-invariant</th>",
+        "polygon": [
+          [
+            1287.502375282587,
+            151.56803979088545
+          ],
+          [
+            1522.5928031608403,
+            151.56803979088545
+          ],
+          [
+            1522.5928031608403,
+            188.6909305357295
+          ],
+          [
+            1287.502375282587,
+            188.6909305357295
+          ]
+        ],
+        "bbox": [
+          1287.502375282587,
+          151.56803979088545,
+          1522.5928031608403,
+          188.6909305357295
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/206",
+        "block_type": "TableCell",
+        "html": "<td>Gambler</td>",
+        "polygon": [
+          [
+            896.809830068648,
+            188.31595184133715
+          ],
+          [
+            1006.6686743562527,
+            188.31595184133715
+          ],
+          [
+            1006.6686743562527,
+            261.4367972478481
+          ],
+          [
+            896.809830068648,
+            261.4367972478481
+          ]
+        ],
+        "bbox": [
+          896.809830068648,
+          188.31595184133715,
+          1006.6686743562527,
+          261.4367972478481
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/207",
+        "block_type": "TableCell",
+        "html": "<td>z</td>",
+        "polygon": [
+          [
+            1005.9187846341531,
+            188.31595184133715
+          ],
+          [
+            1091.7811578145677,
+            188.31595184133715
+          ],
+          [
+            1091.7811578145677,
+            261.4367972478481
+          ],
+          [
+            1005.9187846341531,
+            261.4367972478481
+          ]
+        ],
+        "bbox": [
+          1005.9187846341531,
+          188.31595184133715,
+          1091.7811578145677,
+          261.4367972478481
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/208",
+        "block_type": "TableCell",
+        "html": "<td><math>x \\cdot (y - x)</math></td>",
+        "polygon": [
+          [
+            1091.4062129535178,
+            188.31595184133715
+          ],
+          [
+            1288.2522650046867,
+            188.31595184133715
+          ],
+          [
+            1288.2522650046867,
+            261.4367972478481
+          ],
+          [
+            1091.4062129535178,
+            261.4367972478481
+          ]
+        ],
+        "bbox": [
+          1091.4062129535178,
+          188.31595184133715,
+          1288.2522650046867,
+          261.4367972478481
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/209",
+        "block_type": "TableCell",
+        "html": "<td><math display=\"block\">z + [x &gt; 0 \\text{ and } y &gt; x] \\cdot \\\\ x \\cdot (y - x)</math></td>",
+        "polygon": [
+          [
+            1287.502375282587,
+            188.31595184133715
+          ],
+          [
+            1522.5928031608403,
+            188.31595184133715
+          ],
+          [
+            1522.5928031608403,
+            261.4367972478481
+          ],
+          [
+            1287.502375282587,
+            261.4367972478481
+          ]
+        ],
+        "bbox": [
+          1287.502375282587,
+          188.31595184133715,
+          1522.5928031608403,
+          261.4367972478481
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/210",
+        "block_type": "TableCell",
+        "html": "<td>Geo0</td>",
+        "polygon": [
+          [
+            896.809830068648,
+            261.4367972478481
+          ],
+          [
+            1006.6686743562527,
+            261.4367972478481
+          ],
+          [
+            1006.6686743562527,
+            321.4333883506264
+          ],
+          [
+            896.809830068648,
+            321.4333883506264
+          ]
+        ],
+        "bbox": [
+          896.809830068648,
+          261.4367972478481,
+          1006.6686743562527,
+          321.4333883506264
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/211",
+        "block_type": "TableCell",
+        "html": "<td>z</td>",
+        "polygon": [
+          [
+            1005.9187846341531,
+            261.4367972478481
+          ],
+          [
+            1091.7811578145677,
+            261.4367972478481
+          ],
+          [
+            1091.7811578145677,
+            321.4333883506264
+          ],
+          [
+            1005.9187846341531,
+            321.4333883506264
+          ]
+        ],
+        "bbox": [
+          1005.9187846341531,
+          261.4367972478481,
+          1091.7811578145677,
+          321.4333883506264
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/212",
+        "block_type": "TableCell",
+        "html": "<td><math display=\"block\">\n\\begin{aligned}\n[flip &amp;== 0] \\cdot \\\\\n(1 - p_1))\n\\end{aligned}\n</math></td>",
+        "polygon": [
+          [
+            1091.4062129535178,
+            261.4367972478481
+          ],
+          [
+            1288.2522650046867,
+            261.4367972478481
+          ],
+          [
+            1288.2522650046867,
+            321.4333883506264
+          ],
+          [
+            1091.4062129535178,
+            321.4333883506264
+          ]
+        ],
+        "bbox": [
+          1091.4062129535178,
+          261.4367972478481,
+          1288.2522650046867,
+          321.4333883506264
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/213",
+        "block_type": "TableCell",
+        "html": "<td><math display=\"block\">z + [flip == 0] \\cdot (1 - p_1)</math></td>",
+        "polygon": [
+          [
+            1287.502375282587,
+            261.4367972478481
+          ],
+          [
+            1522.2178582997904,
+            261.4367972478481
+          ],
+          [
+            1522.2178582997904,
+            321.4333883506264
+          ],
+          [
+            1287.502375282587,
+            321.4333883506264
+          ]
+        ],
+        "bbox": [
+          1287.502375282587,
+          261.4367972478481,
+          1522.2178582997904,
+          321.4333883506264
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/214",
+        "block_type": "TableCell",
+        "html": "<td>LinExp</td>",
+        "polygon": [
+          [
+            896.809830068648,
+            321.4333883506264
+          ],
+          [
+            1006.6686743562527,
+            321.4333883506264
+          ],
+          [
+            1006.6686743562527,
+            372.05551209359555
+          ],
+          [
+            896.809830068648,
+            372.05551209359555
+          ]
+        ],
+        "bbox": [
+          896.809830068648,
+          321.4333883506264,
+          1006.6686743562527,
+          372.05551209359555
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/215",
+        "block_type": "TableCell",
+        "html": "<td>z</td>",
+        "polygon": [
+          [
+            1005.9187846341531,
+            321.4333883506264
+          ],
+          [
+            1091.7811578145677,
+            321.4333883506264
+          ],
+          [
+            1091.7811578145677,
+            372.05551209359555
+          ],
+          [
+            1005.9187846341531,
+            372.05551209359555
+          ]
+        ],
+        "bbox": [
+          1005.9187846341531,
+          321.4333883506264,
+          1091.7811578145677,
+          372.05551209359555
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/216",
+        "block_type": "TableCell",
+        "html": "<td><math display=\"block\">z + [n &gt; 0] \\cdot 2</math></td>",
+        "polygon": [
+          [
+            1091.4062129535178,
+            321.4333883506264
+          ],
+          [
+            1288.2522650046867,
+            321.4333883506264
+          ],
+          [
+            1288.2522650046867,
+            372.05551209359555
+          ],
+          [
+            1091.4062129535178,
+            372.05551209359555
+          ]
+        ],
+        "bbox": [
+          1091.4062129535178,
+          321.4333883506264,
+          1288.2522650046867,
+          372.05551209359555
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/217",
+        "block_type": "TableCell",
+        "html": "<td><math display=\"block\">[n&gt;0]\\cdot(n+1)</math></td>",
+        "polygon": [
+          [
+            1287.502375282587,
+            321.4333883506264
+          ],
+          [
+            1522.2178582997904,
+            321.4333883506264
+          ],
+          [
+            1522.2178582997904,
+            372.05551209359555
+          ],
+          [
+            1287.502375282587,
+            372.05551209359555
+          ]
+        ],
+        "bbox": [
+          1287.502375282587,
+          321.4333883506264,
+          1522.2178582997904,
+          372.05551209359555
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/218",
+        "block_type": "TableCell",
+        "html": "<td>RevBin</td>",
+        "polygon": [
+          [
+            896.809830068648,
+            370.93057601041846
+          ],
+          [
+            1006.6686743562527,
+            370.93057601041846
+          ],
+          [
+            1006.6686743562527,
+            482.2992482449506
+          ],
+          [
+            896.809830068648,
+            482.2992482449506
+          ]
+        ],
+        "bbox": [
+          896.809830068648,
+          370.93057601041846,
+          1006.6686743562527,
+          482.2992482449506
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/219",
+        "block_type": "TableCell",
+        "html": "<td>z</td>",
+        "polygon": [
+          [
+            1005.9187846341531,
+            370.93057601041846
+          ],
+          [
+            1091.7811578145677,
+            370.93057601041846
+          ],
+          [
+            1091.7811578145677,
+            482.2992482449506
+          ],
+          [
+            1005.9187846341531,
+            482.2992482449506
+          ]
+        ],
+        "bbox": [
+          1005.9187846341531,
+          370.93057601041846,
+          1091.7811578145677,
+          482.2992482449506
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/220",
+        "block_type": "TableCell",
+        "html": "<td><math display=\"block\">z + [n &gt; 0] \\cdot 2 \\cdot n</math><math display=\"block\">z + [x &gt; 0] \\cdot x</math><math display=\"block\">z</math></td>",
+        "polygon": [
+          [
+            1091.4062129535178,
+            370.93057601041846
+          ],
+          [
+            1288.2522650046867,
+            370.93057601041846
+          ],
+          [
+            1288.2522650046867,
+            481.9242695505582
+          ],
+          [
+            1091.4062129535178,
+            481.9242695505582
+          ]
+        ],
+        "bbox": [
+          1091.4062129535178,
+          370.93057601041846,
+          1288.2522650046867,
+          481.9242695505582
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/221",
+        "block_type": "TableCell",
+        "html": "<td><math display=\"block\">z + [n &gt; 0] \\cdot 2 \\cdot n</math><math display=\"block\">z + [x &gt; 0] \\cdot x/p</math><math display=\"block\">z</math></td>",
+        "polygon": [
+          [
+            1287.502375282587,
+            370.93057601041846
+          ],
+          [
+            1522.2178582997904,
+            370.93057601041846
+          ],
+          [
+            1522.2178582997904,
+            481.54929085616584
+          ],
+          [
+            1287.502375282587,
+            481.54929085616584
+          ]
+        ],
+        "bbox": [
+          1287.502375282587,
+          370.93057601041846,
+          1522.2178582997904,
+          481.54929085616584
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/23/SectionHeader/5"
+        },
+        "images": {}
+      }
+    ],
+    "section_hierarchy": {
+      "1": "/page/20/SectionHeader/27",
+      "2": "/page/23/SectionHeader/5"
+    },
+    "images": null
+  },
+  "table_span_math": {
+    "id": "/page/23/Table/1",
+    "block_type": "Table",
+    "html": "<table><tbody><tr><th>Name</th><th>postE</th><th colspan=2>Learned Invariant</th></tr><tr><td>Bin1</td><td>n</td><td colspan=3><math display=\"block\">x + [n < M] \\cdot (M \\cdot p - n \\cdot p)</math></td></tr><tr><td>Fair</td><td>count</td><td colspan=3><math>(count + [c1 + c2 == 0] \\cdot (p1 + p2)/(p1 + p2 - p1 \\cdot p2))</math></td></tr><tr><td>Gambler</td><td>z</td><td colspan=2><math display=\"inline\">z + [x > 0 \\text{ and } y > x] \\cdot x \\cdot (y - x)</math></td></tr><tr><td>Geo0</td><td>z</td><td><math>z + [flip == 0] \\cdot (1 - p_1)/p_1</math></td></tr><tr><td>Sum0</td><td>x</td><td><math>x + [n > 0] \\cdot (0.5 \\cdot p \\cdot n^2 + 0.5 \\cdot p \\cdot n)</math></td></tr></tbody></table>",
+    "polygon": [
+      [
+        185.041015625,
+        145.578125
+      ],
+      [
+        784.490234375,
+        145.578125
+      ],
+      [
+        784.490234375,
+        417.3125
+      ],
+      [
+        185.041015625,
+        417.3125
+      ]
+    ],
+    "bbox": [
+      185.041015625,
+      145.578125,
+      784.490234375,
+      417.3125
+    ],
+    "children": [
+      {
+        "id": "/page/23/TableCell/184",
+        "block_type": "TableCell",
+        "html": "<th>Name</th>",
+        "polygon": [
+          [
+            209.7873764542898,
+            156.45250713737855
+          ],
+          [
+            303.1486468557014,
+            156.45250713737855
+          ],
+          [
+            303.1486468557014,
+            188.70067485512186
+          ],
+          [
+            209.7873764542898,
+            188.70067485512186
+          ]
+        ],
+        "bbox": [
+          209.7873764542898,
+          156.45250713737855,
+          303.1486468557014,
+          188.70067485512186
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/185",
+        "block_type": "TableCell",
+        "html": "<th>postE</th>",
+        "polygon": [
+          [
+            302.7737019946515,
+            156.45250713737855
+          ],
+          [
+            390.88574434136524,
+            156.45250713737855
+          ],
+          [
+            390.88574434136524,
+            188.70067485512186
+          ],
+          [
+            302.7737019946515,
+            188.70067485512186
+          ]
+        ],
+        "bbox": [
+          302.7737019946515,
+          156.45250713737855,
+          390.88574434136524,
+          188.70067485512186
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/186",
+        "block_type": "TableCell",
+        "html": "<th colspan=\"2\">Learned Invariant</th>",
+        "polygon": [
+          [
+            389.3859648971659,
+            151.57778411027783
+          ],
+          [
+            762.831046502812,
+            151.57778411027783
+          ],
+          [
+            762.831046502812,
+            188.3256961607295
+          ],
+          [
+            389.3859648971659,
+            188.3256961607295
+          ]
+        ],
+        "bbox": [
+          389.3859648971659,
+          151.57778411027783,
+          762.831046502812,
+          188.3256961607295
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/187",
+        "block_type": "TableCell",
+        "html": "<td>Bin1</td>",
+        "polygon": [
+          [
+            209.7873764542898,
+            188.3256961607295
+          ],
+          [
+            303.1486468557014,
+            188.3256961607295
+          ],
+          [
+            303.1486468557014,
+            232.5731820990285
+          ],
+          [
+            209.7873764542898,
+            232.5731820990285
+          ]
+        ],
+        "bbox": [
+          209.7873764542898,
+          188.3256961607295,
+          303.1486468557014,
+          232.5731820990285
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/188",
+        "block_type": "TableCell",
+        "html": "<td>n</td>",
+        "polygon": [
+          [
+            302.7737019946515,
+            188.3256961607295
+          ],
+          [
+            390.88574434136524,
+            188.3256961607295
+          ],
+          [
+            390.88574434136524,
+            232.5731820990285
+          ],
+          [
+            302.7737019946515,
+            232.5731820990285
+          ]
+        ],
+        "bbox": [
+          302.7737019946515,
+          188.3256961607295,
+          390.88574434136524,
+          232.5731820990285
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/189",
+        "block_type": "TableCell",
+        "html": "<td colspan=\"3\"><math display=\"block\">x + [n &lt; M] \\cdot (M \\cdot p - n \\cdot p)</math></td>",
+        "polygon": [
+          [
+            392.3855237855646,
+            188.3256961607295
+          ],
+          [
+            759.4565427533635,
+            188.3256961607295
+          ],
+          [
+            759.4565427533635,
+            232.5731820990285
+          ],
+          [
+            392.3855237855646,
+            232.5731820990285
+          ]
+        ],
+        "bbox": [
+          392.3855237855646,
+          188.3256961607295,
+          759.4565427533635,
+          232.5731820990285
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/190",
+        "block_type": "TableCell",
+        "html": "<td>Fair</td>",
+        "polygon": [
+          [
+            209.7873764542898,
+            232.1982034046361
+          ],
+          [
+            303.1486468557014,
+            232.1982034046361
+          ],
+          [
+            303.1486468557014,
+            290.3199010354525
+          ],
+          [
+            209.7873764542898,
+            290.3199010354525
+          ]
+        ],
+        "bbox": [
+          209.7873764542898,
+          232.1982034046361,
+          303.1486468557014,
+          290.3199010354525
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/191",
+        "block_type": "TableCell",
+        "html": "<td>count</td>",
+        "polygon": [
+          [
+            302.7737019946515,
+            232.1982034046361
+          ],
+          [
+            390.88574434136524,
+            232.1982034046361
+          ],
+          [
+            390.88574434136524,
+            290.3199010354525
+          ],
+          [
+            302.7737019946515,
+            290.3199010354525
+          ]
+        ],
+        "bbox": [
+          302.7737019946515,
+          232.1982034046361,
+          390.88574434136524,
+          290.3199010354525
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/192",
+        "block_type": "TableCell",
+        "html": "<td colspan=\"3\"><math>(count + [c1 + c2 == 0] \\cdot (p1 + p2)/(p1 + p2 - p1 \\cdot p2))</math></td>",
+        "polygon": [
+          [
+            390.88574434136524,
+            231.073267321459
+          ],
+          [
+            768.8301642796096,
+            231.073267321459
+          ],
+          [
+            768.8301642796096,
+            290.6948797298449
+          ],
+          [
+            390.88574434136524,
+            290.6948797298449
+          ]
+        ],
+        "bbox": [
+          390.88574434136524,
+          231.073267321459,
+          768.8301642796096,
+          290.6948797298449
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/193",
+        "block_type": "TableCell",
+        "html": "<td>Gambler</td>",
+        "polygon": [
+          [
+            209.7873764542898,
+            291.0698584242373
+          ],
+          [
+            303.1486468557014,
+            291.0698584242373
+          ],
+          [
+            303.1486468557014,
+            328.942706557866
+          ],
+          [
+            209.7873764542898,
+            328.942706557866
+          ]
+        ],
+        "bbox": [
+          209.7873764542898,
+          291.0698584242373,
+          303.1486468557014,
+          328.942706557866
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/194",
+        "block_type": "TableCell",
+        "html": "<td>z</td>",
+        "polygon": [
+          [
+            302.7737019946515,
+            291.0698584242373
+          ],
+          [
+            390.88574434136524,
+            291.0698584242373
+          ],
+          [
+            390.88574434136524,
+            328.942706557866
+          ],
+          [
+            302.7737019946515,
+            328.942706557866
+          ]
+        ],
+        "bbox": [
+          302.7737019946515,
+          291.0698584242373,
+          390.88574434136524,
+          328.942706557866
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/195",
+        "block_type": "TableCell",
+        "html": "<td colspan=\"2\"><math display=\"inline\">z + [x &gt; 0 \\text{ and } y &gt; x] \\cdot x \\cdot (y - x)</math></td>",
+        "polygon": [
+          [
+            390.1358546192655,
+            289.9449223410602
+          ],
+          [
+            761.7062119196626,
+            289.9449223410602
+          ],
+          [
+            761.7062119196626,
+            328.1927491690813
+          ],
+          [
+            390.1358546192655,
+            328.1927491690813
+          ]
+        ],
+        "bbox": [
+          390.1358546192655,
+          289.9449223410602,
+          761.7062119196626,
+          328.1927491690813
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/196",
+        "block_type": "TableCell",
+        "html": "<td>Geo0</td>",
+        "polygon": [
+          [
+            209.7873764542898,
+            328.942706557866
+          ],
+          [
+            303.1486468557014,
+            328.942706557866
+          ],
+          [
+            303.1486468557014,
+            367.1905333858872
+          ],
+          [
+            209.7873764542898,
+            367.1905333858872
+          ]
+        ],
+        "bbox": [
+          209.7873764542898,
+          328.942706557866,
+          303.1486468557014,
+          367.1905333858872
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/197",
+        "block_type": "TableCell",
+        "html": "<td>z</td>",
+        "polygon": [
+          [
+            302.7737019946515,
+            328.942706557866
+          ],
+          [
+            390.88574434136524,
+            328.942706557866
+          ],
+          [
+            390.88574434136524,
+            367.1905333858872
+          ],
+          [
+            302.7737019946515,
+            367.1905333858872
+          ]
+        ],
+        "bbox": [
+          302.7737019946515,
+          328.942706557866,
+          390.88574434136524,
+          367.1905333858872
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/198",
+        "block_type": "TableCell",
+        "html": "<td><math>z + [flip == 0] \\cdot (1 - p_1)/p_1</math></td>",
+        "polygon": [
+          [
+            390.1358546192655,
+            328.942706557866
+          ],
+          [
+            759.8314876144133,
+            328.942706557866
+          ],
+          [
+            759.8314876144133,
+            367.1905333858872
+          ],
+          [
+            390.1358546192655,
+            367.1905333858872
+          ]
+        ],
+        "bbox": [
+          390.1358546192655,
+          328.942706557866,
+          759.8314876144133,
+          367.1905333858872
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/199",
+        "block_type": "TableCell",
+        "html": "<td>Sum0</td>",
+        "polygon": [
+          [
+            209.7873764542898,
+            366.8155546914948
+          ],
+          [
+            303.1486468557014,
+            366.8155546914948
+          ],
+          [
+            303.1486468557014,
+            399.81367979802286
+          ],
+          [
+            209.7873764542898,
+            399.81367979802286
+          ]
+        ],
+        "bbox": [
+          209.7873764542898,
+          366.8155546914948,
+          303.1486468557014,
+          399.81367979802286
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/200",
+        "block_type": "TableCell",
+        "html": "<td>x</td>",
+        "polygon": [
+          [
+            302.7737019946515,
+            366.8155546914948
+          ],
+          [
+            390.88574434136524,
+            366.8155546914948
+          ],
+          [
+            390.88574434136524,
+            399.81367979802286
+          ],
+          [
+            302.7737019946515,
+            399.81367979802286
+          ]
+        ],
+        "bbox": [
+          302.7737019946515,
+          366.8155546914948,
+          390.88574434136524,
+          399.81367979802286
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      },
+      {
+        "id": "/page/23/TableCell/201",
+        "block_type": "TableCell",
+        "html": "<td><math>x + [n &gt; 0] \\cdot (0.5 \\cdot p \\cdot n^2 + 0.5 \\cdot p \\cdot n)</math></td>",
+        "polygon": [
+          [
+            390.1358546192655,
+            366.8155546914948
+          ],
+          [
+            759.4565427533635,
+            366.8155546914948
+          ],
+          [
+            759.4565427533635,
+            399.81367979802286
+          ],
+          [
+            390.1358546192655,
+            399.81367979802286
+          ]
+        ],
+        "bbox": [
+          390.1358546192655,
+          366.8155546914948,
+          759.4565427533635,
+          399.81367979802286
+        ],
+        "children": null,
+        "section_hierarchy": {
+          "1": "/page/20/SectionHeader/27",
+          "2": "/page/21/SectionHeader/2"
+        },
+        "images": {}
+      }
+    ],
+    "section_hierarchy": {
+      "1": "/page/20/SectionHeader/27",
+      "2": "/page/21/SectionHeader/2"
+    },
+    "images": null
+  }
+}

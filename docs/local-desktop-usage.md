@@ -1,6 +1,6 @@
 # Research 本机运行工具
 
-> 当前文档描述已实现的命令合同。截至 2026-10-13，第 1–10 章实现与第 11 章最终集中验证已完成：前端 729 项单元测试、75 项浏览器用例、typecheck/lint/production build 通过；后端全量 9187 passed，必需 smoke 4192 passed，AgentLoop offline 和 sources validation 均通过。环境跳过与依赖审计告警见 OpenSpec 证据。第 12 章真实账号、来源、provider、恢复和本机部署验收尚未完成；本文不声明本机交付验收通过。
+> 当前交付状态：第 12 章实际生产版本为 `20261013T142952Z-1006169e2757`，可从既有桌面入口或 `http://127.0.0.1:3000` 访问。启动、重复启动、停止、端口冲突、异常退出/清理、restart、日志轮换和两轮全部 42,383 个资源严格校验通过。共享工作区最终测试期间发生并行源码/测试变动；共享 smoke（3 failed、4,189 passed）及共享 full（1 failed、9,245 passed）已自然退出，结果保留为历史，full 的超时测试根因已确认，test-only 补丁已私有验证并集成到最终隔离 worktree `.tmp/dvf`；原隔离 smoke 自然通过（4,192 passed），full 自然失败（1 failed、9,245 passed、117 skipped），唯一失败为未跟踪的原始 compatibility policy 未复制到 worktree。最终 `.tmp/dvf` 已补齐原字节 pending policy、绑定非 Python 输入并集成测试修复，完整 full/smoke 已启动，等待自然结果。真实账号尚未初始化，配置模型不具备 Research schema 资格；标准备份因必需资料 owner 未初始化被拒绝且无归档。认证 PDF/分析/问答/报告恢复、实际 OS 缩放及电脑重启未验收，实例状态 DEGRADED。
 
 在 PowerShell 中从仓库根执行：
 
@@ -37,7 +37,7 @@
 
 配置优先级为：命令行显式参数 > `.newsroom/desktop/config.json` > 仓库根 `.env` > 内建默认值。 CLI 支持 `--profile`、frontend/API host/port、`--canonical-origin`、`--api-base-url`、runtime/release/backup/control 路径、`--parser-mode`、`--data-root` 和 `--artifact-root`，可以放在命令前后；CLI 参数不会写入配置文件。使用临时覆盖构建、启动、停止或诊断同一实例时，应传递同一组端口、origin 与存储参数。readiness/drain/process timeout 必须为有限正数，最大 300 秒。profile 只允许精确值 `local-desktop`；`NEWSROOM_CANONICAL_ORIGIN` 与兼容别名冲突时拒绝启动。所有存储路径在原仓库根解析并绝对化，release 运行时继续指向真实 owner root；原始 `.env`、`.env.*` 与 secret 不会复制进 release。指向项目 `configs/...` 的 `NEWS_RESEARCH_MODELS_CONFIG`/`NEWS_MODELS_CONFIG`/`NEWS_SOURCES_CONFIG` 会随源码打包到 release，并在启动时改指向 release 内的固定副本；项目外显式配置属于外置非秘密依赖，其绝对路径、大小和 checksum 会绑定到 release，文件漂移后 active release 校验失败。Research 的 `NEWS_RESEARCH_MODELS_CONFIG` 优先于通用 `NEWS_MODELS_CONFIG`；两者都受同一 release 绑定与漂移校验。未显式指定时使用 release 内打包的 `app/configs`。
 
-`doctor` 默认离线，只读取解释器、Node/npm、lockfile、ResearchRuntimeSettings 解析出的 source/model/storage、磁盘、端口和选定 parser 条件。`pymupdf` 直接使用已有 Python runtime，不要求 Docker；`marker`/`mineru` 只检查既有 `ResearchParserExecutionAdapter` 使用的 execution profile、Docker provider、image、model/cache/config 与 `network=deny` 条件，不下载 image/model，也不另起 Docker manager。缺少 Docker 只影响所选容器 parser。显式网络探测有超时、请求数、token 和费用上限；它只能证明 source/provider 的可达性。真实 PDF、单论文分析和问答只有经过对应 application 流程验收后才能标记为 `verified`。
+`doctor` 默认离线，只读取解释器、Node/npm、lockfile、ResearchRuntimeSettings 解析出的 source/model/storage、磁盘、端口和选定 parser 条件。`pymupdf` 直接使用已有 Python runtime，不要求 Docker；`marker` 检查既有 `ResearchParserExecutionAdapter` 使用的 execution profile、Docker provider、image、cache 与 `network=deny` 条件，不下载 image/model，也不另起 Docker manager。当前桌面支持的 parser mode 为 `pymupdf` 与 `marker`。缺少 Docker 只影响所选容器 parser。显式网络探测有超时、请求数、token 和费用上限；它只能证明 source/provider 的可达性。真实 PDF、单论文分析和问答只有经过对应 application 流程验收后才能标记为 `verified`。
 
 `build` 是唯一允许准备依赖和生成 Next.js production build 的命令。它生成 release manifest，记录源码摘要、Git revision、Python resolved distributions、Python/Node/npm 二进制与版本、frontend lockfile、配置身份及每个 release 文件的 checksum。`start` 只运行已原子激活且重新校验完整的 release。生产 profile 拒绝启用 `NEXT_PUBLIC_NEWSROOM_USE_MOCKS`，release 的配置身份必须声明 `data_mode=real`；实际 Node 依赖树如有 missing、invalid 或 extraneous package，会拒绝构建或启动。
 
@@ -50,4 +50,28 @@
 `rollback` 只接受资源与依赖完整、且声明可读取当前 data schema 的 release。不兼容时拒绝原地降级；只有显式给出兼容备份时才按完整 restore 合同切换数据，不执行 Git 工作树回滚、逆迁移或删除用户资料。
 
 
-当前验证范围：Windows ACL 已在隔离临时目录通过自动合同测试，包含 Everyone 权限移除、备份输出父目录与相邻文件权限不变，以及敏感资料写入前的权限保护。这不替代真实资料和完整部署验收。快捷方式 COM、注册表、自有进程与端口、容器 parser、网络 provider、完整隔离恢复演练仍需在 OpenSpec 第 12 章按真实配置执行；本机重启须由用户实际完成。本文描述实现与自动检查范围，不表示第 12 章验收已经通过。
+当前验证范围：Windows ACL 已在隔离临时目录通过自动合同测试，包含 Everyone 权限移除、备份输出父目录与相邻文件权限不变，以及敏感资料写入前的权限保护。这不替代真实资料和完整部署验收。快捷方式 COM、自有进程、loopback 端口和日志轮换已有第 12.2/12.8 的实机记录；模型/provider、真实账号与资料的完整隔离恢复仍需在 OpenSpec 第 12 章按真实配置执行；本机重启须由用户实际完成。本文描述实现与自动检查范围，不表示第 12 章验收已经通过。
+
+
+根 `.env` 含其他模块使用的 PostgreSQL DSN，而本机 Research 使用 owned JSON/SQLite 时，可在 `.newsroom/desktop/config.json` 明确设置：
+
+```json
+{
+  "deployment_profile": "local-desktop",
+  "storage_mode": "owned-local",
+  "parser_mode": "pymupdf"
+}
+```
+
+`storage_mode` 只接受 `root-environment`（默认）或 `owned-local`，没有根环境变量别名。`owned-local` 只为桌面子进程隔离 DSN，根 `.env` 保持原样；显式启用 PostgreSQL-only memory 会报冲突。改变该模式后须重新 build，旧 release 不能沿用。首次缺少 required owner 会得到未初始化提示，正式 backup 仍要求真实产品流程建立对应存储。
+
+本次 catalog 修复使新 chunk manifest artifact 持久化 owner-relative 路径。旧 artifact 仅允许通过受信原 owner root 映射到同 scope/paper 的 staged target，保持原 digest 和 bytes；无法建立该映射的绝对路径仍拒绝。物理保护快照不等于正式 backup/restore 验收。
+
+
+2026-10-13 的真实配置核对确认：模型路由有 API Key，但当前部署没有 approved、enabled 且匹配 `research.candidate` 的 native structured-output release，且没有部署定价。单论文分析与问答尚未取得业务验证，`available=false`；未发起付费模型调用。供应商认证/模型清单 GET 可达不能替代真实业务验收。完成模型身份、资格与有界费用配置后，仍须重跑第 12.6。来源、PDF、笔记和分组只按各自真实验收结果声明。降级启动不能关闭第 12.13 的“最终已验收构建”或全部 AC。
+
+真实账号必须由用户在生产登录页面输入账号和口令，验收程序不生成固定账号、不读取口令、不把 session/cookies 写入提交证据。电脑重启也须由用户实际进行；服务 restart 不等于 AC-15 通过。
+
+production release 的完整性检查也覆盖前端预渲染资源。本机 profile 的运行时页面缓存不能写入发布目录；若诊断报告 `desktop_release_resource_inventory_mismatch`，应保留该失败版本和日志，修复根因并重新 build，不手动删缓存或修改 manifest 来恢复校验。
+
+审计、通用 artifact 与 parser 临时目录也属于本机运行时写入。默认 audit 位于 `.newsroom/desktop/audit/audit.jsonl`，parser run 位于 `.newsroom/desktop/parser-runs`；通用 artifact 默认使用同一受信 Research artifact root。显式路径配置继续优先，相对值以项目根解析。日志/资料不应写入不可变 release app，诊断不得通过忽略额外文件来宣布发布完整。

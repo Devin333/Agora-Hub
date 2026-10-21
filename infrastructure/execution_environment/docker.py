@@ -507,7 +507,10 @@ class DockerExecutionEnvironment:
                 mount += ",readonly"
             command.extend(["--mount", mount])
         command.extend(["--entrypoint", "/usr/bin/env", request.image, "-i"])
-        command.extend(f"{name}={value}" for name, value in request.environment.items())
+        command.extend(
+            f"{name}={_translate_argument(value, path_map)}"
+            for name, value in request.environment.items()
+        )
         # BusyBox ``env`` does not accept GNU's optional ``--`` separator.
         # The executable is already constrained by ProcessPolicy, so the
         # separator adds no admission protection here.

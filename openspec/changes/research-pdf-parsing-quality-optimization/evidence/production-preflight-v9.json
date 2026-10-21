@@ -1,0 +1,52 @@
+{
+  "schema_version": "research-production-preflight-v9/v1",
+  "status": "evaluation_export_failed_after_real_parser_success",
+  "run_id": "pdf-current-dev-pilot-1-v9",
+  "run_result_sha256": "12a0abcec90407d0c2c81bb87d76f90aae72b6d2fa216f6782310e365358ed4a",
+  "requested_documents": 1,
+  "completed_evaluation_documents": 0,
+  "heldout": false,
+  "failure": "EventContractError: graph phase transition fields are invalid",
+  "cause": "Reader treated payload.graph_phase_transition wrapper as a GraphPhaseTransitionRecord. Actual six phase records carry stage identity; physical activity identity is in authoritative activity events. Do not synthesize phase identity from receipt.",
+  "paper_quality_not_promoted": true,
+  "runtime_source_manifest_sha256": "0272af384fde0cc9c67f34f634b11873815df1880a92de78c56e964787f27298",
+  "raw_outputs": [
+    {
+      "path": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\production-pilot-first-source-v9\\_runtime\\research\\parser-runs\\marker\\paper_627d8e202d75\\output\\input\\input.json",
+      "sha256": "e165e63ddf767e0f10d3ff7d3cb9628b9761189d3e95d760631aff880926d795",
+      "bytes": 10077
+    },
+    {
+      "path": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\production-pilot-first-source-v9\\_runtime\\research\\parser-runs\\marker\\paper_627d8e202d75\\output\\input\\input_meta.json",
+      "sha256": "86c34bc33878e91a0fcc9e1fa9108b6c04565eb8112c29594b6bb02169041748",
+      "bytes": 677
+    }
+  ],
+  "actual_persisted_document": {
+    "status": "degraded",
+    "parse_source": "marker",
+    "execution_status": "succeeded",
+    "execution_receipt_ref": "execution-receipt://exec:marker:6b31eba07cb25fea635733c8113f7657d4742cc19f726a9f5c43640ea8c3f7ed",
+    "execution_receipt_checksum": "sha256:b549d3d46429045399504e66710199c86d47bce463e68c01b95af1e62a5ab621",
+    "execution_evidence_artifact_ref": "artifact://research/parser-execution-evidence/c8af940332f3b754718e02171f40de527ff057dc76f7b29561f4aa4d29924056",
+    "sections": 1,
+    "equations": 4,
+    "tables": 0,
+    "published_artifacts": {
+      "research-chunk-manifest": "artifact://research/research-chunk-manifest/25eb5ba6b3f12b84c4faf1f0321115a2f3d8ce980c7f3516f4b8c22a56d19637",
+      "research-document": "artifact://research/research-document/e0d1ca26e7ce3b7847f1e0a6a5a2704758fc0edcb41e510892195bc09d1b4896"
+    },
+    "quality_hard_failures": [
+      {
+        "code": "body_too_short",
+        "expected": 3000,
+        "observed": 794
+      },
+      {
+        "code": "sections_insufficient",
+        "expected": 3,
+        "observed": 1
+      }
+    ]
+  }
+}

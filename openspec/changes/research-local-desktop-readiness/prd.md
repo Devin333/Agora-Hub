@@ -6,7 +6,7 @@
 | --- | --- |
 | Change | `research-local-desktop-readiness` |
 | 编写日期 | 2026-10-12，Asia/Shanghai |
-| 状态 | Automated validation complete；第 1–10 章实现与第 11 章最终集中验证完成，第 12 章真实使用与部署未验收，change 保持 active |
+| 状态 | 第 1–11 章原候选检查已完成；v9 `20261013T142952Z-1006169e2757` 的 production 生命周期、loopback/readiness、日志和两轮完整资源校验通过，12.2/12.8 已核销；catalog/超时回归根因修复已进入该包。共享全量/smoke 因并行输入漂移不授予最终通过；共享 smoke（3 failed、4,189 passed）及共享 full（1 failed、9,245 passed）已自然退出并保留失败证据，full 的外部写入超时测试根因已确认，test-only 补丁完成私有验证并集成到最终隔离 worktree `.tmp/dvf`；原隔离 smoke 自然通过（4,192 passed），full 自然失败（1 failed、9,245 passed、117 skipped），唯一失败为未跟踪的原始 compatibility policy 未带入 worktree。最终 `.tmp/dvf` 的原字节 pending policy 和确定性测试修复已建立完整冻结输入，完整 full/smoke 已启动，等待自然结果。真实账号、认证 PDF、合格模型、标准恢复及用户实机步骤未验收，change 保持 active |
 | 用户 | 在个人 Windows 电脑上研究论文、管理材料和查看分析结果的使用者 |
 | 主入口 | 本机 Research 工作区；默认浏览器地址 `http://127.0.0.1:3000` |
 | API | 默认 `127.0.0.1:8000`，通过前端同源代理访问 |

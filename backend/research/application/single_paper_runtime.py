@@ -956,6 +956,124 @@ def _generate_research_candidate_with_prepared_input(
     )
 
 
+def install_research_physical_graph_dispatcher(
+    *,
+    control_plane: HarnessControlPlane,
+    runtime_binding_authority: Any,
+    node_output_resource: HarnessNodeOutputResourcePort,
+    event_port: HarnessTransitionPort,
+    graph_resolver: Callable[[Any], Any],
+    required_usage: str,
+) -> None:
+    """Install the shared physical Research Graph dispatcher in its owned runtime."""
+
+    physical_executor = HarnessGraphPhysicalActivityExecutor(
+        binding_authority=runtime_binding_authority,
+        input_resolver=control_plane,
+        node_output_resource=node_output_resource,
+        result_committer=None,
+        supervisor=AttemptSupervisor(),
+    )
+    dispatcher = HarnessGraphPhysicalActivityDispatcher(
+        executor=physical_executor,
+        graph_resolver=graph_resolver,
+        input_resolver=control_plane,
+        accept=control_plane.accept_graph_activity_for_execution,
+        record_call_marker=control_plane.record_graph_activity_call_marker,
+        record_result=control_plane.record_graph_activity_result_event,
+        apply_result=control_plane.commit_physical_graph_result,
+        durable_recovery_resolver=event_port.recover_graph,
+        capabilities_resolver=lambda activity_ref: runtime_binding_authority.resolve_activity(
+            activity_ref, required_usage=required_usage
+        ).capabilities,
+    )
+    control_plane.install_graph_activity_dispatcher(dispatcher)
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchPhysicalGraphRun:
+    harness_result: Any
+    event_port: HarnessTransitionPort
+
+
+class ResearchPhysicalGraphRunner:
+    """Composition-injected runner for bounded Research application Graphs."""
+
+    def __init__(
+        self,
+        *,
+        event_port_factory: Callable[[str], HarnessTransitionPort],
+        node_output_resource: HarnessNodeOutputResourcePort,
+        side_effect_store: HarnessSideEffectStorePort,
+    ) -> None:
+        if not callable(event_port_factory):
+            raise TypeError("event_port_factory must be callable")
+        if not isinstance(node_output_resource, HarnessNodeOutputResourcePort):
+            raise TypeError("node_output_resource must implement HarnessNodeOutputResourcePort")
+        if not isinstance(side_effect_store, HarnessSideEffectStorePort):
+            raise TypeError("side_effect_store must implement HarnessSideEffectStorePort")
+        self._event_port_factory = event_port_factory
+        self._node_output_resource = node_output_resource
+        self._side_effect_store = side_effect_store
+
+    def run(
+        self,
+        *,
+        run_spec: HarnessRunSpec,
+        authority: Any,
+        gate_registry: Any,
+        side_effect_registry: HarnessSideEffectRegistry,
+        compiled_graph: Any,
+    ) -> ResearchPhysicalGraphRun:
+        event_port = self._event_port_factory(run_spec.run_id)
+        scope_provider = getattr(event_port, "graph_scope_metadata", None)
+        runtime_scopes = scope_provider() if callable(scope_provider) else {}
+        identity_scope_ref = (
+            runtime_scopes.get("identity_scope_ref")
+            if isinstance(runtime_scopes, Mapping)
+            else None
+        )
+        if not isinstance(identity_scope_ref, str) or not identity_scope_ref.strip():
+            raise HarnessValidationError(
+                "Research physical Graph runtime lacks an authoritative identity scope",
+                code="graph_runtime_scope_mismatch",
+                details={"scope": "identity_scope_ref"},
+            )
+        run_spec = replace(
+            run_spec,
+            metadata={
+                **dict(run_spec.metadata),
+                "tenant_scope_ref": identity_scope_ref,
+                "identity_scope_ref": identity_scope_ref,
+            },
+        )
+        control_plane = HarnessControlPlane(
+            event_port=event_port,
+            runtime_binding_authority=authority,
+            gate_registry=gate_registry,
+            side_effect_registry=side_effect_registry,
+            side_effect_store=self._side_effect_store,
+            graph_preflight=HarnessGraphPreflight(
+                policy=HarnessGraphPreflightPolicy(max_active_nodes=1, max_parallelism=1)
+            ),
+        )
+        install_research_physical_graph_dispatcher(
+            control_plane=control_plane,
+            runtime_binding_authority=authority,
+            node_output_resource=self._node_output_resource,
+            event_port=event_port,
+            graph_resolver=lambda _activity: compiled_graph,
+            required_usage="serial",
+        )
+        recovery = event_port.recover_graph(run_spec.run_id)
+        result = (
+            control_plane.recover_and_run(run_spec)
+            if recovery.state is not None
+            else control_plane.run(run_spec)
+        )
+        return ResearchPhysicalGraphRun(result, event_port)
+
+
 class ResearchSinglePaperRuntime:
     def __init__(
         self,
@@ -1304,30 +1422,14 @@ class ResearchSinglePaperRuntime:
             raise TypeError(
                 "node_output_resource_factory must return HarnessNodeOutputResourcePort"
             )
-        physical_executor = HarnessGraphPhysicalActivityExecutor(
-            binding_authority=runtime_binding_authority,
-            input_resolver=control_plane,
+        install_research_physical_graph_dispatcher(
+            control_plane=control_plane,
+            runtime_binding_authority=runtime_binding_authority,
             node_output_resource=node_output_resource,
-            result_committer=None,
-            supervisor=AttemptSupervisor(),
-        )
-        dispatcher = HarnessGraphPhysicalActivityDispatcher(
-            executor=physical_executor,
+            event_port=event_port,
             graph_resolver=control_plane.graph_for_activity,
-            input_resolver=control_plane,
-            accept=control_plane.accept_graph_activity_for_execution,
-            record_call_marker=control_plane.record_graph_activity_call_marker,
-            record_result=control_plane.record_graph_activity_result_event,
-            apply_result=control_plane.commit_physical_graph_result,
-            durable_recovery_resolver=event_port.recover_graph,
-            capabilities_resolver=lambda activity_ref: runtime_binding_authority.resolve_activity(
-                activity_ref,
-                required_usage="parallel",
-            ).capabilities,
+            required_usage="parallel",
         )
-        # The installed physical dispatcher owns both execution and the
-        # cooperative cancellation events referenced by durable Graph decisions.
-        control_plane.install_graph_activity_dispatcher(dispatcher)
         if self.runtime_binding_registrar is not None:
             self.runtime_binding_registrar.register(
                 run_spec,

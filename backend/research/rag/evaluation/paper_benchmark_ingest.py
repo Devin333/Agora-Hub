@@ -295,7 +295,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true", help="Re-parse papers even when research_document.json exists.")
     parser.add_argument(
         "--pdf-parser-backend",
-        choices=("nougat", "mineru", "marker", "cascade"),
+        choices=("nougat", "marker", "cascade"),
         default=None,
         help="PDF parser backend for PDF source packages. Defaults to NEWSROOM_PDF_PARSER_BACKEND or nougat.",
     )

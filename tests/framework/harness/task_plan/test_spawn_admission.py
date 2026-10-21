@@ -1,3 +1,4 @@
+from concurrent.futures import wait
 from dataclasses import replace
 from threading import Event
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ import pytest
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.budget_reservation import BudgetReservation
-from framework.harness.subagents.supervisor import ChildAgentSupervisor
+from framework.harness.subagents.supervisor import ChildAgentState, ChildAgentSupervisor
 from framework.harness.task_plan.parallel import (
     DispatchGroupState,
     ParallelAgentCoordinator,
@@ -270,6 +271,79 @@ def test_receipt_write_failure_keeps_all_started_children_trackable():
         assert session.group.state is DispatchGroupState.INDETERMINATE
         assert not any(item["event_type"] == "TASK_WAVE_DISPATCHED" for item in events)
     finally:
+        supervisor.shutdown()
+
+
+def test_receipt_write_failure_retains_fenced_queued_child_until_spawn_is_audited():
+    plan = _accepted_parallel_plan(("task-1", "task-2"))
+    events = []
+    occupied = Event()
+    release_occupied = Event()
+    running = Event()
+    release_running = Event()
+    calls = []
+
+    def append(event):
+        if event["event_type"] == "TASK_ATTEMPT_SPAWN_CONFIRMED":
+            assert running.wait(timeout=5)
+            raise RuntimeError("injected receipt write failure")
+        events.append(event)
+
+    supervisor = ChildAgentSupervisor(max_children=2)
+    coordinator = ParallelAgentCoordinator(
+        max_workers=2, child_supervisor=supervisor,
+        event_sink=ParallelEventSink(append, events.extend),
+    )
+
+    def occupy_executor():
+        occupied.set()
+        assert release_occupied.wait(timeout=5)
+
+    def invoke(instance):
+        calls.append(instance.task_id)
+        if instance.task_id == "task-1":
+            running.set()
+            assert release_running.wait(timeout=5)
+        return _result(plan, instance)
+
+    # Reserve one physical thread so the second spawned child is still queued
+    # when the first spawn receipt fails. No sleep or scheduler luck is needed.
+    occupier = supervisor._executor.submit(occupy_executor)
+    try:
+        assert occupied.wait(timeout=5)
+        request = _request(plan)
+        with pytest.raises(RuntimeError, match="injected receipt write failure"):
+            coordinator.dispatch(request, invoke)
+        session = next(iter(coordinator._sessions.values()))
+        assert set(session.active_children) == {"task-1", "task-2"}
+        assert session.reserved == {"task-1", "task-2"}
+        assert session.group.state is DispatchGroupState.INDETERMINATE
+        assert session.spawn_receipts == {}
+        assert session.attempt_receipts == {}
+        queued_handle, _worker = session.active_children["task-2"]
+        queued = supervisor.wait(
+            queued_handle.child_id, operation_id=queued_handle.operation_id,
+            timeout_seconds=0,
+        )
+        assert queued.receipt.status is ChildAgentState.CANCELLED
+        assert queued.receipt.termination_confirmed is True
+        assert queued.handle.state is not ChildAgentState.CLOSED
+        assert not any(event["event_type"] == "TASK_WAVE_DISPATCHED" for event in events)
+
+        # Fence physical execution, but do not erase the handle or fabricate an
+        # audited terminal receipt while its spawn admission remains uncommitted.
+        release_running.set()
+        release_occupied.set()
+        occupier.result(timeout=5)
+        assert not wait(tuple(supervisor._futures.values()), timeout=5).not_done
+        assert calls == ["task-1"]
+        redelivered = coordinator.dispatch(request, invoke)
+        assert redelivered.group.state is DispatchGroupState.INDETERMINATE
+        assert calls == ["task-1"]
+        assert set(session.active_children) == {"task-1", "task-2"}
+    finally:
+        release_running.set()
+        release_occupied.set()
         supervisor.shutdown()
 
 

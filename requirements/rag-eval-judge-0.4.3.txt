@@ -1,0 +1,11 @@
+# Validated on Python 3.14 with Ragas collections FactualCorrectness/Faithfulness.
+# langchain-community 0.4.2 is intentionally excluded: it removed vertexai symbols
+# still imported by this Ragas 0.4.3 dependency path.
+ragas==0.4.3
+langchain==0.3.27
+langchain-core==0.3.79
+langchain-community==0.3.31
+langchain-openai==0.3.35
+langchain-text-splitters==0.3.11
+instructor==1.3.2
+openai==1.109.1

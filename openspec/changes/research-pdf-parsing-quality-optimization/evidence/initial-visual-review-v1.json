@@ -1,0 +1,59 @@
+{
+  "schema_version": "research-parsing-visual-review-observations/v1",
+  "heldout": false,
+  "case_packet_sha256": "7b50caadfbf175b326a139f74d114a6e35412ef86045d206d39b1083d694f159",
+  "contact_sheet": "F:\\github\\NewsRoom\\.artifacts\\pdf-parsing-quality-optimization\\root-cause-first-pairs-v1.jpg",
+  "contact_sheet_sha256": "eb99ab0497ac199143df69da3a49d12777cb10a03f5735041b870856b8c3f227",
+  "reviewed_cases": [
+    {
+      "case_key": "a8ea027bc6c3d3cb464dc87aceb0ae5f27a7d54da3df8db8ddf633b84e872692:556",
+      "image_name": "docstructbench_llm-raw-scihub-o.O-j.jcp.2010.12.006.pdf_5.jpg",
+      "visual_review": "source page contact sheet and official matched row inspected",
+      "observation": "原页含多行守恒方程；冻结官方匹配条目的预测为空，属于 matched-row omission。仅此不能判定是 backend 漏检、Markdown 导出还是 scorer matching 造成；须继续核对 raw JSON 和同页完整预测。",
+      "causal_stage": "unresolved",
+      "production_or_downstream_checked": false
+    },
+    {
+      "case_key": "a8ea027bc6c3d3cb464dc87aceb0ae5f27a7d54da3df8db8ddf633b84e872692:587",
+      "image_name": "docstructbench_llm-raw-scihub-o.O-ceat.200407001.pdf_3.jpg",
+      "visual_review": "source page contact sheet and official matched row inspected",
+      "observation": "原页可见 K1=1/8；匹配预测保留该关系，CDM=1。预测增加公式编号、字体形式不同；CDM 满分不代表 byte-identical 或所有语义细节相同。",
+      "causal_stage": "unresolved",
+      "production_or_downstream_checked": false
+    },
+    {
+      "case_key": "64a8d3a51f461acd26a1fbfd63705ffc91539aced3cad244a99e8a3e255985b2:71",
+      "image_name": "docstructbench_llm-raw-scihub-o.O-chem.200700285.pdf_4.jpg",
+      "visual_review": "source page contact sheet and official matched row inspected",
+      "observation": "原页左栏包含 NMR 数值小表，官方匹配预测为空；其临近谱图与表格混排，属于需要单独定位的小表遗漏候选，不能据图片直接认定恢复策略有效。",
+      "causal_stage": "unresolved",
+      "production_or_downstream_checked": false
+    },
+    {
+      "case_key": "64a8d3a51f461acd26a1fbfd63705ffc91539aced3cad244a99e8a3e255985b2:76",
+      "image_name": "docstructbench_llm-raw-scihub-o.O-s00128-007-9171-1.pdf_3.jpg",
+      "visual_review": "source page contact sheet and official matched row inspected",
+      "observation": "原页跨栏数值大表含 Station 1/2 与空格；该匹配 TEDS=1，适合作为数值/空单元格保留对照，不推断其他表均正确。",
+      "causal_stage": "unresolved",
+      "production_or_downstream_checked": false
+    },
+    {
+      "case_key": "16c4f3ae928ceaca8b4ff4ecae7aeaee881bde5d96f2258a0ccdd0d3907458ef:93",
+      "image_name": "docstructbench_llm-raw-scihub-o.O-chin.200305072.pdf_1.jpg",
+      "visual_review": "source page contact sheet and official matched row inspected",
+      "observation": "冻结官方序列 gt=[1,5]、pred=[5,1]，两项反转；原页为书目标题、摘要与化学图式混排。需核对 annotation order 与 matching 后才能确定最终产品顺序根因。",
+      "causal_stage": "unresolved",
+      "production_or_downstream_checked": false
+    },
+    {
+      "case_key": "16c4f3ae928ceaca8b4ff4ecae7aeaee881bde5d96f2258a0ccdd0d3907458ef:84",
+      "image_name": "docstructbench_llm-raw-scihub-o.O-ajhb.10190.pdf_5.jpg",
+      "visual_review": "source page contact sheet and official matched row inspected",
+      "observation": "冻结官方序列 gt=pred=[7,9]；原页双栏含多幅图及 captions。该 matched subset 顺序正确，不代表整页所有块顺序或 caption owner 均已验证。",
+      "causal_stage": "unresolved",
+      "production_or_downstream_checked": false
+    }
+  ],
+  "task_1_3_complete": false,
+  "boundary": "Only six initial visual/matched-row observations. The sixty-case packet is not a completed sixty-case causal audit; production/downstream stage evidence is still missing."
+}

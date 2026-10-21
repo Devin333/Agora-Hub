@@ -47,3 +47,51 @@ def test_subagent_runtime_halts_when_child_budget_exceeded() -> None:
 
     assert result.status == SubAgentStatus.HALTED
     assert any(gate["gate"] == "subagent_budget" and gate["passed"] is False for gate in result.metadata["gate_results"])
+
+
+def test_subagent_runtime_rechecks_cancellation_at_worker_dispatch(monkeypatch) -> None:
+    from threading import Event, Thread
+
+    from framework.harness.subagents import runtime as runtime_module
+    from framework.harness.subagents.execution_control import bind_child_execution_control
+    from tests.framework.harness.subagents.test_execution_control import _control
+
+    control, _, _ = _control()
+    worker = FakeSubAgentWorker()
+    runtime = FakeSubAgentRuntime(fake_subagent_spec(), worker)
+    invocation = runtime.build_invocation()
+    dispatch_ready = Event()
+    release_dispatch = Event()
+    results = []
+    errors = []
+    inspect_identity = runtime_module._accepts_execution_identity
+
+    def pause_admission(callback):
+        dispatch_ready.set()
+        assert release_dispatch.wait(timeout=5)
+        return inspect_identity(callback)
+
+    monkeypatch.setattr(runtime_module, "_accepts_execution_identity", pause_admission)
+
+    def invoke():
+        try:
+            with bind_child_execution_control(control):
+                results.append(runtime.invoke(invocation))
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = Thread(target=invoke)
+    try:
+        thread.start()
+        assert dispatch_ready.wait(timeout=5)
+        control.request_cancel()
+        release_dispatch.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert errors == []
+        assert worker.calls == []
+        assert len(results) == 1
+        assert results[0].status is SubAgentStatus.HALTED
+    finally:
+        release_dispatch.set()
+        thread.join(timeout=5)

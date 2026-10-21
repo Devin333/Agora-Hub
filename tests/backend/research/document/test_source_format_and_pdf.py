@@ -7,7 +7,7 @@ import tarfile
 from pathlib import Path
 from unittest.mock import patch
 
-import fitz
+import pymupdf
 import pytest
 
 from backend.foundation import build_stable_id
@@ -22,7 +22,6 @@ from backend.research.domain.document import (
 from backend.research.document.arxiv_parser import ArxivDocumentParser
 from backend.research.document.latex_compiler import _read_tex_files
 from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
-from backend.research.document.mineru_pdf_parser import MinerUPdfDocumentParser
 from backend.research.document.pdf_compiler import (
     FigureImageRef,
     PageTextEvidence,
@@ -48,7 +47,7 @@ from framework.execution_environment.errors import ExecutionEnvironmentUnavailab
 
 
 def _make_pdf(text_pages: list[str]) -> bytes:
-    doc = fitz.open()
+    doc = pymupdf.open()
     for text in text_pages:
         page = doc.new_page()
         page.insert_text((50, 72), text)
@@ -87,24 +86,6 @@ def _make_latex_targz_with_files(tex_content: str, files: dict[str, bytes]) -> b
             file_info.size = len(content)
             tf.addfile(file_info, io.BytesIO(content))
     return buf.getvalue()
-
-
-def _write_mineru_content(output_dir: Path, payload: list[dict[str, object]]) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "content_list.json").write_text(
-        json.dumps(payload, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-
-def _write_mineru_named_content(output_dir: Path, name: str, payload: list[dict[str, object]]) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    nested = output_dir / "input" / "auto"
-    nested.mkdir(parents=True, exist_ok=True)
-    (nested / name).write_text(
-        json.dumps(payload, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
 
 def _write_marker_content(output_dir: Path, payload: dict[str, object]) -> None:
@@ -387,7 +368,7 @@ def test_parse_surya_layout_response_accepts_evidence_labels():
 def test_surya_bbox_conversion_uses_thousand_point_page_scale():
     rect = _bbox_to_page_rect(
         [314.0, 88.0, 680.0, 497.0],
-        page_rect=fitz.Rect(0, 0, 612, 792),
+        page_rect=pymupdf.Rect(0, 0, 612, 792),
         pix_width=1275,
         pix_height=1650,
     )
@@ -430,7 +411,7 @@ def test_surya_caption_region_attaches_to_nearest_crop():
 
 
 def test_extract_table_structure_from_word_coordinates():
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page()
     for x, y, text in [
         (50, 70, "Name"),
@@ -444,7 +425,7 @@ def test_extract_table_structure_from_word_coordinates():
 
     columns, rows = _extract_table_structure_from_words(
         page,
-        fitz.Rect(40, 50, 220, 130),
+        pymupdf.Rect(40, 50, 220, 130),
     )
     doc.close()
 
@@ -478,7 +459,7 @@ def test_surya_figure_crop_ocr_is_disabled_by_default(
     monkeypatch.setenv("SURYA_INFERENCE_URL", "http://surya.test/v1")
     monkeypatch.delenv("NEWSROOM_PDF_FIGURE_OCR", raising=False)
     monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(tmp_path / "runs"))
-    pdf_doc = fitz.open(stream=_make_pdf(["Figure 1: Architecture"]), filetype="pdf")
+    pdf_doc = pymupdf.open(stream=_make_pdf(["Figure 1: Architecture"]), filetype="pdf")
     try:
         artifacts = _extract_surya_layout_artifacts(pdf_doc, "2501_fig_ocr_disabled")
     finally:
@@ -512,7 +493,7 @@ def test_surya_figure_crop_ocr_metadata_when_enabled(
     monkeypatch.setenv("SURYA_INFERENCE_URL", "http://surya.test/v1")
     monkeypatch.setenv("NEWSROOM_PDF_FIGURE_OCR", "1")
     monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(tmp_path / "runs"))
-    pdf_doc = fitz.open(stream=_make_pdf(["Figure 1: Architecture"]), filetype="pdf")
+    pdf_doc = pymupdf.open(stream=_make_pdf(["Figure 1: Architecture"]), filetype="pdf")
     try:
         artifacts = _extract_surya_layout_artifacts(pdf_doc, "2501_fig_ocr_enabled")
     finally:
@@ -551,7 +532,7 @@ def test_surya_figure_crop_ocr_failure_keeps_figure_metadata(
     monkeypatch.setenv("SURYA_INFERENCE_URL", "http://surya.test/v1")
     monkeypatch.setenv("NEWSROOM_PDF_FIGURE_OCR", "1")
     monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(tmp_path / "runs"))
-    pdf_doc = fitz.open(stream=_make_pdf(["Figure 1: Architecture"]), filetype="pdf")
+    pdf_doc = pymupdf.open(stream=_make_pdf(["Figure 1: Architecture"]), filetype="pdf")
     try:
         artifacts = _extract_surya_layout_artifacts(pdf_doc, "2501_fig_ocr_error")
     finally:
@@ -1291,121 +1272,12 @@ def test_dispatcher_routes_gzipped_pdf(mock_nougat):
     assert doc.metadata.get("parse_source") == "nougat"
 
 
-def test_mineru_pdf_parser_converts_content_list(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEWSROOM_PARSER_RUN_ROOT", str(tmp_path / "parser-runs"))
-    monkeypatch.setenv("NEWS_ARTIFACT_ROOT", str(tmp_path / ".newsroom" / "runs"))
-    monkeypatch.setenv("NEWSROOM_MINERU_MODEL_SOURCE", "modelscope")
-    monkeypatch.setenv("NEWSROOM_MINERU_CACHE_DIR", str(tmp_path / "mineru-cache"))
-    monkeypatch.setenv("NEWSROOM_MINERU_CONFIG_DIR", str(tmp_path / "mineru-config"))
-
-    def fake_run(command, *, timeout_seconds):
-        assert command[:5] == ["docker", "run", "--rm", "--gpus", "all"]
-        assert "MINERU_MODEL_SOURCE=modelscope" in command
-        assert any(part.endswith("mineru-cache:/root/.cache") for part in command)
-        assert any(part.endswith("mineru-config:/root") for part in command)
-        output_dir = _docker_mount_host_path(command, "/output")
-        image_path = output_dir / "figure.png"
-        image_path.parent.mkdir(parents=True, exist_ok=True)
-        image_path.write_bytes(b"png")
-        _write_mineru_content(
-            output_dir,
-            [
-                {"type": "text", "text_level": 1, "text": "Introduction", "page_idx": 0},
-                {"type": "text", "text": "This paper studies parser backends.", "page_idx": 0},
-                {"type": "equation", "latex": "E=mc^2", "page_idx": 0, "bbox": [100, 100, 300, 140]},
-                {
-                    "type": "image",
-                    "img_path": "figure.png",
-                    "image_caption": ["Figure 1: Overview."],
-                    "page_idx": 0,
-                    "bbox": [100, 200, 500, 600],
-                },
-                {
-                    "type": "table",
-                    "caption": ["Table 1: Scores."],
-                    "page_idx": 0,
-                    "bbox": [100, 650, 500, 900],
-                    "table_body": "<table><tr><td>Model</td><td>Score</td></tr>"
-                    "<tr><td>baseline</td><td>0.8</td></tr></table>",
-                },
-                {"type": "page_number", "text": "1", "page_idx": 0},
-            ],
-        )
-
-    monkeypatch.setattr(
-        "backend.research.document.mineru_pdf_parser.run_docker_command",
-        fake_run,
-    )
-    pdf_bytes = _make_pdf(["Introduction\nThis paper studies parser backends."])
-
-    doc = MinerUPdfDocumentParser().parse("2501_mineru", pdf_bytes)
-
-    assert doc.metadata["parse_source"] == "mineru"
-    assert doc.metadata["parser_backend"] == "mineru"
-    assert len(doc.sections) == 1
-    assert doc.sections[0].title == "Introduction"
-    assert len(doc.equations) == 1
-    assert doc.equations[0].metadata["source_locator"].startswith("arxiv://2501_mineru/pdf#page=1")
-    assert len(doc.figures) == 1
-    assert Path(doc.figures[0].image_ref).exists()
-    assert len(doc.tables) == 1
-    assert doc.tables[0].columns == ["Model", "Score"]
-    assert doc.tables[0].rows == [{"Model": "baseline", "Score": "0.8"}]
-    assert doc.metadata["parse_quality"]["tables"]["with_rows"] == 1
-
-
-def test_dispatcher_can_select_mineru_backend(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEWSROOM_PARSER_RUN_ROOT", str(tmp_path / "parser-runs"))
-
-    def fake_run(command, *, timeout_seconds):
-        output_dir = _docker_mount_host_path(command, "/output")
-        _write_mineru_content(
-            output_dir,
-            [
-                {"type": "text", "text_level": 1, "text": "Abstract", "page_idx": 0},
-                {"type": "text", "text": "Parsed by MinerU.", "page_idx": 0},
-            ],
-        )
-
-    monkeypatch.setattr(
-        "backend.research.document.mineru_pdf_parser.run_docker_command",
-        fake_run,
-    )
-
-    doc = ArxivDocumentParser(pdf_parser_backend="mineru").parse(
-        "2501_dispatch_mineru",
-        _make_pdf(["Parsed by MinerU."]),
-    )
-
-    assert doc.metadata["parse_source"] == "mineru"
-
-
-def test_mineru_pdf_parser_reads_named_content_list(monkeypatch, tmp_path):
-    monkeypatch.setenv("NEWSROOM_PARSER_RUN_ROOT", str(tmp_path / "parser-runs"))
-
-    def fake_run(command, *, timeout_seconds):
-        output_dir = _docker_mount_host_path(command, "/output")
-        _write_mineru_named_content(
-            output_dir,
-            "input_content_list.json",
-            [
-                {"type": "text", "text_level": 1, "text": "Abstract", "page_idx": 0},
-                {"type": "text", "text": "Named output works.", "page_idx": 0},
-            ],
-        )
-
-    monkeypatch.setattr(
-        "backend.research.document.mineru_pdf_parser.run_docker_command",
-        fake_run,
-    )
-
-    doc = MinerUPdfDocumentParser().parse(
-        "2501_mineru_named_content",
-        _make_pdf(["Named output works."]),
-    )
-
-    assert doc.metadata["parse_source"] == "mineru"
-    assert doc.sections[0].text == "Named output works."
+def _make_png() -> bytes:
+    document = pymupdf.open(stream=_make_pdf(["image fixture"]), filetype="pdf")
+    try:
+        return document[0].get_pixmap(matrix=pymupdf.Matrix(0.1, 0.1)).tobytes("png")
+    finally:
+        document.close()
 
 
 def test_marker_pdf_parser_converts_json_output(monkeypatch, tmp_path):
@@ -1415,15 +1287,15 @@ def test_marker_pdf_parser_converts_json_output(monkeypatch, tmp_path):
 
     def fake_run(command, *, timeout_seconds):
         assert command[:3] == ["docker", "run", "--rm"]
-        assert "marker_single" in command
+        assert "/usr/local/bin/marker_single" in command
         assert "--output_format" in command
         assert "json" in command
         assert any(part.endswith("marker-cache:/root/.cache") for part in command)
         output_dir = _docker_mount_host_path(command, "/output")
         image_dir = output_dir / "images"
         image_dir.mkdir(parents=True, exist_ok=True)
-        (image_dir / "figure.png").write_bytes(b"png")
-        (image_dir / "table.png").write_bytes(b"png")
+        (image_dir / "figure.png").write_bytes(_make_png())
+        (image_dir / "table.png").write_bytes(_make_png())
         _write_marker_content(
             output_dir,
             {
@@ -1481,9 +1353,10 @@ def test_marker_pdf_parser_converts_json_output(monkeypatch, tmp_path):
     assert doc.metadata["parser_backend"] == "marker"
     assert doc.sections[0].title == "Introduction"
     assert doc.sections[0].text == "This paper studies parser backends."
-    assert doc.sections[0].metadata["source_locator"] == "arxiv://2501_marker/pdf#page=1"
+    content_source_ref = f"urn:sha256:{doc.source_hash}"
+    assert doc.sections[0].metadata["source_locator"] == f"{content_source_ref}#page=1"
     assert doc.equations[0].latex == "E=mc^2"
-    assert doc.equations[0].metadata["source_locator"].startswith("arxiv://2501_marker/pdf#page=1")
+    assert doc.equations[0].metadata["source_locator"].startswith(f"{content_source_ref}#page=1")
     assert len(doc.figures) == 1
     assert Path(doc.figures[0].image_ref).exists()
     assert doc.figures[0].metadata["parse_source"] == "marker"
@@ -1524,9 +1397,11 @@ def test_dispatcher_can_select_marker_backend(monkeypatch, tmp_path):
     assert doc.sections[0].text == "Parsed by Marker."
 
 
-def test_pdf_parser_backend_name_rejects_unknown_backend():
+def test_pdf_parser_backend_name_rejects_removed_and_unknown_backends():
     with pytest.raises(ValueError, match="NEWSROOM_PDF_PARSER_BACKEND"):
         pdf_parser_backend_name("docling")
+    with pytest.raises(ValueError, match="nougat, marker, cascade"):
+        pdf_parser_backend_name("mineru")
 
 
 def test_dispatcher_routes_latex():

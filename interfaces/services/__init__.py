@@ -1,57 +1,14 @@
-"""Application service package."""
+"""Application service package.
 
-from interfaces.services.auth_service import AuthApplicationService
-from interfaces.services.run_service import RunApplicationService
-from interfaces.services.artifact_service import ArtifactInspectionService
-from interfaces.services.diagnose_service import DiagnosticApplicationService
-from interfaces.services.entity_service import EntityTrackingApplicationService
-from interfaces.services.event_delivery_operations_service import (
-    EventDeliveryOperationsService,
-)
-from interfaces.services.event_projection_service import EventProjectionService
-from interfaces.services.event_quarantine_service import EventQuarantineService
-from interfaces.services.event_reader_service import (
-    EventAuthorizationContext,
-    EventAuthorizationDecision,
-    EventAuthorizationRequest,
-    EventAuthorizerPort,
-    EventReaderService,
-    EventStreamReadResult,
-)
-from interfaces.services.event_replay_service import EventReplayService
-from interfaces.services.harness_graph_service import (
-    HarnessGraphApplicationService,
-    HarnessGraphReplayResult,
-    HarnessGraphRunOperationResult,
-)
-from interfaces.services.harness_wait_service import (
-    HarnessWaitApplicationService,
-    HarnessWaitInspectionResult,
-    HarnessWaitInspectionListResult,
-    HarnessWaitOperationResult,
-)
-from interfaces.services.harness_wait_runtime import (
-    DurableHarnessWaitApprovalResolver,
-    HarnessWaitRuntimeRegistration,
-    HarnessWaitRuntimeRegistry,
-    HarnessWaitRuntimeStoreError,
-    HarnessWaitRuntimeUnavailableError,
-)
-from interfaces.services.memory_service import MemoryApplicationService
-from interfaces.services.mcp_service import MCPApplicationService
-from interfaces.services.project_service import ProjectApplicationService, ProjectsApplicationService
-from interfaces.services.research_service import ResearchApplicationService
-from interfaces.services.report_service import ReportApplicationService
-from interfaces.services.run_inspection_service import GraphRunInspectionService
-from interfaces.services.run_inspection_factory import (
-    build_graph_run_inspection_service,
-    graph_run_inspection_service_from_env,
-)
-from interfaces.services.source_service import SourceApplicationService
-from interfaces.services.schedule_service import ScheduleApplicationService
-from interfaces.services.storage_service import StorageApplicationService
-from interfaces.services.subscription_service import SubscriptionApplicationService
-from interfaces.services.tool_service import ToolApplicationService
+Service implementations remain public package exports, but are imported on
+first access so lightweight service utilities do not initialize the full
+application dependency graph.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "AuthApplicationService",
@@ -96,3 +53,60 @@ __all__ = [
     "SubscriptionApplicationService",
     "ToolApplicationService",
 ]
+
+_LAZY_EXPORTS = {
+    "AuthApplicationService": "auth_service",
+    "RunApplicationService": "run_service",
+    "ArtifactInspectionService": "artifact_service",
+    "DiagnosticApplicationService": "diagnose_service",
+    "EntityTrackingApplicationService": "entity_service",
+    "EventDeliveryOperationsService": "event_delivery_operations_service",
+    "EventProjectionService": "event_projection_service",
+    "EventQuarantineService": "event_quarantine_service",
+    "EventAuthorizationContext": "event_reader_service",
+    "EventAuthorizationDecision": "event_reader_service",
+    "EventAuthorizationRequest": "event_reader_service",
+    "EventAuthorizerPort": "event_reader_service",
+    "EventReaderService": "event_reader_service",
+    "EventStreamReadResult": "event_reader_service",
+    "EventReplayService": "event_replay_service",
+    "HarnessGraphApplicationService": "harness_graph_service",
+    "HarnessGraphReplayResult": "harness_graph_service",
+    "HarnessGraphRunOperationResult": "harness_graph_service",
+    "HarnessWaitApplicationService": "harness_wait_service",
+    "HarnessWaitInspectionResult": "harness_wait_service",
+    "HarnessWaitInspectionListResult": "harness_wait_service",
+    "HarnessWaitOperationResult": "harness_wait_service",
+    "DurableHarnessWaitApprovalResolver": "harness_wait_runtime",
+    "HarnessWaitRuntimeRegistration": "harness_wait_runtime",
+    "HarnessWaitRuntimeRegistry": "harness_wait_runtime",
+    "HarnessWaitRuntimeStoreError": "harness_wait_runtime",
+    "HarnessWaitRuntimeUnavailableError": "harness_wait_runtime",
+    "MemoryApplicationService": "memory_service",
+    "MCPApplicationService": "mcp_service",
+    "ProjectApplicationService": "project_service",
+    "ProjectsApplicationService": "project_service",
+    "ResearchApplicationService": "research_service",
+    "ReportApplicationService": "report_service",
+    "GraphRunInspectionService": "run_inspection_service",
+    "build_graph_run_inspection_service": "run_inspection_factory",
+    "graph_run_inspection_service_from_env": "run_inspection_factory",
+    "SourceApplicationService": "source_service",
+    "ScheduleApplicationService": "schedule_service",
+    "StorageApplicationService": "storage_service",
+    "SubscriptionApplicationService": "subscription_service",
+    "ToolApplicationService": "tool_service",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{module_name}"), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

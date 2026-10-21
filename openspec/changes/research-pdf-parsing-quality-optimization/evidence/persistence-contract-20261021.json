@@ -1,0 +1,45 @@
+{
+  "schema_version": "research-document-persistence-contract/v1",
+  "reviewed_on": "2026-10-21",
+  "source_files": [
+    "backend/research/domain/document_fidelity.py",
+    "backend/research/application/parse_paper.py",
+    "infrastructure/research/catalog_store.py",
+    "backend/research/document/chunk_manifest.py",
+    "infrastructure/research/document_execution_adapter.py",
+    "interfaces/composition/research.py"
+  ],
+  "contract": {
+    "canonical_document_store": "existing ResearchDocument in FilesystemResearchCatalogStore; checksum-protected catalog JSON",
+    "artifact_store": "existing immutable content-addressed artifacts published through artifact port; no second fidelity store",
+    "chunk_projection": "existing scoped chunk_manifest.json under paper storage; source/parser/chunker pipeline fingerprint and chunk IDs",
+    "execution": "existing Harness ResearchParserExecutionAdapter and registered execution profile; direct parser subprocess disabled",
+    "default_rollout": "unchanged Marker default/parser selection; no new reading-order or OCR/ROI recovery profile enabled",
+    "fidelity_versioning": "schema_version, normalization_version, source_hash, parser_fingerprint, profile_fingerprint, content_checksum",
+    "bounded_payloads": {
+      "pages": 10000,
+      "blocks": 50000,
+      "max_text_chars": 1000000,
+      "max_locator_chars": 4096,
+      "max_math_chars": 100000,
+      "table_slots": 20000,
+      "table_map_references": 2000,
+      "chunk_fidelity_blocks": 128,
+      "chunk_fidelity_math_spans": 128,
+      "artifact_write_bytes_default": 16777216
+    }
+  },
+  "size_evidence": {
+    "kind": "cached synthetic concatenated 25-page raster batch diagnostic",
+    "production_or_heldout": false,
+    "largest_document_json_bytes": 6524995,
+    "largest_fidelity_json_bytes": 4286328,
+    "largest_chunk_payload_json_bytes": 2236052,
+    "limitation": "Samples are artificial batches, not true papers; 16 MiB is the configured artifact-write ceiling, not an empirically proven production safe size."
+  },
+  "known_gaps": [
+    "Runtime configured artifact limit may be lower than the default.",
+    "Parse, chunk manifest, and index updates do not share an atomic snapshot switch; do not treat these records as one promoted snapshot.",
+    "Parse cache fingerprint hashes implementation modules and selected env inputs but does not yet fully bind every instance policy/configuration identity."
+  ]
+}

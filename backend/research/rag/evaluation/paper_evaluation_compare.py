@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Iterable
+
+from backend.research.rag.evaluation.protocol_comparison import (
+    PairedComparisonConfig, PairedComparisonResult, compare_saved_scores,
+)
+from backend.research.rag.evaluation.protocol_dataset import DatasetManifest
+from backend.research.rag.evaluation.protocol_execution import EvaluationOptions
+from backend.research.rag.evaluation.protocol_scoring import EvaluationScore, MetricRegistry
 
 from backend.research.rag.evaluation.paper_evidence_eval import (
     EvidenceEvalResult,
@@ -68,6 +76,21 @@ class EvidenceABComparator:
         self._candidate = candidate
         self._baseline_name = baseline_name
         self._candidate_name = candidate_name
+
+    @staticmethod
+    def compare_saved_scores(
+        *, baseline_options: EvaluationOptions, candidate_options: EvaluationOptions,
+        baseline_scores: Iterable[EvaluationScore], candidate_scores: Iterable[EvaluationScore],
+        dataset_manifest: DatasetManifest, registry: MetricRegistry, config: PairedComparisonConfig,
+        baseline_name: str = "baseline", candidate_name: str = "candidate",
+    ) -> PairedComparisonResult:
+        """Formal comparison of saved scores; never calls either retriever."""
+        return compare_saved_scores(
+            baseline_options=baseline_options, candidate_options=candidate_options,
+            baseline_scores=baseline_scores, candidate_scores=candidate_scores,
+            dataset_manifest=dataset_manifest, registry=registry, config=config,
+            baseline_name=baseline_name, candidate_name=candidate_name,
+        )
 
     def compare(
         self,
@@ -152,5 +175,8 @@ __all__ = [
     "EvidenceABComparator",
     "EvidenceABDelta",
     "EvidenceABResult",
+    "PairedComparisonConfig",
+    "PairedComparisonResult",
     "compare_evidence_results",
+    "compare_saved_scores",
 ]

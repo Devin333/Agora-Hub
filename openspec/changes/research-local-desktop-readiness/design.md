@@ -214,3 +214,32 @@ restore 在受控 staging root 解包，拒绝绝对路径、越界、symlink/ju
 旧版本下的成功单元测试/构建仅保留为历史检查。安全迁移完成后，重新冻结源码、lockfile 与实际 dependency tree，重新运行前端全量检查、浏览器回归、受影响后端合同与必需 smoke；真实验收和部署只能引用最终候选。Next.js 16 的 production build 不再自动执行 lint，独立 ESLint 检查仍是必需门禁。
 
 依据为官方 advisory、Next.js support policy 和 version 16 upgrade guide；来源、检查时间与实际审计摘要记录在 `evidence/frontend-runtime-security-repair-20261013.json`。
+
+
+## 第 12 章真实配置调查后的限定修复
+
+2026-10-13 的实际 preflight 发现：根 `.env` 中配置 PostgreSQL DSN，但本机 Research 实际存储为 owned JSON/SQLite，且标准备份的外置数据库拒绝合同应继续有效。新增非秘密 runtime JSON `storage_mode`：默认 `root-environment` 完整保留根环境语义；显式 `owned-local` 只在桌面 effective child environment 中以空 `NEWS_DATABASE_DSN` 阻止后续根环境 loader 重新引入 DSN，绝不编辑根 `.env`、假造数据库或自动禁用 PostgreSQL-only capability。所有桌面命令共用这个解析边界，release config identity 绑定模式。模式漂移要求重新构建；没有环境变量别名或兼容旧 release 的降级路径。
+
+已有资料属于“部分 owner 有真实资料、部分 required owner 尚未初始化”，因此正式 `backup` 在真实初始化前仍须拒绝。初始化前保护使用单独标识的物理快照、原生 SQLite backup、源文件未变核对和归档 checksum；该保护快照不冒充标准 BackupManager 归档，也不核销 12.9。真实用户只能通过产品流程初始化账号和业务 owner，不补空 JSON、不生成演示身份。
+
+既有 paper catalog 发布过受 digest/commit marker 保护的 `research-chunk-manifest`，其 `payload.manifest_path` 是 owner 内绝对路径。新发布须在 storage owner 边界生成规范化 POSIX owner-relative `chunk-manifests/<scope>/<paper>/chunk_manifest.json`，再计算原有 artifact identity。为保留已有真实资料，本 change 显式允许唯一限定读取例外：旧绝对路径只可依据受信原 catalog owner root 映射到同一 scope/paper 的隔离目标，并在 envelope digest、类型、scope、commit marker、containment、无 reparse 与目标文件存在全部验证后投影为实际读取路径。不得改写受 checksum 保护的旧 artifact bytes/id，不接受任意 `chunk-manifests` 后缀匹配、外部 origin、跨 scope/paper 或 traversal。恢复进程只读 staged target；其他不可重定位绝对路径仍拒绝。parse-run history 维持原独立 owner，不能拿解析 run ID 与 analysis run store 作错误闭合比较。
+
+真实模型调查仅证明 provider 认证和模型清单 GET 可达：当前 `writer-primary` 指向的 `deepseek-v4-flash` 未出现在供应商返回清单，结构化 capability 为 `none/unqualified`，没有 release 或定价。不得把 Key 有效计为单论文分析可用，不得手填资格通过或开启 JSON-object fallback 绕过 native gate；真实分析前须完成原 provider structured-output owner 的资格和预算合同。
+
+
+实际 production build 还揭示 Windows 父进程使用默认 GBK 解码 Node/npm UTF-8 输出时，reader thread 可报错而子进程 exit 0。发布命令必须先捕获 bytes，再由主线程严格解码 stdout/stderr；任何无效 UTF-8 流应触发稳定 typed error，不得忽略、替换或将零退出码视为成功。真实 startup 则确认未登录 BFF session 不能合成缺少 `initialized` 的空 session；必须读取 auth application 的真实初始化状态，并保留 timeout、后端不可用、身份覆盖和已失效 cookie 合同。
+
+启动 Python 会在 release `app` 目录生成 `__pycache__`，从而违反发布资源的严格清单。desktop effective child environment 必须强制禁止 Python 在 immutable release 写 bytecode cache。严格 release inventory 继续拒绝未知额外文件；不删除或改写已经污染的旧 release 来伪造验证通过。最终候选须经过真实启动、停止、再次启动后的资源身份校验。
+
+
+本次明确生成输入排除规则仅适用于 frontend：`next-env.d.ts`、`*.tsbuildinfo`、`.next-dev.log` 和 `.next-dev-error.log` 在 staging copy 与 source-input digest 中同时排除。backend 同名文件仍属于 source identity；真实 `.tsx`、lockfile 和 config 改变仍触发漂移。production build 重新生成的 declaration/incremental files 仍进入完整 release manifest，篡改或未知额外文件继续拒绝。这个区分保留源码输入与最终发布资源的两种独立身份。
+
+第 12 章实际 production 请求还触发了 Next.js route-cache 写入 `.next/server/route-cache`。不可变发布禁止运行时缓存写入发布树；本机 profile 使用已有框架能力将缓存限制为有界内存或实例持有的外置目录，并保留完整的 manifest/checksum 校验。不得删除旧发布中的已产生缓存来伪造原始构建，也不得将未知缓存路径加入校验忽略表。修复后的真实页面访问、停止与再启动必须重新严格校验。
+
+真实 Windows stop 发现日志收集器在 producer 退出后因 EOF 自行结束。停止器必须区分不存在的已收敛 PID 和仍存在但不属于本实例的 PID：前者幂等继续，后者拒绝信号；在停止/失败 phase 中保留原 boot/release 身份。Python venv launcher 与真实运行 child 的收敛也必须受已证明的 launch ownership 和有界预算约束，不能只停止 shim 留下实际 API，也不能按全局进程名或端口清理。
+
+真实 v6 完整性复验进一步区分了两类写入：Next route-cache 修复后为零，但 API 审计默认 sink 仍以 release app 为相对根创建 `app/.newsroom/audit/audit.jsonl`。本机配置装配必须为真实 audit writer 绑定实例拥有的绝对运行路径，保留审计与显式配置优先级，不关闭 writer、不放宽资源清单、不删除失败版本内的文件。请求、stop/restart 和完整 inventory 的实机复验必须覆盖该路径。
+
+catalog 来源关联必须贯穿恢复验证与 production composition。staging validator 中一次性的 `trusted_origin_roots` 不能替代实际 reader 重建时的关联消费；已验证的 owner/legacy artifact 来源应通过持久化、受校验的恢复元数据传递给原 adapter。任何恢复来源仅允许映射到当前 owned target，不能授予原根读取权限；artifact/marker bytes 和 digest 保持不变。Research 业务层不读取桌面 manifest 或脚本，后续备份恢复也须维持该合同。
+
+真实 configured RAG factory 必须把 `settings.rag.transcript_root` 传给 lazy service 构造器。漏传会在首次 preload 或问答进入时触发 TypeError，不能仅靠直接 helper 测试证明可用。回归由真实 settings → configured composition → lazy provider → application service → transcript file store 贯穿，使用隔离 fixture 验证既有 owner/checksum 持久化合同和绝对 owned root；模型资格与真实付费问答仍独立验收。

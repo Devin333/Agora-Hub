@@ -155,7 +155,6 @@ def test_process_composition_publishes_profile_catalog_and_docker_denial_contrac
     diagnostics = composition.diagnostics()
     assert diagnostics["profiles"] == [
         "research-parser-marker",
-        "research-parser-mineru",
         "runtime-trusted-in-process",
     ]
     assert composition.manifest.metadata["profile_catalog"] == {
@@ -163,20 +162,23 @@ def test_process_composition_publishes_profile_catalog_and_docker_denial_contrac
         "sandboxed": [],
         "external_process": [
             "research-parser-marker",
-            "research-parser-mineru",
         ],
     }
     assert diagnostics["profile_catalog"] == {
         "research-parser-marker": composition.profile_registry.resolve(
             "research-parser-marker"
         ).to_dict(),
-        "research-parser-mineru": composition.profile_registry.resolve(
-            "research-parser-mineru"
-        ).to_dict(),
         "runtime-trusted-in-process": composition.profile_registry.resolve(
             "runtime-trusted-in-process"
         ).to_dict(),
     }
+
+    assert "research-parser-mineru" not in diagnostics["profiles"]
+    assert composition.manifest.metadata["parser_profiles"] == {
+        "marker": "research-parser-marker",
+    }
+    marker_profile = composition.profile_registry.resolve("research-parser-marker")
+    assert marker_profile.to_dict()["process_policy"]["allowed_argv_prefixes"] == [["/usr/local/bin/marker_single"]]
 
     docker = diagnostics["provider_capabilities"]["docker"]
     assert docker["enforces_network_deny"] is True

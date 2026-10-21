@@ -33,6 +33,7 @@ from backend.research.application.run_disposition import (
 from backend.research.application.single_paper_runtime import (
     AnalyzePaperRequest,
     ResearchAnalysisResult,
+    ResearchPhysicalGraphRunner,
     ResearchSinglePaperRuntime,
     build_research_harness_run_spec,
 )
@@ -65,12 +66,16 @@ from backend.research.document.cascade_parser import (
     PyMuPDFTextDocumentParser,
     SelectableTextPdfDocumentParser,
 )
+from backend.research.document.recovery_policy import DocumentRecoveryPolicy
+from backend.research.ports.document_parser import DocumentParserPort
 from backend.research.document.format_router import MultiFormatDocumentParser
 from backend.research.document.chunk_manifest import ChunkManifestManager
 from backend.research.document.chunker import PaperDocumentChunker
 from backend.research.document.latex_compiler import ArxivLatexDocumentCompiler
-from backend.research.document.marker_pdf_parser import MarkerPdfDocumentParser
-from backend.research.document.mineru_pdf_parser import MinerUPdfDocumentParser
+from backend.research.document.marker_pdf_parser import (
+    MarkerPdfDocumentParser,
+    MarkerReadingOrderProfile,
+)
 from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
@@ -82,6 +87,7 @@ from backend.research.ports.artifact_publication import (
     ResearchArtifactReadResolution,
 )
 from backend.research.ports.chunk_store import ChunkStorePort
+from backend.research.ports.artifact_store import ResearchArtifactStorePort
 from framework.llm.clients.openai_compatible import (
     LLMConfigurationError,
     LLMRetryPolicy,
@@ -162,9 +168,11 @@ from framework.harness.runtime import (
 from framework.shared.time import utc_now
 from framework.shared.graph_identity import GraphExecutionIdentity
 from infrastructure.research.document_execution_adapter import ResearchParserExecutionAdapter
+from backend.research.application.production_parsing_graph import (
+    ProductionParsingGraphApplicationService,
+)
 from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
-    RESEARCH_MINERU_PROFILE_ID,
     build_research_execution_composition,
 )
 from framework.harness.ports import HarnessTransitionPort
@@ -728,6 +736,7 @@ class ResearchRuntimeComposition:
         "_harness_wait_actor_scope_resolver",
         "_harness_wait_runtime_registry",
         "_reader_repair_service",
+        "_production_parsing_evaluation_service",
         "_runtime_event_publisher",
         "_resources",
         "_service",
@@ -748,6 +757,9 @@ class ResearchRuntimeComposition:
             ResearchGraphArtifactGovernanceService | None
         ) = None,
         reader_repair_service: ReaderRepairGraphApplicationService | None = None,
+        production_parsing_evaluation_service: (
+            ProductionParsingGraphApplicationService | None
+        ) = None,
         harness_wait_runtime_registry: HarnessWaitRuntimeRegistry | None = None,
         harness_wait_approval_resolver: DurableHarnessWaitApprovalResolver | None = None,
         harness_wait_actor_scope_resolver: _ResearchHarnessWaitActorScopeResolver | None = None,
@@ -822,6 +834,9 @@ class ResearchRuntimeComposition:
             graph_artifact_governance_service
         )
         self._reader_repair_service = reader_repair_service
+        self._production_parsing_evaluation_service = (
+            production_parsing_evaluation_service
+        )
         self._harness_wait_runtime_registry = harness_wait_runtime_registry
         self._harness_wait_approval_resolver = harness_wait_approval_resolver
         self._harness_wait_actor_scope_resolver = harness_wait_actor_scope_resolver
@@ -878,6 +893,14 @@ class ResearchRuntimeComposition:
         self,
     ) -> ReaderRepairGraphApplicationService | None:
         return self._reader_repair_service
+
+    @property
+    def production_parsing_evaluation_service(
+        self,
+    ) -> ProductionParsingGraphApplicationService | None:
+        """Composition-owned deterministic parse-only Harness service."""
+
+        return self._production_parsing_evaluation_service
 
     def harness_wait_service_factory(
         self,
@@ -1937,6 +1960,9 @@ def _build_configured_composition(
             api_url=settings.source.api_url,
             cache_size=settings.source.cache_size,
         )
+        catalog_store = FilesystemResearchCatalogStore(
+            settings.research_root / "paper-catalog"
+        )
         document_compiler = _compose_component(
             ResearchCapability.DOCUMENT_COMPILER,
             lambda: ResearchDocumentCompilerAdapter(
@@ -1945,6 +1971,7 @@ def _build_configured_composition(
                 pdf_parser=_build_research_pdf_parser(
                     settings.parser,
                     execution_composition=execution_composition,
+                    execution_evidence_store=catalog_store,
                 ),
                 allow_abstract_fallback=settings.parser.allow_abstract_fallback,
             ),
@@ -1979,9 +2006,6 @@ def _build_configured_composition(
                 fetch_policy=metadata_policy,
                 rate_limiter=source_runtime.reservation_ledger,
             )
-        )
-        catalog_store = FilesystemResearchCatalogStore(
-            settings.research_root / "paper-catalog"
         )
         from infrastructure.research.document_repository import FilesystemResearchDocumentRepository
 
@@ -2019,6 +2043,7 @@ def _build_configured_composition(
                 arxiv_parser=_build_research_multi_format_parser(
                     settings.parser,
                     execution_composition=execution_composition,
+                    execution_evidence_store=catalog_store,
                 ),
                 pdf_parser=SelectableTextPdfDocumentParser(),
             ),
@@ -2032,6 +2057,30 @@ def _build_configured_composition(
             chunk_manifest=ChunkManifestManager(
                 settings.research_root / "paper-catalog" / "chunk-manifests"
             ),
+        )
+        production_evaluation_parse_use_case = ParsePaperUseCase(
+            source_resolver=source_resolver,
+            paper_repository=catalog_store,
+            identity_repository=catalog_store,
+            source_snapshot_repository=catalog_store,
+            document_repository=documents,
+            evidence_repository=catalog_store,
+            document_parser=_build_research_pdf_parser(
+                settings.parser,
+                execution_composition=execution_composition,
+                execution_evidence_store=catalog_store,
+                allow_selectable_text_fallback=False,
+            ),
+            artifact_store=catalog_store,
+            event_sink=FilesystemResearchEventSink(
+                settings.research_root / "paper-catalog"
+            ),
+            catalog_projection=catalog_service,
+            chunker=PaperDocumentChunker(),
+            chunk_manifest=ChunkManifestManager(
+                settings.research_root / "paper-catalog" / "chunk-manifests"
+            ),
+            max_retries=0,
         )
 
         chunk_store, chunk_resources = _build_research_chunk_store(settings.rag)
@@ -2373,6 +2422,21 @@ def _build_configured_composition(
                 tenant_id=research_event_tenant_id(actor_metadata),
             )
 
+        production_parsing_evaluation_service = (
+            ProductionParsingGraphApplicationService(
+                parse_use_case=production_evaluation_parse_use_case,
+                harness_runner=ResearchPhysicalGraphRunner(
+                    event_port_factory=event_port_factory,
+                    node_output_resource=node_output_resource,
+                    side_effect_store=side_effect_store,
+                ),
+                side_effect_store=side_effect_store,
+                chunk_artifact_reader=catalog_store,
+                durable_event_reader=durable_events.event_store,
+                event_tenant_id=_RESEARCH_EVENT_TENANT_ID,
+            )
+        )
+
         reader_repair_service: ReaderRepairGraphApplicationService | None = None
         reader_repair_memory = build_reader_repair_memory_from_env()
         reader_repair_memory_commit = build_reader_repair_memory_commit_port_from_env()
@@ -2599,6 +2663,9 @@ def _build_configured_composition(
                 graph_artifact_components.governance_service
             ),
             reader_repair_service=reader_repair_service,
+            production_parsing_evaluation_service=(
+                production_parsing_evaluation_service
+            ),
             harness_wait_runtime_registry=harness_wait_runtime_registry,
             harness_wait_approval_resolver=harness_wait_approval_resolver,
             harness_wait_actor_scope_resolver=harness_wait_actor_scope_resolver,
@@ -2936,14 +3003,36 @@ def _build_research_pdf_parser(
     settings: ResearchParserSettings,
     *,
     execution_composition: Any | None = None,
-) -> CascadeDocumentParser:
+    execution_evidence_store: ResearchArtifactStorePort | None = None,
+    allow_selectable_text_fallback: bool = True,
+) -> DocumentParserPort:
     factories: dict[str, Callable[[], Any]] = {
         "marker": MarkerPdfDocumentParser,
-        "mineru": MinerUPdfDocumentParser,
     }
     profile_ids = {
         "marker": RESEARCH_MARKER_PROFILE_ID,
-        "mineru": RESEARCH_MINERU_PROFILE_ID,
+    }
+    recovery = settings.recovery
+    recovery_policy = DocumentRecoveryPolicy(
+        enabled=recovery.enabled,
+        parser_recovery_enabled=recovery.parser_recovery_enabled,
+        formula_roi_enabled=recovery.formula_roi_enabled,
+        table_cell_roi_enabled=recovery.table_cell_roi_enabled,
+        allowed_parser_backends=recovery.allowed_backends,
+        authorized_provider_ids=recovery.authorized_provider_ids,
+        max_attempts=recovery.max_attempts,
+        max_pages=recovery.max_pages,
+        max_regions=recovery.max_regions,
+        max_seconds=recovery.max_seconds,
+        max_memory_bytes=recovery.max_memory_bytes,
+        max_cpu_seconds=recovery.max_cpu_seconds,
+        max_turns=recovery.max_turns,
+        max_replans=recovery.max_replans,
+    )
+    resolved_profiles = {
+        backend: execution_composition.resolve_profile(profile_ids[backend])
+        for backend in settings.backends
+        if backend != "pymupdf" and execution_composition is not None
     }
     backends = [
         (
@@ -2952,19 +3041,56 @@ def _build_research_pdf_parser(
                 command_runner=(
                     ResearchParserExecutionAdapter(
                         execution_environment=execution_composition.execution_registry,
-                        profile=execution_composition.resolve_profile(profile_ids[backend]),
+                        profile=resolved_profiles[backend],
+                        resource_limits={
+                            "max_memory_bytes": recovery.max_memory_bytes,
+                            "max_processes": 1,
+                            **(
+                                {"max_cpu_seconds": recovery.max_cpu_seconds}
+                                if recovery.enabled
+                                else {}
+                            ),
+                        },
+                        max_timeout_seconds=min(
+                            settings.timeout_seconds,
+                            recovery.max_seconds if recovery.enabled else settings.timeout_seconds,
+                        ),
+                        max_attempts=recovery.max_attempts,
+                        allowed_backends=(backend,),
+                        execution_evidence_store=execution_evidence_store,
                     )
                     if execution_composition is not None
                     else None
-                )
+                ),
+                reading_order_profile=MarkerReadingOrderProfile(
+                    settings.reading_order_profile
+                ),
             ),
         )
         for backend in settings.backends
         if backend != "pymupdf"
     ]
+    if not backends:
+        return PyMuPDFTextDocumentParser()
+    if not allow_selectable_text_fallback:
+        if len(backends) != 1:
+            raise ValueError(
+                "production parsing evaluation requires exactly one physical parser backend"
+            )
+        return backends[0][1]
     return CascadeDocumentParser(
         backends,
         fallback=PyMuPDFTextDocumentParser(),
+        recovery_policy=recovery_policy,
+        backend_provider_ids={
+            backend: profile.provider_id
+            for backend, profile in resolved_profiles.items()
+            if profile.provider_id is not None
+        },
+        backend_profile_ids={
+            backend: profile_ids[backend]
+            for backend in resolved_profiles
+        },
     )
 
 
@@ -2972,11 +3098,13 @@ def _build_research_multi_format_parser(
     settings: ResearchParserSettings,
     *,
     execution_composition: Any | None = None,
+    execution_evidence_store: ResearchArtifactStorePort | None = None,
 ) -> CascadeArxivDocumentParser:
     return CascadeArxivDocumentParser(
         pdf_parser=_build_research_pdf_parser(
             settings,
             execution_composition=execution_composition,
+            execution_evidence_store=execution_evidence_store,
         )
     )
 
@@ -3022,6 +3150,26 @@ def _research_runtime_config_identity(settings: ResearchRuntimeSettings) -> str:
             "backends": list(settings.parser.backends),
             "allowAbstractFallback": settings.parser.allow_abstract_fallback,
             "maxDocumentBytes": settings.parser.max_document_bytes,
+            "readingOrderProfile": settings.parser.reading_order_profile,
+            "recovery": {
+                "enabled": settings.parser.recovery.enabled,
+                "parserRecoveryEnabled": settings.parser.recovery.parser_recovery_enabled,
+                "formulaRoiEnabled": settings.parser.recovery.formula_roi_enabled,
+                "tableCellRoiEnabled": settings.parser.recovery.table_cell_roi_enabled,
+                "allowedBackends": list(settings.parser.recovery.allowed_backends),
+                "authorizedProviders": list(
+                    settings.parser.recovery.authorized_provider_ids
+                ),
+                "maxAttempts": settings.parser.recovery.max_attempts,
+                "maxPages": settings.parser.recovery.max_pages,
+                "maxRegions": settings.parser.recovery.max_regions,
+                "maxSeconds": settings.parser.recovery.max_seconds,
+                "maxMemoryBytes": settings.parser.recovery.max_memory_bytes,
+                "maxCpuSeconds": settings.parser.recovery.max_cpu_seconds,
+                "maxProcesses": 1,
+                "maxTurns": settings.parser.recovery.max_turns,
+                "maxReplans": settings.parser.recovery.max_replans,
+            },
         },
         "rag": {
             "backend": settings.rag.backend,

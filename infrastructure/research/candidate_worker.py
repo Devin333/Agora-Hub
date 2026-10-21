@@ -378,7 +378,82 @@ _TASK_PLAN_OUTLINE_SCHEMA = _object_schema(
     }
 )
 
-_SCHEMAS: dict[str, dict[str, Any]] = {
+_SCHEMA_ANNOTATION_KEYWORDS = frozenset(
+    {"$comment", "default", "description", "examples", "title"}
+)
+_SCHEMA_VALUE_KEYWORDS = frozenset(
+    {
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "contentSchema",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+)
+_SCHEMA_ARRAY_KEYWORDS = frozenset(
+    {"allOf", "anyOf", "oneOf", "prefixItems"}
+)
+_SCHEMA_MAP_KEYWORDS = frozenset(
+    {
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "patternProperties",
+        "properties",
+    }
+)
+
+
+def _project_provider_schema(value: Any) -> Any:
+    """Drop schema annotations while preserving non-schema object literals."""
+
+    if not isinstance(value, Mapping):
+        return deepcopy(value)
+    projected: dict[str, Any] = {}
+    for key, item in value.items():
+        if key in _SCHEMA_ANNOTATION_KEYWORDS:
+            continue
+        if key in _SCHEMA_VALUE_KEYWORDS:
+            if isinstance(item, list):
+                projected[key] = [
+                    _project_provider_schema(member) for member in item
+                ]
+            else:
+                projected[key] = _project_provider_schema(item)
+            continue
+        if key in _SCHEMA_ARRAY_KEYWORDS and isinstance(item, list):
+            projected[key] = [
+                _project_provider_schema(member) for member in item
+            ]
+            continue
+        if key in _SCHEMA_MAP_KEYWORDS and isinstance(item, Mapping):
+            projected[key] = {
+                name: _project_provider_schema(member)
+                for name, member in item.items()
+            }
+            continue
+        if key == "dependencies" and isinstance(item, Mapping):
+            projected[key] = {
+                name: (
+                    _project_provider_schema(member)
+                    if isinstance(member, Mapping)
+                    else deepcopy(member)
+                )
+                for name, member in item.items()
+            }
+            continue
+        projected[key] = deepcopy(item)
+    return projected
+
+
+_RAW_SCHEMAS: dict[str, dict[str, Any]] = {
     "candidate_three_minute_read": _THREE_MINUTE_READ_SCHEMA,
     "candidate_taxonomy": _TAXONOMY_SCHEMA,
     "candidate_experiment_claims": _EXPERIMENT_SCHEMA,
@@ -386,6 +461,12 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
     "candidate_task_plan": _TASK_PLAN_OUTLINE_SCHEMA,
     **reader_repair_candidate_task_schemas(),
 }
+_SCHEMAS = deepcopy(_RAW_SCHEMAS)
+# Input budgeting includes the structured response schema. Keep the full reader
+# repair validation contract while omitting annotation-only provider metadata.
+_SCHEMAS[READER_REPAIR_PATCH_CANDIDATE_TASK] = _project_provider_schema(
+    _RAW_SCHEMAS[READER_REPAIR_PATCH_CANDIDATE_TASK]
+)
 
 # Expose immutable task/schema references for composition/tests without
 # allowing a caller to mutate the worker's validation contract.

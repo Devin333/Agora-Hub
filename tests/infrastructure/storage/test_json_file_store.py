@@ -25,6 +25,38 @@ from infrastructure.storage.json_file_store import (
 )
 
 
+def test_package_import_keeps_optional_storage_backends_out_of_json_boundary() -> None:
+    code = r"""
+import importlib.abc
+import json
+import sys
+
+class BlockCryptography(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'cryptography' or fullname.startswith('cryptography.'):
+            raise ImportError('cryptography is outside the JSON storage import boundary')
+        return None
+
+sys.meta_path.insert(0, BlockCryptography())
+from infrastructure.storage.json_file_store import locked_json_file
+print(json.dumps({
+    'callable': callable(locked_json_file),
+    'redis_loaded': 'infrastructure.storage.redis_llm_cache' in sys.modules,
+}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-s", "-c", code],
+        cwd=Path(__file__).resolve().parents[3],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"callable": True, "redis_loaded": False}
+
+
 @pytest.fixture
 def owned_storage_root(tmp_path: Path) -> Iterator[Path]:
     # Never shorten pytest's root. Teardown touches only this new fixture's tree.

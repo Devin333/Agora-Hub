@@ -1,0 +1,249 @@
+{
+  "schema_version": "research-pdf-frozen-b0-rescore-evidence/v1",
+  "execution_identity": "historical_backend_raw_rescore_not_production_B1",
+  "requested_pages": 215,
+  "scorer_exit_code": 0,
+  "scorer_commit": "f133a71e9e91c3621c7ce8994200a7b394a06eb3",
+  "scorer_image": "sha256:6116ad72172e763b5c43e963d5efebf2093f2362b975f58156ce4f6c9142e617",
+  "runtime_config_sha256": "e151a37b567d6044df95e55a4974213383eecfeeeb60507c9b0099e57c9d64b4",
+  "predictions_unchanged": true,
+  "prediction_identity_ledger_sha256": "b251524e156c45ef705ed1b1ea04b83a0ea367b9c0615a10771d21fdcd0e5673",
+  "local_artifact_root": ".artifacts/pdf-parsing-quality-optimization/official-b0-frozen-runtime-v1",
+  "categories": {
+    "text_block": {
+      "matched_sample_rows": 1555,
+      "distinct_scored_pages": 191,
+      "official_page_metric_denominators": {
+        "Edit_dist": {
+          "ALL": 191
+        }
+      },
+      "official_page_metrics": {
+        "Edit_dist": 0.1350238770286368
+      },
+      "official_sample_aggregates": {
+        "Edit_dist": {
+          "ALL_page_avg": 0.13502387702863677,
+          "edit_whole": 0.14886794615320498,
+          "edit_sample_avg": 0.2325199584914511
+        }
+      },
+      "denominator_warning": "Scorer matched rows are not independently counted gold objects; pages absent from a metric are not inferred to be successful or not_applicable."
+    },
+    "display_formula": {
+      "matched_sample_rows": 597,
+      "distinct_scored_pages": 56,
+      "official_page_metric_denominators": {
+        "Edit_dist": {
+          "ALL": 56
+        },
+        "CDM": {
+          "ALL": 56
+        }
+      },
+      "official_page_metrics": {
+        "CDM": 0.6369432296808887,
+        "Edit_dist": 0.4204874912251591
+      },
+      "official_sample_aggregates": {
+        "Edit_dist": {
+          "ALL_page_avg": 0.42048749122515916,
+          "edit_whole": 0.5003367980351721,
+          "edit_sample_avg": 0.472636307056867
+        },
+        "CDM": {
+          "all": 0.5786448911222779
+        }
+      },
+      "denominator_warning": "Scorer matched rows are not independently counted gold objects; pages absent from a metric are not inferred to be successful or not_applicable."
+    },
+    "table": {
+      "matched_sample_rows": 123,
+      "distinct_scored_pages": 97,
+      "official_page_metric_denominators": {
+        "TEDS": {
+          "ALL": 97
+        },
+        "Edit_dist": {
+          "ALL": 97
+        },
+        "TEDS_structure_only": {
+          "ALL": 97
+        }
+      },
+      "official_page_metrics": {
+        "Edit_dist": 0.2156506151291205,
+        "TEDS": 0.7337957380978444,
+        "TEDS_structure_only": 0.8577733151693889
+      },
+      "official_sample_aggregates": {
+        "TEDS": {
+          "all": 0.7521874387769479
+        },
+        "TEDS_structure_only": {
+          "all": 0.8651866277058989
+        },
+        "Edit_dist": {
+          "ALL_page_avg": 0.21565061512912048,
+          "edit_whole": 0.3463475585877815,
+          "edit_sample_avg": 0.2025216585033725
+        }
+      },
+      "denominator_warning": "Scorer matched rows are not independently counted gold objects; pages absent from a metric are not inferred to be successful or not_applicable."
+    },
+    "reading_order": {
+      "matched_sample_rows": 212,
+      "distinct_scored_pages": 212,
+      "official_page_metric_denominators": {
+        "Edit_dist": {
+          "ALL": 212
+        }
+      },
+      "official_page_metrics": {
+        "Edit_dist": 0.274559386858204
+      },
+      "official_sample_aggregates": {
+        "Edit_dist": {
+          "ALL_page_avg": 0.274559386858204,
+          "edit_whole": 0.27380952380952384,
+          "edit_sample_avg": 0.2745593868582041
+        }
+      },
+      "denominator_warning": "Scorer matched rows are not independently counted gold objects; pages absent from a metric are not inferred to be successful or not_applicable."
+    }
+  },
+  "stage_execution": {
+    "page_match": {
+      "workers": 4,
+      "page_count": 215,
+      "quick_match_truncated_timeout_sec": 300,
+      "match_timeout_sec": 420,
+      "fallbacks": {
+        "quick_match_timeout": {
+          "count": 0,
+          "cases": []
+        },
+        "page_timeout": {
+          "count": 0,
+          "cases": []
+        }
+      }
+    },
+    "metrics": {
+      "display_formula": {
+        "CDM": {
+          "workers": 1,
+          "timeout_sec": null,
+          "sample_count": 597,
+          "timeout_case_count": 0,
+          "timeout_cases": [],
+          "error_case_count": 0,
+          "error_cases": [],
+          "exception_case_count": 0,
+          "exception_cases": []
+        }
+      },
+      "table": {
+        "TEDS": {
+          "workers": 1,
+          "timeout_sec": 120.0,
+          "sample_count": 123,
+          "timeout_case_count": 0,
+          "timeout_cases": [],
+          "error_case_count": 0,
+          "error_cases": [],
+          "exception_case_count": 0,
+          "exception_cases": []
+        }
+      }
+    }
+  },
+  "output_identity": {
+    "result/predictions_quick_match_display_formula_per_page_edit.json": {
+      "sha256": "33e139b3c6478b58c274b4f789bc9bfdfde0849717dc29ac9ab7eab56eaaff92",
+      "size_bytes": 4222
+    },
+    "result/predictions_quick_match_display_formula_per_sample_CDM.json": {
+      "sha256": "d9bfd83e3cda1ce8dc90c6a3a2624517f3ef88cab25fe1ed0ac36c7675e442db",
+      "size_bytes": 38529
+    },
+    "result/predictions_quick_match_display_formula_result.json": {
+      "sha256": "a8ea027bc6c3d3cb464dc87aceb0ae5f27a7d54da3df8db8ddf633b84e872692",
+      "size_bytes": 1207288
+    },
+    "result/predictions_quick_match_metric_result.json": {
+      "sha256": "b7d9fea74eb71d0cd9d5f0838f9614ffc483344a48fb60b8189cad926f200dc5",
+      "size_bytes": 9526
+    },
+    "result/predictions_quick_match_reading_order_per_page_edit.json": {
+      "sha256": "5b53ac0aaa589d16d21f34bdc28abbd46c8a64ea9189e07f06766780f294da52",
+      "size_bytes": 14556
+    },
+    "result/predictions_quick_match_reading_order_result.json": {
+      "sha256": "16c4f3ae928ceaca8b4ff4ecae7aeaee881bde5d96f2258a0ccdd0d3907458ef",
+      "size_bytes": 136297
+    },
+    "result/predictions_quick_match_run_summary.json": {
+      "sha256": "4750349152a3d65b80f6b97edff68d272f5eacceaaf5fbb7557a4610f723f8f1",
+      "size_bytes": 10727
+    },
+    "result/predictions_quick_match_runtime_environment.json": {
+      "sha256": "b4b5ea40f4ddb9a4875e5a6cbf7109df9d1da5f7df3b9db8ede5df4498d6284c",
+      "size_bytes": 6927
+    },
+    "result/predictions_quick_match_stage_execution.json": {
+      "sha256": "93dd9e11d34fe2f1279ee18c374fd32f563920c7785a3768a8a219143800a24b",
+      "size_bytes": 1242
+    },
+    "result/predictions_quick_match_table_per_page_edit.json": {
+      "sha256": "2c40567183374098bf5a2c3369debfff9dce067caeea22498c7c3fb57e5e95ff",
+      "size_bytes": 7283
+    },
+    "result/predictions_quick_match_table_per_table_TEDS.json": {
+      "sha256": "f2f5883564fa75f0e188d1994bf257d7af87ea5c7068748b73327f22442e2feb",
+      "size_bytes": 18423
+    },
+    "result/predictions_quick_match_table_result.json": {
+      "sha256": "64a8d3a51f461acd26a1fbfd63705ffc91539aced3cad244a99e8a3e255985b2",
+      "size_bytes": 1702798
+    },
+    "result/predictions_quick_match_text_block_per_page_edit.json": {
+      "sha256": "258e723f38a2e58f26e50598ed3ac3860f17b4048c3e3d61be702464a3aeb30c",
+      "size_bytes": 14647
+    },
+    "result/predictions_quick_match_text_block_result.json": {
+      "sha256": "b47db489f6a8a1509b49621602b2a063af2df31925fab757de3937f6c7d3e56b",
+      "size_bytes": 2772305
+    }
+  },
+  "comparison_conclusion": {
+    "page_aggregates": "Reproduces the recorded historical B0 page metrics. It does not establish candidate improvement.",
+    "production_baseline": "not_established_by_this_rescore",
+    "independent_document_heldout": "not_evaluated",
+    "release_acceptance": "blocked",
+    "blockers": [
+      "historical_preoptimization_production_B1_not_frozen",
+      "acceptance_not_preregistered_before_algorithm_changes",
+      "independent_annotated_document_heldout_unavailable"
+    ]
+  },
+  "supervision": {
+    "schema_version": "research-official-scorer-supervision/v1",
+    "container_name": "newsroom-pdf-official-b0-v1",
+    "container_started_at": "2026-10-21T16:22:38.630929503Z",
+    "wall_clock_budget_seconds": 3600,
+    "remaining_at_attachment_seconds": 2575.639,
+    "status": "container_wait_terminal",
+    "limitation": "supervisor attached after launch; no claim it existed before initial start",
+    "wait_exit": 0,
+    "container_exit": "0",
+    "wait_stderr": ""
+  },
+  "annotation_sha256": "a45cd84b04ad8b793e775089640e6b681209abea33ead54c1828ddca35fae496",
+  "historical_parser_identity": {
+    "image_digest": "unknown",
+    "weights_digest": "unknown",
+    "normalizer": "historical_raw_markdown_unchanged",
+    "note": "The current frozen Marker image/cache were not used to generate these historical predictions and are not backfilled as B0 provenance."
+  }
+}

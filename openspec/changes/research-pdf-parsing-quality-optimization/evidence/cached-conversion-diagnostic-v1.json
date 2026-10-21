@@ -1,0 +1,202 @@
+{
+  "schema_version": "research-cached-conversion-frozen-diagnostic-evidence/v2",
+  "status": "official_scoring_succeeded",
+  "execution_kind": "cached_artifact_diagnostic",
+  "production_execution": false,
+  "harness_execution": false,
+  "parser_rerun": false,
+  "heldout": false,
+  "downstream_projection_captured": false,
+  "requested_pages": 215,
+  "terminal_pages": 215,
+  "render_status": {
+    "partial": 214,
+    "missing_output": 1
+  },
+  "diagnostic_run_sha256": "98295df61d95c415c0be4805ce78d577c4812bfa3a144e391ae90fb134f47986",
+  "official_scorer_execution": {
+    "schema_version": "research-official-score-execution/v1",
+    "status": "succeeded",
+    "execution_kind": "cached_conversion_diagnostic_official_rescore",
+    "production_execution": false,
+    "heldout": false,
+    "image": "sha256:6116ad72172e763b5c43e963d5efebf2093f2362b975f58156ce4f6c9142e617",
+    "scorer_commit": "f133a71e9e91c3621c7ce8994200a7b394a06eb3",
+    "config_sha256": "e151a37b567d6044df95e55a4974213383eecfeeeb60507c9b0099e57c9d64b4",
+    "adapter_source_sha256": "eb8507152c995af545cea87d9d28450ac67f32eedce62222ab4529014ae2ab4b",
+    "started_at": "2026-10-21T19:10:06.802232+00:00",
+    "wall_clock_budget_seconds": 3660,
+    "scorer_timeout_seconds": 3600,
+    "command": [
+      "docker",
+      "run",
+      "--rm",
+      "--name",
+      "newsroom-pdf-cached-conversion-score-v4",
+      "--network",
+      "none",
+      "--read-only",
+      "--tmpfs",
+      "/tmp:rw,noexec,nosuid,size=2147483648",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      "--pids-limit",
+      "256",
+      "--cpus",
+      "4",
+      "--memory",
+      "8g",
+      "--env",
+      "GIT_CONFIG_COUNT=1",
+      "--env",
+      "GIT_CONFIG_KEY_0=core.autocrlf",
+      "--env",
+      "GIT_CONFIG_VALUE_0=true",
+      "--env",
+      "MPLCONFIGDIR=/tmp/matplotlib",
+      "--env",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "--mount",
+      "type=bind,source=F:/benchmarks/OmniDocBench,target=/workspace,readonly",
+      "--mount",
+      "type=bind,source=F:/github/NewsRoom/.artifacts/pdf-parsing-quality-optimization/cached-conversion-frozen-runtime-v3/predictions,target=/predictions,readonly",
+      "--mount",
+      "type=bind,source=F:/benchmarks/dataset/OmniDocBench.json,target=/input/OmniDocBench.json,readonly",
+      "--mount",
+      "type=bind,source=F:/github/NewsRoom/backend/research/rag/evaluation/omnidocbench_adapter.py,target=/adapter/omnidocbench_adapter.py,readonly",
+      "--mount",
+      "type=bind,source=F:/github/NewsRoom/.artifacts/pdf-parsing-quality-optimization/cached-conversion-frozen-runtime-v3,target=/output",
+      "--entrypoint",
+      "/opt/miniconda310/envs/omnidocbench_v16_smoke_20260408_py310/bin/python",
+      "sha256:6116ad72172e763b5c43e963d5efebf2093f2362b975f58156ce4f6c9142e617",
+      "/output/run-frozen-official-adapter-v4.py"
+    ],
+    "exit_code": 0,
+    "termination": "docker_cli_wait_terminal",
+    "ended_at": "2026-10-21T19:33:02.925192+00:00",
+    "wall_seconds": 1376.122839399999
+  },
+  "official_metrics": {
+    "text_edit_dist_page_avg": 0.040253249485851524,
+    "formula_edit_dist_page_avg": 0.21156888115236175,
+    "formula_cdm": 0.894844221105528,
+    "table_edit_dist_page_avg": 0.19590056564614897,
+    "table_teds": 0.7505984527365832,
+    "table_teds_structure_only": 0.8319139044667575,
+    "reading_order_edit_dist_page_avg": 0.18610708501948878
+  },
+  "comparison_to_cached_v1": {
+    "baseline_metrics": {
+      "text_edit_dist_page_avg": 0.331307827883858,
+      "formula_edit_dist_page_avg": 0.2616290850054083,
+      "formula_cdm": 0.883273031825796,
+      "table_edit_dist_page_avg": 0.6319567138455772,
+      "table_teds": 0.39398077453450525,
+      "table_teds_structure_only": 0.42553362771200814,
+      "reading_order_edit_dist_page_avg": 0.42023977622765174
+    },
+    "delta_v3_minus_v1": {
+      "text_edit_dist_page_avg": -0.29105457839800647,
+      "formula_edit_dist_page_avg": -0.050060203853046575,
+      "formula_cdm": 0.011571189279731997,
+      "table_edit_dist_page_avg": -0.4360561481994282,
+      "table_teds": 0.35661767820207796,
+      "table_teds_structure_only": 0.40638027675474936,
+      "reading_order_edit_dist_page_avg": -0.23413269120816296
+    },
+    "interpretation": "Edit_dist 越低越好，其余指标越高越好；该比较只说明当前转换/保真修复后的 exposed dev 诊断变化，不是 baseline gain 或正式 acceptance。"
+  },
+  "batch_render_status": [
+    {
+      "batch": 1,
+      "pages": 25,
+      "render_status": {
+        "partial": 25
+      }
+    },
+    {
+      "batch": 2,
+      "pages": 25,
+      "render_status": {
+        "partial": 25
+      }
+    },
+    {
+      "batch": 3,
+      "pages": 25,
+      "render_status": {
+        "partial": 25
+      }
+    },
+    {
+      "batch": 4,
+      "pages": 25,
+      "render_status": {
+        "missing_output": 1,
+        "partial": 24
+      }
+    },
+    {
+      "batch": 5,
+      "pages": 25,
+      "render_status": {
+        "partial": 25
+      }
+    },
+    {
+      "batch": 6,
+      "pages": 25,
+      "render_status": {
+        "partial": 25
+      }
+    },
+    {
+      "batch": 7,
+      "pages": 25,
+      "render_status": {
+        "partial": 25
+      }
+    },
+    {
+      "batch": 8,
+      "pages": 25,
+      "render_status": {
+        "partial": 25
+      }
+    },
+    {
+      "batch": 9,
+      "pages": 15,
+      "render_status": {
+        "partial": 15
+      }
+    }
+  ],
+  "rootfix_observation": "当前转换保留空 Marker equation 为显式 unavailable equation block，并将真实 table cell math 不平衡降级为 unreadable cell；批次003/004/008不再因单个缺失内容导致整份 document fidelity unavailable。batch004仍有1页仅含不可用空公式，故显式记为 missing_output，未用 raw fallback 补齐。",
+  "formal_acceptance": "blocked",
+  "interpretation": "这是 frozen historical raw -> current ResearchDocument/renderer 的 exposed dev diagnostic；不是 production B1、不是 parser rerun、不是 held-out，也没有 downstream projection 或默认晋升证据。",
+  "official_denominators": {
+    "requested_terminal_pages": 215,
+    "evaluable_pages": {
+      "text": 191,
+      "formula": 56,
+      "table": 97,
+      "reading_order": 212
+    },
+    "matched_rows_v1": {
+      "text": 1555,
+      "formula": 597,
+      "table": 123,
+      "reading_order": 212
+    },
+    "matched_rows_v3": {
+      "text": 1554,
+      "formula": 597,
+      "table": 123,
+      "reading_order": 212
+    },
+    "missing_output_page_scored_in_matched_rows": false
+  }
+}

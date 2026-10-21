@@ -1,0 +1,90 @@
+{
+  "schema_version": "research-marker-capability-probes/v1",
+  "execution_kind": "runtime_capability_diagnostic_not_production",
+  "production_execution": false,
+  "quality_metrics_computed": false,
+  "parser_rerun": false,
+  "image": "sha256:52a95ef88e0075a6da31fcc055a561ebd4cfb62f0d598ad2ea60df5364bd1315",
+  "boundary": {
+    "network": "none",
+    "rootfs": "read_only",
+    "tmpfs_bytes": 67108864,
+    "capabilities": "ALL_dropped",
+    "no_new_privileges": true,
+    "pids_limit": 1,
+    "cpus": 1,
+    "memory": "2g",
+    "gpu_request": false
+  },
+  "probes": [
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-python3.log",
+      "log_sha256": "1b87a69163d8353ef77f6e68fd5dfbecb21150346f8b16ca6bb7c38c929c75c3",
+      "exit_code": 1,
+      "operation": "import_torch_default_threads",
+      "observed": "OpenBLAS pthread_create failures; torch import failed"
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-single-thread.log",
+      "log_sha256": "c675d845f5d2eebb1ed18e9ff1d8607faa3501d88cc24d421571d4152f9102a4",
+      "exit_code": 0,
+      "operation": "import_torch_explicit_single_thread",
+      "observed": "torch 2.11.0+cu129 imported; cuda_available=False; torch_threads=1"
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-clean-env.log",
+      "log_sha256": "eecd6d3c38e2dc4733e5bdc670339ac312232d862df075681f7c6fb708ac2ab4",
+      "exit_code": 127,
+      "operation": "clean_environment_marker_help",
+      "observed": "env -i without trusted PATH cannot find marker_single"
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-clean-env-fixed-path.log",
+      "log_sha256": "fcd859871ad8e3c7b3052b010741c30285001628f0dc3f3ceaf95044c0853b4c",
+      "exit_code": 0,
+      "operation": "clean_environment_trusted_path_marker_help",
+      "observed": "trusted fixed PATH and single-thread BLAS allow CLI --help; not a PDF parse"
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-cache-paths.log",
+      "log_sha256": "d588d4bd19af9cb303f528272e2ec639bbe7a12f63916672aad802a5ac7b7543",
+      "exit_code": 0,
+      "operation": "clean_environment_surya_cache_settings",
+      "observed": "HF_HOME alone leaves MODEL_CACHE_DIR=/root/.cache/datalab/models; model cache directory must map to an admitted read-only cache mount. Settings probe only; no model inference."
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-font-paths.log",
+      "log_sha256": "476810c53c5dac4fdbbc576696192c37ed6816ddf8ace19a17ba9a8b31efd7b2",
+      "exit_code": 0,
+      "operation": "marker_font_default_settings",
+      "observed": "Marker requests GoNotoCurrent-Regular.ttf when its package-default FONT_PATH is missing; settings/source inspection only."
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-offline-font-cache.log",
+      "log_sha256": "7071bb983cd0de1b20bafc42393df86ab536005c5fa9794dd1f51692739a704e",
+      "exit_code": 1,
+      "operation": "offline_font_dir_only",
+      "observed": "FONT_DIR does not recompute independently declared FONT_PATH; local asset was not found and read-only root prevented writes. No PDF parse."
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-font-settings-source.log",
+      "log_sha256": "b54e56cfa8e679061efee51c5bc6628ab49bcb4066f7d4b243cfa725af704102",
+      "exit_code": 0,
+      "operation": "marker_font_path_field_source",
+      "observed": "Frozen package source shows FONT_PATH is an independent environment-configurable field initialized at class definition. No inference."
+    },
+    {
+      "log": ".artifacts/pdf-parsing-quality-optimization/marker-capability-probe-offline-explicit-font-path.log",
+      "log_sha256": "8057ab1179a37ca6ac24fac640223feb53668adf3ba002a4bc090f7493cc1cc5",
+      "exit_code": 0,
+      "operation": "offline_explicit_font_path",
+      "observed": "Explicit FONT_PATH and MODEL_CACHE_DIR resolve inside the separately frozen read-only cache. download_font() finds the existing asset with network=none. Not a PDF parse."
+    }
+  ],
+  "constraints": [
+    "No security limit was relaxed to make a probe succeed.",
+    "Restrictive single-thread environment and trusted executable PATH are runtime admission fixes, not parser quality gains.",
+    "No GPU execution, actual PDF parsing, Harness receipt, or production B1 is claimed by these direct capability probes.",
+    "Do not silently discard a requested GPU and report the CPU process as GPU execution."
+  ]
+}

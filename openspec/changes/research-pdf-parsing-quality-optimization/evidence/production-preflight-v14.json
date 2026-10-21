@@ -1,0 +1,60 @@
+{
+  "schema_version": "research-production-parsing-preflight-evidence/v2",
+  "status": "succeeded_degraded",
+  "run_id": "pdf-current-dev-pilot-1-v14",
+  "execution_kind": "production",
+  "track": "production_document",
+  "baseline_identity": "B1_current_not_historical_preoptimization",
+  "exposure": "exposed_dev",
+  "document_id": "pdf-b2341aedbaac550548f22ab4",
+  "source_sha256": "b2341aedbaac550548f22ab45ed65126fe5575cb2876251168731d814b4b6797",
+  "expected_pages": 1,
+  "terminal_pages": 1,
+  "parser_backend": "marker",
+  "receipt_status": "succeeded",
+  "receipt_exit_code": 0,
+  "source_hash_verified": true,
+  "durable_request_receipt_verified": true,
+  "harness_plan_execute_verify_verified": true,
+  "persisted_chunk_payload_verified": true,
+  "document_status": "degraded",
+  "fidelity_status": "validated",
+  "quality_score": 0.5795,
+  "chunk_count": 5,
+  "chunk_activation_status": "blocked",
+  "quality_dimensions": {
+    "content": {
+      "body_chars": 794,
+      "element_count": 5,
+      "hard_failure_count": 2,
+      "locator_coverage": 0.8,
+      "missing_formula_source_count": 0,
+      "section_count": 1,
+      "status": "degraded"
+    },
+    "execution": {
+      "attempt_count": 0,
+      "cascade_degraded": false,
+      "failed_attempt_count": 0,
+      "status": "completed",
+      "used_backend": "marker"
+    },
+    "structure_and_source": {
+      "block_count": 10,
+      "fidelity_available": true,
+      "fidelity_schema_version": "research-document-fidelity.v1",
+      "page_count": 1,
+      "reason_codes": [],
+      "source_hash_matches_lineage": true,
+      "status": "validated",
+      "table_grid_count": 0
+    }
+  },
+  "formal_acceptance": "blocked",
+  "interpretation": "真实 production composition 已完成物理 Marker 执行、ResearchDocument 和 chunks 落盘；文档质量为 degraded。chunk activation 另因 index_snapshot_atomic_activation_unavailable blocked。此为接线/完整性证据，不是通过质量门或默认晋升证据。",
+  "activation_blocker": "index_snapshot_atomic_activation_unavailable",
+  "quality_failure_reasons": [
+    "body_too_short",
+    "sections_insufficient"
+  ]
+}

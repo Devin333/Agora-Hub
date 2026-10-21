@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend.research.rag.cli import run_live_answer_eval as live_answer_cli
-from backend.research.rag.evaluation import live_answer_eval
+from backend.research.rag.evaluation import evidence_eval_runner, live_answer_eval
 from backend.research.rag.evaluation.live_answer_eval import run_live_answer_eval
 from backend.research.rag.evaluation.paper_evidence_eval import EvidenceQAPair
 
@@ -50,7 +50,86 @@ def test_run_live_answer_eval_uses_injected_ask_callable(tmp_path) -> None:
     assert result.fixture_papers_dir.exists()
     payload = json.loads(result.evidence_report_path.read_text(encoding="utf-8"))
     assert payload["metadata"]["answer_eval_mode"] == "live"
+    assert payload["metadata"]["track"] == "end_to_end"
+    assert payload["metadata"]["execution_profile"] == "fixture"
+    assert payload["metadata"]["component_identity"]["answer_adapter"] == (
+        "injected_live_answer_callable"
+    )
+    assert payload["metadata"]["gold_context_used"] is True
+    assert payload["metadata"]["production_qualification"]["eligible"] is False
     assert payload["answer"]["failure_reason_counts"] == {}
+
+
+def test_run_live_answer_eval_classifies_configured_model_and_hash_retrieval_as_fixture(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fake_build_live_answer_ask(chunks, **kwargs):
+        assert chunks
+        assert kwargs["limit"] == 8
+        chunks_by_paper = {}
+        for chunk in chunks:
+            chunks_by_paper.setdefault(chunk.paper_id, []).append(chunk)
+
+        def ask(pair: EvidenceQAPair) -> dict:
+            if "unrelated future model" in pair.question:
+                return {
+                    "status": "abstained",
+                    "generation_mode": "gated_harness",
+                    "answer": None,
+                    "answer_candidate": {"abstained": True, "answer_text": ""},
+                    "citations": [],
+                    "passages": [],
+                    "gate_results": [],
+                    "decision": {"decision_type": "abstain"},
+                    "transcript_id": "rag-transcript://test/abstain",
+                }
+            paper_chunks = chunks_by_paper[pair.paper_id]
+            answer = " ".join(chunk.content for chunk in paper_chunks)
+            citations = [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "source_locator": chunk.metadata.get("source_locator", ""),
+                }
+                for chunk in paper_chunks
+            ]
+            return {
+                "status": "answered",
+                "generation_mode": "gated_harness",
+                "answer": answer,
+                "answer_candidate": {"abstained": False, "answer_text": answer},
+                "citations": citations,
+                "passages": citations,
+                "gate_results": [{"check_id": "answer.grounded", "passed": True}],
+                "decision": {"decision_type": "answer"},
+                "transcript_id": "rag-transcript://test/answer",
+            }
+
+        return ask
+
+    monkeypatch.setattr(
+        evidence_eval_runner,
+        "_build_live_answer_ask",
+        fake_build_live_answer_ask,
+    )
+
+    result = run_live_answer_eval(output_dir=tmp_path / "live")
+
+    assert result.passed is True
+    payload = json.loads(result.evidence_report_path.read_text(encoding="utf-8"))
+    metadata = payload["metadata"]
+    assert metadata["track"] == "end_to_end"
+    assert metadata["execution_profile"] == "fixture"
+    assert metadata["component_identity"]["retrieval_adapter"] == (
+        "in_memory_chunk_store_with_sha256_hash_field_index"
+    )
+    assert metadata["component_identity"]["answer_adapter"] == "paper_rag_session_unity_llm"
+    assert metadata["component_identity"]["generation_adapter"] == (
+        "configured_unity_llm_via_gated_paper_rag_session"
+    )
+    assert metadata["gold_context_used"] is False
+    assert metadata["gold_context_scope"] == "scoring_only"
+    assert metadata["production_qualification"]["eligible"] is False
 
 
 def test_run_live_answer_eval_external_golden_set_bypasses_fixture_generation(tmp_path, monkeypatch) -> None:
@@ -98,6 +177,42 @@ def test_run_live_answer_eval_external_golden_set_bypasses_fixture_generation(tm
     assert options.live_answer_eval is True
     assert options.live_retrieval is True
     assert options.answer_eval_limit == 8
+
+
+def test_external_corpus_live_answer_diagnostic_does_not_gain_production_qualification(
+    tmp_path,
+) -> None:
+    def ask(pair: EvidenceQAPair) -> dict:
+        if pair.expected_behavior == "abstain":
+            return {"status": "abstained", "answer": None, "citations": [], "passages": []}
+        answer = " ".join(pair.answer_facts) or "The cited evidence supports the answer."
+        return {
+            "status": "answered",
+            "answer": answer,
+            "citations": [{
+                "chunk_id": pair.gold_chunk_ids[0],
+                "source_locator": pair.gold_source_locators[0],
+            }],
+            "passages": [{"chunk_id": pair.gold_chunk_ids[0]}],
+        }
+
+    seed = run_live_answer_eval(output_dir=tmp_path / "seed", live_answer_ask=ask)
+    result = run_live_answer_eval(
+        output_dir=tmp_path / "external",
+        golden_set_path=seed.golden_set_path,
+        papers_dir=seed.papers_dir,
+        live_answer_ask=ask,
+    )
+
+    assert result.passed is True
+    assert result.corpus_mode == "external"
+    payload = json.loads(result.evidence_report_path.read_text(encoding="utf-8"))
+    metadata = payload["metadata"]
+    assert metadata["execution_profile"] == "fixture"
+    assert metadata["component_identity"]["retrieval_adapter"] == (
+        "in_memory_chunk_store_with_sha256_hash_field_index"
+    )
+    assert metadata["production_qualification"]["eligible"] is False
 
 
 def test_run_live_answer_eval_passes_answer_eval_limit(tmp_path, monkeypatch) -> None:

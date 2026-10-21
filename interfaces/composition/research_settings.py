@@ -4,7 +4,7 @@ import math
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlsplit, urlunsplit
@@ -32,7 +32,8 @@ _DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]*$")
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _COLLECTION_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
-_PARSER_BACKENDS = {"marker", "mineru", "pymupdf"}
+_PARSER_BACKENDS = {"marker", "pymupdf"}
+_READING_ORDER_PROFILES = {"backend_preserved", "layout_admitted_v1"}
 _RESEARCH_RUN_SCHEMA_VERSIONS = ("v1", "v2")
 
 
@@ -130,12 +131,73 @@ class ResearchLLMSettings:
         )
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchParserRecoverySettings:
+    enabled: bool = False
+    parser_recovery_enabled: bool = False
+    formula_roi_enabled: bool = False
+    table_cell_roi_enabled: bool = False
+    allowed_backends: tuple[str, ...] = ("marker",)
+    authorized_provider_ids: tuple[str, ...] = ()
+    max_attempts: int = 2
+    max_pages: int = 3
+    max_regions: int = 3
+    max_seconds: float = 120.0
+    max_memory_bytes: int = 17_179_869_184
+    max_cpu_seconds: float = 120.0
+    max_turns: int = 1
+    max_replans: int = 0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "enabled",
+            "parser_recovery_enabled",
+            "formula_roi_enabled",
+            "table_cell_roi_enabled",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                _invalid(f"research.parser.recovery.{name}")
+        backends = tuple(str(value).strip().lower() for value in self.allowed_backends)
+        providers = tuple(str(value).strip().lower() for value in self.authorized_provider_ids)
+        if (
+            not backends
+            or len(backends) != len(set(backends))
+            or any(backend not in _PARSER_BACKENDS for backend in backends)
+        ):
+            _invalid("research.parser")
+        if (
+            len(providers) != len(set(providers))
+            or any(_IDENTIFIER.fullmatch(provider) is None for provider in providers)
+        ):
+            _invalid("research.parser")
+        object.__setattr__(self, "allowed_backends", backends)
+        object.__setattr__(self, "authorized_provider_ids", providers)
+        _bounded_int(self.max_attempts, "research.parser", 1, 8)
+        _bounded_int(self.max_pages, "research.parser", 1, 16)
+        _bounded_int(self.max_regions, "research.parser", 1, 32)
+        _bounded_float(self.max_seconds, "research.parser", 1.0, 1_800.0)
+        _bounded_int(
+            self.max_memory_bytes,
+            "research.parser",
+            268_435_456,
+            68_719_476_736,
+        )
+        _bounded_float(self.max_cpu_seconds, "research.parser", 1.0, 1_800.0)
+        _bounded_int(self.max_turns, "research.parser", 1, 4)
+        _bounded_int(self.max_replans, "research.parser", 0, 2)
+
 @dataclass(frozen=True, slots=True)
 class ResearchParserSettings:
     backends: tuple[str, ...]
     allow_abstract_fallback: bool
     timeout_seconds: float
     max_document_bytes: int
+    reading_order_profile: str = "backend_preserved"
+    recovery: ResearchParserRecoverySettings = field(
+        default_factory=ResearchParserRecoverySettings
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.backends, tuple):
@@ -153,7 +215,13 @@ class ResearchParserSettings:
             _invalid("research.parser.backends")
         if not isinstance(self.allow_abstract_fallback, bool):
             _invalid("research.parser.abstract_fallback")
+        reading_order_profile = str(self.reading_order_profile or "").strip().lower()
+        if reading_order_profile not in _READING_ORDER_PROFILES:
+            _invalid("research.parser")
+        if not isinstance(self.recovery, ResearchParserRecoverySettings):
+            _invalid("research.parser")
         object.__setattr__(self, "backends", backends)
+        object.__setattr__(self, "reading_order_profile", reading_order_profile)
         _bounded_float(self.timeout_seconds, "research.parser.timeout", 1.0, 1_800.0)
         _bounded_int(
             self.max_document_bytes,
@@ -741,7 +809,7 @@ def _research_parser_settings_from_env(
                     "NEWS_RESEARCH_PARSER_BACKENDS",
                     "NEWSROOM_PDF_PARSER_CASCADE",
                 ),
-                "mineru,marker",
+                "marker",
             )
         ),
         allow_abstract_fallback=_env_bool(
@@ -761,6 +829,96 @@ def _research_parser_settings_from_env(
             "NEWS_RESEARCH_PARSER_MAX_DOCUMENT_BYTES",
             _DEFAULT_SOURCE_MAX_BYTES,
             capability="research.parser.max_document_bytes",
+        ),
+        reading_order_profile=_first_text(
+            values,
+            ("NEWS_RESEARCH_PARSER_READING_ORDER_PROFILE",),
+            "backend_preserved",
+        ),
+        recovery=ResearchParserRecoverySettings(
+            enabled=_env_bool(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_ENABLED",
+                False,
+                capability="research.parser",
+            ),
+            parser_recovery_enabled=_env_bool(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_PARSER_ENABLED",
+                False,
+                capability="research.parser",
+            ),
+            formula_roi_enabled=_env_bool(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_FORMULA_ROI_ENABLED",
+                False,
+                capability="research.parser",
+            ),
+            table_cell_roi_enabled=_env_bool(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_TABLE_ROI_ENABLED",
+                False,
+                capability="research.parser",
+            ),
+            allowed_backends=_parser_backends(
+                _first_text(
+                    values,
+                    ("NEWS_RESEARCH_PARSER_RECOVERY_ALLOWED_BACKENDS",),
+                    "marker",
+                )
+            ),
+            authorized_provider_ids=_optional_identifier_tuple(
+                values.get("NEWS_RESEARCH_PARSER_RECOVERY_AUTHORIZED_PROVIDERS", ""),
+                capability="research.parser",
+            ),
+            max_attempts=_env_int(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_ATTEMPTS",
+                2,
+                capability="research.parser",
+            ),
+            max_pages=_env_int(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_PAGES",
+                3,
+                capability="research.parser",
+            ),
+            max_regions=_env_int(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_REGIONS",
+                3,
+                capability="research.parser",
+            ),
+            max_seconds=_env_float(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_SECONDS",
+                120.0,
+                capability="research.parser",
+            ),
+            max_memory_bytes=_env_int(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_MEMORY_BYTES",
+                17_179_869_184,
+                capability="research.parser",
+            ),
+            max_cpu_seconds=_env_float(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_CPU_SECONDS",
+                120.0,
+                capability="research.parser",
+            ),
+            max_turns=_env_int(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_TURNS",
+                1,
+                capability="research.parser",
+            ),
+            max_replans=_env_int(
+                values,
+                "NEWS_RESEARCH_PARSER_RECOVERY_MAX_REPLANS",
+                0,
+                capability="research.parser",
+            ),
         ),
     )
 
@@ -1131,6 +1289,22 @@ def _parser_backends(value: str) -> tuple[str, ...]:
     return tuple(part.strip().lower() for part in value.split(",") if part.strip())
 
 
+
+def _optional_identifier_tuple(value: str, *, capability: str) -> tuple[str, ...]:
+    text = str(value or "").strip()
+    if not text:
+        return ()
+    if len(text) > 1_024:
+        _invalid(capability)
+    items = tuple(part.strip().lower() for part in text.split(",") if part.strip())
+    if (
+        len(items) != len(set(items))
+        or any(_IDENTIFIER.fullmatch(item) is None for item in items)
+    ):
+        _invalid(capability)
+    return items
+
+
 def _memory_namespace_refs(value: str) -> tuple[str, ...]:
     if len(value) > 8_192:
         _invalid("research.rag.memory_namespace_refs")
@@ -1272,6 +1446,7 @@ __all__ = [
     "ResearchArtifactSettings",
     "ResearchLLMSettings",
     "ResearchLocalRuntimeSettings",
+    "ResearchParserRecoverySettings",
     "ResearchParserSettings",
     "ResearchRAGSettings",
     "ResearchRunStoreSettings",

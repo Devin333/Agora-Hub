@@ -1,0 +1,39 @@
+{
+  "schema_version": "research-pdf-parsing-protocol-deviation/v1",
+  "change": "research-pdf-parsing-quality-optimization",
+  "observed_repository_head": "ce7584f3de6082ddda45202ee37b4fae13557402",
+  "deviation": "Parsing/normalization implementation changes already exist in the dirty worktree, but no historically frozen production B1 or pre-first-algorithm acceptance profile has been proven.",
+  "first_algorithm_revision": null,
+  "first_algorithm_revision_unknown_reason": "Uncommitted worktree edits have no trustworthy historical revision/timestamp proof for preregistration.",
+  "original_acceptance_status": "blocked",
+  "original_acceptance_blockers": [
+    "no proven preoptimization production B1",
+    "no proven pre-first-algorithm acceptance-profile registration",
+    "independent heldout gold annotations unavailable",
+    "legacy 215-page source and version-family grouping unknown"
+  ],
+  "current_run_identity": "B1_current_not_historical_preoptimization",
+  "allowed_uses": [
+    "exposed-dev diagnostic replay",
+    "current-state production execution verification",
+    "prospective candidate freeze with explicit posthoc history",
+    "development ablations reported without release claims"
+  ],
+  "forbidden_claims": [
+    "retroactive preregistration",
+    "B0 raw scores as production B1",
+    "historical mutable latest image resolved using current digest",
+    "relabeling 215 exposed pages as unbiased heldout",
+    "promotion or default enablement from diagnostic metrics"
+  ],
+  "current_inputs": {
+    "exposed_dev_manifest": ".artifacts/pdf-parsing-quality-optimization/production-inputs-v1/manifest.json",
+    "exposed_dev_manifest_sha256": "8011bcbad0f0657db720d5db9cd46cd1022812fe860aa5b2f0712341f87e30fa",
+    "real_paper_dev_manifest": ".artifacts/pdf-parsing-quality-optimization/real-paper-corpus-v1/dev-integration-manifest.json",
+    "real_paper_candidate_inventory": ".artifacts/pdf-parsing-quality-optimization/real-paper-corpus-v1/source-inventory.json",
+    "candidate_heldout_quality_results_inspected": false,
+    "candidate_heldout_eligibility": "not_proven_despite_no_lexical_or_perceptual_duplicate_flags"
+  },
+  "release_decision": "do_not_promote_or_change_defaults",
+  "owner_action_required": "Any change to the original preregistration requirement needs explicit human-owner approval in OpenSpec; this record does not authorize it."
+}

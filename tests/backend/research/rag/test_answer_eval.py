@@ -124,11 +124,19 @@ def test_answer_evaluator_scores_context_absence_variants_as_negative_abstention
                 "they contain nothing about the Riemann hypothesis or a proof of it."
             ),
         ),
+        EvidenceAnswerSample(
+            pair=pair,
+            answer="No. The provided context contains no report of carbon emissions from a national power grid.",
+        ),
+        EvidenceAnswerSample(
+            pair=pair,
+            answer="The paper does not report weather measurements from Shanghai on July 6, 2026.",
+        ),
     ]
 
     result = EvidenceAnswerEvaluator().evaluate(samples)
 
-    assert [score.abstention_correct for score in result.scores] == [1.0, 1.0, 1.0]
+    assert [score.abstention_correct for score in result.scores] == [1.0, 1.0, 1.0, 1.0, 1.0]
     assert result.abstention_accuracy() == 1.0
     assert result.success_rate() == 1.0
 

@@ -47,8 +47,21 @@ def test_from_env_builds_immutable_defaults_without_creating_storage(
     assert settings.llm.provider == "openai-compatible"
     assert settings.llm.api_key_env == "DASHSCOPE_API_KEY"
     assert settings.llm.max_attempts == 2
-    assert settings.parser.backends == ("mineru", "marker")
+    assert settings.parser.backends == ("marker",)
     assert settings.parser.allow_abstract_fallback is True
+    assert settings.parser.reading_order_profile == "backend_preserved"
+    assert settings.parser.recovery.enabled is False
+    assert settings.parser.recovery.parser_recovery_enabled is False
+    assert settings.parser.recovery.formula_roi_enabled is False
+    assert settings.parser.recovery.table_cell_roi_enabled is False
+    assert settings.parser.recovery.authorized_provider_ids == ()
+    assert settings.parser.recovery.max_attempts == 2
+    assert settings.parser.recovery.max_pages == 3
+    assert settings.parser.recovery.max_regions == 3
+    assert settings.parser.recovery.max_memory_bytes == 17_179_869_184
+    assert settings.parser.recovery.max_cpu_seconds == 120
+    assert settings.parser.recovery.max_turns == 1
+    assert settings.parser.recovery.max_replans == 0
     assert settings.rag.backend == "local"
     assert settings.rag.qdrant_url is None
     assert settings.rag.max_rounds == 6
@@ -318,7 +331,7 @@ def test_from_env_uses_existing_shared_llm_artifact_and_parser_names(
         "NEWS_LLM_API_KEY_ENV": "SHARED_LLM_KEY",
         "SHARED_LLM_KEY": "shared-secret",
         "NEWS_ARTIFACT_ROOT": "shared-runs",
-        "NEWSROOM_PDF_PARSER_CASCADE": "mineru,pymupdf",
+        "NEWSROOM_PDF_PARSER_CASCADE": "marker,pymupdf",
     }
 
     settings = ResearchRuntimeSettings.from_env(env, cwd=tmp_path)
@@ -327,7 +340,7 @@ def test_from_env_uses_existing_shared_llm_artifact_and_parser_names(
     assert settings.llm.model == "shared-model"
     assert settings.llm.api_key_env == "SHARED_LLM_KEY"
     assert settings.artifact.root == (tmp_path / "shared-runs").resolve()
-    assert settings.parser.backends == ("mineru", "pymupdf")
+    assert settings.parser.backends == ("marker", "pymupdf")
 
 
 def test_from_env_uses_standard_openai_credential_when_no_key_indirection_is_set(
@@ -445,6 +458,7 @@ def test_from_env_rejects_unsafe_endpoint_or_secret_indirection_without_echo(
     [
         ("NEWS_RESEARCH_SOURCE_PROVIDER", "rss", "research.source.provider"),
         ("NEWS_RESEARCH_PARSER_BACKENDS", "marker,marker", "research.parser.backends"),
+        ("NEWS_RESEARCH_PARSER_BACKENDS", "mineru,marker", "research.parser.backends"),
         ("NEWS_RESEARCH_ALLOW_ABSTRACT_FALLBACK", "sometimes", "research.parser.abstract_fallback"),
         ("NEWS_RESEARCH_RAG_BACKEND", "memory", "research.rag.backend"),
         ("NEWS_RESEARCH_RAG_COLLECTION", "bad collection", "research.rag.collection"),
@@ -646,3 +660,95 @@ def test_local_runtime_settings_parse_storage_without_llm_resolution(
     assert settings.local_authorized_root == (tmp_path / "imports").resolve()
     assert settings.run_store.root == (tmp_path / "runs").resolve()
     assert settings.parser.backends == ("pymupdf",)
+
+
+
+def test_from_env_builds_typed_parser_recovery_allowlist_and_budgets(tmp_path: Path) -> None:
+    env = {
+        **_minimum_env(),
+        "NEWS_RESEARCH_PARSER_RECOVERY_ENABLED": "true",
+        "NEWS_RESEARCH_PARSER_RECOVERY_PARSER_ENABLED": "true",
+        "NEWS_RESEARCH_PARSER_RECOVERY_FORMULA_ROI_ENABLED": "true",
+        "NEWS_RESEARCH_PARSER_RECOVERY_TABLE_ROI_ENABLED": "false",
+        "NEWS_RESEARCH_PARSER_RECOVERY_ALLOWED_BACKENDS": "marker",
+        "NEWS_RESEARCH_PARSER_RECOVERY_AUTHORIZED_PROVIDERS": "docker",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_ATTEMPTS": "2",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_PAGES": "2",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_REGIONS": "3",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_SECONDS": "45",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_MEMORY_BYTES": "8589934592",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_CPU_SECONDS": "40",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_TURNS": "2",
+        "NEWS_RESEARCH_PARSER_RECOVERY_MAX_REPLANS": "1",
+    }
+
+    settings = ResearchRuntimeSettings.from_env(env, cwd=tmp_path)
+    recovery = settings.parser.recovery
+
+    assert recovery.enabled is True
+    assert recovery.parser_recovery_enabled is True
+    assert recovery.formula_roi_enabled is True
+    assert recovery.table_cell_roi_enabled is False
+    assert recovery.allowed_backends == ("marker",)
+    assert recovery.authorized_provider_ids == ("docker",)
+    assert recovery.max_attempts == 2
+    assert recovery.max_pages == 2
+    assert recovery.max_regions == 3
+    assert recovery.max_seconds == 45
+    assert recovery.max_memory_bytes == 8_589_934_592
+    assert recovery.max_cpu_seconds == 40
+    assert recovery.max_turns == 2
+    assert recovery.max_replans == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "capability"),
+    [
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_ATTEMPTS", "9", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_PAGES", "0", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_REGIONS", "33", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_SECONDS", "1801", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_MEMORY_BYTES", "1024", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_CPU_SECONDS", "1801", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_TURNS", "5", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_MAX_REPLANS", "3", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_AUTHORIZED_PROVIDERS", "docker,docker", "research.parser"),
+        ("NEWS_RESEARCH_PARSER_RECOVERY_ALLOWED_BACKENDS", "mineru", "research.parser"),
+    ],
+)
+def test_from_env_rejects_invalid_parser_recovery_policy(
+    tmp_path: Path,
+    name: str,
+    value: str,
+    capability: str,
+) -> None:
+    env = {**_minimum_env(), name: value}
+
+    with pytest.raises(ResearchConfigurationError) as error:
+        ResearchRuntimeSettings.from_env(env, cwd=tmp_path)
+
+    assert capability in error.value.capabilities
+
+
+
+
+def test_from_env_requires_explicit_reading_order_candidate_opt_in(tmp_path: Path) -> None:
+    settings = ResearchRuntimeSettings.from_env(
+        {
+            **_minimum_env(),
+            "NEWS_RESEARCH_PARSER_READING_ORDER_PROFILE": "layout_admitted_v1",
+        },
+        cwd=tmp_path,
+    )
+
+    assert settings.parser.reading_order_profile == "layout_admitted_v1"
+
+    with pytest.raises(ResearchConfigurationError) as error:
+        ResearchRuntimeSettings.from_env(
+            {
+                **_minimum_env(),
+                "NEWS_RESEARCH_PARSER_READING_ORDER_PROFILE": "auto_reorder",
+            },
+            cwd=tmp_path,
+        )
+    assert error.value.capabilities == ("research.parser",)

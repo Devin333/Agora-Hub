@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Route } from "@playwright/test"
+import { expect, test, type Locator, type Page } from "./fixtures"
 
 const fingerprint = `sha256:${"a".repeat(64)}`
 const generation = "gen_0123456789abcdef0123456789abcdef"
@@ -174,8 +174,8 @@ async function installDesktopFixture(
   await page.route("**/api/research/history", async route => {
     if (route.request().method() === "PUT") {
       const body = JSON.parse(route.request().postData() ?? "{}")
-      const { revision: _revision, ...workspace } = body
-      state.workspace = workspace
+      delete body.revision
+      state.workspace = body
       state.revision += 1
     }
     await route.fulfill({

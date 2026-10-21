@@ -14,6 +14,10 @@ from backend.research.application.research_input_contract import (
     PreparedResearchInputContext,
     ResearchInputContractService,
 )
+from backend.research.ports.reader_repair_candidate import (
+    READER_REPAIR_PATCH_CANDIDATE_TASK,
+    reader_repair_candidate_task_schemas,
+)
 from backend.research.domain.input_contract import (
     ResearchInputCategory,
     ResearchInputItem,
@@ -21,8 +25,10 @@ from backend.research.domain.input_contract import (
     ResearchInputStatus,
 )
 from infrastructure.research.candidate_worker import (
+    CANDIDATE_TASK_SCHEMAS,
     ResearchCandidateContractError,
     SUPPORTED_CANDIDATE_TASKS,
+    _project_provider_schema,
 )
 from interfaces.composition.research import _PreparedResearchCandidateWorker
 from tests.infrastructure.research.test_candidate_worker import (
@@ -220,6 +226,101 @@ def test_all_candidate_tasks_preserve_prepared_envelope_in_final_provider_reques
     assert set(prepared["user_payload"]) == {category.value for category in ResearchInputCategory}
     for item in prepared_context.profile.items:
         assert item.to_dict() in prepared["user_payload"][item.category.value]
+
+
+def test_provider_schema_projection_preserves_literals_and_named_members() -> None:
+    source_schema = {
+        "type": "object",
+        "title": "Root annotation",
+        "properties": {
+            "title": {"type": "string", "title": "Property annotation"},
+            "default": {
+                "type": "object",
+                "properties": {
+                    "choice": {
+                        "enum": [
+                            {"title": "literal title", "default": "literal default"}
+                        ]
+                    },
+                    "exact": {
+                        "const": {"title": "exact title", "default": "exact default"}
+                    },
+                },
+                "required": ["choice", "exact"],
+                "additionalProperties": False,
+            },
+        },
+        "$defs": {
+            "title": {"type": "string", "default": "schema annotation"},
+            "default": {"type": "string", "title": "Schema annotation"},
+        },
+        "required": ["title", "default"],
+        "additionalProperties": False,
+    }
+
+    projected = _project_provider_schema(source_schema)
+
+    assert projected == {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "default": {
+                "type": "object",
+                "properties": {
+                    "choice": {
+                        "enum": [
+                            {"title": "literal title", "default": "literal default"}
+                        ]
+                    },
+                    "exact": {
+                        "const": {"title": "exact title", "default": "exact default"}
+                    },
+                },
+                "required": ["choice", "exact"],
+                "additionalProperties": False,
+            },
+        },
+        "$defs": {"title": {"type": "string"}, "default": {"type": "string"}},
+        "required": ["title", "default"],
+        "additionalProperties": False,
+    }
+
+
+def test_reader_repair_patch_schema_projection_fits_the_prepared_input_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    prepared_context: PreparedResearchInputContext,
+) -> None:
+    task = READER_REPAIR_PATCH_CANDIDATE_TASK
+    worker, requests = _recorded_worker(monkeypatch, _valid_output(task))
+    payload = _valid_payload(task)
+    expected = prepared_context.candidate_projection()
+    payload["prepared_input"] = deepcopy(expected)
+
+    worker.generate_candidate(task=task, payload=payload)
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert _provider_request_json(request)["prepared_input"] == expected
+    request_chars = len(json.dumps(request, separators=(",", ":")))
+    assert request_chars <= worker.max_input_tokens * 4
+
+    source_schema = reader_repair_candidate_task_schemas()[task]
+    provider_schema = CANDIDATE_TASK_SCHEMAS[task]
+    assert len(json.dumps(provider_schema, separators=(",", ":"))) < len(
+        json.dumps(source_schema, separators=(",", ":"))
+    )
+    source_navigation = source_schema["$defs"]["ReaderNavigationItem"]
+    provider_navigation = provider_schema["$defs"]["ReaderNavigationItem"]
+    assert "title" in source_navigation
+    assert "default" in source_navigation["properties"]["level"]
+    assert "title" not in provider_navigation
+    assert "default" not in provider_navigation["properties"]["level"]
+    assert provider_navigation["properties"]["title"] == {
+        "type": "string",
+        "maxLength": 8_192,
+    }
+    assert "title" in provider_navigation["required"]
+    assert provider_navigation["additionalProperties"] is False
 
 
 def test_provider_json_escapes_control_text_without_creating_a_message_or_projection(

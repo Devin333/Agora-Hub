@@ -1143,6 +1143,18 @@ class ParallelSerialRollbackReceipt:
 
 
 @dataclass
+class _ExecutionAdmission:
+    """Linearize callback admission against closure of one dispatch cohort."""
+
+    lock: Any = field(default_factory=Lock)
+    closed: bool = False
+
+    def close(self) -> None:
+        with self.lock:
+            self.closed = True
+
+
+@dataclass
 class _GroupSession:
     group: DispatchGroup
     request: ParallelDispatchRequest
@@ -1172,6 +1184,7 @@ class _GroupSession:
     wave_admitted_at: dict[str, float] = field(default_factory=dict)
     wave_dispatched_at: dict[str, float] = field(default_factory=dict)
     dispatch_lock: Any = field(default_factory=Lock)
+    execution_admission: _ExecutionAdmission = field(default_factory=_ExecutionAdmission)
     terminal_diagnostics: tuple[str, ...] = ()
     # A terminal event is prepared before the in-memory transition is
     # committed. If the durable sink writes and loses its acknowledgement, a
@@ -1210,6 +1223,7 @@ class _SupervisorTaskWorker:
         *,
         spawn_request: ChildAgentSpawnRequest | None = None,
         group_absolute_deadline_ms: int | None = None,
+        execution_admission: _ExecutionAdmission | None = None,
     ) -> None:
         self._invoke = invoke
         self._item = item
@@ -1220,6 +1234,7 @@ class _SupervisorTaskWorker:
             else None
         )
         self._group_absolute_deadline_ms = group_absolute_deadline_ms
+        self._execution_admission = execution_admission or _ExecutionAdmission()
         self._cancel_requested = Event()
         self._started = Event()
         self._live_control: ChildExecutionControl | None = None
@@ -1246,13 +1261,16 @@ class _SupervisorTaskWorker:
             reservation=self._reservation,
             group_absolute_deadline_ms=self._group_absolute_deadline_ms,
         )
-        with self._lock:
-            self._live_control = control
-        try:
-            if self._cancel_requested.is_set():
-                control.request_cancel()
+        # Closing a cohort and cancelling an individual child both race this
+        # admission point, not an unsynchronised check of _started. Never hold
+        # either lock across the external callback: running work may be LOST.
+        with self._execution_admission.lock, self._lock:
+            if self._execution_admission.closed or self._cancel_requested.is_set():
+                raise RuntimeError("parallel task cancellation requested before execution")
             control.raise_if_active()
+            self._live_control = control
             self._started.set()
+        try:
             with bind_child_execution_control(control):
                 control.raise_if_active()
                 result = self._invoke(self._item)
@@ -1275,19 +1293,16 @@ class _SupervisorTaskWorker:
             "task_result_checksum": result.result_checksum,
         }
 
-    def cancel(self, _handle: ChildAgentHandle) -> bool:
-        self._cancel_requested.set()
-        # The lexical control carries the same cooperative cancellation event
-        # into child descendants.  The return value still only speaks to
-        # whether this adapter had entered its callback.
+    def cancel(self, _handle: ChildAgentHandle, *, only_pending: bool = False) -> bool:
         with self._lock:
-            control = self._live_control
-        if control is not None:
-            control.request_cancel()
-        # A not-yet-started task is safely cancelled.  Once the real worker
-        # entered its body the supervisor must retain an indeterminate receipt
-        # instead of pretending an external side effect stopped.
-        return not self._started.is_set()
+            if only_pending and self._started.is_set():
+                return False
+            self._cancel_requested.set()
+            if self._live_control is not None:
+                self._live_control.request_cancel()
+            # Only callback admission can be prevented synchronously. Never
+            # turn an already-running callback into confirmed termination.
+            return not self._started.is_set()
 
 
 @runtime_checkable
@@ -2320,6 +2335,10 @@ class ParallelAgentCoordinator:
                     missing_results[task_id] = result
             session.results.update(missing_results)
             session.reserved.difference_update(missing_results)
+            # All old handles have now supplied confirmed terminal receipts.
+            # Recovery issues a fresh gate; it must never reopen the gate still
+            # held by callbacks from the previous, fenced cohort.
+            session.execution_admission = _ExecutionAdmission()
             if session.group.state is DispatchGroupState.INDETERMINATE:
                 session.group = replace(session.group, state=DispatchGroupState.RUNNING)
             elif session.group.state is not DispatchGroupState.SUCCEEDED:
@@ -3457,7 +3476,7 @@ class ParallelAgentCoordinator:
             }:
                 return self._result_for_session(session, request, limits=limits)
             self._emit("TASK_GROUP_CANCEL_REQUESTED", event_sink=event_sink, group_id=group_id, reason_code=reason_code, idempotency_key=group_id)
-            active = tuple(session.active_children.items())
+            active = self._fence_execution_admission(session)
         unconfirmed = False
         if self.child_supervisor is not None:
             for task_id, (handle, _worker) in active:
@@ -3738,6 +3757,7 @@ class ParallelAgentCoordinator:
                     item,
                     spawn_request=spawn_request,
                     group_absolute_deadline_ms=request.group_absolute_deadline_ms,
+                    execution_admission=session.execution_admission,
                 ),
                 spawn_request,
             )
@@ -3949,6 +3969,7 @@ class ParallelAgentCoordinator:
                             reason_code="fail_fast",
                             idempotency_key=f"{session.group.group_id}:fail_fast",
                         )
+                        self._fence_execution_admission(session)
                         for sibling_task_id in sorted(tuple(pending)):
                             sibling, _sibling_worker, sibling_handle = pending[
                                 sibling_task_id
@@ -4114,6 +4135,19 @@ class ParallelAgentCoordinator:
         session.waves = updated
         return current_capacity
 
+    def _fence_execution_admission(
+        self, session: _GroupSession, *, cancel_running: bool = True,
+    ) -> tuple[tuple[str, tuple[ChildAgentHandle, _SupervisorTaskWorker]], ...]:
+        # Close the shared gate before contacting any individual supervisor.
+        # A queued sibling must not start while cancellation of a running child
+        # is still being reconciled (or returns an unconfirmed LOST receipt).
+        session.execution_admission.close()
+        with self._lock:
+            active = tuple(session.active_children.items())
+        for _task_id, (handle, worker) in active:
+            worker.cancel(handle, only_pending=not cancel_running)
+        return active
+
     def _mark_indeterminate(
         self,
         group_id: str,
@@ -4124,16 +4158,63 @@ class ParallelAgentCoordinator:
     ) -> None:
         with self._lock:
             session = self._sessions.get(group_id)
-            if session is None:
+            if session is None or session.group.state is DispatchGroupState.INDETERMINATE:
                 return
-            if session.group.state is DispatchGroupState.INDETERMINATE:
-                return
+            cancel_running = any(
+                not receipt.termination_confirmed
+                for receipt in session.attempt_receipts.values()
+            )
+        active = self._fence_execution_admission(session, cancel_running=cancel_running)
+        cleanup_diagnostics = []
+        if self.child_supervisor is not None:
+            for task_id, (handle, worker) in active:
+                try:
+                    if worker.cancel(handle, only_pending=True) or cancel_running:
+                        operation = self.child_supervisor.cancel(
+                            handle.child_id, operation_id=handle.operation_id,
+                            reason=reason_code,
+                        )
+                    else:
+                        # Parent-side persistence faults retain admitted work
+                        # for the separately audited online recovery path.
+                        continue
+                    spawn_status = session.spawn_receipts.get(handle.operation_id, (None, None))[0]
+                    if operation.receipt is not None and spawn_status == "SPAWN_CONFIRMED":
+                        session.attempt_receipts[handle.task_instance_id] = operation.receipt
+                    # Physical cancellation does not establish durable spawn
+                    # admission. Keep unaudited handles for explicit recovery,
+                    # even when their queued callbacks were safely fenced.
+                    if (
+                        spawn_status == "SPAWN_CONFIRMED"
+                        and operation.receipt is not None
+                        and operation.receipt.status is ChildAgentState.CANCELLED
+                        and operation.receipt.termination_confirmed
+                    ):
+                        self.child_supervisor.close(handle.child_id, operation_id=handle.operation_id)
+                        with self._lock:
+                            session.active_children.pop(task_id, None)
+                except ChildAgentSupervisorError as exc:
+                    # One uncertain durable cancellation must not prevent the
+                    # remaining siblings from being fenced/cancelled. Preserve
+                    # its occupancy and expose the reconciliation failure.
+                    cleanup_diagnostics.append(f"{task_id}:{exc.code}")
+        diagnostics = (*diagnostics, *cleanup_diagnostics)
+        with self._lock:
             recorded_instances = {item.task_instance_id for item in session.attempt_history.values()}
             for wave in session.waves:
                 for instance in session.wave_instances.get(wave.wave_id, ()):
-                    if instance.task_instance_id not in recorded_instances:
-                        self._record_attempt(session, wave, instance, outcome=TaskAttemptOutcome.INDETERMINATE,
-                                             reason_code=reason_code, event_sink=event_sink)
+                    if instance.task_instance_id in recorded_instances:
+                        continue
+                    receipt = session.attempt_receipts.get(instance.task_instance_id)
+                    outcome = TaskAttemptOutcome.INDETERMINATE
+                    if receipt is not None and receipt.termination_confirmed:
+                        if receipt.status is ChildAgentState.CANCELLED:
+                            outcome = TaskAttemptOutcome.CANCELLED
+                        else:
+                            outcome = TaskAttemptOutcome.QUARANTINED
+                    self._record_attempt(session, wave, instance, outcome=outcome,
+                                         receipt=receipt, reason_code=reason_code,
+                                         event_sink=event_sink)
             self._release_pending_waves(session, event_sink=event_sink, reason_code=reason_code)
             indeterminate_group = session.group.transitioned(
                 DispatchGroupState.INDETERMINATE

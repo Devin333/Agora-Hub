@@ -5,12 +5,14 @@ import json
 import os
 import shutil
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
 from backend.research.domain import ResearchPaper
-from backend.research.domain.catalog import ResearchSourceSnapshot, actor_scope_ref
+from backend.research.domain.catalog import ResearchPaperIdentity, ResearchSourceSnapshot, actor_scope_ref
 from backend.research.domain.common import SourceLineage
 from backend.research.document.chunk_manifest import ChunkManifestManager
 from framework.shared.windows_paths import resolve_storage_path, storage_io_path
@@ -58,6 +60,38 @@ def test_catalog_store_keeps_actor_scopes_isolated(tmp_path) -> None:
 
     assert store.get_paper("paper-a", actor_scope={"tenant_id": "b"}) is None
     assert store.get_paper("paper-a", actor_scope={"tenant_id": "a"}) is not None
+
+
+def test_catalog_store_concurrent_stale_identity_writers_preserve_snapshot_provenance(tmp_path) -> None:
+    scope = {"user_id": "alice", "memory_namespace": "research:user:alice"}
+    stores = [FilesystemResearchCatalogStore(tmp_path), FilesystemResearchCatalogStore(tmp_path)]
+    identities = [
+        ResearchPaperIdentity(
+            paper_id="paper-shared",
+            title="Shared local paper",
+            source_snapshot_refs=[f"snapshot-{index}"],
+            field_provenance={"title": [f"snapshot-{index}"]},
+            metadata={"actor_scope": scope},
+        )
+        for index in range(2)
+    ]
+    ready = Barrier(2)
+
+    def save(index: int) -> None:
+        ready.wait()
+        stores[index].save(identities[index])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(save, range(2)))
+
+    stored = FilesystemResearchCatalogStore(tmp_path).get_identity(
+        "paper-shared",
+        actor_scope=scope,
+    )
+    assert stored is not None
+    assert set(stored.source_snapshot_refs) == {"snapshot-0", "snapshot-1"}
+    assert set(stored.source_snapshot_ids) == {"snapshot-0", "snapshot-1"}
+    assert set(stored.field_provenance["title"]) == {"snapshot-0", "snapshot-1"}
 
 
 def test_snapshot_roundtrip_preserves_immutable_content_with_flat_actor_scope(tmp_path) -> None:

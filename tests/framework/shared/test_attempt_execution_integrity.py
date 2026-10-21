@@ -133,17 +133,30 @@ def test_non_cooperative_attempts_are_admitted_by_a_hard_capacity_limit() -> Non
 
 def test_standalone_local_timeout_is_not_rejected_by_cancellation_grace() -> None:
     started = threading.Event()
-    supervisor = AttemptSupervisor(cancellation_grace_seconds=0.05)
+
+    def clock() -> float:
+        # Advance the deadline only after the worker proves it was scheduled.
+        # Admission is the behavior under test; OS thread latency is not.
+        return 0.02 if started.is_set() else 0.0
+
+    supervisor = AttemptSupervisor(
+        cancellation_grace_seconds=0.05,
+        clock=clock,
+    )
+    local_budget = LocalRetryBudget(max_attempts=1)
 
     def block() -> None:
         started.set()
-        current = threading.Event()
-        current.wait(1)
+        context = current_attempt_context()
+        assert context is not None
+        assert context.cancel_event.wait(1)
+        context.raise_if_cancelled()
 
     outcome = supervisor.run(
         block,
         timeout_seconds=0.01,
         idempotency_key="deadline:local-timeout",
+        local_budget=local_budget,
         admission_policy=DeadlineAdmissionPolicy(
             timeout_seconds=0.01,
             cancellation_grace_seconds=0.05,
@@ -152,8 +165,13 @@ def test_standalone_local_timeout_is_not_rejected_by_cancellation_grace() -> Non
 
     assert started.is_set()
     assert outcome.state is AttemptState.TIMED_OUT
+    assert outcome.started is True
+    assert outcome.timed_out is True
+    assert outcome.termination_confirmed is True
+    assert outcome.indeterminate is False
     assert outcome.context is not None
     assert outcome.context.local_attempt_no == 1
+    assert local_budget.used == 1
 
 
 def test_root_deadline_reserves_child_grace_and_rejects_without_consumption() -> None:

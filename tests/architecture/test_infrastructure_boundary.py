@@ -10,15 +10,6 @@ INFRASTRUCTURE_ROOT = PROJECT_ROOT / "infrastructure"
 # TODO(architecture-p2-memory-port-migration): remove these exceptions when
 # infrastructure memory/vector/graph adapters use storage-facing port DTOs.
 ALLOWED_BUSINESS_IMPORTS = {
-    "infrastructure/research/evaluation_dataset.py": {
-        "backend.research.ports.evaluation_dataset",
-    },
-    "infrastructure/research/evaluation_sources.py": {
-        "backend.research.ports.evaluation_sources",
-    },
-    "infrastructure/research/qasper_evaluation.py": {
-        "backend.research.ports.qasper_evaluation",
-    },
     "infrastructure/storage/graph/postgres_graph_store.py": {"backend.memory.graph_models"},
     "infrastructure/storage/memory/intelligence_vector_index.py": {
         "backend.memory.intelligence_models",
@@ -49,6 +40,12 @@ ALLOWED_BUSINESS_IMPORTS = {
     "infrastructure/research/artifact_port.py": {
         "backend.research.ports.artifact_publication",
     },
+    "infrastructure/research/evaluation_dataset.py": {
+        "backend.research.ports.evaluation_dataset",
+    },
+    "infrastructure/research/qasper_evaluation.py": {
+        "backend.research.ports.qasper_evaluation",
+    },
     "infrastructure/research/personal_memory_store.py": {
         "backend.research.domain.personal_memory",
         "backend.research.ports.personal_memory",
@@ -59,6 +56,12 @@ ALLOWED_BUSINESS_IMPORTS = {
     },
     "infrastructure/research/github_repository.py": {
         "backend.research.domain.code_repository",
+    },
+    "infrastructure/research/evaluation_sources.py": {
+        "backend.research.ports.evaluation_sources",
+    },
+    "infrastructure/research/ragas_judge.py": {
+        "backend.research.ports.evaluation_judge",
     },
     "infrastructure/research/reader_repair_memory_side_effect.py": {
         "backend.research.ports.repair_memory",
@@ -109,12 +112,6 @@ SOURCE_STORAGE_BUSINESS_IMPORTS = {
 }
 
 RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
-    "infrastructure/research/evaluation_dataset.py": {
-        "backend.research.ports.evaluation_dataset",
-    },
-    "infrastructure/research/evaluation_sources.py": {
-        "backend.research.ports.evaluation_sources",
-    },
     "infrastructure/research/qasper_evaluation.py": {
         "backend.research.ports.qasper_evaluation",
     },
@@ -131,6 +128,9 @@ RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
         "backend.research.ports.document_compiler",
         "backend.research.ports.document_parser",
     },
+    "infrastructure/research/evaluation_dataset.py": {
+        "backend.research.ports.evaluation_dataset",
+    },
     "infrastructure/research/personal_memory_store.py": {
         "backend.research.domain.personal_memory",
         "backend.research.ports.personal_memory",
@@ -141,6 +141,12 @@ RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
     },
     "infrastructure/research/github_repository.py": {
         "backend.research.domain.code_repository",
+    },
+    "infrastructure/research/evaluation_sources.py": {
+        "backend.research.ports.evaluation_sources",
+    },
+    "infrastructure/research/ragas_judge.py": {
+        "backend.research.ports.evaluation_judge",
     },
     "infrastructure/research/reader_repair_memory_side_effect.py": {
         "backend.research.ports.repair_memory",
@@ -240,3 +246,12 @@ def _imports_for_file(path: Path) -> list[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.append(node.module)
     return modules
+
+
+def test_evaluation_dataset_adapter_consumes_only_storage_facing_contracts() -> None:
+    adapter = INFRASTRUCTURE_ROOT / "research" / "evaluation_dataset.py"
+    business_imports = {item for item in _imports_for_file(adapter) if item.startswith("backend.")}
+    assert business_imports == {"backend.research.ports.evaluation_dataset"}
+    contract = PROJECT_ROOT / "backend" / "research" / "ports" / "evaluation_dataset.py"
+    contract_imports = _imports_for_file(contract)
+    assert not any(item.startswith(("interfaces", "infrastructure", "backend.research.application", "backend.research.rag")) for item in contract_imports)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import shutil
+from dataclasses import replace
 from copy import deepcopy
 from pathlib import Path
 from threading import Event, Thread
@@ -114,7 +115,6 @@ from backend.research.graphs.task_plan import (
 )
 from interfaces.composition.runtime_execution import (
     RESEARCH_MARKER_PROFILE_ID,
-    RESEARCH_MINERU_PROFILE_ID,
 )
 from interfaces.models.actor import ActorContext
 
@@ -796,11 +796,27 @@ def test_configured_lazy_rag_service_persists_transcript_under_owned_root(
         shutil.rmtree(test_root, ignore_errors=True)
 
 
+
+def test_research_pdf_parser_wires_explicit_reading_order_profile(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    parser_settings = replace(
+        settings.parser,
+        reading_order_profile="layout_admitted_v1",
+    )
+
+    parser = research_composition._build_research_pdf_parser(parser_settings)
+
+    assert isinstance(parser, CascadeDocumentParser)
+    assert parser._backends[0][1]._reading_order_profile.value == "layout_admitted_v1"
+
+
 def test_default_research_pdf_parser_fails_closed_when_docker_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("NEWSROOM_PARSER_RUN_ROOT", str(tmp_path / "parser-runs"))
+    # Exercise unavailable-provider admission, not the independent default-CUDA gate.
+    monkeypatch.setenv("NEWSROOM_MARKER_TORCH_DEVICE", "cpu")
     settings = _settings(tmp_path)
     capabilities = ExecutionCapabilityProfile(
         provider_id="docker",
@@ -814,17 +830,10 @@ def test_default_research_pdf_parser_fails_closed_when_docker_is_unavailable(
     registry.register(provider)
     profiles = ExecutionProfileRegistry()
     profiles.register(
-        RESEARCH_MINERU_PROFILE_ID,
-        ExecutionProfile.external_process(
-            provider_id="docker",
-            allowed_argv_prefixes=(("mineru",),),
-        ),
-    )
-    profiles.register(
         RESEARCH_MARKER_PROFILE_ID,
         ExecutionProfile.external_process(
             provider_id="docker",
-            allowed_argv_prefixes=(("marker_single",),),
+            allowed_argv_prefixes=(("/usr/local/bin/marker_single",),),
         ),
     )
     manifest = RuntimeCompositionManifest.from_registries(
@@ -842,6 +851,12 @@ def test_default_research_pdf_parser_fails_closed_when_docker_is_unavailable(
         settings.parser,
         execution_composition=execution_composition,
     )
+    assert isinstance(parser, CascadeDocumentParser)
+    assert parser._recovery_policy.enabled is False
+    assert parser._recovery_policy.authorized_provider_ids == ()
+    assert parser._backend_provider_ids == {"marker": "docker"}
+    assert parser._backend_profile_ids == {"marker": RESEARCH_MARKER_PROFILE_ID}
+    assert parser._backends[0][1]._reading_order_profile.value == "backend_preserved"
     compiler = ResearchDocumentCompilerAdapter(
         SimpleNamespace(
             fetch_pdf_package=lambda _arxiv_id: SimpleNamespace(
@@ -1628,3 +1643,49 @@ def test_disabled_desktop_builds_local_only_composition_without_remote_clients(
         assert ask_error.value.status_code == 503
     finally:
         composition.close()
+
+
+def test_base_parser_omits_recovery_cpu_limit_but_recovery_keeps_it(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    profiles = ExecutionProfileRegistry()
+    profiles.register(
+        RESEARCH_MARKER_PROFILE_ID,
+        ExecutionProfile.external_process(
+            provider_id="docker",
+            allowed_argv_prefixes=(("/usr/local/bin/marker_single",),),
+        ),
+    )
+    registry = ExecutionEnvironmentRegistry()
+    registry.register(FakeExecutionEnvironment(
+        ExecutionCapabilityProfile(provider_id="docker", available=False),
+        lambda _request: pytest.fail("projection test must not execute"),
+    ))
+    execution = RuntimeExecutionComposition(
+        manifest=RuntimeCompositionManifest.from_registries(
+            composition_id="parser-limit-projection",
+            profile_registry=profiles,
+            execution_registry=registry,
+        ),
+        profile_registry=profiles,
+        execution_registry=registry,
+        required_provider_ids=("docker",),
+    )
+
+    base = research_composition._build_research_pdf_parser(
+        settings.parser, execution_composition=execution
+    )
+    base_limits = base._backends[0][1]._command_runner._resource_limits
+    assert base_limits.max_cpu_seconds is None
+    assert base_limits.max_processes == 1
+
+    recovery_settings = replace(
+        settings.parser,
+        recovery=replace(settings.parser.recovery, enabled=True),
+    )
+    recovery = research_composition._build_research_pdf_parser(
+        recovery_settings, execution_composition=execution
+    )
+    recovery_limits = recovery._backends[0][1]._command_runner._resource_limits
+    assert recovery_limits.max_cpu_seconds == settings.parser.recovery.max_cpu_seconds
