@@ -8,9 +8,8 @@ configured (and, for reproducibility, cached) ``LLMClient``.
 """
 from __future__ import annotations
 
-import asyncio
 import json
-from typing import Any, Literal, TypeVar
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -25,15 +24,14 @@ from backend.research.ports.answer_fact_extraction import (
     FactExtractionRequest,
     FactExtractionResult,
 )
-from framework.llm.clients.openai_compatible import LLMConfigurationError, LLMProviderError
-from framework.llm.models import LLMClient, LLMRequest, LLMResponse
-from framework.llm.structured_output import (
-    LLMStructuredOutputError,
-    ProviderStructuredOutputPolicy,
-    decode_structured_output,
-)
+from framework.llm.models import LLMClient
 
 from infrastructure.research.errors import ResearchAdapterError
+from infrastructure.research.structured_llm_call import (
+    StructuredCallOutputFailure,
+    StructuredCallProviderFailure,
+    call_structured,
+)
 
 FACT_EXTRACTION_PROMPT_VERSION = "answer-fact-extraction/v1"
 
@@ -201,42 +199,26 @@ class LLMAnswerFactExtractor:
         task: str,
         request_id: str,
     ) -> _T:
-        request = LLMRequest(
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0,
-            max_tokens=self._max_output_tokens,
-            timeout_seconds=self._timeout_seconds,
-            metadata={
-                "component": "research_answer_fact_extractor",
-                "task": task,
-                "request_id": request_id,
-                "prompt_version": FACT_EXTRACTION_PROMPT_VERSION,
-            },
-            output_schema=schema,
-            output_schema_name=f"research_{task}",
-            structured_output_policy=ProviderStructuredOutputPolicy(graph_scope="research.evaluation"),
-        )
         try:
-            response = await asyncio.to_thread(self._client.complete, request)
-        except (LLMConfigurationError, LLMProviderError) as exc:
-            raise FactExtractorProviderError(
-                f"fact extractor provider request failed for {task}",
-                retryable=bool(getattr(exc, "retryable", False)),
-            ) from exc
-        return _parse(LLMResponse.from_any(response), schema, task=task)
-
-
-def _parse(response: LLMResponse, schema: type[_T], *, task: str) -> _T:
-    raw: Any = response.structured_output
-    if not isinstance(raw, dict):
-        try:
-            raw = decode_structured_output(response.content or "")
-        except LLMStructuredOutputError as exc:
-            raise FactExtractorOutputError(f"{task} output is not strict JSON") from exc
-    try:
-        return schema.model_validate(raw)
-    except ValidationError as exc:
-        raise FactExtractorOutputError(f"{task} output does not match its schema") from exc
+            return await call_structured(
+                self._client,
+                system=system,
+                user=user,
+                schema=schema,
+                schema_name=f"research_{task}",
+                max_output_tokens=self._max_output_tokens,
+                timeout_seconds=self._timeout_seconds,
+                metadata={
+                    "component": "research_answer_fact_extractor",
+                    "task": task,
+                    "request_id": request_id,
+                    "prompt_version": FACT_EXTRACTION_PROMPT_VERSION,
+                },
+            )
+        except StructuredCallProviderFailure as exc:
+            raise FactExtractorProviderError(str(exc), retryable=exc.retryable) from exc
+        except StructuredCallOutputFailure as exc:
+            raise FactExtractorOutputError(str(exc)) from exc
 
 
 def _blank_to_none(value: str | None) -> str | None:

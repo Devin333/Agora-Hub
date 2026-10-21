@@ -17,7 +17,6 @@ extraction loss is measured instead of silently shrinking denominators.
 """
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -32,12 +31,13 @@ from backend.research.ports.answer_fact_extraction import (
     FactSourceRole,
     ScopeVocabulary,
 )
-from backend.research.rag.evaluation.protocol_answer_scoring import (
+from backend.research.rag.evaluation.protocol_fact_projections import (
     CandidateFactProjection,
     EvidenceFactProjection,
     ExactSourceExcerpt,
     ReferenceFactProjection,
     evidence_source_identity,
+    text_sha256,
 )
 from backend.research.rag.evaluation.protocol_common import (
     NonEmptyStr,
@@ -59,10 +59,6 @@ _PERCENT_UNITS = frozenset({
     NumericUnit.PERCENTAGE_POINT,
     NumericUnit.RELATIVE_PERCENT,
 })
-
-
-def _hash_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def canonical_key(value: str) -> str:
@@ -429,11 +425,11 @@ def build_evidence_projections(
                     source_locator=identity["source_locator"],
                     content_type=verified.fact.modality,
                     source_text=evidence.summary,
-                    source_text_sha256=_hash_text(evidence.summary),
+                    source_text_sha256=text_sha256(evidence.summary),
                     quote_start=start,
                     quote_end=start + len(draft.statement),
                     quote_text=draft.statement,
-                    quote_sha256=_hash_text(draft.statement),
+                    quote_sha256=text_sha256(draft.statement),
                 )
                 projection = EvidenceFactProjection(
                     evidence_id=evidence.evidence_id,

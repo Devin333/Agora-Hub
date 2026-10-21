@@ -1,13 +1,14 @@
-"""Deterministic answer, citation, and abstention scoring.
+"""Answer, citation, and abstention scoring.
 
-The module only emits independently verifiable observations. It never invokes a
-semantic judge and never substitutes lexical similarity for correctness or
-faithfulness. Ambiguous semantics become needs_review for the separate judge
-workflow.
+Observations come from deterministic fact comparison first. The module never
+invokes a semantic judge and never substitutes lexical similarity for
+correctness or faithfulness: pairs it cannot decide stay pending and make their
+metrics needs_review. A separate consensus workflow may resolve exactly those
+pending pairs; observations they influence are attributed to the semantic judge
+source.
 """
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -30,22 +31,42 @@ from backend.research.rag.evaluation.protocol_common import (
 from backend.research.rag.evaluation.protocol_dataset import (
     AUTOMATED_REVIEW_POLICY,
     EvaluationCase,
-    EvidenceLocation,
     ReferenceLabel,
     ReviewAcceptancePolicy,
+)
+from backend.research.rag.evaluation.protocol_claim_assessment import (
+    ClaimFactAssessment,
+    ClaimVerdict,
+    ComparisonTargetKind,
+    PassageDecision,
+    PendingJudgment,
+    ResolvedDimension,
+    SemanticDecision,
+    SemanticResolution,
+    TargetComparison,
+    assess_claim,
+    index_resolutions,
+)
+from backend.research.rag.evaluation.protocol_fact_projections import (
+    CandidateFactProjection,
+    EvidenceFactProjection,
+    ExactSourceExcerpt,
+    ReferenceFactProjection,
+    evidence_source_identity,
+    index_candidate_facts,
+    index_evidence_facts,
+    index_reference_facts,
+    rule_key,
+    source_identity_mismatch,
 )
 from backend.research.rag.evaluation.protocol_semantic_facts import (
     DETERMINISTIC_SEMANTIC_RULE_VERSION,
     EXPERIMENTAL_CONDITION_DIMENSIONS,
-    ContentModality,
     DimensionOutcome,
-    FactComparison,
     FactDimension,
-    FactRelation,
     NumericUnit,
     SemanticCondition,
     SemanticFact,
-    compare_semantic_facts,
 )
 from backend.research.rag.evaluation.protocol_scoring import (
     EvaluationScore,
@@ -62,7 +83,6 @@ from backend.research.rag.evaluation.protocol_scoring import (
 )
 from framework.harness.rag.models import (
     AnswerClaim,
-    EvidenceCandidate,
     GroundedAnswerCandidate,
     RAGContextPack,
 )
@@ -89,39 +109,9 @@ AnswerMetricId = Literal[
 ]
 
 
-def _text_sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _normalized_exact_text(value: str) -> str:
-    return " ".join(value.split())
-
-
 def _unique(values: Sequence[str], field_name: str) -> None:
     if len(values) != len(set(values)):
         raise ValueError(f"{field_name} must not contain duplicate values")
-
-
-class SemanticDecision(StrEnum):
-    SUPPORTED = "supported"
-    CONTRADICTED = "contradicted"
-    UNSUPPORTED = "unsupported"
-    NEEDS_REVIEW = "needs_review"
-
-
-class ClaimVerdict(StrEnum):
-    """Combined outcome of one answer claim against reference and context.
-
-    The reference (gold) decision is authoritative when it is decided. Only when
-    the reference does not cover the claim does actual context decide whether
-    the claim is grounded extra information or an over-inference.
-    """
-
-    CORRECT = "correct"
-    CONTRADICTED = "contradicted"
-    GROUNDED_EXTRA = "grounded_extra"
-    OVER_INFERENCE = "over_inference"
-    UNRESOLVED = "unresolved"
 
 
 class CitationParseState(StrEnum):
@@ -142,85 +132,6 @@ class ReviewedClass(StrEnum):
     POSITIVE = "positive"
     NEGATIVE = "negative"
     NEEDS_REVIEW = "needs_review"
-
-
-class ExactSourceExcerpt(ProtocolModel):
-    """Exact source text bound to actual context and reproducible identity."""
-
-    context_pack_id: NonEmptyStr
-    evidence_id: NonEmptyStr
-    paper_id: NonEmptyStr
-    document_version: ImmutableVersionStr
-    source_sha256: Sha256Digest
-    source_locator: NonEmptyStr
-    location: EvidenceLocation | None = None
-    content_type: ContentModality
-    source_text: NonEmptyStr
-    source_text_sha256: Sha256Digest
-    quote_start: int = Field(ge=0, strict=True)
-    quote_end: int = Field(gt=0, strict=True)
-    quote_text: NonEmptyStr
-    quote_sha256: Sha256Digest
-
-    @model_validator(mode="after")
-    def _verify_exact_text(self) -> "ExactSourceExcerpt":
-        if self.quote_end <= self.quote_start or self.quote_end > len(self.source_text):
-            raise ValueError("invalid exact quote range")
-        if self.source_text[self.quote_start : self.quote_end] != self.quote_text:
-            raise ValueError("quote_text must equal the exact source_text slice")
-        if self.source_text_sha256 != _text_sha256(self.source_text):
-            raise ValueError("source_text_sha256 does not match source_text")
-        if self.quote_sha256 != _text_sha256(self.quote_text):
-            raise ValueError("quote_sha256 does not match quote_text")
-        return self
-
-    @property
-    def evidence_reference(self) -> str:
-        locator = self.location.model_dump(mode="json") if self.location else self.source_locator
-        return (
-            f"source://{self.paper_id}/{self.document_version}/{self.source_sha256}/"
-            f"{content_digest(locator)}#quote={self.quote_sha256}"
-        )
-
-
-class ReferenceFactProjection(ProtocolModel):
-    reference_claim_id: NonEmptyStr
-    fact: SemanticFact
-    evidence_anchor_ids: tuple[NonEmptyStr, ...] = Field(min_length=1)
-    rule_id: NonEmptyStr
-    rule_version: ImmutableVersionStr
-
-    @model_validator(mode="after")
-    def _unique_anchors(self) -> "ReferenceFactProjection":
-        _unique(self.evidence_anchor_ids, "evidence_anchor_ids")
-        return self
-
-
-class CandidateFactProjection(ProtocolModel):
-    answer_claim_id: NonEmptyStr
-    reference_claim_id: NonEmptyStr | None = None
-    fact: SemanticFact
-    rule_id: NonEmptyStr
-    rule_version: ImmutableVersionStr
-
-
-class EvidenceFactProjection(ProtocolModel):
-    evidence_id: NonEmptyStr
-    fact: SemanticFact
-    source: ExactSourceExcerpt
-    rule_id: NonEmptyStr
-    rule_version: ImmutableVersionStr
-
-    @model_validator(mode="after")
-    def _source_matches_evidence(self) -> "EvidenceFactProjection":
-        if self.source.evidence_id != self.evidence_id:
-            raise ValueError("evidence fact and exact source must use the same evidence_id")
-        if self.fact.exact_quote is not None and (
-            _normalized_exact_text(self.fact.exact_quote)
-            != _normalized_exact_text(self.source.quote_text)
-        ):
-            raise ValueError("exact-quote fact must equal its verified source quote")
-        return self
 
 
 class ClaimAnswerSpan(ProtocolModel):
@@ -255,64 +166,6 @@ class CitationBinding(ProtocolModel):
         return self
 
 
-class ComparisonTargetKind(StrEnum):
-    REFERENCE = "reference"
-    EVIDENCE = "evidence"
-
-
-class TargetComparison(ProtocolModel):
-    """One deterministic comparison of an answer claim fact against one target fact."""
-
-    target_kind: ComparisonTargetKind
-    target_id: NonEmptyStr
-    evidence_id: NonEmptyStr | None = None
-    target_rule: NonEmptyStr
-    comparison: FactComparison
-
-    @model_validator(mode="after")
-    def _evidence_contract(self) -> "TargetComparison":
-        if (self.target_kind is ComparisonTargetKind.EVIDENCE) != (self.evidence_id is not None):
-            raise ValueError("evidence comparisons, and only they, carry an evidence_id")
-        return self
-
-
-class ClaimFactAssessment(ProtocolModel):
-    """Auditable per-claim record behind every fact and context metric.
-
-    Unresolved comparisons are kept so a separate semantic judge workflow can
-    resolve exactly these pairs without recomputing the deterministic part.
-    """
-
-    claim_id: NonEmptyStr
-    candidate_rule: NonEmptyStr | None
-    candidate_fact: SemanticFact | None
-    reference_decision: SemanticDecision
-    aligned_reference_claim_id: NonEmptyStr | None
-    context_decision: SemanticDecision
-    verdict: ClaimVerdict
-    reason: NonEmptyStr
-    reference_comparisons: tuple[TargetComparison, ...] = ()
-    context_comparisons: tuple[TargetComparison, ...] = ()
-
-    @property
-    def aligned_reference_comparison(self) -> FactComparison | None:
-        if self.aligned_reference_claim_id is None:
-            return None
-        matches = [
-            item.comparison for item in self.reference_comparisons
-            if item.target_id == self.aligned_reference_claim_id
-        ]
-        return matches[0] if len(matches) == 1 else None
-
-    def decision_over_evidence(self, evidence_ids: Sequence[str]) -> SemanticDecision:
-        wanted = set(evidence_ids)
-        comparisons = [
-            item.comparison for item in self.context_comparisons
-            if item.evidence_id in wanted
-        ]
-        return _best_context_decision(comparisons)
-
-
 class AnswerMetricObservation(ProtocolModel):
     metric_id: AnswerMetricId
     version: Literal[ANSWER_METRIC_VERSION] = ANSWER_METRIC_VERSION
@@ -323,6 +176,7 @@ class AnswerMetricObservation(ProtocolModel):
     reason: NonEmptyStr | None
     provenance: dict[NonEmptyStr, Any]
     evidence: tuple[NonEmptyStr, ...] = Field(min_length=1)
+    source: ScoreSource = ScoreSource.RULE
 
     @field_validator("status", mode="before")
     @classmethod
@@ -499,6 +353,11 @@ class AnswerScoreResult(ProtocolModel):
     def observation(self, metric_id: AnswerMetricId) -> AnswerMetricObservation:
         return next(item for item in self.observations if item.metric_id == metric_id)
 
+    def pending_judgments(self) -> tuple[PendingJudgment, ...]:
+        """Every (claim, target) pair a semantic judge must resolve."""
+
+        return tuple(item for assessment in self.claim_assessments for item in assessment.pending_judgments())
+
     def to_evaluation_scores(self, identity: AnswerScoreIdentity) -> tuple[EvaluationScore, ...]:
         if identity.case_id != self.case_id:
             raise ValueError("score identity case_id must match the scored case")
@@ -564,7 +423,7 @@ def parse_citation_bindings(
             if source.context_pack_id != actual_context.pack_id:
                 invalid_reason = "citation source belongs to a different context pack"
                 break
-            review_reason = _source_identity_mismatch(actual, source)
+            review_reason = source_identity_mismatch(actual, source)
             if review_reason:
                 break
             resolved.append(source)
@@ -790,38 +649,6 @@ _CASE_METRIC_BOUNDARIES: tuple[tuple[AnswerMetricId, str], ...] = (
     ("answer.citation_coverage", "answer_claims+citation_bindings"),
 )
 
-_RELATION_DECISION: dict[FactRelation, SemanticDecision] = {
-    FactRelation.MATCH: SemanticDecision.SUPPORTED,
-    FactRelation.CONFLICT: SemanticDecision.CONTRADICTED,
-    FactRelation.UNDETERMINED: SemanticDecision.NEEDS_REVIEW,
-    FactRelation.SCOPE_MISMATCH: SemanticDecision.UNSUPPORTED,
-}
-
-
-def _best_context_decision(comparisons: Sequence[FactComparison]) -> SemanticDecision:
-    """Best decision of one claim over a set of evidence facts.
-
-    Any matching evidence supports the claim. Undetermined evidence keeps the
-    claim unresolved even if other evidence conflicts, so a contradiction is
-    only reported when every in-scope evidence fact disagrees deterministically.
-    """
-
-    if not comparisons:
-        return SemanticDecision.NEEDS_REVIEW
-    relations = {item.relation for item in comparisons}
-    if FactRelation.MATCH in relations:
-        return SemanticDecision.SUPPORTED
-    if FactRelation.UNDETERMINED in relations:
-        return SemanticDecision.NEEDS_REVIEW
-    if FactRelation.CONFLICT in relations:
-        return SemanticDecision.CONTRADICTED
-    return SemanticDecision.UNSUPPORTED
-
-
-def _rule_key(rule_id: str, rule_version: str) -> str:
-    return f"{rule_id}@{rule_version}"
-
-
 def score_answer(
     *,
     case_id: str,
@@ -834,8 +661,15 @@ def score_answer(
     runtime_error: str | None = None,
     rubric: AbstentionRubric = AbstentionRubric(),
     review_policy: ReviewAcceptancePolicy = AUTOMATED_REVIEW_POLICY,
+    resolutions: Sequence[SemanticResolution] = (),
 ) -> AnswerScoreResult:
-    """Produce independent deterministic observations with isolated inputs."""
+    """Score one answer from deterministic comparisons plus attributed resolutions.
+
+    ``resolutions`` may only decide pairs the deterministic rules left pending
+    (see ``AnswerScoreResult.pending_judgments``); any other resolution is a
+    contract error. Observations influenced by a resolution are attributed to
+    the semantic judge source.
+    """
 
     abstention = classify_abstention(
         case_id=case_id,
@@ -848,7 +682,10 @@ def score_answer(
     answer_ref = f"answer://{candidate.answer_id}" if candidate else f"answer://{case_id}/missing"
     reference_ref = f"reference://{case_id}/{content_digest(reference)}"
     base_evidence = (answer_ref, reference_ref)
+    resolution_index = index_resolutions(resolutions)
     if runtime_error is not None or candidate is None:
+        if resolution_index:
+            raise ValueError("resolutions cannot apply to a runtime failure")
         observations = tuple(_state_observation(
             metric_id=metric_id,
             status=ScoreStatus.ERROR,
@@ -871,6 +708,11 @@ def score_answer(
     )
     reviewed_class = _reviewed_class(reference, review_policy)
     assessments: tuple[ClaimFactAssessment, ...] = ()
+    answerable = not (
+        reference.answerability != "answerable" or reviewed_class is ReviewedClass.NEEDS_REVIEW
+    )
+    if resolution_index and not answerable:
+        raise ValueError("resolutions only apply to accepted answerable cases")
     if reference.answerability == "needs_review" or reviewed_class is ReviewedClass.NEEDS_REVIEW:
         observations = tuple(_state_observation(
             metric_id=metric_id,
@@ -900,6 +742,7 @@ def score_answer(
             evidence_facts=evidence_facts,
             bindings=bindings,
             base_evidence=base_evidence,
+            resolutions=resolution_index,
         )
     observations = _with_provenance(observations, _review_provenance(reference, review_policy))
     return AnswerScoreResult(
@@ -926,49 +769,69 @@ def _score_answerable_case(
     evidence_facts: Sequence[EvidenceFactProjection],
     bindings: Sequence[CitationBinding],
     base_evidence: tuple[str, ...],
+    resolutions: Mapping[tuple[str, ComparisonTargetKind, str], SemanticResolution],
 ) -> tuple[tuple[AnswerMetricObservation, ...], tuple[ClaimFactAssessment, ...]]:
     claims = tuple(candidate.claims)
     claim_ids = {item.claim_id for item in claims}
     if len(claim_ids) != len(claims):
         raise ValueError("candidate claim_id values must be unique")
-    reference_by_id = _index_reference_facts(reference_facts, reference)
-    candidate_by_id = _index_candidate_facts(candidate_facts, claims, reference)
-    evidence_by_id = _index_evidence_facts(evidence_facts, actual_context)
-    unprojected_reference_ids = frozenset(
-        item.claim_id for item in reference.reference_claims
-    ) - frozenset(reference_by_id)
+    reference_by_id = index_reference_facts(reference_facts, reference)
+    candidate_by_id = index_candidate_facts(candidate_facts, claims, reference)
+    evidence_by_id = index_evidence_facts(evidence_facts, actual_context)
+    reference_claim_ids = tuple(item.claim_id for item in reference.reference_claims)
     assessments = tuple(
-        _assess_claim(
+        assess_claim(
             claim,
             projection=candidate_by_id.get(claim.claim_id),
             reference_by_id=reference_by_id,
-            unprojected_reference_ids=unprojected_reference_ids,
+            reference_claim_ids=reference_claim_ids,
             actual_context=actual_context,
             evidence_by_id=evidence_by_id,
+            resolutions=resolutions,
         )
         for claim in claims
     )
+    applied = [item for assessment in assessments for item in assessment.resolutions]
+    unused = set(resolutions) - {item.key for item in applied}
+    if unused:
+        raise ValueError(
+            "resolutions target pairs that are not pending: "
+            + ", ".join(f"{claim}/{kind.value}/{target}" for claim, kind, target in sorted(unused))
+        )
+    reference_resolvers = sorted({
+        item.resolver for item in applied if item.target_kind is ComparisonTargetKind.REFERENCE
+    })
+    evidence_resolvers = sorted({
+        item.resolver for item in applied if item.target_kind is ComparisonTargetKind.EVIDENCE
+    })
     fact_provenance = {
         "rule_version": DETERMINISTIC_SEMANTIC_RULE_VERSION,
         "reference_projection_rules": sorted({
-            _rule_key(item.rule_id, item.rule_version) for item in reference_by_id.values()
+            rule_key(item.rule_id, item.rule_version) for item in reference_by_id.values()
         }),
         "candidate_projection_rules": sorted({
-            _rule_key(item.rule_id, item.rule_version) for item in candidate_by_id.values()
+            rule_key(item.rule_id, item.rule_version) for item in candidate_by_id.values()
         }),
+        "reference_resolutions": sum(
+            item.target_kind is ComparisonTargetKind.REFERENCE for item in applied
+        ),
+        "reference_resolvers": reference_resolvers,
     }
     context_provenance = {
         "rule_version": DETERMINISTIC_SEMANTIC_RULE_VERSION,
         "candidate_projection_rules": fact_provenance["candidate_projection_rules"],
         "evidence_projection_rules": sorted({
-            _rule_key(item.rule_id, item.rule_version)
+            rule_key(item.rule_id, item.rule_version)
             for values in evidence_by_id.values() for item in values
         }),
+        "evidence_resolutions": sum(
+            item.target_kind is ComparisonTargetKind.EVIDENCE for item in applied
+        ),
+        "evidence_resolvers": evidence_resolvers,
     }
     precision, recall, f1 = _score_fact_correctness(
         reference=reference,
         assessments=assessments,
-        unprojected_reference_ids=unprojected_reference_ids,
         provenance=fact_provenance,
         evidence=base_evidence,
     )
@@ -1002,169 +865,20 @@ def _score_answerable_case(
         provenance=context_provenance,
         evidence=(base_evidence[0],),
     )
+    judged_reference = bool(reference_resolvers)
+    judged_context = bool(evidence_resolvers)
     observations = (
-        precision, recall, f1,
-        contradicted, over_inference, unresolved,
-        numeric, unit, condition,
-        faithfulness, support, coverage,
+        *_attributed((precision, recall, f1, numeric, unit, condition), judged_reference),
+        *_attributed((contradicted, over_inference, unresolved), judged_reference or judged_context),
+        *_attributed((faithfulness, support, coverage), judged_context),
     )
     return observations, assessments
-
-
-def _assess_claim(
-    claim: AnswerClaim,
-    *,
-    projection: CandidateFactProjection | None,
-    reference_by_id: Mapping[str, ReferenceFactProjection],
-    unprojected_reference_ids: frozenset[str],
-    actual_context: RAGContextPack | None,
-    evidence_by_id: Mapping[str, tuple[EvidenceFactProjection, ...]],
-) -> ClaimFactAssessment:
-    if projection is None:
-        context_decision = _context_precondition(actual_context, evidence_by_id)
-        return ClaimFactAssessment(
-            claim_id=claim.claim_id,
-            candidate_rule=None,
-            candidate_fact=None,
-            reference_decision=SemanticDecision.NEEDS_REVIEW,
-            aligned_reference_claim_id=None,
-            context_decision=context_decision or SemanticDecision.NEEDS_REVIEW,
-            verdict=ClaimVerdict.UNRESOLVED,
-            reason="answer claim has no verified semantic projection",
-        )
-    reference_decision, aligned_id, reference_comparisons = _assess_against_reference(
-        projection,
-        reference_by_id=reference_by_id,
-        unprojected_reference_ids=unprojected_reference_ids,
-    )
-    context_decision, context_comparisons = _assess_against_context(
-        projection.fact,
-        actual_context=actual_context,
-        evidence_by_id=evidence_by_id,
-    )
-    verdict, reason = _derive_verdict(reference_decision, context_decision)
-    return ClaimFactAssessment(
-        claim_id=claim.claim_id,
-        candidate_rule=_rule_key(projection.rule_id, projection.rule_version),
-        candidate_fact=projection.fact,
-        reference_decision=reference_decision,
-        aligned_reference_claim_id=aligned_id,
-        context_decision=context_decision,
-        verdict=verdict,
-        reason=reason,
-        reference_comparisons=reference_comparisons,
-        context_comparisons=context_comparisons,
-    )
-
-
-def _context_precondition(
-    actual_context: RAGContextPack | None,
-    evidence_by_id: Mapping[str, tuple[EvidenceFactProjection, ...]],
-) -> SemanticDecision | None:
-    """Decision forced by the context itself, or None when facts must be compared."""
-
-    if actual_context is None:
-        return SemanticDecision.NEEDS_REVIEW
-    if not actual_context.accepted_evidence:
-        # Nothing was shown to the model, so no claim can be grounded in it.
-        return SemanticDecision.UNSUPPORTED
-    if not evidence_by_id:
-        return SemanticDecision.NEEDS_REVIEW
-    return None
-
-
-def _assess_against_reference(
-    projection: CandidateFactProjection,
-    *,
-    reference_by_id: Mapping[str, ReferenceFactProjection],
-    unprojected_reference_ids: frozenset[str],
-) -> tuple[SemanticDecision, str | None, tuple[TargetComparison, ...]]:
-    if projection.reference_claim_id is not None:
-        target = reference_by_id.get(projection.reference_claim_id)
-        if target is None:
-            # Aligned to a reference claim that has no verified projection.
-            return SemanticDecision.NEEDS_REVIEW, projection.reference_claim_id, ()
-        comparison = compare_semantic_facts(projection.fact, target.fact, bound=True)
-        item = TargetComparison(
-            target_kind=ComparisonTargetKind.REFERENCE,
-            target_id=target.reference_claim_id,
-            target_rule=_rule_key(target.rule_id, target.rule_version),
-            comparison=comparison,
-        )
-        return _RELATION_DECISION[comparison.relation], target.reference_claim_id, (item,)
-    comparisons = tuple(
-        TargetComparison(
-            target_kind=ComparisonTargetKind.REFERENCE,
-            target_id=target.reference_claim_id,
-            target_rule=_rule_key(target.rule_id, target.rule_version),
-            comparison=compare_semantic_facts(projection.fact, target.fact, bound=False),
-        )
-        for target in reference_by_id.values()
-    )
-    by_relation: dict[FactRelation, list[str]] = {}
-    for item in comparisons:
-        by_relation.setdefault(item.comparison.relation, []).append(item.target_id)
-    matches = by_relation.get(FactRelation.MATCH, [])
-    conflicts = by_relation.get(FactRelation.CONFLICT, [])
-    if matches:
-        return SemanticDecision.SUPPORTED, matches[0] if len(matches) == 1 else None, comparisons
-    if FactRelation.UNDETERMINED in by_relation:
-        return SemanticDecision.NEEDS_REVIEW, None, comparisons
-    if conflicts:
-        return SemanticDecision.CONTRADICTED, conflicts[0] if len(conflicts) == 1 else None, comparisons
-    if unprojected_reference_ids:
-        # The claim may address a reference claim whose fact is not verified.
-        return SemanticDecision.NEEDS_REVIEW, None, comparisons
-    return SemanticDecision.UNSUPPORTED, None, comparisons
-
-
-def _assess_against_context(
-    fact: SemanticFact,
-    *,
-    actual_context: RAGContextPack | None,
-    evidence_by_id: Mapping[str, tuple[EvidenceFactProjection, ...]],
-) -> tuple[SemanticDecision, tuple[TargetComparison, ...]]:
-    forced = _context_precondition(actual_context, evidence_by_id)
-    if forced is not None:
-        return forced, ()
-    comparisons = tuple(
-        TargetComparison(
-            target_kind=ComparisonTargetKind.EVIDENCE,
-            target_id=f"{evidence_id}#{content_digest(item.fact.model_dump(mode='json'))}",
-            evidence_id=evidence_id,
-            target_rule=_rule_key(item.rule_id, item.rule_version),
-            comparison=compare_semantic_facts(fact, item.fact, bound=False),
-        )
-        for evidence_id, items in evidence_by_id.items()
-        for item in items
-    )
-    return _best_context_decision([item.comparison for item in comparisons]), comparisons
-
-
-def _derive_verdict(
-    reference_decision: SemanticDecision,
-    context_decision: SemanticDecision,
-) -> tuple[ClaimVerdict, str]:
-    if reference_decision is SemanticDecision.CONTRADICTED:
-        return ClaimVerdict.CONTRADICTED, "claim conflicts with a verified reference fact"
-    if reference_decision is SemanticDecision.SUPPORTED:
-        return ClaimVerdict.CORRECT, "claim matches a verified reference fact"
-    if reference_decision is SemanticDecision.NEEDS_REVIEW:
-        return ClaimVerdict.UNRESOLVED, "reference comparison requires semantic judgment"
-    if context_decision is SemanticDecision.SUPPORTED:
-        return ClaimVerdict.GROUNDED_EXTRA, "claim is outside the reference but grounded in actual context"
-    if context_decision is SemanticDecision.CONTRADICTED:
-        return ClaimVerdict.CONTRADICTED, "claim is outside the reference and conflicts with actual context"
-    if context_decision is SemanticDecision.UNSUPPORTED:
-        return ClaimVerdict.OVER_INFERENCE, "claim is supported by neither the reference nor actual context"
-    return ClaimVerdict.UNRESOLVED, "context comparison requires semantic judgment"
 
 
 def _score_fact_correctness(
     *,
     reference: ReferenceLabel,
     assessments: Sequence[ClaimFactAssessment],
-    unprojected_reference_ids: frozenset[str],
     provenance: dict[str, Any],
     evidence: tuple[str, ...],
 ) -> tuple[AnswerMetricObservation, AnswerMetricObservation, AnswerMetricObservation]:
@@ -1199,30 +913,16 @@ def _score_fact_correctness(
         evidence=evidence,
     )
 
-    matched: set[str] = set()
-    undetermined: set[str] = set()
-    has_unprojected_claim = False
-    for item in assessments:
-        if item.candidate_fact is None:
-            has_unprojected_claim = True
-            continue
-        for target in item.reference_comparisons:
-            if target.comparison.relation is FactRelation.MATCH:
-                matched.add(target.target_id)
-            elif target.comparison.relation is FactRelation.UNDETERMINED:
-                undetermined.add(target.target_id)
-        if (
-            item.reference_decision is SemanticDecision.NEEDS_REVIEW
-            and item.aligned_reference_claim_id is not None
-            and not item.reference_comparisons
-        ):
-            undetermined.add(item.aligned_reference_claim_id)
+    # A reference claim is covered when any claim supports it, and unknown while
+    # some claim's judgment about it is still pending.
+    matched = {target for item in assessments for target in item.supported_reference_ids}
+    pending = {
+        target
+        for item in assessments
+        for target in (*item.pending_reference_ids, *item.recall_pending_reference_ids)
+    }
     all_reference_ids = {item.claim_id for item in reference.reference_claims}
-    unknown_reference = (
-        set(unprojected_reference_ids)
-        | (undetermined - matched)
-        | ((all_reference_ids - matched) if has_unprojected_claim else set())
-    )
+    unknown_reference = (pending - matched) & all_reference_ids
     if unknown_reference:
         recall = _review_observation(
             metric_id="answer.fact_recall",
@@ -1365,15 +1065,22 @@ def _score_dimension_accuracy(
         for item in assessments:
             if item.reference_decision is SemanticDecision.UNSUPPORTED:
                 continue
-            comparison = item.aligned_reference_comparison
-            if comparison is None or item.reference_decision is SemanticDecision.NEEDS_REVIEW:
+            outcomes = (
+                None if item.reference_decision is SemanticDecision.NEEDS_REVIEW
+                else item.aligned_dimension_outcomes()
+            )
+            if outcomes is None:
                 unknown += _asserted_dimension_count(item.candidate_fact, dimensions)
                 continue
-            for dimension in comparison.outcomes(dimensions):
+            for dimension in outcomes:
+                if dimension.dimension not in dimensions:
+                    continue
                 if dimension.outcome is DimensionOutcome.MATCH:
                     correct += 1
                 elif dimension.outcome is DimensionOutcome.MISMATCH:
                     wrong += 1
+                else:
+                    unknown += 1
         result.append(_aggregate_ratio_observation(
             metric_id=metric_id,
             event_count=correct,
@@ -1425,7 +1132,7 @@ def _cited_claim_decision(
 ) -> SemanticDecision:
     if binding is None or binding.state is CitationParseState.INVALID:
         return SemanticDecision.UNSUPPORTED
-    if binding.state is CitationParseState.NEEDS_REVIEW or assessment.candidate_fact is None:
+    if binding.state is CitationParseState.NEEDS_REVIEW:
         return SemanticDecision.NEEDS_REVIEW
     return assessment.decision_over_evidence(claim.evidence_ids)
 
@@ -1530,6 +1237,21 @@ def _review_provenance(reference: ReferenceLabel, policy: ReviewAcceptancePolicy
     }
 
 
+def _attributed(
+    observations: Sequence[AnswerMetricObservation],
+    judged: bool,
+) -> tuple[AnswerMetricObservation, ...]:
+    if not judged:
+        return tuple(observations)
+    return tuple(
+        AnswerMetricObservation.model_validate({
+            **item.model_dump(),
+            "source": ScoreSource.SEMANTIC_JUDGE,
+        })
+        for item in observations
+    )
+
+
 def _with_provenance(
     observations: Sequence[AnswerMetricObservation],
     extra: Mapping[str, Any],
@@ -1594,131 +1316,6 @@ def _resolve_claim_span(
         end=start + len(claim.text),
         text=claim.text,
     ), ""
-
-
-def evidence_source_identity(evidence: EvidenceCandidate) -> dict[str, str | None]:
-    """Immutable source identity an accepted context item declares.
-
-    Identity may be carried on the evidence metadata, on an embedded
-    ``paper_chunk``, or on that chunk's own metadata, in that precedence order.
-    """
-
-    metadata = evidence.metadata
-    raw_chunk = metadata.get("paper_chunk")
-    chunk: Mapping[str, Any] = raw_chunk if isinstance(raw_chunk, Mapping) else {}
-    raw_chunk_metadata = chunk.get("metadata")
-    chunk_metadata: Mapping[str, Any] = (
-        raw_chunk_metadata if isinstance(raw_chunk_metadata, Mapping) else {}
-    )
-
-    def pick(name: str) -> str | None:
-        value = metadata.get(name)
-        if value in (None, ""):
-            value = chunk.get(name)
-        if value in (None, ""):
-            value = chunk_metadata.get(name)
-        return str(value) if value not in (None, "") else None
-
-    return {
-        "paper_id": pick("paper_id"),
-        "document_version": pick("document_version"),
-        "source_sha256": pick("source_sha256"),
-        "source_locator": pick("source_locator") or evidence.source_ref,
-    }
-
-
-def _source_identity_mismatch(
-    evidence: EvidenceCandidate,
-    source: ExactSourceExcerpt,
-) -> str | None:
-    expected = evidence_source_identity(evidence)
-    actual = {
-        "paper_id": source.paper_id,
-        "document_version": source.document_version,
-        "source_sha256": source.source_sha256,
-        "source_locator": source.source_locator,
-    }
-    missing = [name for name, value in expected.items() if value is None]
-    if missing:
-        return f"actual context lacks immutable source identity fields: {', '.join(missing)}"
-    mismatch = [name for name in expected if expected[name] != actual[name]]
-    if mismatch:
-        return f"exact citation source identity differs for: {', '.join(mismatch)}"
-    # Only the exact text actually exposed to the model may support faithfulness.
-    # A complete source document or arbitrary retrieved chunk cannot repair a
-    # truncated or compressed accepted context.
-    if source.quote_text not in evidence.summary:
-        return "verified source quote is absent from actual model context text"
-    return None
-
-
-def _index_reference_facts(
-    projections: Sequence[ReferenceFactProjection],
-    reference: ReferenceLabel,
-) -> dict[str, ReferenceFactProjection]:
-    allowed_claim_ids = {item.claim_id for item in reference.reference_claims}
-    anchors = {item.anchor_id: item for item in reference.evidence_anchors}
-    result: dict[str, ReferenceFactProjection] = {}
-    for projection in projections:
-        if projection.reference_claim_id not in allowed_claim_ids:
-            raise ValueError("reference fact projection targets an unknown reference claim")
-        if projection.reference_claim_id in result:
-            raise ValueError("reference claims may have only one deterministic projection")
-        for anchor_id in projection.evidence_anchor_ids:
-            anchor = anchors.get(anchor_id)
-            if anchor is None or projection.reference_claim_id not in anchor.claim_ids:
-                raise ValueError("reference fact projection must use native anchors for its claim")
-        result[projection.reference_claim_id] = projection
-    return result
-
-
-def _index_candidate_facts(
-    projections: Sequence[CandidateFactProjection],
-    claims: Sequence[AnswerClaim],
-    reference: ReferenceLabel,
-) -> dict[str, CandidateFactProjection]:
-    claim_by_id = {item.claim_id: item for item in claims}
-    reference_claim_ids = {item.claim_id for item in reference.reference_claims}
-    result: dict[str, CandidateFactProjection] = {}
-    for projection in projections:
-        claim = claim_by_id.get(projection.answer_claim_id)
-        if claim is None:
-            raise ValueError("candidate fact projection targets an unknown answer claim")
-        if projection.answer_claim_id in result:
-            raise ValueError("answer claims may have only one deterministic projection")
-        if (
-            projection.reference_claim_id is not None
-            and projection.reference_claim_id not in reference_claim_ids
-        ):
-            raise ValueError("candidate fact projection is aligned to an unknown reference claim")
-        if projection.fact.exact_quote is not None and (
-            _normalized_exact_text(projection.fact.exact_quote)
-            != _normalized_exact_text(claim.text)
-        ):
-            raise ValueError("exact-quote candidate projection must equal its native AnswerClaim text")
-        result[projection.answer_claim_id] = projection
-    return result
-
-
-def _index_evidence_facts(
-    projections: Sequence[EvidenceFactProjection],
-    actual_context: RAGContextPack | None,
-) -> dict[str, tuple[EvidenceFactProjection, ...]]:
-    actual_by_id = (
-        {item.evidence_id: item for item in actual_context.accepted_evidence}
-        if actual_context is not None
-        else {}
-    )
-    grouped: dict[str, list[EvidenceFactProjection]] = {}
-    for projection in projections:
-        if actual_context is None or projection.evidence_id not in actual_by_id:
-            raise ValueError("evidence facts must belong to actual_context.accepted_evidence")
-        if projection.source.context_pack_id != actual_context.pack_id:
-            raise ValueError("evidence fact source belongs to a different actual context pack")
-        if _source_identity_mismatch(actual_by_id[projection.evidence_id], projection.source):
-            continue
-        grouped.setdefault(projection.evidence_id, []).append(projection)
-    return {key: tuple(value) for key, value in grouped.items()}
 
 
 def _decisions_ratio(
@@ -1933,7 +1530,7 @@ def _observations_to_scores(
             status=observation.status,
             numerator=observation.numerator,
             denominator=observation.denominator,
-            source=ScoreSource.RULE,
+            source=observation.source,
             provenance=provenance,
             provenance_digest=content_digest(provenance),
             evidence=observation.evidence,
@@ -2050,6 +1647,10 @@ __all__ = [
     "ClaimVerdict",
     "ComparisonTargetKind",
     "EvidenceFactProjection",
+    "PassageDecision",
+    "PendingJudgment",
+    "ResolvedDimension",
+    "SemanticResolution",
     "ExactSourceExcerpt",
     "NumericUnit",
     "ReferenceFactProjection",

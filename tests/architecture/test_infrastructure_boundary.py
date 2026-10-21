@@ -66,6 +66,9 @@ ALLOWED_BUSINESS_IMPORTS = {
     "infrastructure/research/llm_fact_extractor.py": {
         "backend.research.ports.answer_fact_extraction",
     },
+    "infrastructure/research/llm_fact_judge.py": {
+        "backend.research.ports.fact_entailment_judge",
+    },
     "infrastructure/research/reader_repair_memory_side_effect.py": {
         "backend.research.ports.repair_memory",
     },
@@ -153,6 +156,9 @@ RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
     },
     "infrastructure/research/llm_fact_extractor.py": {
         "backend.research.ports.answer_fact_extraction",
+    },
+    "infrastructure/research/llm_fact_judge.py": {
+        "backend.research.ports.fact_entailment_judge",
     },
     "infrastructure/research/reader_repair_memory_side_effect.py": {
         "backend.research.ports.repair_memory",
