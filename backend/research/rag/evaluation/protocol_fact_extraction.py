@@ -320,14 +320,21 @@ def build_candidate_projections(
     results: Mapping[str, FactExtractionResult],
     *,
     alignment_targets: Sequence[AlignmentTarget],
+    reference_facts: Sequence[ReferenceFactProjection] = (),
 ) -> tuple[tuple[CandidateFactProjection, ...], FactVerificationReport]:
     """Project each atomic answer claim to at most one verified fact.
 
     ``results`` is keyed by answer claim id. The claim text is the only source a
     candidate fact may quote; decomposition already guaranteed that claim text
-    introduces no number absent from the answer.
+    introduces no number absent from the answer. ``reference_facts`` lets a
+    yes/no claim aligned to a yes/no reference adopt that reference's scope.
     """
 
+    reference_scopes = {
+        item.reference_claim_id: item.fact
+        for item in reference_facts
+        if item.fact.polarity is not None
+    }
     rejections: list[FactRejection] = []
     projections: list[CandidateFactProjection] = []
     drafts = accepted = 0
@@ -351,6 +358,23 @@ def build_candidate_projections(
         fact = fact.model_copy(update={
             "exact_quote": None if fact.has_structured_content else claim.text,
         })
+        target_scope = reference_scopes.get(verified.draft.aligned_target_id or "")
+        if (
+            target_scope is not None
+            and fact.polarity is not None
+            and fact.numeric_value is None
+            and fact.categorical_value is None
+        ):
+            # A yes/no claim explicitly aligned to a yes/no reference answers
+            # that question; the extractor's own wording of "what is asked"
+            # must not turn agreement into a scope conflict.
+            fact = fact.model_copy(update={
+                "object_id": target_scope.object_id,
+                "dataset_id": target_scope.dataset_id,
+                "split_id": target_scope.split_id,
+                "statistic": target_scope.statistic,
+                "conditions": target_scope.conditions,
+            })
         rule_id, rule_version = _rule(result)
         projections.append(CandidateFactProjection(
             answer_claim_id=claim.claim_id,

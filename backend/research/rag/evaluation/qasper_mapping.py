@@ -497,3 +497,14 @@ def freeze_qasper_dataset(
     frozen = FrozenQasperDataset(**payload, digest=content_digest(payload))
     frozen.verify_digest()
     return frozen
+
+
+# Public parsing surface shared with answer-level gold construction
+# (``qasper_reference``). The raw QASPER layouts and checked source text must be
+# read identically by retrieval mapping and answer evaluation.
+iter_qasper_papers = _paper_rows
+iter_qasper_questions = _qa_rows
+iter_qasper_annotations = _answer_rows
+qasper_answer_content = _answer_content
+build_checked_source = _build_source
+locate_unique_span = _unique_span
