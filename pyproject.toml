@@ -56,6 +56,9 @@ ocr = [
   # Provides the `nougat` CLI used by backend.research.document.pdf_compiler.
   "nougat-ocr==0.1.17",
 ]
+qasper-eval = [
+  "numpy>=1.26,<3.0",
+]
 dev = [
   "cryptography>=42.0",
   "fastapi>=0.110",

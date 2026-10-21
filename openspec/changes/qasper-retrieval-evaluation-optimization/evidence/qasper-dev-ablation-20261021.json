@@ -1,0 +1,1491 @@
+{
+  "artifact_hashes": {
+    "report.json": "2d6dadd9996e25c41b8c7fc3b888e90a0b3e983c12b8b40289dd9d4de04abc5b",
+    "report.md": "eea98751daae0df9aff32bcbe491bd35d095e3b36d7c13dbdd02776e52c93d82",
+    "run-experiments.json": "6f5d92bc7f796b5bbfb363a992e2494108c17a1026299abde4a1fa9637f2286c",
+    "run-index.json": "caf3dd7fdb73cfe7c21d7651af01f77e00f643e54b4e27ce72888152793bf274",
+    "run-summary.json": "febd3eea30bafd18afd6a274b850e1c8a5b0e81942521929c834e2fbc67a23bb"
+  },
+  "as_of": "2026-10-21",
+  "cache_sha256": "57a2b191e3330a04d451f25d4d05f5abb51532a920c7224f9fbe23b6ba8cfff6",
+  "checks": {
+    "compile": {
+      "exit_code": 0
+    },
+    "focused_qasper_and_boundaries": {
+      "exit_code": 0,
+      "passed": 246
+    },
+    "full_smoke": {
+      "deselected": 23,
+      "exit_code": 0,
+      "log": "F:/datasets/qasper/results/qasper-smoke-20261021-rerun.log",
+      "log_sha256": "a44fb7313ef4a8d4ab4eb0b7d8d053eda4925e330e780c5ed646ee3e071fce42",
+      "note": "Smoke collection started before last regression additions. Final focused regression and isolated candidate tests run additionally.",
+      "passed": 4947,
+      "skipped": 1
+    },
+    "harness_caller_inventory_openspec_strict": {
+      "exit_code": 0
+    },
+    "isolated_candidate_dependencies": {
+      "exit_code": 0,
+      "passed": 467
+    },
+    "qasper_openspec_strict": {
+      "exit_code": 0
+    }
+  },
+  "code_identity_note": "Observed dirty workspace identity is bound in every manifest. Results are not represented as a clean committed-code measurement. Subsequent EOF normalization changes source bytes but not retrieval/scoring logic.",
+  "dataset_digest": "454dd3d08826253edb3147d8cda676de737b8bd4a04fa6b80947d7434c5bfe2c",
+  "dataset_sha256": "2ae7ee62a65b1c4225791c70de80c2aad4e8998cf1fd4f09a53103db4f21af93",
+  "diagnostic_only": true,
+  "execution_profile": "fixture",
+  "execution_summary": {
+    "blocked_cases": 844,
+    "blocked_profile": "full_hybrid_multi_query",
+    "blocked_profiles": 1,
+    "missing_keys_manifest_sha256": "5c4d92d0c212ab5d1d6df773301d6c3fec1a124cd5dacaebca75d84fd34c96f2",
+    "missing_required_query_keys": 982,
+    "planned_profiles": 7,
+    "score_validated_cases": 7035,
+    "structural_validation_does_not_imply_success": true,
+    "successful_profiles": 6
+  },
+  "experiments": [
+    {
+      "denominators": {
+        "needs_review": 101,
+        "not_applicable": 60,
+        "planned": 1005,
+        "system_failure": 0,
+        "valid": 844
+      },
+      "experiment_id": "0b847b818e064fe1b3edd999b8bf03f2c9885d0f814484b6fc32cdb8ae14ab8f",
+      "failure_attribution": {
+        "candidate_recall_miss:candidate": 48,
+        "fusion_rerank_miss:fusion": 1,
+        "mapping_failure:mapping": 101,
+        "not_applicable:mapping": 60,
+        "partial_coverage:scoring": 153,
+        "top_k_miss:scoring": 389
+      },
+      "manifest_digest": "eae63a942ff0fa0fe6574a0538e0f2f5bdace6b76583c41cfb08db38d74c7448",
+      "manifest_sha256": "855a1c6c37e1fac65473268cffeefea1da3931658947959578888a5c04c8e513",
+      "metrics": [
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 421.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.49881516587677727,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 513.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6078199052132701,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 568.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6729857819905213,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 664.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7867298578199052,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 315.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.3732227488151659,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 429.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5082938388625592,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 456.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5402843601895735,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 591.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7002369668246445,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_mrr",
+          "numerator": 277.4246781426464,
+          "reason": null,
+          "status": "ok",
+          "value": 0.32870222528749576,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_mrr",
+          "numerator": 341.56343886790404,
+          "reason": null,
+          "status": "ok",
+          "value": 0.40469601761600005,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 231.35090574513066,
+          "reason": null,
+          "status": "ok",
+          "value": 0.27411244756532066,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 304.0991575725764,
+          "reason": null,
+          "status": "ok",
+          "value": 0.36030705873528013,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 281.60215279988614,
+          "reason": null,
+          "status": "ok",
+          "value": 0.3336518398102916,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 355.8580578160021,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4216327699241731,
+          "version": "qasper-equivalent-retrieval/v1"
+        }
+      ],
+      "parameters": {
+        "candidate_limit": 100,
+        "channel_weights": {},
+        "overfetch_multiplier": 3,
+        "rerank_score_threshold": null,
+        "rrf_k": 60
+      },
+      "profile": "bm25_only",
+      "report_sha256": "8650d104a1a10bc2d842b24ba870e2d0587c8cfaa6b98662b8fd9aeccfbdf91f"
+    },
+    {
+      "denominators": {
+        "needs_review": 101,
+        "not_applicable": 60,
+        "planned": 1005,
+        "system_failure": 844,
+        "valid": 0
+      },
+      "experiment_id": "18bf1d919703e3abbbd619d0c6890669f568dc5203ba69aaa19bf00125af795f",
+      "failure_attribution": {
+        "mapping_failure:mapping": 101,
+        "not_applicable:mapping": 60,
+        "system_failure:index": 844
+      },
+      "manifest_digest": "0dca6625c1c5bc94563ba8ac055a9074777540cfa9984767c36268006a73737b",
+      "manifest_sha256": "fe03a1a976b7c6274484601f7d2961c8f67eeffb5d6a2365268e00bb5fd0c4b7",
+      "metrics": [
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_mrr",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_mrr",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": null,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": null,
+          "reason": "No valid cases in aggregate cohort.",
+          "status": "system_failure",
+          "value": null,
+          "version": "qasper-equivalent-retrieval/v1"
+        }
+      ],
+      "parameters": {
+        "candidate_limit": 100,
+        "channel_weights": {},
+        "overfetch_multiplier": 3,
+        "rerank_score_threshold": null,
+        "rrf_k": 60
+      },
+      "profile": "full_hybrid_multi_query",
+      "report_sha256": "e055a23e9625f4537463e62a8b3557f0617078136d8ac82418e4cca0c67d6507"
+    },
+    {
+      "denominators": {
+        "needs_review": 101,
+        "not_applicable": 60,
+        "planned": 1005,
+        "system_failure": 0,
+        "valid": 844
+      },
+      "experiment_id": "2b84172bb773908bd322ff1d947ce73583f226c6dc4bf2cd4303997217753cd2",
+      "failure_attribution": {
+        "fusion_rerank_miss:fusion": 1,
+        "mapping_failure:mapping": 101,
+        "not_applicable:mapping": 60,
+        "partial_coverage:scoring": 166,
+        "top_k_miss:scoring": 311
+      },
+      "manifest_digest": "258dfe3ca72b386e94ea9415a017036deefbb4baeea7a99abf13854ee5029974",
+      "manifest_sha256": "0cce903b9ca7b3f24e887c787859290d124e81690aa4f68f3bbcf496abc1aaa5",
+      "metrics": [
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 532.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6303317535545023,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 588.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6966824644549763,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 662.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7843601895734598,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 713.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.8447867298578199,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 406.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.48104265402843605,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 497.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5888625592417062,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 552.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6540284360189573,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 655.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7760663507109005,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_mrr",
+          "numerator": 338.9856932212231,
+          "reason": null,
+          "status": "ok",
+          "value": 0.40164181661282355,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_mrr",
+          "numerator": 435.72567107525623,
+          "reason": null,
+          "status": "ok",
+          "value": 0.516262643454095,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 302.4919239988873,
+          "reason": null,
+          "status": "ok",
+          "value": 0.35840275355318396,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 386.857323448268,
+          "reason": null,
+          "status": "ok",
+          "value": 0.458361757640128,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 355.3910055902815,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4210793905098122,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 434.59410687314306,
+          "reason": null,
+          "status": "ok",
+          "value": 0.514921927574814,
+          "version": "qasper-equivalent-retrieval/v1"
+        }
+      ],
+      "parameters": {
+        "candidate_limit": 100,
+        "channel_weights": {},
+        "overfetch_multiplier": 3,
+        "rerank_score_threshold": null,
+        "rrf_k": 60
+      },
+      "profile": "full_hybrid",
+      "report_sha256": "a69b375983fcfaa7234ee977855fffa192c6245b965a5f5e1b6dff45c0327e05"
+    },
+    {
+      "denominators": {
+        "needs_review": 101,
+        "not_applicable": 60,
+        "planned": 1005,
+        "system_failure": 0,
+        "valid": 844
+      },
+      "experiment_id": "4b02b3ea2c15bdaa20222267641baad668d15375d515e9996b11d5e560908cb5",
+      "failure_attribution": {
+        "fusion_rerank_miss:fusion": 1,
+        "mapping_failure:mapping": 101,
+        "not_applicable:mapping": 60,
+        "partial_coverage:scoring": 168,
+        "top_k_miss:scoring": 309
+      },
+      "manifest_digest": "5a366baac8548aa1d81615bdd591c33beadd49a6d9d0d831bd93afd434afe81a",
+      "manifest_sha256": "4c3dacece4848341d531078b20e7b60d9454ca5af0d202f46e9d58e320b59cbb",
+      "metrics": [
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 534.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6327014218009479,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 609.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7215639810426541,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 653.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.773696682464455,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 709.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.840047393364929,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 404.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4786729857819905,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 516.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6113744075829384,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 536.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6350710900473934,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 652.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7725118483412322,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_mrr",
+          "numerator": 343.3003425305138,
+          "reason": null,
+          "status": "ok",
+          "value": 0.40675396034421063,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_mrr",
+          "numerator": 422.347386364993,
+          "reason": null,
+          "status": "ok",
+          "value": 0.500411595219186,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 303.2579876103791,
+          "reason": null,
+          "status": "ok",
+          "value": 0.3593104118606387,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 384.7069853136969,
+          "reason": null,
+          "status": "ok",
+          "value": 0.455813963641821,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 352.62191122930597,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4177984730205047,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 427.8137651718881,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5068883473600571,
+          "version": "qasper-equivalent-retrieval/v1"
+        }
+      ],
+      "parameters": {
+        "candidate_limit": 100,
+        "channel_weights": {},
+        "overfetch_multiplier": 3,
+        "rerank_score_threshold": null,
+        "rrf_k": 60
+      },
+      "profile": "semantic_bm25",
+      "report_sha256": "4236a71a677a18c7b9a0d21ed4e6ad8ab18ac00ae3ea23151083e7333fa4c4b1"
+    },
+    {
+      "denominators": {
+        "needs_review": 101,
+        "not_applicable": 60,
+        "planned": 1005,
+        "system_failure": 0,
+        "valid": 844
+      },
+      "experiment_id": "5a7738e8cae065cfd4c61d0623f9420f3b301947eeee8734754fd9bdde7ee45d",
+      "failure_attribution": {
+        "fusion_rerank_miss:fusion": 3,
+        "mapping_failure:mapping": 101,
+        "not_applicable:mapping": 60,
+        "partial_coverage:scoring": 160,
+        "top_k_miss:scoring": 324
+      },
+      "manifest_digest": "f26934ece199e5ccce5a040b41672a0e3634c1b7995524476d7e3a5eb8765f5b",
+      "manifest_sha256": "2592ae718f27938e3fa1db7bed43a2681899ba8da472823d141afea563684ebd",
+      "metrics": [
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 518.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6137440758293838,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 562.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6658767772511849,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 653.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.773696682464455,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 684.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.8104265402843602,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 391.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.46327014218009477,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 468.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5545023696682464,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 542.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6421800947867299,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 621.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.735781990521327,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_mrr",
+          "numerator": 343.18171149904134,
+          "reason": null,
+          "status": "ok",
+          "value": 0.406613402250049,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_mrr",
+          "numerator": 425.39115219551695,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5040179528382902,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 300.9851730154552,
+          "reason": null,
+          "status": "ok",
+          "value": 0.3566175035728142,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 371.7503534220302,
+          "reason": null,
+          "status": "ok",
+          "value": 0.44046250405453813,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 355.054727456714,
+          "reason": null,
+          "status": "ok",
+          "value": 0.42068095670226774,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 418.28532590711205,
+          "reason": null,
+          "status": "ok",
+          "value": 0.49559872737809485,
+          "version": "qasper-equivalent-retrieval/v1"
+        }
+      ],
+      "parameters": {
+        "candidate_limit": 100,
+        "channel_weights": {},
+        "overfetch_multiplier": 3,
+        "rerank_score_threshold": null,
+        "rrf_k": 60
+      },
+      "profile": "semantic_field",
+      "report_sha256": "66e43c16aa1fbdabf84af07df760d0430574f87e2428615e250fc560ad9f738a"
+    },
+    {
+      "denominators": {
+        "needs_review": 101,
+        "not_applicable": 60,
+        "planned": 1005,
+        "system_failure": 0,
+        "valid": 844
+      },
+      "experiment_id": "6c89d961209688c12b8e10beb2dbdcad7d367177f1c832a37c056ecfffb52849",
+      "failure_attribution": {
+        "fusion_rerank_miss:fusion": 3,
+        "mapping_failure:mapping": 101,
+        "not_applicable:mapping": 60,
+        "partial_coverage:scoring": 150,
+        "top_k_miss:scoring": 318
+      },
+      "manifest_digest": "dc4171e9b3acd88401b6b6015f0d95624ebfe14e5ba8e989cf540fca0f1b646e",
+      "manifest_sha256": "e4fa5d7f50ba02a3ee111de2e458d416f5c255e9bec973052ca80da9645c83ea",
+      "metrics": [
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 525.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6220379146919431,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 555.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6575829383886256,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 655.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7760663507109005,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 683.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.8092417061611374,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 400.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.47393364928909953,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 462.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.54739336492891,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 547.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6481042654028436,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 622.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7369668246445498,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_mrr",
+          "numerator": 349.2160412111643,
+          "reason": null,
+          "status": "ok",
+          "value": 0.41376308200374917,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_mrr",
+          "numerator": 405.9629962340492,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4809988107038498,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 308.2921243554473,
+          "reason": null,
+          "status": "ok",
+          "value": 0.36527502885716506,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 360.00500922757146,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4265462194639472,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 360.67555917959385,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4273407099284287,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 410.78351101204424,
+          "reason": null,
+          "status": "ok",
+          "value": 0.48671032110431783,
+          "version": "qasper-equivalent-retrieval/v1"
+        }
+      ],
+      "parameters": {
+        "candidate_limit": 100,
+        "channel_weights": {},
+        "overfetch_multiplier": 3,
+        "rerank_score_threshold": null,
+        "rrf_k": 60
+      },
+      "profile": "semantic_only",
+      "report_sha256": "fc04c8db31bf384df4c777da1a99e9bb950535a1116a46fac84a3ca4863a0046"
+    },
+    {
+      "denominators": {
+        "needs_review": 101,
+        "not_applicable": 60,
+        "planned": 1005,
+        "system_failure": 0,
+        "valid": 844
+      },
+      "experiment_id": "d0c928ff426afef3f5d282ea530b3b3286f67f7a872de1d986d0a1cb0a9784c1",
+      "failure_attribution": {
+        "candidate_recall_miss:candidate": 1,
+        "fusion_rerank_miss:fusion": 2,
+        "mapping_failure:mapping": 101,
+        "not_applicable:mapping": 60,
+        "partial_coverage:scoring": 152,
+        "top_k_miss:scoring": 352
+      },
+      "manifest_digest": "d2c08ef60f322ec22d5f5ac9a71c4cef0c1fe3297c73861f87cfbd2403377b92",
+      "manifest_sha256": "ddff986cd0dbf0bad854aa8bf5d37bb02212f8f5fce626c116b82472741b7908",
+      "metrics": [
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 491.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5817535545023697,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 532.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6303317535545023,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_hit",
+          "numerator": 623.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.7381516587677726,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_hit",
+          "numerator": 653.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.773696682464455,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 368.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.43601895734597157,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 444.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.5260663507109005,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_coverage",
+          "numerator": 520.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6161137440758294,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_coverage",
+          "numerator": 580.0,
+          "reason": null,
+          "status": "ok",
+          "value": 0.6872037914691943,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_mrr",
+          "numerator": 290.0413807814704,
+          "reason": null,
+          "status": "ok",
+          "value": 0.34365092509652895,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": null,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_mrr",
+          "numerator": 410.8034969237979,
+          "reason": null,
+          "status": "ok",
+          "value": 0.4867340010945473,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 264.7603953453136,
+          "reason": null,
+          "status": "ok",
+          "value": 0.313697150883073,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 5,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 339.5170017881355,
+          "reason": null,
+          "status": "ok",
+          "value": 0.40227132913286195,
+          "version": "qasper-equivalent-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "strict_ndcg",
+          "numerator": 317.5590469047488,
+          "reason": null,
+          "status": "ok",
+          "value": 0.37625479491083985,
+          "version": "qasper-strict-retrieval/v1"
+        },
+        {
+          "aggregation": "macro_average",
+          "denominator": 844,
+          "k": 10,
+          "mapping_version": "qasper-evidence-mapping/v1",
+          "metric_id": "equivalent_ndcg",
+          "numerator": 384.0848901330214,
+          "reason": null,
+          "status": "ok",
+          "value": 0.45507688404386426,
+          "version": "qasper-equivalent-retrieval/v1"
+        }
+      ],
+      "parameters": {
+        "candidate_limit": 100,
+        "channel_weights": {},
+        "overfetch_multiplier": 3,
+        "rerank_score_threshold": null,
+        "rrf_k": 60
+      },
+      "profile": "field_only",
+      "report_sha256": "ad0ab01acf365532f3402bdefeb2df452b8c583764ac4d7ebebc1a41fdeda56b"
+    }
+  ],
+  "external_requests": 0,
+  "external_run_directory": "F:/datasets/qasper/results/qasper-retrieval-eval-20261021/final-ablation",
+  "historical_baseline_comparable": false,
+  "historical_baseline_note": "Historical 888/881 cohorts and reconstructed frozen 844-cohort are not interchangeable. No improvement or production quality claim.",
+  "human_review": {
+    "artifact": "F:/datasets/qasper/results/qasper-retrieval-eval-20261021/human-review-packet.json",
+    "case_count": 40,
+    "cohorts": {
+      "mapping_needs_review": 10,
+      "matched_control": 10,
+      "strict_equivalent_gap": 20
+    },
+    "frozen_overlap_threshold": null,
+    "reviewer_id": null,
+    "sha256": "53bfb4e2a1b2ba55a9c63b0c0b4b14214bb0e05802bd98a2c9c2a901784bb410",
+    "status": "pending_human_review"
+  },
+  "index_sha256": "6afa46b2e96aaa8ee955c57319ea03e2a381036419660877938c54314af5a09b",
+  "mapping_digest": "330fb4722d01da762584e3cf37aba3f0c469ab0eb1290bf158814231d35b6465",
+  "mapping_policy": {
+    "frozen_overlap_threshold": null,
+    "mapping_version": "qasper-evidence-mapping/v1",
+    "review_reason": "Equivalent overlap threshold awaits human review; no approved policy is claimed.",
+    "review_status": "pending_human_review"
+  },
+  "mapping_sha256": "5005654e1564f1f7ffbff8ede98519c991845ffbe5c036aed8a32b2cdfed1aa8",
+  "metric_versions": {
+    "equivalent_coverage": "qasper-equivalent-retrieval/v1",
+    "equivalent_hit": "qasper-equivalent-retrieval/v1",
+    "equivalent_mrr": "qasper-equivalent-retrieval/v1",
+    "equivalent_ndcg": "qasper-equivalent-retrieval/v1",
+    "strict_coverage": "qasper-strict-retrieval/v1",
+    "strict_hit": "qasper-strict-retrieval/v1",
+    "strict_mrr": "qasper-strict-retrieval/v1",
+    "strict_ndcg": "qasper-strict-retrieval/v1"
+  },
+  "production_qualification": false,
+  "run_id": "577ea4b5-086c-43e9-b0b1-03c5c4bd9cd0",
+  "schema_version": "qasper-dev-validation-summary/v1",
+  "source_code_identity": {
+    "code_fingerprint": "e75fc22001f1acca3889283f2fc3264c058b51bfee72f659dadd03c77b4d4eb6",
+    "dirty": true,
+    "git_revision": "b7eba85f4a8f3ccd3d15fb326b24fcbd23272fac",
+    "mutable_patch_fingerprints": [
+      "6b9b9157b4718e4cdbbe395731b56b822b53567b919ddc251dc44ade7d3512cd"
+    ],
+    "workspace_content_fingerprint": "c58d9c7f2d178235bd62e6861cab9bc582b42f546592883e8117acf7bde5ab8d"
+  }
+}

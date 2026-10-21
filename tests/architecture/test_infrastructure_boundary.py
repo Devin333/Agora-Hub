@@ -10,6 +10,15 @@ INFRASTRUCTURE_ROOT = PROJECT_ROOT / "infrastructure"
 # TODO(architecture-p2-memory-port-migration): remove these exceptions when
 # infrastructure memory/vector/graph adapters use storage-facing port DTOs.
 ALLOWED_BUSINESS_IMPORTS = {
+    "infrastructure/research/evaluation_dataset.py": {
+        "backend.research.ports.evaluation_dataset",
+    },
+    "infrastructure/research/evaluation_sources.py": {
+        "backend.research.ports.evaluation_sources",
+    },
+    "infrastructure/research/qasper_evaluation.py": {
+        "backend.research.ports.qasper_evaluation",
+    },
     "infrastructure/storage/graph/postgres_graph_store.py": {"backend.memory.graph_models"},
     "infrastructure/storage/memory/intelligence_vector_index.py": {
         "backend.memory.intelligence_models",
@@ -100,6 +109,15 @@ SOURCE_STORAGE_BUSINESS_IMPORTS = {
 }
 
 RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
+    "infrastructure/research/evaluation_dataset.py": {
+        "backend.research.ports.evaluation_dataset",
+    },
+    "infrastructure/research/evaluation_sources.py": {
+        "backend.research.ports.evaluation_sources",
+    },
+    "infrastructure/research/qasper_evaluation.py": {
+        "backend.research.ports.qasper_evaluation",
+    },
     "infrastructure/research/artifact_port.py": {
         "backend.research.ports.artifact_publication",
     },

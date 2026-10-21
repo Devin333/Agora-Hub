@@ -1,259 +1,69 @@
-# Codex 交接文档：QASPER 检索评测优化
+# QASPER 检索评测优化交接（2026-10-21）
 
-## 1. 交接目的
+## 范围与权威状态
 
-本文件用于新会话继续完成 Paper RAG 的 QASPER retrieval evaluation optimization。当前已经完成 PRD 和 OpenSpec 设计，尚未开始实现这个新变更的代码任务。
+继续实现 `qasper-retrieval-evaluation-optimization`，不是替换为一个小型演示评测器。以当前代码、`openspec/changes/qasper-retrieval-evaluation-optimization/tasks.md` 和实际工件为准；文档存在或任务被勾选，不单独证明实现正确。
 
-新会话首先应阅读：
+先阅读：
 
 1. `docs/qasper-retrieval-evaluation-optimization-prd.md`
-2. `openspec/changes/qasper-retrieval-evaluation-optimization/proposal.md`
-3. `openspec/changes/qasper-retrieval-evaluation-optimization/design.md`
-4. `openspec/changes/qasper-retrieval-evaluation-optimization/specs/qasper-retrieval-evaluation-optimization/spec.md`
-5. `openspec/changes/qasper-retrieval-evaluation-optimization/tasks.md`
+2. 对应 OpenSpec 的 `proposal.md`、`design.md`、`specs/qasper-retrieval-evaluation-optimization/spec.md`、`tasks.md`
+3. `docs/qasper-retrieval-evaluation.md`
+4. `openspec/changes/qasper-retrieval-evaluation-optimization/evidence/README.md`
 
-## 2. 当前仓库状态
+仓库实际路径 `F:/github/NewsRoom`；`F:/github/Agora-Hub` 是指向它的 junction，并非另一份独立工作区。当前分支应通过 `git status --short --branch` 重新确认，不能仅依赖本文的旧 HEAD 声明。
 
-- 仓库路径：`F:\github\Agora-Hub`
-- 当前分支：`codex/reportbench-cross-source-eval`
-- 当前 HEAD：`f9b2530d`
-- `main` 已与当前 HEAD 对齐。
-- 之前已合并的相关提交：
-  - `7817e4f9 feat: add ReportBench cross-source evaluation adapter`
-  - `f9b2530d perf: optimize hybrid field retrieval`
-- 新 OpenSpec 变更：`qasper-retrieval-evaluation-optimization`
-- 新 OpenSpec 当前状态：proposal/design/spec/tasks 已创建，任务全部未勾选，尚未实现。
+## 保留其他工作
 
-## 3. 非常重要的工作区约束
+工作区有 PDF parsing、通用 RAG evaluation、Harness、desktop/frontend 等未提交改动。禁止 `git reset --hard`、`git clean -fd`、覆盖其他会话内容或 blanket `git add .`。共享协议是 QASPER 的真实依赖；提交前核对依赖闭包，不能生成依赖未跟踪文件的不可运行提交，也不能把不相关修改混入本变更。
 
-当前工作区有大量其他进行中的修改和未跟踪文件，包含 Research evaluation、PDF parsing、frontend 和测试相关内容。不要执行以下操作：
+## 已实现的运行面
 
-```text
-禁止 git reset --hard
-禁止 git clean -fd
-禁止删除或覆盖其他变更
-禁止为了本变更整理整个工作区
-```
+- `qasper_baseline.py` / `qasper_protocol.py`：历史基线与版本化 manifest/case/mapping/failure/report 契约。
+- `qasper_mapping.py` / `qasper_scoring.py`：冻结 gold、parent/child/span/相邻路径、Strict/Equivalent 评分，不根据候选扩大 gold。
+- `qasper_experiments.py` / `qasper_retrieval.py`：七个显式 profile、已有 cache、通道 provenance、参数矩阵。
+- `qasper_diagnostics.py`：切片、阶段和通道诊断；application 必须真正接入这些输出，不能只有孤立单测。
+- `application/qasper_assets.py` / `qasper_evaluation.py`：业务数据重建与评测编排。
+- `ports/qasper_evaluation.py` / `infrastructure/research/qasper_evaluation.py`：仅传输 raw bytes/metadata 的只读输入和不可变工件发布。
+- `interfaces/composition/qasper_evaluation.py` / `interfaces/cli/commands/qasper_eval.py`：显式 composition 和 `rag-eval qasper` CLI。
 
-只允许在本 OpenSpec 变更要求的文件范围内修改，并在提交时按路径暂存。若要修改已有文件，先检查是否包含其他会话的未提交内容，采用最小补丁方式。
+本轮从真实 CLI 和数据运行中发现并修复/验证参数类型、final stage、候选截断、宏平均和输入身份等问题。定向 tests 不能替代真实 CLI integration 或完整 smoke；以最终验证输出为准。
 
-## 4. 已知 QASPER 基线
+## 真实外部数据与缓存
 
-当前 QASPER Dev 运行结果位于仓库外：
+- dataset：`F:/datasets/qasper/train-dev/qasper-dev-v0.3.json`
+- cache：`F:/datasets/qasper/cache/qasper_dev_text-embedding-v4_1024.npz`
+- 历史 summary：`F:/datasets/qasper/results/qasper_dev_optimized_full.json`
+- 本轮外部诊断目录：`F:/datasets/qasper/results/qasper-retrieval-eval-20261021`
 
-```text
-F:\datasets\qasper\results\qasper_dev_optimized_full.json
-```
+冻结 mapping digest：`330fb4722d01da762584e3cf37aba3f0c469ab0eb1290bf158814231d35b6465`。1005 道问题分为 844 valid、101 needs_review、60 not_applicable。253 是 float evidence 条数，163 是 unanswerable annotation 条数，不能与问题分区相加。历史 888、旧重建 881 与新映射 844 的口径不同，不能同比后宣称提升。
 
-运行脚本：
+## 尚未完成的验收
 
-```text
-F:\datasets\qasper\evaluate_qasper_optimized.py
-```
+1. **门禁已完成，按范围提交**：完整 smoke 为 4947 passed、1 skipped、23 deselected，AgentLoop smoke 与 source validation 通过；最终 QASPER/边界 246 passed，隔离必要依赖快照 467 passed，compile 与两个相关 OpenSpec strict validation 均通过。smoke 在最后一批回归新增前开始，因此新增测试单独复验，不能将旧 collection 当作新增覆盖。只提交 QASPER、必要协议/CLI 依赖和精确共享文件 hunk，不夹带其余解析器/桌面/RAG 改动。
+2. **七组完整实验与参数 sweep（6.3）**：六组单查询可用；现有 cache 对 844 道可评测题的 multi-query 共需 1779 个 query key，其中缺少 982 个，全部 844 道题受影响。外部 `cache-audit.json` 和 `missing-multi-query-embeddings.jsonl` 保存清单。不得用原 query 向量替代、跳过变体、合成向量或隐式调用付费 provider。提供同模型完整缓存后在新目录重跑；失败组不能记为成功。
+3. **人工审核（6.4）**：外部 `human-review-packet.json` 已准备 40 例（20 高差异、10 对照、10 mapping needs_review），SHA-256 为 `53bfb4e2a1b2ba55a9c63b0c0b4b14214bb0e05802bd98a2c9c2a901784bb410`，含原始标注、冻结路径及 top10 候选正文。全部仍为 `pending_human_review`。需要人类确认 evidence groups、exact child、Equivalent 充分性和阈值，再冻结策略；LLM 不得自批。
+4. **文档/工件**：使用说明、PRD、交接和 evidence README 已更新；修复后七组消融位于 `final-ablation`，score 已复核 7035 个逐题结果，report 已生成。小型摘要见 `openspec/changes/qasper-retrieval-evaluation-optimization/evidence/qasper-dev-ablation-20261021.json`。完整参数网格正在外部 `final-sweep` 顺序执行，不把未完成网格记为成功。
 
-本次基线：
+修复前的 `qasper-seven-profiles-v2-debug` 和 `ablation` 工件仅用于诊断，不作为最终评分验收，不覆写它们。修复后运行必须另取目录、保存实际代码指纹，并重新确定 score/report 的执行范围。
 
-```text
-总问题数：1005
-可映射文本证据问题：888
-论文数：281
-检索 chunks：17048
-不可映射问题：117
-float evidence：253
-unanswerable annotation：163
-```
+## 不可越过的边界
 
-严格指标：
+CLI 只调 application；storage adapter 不构造业务文档或检索器。评测是 fixture，不冒充 production/Qdrant 的延迟或完整质量。不得写 production index、business memory、active skill，或自行作 production 质量/发布决定。若要切换生产默认策略，另开变更并提供独立验证和回滚依据。
 
-```text
-Strict Hit@5：60.0225%
-Strict Hit@10：75.2252%
-Strict EvidenceCoverage@5：46.3673%
-Strict EvidenceCoverage@10：62.8853%
-Strict MRR：39.6287%
-Strict nDCG@5：35.8917%
-Strict nDCG@10：41.9193%
-```
-
-内容等价指标：
-
-```text
-Equivalent Hit@5：66.1036%
-Equivalent Hit@10：79.7297%
-Equivalent EvidenceCoverage@5：54.9161%
-Equivalent EvidenceCoverage@10：70.9132%
-Equivalent MRR：47.3309%
-Equivalent nDCG@5：57.8747%
-Equivalent nDCG@10：69.1477%
-```
-
-解释：Equivalent 指标高于 Strict 指标，说明有一部分结果内容相关，但 chunk ID、父块/子块关系或切分边界与 QASPER 标注不完全一致。这个差异既是评测对齐问题，也是需要人工抽检的诊断信号，不能直接当成真实模型提升。
-
-## 5. 之前已经完成的生产检索优化
-
-已在 `f9b2530d` 中完成并合并到 main：
-
-- `infrastructure/storage/vector/qdrant_store.py`
-  - bounded thread-safe LRU query embedding cache；
-  - list/tuple/set filter 使用 Qdrant `MatchAny`；
-  - `clear_query_embedding_cache()`。
-- `infrastructure/storage/vector/paper_field_chunk_store.py`
-  - 多字段请求合并为一次 Qdrant 查询；
-  - 通过 overfetch 和全局排序保持候选覆盖。
-- `infrastructure/storage/vector/fake_store.py`
-  - 支持 list membership filter。
-- `backend/research/rag/retrieval/channels/sparse_lexical.py`
-  - BM25 索引按文件签名缓存；
-  - 提供 `invalidate_bm25_cache()`。
-
-已有检查：
-
-```text
-97 个 retrieval/vector/BM25 相关测试通过
-python -m scripts.dev compile 通过
-Qdrant MatchAny smoke query 已执行成功
-```
-
-注意：这些修改主要优化生产延迟、查询次数和缓存，不能直接提高 QASPER 质量指标。当前 QASPER 外部评测脚本使用 NumPy in-memory store，不经过生产 Qdrant/PaperFieldChunkStore，因此不能用 QASPER 分数证明生产延迟提升。
-
-## 6. 新变更的核心目标
-
-实施顺序必须保持：
-
-```text
-冻结 baseline
-  -> evidence mapping
-  -> Strict/Equivalent 双口径
-  -> 通道消融
-  -> candidate/overfetch/RRF/rerank sweep
-  -> 切片诊断
-  -> 人工抽检并冻结阈值
-  -> 如需修改生产默认值，另开变更
-```
-
-不要一开始更换 embedding 模型，也不要只把 Equivalent 指标做高。首先要回答：
-
-1. 正确证据是否进入候选集？
-2. 进入候选集后是否被 RRF/reranker 排到 Top-K？
-3. 评测是否因为父子块或切分差异误判？
-4. 某个通道是否带来了独立 gold evidence？
-
-## 7. 推荐第一轮实现任务
-
-按照 `tasks.md` 从第 1 组开始：
-
-1. 固定 manifest 和 baseline identity；
-2. 检查并复用现有：
-   - `backend/research/rag/evaluation/protocol_evidence_mapping.py`
-   - `backend/research/rag/evaluation/protocol_retrieval_scoring.py`
-   - `backend/research/rag/evaluation/protocol_dataset.py`
-   - `backend/research/rag/evaluation/protocol_execution.py`
-   - `backend/research/rag/evaluation/protocol_comparison.py`
-   - `interfaces/cli/commands/rag_eval.py`
-3. 先补映射与评分合同，再接 profile 和 sweep；
-4. 先用已存在的 embedding cache，避免新增模型调用。
-
-建议先运行：
+## 复验命令
 
 ```powershell
-openspec status --change qasper-retrieval-evaluation-optimization --json
+python -m scripts.dev rag-eval qasper --help
 openspec validate qasper-retrieval-evaluation-optimization --strict
 python -m scripts.dev compile
+python -m scripts.dev smoke
 ```
 
-然后查看现有评测相关测试：
+具体冻结、消融、参数 sweep、score/report 示例见 `docs/qasper-retrieval-evaluation.md`。`--output-dir` 就是后续的 `--run-dir`；`mapping validate` 需要 dataset 路径，不需要 cache。不要根据目录名或一行 `valid=true` 推断所有 profile 已成功；必须检查逐组 planned/valid/needs_review/not_applicable/system_failure 和完整结果覆盖。
 
-```powershell
-Get-ChildItem tests/backend/research/rag -Filter '*eval*'
-Get-ChildItem tests/scripts -Filter '*rag*eval*'
-```
+## 隔离提交验证说明
 
-## 8. 建议实验矩阵
+提交候选以 `HEAD` 导出为基底，只叠加本次必要文件及共享文件的精确 hunk；467 个测试、compile、真实 mapping validate 在该快照通过，未依赖工作区其余未提交的 `document_fidelity`、PDF parser 或桌面改动。测试快照未纳入无关 legacy comparison adapter 测试及其尚未提交的实现。
 
-通道消融：
-
-```text
-semantic_only
-bm25_only
-field_only
-semantic_bm25
-semantic_field
-full_hybrid
-full_hybrid_multi_query
-```
-
-参数候选：
-
-```text
-candidate_limit = 50, 100, 150
-overfetch_multiplier = 3, 5, 8
-rrf_k = 20, 60, 100
-rerank_score_threshold = 0, 0.15, 0.3
-```
-
-默认优先试验点：
-
-```text
-candidate_limit = 100
-overfetch_multiplier = 5
-rrf_k = 60
-rerank_score_threshold = 0.0
-multi_query = true
-```
-
-## 9. 评测口径要求
-
-每次结果都必须保留：
-
-```text
-StrictHit@5 / StrictHit@10
-EquivalentHit@5 / EquivalentHit@10
-StrictCoverage@5 / StrictCoverage@10
-EquivalentCoverage@5 / EquivalentCoverage@10
-MRR
-nDCG@10
-有效分母
-计划分母
-mapping status
-failure reason
-execution profile
-```
-
-其中：
-
-- `StrictHit@K`：Top-K 中必须出现完全相同的 gold evidence/chunk ID；
-- `EquivalentHit@K`：Top-K 中出现冻结 mapping 认可的父子块、文本 span 或内容等价证据；
-- `Hit@K` 是单题二值命中；`Coverage@K` 是多条 gold evidence 的覆盖比例；
-- 不可映射问题、float evidence、unanswerable 和 system failure 必须显示，不能静默从分母删除。
-
-## 10. 生产架构护栏
-
-新实现必须遵守：
-
-- CLI 调 application service，不直接调用 store/executor；
-- Harness 控制流程，LLM 不能决定 routing、quality pass/fail、memory write 或 publication；
-- 评测不写 production index、business memory 或 active skill；
-- fixture/in-memory 与 production/Qdrant 结果必须区分；
-- 评测脚本不能根据返回结果动态重建 gold；
-- 生产默认策略不在本变更中直接切换。
-
-## 11. 完成判断
-
-本变更只有在以下证据都存在时才可认为完成：
-
-- OpenSpec strict validation 通过；
-- 相关单元/集成测试通过；
-- `python -m scripts.dev compile` 通过；
-- 范围匹配的 smoke 通过；
-- 七组通道消融有完整 manifest 和逐题结果；
-- 至少一轮参数 sweep 有完整报告；
-- 高差异样本完成人工抽检；
-- mapping overlap 阈值和 metric version 已冻结；
-- 结果报告没有把 fixture 结果冒充生产质量；
-- 任何生产默认配置变更另有独立变更和回滚依据。
-
-## 12. 新会话第一句话建议
-
-新会话可以直接使用：
-
-> 请先阅读 `codex-handoff-qasper-retrieval-evaluation-optimization.md`、对应 PRD 和 OpenSpec，然后检查当前工作区和变更状态；不要清理其他未提交改动，从 `tasks.md` 的第 1 组开始实现 QASPER 检索评测优化。
+本地快照 fetch 曾报告历史对象 `018707f3bb5ae7c3437ceeb9009e035861aad93e` 不可读；随后改用 `git archive HEAD` 和只读 objects alternates 完成隔离验证，未对主仓库执行 repair/reset/clean，也未验证远端 push。不要把本地检查通过等同于完整历史对象健康。

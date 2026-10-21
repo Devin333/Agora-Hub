@@ -175,3 +175,19 @@ not_applicable
 7. 最后再考虑 embedding 模型比较
 8. 形成生产配置变更提案
 ```
+
+## 9. 实施与验收状态（2026-10-21）
+
+实现与使用入口见 `docs/qasper-retrieval-evaluation.md`，可恢复的工作状态见 `codex-handoff-qasper-retrieval-evaluation-optimization.md` 和 OpenSpec `tasks.md`。基线身份只代表对应的历史/重建运行，不覆写其分母或补造历史代码指纹。
+
+当前冻结映射覆盖全部 1005 道问题，分为 844 道 valid mapping、101 道 needs_review、60 道 not_applicable；这不等价于历史摘要的 888 道可映射题。253 条 float evidence 与 163 条 unanswerable annotation 继续作为独立单位保留，不从 planned denominator 中静默删除。
+
+现有离线 cache 对 multi-query 缺少 982 个必需精确文本 key，影响全部 844 道可评测题。六个单查询 profile 有诊断结果，第七个 profile 的失败不计作实验完成；需要完整同模型 cache 后再验收七组消融。未授权的 provider 调用、向量替代和跳过 query 变体均不可用于消除该缺口。
+
+人工差异样本复核和 overlap 阈值冻结仍未完成。程序可以生成候选包，但不能自批人类审核；`pending_human_review` 保留。生产策略默认值不变，任何生产切换继续需要独立变更。
+
+### 本轮自动化验收
+
+完整 smoke 通过（4947 passed、1 skipped、23 deselected），另以最终源码补跑 QASPER/架构边界 246 tests，并以仅含本次必要变更的隔离快照验证 467 tests、compile 和真实 mapping validate。修复后七组结果及哈希见 `evidence/qasper-dev-ablation-20261021.json`：六组成功，第七组明确记录 844 个缓存失败，不可声称七组全部通过。full-hybrid 的 StrictHit@5 为 0.6303、EquivalentHit@5 为 0.6967，有效分母均为 844；这些开发集 fixture 读数不与历史不同分母作提升比较，也不证明生产质量。
+
+40 例外部人工复核包已生成，仍待人类审查；完整同模型 multi-query 缓存和 overlap 阈值人工批准仍是剩余验收条件。
