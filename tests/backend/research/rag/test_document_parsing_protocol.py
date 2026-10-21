@@ -21,7 +21,9 @@ from backend.research.rag.evaluation.document_parsing_protocol import (
     ParsingTrack,
     RequestedPage,
     RunStatus,
+    load_parsing_evaluation_manifest,
     metric_denominators,
+    write_parsing_evaluation_manifest,
 )
 
 
@@ -107,6 +109,25 @@ def test_manifest_records_explicit_unknowns_and_page_identity():
     assert payload["requested_pages"][0]["exposure"] == "exposed_dev"
     assert payload["fingerprints"]["parser_weights_digest"]["value"] is None
     assert payload["fingerprints"]["parser_weights_digest"]["unknown_reason"]
+
+
+def test_manifest_json_codec_round_trips_through_path(tmp_path):
+    expected = _manifest()
+    path = tmp_path / "manifest.json"
+
+    write_parsing_evaluation_manifest(expected, path)
+
+    assert load_parsing_evaluation_manifest(path) == expected
+    assert path.read_text(encoding="utf-8").endswith("\n")
+
+
+@pytest.mark.parametrize("contents", ["{", '{"run_id":"one","run_id":"two"}', '{"value":NaN}'])
+def test_manifest_json_loader_rejects_damaged_or_nonstandard_json(tmp_path, contents):
+    path = tmp_path / "broken-manifest.json"
+    path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_parsing_evaluation_manifest(path)
 
 
 def test_outcomes_must_cover_every_requested_page_exactly():

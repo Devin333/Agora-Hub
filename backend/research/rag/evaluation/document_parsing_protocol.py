@@ -6,10 +6,12 @@ score gold data, or decide release promotion.
 
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
 from enum import StrEnum
-from typing import Self
+from pathlib import Path
+from typing import Any, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -331,6 +333,61 @@ class ParsingEvaluationManifest(ProtocolModel):
         return self
 
 
+class _DuplicateManifestJsonKey(ValueError):
+    """Raised when a manifest JSON object repeats a key."""
+
+
+def _manifest_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateManifestJsonKey(f"duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_manifest_json_constant(value: str) -> Any:
+    raise ValueError(f"non-standard JSON constant {value!r} is not allowed")
+
+
+def write_parsing_evaluation_manifest(
+    manifest: ParsingEvaluationManifest,
+    path: str | Path,
+) -> None:
+    """Write a validated manifest as readable UTF-8 JSON with a trailing newline."""
+
+    payload = json.dumps(
+        manifest.model_dump(mode="json"),
+        ensure_ascii=False,
+        indent=2,
+        allow_nan=False,
+    )
+    Path(path).write_text(payload + "\n", encoding="utf-8", newline="\n")
+
+
+def load_parsing_evaluation_manifest(path: str | Path) -> ParsingEvaluationManifest:
+    """Strictly decode and validate a manifest JSON file.
+
+    Duplicate object keys and non-standard constants (such as NaN) are rejected
+    instead of silently accepting the last/implementation-specific value.
+    JSON syntax, UTF-8 decoding, and schema validation errors propagate to the
+    caller so damaged or incompatible manifests cannot be mistaken for valid
+    records.
+    """
+
+    text = Path(path).read_text(encoding="utf-8")
+    payload = json.loads(
+        text,
+        object_pairs_hook=_manifest_object_without_duplicate_keys,
+        parse_constant=_reject_manifest_json_constant,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("parsing evaluation manifest JSON must contain an object")
+    # Pydantic's JSON validation path preserves strict JSON-native handling for
+    # enums and tuples while still enforcing the model's strict contract.
+    return ParsingEvaluationManifest.model_validate_json(text, strict=True)
+
+
 def metric_denominators(manifest: ParsingEvaluationManifest) -> dict[str, dict[str, Any]]:
     """Summarize metric support without dropping failed or not-applicable rows."""
 
@@ -370,5 +427,7 @@ __all__ = [
     "ParsingTrack",
     "RequestedPage",
     "RunStatus",
+    "load_parsing_evaluation_manifest",
     "metric_denominators",
+    "write_parsing_evaluation_manifest",
 ]
