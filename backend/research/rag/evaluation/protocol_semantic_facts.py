@@ -344,18 +344,26 @@ def _compare_content(
     return tuple(result)
 
 
+_UNIT_CANONICAL: dict[NumericUnit, tuple[str, float]] = {
+    NumericUnit.FRACTION: ("absolute_fraction", 1.0),
+    NumericUnit.PERCENT: ("absolute_fraction", 0.01),
+    NumericUnit.PERCENTAGE_POINT: ("percentage_point", 1.0),
+    NumericUnit.RELATIVE_PERCENT: ("relative_gain", 0.01),
+    NumericUnit.SCALAR: ("scalar", 1.0),
+}
+
+
 def normalize_numeric(value: float, unit: NumericUnit) -> tuple[str, float]:
     """Map a value to (physical dimension, canonical value)."""
 
-    if unit is NumericUnit.FRACTION:
-        return "absolute_fraction", value
-    if unit is NumericUnit.PERCENT:
-        return "absolute_fraction", value / 100.0
-    if unit is NumericUnit.PERCENTAGE_POINT:
-        return "percentage_point", value
-    if unit is NumericUnit.RELATIVE_PERCENT:
-        return "relative_gain", value / 100.0
-    return "scalar", value
+    dimension, scale = _UNIT_CANONICAL[unit]
+    return dimension, value * scale
+
+
+def normalize_tolerance(tolerance: float, unit: NumericUnit) -> float:
+    """Express a tolerance in the canonical scale of its unit's dimension."""
+
+    return tolerance * _UNIT_CANONICAL[unit][1]
 
 
 def _format_number(value: float, unit: NumericUnit) -> str:
@@ -401,12 +409,20 @@ def _compare_numeric(
                 reason="values in different unit dimensions are not comparable",
             ),
         )
-    # The observed fact cannot choose a larger acceptance tolerance.
+    # Tolerance is the rounding half-unit implied by each side's stated
+    # precision (derived deterministically from the verbatim value text, never
+    # chosen by a model). A coarser but correctly rounded statement such as
+    # "95%" for 95.3% is not a contradiction; anything outside both rounding
+    # intervals is.
+    allowed = max(
+        normalize_tolerance(expected.tolerance, expected.unit),
+        normalize_tolerance(actual.tolerance, actual.unit),
+    )
     within = math.isclose(
         actual_value,
         expected_value,
         rel_tol=0.0,
-        abs_tol=expected.tolerance + _FLOAT_EPSILON,
+        abs_tol=allowed + _FLOAT_EPSILON,
     )
     return (
         DimensionComparison(
@@ -547,4 +563,5 @@ __all__ = [
     "SemanticFact",
     "compare_semantic_facts",
     "normalize_numeric",
+    "normalize_tolerance",
 ]

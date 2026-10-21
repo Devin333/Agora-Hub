@@ -63,6 +63,9 @@ ALLOWED_BUSINESS_IMPORTS = {
     "infrastructure/research/ragas_judge.py": {
         "backend.research.ports.evaluation_judge",
     },
+    "infrastructure/research/llm_fact_extractor.py": {
+        "backend.research.ports.answer_fact_extraction",
+    },
     "infrastructure/research/reader_repair_memory_side_effect.py": {
         "backend.research.ports.repair_memory",
     },
@@ -147,6 +150,9 @@ RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
     },
     "infrastructure/research/ragas_judge.py": {
         "backend.research.ports.evaluation_judge",
+    },
+    "infrastructure/research/llm_fact_extractor.py": {
+        "backend.research.ports.answer_fact_extraction",
     },
     "infrastructure/research/reader_repair_memory_side_effect.py": {
         "backend.research.ports.repair_memory",

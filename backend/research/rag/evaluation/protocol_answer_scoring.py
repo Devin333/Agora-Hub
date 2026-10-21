@@ -1553,22 +1553,31 @@ def _resolve_claim_span(
     claim: AnswerClaim,
     overrides: Mapping[str, Any],
 ) -> tuple[ClaimAnswerSpan | None, str]:
+    """Locate the verbatim answer span a claim is grounded on.
+
+    A declared ``claim_spans`` entry binds a decontextualized atomic claim to the
+    exact answer text that asserts it; its ``text`` must equal that slice so the
+    binding cannot silently drift when the answer text changes. Without a
+    declaration the claim text itself must occur exactly once in the answer.
+    """
+
     raw = overrides.get(claim.claim_id)
     if isinstance(raw, Mapping):
-        start, end = raw.get("start"), raw.get("end")
+        start, end, text = raw.get("start"), raw.get("end"), raw.get("text")
         if (
             isinstance(start, int)
             and not isinstance(start, bool)
             and isinstance(end, int)
             and not isinstance(end, bool)
             and 0 <= start < end <= len(answer_text)
-            and answer_text[start:end] == claim.text
+            and isinstance(text, str)
+            and answer_text[start:end] == text
         ):
             return ClaimAnswerSpan(
                 claim_id=claim.claim_id,
                 start=start,
                 end=end,
-                text=claim.text,
+                text=text,
             ), ""
         return None, "declared claim span does not exactly match answer text"
     positions: list[int] = []
@@ -1587,10 +1596,13 @@ def _resolve_claim_span(
     ), ""
 
 
-def _source_identity_mismatch(
-    evidence: EvidenceCandidate,
-    source: ExactSourceExcerpt,
-) -> str | None:
+def evidence_source_identity(evidence: EvidenceCandidate) -> dict[str, str | None]:
+    """Immutable source identity an accepted context item declares.
+
+    Identity may be carried on the evidence metadata, on an embedded
+    ``paper_chunk``, or on that chunk's own metadata, in that precedence order.
+    """
+
     metadata = evidence.metadata
     raw_chunk = metadata.get("paper_chunk")
     chunk: Mapping[str, Any] = raw_chunk if isinstance(raw_chunk, Mapping) else {}
@@ -1607,12 +1619,19 @@ def _source_identity_mismatch(
             value = chunk_metadata.get(name)
         return str(value) if value not in (None, "") else None
 
-    expected = {
+    return {
         "paper_id": pick("paper_id"),
         "document_version": pick("document_version"),
         "source_sha256": pick("source_sha256"),
         "source_locator": pick("source_locator") or evidence.source_ref,
     }
+
+
+def _source_identity_mismatch(
+    evidence: EvidenceCandidate,
+    source: ExactSourceExcerpt,
+) -> str | None:
+    expected = evidence_source_identity(evidence)
     actual = {
         "paper_id": source.paper_id,
         "document_version": source.document_version,
@@ -2043,6 +2062,7 @@ __all__ = [
     "aggregate_planned_abstention",
     "answer_metric_definitions",
     "build_answer_metric_registry",
+    "evidence_source_identity",
     "classify_abstention",
     "classify_case_abstention",
     "parse_citation_bindings",
