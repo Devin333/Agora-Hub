@@ -365,6 +365,7 @@ def live_answer_sample(pair: EvidenceQAPair, payload: dict[str, Any]) -> Evidenc
         "decision": dict(payload.get("decision") or {}),
         "answer_candidate": dict(candidate or {}) if isinstance(candidate, dict) else {},
         "model_usage": (candidate_metadata or {}).get("model_usage") if isinstance(candidate_metadata, dict) else None,
+        "evidence_type_gap_accepted": bool((payload.get("metrics") or {}).get("evidence_type_gap_accepted")),
     }
     return EvidenceAnswerSample(
         pair=pair,

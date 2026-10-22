@@ -11,7 +11,7 @@ from framework.harness.mcp.ports import MCPToolPort
 from framework.harness.rag.answer_gate import RAGAnswerGate, unsupported_claims_from_answer_gate
 from framework.harness.rag.answer_worker import AnswerWorkerError, AnswerWorkerPort
 from framework.harness.rag.context_pack_assembler import RAGContextPackAssembler
-from framework.harness.rag.gates import RAGGateSuite, RAGGateResult, failed_gate_dicts
+from framework.harness.rag.gates import RAGEvidenceCoverageGate, RAGGateSuite, RAGGateResult, failed_gate_dicts
 from framework.harness.rag.models import (
     EvidenceCandidate,
     GroundedAnswerCandidate,
@@ -24,10 +24,17 @@ from framework.harness.rag.models import (
     RetrievalPlanCandidate,
     RetrievalStepResult,
     RetrievalStepSpec,
+    present_evidence_types,
 )
 from framework.harness.rag.metrics import RAGSessionMetrics, build_rag_session_metrics
 from framework.harness.rag.planner import DeterministicRAGPlanner, RAGPlanner
-from framework.harness.rag.policy import RAGDecision, RAGDecisionType, RAGExecutionPolicy, normalize_query
+from framework.harness.rag.policy import (
+    EVIDENCE_TYPE_COVERAGE_ADVISORY,
+    RAGDecision,
+    RAGDecisionType,
+    RAGExecutionPolicy,
+    normalize_query,
+)
 from framework.harness.rag.source_verifier import SourceVerifier
 from framework.harness.rag.telemetry import RAGTelemetry, RAGTelemetrySpan
 from framework.harness.rag.visibility import evidence_visible_to_tenant
@@ -197,9 +204,11 @@ class BoundedRAGSessionController(RAGSessionController):
             )
             self._event(state, "rag_plan_verified", {"round_index": round_index, "gate_results": _results(plan_results)})
             if any(result.passed is False for result in plan_results):
-                decision = self._handle_plan_failure(state, plan_results)
+                decision = self._handle_plan_failure(state, plan_results, policy)
                 if decision.decision_type == RAGDecisionType.REPLAN_QUERIES:
                     continue
+                if decision.decision_type == RAGDecisionType.ASSEMBLE_CONTEXT:
+                    break
                 status = (
                     RAGSessionStatus.INSUFFICIENT_EVIDENCE
                     if decision.decision_type == RAGDecisionType.INSUFFICIENT_EVIDENCE
@@ -251,6 +260,10 @@ class BoundedRAGSessionController(RAGSessionController):
                 )
                 self._event(state, "rag_replanned", decision.to_dict())
                 continue
+            gap_decision = self._evidence_type_gap_decision(state, policy, source_results)
+            if gap_decision is not None:
+                decision = gap_decision
+                break
             decision = RAGDecision(
                 RAGDecisionType.INSUFFICIENT_EVIDENCE,
                 "evidence coverage is incomplete and no controlled replan remains",
@@ -796,7 +809,12 @@ class BoundedRAGSessionController(RAGSessionController):
             metadata={"namespace": step.memory_namespace, "returned": len(hits), "accepted": len(accepted_hits)},
         )
 
-    def _handle_plan_failure(self, state: RAGSessionState, results: tuple[RAGGateResult, ...]) -> RAGDecision:
+    def _handle_plan_failure(
+        self,
+        state: RAGSessionState,
+        results: tuple[RAGGateResult, ...],
+        policy: RAGExecutionPolicy,
+    ) -> RAGDecision:
         self._record_gate_failures(state, results)
         if state.budget_snapshot.replans_used < state.spec.budget.max_replans:
             state.budget_snapshot = state.budget_snapshot.with_usage(replans=1)
@@ -809,8 +827,19 @@ class BoundedRAGSessionController(RAGSessionController):
             self._event(state, "rag_replanned", decision.to_dict())
             return decision
         if _only_query_dedup_failed(results):
-            # Retrieval exhausted its distinct queries: the evidence is insufficient,
-            # which is a normal outcome rather than a policy violation.
+            # Retrieval exhausted its distinct queries. An advisory type gap over the
+            # evidence already accepted still goes to the answer worker.
+            if state.accepted_evidence:
+                source_results = self.gates.verify_sources(
+                    tuple(state.accepted_evidence),
+                    spec=state.spec,
+                    policy=policy,
+                    memory_context=tuple(state.memory_context),
+                )
+                gap_decision = self._evidence_type_gap_decision(state, policy, source_results)
+                if gap_decision is not None:
+                    return gap_decision
+            # Otherwise the evidence is insufficient, a normal outcome rather than a policy violation.
             return RAGDecision(
                 RAGDecisionType.INSUFFICIENT_EVIDENCE,
                 "retrieval queries exhausted before required evidence coverage",
@@ -819,6 +848,44 @@ class BoundedRAGSessionController(RAGSessionController):
                 metadata={"gap_report": to_jsonable(state.gap_report)},
             )
         return self._halt(state, "plan gate failed and no replan budget remains", results)
+
+    def _evidence_type_gap_decision(
+        self,
+        state: RAGSessionState,
+        policy: RAGExecutionPolicy,
+        source_results: tuple[RAGGateResult, ...],
+    ) -> RAGDecision | None:
+        """Hand an evidence-type-only gap to the answer worker under the advisory policy.
+
+        Only the type requirement is relaxed: lineage, source quality and memory gates
+        must still pass, evidence must have been accepted, and a worker must be able to
+        judge it (it abstains through its own protocol when the evidence is insufficient).
+        """
+        if policy.evidence_type_coverage != EVIDENCE_TYPE_COVERAGE_ADVISORY:
+            return None
+        if not policy.generation_enabled or self.answer_worker is None or not state.accepted_evidence:
+            return None
+        blocking = [
+            result.gate_name
+            for result in source_results
+            if result.gate_name in _SOURCE_COVERAGE_GATES and not result.passed
+        ]
+        if blocking != [RAGEvidenceCoverageGate.gate_name]:
+            return None
+        gap = {
+            "missing_evidence_types": list(state.gap_report.get("missing_evidence_types") or []),
+            "present_evidence_types": sorted(present_evidence_types(state.accepted_evidence)),
+            "accepted_evidence_ids": [item.evidence_id for item in state.accepted_evidence],
+            "evidence_type_coverage": policy.evidence_type_coverage,
+        }
+        self._event(state, "rag_evidence_type_gap_accepted", gap)
+        return RAGDecision(
+            RAGDecisionType.ASSEMBLE_CONTEXT,
+            "evidence type gap accepted; the answer worker judges sufficiency",
+            gate_results=_results(source_results),
+            budget_snapshot=state.budget_snapshot,
+            metadata={"evidence_type_gap": gap},
+        )
 
     def _can_replan(self, state: RAGSessionState, spec: RAGSessionSpec) -> bool:
         return (
@@ -904,8 +971,16 @@ def _dedupe_texts(values: Any) -> tuple[str, ...]:
     return tuple(out)
 
 
+_SOURCE_COVERAGE_GATES = frozenset({
+    "rag_evidence_coverage",
+    "rag_lineage",
+    "rag_source_quality",
+    "rag_memory_relevance",
+})
+
+
 def _coverage_passed(results: tuple[RAGGateResult, ...]) -> bool:
-    return all(result.passed for result in results if result.gate_name in {"rag_evidence_coverage", "rag_lineage", "rag_source_quality", "rag_memory_relevance"})
+    return all(result.passed for result in results if result.gate_name in _SOURCE_COVERAGE_GATES)
 
 
 def _gap_report(
@@ -914,7 +989,7 @@ def _gap_report(
     results: tuple[RAGGateResult, ...],
     rejected: tuple[EvidenceCandidate, ...] = (),
 ) -> dict[str, Any]:
-    present = {item.evidence_type for item in accepted}
+    present = present_evidence_types(accepted)
     missing = [item for item in spec.goal.required_evidence_types if item not in present]
     return {
         "missing_evidence_types": missing,

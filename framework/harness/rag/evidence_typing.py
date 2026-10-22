@@ -9,7 +9,11 @@ class EvidenceTypeResolver(Protocol):
     """Resolves a retrieved item's content-derived evidence type."""
 
     def resolve(self, metadata: Mapping[str, Any]) -> str | None:
-        """Return an evidence type or None when metadata has no usable signal."""
+        """Return the primary evidence type or None when metadata has no usable signal."""
+        ...
+
+    def resolve_types(self, metadata: Mapping[str, Any]) -> tuple[str, ...]:
+        """Return every evidence type the content supports, primary type first."""
         ...
 
 
@@ -23,12 +27,19 @@ class MetadataKeyEvidenceTypeResolver:
         }
 
     def resolve(self, metadata: Mapping[str, Any]) -> str | None:
+        types = self.resolve_types(metadata)
+        return types[0] if types else None
+
+    def resolve_types(self, metadata: Mapping[str, Any]) -> tuple[str, ...]:
+        # A passage can carry several roles (e.g. experiment and method); keep them all,
+        # in mapping-key then value order so the first one remains the primary type.
+        types: list[str] = []
         for metadata_key, table in self._mapping.items():
             for value in _metadata_values(metadata.get(metadata_key)):
                 mapped = table.get(value)
-                if mapped:
-                    return mapped
-        return None
+                if mapped and mapped not in types:
+                    types.append(mapped)
+        return tuple(types)
 
 
 def _metadata_values(raw: Any) -> tuple[str, ...]:

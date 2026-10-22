@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -369,6 +370,8 @@ class EvidenceCandidate:
     lineage: tuple[str, ...] = ()
     artifact_refs: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Every type the content supports; evidence_type is the primary and always first.
+    evidence_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name in ("evidence_id", "title", "summary", "source_ref", "evidence_type"):
@@ -385,6 +388,11 @@ class EvidenceCandidate:
         object.__setattr__(self, "lineage", tuple(str(item) for item in self.lineage))
         object.__setattr__(self, "artifact_refs", tuple(str(ref) for ref in self.artifact_refs if str(ref).strip()))
         object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(
+            self,
+            "evidence_types",
+            _primary_first(str(self.evidence_type), self.evidence_types),
+        )
 
     @classmethod
     def from_evidence_pack(
@@ -396,11 +404,13 @@ class EvidenceCandidate:
     ) -> "EvidenceCandidate":
         pack_artifact_refs = _artifact_refs_from_metadata(pack.metadata)
         resolved_evidence_type = str(pack.metadata.get("evidence_type") or "").strip()
+        content_resolved = pack.metadata.get("evidence_type_source") == "content_resolved"
         candidate_evidence_type = (
             resolved_evidence_type
-            if pack.metadata.get("evidence_type_source") == "content_resolved" and resolved_evidence_type
+            if content_resolved and resolved_evidence_type
             else evidence_type
         )
+        resolved_types = pack.metadata.get("evidence_types") if content_resolved else None
         return cls(
             evidence_id=pack.evidence_id,
             title=pack.title,
@@ -414,6 +424,7 @@ class EvidenceCandidate:
             lineage=pack.lineage,
             artifact_refs=tuple(dict.fromkeys((*pack_artifact_refs, *artifact_refs))),
             metadata=pack.metadata,
+            evidence_types=tuple(resolved_types) if isinstance(resolved_types, (list, tuple)) else (),
         )
 
     def to_evidence_pack(self) -> EvidencePack:
@@ -428,6 +439,7 @@ class EvidenceCandidate:
             metadata={
                 **self.metadata,
                 "evidence_type": self.evidence_type,
+                "evidence_types": list(self.evidence_types),
                 "claim_refs": list(self.claim_refs),
                 "artifact_refs": list(self.artifact_refs),
             },
@@ -441,6 +453,7 @@ class EvidenceCandidate:
             "source_ref": self.source_ref,
             "span_refs": list(self.span_refs),
             "evidence_type": self.evidence_type,
+            "evidence_types": list(self.evidence_types),
             "claim_refs": list(self.claim_refs),
             "confidence": self.confidence,
             "freshness": self.freshness,
@@ -714,6 +727,20 @@ class GroundedAnswerCandidate:
         }
 
 
+def present_evidence_types(evidence: Iterable[EvidenceCandidate]) -> set[str]:
+    """Union of every evidence type supported by the given candidates."""
+    return {evidence_type for item in evidence for evidence_type in item.evidence_types}
+
+
+def _primary_first(primary: str, types: Iterable[Any]) -> tuple[str, ...]:
+    ordered = [primary]
+    for item in types:
+        text = str(item).strip()
+        if text and text not in ordered:
+            ordered.append(text)
+    return tuple(ordered)
+
+
 def ensure_jsonable_rag_model(value: Any) -> None:
     stable_json_dumps(to_jsonable(value))
 
@@ -744,4 +771,5 @@ __all__ = [
     "RetrievalStepResult",
     "RetrievalStepSpec",
     "ensure_jsonable_rag_model",
+    "present_evidence_types",
 ]

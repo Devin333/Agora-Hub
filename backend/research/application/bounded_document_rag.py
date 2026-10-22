@@ -12,6 +12,7 @@ from framework.harness.rag.models import (
     RAGContextPack,
     RAGSessionSpec,
     RAGSessionStatus,
+    present_evidence_types,
 )
 from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.rag.session import RAGSessionResult
@@ -487,6 +488,8 @@ def _project_result(
         replace(result, context_pack=pack),
         spec=spec,
         accepted=accepted,
+        # Projected items carry only the primary type; coverage uses every supported type.
+        present_types=present_evidence_types(accepted_in_scope),
         rejected=rejected,
         conflicting=conflicting,
     )
@@ -847,6 +850,7 @@ def _project_gap_report(
     *,
     spec: RAGSessionSpec,
     accepted: list[ResearchEvidenceItem],
+    present_types: set[str],
     rejected: list[ResearchEvidenceItem],
     conflicting: list[ResearchEvidenceItem],
 ) -> ResearchRAGGapReport:
@@ -858,7 +862,6 @@ def _project_gap_report(
         *_text_values(raw_gap.get("missing_information")),
         *_text_values(raw_gap.get("missing_evidence_types")),
     ]
-    present_types = {item.evidence_type for item in accepted}
     missing.extend(
         evidence_type
         for evidence_type in spec.goal.required_evidence_types

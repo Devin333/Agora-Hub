@@ -5,13 +5,14 @@ from typing import Any
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.rag.models import (
-    FORBIDDEN_RAG_PLAN_KEYS,
     EvidenceCandidate,
+    FORBIDDEN_RAG_PLAN_KEYS,
     RAGBudgetSnapshot,
     RAGContextPack,
     RAGSessionSpec,
     RetrievalOperation,
     RetrievalPlanCandidate,
+    present_evidence_types,
 )
 from framework.harness.rag.policy import RAGExecutionPolicy, budget_exceeded, normalize_query
 from framework.shared.json import to_jsonable
@@ -225,7 +226,7 @@ class RAGEvidenceCoverageGate:
     gate_name = "rag_evidence_coverage"
 
     def evaluate(self, goal_types: tuple[str, ...], evidence: tuple[EvidenceCandidate, ...]) -> RAGGateResult:
-        present = {item.evidence_type for item in evidence}
+        present = present_evidence_types(evidence)
         missing = [item for item in goal_types if item not in present]
         return RAGGateResult(
             self.gate_name,

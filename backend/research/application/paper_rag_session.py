@@ -13,6 +13,7 @@ from framework.harness.rag.session import (
     RAGSessionResult,
 )
 from framework.harness.rag.models import RAGBudget, RAGSessionSpec
+from framework.harness.rag.policy import EVIDENCE_TYPE_COVERAGE_ADVISORY
 from framework.harness.rag.relevance import RelevanceScorerPort
 from framework.harness.rag.source_verifier import SourceVerifier
 
@@ -105,6 +106,9 @@ class PaperRAGSession:
             budget=self._budget,
             generation_policy=self._generation_policy,
             candidate_experiment=self._candidate_experiment,
+            # Paper Q&A: the intent-to-type mapping is heuristic, so a type mismatch over
+            # accepted evidence is left to the answer worker's abstention protocol.
+            evidence_type_coverage=EVIDENCE_TYPE_COVERAGE_ADVISORY,
         )
         return self.run_spec(spec, current_section_index=current_section_index)
 

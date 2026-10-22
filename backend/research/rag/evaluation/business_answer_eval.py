@@ -167,6 +167,7 @@ def _efficiency(samples: list[EvidenceAnswerSample]) -> dict[str, Any]:
         "end_to_end_ms": _latency_stats(end_to_end),
         "generation_ms": _latency_stats(generation),
         "tokens": totals,
+        "evidence_type_gap_accepted": sum(1 for s in samples if s.metadata.get("evidence_type_gap_accepted")),
         # Provider input tokens can exceed what we sent (gateway-side prompt additions);
         # compare against the characters actually sent before attributing cost.
         "prompt_chars": {"n": len(prompt_chars), "total": sum(prompt_chars), "max": max(prompt_chars, default=None)},
@@ -225,6 +226,7 @@ def _write_case_rows(path: Path, answer: EvidenceAnswerEvalResult) -> None:
                 "prompt_chars": _prompt_chars(sample),
                 "model": _sample_model(sample),
                 "model_usage": sample.metadata.get("model_usage"),
+                "evidence_type_gap_accepted": sample.metadata.get("evidence_type_gap_accepted"),
             }
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 

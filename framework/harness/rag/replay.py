@@ -173,6 +173,7 @@ def _gate_timeline(events: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
 
 def _decision_timeline(events: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
     decision_events = {
+        "rag_evidence_type_gap_accepted",
         "rag_replanned",
         "rag_context_pack_returned",
         "rag_answer_returned",

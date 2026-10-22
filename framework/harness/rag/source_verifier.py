@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from framework.harness.rag.gates import RAGGateResult, RAGLineageGate, RAGSourceQualityGate
 from framework.harness.rag.models import EvidenceCandidate
@@ -241,18 +241,8 @@ def _with_rejection_metadata(
     relevance_score: float,
     relevance_threshold: float,
 ) -> EvidenceCandidate:
-    return EvidenceCandidate(
-        evidence_id=candidate.evidence_id,
-        title=candidate.title,
-        summary=candidate.summary,
-        source_ref=candidate.source_ref,
-        span_refs=candidate.span_refs,
-        evidence_type=candidate.evidence_type,
-        claim_refs=candidate.claim_refs,
-        confidence=candidate.confidence,
-        freshness=candidate.freshness,
-        lineage=candidate.lineage,
-        artifact_refs=candidate.artifact_refs,
+    return replace(
+        candidate,
         metadata={
             **candidate.metadata,
             "rejection_reason": reason,
@@ -267,18 +257,8 @@ def _with_tenant_rejection_metadata(
     *,
     violation: dict[str, object],
 ) -> EvidenceCandidate:
-    return EvidenceCandidate(
-        evidence_id=candidate.evidence_id,
-        title=candidate.title,
-        summary=candidate.summary,
-        source_ref=candidate.source_ref,
-        span_refs=candidate.span_refs,
-        evidence_type=candidate.evidence_type,
-        claim_refs=candidate.claim_refs,
-        confidence=candidate.confidence,
-        freshness=candidate.freshness,
-        lineage=candidate.lineage,
-        artifact_refs=candidate.artifact_refs,
+    return replace(
+        candidate,
         metadata={
             **candidate.metadata,
             "rejection_reason": "tenant_scope_violation",

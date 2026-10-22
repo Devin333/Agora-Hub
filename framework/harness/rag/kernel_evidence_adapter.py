@@ -14,6 +14,7 @@ def evidence_candidate_from_rag_evidence(
     evidence: RAGEvidence,
     *,
     evidence_type: str = "rag_evidence",
+    evidence_types: tuple[str, ...] = (),
     title: str | None = None,
 ) -> EvidenceCandidate:
     source_ref = _source_ref(evidence)
@@ -33,6 +34,7 @@ def evidence_candidate_from_rag_evidence(
         source_ref=source_ref,
         span_refs=(source_ref,),
         evidence_type=evidence_type,
+        evidence_types=evidence_types,
         confidence=_confidence(evidence.score),
         freshness=str(evidence.metadata.get("freshness") or "unknown"),
         lineage=(evidence.document_id,),
@@ -76,14 +78,16 @@ class KernelRAGRetrieverHarnessAdapter:
         )
 
     def _candidate_from_evidence(self, evidence: RAGEvidence, *, requested_type: str) -> EvidenceCandidate:
-        resolved_type = (
-            self._evidence_type_resolver.resolve(evidence.metadata)
+        resolved_types = (
+            self._evidence_type_resolver.resolve_types(evidence.metadata)
             if self._evidence_type_resolver is not None
-            else None
+            else ()
         )
+        resolved_type = resolved_types[0] if resolved_types else None
         candidate = evidence_candidate_from_rag_evidence(
             evidence,
             evidence_type=resolved_type or requested_type,
+            evidence_types=resolved_types,
         )
         if resolved_type:
             candidate.metadata["evidence_type_source"] = "content_resolved"
