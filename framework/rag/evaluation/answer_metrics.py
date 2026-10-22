@@ -140,6 +140,8 @@ class AnswerMetricScore:
     equivalent_citation_gold_coverage: float | None = None
     equivalent_gold_supported: bool = False
     failure_reason: str = ""
+    # Why an expected abstention counted as correct: "refusal", "cited_negation", or "".
+    abstention_basis: str = ""
     matched_facts: tuple[str, ...] = ()
     missing_facts: tuple[str, ...] = ()
 
@@ -165,7 +167,8 @@ def score_answer_case(
         )
 
     if case.expected_abstain:
-        correct = outcome.is_refusal
+        basis = abstention_basis(case)
+        correct = bool(basis)
         return AnswerMetricScore(
             case=case,
             fact_coverage=None,
@@ -174,6 +177,7 @@ def score_answer_case(
             abstention_correct=1.0 if correct else 0.0,
             answer_success=correct,
             failure_reason="" if correct else RAGFailureReason.ABSTENTION_WRONG.value,
+            abstention_basis=basis,
         )
 
     strict_retrieval_context_coverage = id_coverage(case.context_evidence_ids, case.gold_evidence_ids)
@@ -339,13 +343,44 @@ def answer_relevance(case: AnswerMetricCase) -> float:
 
 
 def faithfulness_proxy(case: AnswerMetricCase) -> float:
+    if case.expected_abstain:
+        return 1.0 if abstention_basis(case) else 0.0
     if case.outcome is not AnswerOutcome.ANSWERED:
-        return 1.0 if case.expected_abstain and case.outcome.is_refusal else 0.0
+        return 0.0
     return fact_coverage(case) * citation_grounding(case)
 
 
 def abstention_accuracy(case: AnswerMetricCase) -> float:
-    return 1.0 if case.outcome.is_refusal == case.expected_abstain else 0.0
+    if case.expected_abstain:
+        return 1.0 if abstention_basis(case) else 0.0
+    return 0.0 if case.outcome.is_refusal else 1.0
+
+
+_POLAR_QUESTION_RE = re.compile(
+    r"^\s*(?:does|do|did|is|are|was|were|has|have|had|can|could|will|would|should)\b",
+    re.IGNORECASE,
+)
+_NEGATION_ANSWER_RE = re.compile(r"^\W*no\b", re.IGNORECASE)
+
+
+def abstention_basis(case: AnswerMetricCase) -> str:
+    """Why a case satisfies an expected abstention, or "" when it does not.
+
+    ``refusal``: the system declined (model abstention or insufficient evidence).
+    ``cited_negation``: a yes/no question answered with an explicit "No" that cites
+    retrieved context. For "Does the paper report X?" that is the correct answer, and
+    the citation shows it is grounded rather than asserted from outside knowledge.
+    """
+    if case.outcome.is_refusal:
+        return "refusal"
+    if (
+        case.outcome is AnswerOutcome.ANSWERED
+        and case.cited_evidence_ids
+        and _POLAR_QUESTION_RE.match(case.question)
+        and _NEGATION_ANSWER_RE.match(case.answer)
+    ):
+        return "cited_negation"
+    return ""
 
 
 def evaluate_answer_case(case: AnswerMetricCase) -> tuple[MetricValue, ...]:
@@ -567,6 +602,7 @@ __all__ = [
     "AnswerMetricCase",
     "AnswerMetricScore",
     "AnswerOutcome",
+    "abstention_basis",
     "abstention_accuracy",
     "answer_relevance",
     "citation_grounding",

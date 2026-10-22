@@ -52,6 +52,7 @@ class BusinessAnswerEvalRun:
             "system_failure_rate": self.answer.system_failure_rate(),
             "over_abstention_rate": self.answer.over_abstention_rate(),
             "abstention_accuracy": self.answer.abstention_accuracy(),
+            "abstention_basis_counts": self.answer.abstention_basis_counts(),
             "answer_success_rate": self.answer.success_rate(),
             "citation_gold_coverage": self.answer.citation_gold_coverage_score(),
             "retrieval_context_coverage": self.answer.retrieval_context_coverage_score(),
@@ -210,6 +211,7 @@ def _write_case_rows(path: Path, answer: EvidenceAnswerEvalResult) -> None:
                 "outcome": sample.outcome.value,
                 "answer_success": score.answer_success,
                 "failure_reason": score.failure_reason,
+                "abstention_basis": score.abstention_basis,
                 "answer": sample.answer,
                 "abstention_reason": (
                     ((sample.metadata.get("answer_candidate") or {}).get("metadata") or {}).get("abstention_reason")

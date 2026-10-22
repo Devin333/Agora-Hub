@@ -40,4 +40,6 @@
 - [x] 5.2 业务题库加载器：只评分已审阅单篇题，草稿与多论文题显式记为跳过并报告覆盖率
 - [x] 5.3 业务题库运行器与 CLI `run_business_answer_eval`：走生产门控回答链路，记录每题 outcome、端到端与生成延迟、token
 - [x] 5.4 用 `gpt-5.6-sol` 跑通 42 题，结果摘要见 `evidence/business-qb-live-20261022.md`
+- [x] 5.5 是否题的"明确否定 + 引用"判为拒答正确，记录 `abstention_basis`（refusal / cited_negation）；重新打分 2026-10-22 运行，拒答准确率 9/11 → 11/11
+- [x] 5.6 记录网关对生命科学类问题的内容拒答限制（无法规避，表现为 halted）
 

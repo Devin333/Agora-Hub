@@ -281,3 +281,54 @@ def test_non_answered_case_rejects_answer_text():
             answer="Synthesized refusal text.",
             outcome=AnswerOutcome.HALTED,
         )
+
+
+def _abstain_case(question: str, answer: str, *, cited=("ev-1",), outcome=AnswerOutcome.ANSWERED):
+    return AnswerMetricCase(
+        case_id="case-negation",
+        question=question,
+        answer=answer,
+        outcome=outcome,
+        cited_evidence_ids=cited,
+        expected_abstain=True,
+    )
+
+
+def test_cited_explicit_negation_to_a_yes_no_question_is_a_correct_abstention():
+    score = score_answer_case(
+        _abstain_case("Does this paper disclose a private API key?", "No. The passage does not disclose one. [1]")
+    )
+
+    assert score.abstention_correct == 1.0
+    assert score.answer_success is True
+    assert score.abstention_basis == "cited_negation"
+    assert score.failure_reason == ""
+
+
+@pytest.mark.parametrize(
+    ("question", "answer", "cited"),
+    [
+        # No citation: the negation is not grounded in retrieved context.
+        ("Does this paper disclose a private API key?", "No. It does not.", ()),
+        # Not a yes/no question.
+        ("What API key does the paper use?", "No API key is disclosed. [1]", ("ev-1",)),
+        # Not an explicit negation.
+        ("Does this paper disclose a private API key?", "The passage mentions keys. [1]", ("ev-1",)),
+        # "No" must be a word, not a prefix of another word.
+        ("Does this paper report notation details?", "Notation is described in Section 2. [1]", ("ev-1",)),
+    ],
+)
+def test_only_cited_explicit_negations_to_yes_no_questions_count(question, answer, cited):
+    score = score_answer_case(_abstain_case(question, answer, cited=cited))
+
+    assert score.abstention_correct == 0.0
+    assert score.abstention_basis == ""
+    assert score.failure_reason == RAGFailureReason.ABSTENTION_WRONG.value
+
+
+def test_refusal_basis_is_recorded():
+    score = score_answer_case(
+        _abstain_case("Does this paper disclose a key?", "", cited=(), outcome=AnswerOutcome.ABSTAINED)
+    )
+
+    assert score.abstention_basis == "refusal"

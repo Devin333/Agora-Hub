@@ -46,6 +46,7 @@ class EvidenceAnswerScores:
     claim_support_coverage: float | None = None
     diagnostic_tags: tuple[str, ...] = ()
     failure_reason: str = ""
+    abstention_basis: str = ""
     matched_facts: tuple[str, ...] = ()
     missing_facts: tuple[str, ...] = ()
 
@@ -122,6 +123,14 @@ class EvidenceAnswerEvalResult:
             counts[score.sample.outcome.value] += 1
         return {key: value for key, value in counts.items() if value}
 
+    def abstention_basis_counts(self) -> dict[str, int]:
+        """How correct expected abstentions were reached: refusal vs cited negation."""
+        counts: dict[str, int] = {}
+        for score in self.scores:
+            if score.abstention_basis:
+                counts[score.abstention_basis] = counts.get(score.abstention_basis, 0) + 1
+        return dict(sorted(counts.items()))
+
     def system_failure_rate(self) -> float | None:
         if not self.total:
             return None
@@ -165,6 +174,7 @@ class EvidenceAnswerEvalResult:
             f"  SystemFailureRate        = {_format_metric(self.system_failure_rate(), self.total)}",
             f"  OverAbstentionRate       = {_format_metric(self.over_abstention_rate(), sum(1 for score in self.scores if score.sample.pair.expected_behavior == 'answer' and not score.sample.outcome.is_system_failure))}",
             f"  OutcomeCounts            = {self.outcome_counts()}",
+            f"  AbstentionBasis          = {self.abstention_basis_counts()}",
         ]
         if self.by_qa_type:
             lines.append("  -- by qa_type --")
@@ -256,6 +266,7 @@ class EvidenceAnswerEvaluator:
             claim_support_coverage=claim_support_coverage,
             diagnostic_tags=diagnostic_tags,
             failure_reason=failure_reason,
+            abstention_basis=score.abstention_basis,
             matched_facts=score.matched_facts,
             missing_facts=score.missing_facts,
         )

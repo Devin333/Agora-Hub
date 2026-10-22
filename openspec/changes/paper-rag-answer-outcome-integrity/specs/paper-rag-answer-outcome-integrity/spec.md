@@ -91,6 +91,23 @@ worker MUST 把无法解析的引用编号写入 `GroundedAnswerCandidate.unreso
 - **WHEN** 一道期望拒答的题结果为 `abstained`
 - **THEN** 该题 MUST 计为拒答正确
 
+### Requirement: Cited negation satisfies expected abstention
+
+对期望拒答的是否题（以 does/is/are/has/can 等助动词开头），回答以明确否定词 "No" 开头且至少引用一个检索片段时，评测 MUST 判为拒答正确，并 MUST 记录 `abstention_basis = "cited_negation"`；系统主动拒答或证据不足 MUST 记录 `abstention_basis = "refusal"`。其余回答 MUST 判为 `abstention_wrong`。
+
+#### Scenario: Cited negation
+- **WHEN** 问题为 "Does this paper disclose a private API key?"，回答为 "No. The passage does not disclose one. [1]" 且引用了片段
+- **THEN** `abstention_correct` MUST 为 1.0
+- **AND** `abstention_basis` MUST 为 `cited_negation`
+
+#### Scenario: Uncited negation
+- **WHEN** 回答以 "No" 开头但没有任何引用
+- **THEN** MUST 判为 `abstention_wrong`
+
+#### Scenario: Not a yes/no question
+- **WHEN** 问题为 "What API key does the paper use?"，回答为 "No API key is disclosed. [1]"
+- **THEN** MUST 判为 `abstention_wrong`
+
 ### Requirement: Metrics report denominators
 
 回答评测的每个平均指标 MUST 只对有定义的值求平均。没有可用值时 MUST 返回 `None`，报告 MUST 显示 `N/A (n=0)`，MUST NOT 显示 0。

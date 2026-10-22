@@ -343,6 +343,7 @@ def _answer_result_to_dict(result: EvidenceAnswerEvalResult) -> dict[str, Any]:
         "abstention_accuracy": result.abstention_accuracy(),
         "success_rate": result.success_rate(),
         "outcome_counts": result.outcome_counts(),
+        "abstention_basis_counts": result.abstention_basis_counts(),
         "system_failure_rate": result.system_failure_rate(),
         "over_abstention_rate": result.over_abstention_rate(),
         "failure_reason_counts": result.failure_reason_counts(),
