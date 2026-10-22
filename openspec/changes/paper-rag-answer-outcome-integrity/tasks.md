@@ -30,4 +30,4 @@
 
 - [x] 4.1 `openspec validate paper-rag-answer-outcome-integrity --strict`
 - [x] 4.2 `python -m scripts.dev smoke`
-- [ ] 4.3 提交
+- [x] 4.3 提交
