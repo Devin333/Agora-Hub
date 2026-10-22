@@ -137,6 +137,75 @@ def test_controller_plan_failure_uses_replan_then_controlled_halt() -> None:
     assert any(event["payload"].get("gate") == "rag_tool_allowlist" for event in result.transcript.events if event["event_type"] == "rag_gate_failed")
 
 
+def test_controller_reports_insufficient_evidence_when_queries_are_exhausted() -> None:
+    repeated_plan = RetrievalPlanCandidate(
+        candidate_id="repeated-plan",
+        queries=(
+            RetrievalStepSpec(
+                step_id="repeated-query",
+                operation=RetrievalOperation.SEARCH_CORPUS,
+                query="reader repair limitation",
+                corpus="research-papers",
+                metadata={"scope_ref": "paper://sparse-mixture-reader", "evidence_type": "limitation"},
+            ),
+        ),
+    )
+    spec = fake_rag_session_spec(
+        required_evidence_types=("method", "limitation"),
+        budget=RAGBudget(
+            max_rounds=3,
+            max_replans=1,
+            max_queries=4,
+            max_source_reads=4,
+            max_memory_hits=4,
+            max_context_items=4,
+            max_context_tokens=1024,
+            max_worker_calls=4,
+        ),
+    )
+
+    result = FakeRAGSessionController(
+        planner=FakeRAGPlanner((repeated_plan,)),
+        retrieval=FakeRetrievalPort((_content_resolved_method_pack(),)),
+    ).run_fake_session(spec)
+
+    assert result.status == RAGSessionStatus.INSUFFICIENT_EVIDENCE
+    assert result.decision.decision_type == RAGDecisionType.INSUFFICIENT_EVIDENCE
+    assert result.decision.reason == "retrieval queries exhausted before required evidence coverage"
+    assert [item["gate"] for item in result.decision.gate_results] == ["rag_query_dedup"]
+    assert result.decision.metadata["gap_report"]["missing_evidence_types"] == ["limitation"]
+    assert not any(event["event_type"] == "rag_answer_generation_started" for event in result.transcript.events)
+
+
+def test_controller_replans_with_a_new_query_after_wrong_evidence_type() -> None:
+    spec = fake_rag_session_spec(
+        required_evidence_types=("limitation",),
+        budget=RAGBudget(
+            max_rounds=2,
+            max_replans=1,
+            max_queries=4,
+            max_source_reads=4,
+            max_memory_hits=4,
+            max_context_items=4,
+            max_context_tokens=1024,
+            max_worker_calls=8,
+        ),
+    )
+    retrieval = FakeRetrievalPort((_content_resolved_method_pack(),))
+
+    result = FakeRAGSessionController(retrieval=retrieval).run_fake_session(spec)
+
+    queries = [request.query for request in retrieval.requests]
+    assert len(queries) == 2
+    assert len(set(queries)) == 2
+    assert result.status == RAGSessionStatus.INSUFFICIENT_EVIDENCE
+    assert not any(
+        event["payload"].get("gate") == "rag_query_dedup"
+        for event in result.transcript.events
+        if event["event_type"] == "rag_gate_failed"
+    )
+
+
 def test_controller_gap_report_includes_low_relevance_rejection_summary() -> None:
     spec = fake_rag_session_spec(
         budget=RAGBudget(
@@ -373,4 +442,13 @@ def test_durable_step_result_stops_before_next_retrieval_side_effect() -> None:
     assert any(
         event_type == "rag_step_executed" and payload.get("step_id") == "query-1"
         for event_type, payload in recorder.events
+    )
+
+
+def _content_resolved_method_pack() -> EvidencePack:
+    """Evidence whose content resolves to `method` regardless of the requested type."""
+    pack = fake_research_evidence_packs()[0]
+    return replace(
+        pack,
+        metadata={**pack.metadata, "evidence_type": "method", "evidence_type_source": "content_resolved"},
     )

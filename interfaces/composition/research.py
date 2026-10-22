@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -14,6 +13,7 @@ from urllib.parse import urlsplit
 
 from backend.research.application.analyze_paper import AnalyzePaperUseCase
 from backend.research.application.ask_paper import AskPaperUseCase
+from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
 from backend.research.application.catalog import ResearchPaperCatalogService
 from backend.research.application.parse_paper import ParsePaperUseCase
 from backend.research.application.bounded_document_rag import (
@@ -1721,25 +1721,12 @@ def _configured_paper_answer_worker_factory(
     *,
     max_output_tokens: int,
 ) -> Any:
-    async def answer_llm_call(
-        prompt: str,
-        *,
-        execution_identity: GraphExecutionIdentity | None = None,
-        timeout_seconds: float | None = None,
-        max_transport_attempts: int | None = None,
-    ) -> str:
-        request = LLMRequest(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_output_tokens,
-            temperature=0.0,
-            execution_identity=execution_identity,
-            timeout_seconds=timeout_seconds,
-            max_transport_attempts=max_transport_attempts,
-        )
-        response = await asyncio.to_thread(llm_client.complete, request)
-        return response.content or ""
-
-    return lambda: PaperAnswerWorker(AnswerGenerator(answer_llm_call))
+    answer_model = OpenAICompatiblePaperAnswerModel(
+        llm_client,
+        max_output_tokens=max_output_tokens,
+        temperature=0.0,
+    )
+    return lambda: PaperAnswerWorker(AnswerGenerator(answer_model))
 
 def _local_reader_rag_service(
     *,

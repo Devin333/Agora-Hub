@@ -32,6 +32,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         gold_judge_sample_size=args.gold_judge_sample_size,
         gold_judge_max_evidence_chars=args.gold_judge_max_evidence_chars,
         answer_eval_enabled=args.answer_eval,
+        generation_track=args.generation_track,
         answer_eval_sample_size=args.answer_eval_sample_size,
         answer_max_context_chunks=args.answer_max_context_chunks,
         answer_max_chars_per_chunk=args.answer_max_chars_per_chunk,
@@ -92,6 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--gold-judge-max-evidence-chars", type=int, default=1600)
     parser.add_argument("--answer-eval", action="store_true", help="Generate answers for the test split and run answer-level evaluation.")
+    parser.add_argument("--generation-track", choices=("end_to_end", "oracle_context"), default="end_to_end", help="Answer generation track; oracle_context may inject gold context for diagnostic comparison.")
     parser.add_argument("--answer-eval-sample-size", type=int, help="Maximum deterministic test samples for answer evaluation.")
     parser.add_argument("--answer-max-context-chunks", type=int, default=3)
     parser.add_argument("--answer-max-chars-per-chunk", type=int, default=1000)

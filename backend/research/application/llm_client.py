@@ -9,6 +9,7 @@ from framework.llm.clients.openai_compatible import (
     OpenAICompatibleConfig,
     LLMRetryPolicy,
 )
+from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
 from framework.llm.models.request import LLMRequest
 from framework.shared.env import load_root_env
 from framework.shared.graph_identity import GraphExecutionIdentity
@@ -26,8 +27,8 @@ def _browser_ua_transport(request: Request, timeout_seconds: float) -> bytes:
         return response.read()
 
 
-def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = None):
-    """Async LLM callable backed by the OPENAI_*-configured endpoint (unity2.ai).
+def _build_unity_client() -> OpenAICompatibleClient:
+    """Client for the OPENAI_*-configured endpoint (unity2.ai).
 
     Uses a browser User-Agent transport to pass Cloudflare. Reads:
       OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL.
@@ -39,11 +40,25 @@ def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = 
         model=os.environ.get("OPENAI_MODEL", "gpt-5.4-mini"),
         api_key_env="OPENAI_API_KEY",
     )
-    client = OpenAICompatibleClient(
+    return OpenAICompatibleClient(
         config,
         transport=_browser_ua_transport,
         retry_policy=LLMRetryPolicy(max_attempts=3, retry_delay_seconds=(1.5, 3.0)),
     )
+
+
+def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatiblePaperAnswerModel:
+    """Paper answer model backed by the OPENAI_*-configured endpoint."""
+    return OpenAICompatiblePaperAnswerModel(
+        _build_unity_client(),
+        max_output_tokens=max_tokens,
+        temperature=0.0,
+    )
+
+
+def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = None):
+    """Async prompt-to-text callable for judges and other single-prompt workers."""
+    client = _build_unity_client()
 
     async def llm_call(
         prompt: str,
@@ -66,4 +81,4 @@ def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = 
     return llm_call
 
 
-__all__ = ["build_unity_llm_call"]
+__all__ = ["build_unity_llm_call", "build_unity_paper_answer_model"]

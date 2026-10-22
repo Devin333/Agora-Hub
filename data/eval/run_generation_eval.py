@@ -25,7 +25,7 @@ from backend.research.rag.retriever import ResearchRetriever, RetrievalRequest
 from backend.research.rag.generator import AnswerGenerator
 from backend.research.rag.generation_eval import GenerationEvaluator
 from backend.research.rag.eval import load_golden_set
-from backend.research.application.llm_client import build_unity_llm_call
+from backend.research.application.llm_client import build_unity_llm_call, build_unity_paper_answer_model
 
 GOLDEN = Path("data/eval/golden_set.json")
 PER_DOMAIN = 3

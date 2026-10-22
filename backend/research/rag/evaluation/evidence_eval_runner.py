@@ -12,11 +12,13 @@ from typing import Any, Sequence
 from uuid import uuid4
 
 from backend.research.document.models import PaperChunk
+from backend.research.ports.paper_answer_model import PaperAnswerModelPort
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from backend.research.ports.field_embedding_index import FieldEmbeddingHit
 from backend.research.ports.visual_chunk_index import VisualChunkHit
 from backend.research.rag.adapters.paper_field_text import FIELD_NAMES, extract_field_texts
 from backend.research.rag.evaluation.paper_answer_eval import (
+    AnswerOutcome,
     EvidenceAnswerEvaluator,
     EvidenceAnswerSample,
 )
@@ -58,6 +60,7 @@ def run_evidence_eval_core(
     options: EvidenceEvalOptions,
     *,
     live_answer_ask: Callable[[EvidenceQAPair], dict[str, Any]] | None = None,
+    answer_model: PaperAnswerModelPort | None = None,
 ) -> int:
     if options.deterministic_answer_eval and options.live_answer_eval:
         raise ValueError("--deterministic-answer-eval and --live-answer-eval are mutually exclusive")
@@ -169,6 +172,7 @@ def run_evidence_eval_core(
                 image_root=Path(options.image_root) if options.image_root else None,
                 lightweight_reranker=options.lightweight_reranker,
                 limit=options.answer_eval_limit,
+                answer_model=answer_model,
             )
         answer = EvidenceAnswerEvaluator().evaluate(
             _build_live_answer_samples(
@@ -290,7 +294,8 @@ def _deterministic_answer_sample(pair: EvidenceQAPair) -> EvidenceAnswerSample:
     if pair.expected_behavior == "abstain":
         return EvidenceAnswerSample(
             pair=pair,
-            answer="The provided context does not mention evidence that answers this question.",
+            answer="",
+            outcome=AnswerOutcome.ABSTAINED,
             metadata={"ci_answer_eval": "deterministic_abstention"},
         )
 
@@ -305,6 +310,7 @@ def _deterministic_answer_sample(pair: EvidenceQAPair) -> EvidenceAnswerSample:
     return EvidenceAnswerSample(
         pair=pair,
         answer=answer_text,
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=list(pair.gold_chunk_ids),
         cited_source_locators=list(pair.gold_source_locators),
         context_chunk_ids=context_ids,
@@ -334,41 +340,41 @@ def _live_answer_sample(pair: EvidenceQAPair, payload: dict[str, Any]) -> Eviden
         for item in citations
     ])
     cited_source_locators = _unique_texts([item.get("source_locator") for item in citations])
+    status = str(payload.get("status") or "").casefold()
+    outcome_by_status = {
+        "answered": AnswerOutcome.ANSWERED,
+        "abstained": AnswerOutcome.ABSTAINED,
+        "insufficient_evidence": AnswerOutcome.INSUFFICIENT_EVIDENCE,
+        "halted": AnswerOutcome.HALTED,
+        "failed": AnswerOutcome.FAILED,
+    }
+    try:
+        outcome = outcome_by_status[status]
+    except KeyError as exc:
+        raise ValueError(f"unsupported live answer session status: {status!r}") from exc
+    answer = str(payload.get("answer") or "").strip() if outcome is AnswerOutcome.ANSWERED else ""
+    candidate = payload.get("answer_candidate")
+    candidate_metadata = candidate.get("metadata") if isinstance(candidate, dict) else {}
+    metadata = {
+        "answer_eval": "live_gated_harness",
+        "status": status,
+        "generation_mode": str(payload.get("generation_mode") or ""),
+        "transcript_id": str(payload.get("transcript_id") or ""),
+        "retrieved_chunk_ids": context_chunk_ids,
+        "gate_results": list(payload.get("gate_results") or []),
+        "decision": dict(payload.get("decision") or {}),
+        "answer_candidate": dict(candidate or {}) if isinstance(candidate, dict) else {},
+        "model_usage": (candidate_metadata or {}).get("model_usage") if isinstance(candidate_metadata, dict) else None,
+    }
     return EvidenceAnswerSample(
         pair=pair,
-        answer=_answer_text_from_live_payload(payload),
+        answer=answer,
+        outcome=outcome,
         cited_chunk_ids=cited_chunk_ids,
         cited_source_locators=cited_source_locators,
         context_chunk_ids=context_chunk_ids,
-        metadata={
-            "answer_eval": "live_gated_harness",
-            "status": str(payload.get("status") or ""),
-            "generation_mode": str(payload.get("generation_mode") or ""),
-            "transcript_id": str(payload.get("transcript_id") or ""),
-            "retrieved_chunk_ids": context_chunk_ids,
-            "gate_results": list(payload.get("gate_results") or []),
-            "decision": dict(payload.get("decision") or {}),
-            "answer_candidate": dict(payload.get("answer_candidate") or {}),
-        },
+        metadata=metadata,
     )
-
-
-def _answer_text_from_live_payload(payload: dict[str, Any]) -> str:
-    answer = str(payload.get("answer") or "").strip()
-    if answer:
-        return answer
-    candidate = payload.get("answer_candidate")
-    if isinstance(candidate, dict):
-        candidate_answer = str(candidate.get("answer_text") or "").strip()
-        if candidate_answer:
-            return candidate_answer
-        if candidate.get("abstained"):
-            return "The provided context does not mention evidence that answers this question."
-    status = str(payload.get("status") or "").casefold()
-    if status and status != "succeeded":
-        return "The provided context does not mention evidence that answers this question."
-    return ""
-
 
 def _build_live_answer_ask(
     chunks: list[PaperChunk],
@@ -378,6 +384,7 @@ def _build_live_answer_ask(
     image_root: Path | None,
     lightweight_reranker: bool,
     limit: int,
+    answer_model: PaperAnswerModelPort | None = None,
 ) -> Callable[[EvidenceQAPair], dict[str, Any]]:
     if not chunks:
         raise ValueError(
@@ -391,6 +398,7 @@ def _build_live_answer_ask(
         image_root=image_root,
         lightweight_reranker=lightweight_reranker,
         limit=limit,
+        answer_model=answer_model,
     )
 
 
@@ -402,13 +410,16 @@ def _build_in_memory_live_answer_ask(
     image_root: Path | None,
     lightweight_reranker: bool,
     limit: int,
+    answer_model: PaperAnswerModelPort | None = None,
 ) -> Callable[[EvidenceQAPair], dict[str, Any]]:
     from backend.research.application.ask_paper import AskPaperUseCase
-    from backend.research.application.llm_client import build_unity_llm_call
     from backend.research.application.paper_rag_session import PaperRAGSession
     from backend.research.rag.adapters import PaperAnswerWorker
     from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
     from backend.research.rag.retrieval.policies import build_retrieval_policy
+
+    run_id = f"paper-rag-answer-eval-run-{uuid4().hex[:12]}"
+    chunks = [chunk.model_copy(update={"metadata": {**chunk.metadata, "run_id": run_id}}) for chunk in chunks]
 
     chunk_store = _InMemoryChunkStore()
     chunk_store.ensure_collection()
@@ -434,7 +445,10 @@ def _build_in_memory_live_answer_ask(
         field_reranker = LightweightLexicalReranker()
 
     policy = build_retrieval_policy(retrieval_policy)
-    answer_worker = PaperAnswerWorker(AnswerGenerator(build_unity_llm_call(max_tokens=600)))
+    if answer_model is None:
+        from backend.research.application.llm_client import build_unity_paper_answer_model
+        answer_model = build_unity_paper_answer_model(max_tokens=600)
+    answer_worker = PaperAnswerWorker(AnswerGenerator(answer_model))
     session = PaperRAGSession(
         chunk_store,
         field_index=field_index,
@@ -453,7 +467,6 @@ def _build_in_memory_live_answer_ask(
             question=pair.question,
             goal_id=f"paper-rag-answer-eval-{run_suffix}",
         )
-        run_id = f"paper-rag-answer-eval-run-{run_suffix}"
         result = session.run(
             goal,
             graph_identity=build_paper_analysis_context_graph_identity(

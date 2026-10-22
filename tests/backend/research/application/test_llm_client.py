@@ -83,8 +83,8 @@ def test_memory_send_never_retries_inside_transport_after_permission_is_revoked(
     from backend.research.domain.personal_memory import PersonalMemorySourceRef
     from backend.research.domain.personal_memory_context import PersonalMemoryContext, PersonalMemoryContextItem
     from backend.research.rag.retrieval.contracts import RetrievalResult
+    from backend.research.ports.paper_answer_model import PaperAnswerModelError
     from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
-    from framework.llm.clients.openai_compatible import LLMProviderError
 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -119,15 +119,15 @@ def test_memory_send_never_retries_inside_transport_after_permission_is_revoked(
 
     monkeypatch.setattr(llm_client, "OpenAICompatibleClient", client)
     monkeypatch.setattr(llm_client, "_browser_ua_transport", transport)
-    call = llm_client.build_unity_llm_call()
-    generator = AnswerGenerator(call)
+    generator = AnswerGenerator(llm_client.build_unity_paper_answer_model())
     retrieval = RetrievalResult(parent_chunks=[], child_chunks=[PaperChunk(
         chunk_id="chunk-1", paper_id="p1", parse_source="latex", chunk_type="paragraph",
         content="The method retrieves verified evidence.",
     )], ref_chunks=[], intent="general")
-    with pytest.raises(LLMProviderError):
+    with pytest.raises(PaperAnswerModelError) as raised:
         asyncio.run(generator.generate("What is the method?", retrieval,
                     personal_memory_context=context, personal_memory_context_provider=provider))
+    assert raised.value.code == "provider_unavailable"
     assert len(calls) == 1
     with pytest.raises(PermissionError):
         asyncio.run(generator.generate("What is the method?", retrieval,
@@ -135,7 +135,40 @@ def test_memory_send_never_retries_inside_transport_after_permission_is_revoked(
     assert provider.checks == 2
     assert len(calls) == 1  # No memory request is sent after revocation.
 
-    # This same application callable retains three attempts for ordinary requests.
-    with pytest.raises(LLMProviderError):
-        asyncio.run(call("No personal memory"))
+    # The same answer model retains the configured three attempts for ordinary requests.
+    with pytest.raises(PaperAnswerModelError):
+        asyncio.run(generator.generate("What is the method?", retrieval))
     assert len(calls) == 4
+
+
+def test_unity_paper_answer_model_sends_system_and_user_messages(monkeypatch) -> None:
+    from backend.research.ports.paper_answer_model import PaperAnswerModelRequest
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    captured = []
+
+    class _FakeClient:
+        def __init__(self, config, **kwargs) -> None:
+            self.config = config
+
+        def complete(self, request):
+            captured.append(request)
+            return LLMResponse(content="Answer [1].", model="test-model", usage={"input_tokens": 9, "output_tokens": 3})
+
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _FakeClient)
+    model = llm_client.build_unity_paper_answer_model(max_tokens=77)
+
+    response = asyncio.run(model.complete(PaperAnswerModelRequest(system_prompt="system", user_prompt="user")))
+
+    assert response.text == "Answer [1]."
+    assert response.model == "test-model"
+    assert response.usage.input_tokens == 9
+    assert captured[0].messages == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "user"},
+    ]
+    assert captured[0].max_tokens == 77
+    assert captured[0].temperature == 0.0
+    assert captured[0].max_transport_attempts is None

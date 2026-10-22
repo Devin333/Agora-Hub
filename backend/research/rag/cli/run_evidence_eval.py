@@ -19,9 +19,14 @@ def main(
     live_answer_ask: Callable[[EvidenceQAPair], dict[str, Any]] | None = None,
 ) -> int:
     args = _build_parser().parse_args(argv)
+    answer_model = None
+    if args.live_answer_eval and live_answer_ask is None:
+        from backend.research.application.llm_client import build_unity_paper_answer_model
+        answer_model = build_unity_paper_answer_model(max_tokens=600)
     return run_evidence_eval_core(
         evidence_eval_options_from_args(args),
         live_answer_ask=live_answer_ask,
+        answer_model=answer_model,
     )
 
 

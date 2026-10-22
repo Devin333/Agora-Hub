@@ -22,6 +22,7 @@ class RAGSessionMetrics:
     answer_present: bool = False
     answer_abstained: bool = False
     answer_attempts: int = 0
+    answer_generation_failures: int = 0
     supplemental_rounds_started: int = 0
     supplemental_rounds_completed: int = 0
     supplemental_rounds_failed: int = 0
@@ -50,6 +51,7 @@ class RAGSessionMetrics:
             "memory_context_count",
             "artifact_ref_count",
             "answer_attempts",
+            "answer_generation_failures",
             "supplemental_rounds_started",
             "supplemental_rounds_completed",
             "supplemental_rounds_failed",
@@ -74,6 +76,7 @@ class RAGSessionMetrics:
             "answer_present": self.answer_present,
             "answer_abstained": self.answer_abstained,
             "answer_attempts": self.answer_attempts,
+            "answer_generation_failures": self.answer_generation_failures,
             "supplemental_rounds_started": self.supplemental_rounds_started,
             "supplemental_rounds_completed": self.supplemental_rounds_completed,
             "supplemental_rounds_failed": self.supplemental_rounds_failed,
@@ -113,6 +116,7 @@ def build_rag_session_metrics(
         answer_present=answer is not None,
         answer_abstained=bool(getattr(answer, "abstained", False)) if answer is not None else False,
         answer_attempts=event_types.count("rag_answer_candidate_created"),
+        answer_generation_failures=event_types.count("rag_answer_generation_failed"),
         supplemental_rounds_started=event_types.count("rag_answer_supplemental_round_started"),
         supplemental_rounds_completed=event_types.count("rag_answer_supplemental_round_completed"),
         supplemental_rounds_failed=event_types.count("rag_answer_supplemental_round_failed"),

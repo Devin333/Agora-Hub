@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from framework.rag.evaluation import AnswerOutcome
+
 import json
 
 from backend.research.rag.evaluation.paper_answer_eval import (
@@ -37,7 +39,8 @@ def test_evidence_regression_report_writes_json_and_markdown(tmp_path) -> None:
     )
     answer = EvidenceAnswerEvalResult(scores=[
         EvidenceAnswerScores(
-            sample=EvidenceAnswerSample(pair=pair, answer="Supported. [para-1]", cited_chunk_ids=["para-1"]),
+            sample=EvidenceAnswerSample(pair=pair, answer="Supported. [para-1]", outcome=AnswerOutcome.ANSWERED,
+                                                                                 cited_chunk_ids=["para-1"]),
             fact_coverage=None,
             citation_grounding=1.0,
             source_locator_grounding=None,
@@ -122,7 +125,7 @@ def test_evidence_regression_report_maps_answer_failures_to_rag_scorecard() -> N
     )
     answer = EvidenceAnswerEvalResult(scores=[
         EvidenceAnswerScores(
-            sample=EvidenceAnswerSample(pair=pair, answer="The answer missed the table."),
+            sample=EvidenceAnswerSample(pair=pair, answer="The answer missed the table.", outcome=AnswerOutcome.ANSWERED),
             fact_coverage=1.0,
             citation_grounding=0.0,
             source_locator_grounding=None,
@@ -164,6 +167,7 @@ def test_evidence_regression_report_writes_answer_failure_details(tmp_path) -> N
             sample=EvidenceAnswerSample(
                 pair=failing_pair,
                 answer="The provided context does not mention the table.",
+                outcome=AnswerOutcome.ANSWERED,
                 cited_chunk_ids=[],
                 cited_source_locators=[],
                 context_chunk_ids=["other"],
@@ -194,6 +198,7 @@ def test_evidence_regression_report_writes_answer_failure_details(tmp_path) -> N
             sample=EvidenceAnswerSample(
                 pair=passing_pair,
                 answer="The claim is supported. [para-2]",
+                outcome=AnswerOutcome.ANSWERED,
                 cited_chunk_ids=["para-2"],
                 context_chunk_ids=["para-2"],
             ),

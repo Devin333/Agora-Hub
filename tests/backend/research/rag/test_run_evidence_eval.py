@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from data.eval.build_golden_set import build_pairs
 from backend.research.document.models import PaperChunk
+from backend.research.rag.evaluation import evidence_eval_runner
+from backend.research.rag.evaluation.golden_corpus_snapshot import load_golden_corpus_snapshot
+from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 from backend.research.rag.cli.run_evidence_eval import main
 from backend.research.rag.evaluation.evidence_eval_runner import (
     EvidenceEvalOptions,
@@ -54,6 +58,51 @@ class _FakeChunkStore:
 
     def get_parent_chunk(self, chunk: PaperChunk):
         return self.get_chunk(chunk.parent_chunk_id) if chunk.parent_chunk_id else None
+
+
+def test_live_answer_eval_reuses_run_id_for_golden_single_paper_cases() -> None:
+    snapshot = load_golden_corpus_snapshot(
+        Path("data/eval/golden_corpus_snapshot.json"),
+        golden_set_path=Path("data/eval/golden_set.json"),
+    )
+    ask = evidence_eval_runner._build_in_memory_live_answer_ask(
+        snapshot.chunks,
+        retrieval_policy="paper_blind_semantic_rag_v1",
+        visual_enabled=False,
+        image_root=None,
+        lightweight_reranker=False,
+        limit=5,
+        answer_model=FakePaperAnswerModel("Answer supported by [1]."),
+    )
+
+    results = []
+    for line in Path("data/eval/business_question_bank_v1_draft.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines():
+        case = json.loads(line)
+        gold_ids = (case.get("gold_evidence") or {}).get("gold_chunk_ids") or []
+        if case.get("category") != "single_paper" or not gold_ids:
+            continue
+        pair = EvidenceQAPair(
+            paper_id=case["source_papers"][0],
+            question=case["question"],
+            qa_type=case["category"],
+            gold_chunk_ids=gold_ids,
+        )
+        results.append((case["case_id"], ask(pair)))
+
+    assert len(results) == 30
+    assert all(
+        payload["passages"]
+        or payload.get("decision", {}).get("metadata", {}).get("gap_report", {}).get("accepted_evidence_ids")
+        for _, payload in results
+    )
+    assert not [
+        case_id
+        for case_id, payload in results
+        if payload["status"] == "halted"
+        and payload.get("decision", {}).get("reason") == "rag_query_dedup"
+    ]
 
 
 def test_run_evidence_eval_writes_summary_report(tmp_path) -> None:
@@ -199,7 +248,7 @@ def test_live_answer_eval_samples_preserve_gated_payload_semantics() -> None:
                 "transcript_id": "rag-transcript://p1/abstain",
             }
         return {
-            "status": "succeeded",
+            "status": "answered",
             "generation_mode": "gated_harness",
             "answer": "The visual architecture improves retrieval accuracy.",
             "answer_candidate": {"abstained": False},
@@ -224,7 +273,9 @@ def test_live_answer_eval_samples_preserve_gated_payload_semantics() -> None:
     ]
     assert samples[0].cited_chunk_ids == ["para-1"]
     assert samples[0].context_chunk_ids == ["para-1"]
-    assert "provided context does not mention" in samples[1].answer
+    assert samples[1].answer == ""
+    assert samples[0].outcome.value == "answered"
+    assert samples[1].outcome.value == "insufficient_evidence"
     assert result.abstention_accuracy() == 1.0
     assert result.success_rate() == 1.0
 

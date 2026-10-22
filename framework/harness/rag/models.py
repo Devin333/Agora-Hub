@@ -679,6 +679,8 @@ class GroundedAnswerCandidate:
     claims: tuple[AnswerClaim, ...]
     abstained: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Citation markers in answer_text that do not resolve to verified context evidence.
+    unresolved_citations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not str(self.answer_id).strip():
@@ -687,6 +689,11 @@ class GroundedAnswerCandidate:
             raise HarnessValidationError("answer question is required")
         object.__setattr__(self, "answer_text", str(self.answer_text))
         object.__setattr__(self, "cited_evidence_ids", tuple(str(item) for item in self.cited_evidence_ids))
+        object.__setattr__(
+            self,
+            "unresolved_citations",
+            tuple(str(item) for item in self.unresolved_citations),
+        )
         object.__setattr__(
             self,
             "claims",
@@ -702,6 +709,7 @@ class GroundedAnswerCandidate:
             "cited_evidence_ids": list(self.cited_evidence_ids),
             "claims": [claim.to_dict() for claim in self.claims],
             "abstained": self.abstained,
+            "unresolved_citations": list(self.unresolved_citations),
             "metadata": to_jsonable(self.metadata),
         }
 

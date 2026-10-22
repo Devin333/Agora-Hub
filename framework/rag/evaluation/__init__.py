@@ -3,6 +3,7 @@ from __future__ import annotations
 from framework.rag.evaluation.answer_metrics import (
     AnswerMetricCase,
     AnswerMetricScore,
+    AnswerOutcome,
     evidence_support_coverage,
     evaluate_answer_case,
     score_answer_case,
@@ -24,6 +25,7 @@ from framework.rag.evaluation.score_breakdown import SCORE_BREAKDOWN_COMPONENTS,
 __all__ = [
     "AnswerMetricCase",
     "AnswerMetricScore",
+    "AnswerOutcome",
     "MetricValue",
     "RAGEvaluationReport",
     "RAGFailureReason",

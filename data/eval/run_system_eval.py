@@ -28,7 +28,7 @@ from backend.research.rag.retriever import ResearchRetriever, RetrievalRequest
 from backend.research.rag.generator import AnswerGenerator
 from backend.research.rag.system_eval import SystemEvaluator, SystemSample
 from backend.research.rag.eval import load_golden_set
-from backend.research.application.llm_client import build_unity_llm_call
+from backend.research.application.llm_client import build_unity_paper_answer_model, build_unity_llm_call
 
 GOLDEN = Path("data/eval/golden_set.json")
 PER_DOMAIN = 3
@@ -53,7 +53,7 @@ async def main() -> None:
 
     store = PaperChunkStoreAdapter(PaperChunkStore(qdrant_store_from_env()))
     retriever = ResearchRetriever(store, reranker=CrossEncoderReranker())
-    generator = AnswerGenerator(build_unity_llm_call(max_tokens=600))
+    generator = AnswerGenerator(build_unity_paper_answer_model(max_tokens=600))
     evaluator = SystemEvaluator(build_unity_llm_call(max_tokens=200), max_concurrency=3)
 
     samples: list[SystemSample] = []

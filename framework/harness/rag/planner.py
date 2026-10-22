@@ -12,6 +12,7 @@ from framework.harness.rag.models import (
     RetrievalStepSpec,
     RAGSessionSpec,
 )
+from framework.harness.rag.policy import normalize_query
 from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
 from framework.shared.graph_identity import GraphExecutionIdentity
 
@@ -39,13 +40,13 @@ class DeterministicRAGPlanner:
         executed_queries: tuple[str, ...] = (),
     ) -> RetrievalPlanCandidate:
         suffix = f"round-{round_index + 1}"
-        query_text = spec.goal.question
         missing_evidence_types = tuple(str(item) for item in gap_report.get("missing_evidence_types", ()) if str(item).strip())
-        if missing_evidence_types:
-            query_text = f"{query_text} {' '.join(missing_evidence_types)}"
         unsupported_claims = _unsupported_claim_texts(gap_report)
-        if unsupported_claims:
-            query_text = f"{query_text} {' '.join(unsupported_claims)}"
+        query_text = deterministic_query_text(
+            spec,
+            gap_report=gap_report,
+            executed_queries=executed_queries,
+        )
         evidence_type = (
             missing_evidence_types[0]
             if missing_evidence_types
@@ -290,6 +291,56 @@ def _per_round_limit(total: int, rounds: int, *, ceiling: int) -> int:
     return max(1, min(ceiling, total // max(rounds, 1) or total or 1))
 
 
+def deterministic_query_text(
+    spec: RAGSessionSpec,
+    *,
+    gap_report: dict[str, Any],
+    executed_queries: tuple[str, ...] = (),
+) -> str:
+    """Pick the first deterministic query variant that has not been executed yet."""
+    return _first_unexecuted_query(
+        _query_variants(
+            spec.goal.question,
+            missing_evidence_types=tuple(
+                str(item) for item in gap_report.get("missing_evidence_types", ()) if str(item).strip()
+            ),
+            unsupported_claims=_unsupported_claim_texts(gap_report),
+            target_entities=spec.goal.target_entities,
+        ),
+        executed_queries=executed_queries,
+    )
+
+
+def _query_variants(
+    question: str,
+    *,
+    missing_evidence_types: tuple[str, ...],
+    unsupported_claims: tuple[str, ...],
+    target_entities: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Ordered deterministic query candidates; the first is the gap-focused default."""
+    entities = tuple(entity for entity in target_entities if str(entity).strip())
+    return (
+        _join_query(question, *missing_evidence_types, *unsupported_claims),
+        _join_query(question, *unsupported_claims),
+        _join_query(question),
+        _join_query(question, *entities),
+    )
+
+
+def _join_query(*parts: str) -> str:
+    return " ".join(str(part).strip() for part in parts if str(part).strip())
+
+
+def _first_unexecuted_query(candidates: tuple[str, ...], *, executed_queries: tuple[str, ...]) -> str:
+    executed = {normalize_query(query) for query in executed_queries}
+    for candidate in candidates:
+        if normalize_query(candidate) not in executed:
+            return candidate
+    # Every variant was already executed; the dedup gate reports retrieval exhaustion.
+    return candidates[0]
+
+
 def _unsupported_claim_texts(gap_report: dict[str, Any]) -> tuple[str, ...]:
     texts: list[str] = []
     for item in gap_report.get("unsupported_claims", ()):
@@ -302,4 +353,4 @@ def _unsupported_claim_texts(gap_report: dict[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(texts[:3]))
 
 
-__all__ = ["DeterministicRAGPlanner", "RAGPlanner", "WorkerRAGPlanner"]
+__all__ = ["DeterministicRAGPlanner", "RAGPlanner", "WorkerRAGPlanner", "deterministic_query_text"]

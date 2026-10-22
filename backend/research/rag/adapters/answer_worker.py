@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass
-import re
 from threading import Thread
 from typing import Any
 from uuid import uuid4
@@ -12,9 +11,11 @@ from backend.research.document.models import PaperChunk
 from backend.research.domain.personal_memory_context import (
     PersonalMemoryContext, PersonalMemoryContextProvider,
 )
+from backend.research.ports.paper_answer_model import PaperAnswerModelError
 from backend.research.rag.retrieval.contracts import RetrievalResult
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator, GeneratedAnswer
 from backend.research.rag.retrieval.paper_policy import classify_query_intent
+from framework.harness.rag.answer_worker import AnswerWorkerError
 from framework.harness.rag.models import AnswerClaim, GroundedAnswerCandidate, RAGContextPack
 from framework.shared.graph_identity import GraphExecutionIdentity
 
@@ -67,19 +68,16 @@ class PaperAnswerWorker:
     ) -> GroundedAnswerCandidate:
         projected = _project_context_pack(pack, question=question)
         if projected is None:
-            return _abstention(
-                question,
-                reason="context pack lacks paper_chunk metadata",
-                context_pack_id=pack.pack_id,
+            raise AnswerWorkerError(
+                "context_pack_not_projectable",
+                "context pack lacks paper_chunk metadata",
             )
-
         if self._personal_memory_context is not None and not _supports_personal_memory_context(
             self._generator
         ):
-            return _abstention(
-                question,
-                reason="answer generator does not support personal memory context",
-                context_pack_id=pack.pack_id,
+            raise AnswerWorkerError(
+                "personal_memory_unsupported",
+                "answer generator does not support personal memory context",
             )
 
         generator_kwargs: dict[str, Any] = {}
@@ -89,13 +87,17 @@ class PaperAnswerWorker:
             generator_kwargs["personal_memory_context"] = self._personal_memory_context
         if self._personal_memory_context_provider is not None:
             generator_kwargs["personal_memory_context_provider"] = self._personal_memory_context_provider
-        generated = _run_async(
-            self._generator.generate(
-                question,
-                projected.retrieval,
-                **generator_kwargs,
+        try:
+            generated = _run_async(
+                self._generator.generate(
+                    question,
+                    projected.retrieval,
+                    **generator_kwargs,
+                )
             )
-        )
+        except PaperAnswerModelError as exc:
+            raise AnswerWorkerError(f"model_{exc.code}", str(exc), retryable=exc.retryable) from exc
+
         actual_used_personal_memory: list[dict[str, str | int]] = []
         if self._personal_memory_context is not None:
             receipt = _verified_personal_memory_receipt(
@@ -103,108 +105,62 @@ class PaperAnswerWorker:
                 expected=self._personal_memory_context,
             )
             if receipt is None:
-                return _abstention(
-                    question,
-                    reason="answer generator did not acknowledge personal memory context",
-                    context_pack_id=pack.pack_id,
-                    metadata={"generated_answer": generated.to_dict()},
+                raise AnswerWorkerError(
+                    "personal_memory_receipt_mismatch",
+                    "answer generator did not acknowledge personal memory context",
                 )
             actual_used_personal_memory = receipt
-        generated_metadata = {
-            "generated_answer": generated.to_dict(),
+
+        metadata: dict[str, Any] = {
+            "worker": "paper_answer_worker",
+            "context_pack_id": pack.pack_id,
+            "context_chunk_ids": list(generated.context_chunk_ids),
+            "chunk_to_evidence_id": dict(projected.chunk_to_evidence_id),
+            "evidence_id_to_span_refs": {
+                evidence_id: list(span_refs)
+                for evidence_id, span_refs in projected.evidence_id_to_span_refs.items()
+            },
             "generated_answer_metadata": dict(generated.context_metadata),
+            "model": generated.model,
+            "model_usage": generated.model_usage.to_dict(),
             **(
                 {"used_personal_memory": actual_used_personal_memory}
                 if actual_used_personal_memory
                 else {}
             ),
         }
-        if not generated.answer.strip():
-            return _abstention(
-                question,
-                reason="answer generator returned empty answer",
-                context_pack_id=pack.pack_id,
-                metadata=generated_metadata,
-            )
-        if _looks_like_context_abstention(generated.answer):
-            return _abstention(
-                question,
-                reason="answer generator reported insufficient context",
-                context_pack_id=pack.pack_id,
-                metadata=generated_metadata,
-            )
-        if negative_presence := _negative_presence_relevance_gap(
-            question,
-            generated.answer,
-            generated.contexts,
-        ):
-            return _abstention(
-                question,
-                reason="negative presence answer lacked target relevance",
-                context_pack_id=pack.pack_id,
+        if generated.abstained:
+            return GroundedAnswerCandidate(
+                answer_id=f"paper-answer-abstain-{uuid4().hex[:12]}",
+                question=question,
+                answer_text="",
+                cited_evidence_ids=(),
+                claims=(),
+                abstained=True,
                 metadata={
-                    **generated_metadata,
-                    "negative_presence_relevance": negative_presence,
+                    **metadata,
+                    "abstention_source": "model",
+                    "abstention_reason": generated.abstention_reason,
                 },
             )
 
-        cited_chunk_ids = _explicitly_cited_chunk_ids(
-            generated.answer,
-            generated.context_chunk_ids,
-        )
-        if cited_chunk_ids is None:
-            return _abstention(
-                question,
-                reason="answer citations do not resolve to retrieved context",
-                context_pack_id=pack.pack_id,
-                metadata=generated_metadata,
-            )
-        if any(
-            chunk_id not in projected.chunk_to_evidence_id
-            for chunk_id in cited_chunk_ids
-        ):
-            return _abstention(
-                question,
-                reason="answer citations do not resolve to verified evidence",
-                context_pack_id=pack.pack_id,
-                metadata=generated_metadata,
-            )
+        # Citation validity is judged by the answer gate; the worker only reports it.
+        unresolved = list(generated.invalid_citation_markers)
+        for index, chunk_id in zip(generated.cited_context_indexes, generated.cited_chunk_ids):
+            if chunk_id not in projected.chunk_to_evidence_id:
+                unresolved.append(f"[{index}]")
         cited_evidence_ids = _map_chunk_ids(
-            cited_chunk_ids, projected.chunk_to_evidence_id
+            generated.cited_chunk_ids,
+            projected.chunk_to_evidence_id,
         )
-        if not cited_evidence_ids or not _cited_evidence_has_locators(
-            cited_evidence_ids, projected.evidence_id_to_span_refs
-        ):
-            return _abstention(
-                question,
-                reason="cited evidence lacks a verified locator",
-                context_pack_id=pack.pack_id,
-                metadata=generated_metadata,
-            )
-
         return GroundedAnswerCandidate(
             answer_id=f"paper-answer-{uuid4().hex[:12]}",
             question=question,
             answer_text=generated.answer,
             cited_evidence_ids=tuple(cited_evidence_ids),
             claims=(_conservative_claim(generated, cited_evidence_ids, projected.evidence_id_to_span_refs),),
-            metadata={
-                "worker": "paper_answer_worker",
-                "context_pack_id": pack.pack_id,
-                "context_chunk_ids": list(generated.context_chunk_ids),
-                "chunk_to_evidence_id": dict(projected.chunk_to_evidence_id),
-                "evidence_id_to_span_refs": {
-                    evidence_id: list(span_refs)
-                    for evidence_id, span_refs in projected.evidence_id_to_span_refs.items()
-                },
-                "claims_degraded": True,
-                "generated_answer_metadata": dict(generated.context_metadata),
-                **(
-                    {"used_personal_memory": actual_used_personal_memory}
-                    if actual_used_personal_memory
-                    else {}
-                ),
-            },
+            metadata={**metadata, "claims_degraded": True},
+            unresolved_citations=tuple(unresolved),
         )
 
 
@@ -350,31 +306,6 @@ def _paper_chunk_from_evidence(evidence: Any) -> PaperChunk | None:
     return _paper_chunk_from_evidence_metadata(metadata)
 
 
-def _explicitly_cited_chunk_ids(
-    answer: str,
-    context_chunk_ids: list[str],
-) -> list[str] | None:
-    indexes: list[int] = []
-    seen: set[int] = set()
-    for match in re.finditer(r"\[(\d+)\]", str(answer or "")):
-        index = int(match.group(1))
-        if index < 1 or index > len(context_chunk_ids):
-            return None
-        if index not in seen:
-            seen.add(index)
-            indexes.append(index)
-    if not indexes:
-        return None
-    return [context_chunk_ids[index - 1] for index in indexes]
-
-
-def _cited_evidence_has_locators(
-    evidence_ids: list[str],
-    evidence_id_to_span_refs: dict[str, tuple[str, ...]],
-) -> bool:
-    return all(evidence_id_to_span_refs.get(evidence_id) for evidence_id in evidence_ids)
-
-
 def _map_chunk_ids(chunk_ids: list[str], mapping: dict[str, str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -423,221 +354,6 @@ def _claim_span_refs(
             seen.add(span_ref)
             out.append(span_ref)
     return tuple(out)
-
-
-def _looks_like_context_abstention(answer: str) -> bool:
-    text = " ".join(str(answer or "").casefold().split())
-    if not text:
-        return True
-    direct_markers = (
-        "cannot determine",
-        "cannot answer",
-        "insufficient evidence",
-        "not enough evidence",
-        "not in the provided context",
-        "not available from the passages",
-        "provided context does not mention",
-        "provided passages do not mention",
-        "does not state",
-        "contains no mention",
-        "contain nothing about",
-        "contains nothing about",
-        "context does not mention",
-        "no evidence",
-    )
-    if any(marker in text for marker in direct_markers):
-        return True
-    context_anchors = (
-        "provided context",
-        "provided passages",
-        "the context",
-        "the passages",
-        "context passages",
-    )
-    absence_markers = (
-        "does not contain",
-        "do not contain",
-        "does not discuss",
-        "do not discuss",
-        "does not mention",
-        "do not mention",
-        "does not include",
-        "do not include",
-        "does not provide",
-        "do not provide",
-        "does not address",
-        "do not address",
-        "does not report",
-        "do not report",
-        "does not indicate",
-        "do not indicate",
-        "does not state",
-        "do not state",
-        "contains no mention",
-        "contain no mention",
-        "contain nothing about",
-        "contains nothing about",
-        "no mention of",
-        "not contain",
-        "not discuss",
-        "not mention",
-        "not include",
-        "not provide",
-        "not address",
-        "not report",
-        "not indicate",
-        "not state",
-    )
-    if any(anchor in text for anchor in context_anchors) and any(marker in text for marker in absence_markers):
-        return True
-    return bool(re.search(r"\b(no|not enough|insufficient)\s+(evidence|information)\b", text))
-
-
-_NEGATIVE_PRESENCE_VERBS = (
-    "include",
-    "includes",
-    "included",
-    "specify",
-    "specifies",
-    "specified",
-    "report",
-    "reports",
-    "reported",
-    "discuss",
-    "discusses",
-    "discussed",
-    "provide",
-    "provides",
-    "provided",
-    "state",
-    "states",
-    "stated",
-    "mention",
-    "mentions",
-    "mentioned",
-    "describe",
-    "describes",
-    "described",
-    "contain",
-    "contains",
-    "contained",
-    "disclose",
-    "discloses",
-    "disclosed",
-)
-
-_NEGATIVE_PRESENCE_STOP_TERMS = {
-    "about",
-    "also",
-    "answer",
-    "authors",
-    "based",
-    "detail",
-    "details",
-    "does",
-    "from",
-    "given",
-    "include",
-    "includes",
-    "included",
-    "paper",
-    "papers",
-    "provided",
-    "question",
-    "report",
-    "reports",
-    "reported",
-    "research",
-    "specify",
-    "specifies",
-    "specified",
-    "state",
-    "states",
-    "stated",
-    "study",
-    "tell",
-    "that",
-    "their",
-    "there",
-    "these",
-    "this",
-    "using",
-    "whether",
-    "with",
-}
-
-
-def _negative_presence_relevance_gap(
-    question: str,
-    answer: str,
-    contexts: list[str] | tuple[str, ...],
-) -> dict[str, Any] | None:
-    if _looks_like_context_abstention(answer):
-        return None
-    target_terms = _negative_presence_target_terms(question)
-    if len(target_terms) < 2:
-        return None
-    answer_terms = _lexical_terms(answer)
-    overlap_terms = sorted(set(target_terms) & answer_terms)
-    overlap_ratio = len(overlap_terms) / len(target_terms)
-    context_terms = _lexical_terms(" ".join(str(context or "") for context in contexts))
-    context_overlap_terms = sorted(set(target_terms) & context_terms)
-    context_overlap_ratio = len(context_overlap_terms) / len(target_terms)
-    if overlap_ratio >= 0.25 or context_overlap_ratio >= 0.25:
-        return None
-    return {
-        "target_terms": target_terms,
-        "overlap_terms": overlap_terms,
-        "overlap_ratio": overlap_ratio,
-        "context_overlap_terms": context_overlap_terms,
-        "context_overlap_ratio": context_overlap_ratio,
-    }
-
-
-def _negative_presence_target_terms(question: str) -> list[str]:
-    text = " ".join(str(question or "").strip().split())
-    if not text:
-        return []
-    lowered = text.casefold()
-    if not re.match(r"^(does|do|did)\s+(this\s+)?paper\b", lowered):
-        return []
-    verb_pattern = "|".join(re.escape(verb) for verb in _NEGATIVE_PRESENCE_VERBS)
-    match = re.search(rf"\b({verb_pattern})\b(?P<target>.+?)(?:\?|$)", lowered)
-    if not match:
-        return []
-    target = match.group("target")
-    return sorted(_lexical_terms(target) - _NEGATIVE_PRESENCE_STOP_TERMS)
-
-
-def _lexical_terms(text: str) -> set[str]:
-    return {
-        token.casefold()
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", str(text or ""))
-        if len(token) >= 4
-    }
-
-
-def _abstention(
-    question: str,
-    *,
-    reason: str,
-    context_pack_id: str,
-    metadata: dict[str, Any] | None = None,
-) -> GroundedAnswerCandidate:
-    return GroundedAnswerCandidate(
-        answer_id=f"paper-answer-abstain-{uuid4().hex[:12]}",
-        question=question,
-        answer_text="",
-        cited_evidence_ids=(),
-        claims=(),
-        abstained=True,
-        metadata={
-            "worker": "paper_answer_worker",
-            "context_pack_id": context_pack_id,
-            "abstention_reason": reason,
-            **dict(metadata or {}),
-        },
-    )
 
 
 def _dedupe_chunks(chunks: list[PaperChunk]) -> list[PaperChunk]:

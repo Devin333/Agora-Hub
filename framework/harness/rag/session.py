@@ -9,7 +9,7 @@ from framework.harness.memory.ports import ExecutionBoundMemoryPort, MemoryPort
 from framework.harness.mcp.policy import MCPToolRequest
 from framework.harness.mcp.ports import MCPToolPort
 from framework.harness.rag.answer_gate import RAGAnswerGate, unsupported_claims_from_answer_gate
-from framework.harness.rag.answer_worker import AnswerWorkerPort
+from framework.harness.rag.answer_worker import AnswerWorkerError, AnswerWorkerPort
 from framework.harness.rag.context_pack_assembler import RAGContextPackAssembler
 from framework.harness.rag.gates import RAGGateSuite, RAGGateResult, failed_gate_dicts
 from framework.harness.rag.models import (
@@ -200,7 +200,11 @@ class BoundedRAGSessionController(RAGSessionController):
                 decision = self._handle_plan_failure(state, plan_results)
                 if decision.decision_type == RAGDecisionType.REPLAN_QUERIES:
                     continue
-                status = RAGSessionStatus.HALTED
+                status = (
+                    RAGSessionStatus.INSUFFICIENT_EVIDENCE
+                    if decision.decision_type == RAGDecisionType.INSUFFICIENT_EVIDENCE
+                    else RAGSessionStatus.HALTED
+                )
                 break
 
             step_results = self._execute_plan(plan, state, policy)
@@ -359,17 +363,33 @@ class BoundedRAGSessionController(RAGSessionController):
                     "max_generation_attempts": max_attempts,
                 },
             )
-            if execution_identity is None:
-                candidate = self.answer_worker.generate_answer(
-                    question=spec.goal.question,
-                    pack=current_pack,
+            try:
+                if execution_identity is None:
+                    candidate = self.answer_worker.generate_answer(
+                        question=spec.goal.question,
+                        pack=current_pack,
+                    )
+                else:
+                    candidate = self.answer_worker.generate_answer(
+                        question=spec.goal.question,
+                        pack=current_pack,
+                        execution_identity=execution_identity,
+                    )
+            except AnswerWorkerError as exc:
+                failure = {
+                    **exc.to_dict(),
+                    "generation_attempt": attempt_index + 1,
+                    "max_generation_attempts": max_attempts,
+                }
+                self._event(state, "rag_answer_generation_failed", failure)
+                decision = RAGDecision(
+                    RAGDecisionType.FAILED,
+                    "answer generation failed",
+                    budget_snapshot=current_pack.budget_snapshot,
+                    metadata={"context_pack_id": current_pack.pack_id, "generation_error": failure},
                 )
-            else:
-                candidate = self.answer_worker.generate_answer(
-                    question=spec.goal.question,
-                    pack=current_pack,
-                    execution_identity=execution_identity,
-                )
+                self._event(state, "rag_halted", decision.to_dict())
+                return None, decision, RAGSessionStatus.FAILED, current_pack
             self._event(
                 state,
                 "rag_answer_candidate_created",
@@ -424,8 +444,9 @@ class BoundedRAGSessionController(RAGSessionController):
                     current_pack = supplemental_pack
                     continue
 
+            # A rejected candidate is a gate failure, not a model abstention.
             decision = RAGDecision(
-                RAGDecisionType.ABSTAIN,
+                RAGDecisionType.HALTED,
                 "answer gate failed",
                 gate_results=failed_gate_dicts(answer_results),
                 budget_snapshot=state.budget_snapshot,
@@ -437,8 +458,8 @@ class BoundedRAGSessionController(RAGSessionController):
                     "unsupported_claims": list(unsupported_claims),
                 },
             )
-            self._event(state, "rag_abstained", decision.to_dict())
-            return candidate, decision, RAGSessionStatus.ABSTAINED, current_pack
+            self._event(state, "rag_halted", decision.to_dict())
+            return candidate, decision, RAGSessionStatus.HALTED, current_pack
 
         raise AssertionError("generation loop must return from an answer attempt")
 
@@ -787,6 +808,16 @@ class BoundedRAGSessionController(RAGSessionController):
             )
             self._event(state, "rag_replanned", decision.to_dict())
             return decision
+        if _only_query_dedup_failed(results):
+            # Retrieval exhausted its distinct queries: the evidence is insufficient,
+            # which is a normal outcome rather than a policy violation.
+            return RAGDecision(
+                RAGDecisionType.INSUFFICIENT_EVIDENCE,
+                "retrieval queries exhausted before required evidence coverage",
+                gate_results=failed_gate_dicts(results),
+                budget_snapshot=state.budget_snapshot,
+                metadata={"gap_report": to_jsonable(state.gap_report)},
+            )
         return self._halt(state, "plan gate failed and no replan budget remains", results)
 
     def _can_replan(self, state: RAGSessionState, spec: RAGSessionSpec) -> bool:
@@ -936,6 +967,11 @@ def _rejection_summary(rejected: tuple[EvidenceCandidate, ...]) -> dict[str, dic
 
 def _default_evidence_type(spec: RAGSessionSpec) -> str:
     return spec.goal.required_evidence_types[0]
+
+
+def _only_query_dedup_failed(results: tuple[RAGGateResult, ...]) -> bool:
+    failed = [result for result in results if not result.passed]
+    return bool(failed) and all(result.gate_name == "rag_query_dedup" for result in failed)
 
 
 def _session_scope_metadata(spec: RAGSessionSpec) -> dict[str, str]:

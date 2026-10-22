@@ -39,7 +39,10 @@ from backend.research.application.paper_rag_session import PaperRAGSession
 from backend.research.domain.personal_memory_context import (
     PersonalMemoryContext, PersonalMemoryContextProvider,
 )
-from backend.research.application.llm_client import build_unity_llm_call
+from backend.research.application.llm_client import (
+    build_unity_llm_call,
+    build_unity_paper_answer_model,
+)
 from backend.research.rag.adapters import (
     LLMResearchRAGPlanCandidateWorker,
     PaperAnswerWorker,
@@ -149,7 +152,7 @@ class PaperRagRuntimeResources:
         )
         self._answer_worker_factory = answer_worker_factory or (
             lambda: PaperAnswerWorker(
-                AnswerGenerator(build_unity_llm_call(max_tokens=600))
+                AnswerGenerator(build_unity_paper_answer_model(max_tokens=600))
             )
         )
         self._plan_worker_factory = plan_worker_factory or _build_optional_plan_worker

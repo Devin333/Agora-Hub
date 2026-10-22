@@ -30,15 +30,24 @@ def _citation_integrity(candidate: GroundedAnswerCandidate, available: set[str])
     cited = set(candidate.cited_evidence_ids)
     claim_cited = {evidence_id for claim in candidate.claims for evidence_id in claim.evidence_ids}
     missing = sorted((cited | claim_cited) - available)
+    unresolved = list(candidate.unresolved_citations)
+    passed = not missing and not unresolved
+    if missing:
+        reason = "answer cites evidence ids outside the verified context pack"
+    elif unresolved:
+        reason = "answer contains citation markers that do not resolve to verified context"
+    else:
+        reason = None
     return RAGGateResult(
         "rag_answer_citation_integrity",
-        not missing,
-        None if not missing else "answer cites evidence ids outside the verified context pack",
+        passed,
+        reason,
         {
             "available_evidence_ids": sorted(available),
             "cited_evidence_ids": sorted(cited),
             "claim_evidence_ids": sorted(claim_cited),
             "missing_evidence_ids": missing,
+            "unresolved_citations": unresolved,
         },
     )
 

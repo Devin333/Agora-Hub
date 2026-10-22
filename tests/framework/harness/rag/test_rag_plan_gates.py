@@ -14,6 +14,7 @@ from framework.harness import (
     RetrievalStepSpec,
     fake_rag_session_spec,
 )
+from framework.harness.rag.policy import normalize_query
 from framework.harness.workers.result import HarnessWorkerResult, HarnessWorkerStatus
 
 
@@ -246,6 +247,47 @@ def test_deterministic_planner_prefers_missing_evidence_type_when_replanning() -
     assert plan.queries[0].metadata["evidence_type"] == "figure"
     assert plan.queries[0].query is not None
     assert "figure" in plan.queries[0].query
+
+
+def test_deterministic_planner_skips_query_variants_that_were_already_executed() -> None:
+    spec = fake_rag_session_spec(required_evidence_types=("experiment",))
+    gap_report = {"missing_evidence_types": ["experiment"]}
+    first = DeterministicRAGPlanner().plan(spec, round_index=0, gap_report=gap_report)
+
+    second = DeterministicRAGPlanner().plan(
+        spec,
+        round_index=1,
+        gap_report=gap_report,
+        executed_queries=(normalize_query(first.queries[0].query),),
+    )
+
+    assert normalize_query(second.queries[0].query) != normalize_query(first.queries[0].query)
+    assert second.queries[0].query == spec.goal.question
+    assert second.memory_recall_plan[0].query == second.queries[0].query
+
+
+def test_deterministic_planner_returns_default_variant_when_all_are_executed() -> None:
+    spec = fake_rag_session_spec(required_evidence_types=("experiment",))
+    gap_report = {"missing_evidence_types": ["experiment"]}
+    question = spec.goal.question
+    executed = tuple(
+        normalize_query(query)
+        for query in (
+            f"{question} experiment",
+            question,
+            f"{question} {' '.join(spec.goal.target_entities)}",
+        )
+    )
+
+    plan = DeterministicRAGPlanner().plan(
+        spec,
+        round_index=3,
+        gap_report=gap_report,
+        executed_queries=executed,
+    )
+
+    # The dedup gate, not the planner, reports exhaustion.
+    assert plan.queries[0].query == f"{question} experiment"
 
 
 def test_deterministic_planner_includes_unsupported_claims_in_replan_query() -> None:

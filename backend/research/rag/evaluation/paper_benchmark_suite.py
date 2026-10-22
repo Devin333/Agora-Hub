@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Protocol, Sequence
+from typing import Any, Iterable, Literal, Protocol, Sequence
 
 from backend.research.document.models import PaperChunk
 from backend.research.application.llm_client import _browser_ua_transport
@@ -19,7 +19,6 @@ from backend.research.rag.evaluation.paper_answer_eval import (
     EvidenceAnswerEvaluator,
     EvidenceAnswerSample,
     WRONG_ABSTENTION_REASON,
-    abstention_failure_reason,
 )
 from backend.research.rag.evaluation.paper_evidence_eval import (
     EvidenceGoldenSetBuilder,
@@ -32,6 +31,8 @@ from backend.research.rag.evaluation.paper_evaluation_report import EvidenceRegr
 from backend.research.rag.evaluation.paper_fixed_window_baseline import FixedWindowBaselineChunker, FixedWindowChunkerConfig
 from backend.research.rag.evaluation.paper_generation_eval import GenerationEvaluator, GenerationEvalResult
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator, GeneratedAnswer
+from backend.research.ports.paper_answer_model import PaperAnswerModelError, PaperAnswerModelPort
+from framework.rag.evaluation import AnswerOutcome
 from backend.research.rag.visual.page_visual_chunks import build_page_visual_chunks
 from backend.research.rag.evaluation.evidence_eval_runner import (
     _build_live_retriever,
@@ -48,6 +49,7 @@ from framework.llm.models.request import LLMRequest
 from framework.shared.env import load_root_env
 
 LLMCall = Callable[[str], Awaitable[str]]
+GenerationTrack = Literal["end_to_end", "oracle_context"]
 
 DEFAULT_SPLIT_RATIOS = (0.6, 0.2, 0.2)
 DEFAULT_TARGET_QA_TYPES = (
@@ -551,6 +553,7 @@ class BenchmarkSuiteResult:
     splits: dict[str, BenchmarkSplit]
     target_qa_counts: dict[str, int]
     question_profile: str
+    generation_track: GenerationTrack
     question_audit: QuestionAmbiguityAuditReport
     gold_audit: GoldEvidenceAuditReport
     gold_judge: GoldEvidenceJudgeReport | None
@@ -579,6 +582,7 @@ class BenchmarkSuiteResult:
                 "reported_split": "test",
                 "test_policy": test_policy,
                 "question_profile": self.question_profile,
+                "generation_track": self.generation_track,
                 "blind_test": _is_blind_question_profile(self.question_profile),
                 "detemplate_policy": _detemplate_policy_for_profile(self.question_profile),
             },
@@ -625,7 +629,7 @@ class BenchmarkSuiteConfig:
     answer_eval_sample_size: int | None = None
     answer_max_context_chunks: int = 5
     answer_max_chars_per_chunk: int = 1000
-    answer_llm_call: LLMCall | None = None
+    answer_model: PaperAnswerModelPort | None = None
     answer_judge_mode: str = "none"
     answer_judge_sample_size: int | None = None
     answer_judge_llm_call: LLMCall | None = None
@@ -635,6 +639,11 @@ class BenchmarkSuiteConfig:
     include_fixed_window_baseline: bool = False
     fixed_window_tokens: int = 220
     fixed_window_overlap_tokens: int | None = None
+    generation_track: GenerationTrack = "end_to_end"
+
+    def __post_init__(self) -> None:
+        if self.generation_track not in ("end_to_end", "oracle_context"):
+            raise ValueError("generation_track must be 'end_to_end' or 'oracle_context'")
 
 
 def run_benchmark_suite(config: BenchmarkSuiteConfig) -> BenchmarkSuiteResult:
@@ -718,6 +727,7 @@ def run_benchmark_suite(config: BenchmarkSuiteConfig) -> BenchmarkSuiteResult:
         splits=splits,
         target_qa_counts=target_counts,
         question_profile=question_profile,
+        generation_track=config.generation_track,
         question_audit=question_audit,
         gold_audit=audit,
         gold_judge=judge_report,
@@ -1056,7 +1066,7 @@ def _evaluate_candidate(
     retrieval = EvidenceRetrievalEvaluator(retriever).evaluate(pairs)
     formula_diagnostics = formula_failure_diagnostics(retrieval, top_k=10)
     answer_samples: list[EvidenceAnswerSample] = []
-    generated_answers: list[GeneratedAnswer] = []
+    generated_answers: list[GeneratedAnswer | None] = []
     answer_result = None
     generation_result = None
     answer_judge_records: list[tuple[EvidenceAnswerSample, GeneratedAnswer]] = []
@@ -1084,6 +1094,7 @@ def _evaluate_candidate(
         "mode": "candidate",
         "retrieval_policy": retriever.policy.name,
         "question_profile": _normalize_question_profile(config.question_profile),
+        "generation_track": config.generation_track,
         "blind_test": _is_blind_question_profile(config.question_profile),
         "chunks_total": len(chunks),
         "visual_fusion_enabled": visual_store is not None,
@@ -1165,38 +1176,63 @@ async def _generate_answer_samples(
     config: BenchmarkSuiteConfig,
     retriever: Any,
     pairs: list[EvidenceQAPair],
-) -> tuple[list[EvidenceAnswerSample], list[GeneratedAnswer]]:
-    llm_call = config.answer_llm_call or _build_answer_llm_call(max_tokens=700)
+) -> tuple[list[EvidenceAnswerSample], list[GeneratedAnswer | None]]:
+    answer_model = config.answer_model
+    if answer_model is None:
+        from backend.research.application.llm_client import build_unity_paper_answer_model
+        answer_model = build_unity_paper_answer_model(max_tokens=700)
     generator = AnswerGenerator(
-        llm_call,
+        answer_model,
         max_context_chunks=config.answer_max_context_chunks,
         max_chars_per_chunk=config.answer_max_chars_per_chunk,
     )
     samples: list[EvidenceAnswerSample] = []
-    generated: list[GeneratedAnswer] = []
+    generated: list[GeneratedAnswer | None] = []
     for pair in _answer_generation_pairs(pairs, config):
         retrieval = retriever.retrieve(RetrievalRequest(
             paper_id=pair.paper_id,
             question=pair.question,
             limit=10,
         ))
-        required_context_ids = _evidence_pack_required_context_ids(pair)
-        retrieval, evidence_pack_metadata = _hydrate_retrieval_with_evidence_pack(
-            retrieval,
-            pair,
-            chunk_lookup=retriever,
-            required_context_ids=required_context_ids,
-        )
-        answer = await generator.generate(
-            pair.question,
-            retrieval,
-            required_context_ids=required_context_ids,
-        )
+        if config.generation_track == "oracle_context":
+            required_context_ids = _evidence_pack_required_context_ids(pair)
+            retrieval, evidence_pack_metadata = _hydrate_retrieval_with_evidence_pack(
+                retrieval, pair, chunk_lookup=retriever, required_context_ids=required_context_ids,
+            )
+        elif config.generation_track == "end_to_end":
+            required_context_ids = []
+            evidence_pack_metadata = {}
+        else:
+            raise ValueError("generation_track must be 'end_to_end' or 'oracle_context'")
+        try:
+            if config.generation_track == "oracle_context":
+                answer = await generator.generate(
+                    pair.question,
+                    retrieval,
+                    required_context_ids=required_context_ids,
+                )
+            else:
+                answer = await generator.generate(pair.question, retrieval)
+        except PaperAnswerModelError as exc:
+            samples.append(EvidenceAnswerSample(
+                pair=pair,
+                answer="",
+                outcome=AnswerOutcome.FAILED,
+                metadata={
+                    "model_error_code": exc.code,
+                    "model_error_message": str(exc),
+                    "retrieved_chunk_ids": [
+                        chunk.chunk_id for chunk in getattr(retrieval, "child_chunks", [])
+                    ],
+                },
+            ))
+            generated.append(None)
+            continue
         context_chunks = _context_chunks_for_answer(retrieval, answer.context_chunk_ids)
         context_score_breakdowns = _context_score_breakdowns(context_chunks)
         answer.context_metadata.update(evidence_pack_metadata)
         answer.context_metadata["context_score_breakdowns"] = context_score_breakdowns
-        cited_chunk_ids = _cited_chunk_ids(answer.answer, answer.context_chunk_ids)
+        cited_chunk_ids = list(answer.cited_chunk_ids)
         context_by_id = {chunk.chunk_id: chunk for chunk in context_chunks}
         cited_locators = [
             locator for chunk_id in cited_chunk_ids
@@ -1204,7 +1240,8 @@ async def _generate_answer_samples(
         ]
         samples.append(EvidenceAnswerSample(
             pair=pair,
-            answer=answer.answer,
+            answer="" if answer.abstained else answer.answer,
+            outcome=AnswerOutcome.ABSTAINED if answer.abstained else AnswerOutcome.ANSWERED,
             cited_chunk_ids=cited_chunk_ids,
             cited_source_locators=cited_locators,
             context_chunk_ids=list(answer.context_chunk_ids),
@@ -1493,9 +1530,8 @@ def _answer_generation_sample_size(config: BenchmarkSuiteConfig) -> int | None:
     return max(max(0, int(size)) for size in requested_sizes if size is not None)
 
 
-def _build_answer_llm_call(*, max_tokens: int) -> LLMCall:
+def _build_answer_judge_llm_call(*, max_tokens: int) -> LLMCall:
     from backend.research.application.llm_client import build_unity_llm_call
-
     return build_unity_llm_call(max_tokens=max_tokens, temperature=0)
 
 
@@ -1509,20 +1545,6 @@ def _context_chunks_for_answer(retrieval: Any, context_chunk_ids: list[str]) -> 
     return [chunk for chunk_id in context_chunk_ids if (chunk := by_id.get(chunk_id)) is not None]
 
 
-def _cited_chunk_ids(answer: str, context_chunk_ids: list[str]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for match in re.finditer(r"\[(\d+)\]", answer):
-        index = int(match.group(1)) - 1
-        if index < 0 or index >= len(context_chunk_ids):
-            continue
-        chunk_id = context_chunk_ids[index]
-        if chunk_id not in seen:
-            out.append(chunk_id)
-            seen.add(chunk_id)
-    return out
-
-
 def _chunk_source_locator(chunk: PaperChunk | None) -> str:
     if chunk is None:
         return ""
@@ -1532,7 +1554,7 @@ def _chunk_source_locator(chunk: PaperChunk | None) -> str:
 def _write_answer_samples(
     path: Path,
     samples: list[EvidenceAnswerSample],
-    generated_answers: list[GeneratedAnswer],
+    generated_answers: list[GeneratedAnswer | None],
     *,
     answer_result: Any | None = None,
 ) -> None:
@@ -1550,7 +1572,7 @@ def _write_answer_samples(
 
 def _answer_sample_record(
     sample: EvidenceAnswerSample,
-    generated: GeneratedAnswer,
+    generated: GeneratedAnswer | None,
     *,
     score: Any | None = None,
 ) -> dict[str, Any]:
@@ -1559,6 +1581,7 @@ def _answer_sample_record(
         "paper_id": sample.pair.paper_id,
         "qa_type": sample.pair.qa_type,
         "expected_behavior": sample.pair.expected_behavior,
+        "outcome": sample.outcome.value,
         "answer": sample.answer,
         "answer_facts": list(sample.pair.answer_facts),
         "gold_chunk_ids": list(sample.pair.gold_chunk_ids),
@@ -1569,10 +1592,10 @@ def _answer_sample_record(
         "context_chunk_ids": list(sample.context_chunk_ids),
         "cited_chunk_ids": list(sample.cited_chunk_ids),
         "cited_source_locators": list(sample.cited_source_locators),
-        "contexts": list(generated.contexts),
+        "contexts": list(generated.contexts) if generated is not None else [],
         "context_score_breakdowns": dict(sample.metadata.get("context_score_breakdowns") or {}),
         "metadata": dict(sample.metadata),
-        "context_metadata": dict(generated.context_metadata),
+        "context_metadata": dict(generated.context_metadata) if generated is not None else {},
     }
     if score is not None:
         record["deterministic_scores"] = {
@@ -1615,10 +1638,14 @@ def _context_score_breakdowns(chunks: list[PaperChunk]) -> dict[str, dict[str, f
 
 def _answer_judge_sample_records(
     answer_samples: list[EvidenceAnswerSample],
-    generated_answers: list[GeneratedAnswer],
+    generated_answers: list[GeneratedAnswer | None],
     config: BenchmarkSuiteConfig,
 ) -> list[tuple[EvidenceAnswerSample, GeneratedAnswer]]:
-    records = list(zip(answer_samples, generated_answers, strict=True))
+    records = [
+        (sample, generated)
+        for sample, generated in zip(answer_samples, generated_answers, strict=True)
+        if sample.outcome is AnswerOutcome.ANSWERED and generated is not None
+    ]
     sample_size = config.answer_judge_sample_size
     if sample_size is None:
         return records
@@ -1632,7 +1659,7 @@ async def _run_answer_judge(
     mode = str(config.answer_judge_mode or "none").strip().casefold()
     if mode != "llm":
         raise ValueError("answer_judge_mode must be 'none' or 'llm'")
-    llm_call = config.answer_judge_llm_call or _build_answer_llm_call(max_tokens=900)
+    llm_call = config.answer_judge_llm_call or _build_answer_judge_llm_call(max_tokens=900)
     return await GenerationEvaluator(llm_call).evaluate(generated_answers)
 
 
@@ -1756,17 +1783,16 @@ def _answer_fix_record(record: dict[str, Any], *, reasons: list[str]) -> dict[st
 
 def _answer_judge_failure_reasons(record: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
-    abstention_reason = abstention_failure_reason(
-        str(record.get("expected_behavior") or "answer"),
-        str(record.get("answer") or ""),
-    )
-    if abstention_reason:
-        reasons.append(abstention_reason)
+    outcome = str(record.get("outcome") or "")
+    expected_behavior = str(record.get("expected_behavior") or "answer")
+    if outcome in {AnswerOutcome.ABSTAINED.value, AnswerOutcome.INSUFFICIENT_EVIDENCE.value}:
+        if expected_behavior == "answer":
+            reasons.append(OVERCONSERVATIVE_ABSTENTION_REASON)
+    elif expected_behavior == "abstain" and outcome == AnswerOutcome.ANSWERED.value:
+        reasons.append(WRONG_ABSTENTION_REASON)
     deterministic = record.get("deterministic_scores") or {}
     deterministic_reason = str(deterministic.get("failure_reason") or "")
-    if deterministic_reason and (
-        not abstention_reason or deterministic_reason not in _ABSTENTION_FAILURE_REASON_ALIASES
-    ):
+    if deterministic_reason and deterministic_reason not in _ABSTENTION_FAILURE_REASON_ALIASES:
         reasons.append(deterministic_reason)
     judge = record.get("llm_judge") or {}
     scores = judge.get("scores") or {}
@@ -1798,7 +1824,7 @@ def _write_spot_check_report(
     *,
     output_dir: Path,
     answer_samples: list[EvidenceAnswerSample],
-    generated_answers: list[GeneratedAnswer],
+    generated_answers: list[GeneratedAnswer | None],
     answer_result: Any | None,
     generation_result: GenerationEvalResult | None,
     answer_judge_records: list[tuple[EvidenceAnswerSample, GeneratedAnswer]],
@@ -3051,6 +3077,10 @@ def _format_check_value(value: Any) -> str:
     return f"`{text}`"
 
 
+def _optional_metric(value: Any) -> str:
+    return "N/A" if value is None else f"{float(value):.3f}"
+
+
 def _suite_markdown(payload: dict[str, Any]) -> str:
     candidate = payload["candidate_test_report"]["retrieval"]
     baseline_report = payload.get("baseline_test_report")
@@ -3268,16 +3298,16 @@ def _suite_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Answer Metrics",
             "",
-            f"- answer success rate: `{answer['success_rate']:.3f}`",
-            f"- answer fact coverage: `{answer['answer_fact_coverage']:.3f}`",
-            f"- retrieval context coverage: `{answer['retrieval_context_coverage']:.3f}`",
-            f"- citation grounding: `{answer['citation_grounding_score']:.3f}`",
-            f"- citation gold coverage: `{answer['citation_gold_coverage']:.3f}`",
-            f"- equivalent supported rate: `{answer.get('equivalent_supported_rate', 0.0):.3f}`",
-            f"- claim support coverage: `{answer.get('claim_support_coverage', 0.0):.3f}`",
-            f"- true missing gold rate: `{answer.get('true_missing_gold_rate', 0.0):.3f}`",
-            f"- source locator grounding: `{answer['source_locator_grounding_score']:.3f}`",
-            f"- abstention accuracy: `{answer['abstention_accuracy']:.3f}`",
+            f"- answer success rate: `{_optional_metric(answer.get('success_rate'))}`",
+            f"- answer fact coverage: `{_optional_metric(answer.get('answer_fact_coverage'))}`",
+            f"- retrieval context coverage: `{_optional_metric(answer.get('retrieval_context_coverage'))}`",
+            f"- citation grounding: `{_optional_metric(answer.get('citation_grounding_score'))}`",
+            f"- citation gold coverage: `{_optional_metric(answer.get('citation_gold_coverage'))}`",
+            f"- equivalent supported rate: `{_optional_metric(answer.get('equivalent_supported_rate'))}`",
+            f"- claim support coverage: `{_optional_metric(answer.get('claim_support_coverage'))}`",
+            f"- true missing gold rate: `{_optional_metric(answer.get('true_missing_gold_rate'))}`",
+            f"- source locator grounding: `{_optional_metric(answer.get('source_locator_grounding_score'))}`",
+            f"- abstention accuracy: `{_optional_metric(answer.get('abstention_accuracy'))}`",
         ])
         failure_counts = answer.get("failure_reason_counts") or {}
         if failure_counts:

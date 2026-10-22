@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from framework.rag.evaluation import AnswerOutcome
+
 import json
 from pathlib import Path
 
@@ -48,6 +50,7 @@ from backend.research.rag.cli.run_benchmark_suite import _parse_thresholds, main
 from backend.research.rag.cli.run_benchmark_matrix import _datasets_from_args, _build_parser as _build_matrix_parser
 from backend.research.rag.retrieval.paper_answer_generator import AnswerContextAssembler, GeneratedAnswer
 from backend.research.rag.retrieval.paper_retriever import RetrievalResult
+from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 
 
 class _FakeGoldJudge:
@@ -116,12 +119,16 @@ class _ChunkLookup:
         return self._chunks.get(chunk_id)
 
 
-async def _fake_answer_llm(prompt: str) -> str:
+def _fake_answer_text(request) -> str:
     return (
         "Figure 1: architecture overview. Table 1: accuracy results. "
         "The table reports accuracy 95, Equation 1 defines the score, "
         "and s = x + y. [1]"
     )
+
+
+def _fake_answer_model() -> FakePaperAnswerModel:
+    return FakePaperAnswerModel(_fake_answer_text)
 
 
 async def _fake_judge_llm(prompt: str) -> str:
@@ -636,7 +643,7 @@ def test_run_benchmark_suite_writes_answer_eval_judge_and_spot_check(tmp_path: P
         gold_audit_sample_size=5,
         answer_eval_enabled=True,
         answer_eval_sample_size=2,
-        answer_llm_call=_fake_answer_llm,
+        answer_model=_fake_answer_model(),
         answer_judge_mode="llm",
         answer_judge_sample_size=1,
         answer_judge_llm_call=_fake_judge_llm,
@@ -713,7 +720,7 @@ def test_run_benchmark_suite_writes_answer_fix_manifest_for_answer_judge_failure
         render_page_visual=False,
         answer_eval_enabled=True,
         answer_eval_sample_size=1,
-        answer_llm_call=_fake_answer_llm,
+        answer_model=_fake_answer_model(),
         answer_judge_mode="llm",
         answer_judge_sample_size=1,
         answer_judge_llm_call=_fake_bad_answer_judge_llm,
@@ -744,12 +751,14 @@ def test_answer_failure_taxonomy_splits_abstention_direction() -> None:
 
     answerable_abstention = {
         "expected_behavior": "answer",
-        "answer": "Insufficient evidence to answer from the provided context.",
+        "outcome": "abstained",
+        "answer": "",
         "deterministic_scores": {"failure_reason": "abstention_expected"},
         "llm_judge": {"scores": passing_judge_scores},
     }
     expected_abstain_answered = {
         "expected_behavior": "abstain",
+        "outcome": "answered",
         "answer": "The method improves accuracy by 7%.",
         "deterministic_scores": {"failure_reason": "abstention_expected"},
         "llm_judge": {"scores": passing_judge_scores},
@@ -776,7 +785,8 @@ def test_answer_eval_failure_counts_preserve_abstention_direction() -> None:
             answer_facts=["accuracy improved"],
             expected_behavior="answer",
         ),
-        answer="Insufficient evidence to answer from the provided context.",
+        answer="",
+        outcome=AnswerOutcome.ABSTAINED,
         context_chunk_ids=["gold-1"],
     )
     expected_abstain_answered = EvidenceAnswerSample(
@@ -787,6 +797,7 @@ def test_answer_eval_failure_counts_preserve_abstention_direction() -> None:
             expected_behavior="abstain",
         ),
         answer="The private dataset was AlphaBench.",
+        outcome=AnswerOutcome.ANSWERED,
     )
 
     result = EvidenceAnswerEvaluator().evaluate([answerable_abstention, expected_abstain_answered])
@@ -808,7 +819,8 @@ def test_answer_fix_manifest_counts_over_conservative_abstention(tmp_path: Path)
             answer_facts=["accuracy improved"],
             expected_behavior="answer",
         ),
-        answer=answer,
+        answer="",
+        outcome=AnswerOutcome.ABSTAINED,
         context_chunk_ids=["gold-1"],
     )
     generated = GeneratedAnswer(
@@ -940,7 +952,7 @@ def test_run_benchmark_matrix_writes_held_out_dataset_summary(tmp_path: Path) ->
         gold_audit_sample_size=5,
         answer_eval_enabled=True,
         answer_eval_sample_size=1,
-        answer_llm_call=_fake_answer_llm,
+        answer_model=_fake_answer_model(),
         answer_judge_mode="llm",
         answer_judge_sample_size=1,
         answer_judge_llm_call=_fake_judge_llm,
@@ -1318,8 +1330,8 @@ def test_spot_check_generation_is_capped_by_sample_size(tmp_path: Path) -> None:
     _write_research_document_fixtures(papers_dir, ("p1", "p2", "p3"))
     prompts: list[str] = []
 
-    async def fake_answer(prompt: str) -> str:
-        prompts.append(prompt)
+    def fake_answer(request) -> str:
+        prompts.append(request.user_prompt)
         return "The answer is in the selected context. [1]"
 
     output_dir = tmp_path / "suite"
@@ -1331,7 +1343,7 @@ def test_spot_check_generation_is_capped_by_sample_size(tmp_path: Path) -> None:
         max_pairs_per_type=20,
         render_page_visual=False,
         gold_audit_sample_size=5,
-        answer_llm_call=fake_answer,
+        answer_model=FakePaperAnswerModel(fake_answer),
         spot_check_sample_size=1,
     ))
 

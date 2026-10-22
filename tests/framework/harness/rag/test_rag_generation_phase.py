@@ -6,6 +6,7 @@ import pytest
 
 from framework.harness import FakeMemoryPort, RAGBudget, RAGDecisionType, RAGSessionStatus, fake_rag_session_spec
 from framework.harness.rag.fake import FakeRAGPlanner, fake_reader_repair_memory, fake_research_evidence_packs
+from framework.harness.rag.answer_worker import AnswerWorkerError
 from framework.harness.rag.models import AnswerClaim, GroundedAnswerCandidate, RAGContextPack
 from framework.harness.rag.session import BoundedRAGSessionController
 from framework.harness.retrieval.evidence_pack import EvidencePack, EvidencePackCollection
@@ -69,7 +70,7 @@ def test_generation_phase_forwards_physical_execution_identity() -> None:
     assert worker.execution_identities == [spec.graph_identity.to_graph_execution_identity()]
 
 
-def test_generation_phase_abstains_when_answer_gate_fails() -> None:
+def test_generation_phase_halts_when_answer_gate_fails() -> None:
     candidate = GroundedAnswerCandidate(
         answer_id="ans-1",
         question="Q?",
@@ -79,16 +80,66 @@ def test_generation_phase_abstains_when_answer_gate_fails() -> None:
     )
     result = _controller(_AnswerWorker(candidate)).run(_generation_spec())
 
-    assert result.status == RAGSessionStatus.ABSTAINED
-    assert result.decision.decision_type == RAGDecisionType.ABSTAIN
+    # A rejected candidate is a gate failure, never a model abstention.
+    assert result.status == RAGSessionStatus.HALTED
+    assert result.decision.decision_type == RAGDecisionType.HALTED
     assert result.decision.reason == "answer gate failed"
     assert any(item["gate"] == "rag_answer_citation_integrity" for item in result.decision.gate_results)
+    assert not any(event["event_type"] == "rag_abstained" for event in result.transcript.events)
     assert result.metrics is not None
-    assert result.metrics.status == RAGSessionStatus.ABSTAINED
+    assert result.metrics.status == RAGSessionStatus.HALTED
     assert result.metrics.answer_attempts == 1
     assert result.metrics.gate_failures_by_gate == {"rag_answer_citation_integrity": 1}
     assert result.metrics.answer_present is True
     assert result.metrics.answer_abstained is False
+
+
+def test_generation_phase_fails_when_answer_worker_cannot_produce_candidate() -> None:
+    worker = _FailingAnswerWorker(AnswerWorkerError("model_provider_unavailable", "provider is down"))
+
+    result = _controller(worker).run(_generation_spec())
+
+    assert result.status == RAGSessionStatus.FAILED
+    assert result.decision.decision_type == RAGDecisionType.FAILED
+    assert result.answer is None
+    failures = [
+        event["payload"]
+        for event in result.transcript.events
+        if event["event_type"] == "rag_answer_generation_failed"
+    ]
+    assert failures == [
+        {
+            "code": "model_provider_unavailable",
+            "message": "provider is down",
+            "retryable": False,
+            "generation_attempt": 1,
+            "max_generation_attempts": 1,
+        }
+    ]
+    assert result.decision.metadata["generation_error"]["code"] == "model_provider_unavailable"
+    assert not any(event["event_type"] == "rag_abstained" for event in result.transcript.events)
+    assert result.metrics is not None
+    assert result.metrics.answer_generation_failures == 1
+    assert result.metrics.answer_attempts == 0
+
+
+def test_generation_phase_propagates_unexpected_worker_errors() -> None:
+    worker = _FailingAnswerWorker(KeyError("programming bug"))
+
+    with pytest.raises(KeyError):
+        _controller(worker).run(_generation_spec())
+
+
+def test_generation_phase_halts_on_unresolved_citation_markers() -> None:
+    candidate = replace(_grounded_answer(), unresolved_citations=("[9]",))
+
+    result = _controller(_AnswerWorker(candidate)).run(_generation_spec())
+
+    assert result.status == RAGSessionStatus.HALTED
+    integrity = next(
+        item for item in result.decision.gate_results if item["gate"] == "rag_answer_citation_integrity"
+    )
+    assert integrity["details"]["unresolved_citations"] == ["[9]"]
 
 
 def test_generation_phase_returns_verified_abstention() -> None:
@@ -143,7 +194,7 @@ def test_generation_phase_retries_after_supplemental_round_and_returns_answered(
     assert result.metrics.gate_failures_by_gate == {"rag_answer_claim_coverage": 1}
 
 
-def test_generation_phase_abstains_when_supplemental_retry_still_fails() -> None:
+def test_generation_phase_halts_when_supplemental_retry_still_fails() -> None:
     packs = fake_research_evidence_packs()
     retrieval = _SequentialRetrievalPort(((packs[0],), (packs[1],)))
     worker = _AnswerWorker(
@@ -155,8 +206,8 @@ def test_generation_phase_abstains_when_supplemental_retry_still_fails() -> None
         _generation_spec(generation_policy={"enabled": True, "max_attempts": 2})
     )
 
-    assert result.status == RAGSessionStatus.ABSTAINED
-    assert result.decision.decision_type == RAGDecisionType.ABSTAIN
+    assert result.status == RAGSessionStatus.HALTED
+    assert result.decision.decision_type == RAGDecisionType.HALTED
     assert len(worker.calls) == 2
     assert len(retrieval.requests) == 2
     assert any(item["gate"] == "rag_answer_claim_coverage" for item in result.decision.gate_results)
@@ -232,7 +283,7 @@ def test_generation_phase_does_not_retry_when_supplemental_budget_is_exhausted()
         )
     )
 
-    assert result.status == RAGSessionStatus.ABSTAINED
+    assert result.status == RAGSessionStatus.HALTED
     assert len(worker.calls) == 1
     assert len(retrieval.requests) == 1
     assert any(event["event_type"] == "rag_answer_supplemental_gap_created" for event in result.transcript.events)
@@ -348,6 +399,17 @@ class _AnswerWorker:
         self.execution_identities.append(execution_identity)
         index = min(len(self.calls) - 1, len(self.candidates) - 1)
         return self.candidates[index]
+
+
+class _FailingAnswerWorker:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls: list[tuple[str, str]] = []
+        self.execution_identities = []
+
+    def generate_answer(self, *, question: str, pack: RAGContextPack, execution_identity=None) -> GroundedAnswerCandidate:
+        self.calls.append((question, pack.pack_id))
+        raise self.error
 
 
 class _SequentialRetrievalPort:
