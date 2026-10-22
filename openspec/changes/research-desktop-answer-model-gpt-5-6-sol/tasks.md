@@ -24,7 +24,8 @@
 
 - [x] 4.0 Verify a real remote completion through `OpenAICompatiblePaperAnswerModel`: requested/returned `gpt-5.6-sol`, grounded synthetic answer `24 participants.`, 6.75s, tokens 42/7. This is not Electron activation evidence.
 
-- [ ] 4.1 Rebuild and reinstall the verified desktop release to resolve `desktop_release_dependency_drift`; do not install packages into the existing release, alter its manifest, or bypass validation.
-- [ ] 4.2 Provision the desktop credential through the controlled credential path after explicit authorization, preserving the fixed credential ref and never exposing the secret.
-- [ ] 4.3 Successfully apply the Electron owner configuration through preview/apply and the release workflow.
-- [ ] 4.4 Verify the persisted revision/model and actual desktop runtime model before claiming the production switch complete.
+- [x] 4.1 Rebuild and install the verified desktop installer from source revision `1784cf2cd81b9cc4e9072ff3e3b900b736edcace`; verify sealed install ownership and payload admission, and confirm all 85,061 user-data files retain identical paths, sizes, and SHA-256 hashes. This installs the bundle but does not by itself repair/replace the active production release.
+- [ ] 4.2 Activate/rebind the verified installed bundle through the packaged release owner, replacing the stale active release only after owner verification. Do not patch dependencies or manifests, bypass validation, start the desktop, or retry the failed build command without explicit authorization.
+- [ ] 4.3 Provision the desktop credential through the controlled credential path after explicit authorization, preserving the fixed credential ref and never exposing the secret.
+- [ ] 4.4 Successfully apply the Electron owner configuration through preview/apply and the release workflow.
+- [ ] 4.5 Verify the persisted revision/model and actual desktop runtime model before claiming the production switch complete.

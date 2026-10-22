@@ -88,3 +88,12 @@ repo/dev composition 测试校验专用 route 的 model/base/key-env 匹配及 `
 直接 use-boundary import 修复后的证据：zero-reference scanner 为 0 violations、0 parse failures、fallback=0；全部 architecture 259 项通过，图像/import 与 desktop profile/bundle 共 124 项通过；selected Python 3.12.14 API probe 再次通过（174 routes、health 存在、PIL 未加载）。未修改 scanner、allowlist 或架构断言。第二次 required smoke 使用新日志 `.tmp/research-desktop-optional-dependency-smoke-r2.log` 执行；第一轮失败日志保留，不将其算作通过。
 
 第二次完整 required smoke（session 75484）已成功退出 0：5224 passed、1 skipped、23 deselected，耗时 1772.17 秒；其后 AgentLoop `succeeded`、network_calls=0，sources validation `is_valid=true`、error_count=0、warning_count=0。该 gate 已覆盖修复后的当前源码；后续源码 release 必须绑定本次代码提交的新 HEAD。
+
+
+## D7：新安装后的 release activation 边界（2026-10-22）
+
+从源码 revision `1784cf2cd81b9cc4e9072ff3e3b900b736edcace` 构建的安装器 `Agora-Paper-Agent-0.1.2-x64.exe`（SHA-256 `3a873e83f0135ed541c1791da301ca776626865eb7a434323a55669f17acaf9b`，NotSigned）已按 installer 流程安装至既有 owner root。安装后 installer `admit-owned` 成功，sealed owner 与 14,531-resource runtime payload 由当前清单验证。安装前后对 Electron userData 做了完整文件清单与 SHA-256 比对：85,061 个文件，新增/缺失/变更均为 0。desktop config 仍为 revision 0、`llm=null`，credential-inspect 仍为 `configured=false`；未执行 credential prompt/provisioning。
+
+安装包内的 `PortableBundleManager.verify_bundle()` 对 bundle `desktop-836447922c155244a83b92ec` 完成只读验证，清单声明 14,531 个资源及 source revision `1784cf2c…`。首次 packaged `build` 尝试未激活任何 release，错误为 `desktop_app_release_dependency_drift`。后续只读对比确认该次诊断命令从仓库根目录启动，仓库根的 `agora_hub.egg-info` 与 `newsroom.egg-info` 被 `importlib.metadata` 错误纳入实际 Python distributions；这两个条目不在 bundle 依赖身份中。以桌面实际资源目录为进程工作目录、在受控环境下再次只读比对时，Python 包集合与 Node/npm 版本、依赖树均与 bundle 身份一致，差异仅为合同允许 relocation 的 Python/Node/npm executable 路径。该证据定位了命令调用上下文问题，不是对生产 release 已激活的证明。
+
+旧 `active-release.json` 仍指向 revision `c4286d0c…` 的历史 release；安装后的 offline doctor 仍报告该 active release invalid。根据续跑授权边界，不重试 packaged build、不启动/停止桌面、不修改 active pointer/release 数据、不触碰 credentials，也不执行 config-apply。故 4.1 仅记录安装与资料保全完成；release owner activation/rebind、credential authorization、config apply 和真实运行模型验证仍未完成，不得宣称生产切换完成。
