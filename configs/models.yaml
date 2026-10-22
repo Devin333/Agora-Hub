@@ -1,4 +1,15 @@
 model_groups:
+  research-desktop-answer:
+    deployments:
+      - deployment_id: research-desktop-answer-gpt-5.6-sol
+        provider: openai-compatible
+        provider_name: openai-compatible
+        model: gpt-5.6-sol
+        api_base: ${NEWS_RESEARCH_LLM_BASE_URL}
+        api_key_env: OPENAI_API_KEY
+        timeout_seconds: 90
+        max_retries: 1
+
   writer-primary:
     deployments:
       - deployment_id: dashscope-deepseek-v4-flash
@@ -37,6 +48,8 @@ model_groups:
           provider_auto_truncation: false
 
 routes:
+  research-desktop-answer:
+    model_group: research-desktop-answer
   daily-intelligence-writer:
     model_group: writer-primary
   writer-primary:

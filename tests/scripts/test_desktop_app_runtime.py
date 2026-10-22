@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from scripts.desktop_app.config import resolve_desktop_app_config
 from framework.shared.local_desktop import CapabilityProjection, CapabilityState
 from scripts.desktop_app.runtime import DesktopAppRuntime, _DesktopAppDoctor
-from scripts.local_desktop.common import OperationResult
+from scripts.local_desktop.common import DesktopOperationError, OperationResult
 from scripts.local_desktop.doctor import DoctorCheck
 from scripts.local_desktop.recovery import StorageInventory, StorageInventoryResolver, StorageOwner
 
@@ -93,22 +96,34 @@ class FakeBackupManager:
 
 
 class FakeRuntimeConfigManager:
-    def __init__(self, *, reject_admission: bool = False) -> None:
-        self.reject_admission = reject_admission
+    def __init__(
+        self,
+        *,
+        rejection_code: str | None = None,
+        events: list[str] | None = None,
+    ) -> None:
+        self.rejection_code = rejection_code
+        self.events = events
         self.admissions = 0
         self.applies = 0
         self.recoveries = 0
+        self.admission_models_config: str | None = None
+        self.apply_models_config: str | None = None
 
     def admit(self, candidate, *, expected_revision, confirmation_token):
         self.admissions += 1
-        if self.reject_admission:
-            from scripts.local_desktop.common import DesktopOperationError
-
-            raise DesktopOperationError("desktop_runtime_config_confirmation_invalid", "invalid confirmation")
+        self.admission_models_config = os.environ.get("NEWS_MODELS_CONFIG")
+        if self.events is not None:
+            self.events.append("admit")
+        if self.rejection_code is not None:
+            raise DesktopOperationError(self.rejection_code, "admission rejected")
         return {}
 
     def apply(self, candidate, *, expected_revision, confirmation_token):
         self.applies += 1
+        self.apply_models_config = os.environ.get("NEWS_MODELS_CONFIG")
+        if self.events is not None:
+            self.events.append("apply")
         return OperationResult(True, "config-apply", "APPLIED", "desktop_runtime_config_applied", "applied", {})
 
     def recover_pending(self):
@@ -218,16 +233,53 @@ def test_real_inventory_owner_maps_personal_memory_to_owned_data_root(tmp_path: 
 
 def test_config_apply_invalid_admission_does_not_stop_or_write(tmp_path: Path) -> None:
     runtime, _bundle, lifecycle, _doctor, _inventory, _backup, _restore = _runtime(tmp_path)
-    manager = FakeRuntimeConfigManager(reject_admission=True)
+    manager = FakeRuntimeConfigManager(rejection_code="desktop_runtime_config_confirmation_invalid")
     runtime.runtime_config_manager = manager
-
-    import pytest
-    from scripts.local_desktop.common import DesktopOperationError
 
     with pytest.raises(DesktopOperationError) as raised:
         runtime.config_apply(candidate={}, expected_revision=0, confirmation_token="bad")
 
     assert raised.value.reason_code == "desktop_runtime_config_confirmation_invalid"
+    assert lifecycle.stops == 0
+    assert manager.applies == 0
+
+
+def test_config_apply_admission_uses_owned_environment_before_stop_and_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _bundle, lifecycle, _doctor, _inventory, _backup, _restore = _runtime(tmp_path)
+    events: list[str] = []
+    manager = FakeRuntimeConfigManager(events=events)
+    runtime.runtime_config_manager = manager
+    inherited_models_config = str(tmp_path / "repo-models.yaml")
+    monkeypatch.setenv("NEWS_MODELS_CONFIG", inherited_models_config)
+    original_stop = lifecycle.stop
+
+    def recording_stop(*, drain_timeout: float, process_timeout: float):
+        events.append("stop")
+        return original_stop(drain_timeout=drain_timeout, process_timeout=process_timeout)
+
+    lifecycle.stop = recording_stop
+
+    result = runtime.config_apply(candidate={}, expected_revision=0, confirmation_token="valid")
+
+    assert result.status == "APPLIED"
+    assert events == ["admit", "stop", "apply"]
+    assert manager.admission_models_config == ""
+    assert manager.apply_models_config == ""
+    assert os.environ["NEWS_MODELS_CONFIG"] == inherited_models_config
+
+
+def test_config_apply_release_gate_failure_does_not_stop_or_write(tmp_path: Path) -> None:
+    runtime, _bundle, lifecycle, _doctor, _inventory, _backup, _restore = _runtime(tmp_path)
+    manager = FakeRuntimeConfigManager(rejection_code="desktop_runtime_config_release_required")
+    runtime.runtime_config_manager = manager
+
+    with pytest.raises(DesktopOperationError) as raised:
+        runtime.config_apply(candidate={}, expected_revision=0, confirmation_token="valid")
+
+    assert raised.value.reason_code == "desktop_runtime_config_release_required"
     assert lifecycle.stops == 0
     assert manager.applies == 0
 
@@ -242,9 +294,6 @@ def test_config_apply_stop_failure_preserves_configuration_and_release(tmp_path:
         return OperationResult(False, "stop", "FAILED", "desktop_stop_failed", "failed", {})
 
     lifecycle.stop = failed_stop
-
-    import pytest
-    from scripts.local_desktop.common import DesktopOperationError
 
     with pytest.raises(DesktopOperationError) as raised:
         runtime.config_apply(candidate={}, expected_revision=0, confirmation_token="valid", timeout=5)

@@ -365,11 +365,12 @@ class DesktopAppRuntime:
         confirmation_token: str,
         timeout: float = 30.0,
     ) -> OperationResult:
-        self.runtime_config_manager.admit(
-            candidate,
-            expected_revision=expected_revision,
-            confirmation_token=confirmation_token,
-        )
+        with controlled_process_environment(self.config):
+            self.runtime_config_manager.admit(
+                candidate,
+                expected_revision=expected_revision,
+                confirmation_token=confirmation_token,
+            )
         initialize_data_root(self.config)
         stop_result = self.stop(timeout=timeout)
         if not stop_result.ok or stop_result.status != "STOPPED":
