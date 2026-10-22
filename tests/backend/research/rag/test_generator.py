@@ -220,7 +220,7 @@ def test_answer_generator_context_includes_structured_metadata_fields() -> None:
     answer = asyncio.run(AnswerGenerator(
         model,
         max_context_chunks=1,
-        max_chars_per_chunk=500,
+        max_context_chars=500,
     ).generate("What do the experiment results around Table 5 show?", retrieval))
 
     assert "PaLM 540B improves the average score" in answer.contexts[0]
@@ -255,7 +255,7 @@ def test_answer_generator_context_includes_figure_visual_locator_fields() -> Non
     answer = asyncio.run(AnswerGenerator(
         model,
         max_context_chunks=2,
-        max_chars_per_chunk=700,
+        max_context_chars=1400,
     ).generate("What does the figure show?", retrieval))
 
     assert "Caption: Figure 1 shows the model architecture." in answer.contexts[0]
@@ -289,7 +289,7 @@ def test_answer_generator_context_includes_formula_referenced_text() -> None:
     answer = asyncio.run(AnswerGenerator(
         model,
         max_context_chunks=1,
-        max_chars_per_chunk=700,
+        max_context_chars=700,
     ).generate("How is the equation explained?", retrieval))
 
     assert "Equation: y = Wx" in answer.contexts[0]

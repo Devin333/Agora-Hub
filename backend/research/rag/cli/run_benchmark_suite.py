@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from backend.research.rag.evaluation.paper_benchmark_suite import BenchmarkSuiteConfig, run_benchmark_suite
+from backend.research.rag.retrieval.paper_answer_generator import DEFAULT_MAX_CONTEXT_CHARS
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -35,7 +36,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         generation_track=args.generation_track,
         answer_eval_sample_size=args.answer_eval_sample_size,
         answer_max_context_chunks=args.answer_max_context_chunks,
-        answer_max_chars_per_chunk=args.answer_max_chars_per_chunk,
+        answer_max_context_chars=args.answer_max_context_chars,
         answer_judge_mode=args.answer_judge,
         answer_judge_sample_size=args.answer_judge_sample_size,
         spot_check_sample_size=args.spot_check_sample_size,
@@ -96,7 +97,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--generation-track", choices=("end_to_end", "oracle_context"), default="end_to_end", help="Answer generation track; oracle_context may inject gold context for diagnostic comparison.")
     parser.add_argument("--answer-eval-sample-size", type=int, help="Maximum deterministic test samples for answer evaluation.")
     parser.add_argument("--answer-max-context-chunks", type=int, default=3)
-    parser.add_argument("--answer-max-chars-per-chunk", type=int, default=1000)
+    parser.add_argument(
+        "--answer-max-context-chars",
+        type=int,
+        default=DEFAULT_MAX_CONTEXT_CHARS,
+        help="Total character budget shared by all passages sent to the answer model.",
+    )
     parser.add_argument(
         "--answer-judge",
         choices=("none", "llm"),

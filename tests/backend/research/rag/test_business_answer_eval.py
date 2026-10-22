@@ -108,10 +108,13 @@ def test_business_eval_records_outcomes_latency_and_tokens(tmp_path: Path) -> No
     assert run.efficiency["model_calls_recorded"] > 0
     assert run.efficiency["tokens"]["output_tokens"] > 0
     assert run.efficiency["estimated_cost_usd"] is None
+    assert run.efficiency["prompt_chars"]["n"] == run.efficiency["model_calls_recorded"]
+    assert 0 < run.efficiency["prompt_chars"]["max"] <= 12_000 + 2_000
 
     rows = [json.loads(line) for line in (tmp_path / "out" / "answers.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 42
     assert {row["outcome"] for row in rows} <= {"answered", "abstained", "insufficient_evidence"}
+    assert all(row["prompt_chars"] for row in rows if row["model_usage"])
     report = json.loads((tmp_path / "out" / "evidence_regression_report.json").read_text(encoding="utf-8"))
     assert report["metadata"]["question_bank_coverage"]["scored"] == 42
     assert report["metadata"]["production_qualification"]["eligible"] is False

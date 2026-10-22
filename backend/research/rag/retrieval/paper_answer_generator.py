@@ -17,6 +17,13 @@ from backend.research.ports.paper_answer_model import (
     PaperAnswerModelRequest,
 )
 from backend.research.rag.adapters.paper_field_text import extract_field_texts
+from backend.research.rag.retrieval.answer_context_budget import (
+    ContextLine,
+    allocate_budgets,
+    fit_lines,
+    question_terms,
+    render_lines,
+)
 from backend.research.rag.retrieval.contracts import RetrievalResult
 from framework.llm.models.usage import TokenUsage
 from framework.rag.context import collect_nearby_context_ids
@@ -30,6 +37,10 @@ from framework.shared.graph_identity import GraphExecutionIdentity
 _LOGGER = logging.getLogger(__name__)
 
 ANSWER_PROTOCOL_VERSION = "insufficient_evidence_prefix_v1"
+CONTEXT_BUDGET_STRATEGY = "shared_budget_relevant_sentences_v1"
+# About 3k tokens: every passage of the evaluation corpus except one outlier fits whole.
+DEFAULT_MAX_CONTEXT_CHARS = 12000
+CONTEXT_PASSAGE_FLOOR_CHARS = 400
 ABSTENTION_TOKEN = "INSUFFICIENT_EVIDENCE"
 _ABSTENTION_LINE_RE = re.compile(rf"{ABSTENTION_TOKEN}:[ \t]*(?P<reason>\S[^\r\n]*)")
 
@@ -232,12 +243,17 @@ class AnswerGenerator:
         model: PaperAnswerModelPort,
         *,
         max_context_chunks: int = 8,
-        max_chars_per_chunk: int = 1000,
+        max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
     ) -> None:
         if not isinstance(model, PaperAnswerModelPort):
             raise TypeError("model must implement PaperAnswerModelPort")
+        if max_context_chars < max_context_chunks * CONTEXT_PASSAGE_FLOOR_CHARS:
+            raise ValueError(
+                f"max_context_chars must hold {max_context_chunks} passages at "
+                f"{CONTEXT_PASSAGE_FLOOR_CHARS} chars each"
+            )
         self._model = model
-        self._max_chars = max_chars_per_chunk
+        self._max_context_chars = max_context_chars
         self._context_assembler = AnswerContextAssembler(max_context_chunks=max_context_chunks)
 
     async def generate(
@@ -257,10 +273,11 @@ class AnswerGenerator:
             retrieval,
             required_context_ids=required_context_ids,
         )
-        contexts = [
-            _render_context_for_answer(chunk, question=question, max_chars=self._max_chars)
-            for chunk in selection.chunks
-        ]
+        contexts, context_budget = _budgeted_contexts(
+            selection,
+            question=question,
+            total_chars=self._max_context_chars,
+        )
         request = PaperAnswerModelRequest(
             system_prompt=build_answer_system_prompt(
                 question,
@@ -296,6 +313,9 @@ class AnswerGenerator:
             context_metadata={
                 **selection.metadata,
                 "answer_protocol": ANSWER_PROTOCOL_VERSION,
+                "context_budget": context_budget,
+                # Characters we actually sent; compare with provider-reported input tokens.
+                "prompt_chars": len(request.system_prompt) + len(request.user_prompt),
                 "generation_elapsed_ms": elapsed_ms,
                 **(
                     {"used_personal_memory": list(personal_memory_context.used_refs)}
@@ -507,25 +527,69 @@ def _system_instruction_for_question(question: str) -> str:
     return " ".join([_BASE_ANSWER_INSTRUCTION, *extras])
 
 
-def _render_context_for_answer(chunk: PaperChunk, *, question: str, max_chars: int) -> str:
-    text = _answer_context_text(chunk)
-    return _compact_context_text(text, question=question, max_chars=max_chars)
+_PRIMARY_TIER = 0
+_SUPPORT_TIER = 1
 
 
-def _answer_context_text(chunk: PaperChunk) -> str:
+def _budgeted_contexts(
+    selection: AnswerContextSelection,
+    *,
+    question: str,
+    total_chars: int,
+) -> tuple[list[str], dict[str, Any]]:
+    """Render selected passages within one shared budget; record what each passage kept."""
+    lines = [_answer_context_lines(chunk) for chunk in selection.chunks]
+    full = [render_lines(chunk_lines) for chunk_lines in lines]
+    roles = selection.metadata.get("context_role_buckets") or {}
+    tiers = [
+        _PRIMARY_TIER if roles.get(chunk.chunk_id) == "primary_evidence" else _SUPPORT_TIER
+        for chunk in selection.chunks
+    ]
+    budgets = allocate_budgets(
+        [len(text) for text in full],
+        tiers=tiers,
+        total=total_chars,
+        floor=CONTEXT_PASSAGE_FLOOR_CHARS,
+    )
+    terms = question_terms(question)
+    contexts = [
+        fit_lines(chunk_lines, max_chars=budget, terms=terms)
+        for chunk_lines, budget in zip(lines, budgets)
+    ]
+    passages = [
+        {
+            "chunk_id": chunk.chunk_id,
+            "original_chars": len(original),
+            "budget_chars": budget,
+            "kept_chars": len(kept),
+            "truncated": len(kept) < len(original),
+        }
+        for chunk, original, budget, kept in zip(selection.chunks, full, budgets, contexts)
+    ]
+    return contexts, {
+        "strategy": CONTEXT_BUDGET_STRATEGY,
+        "total_chars": total_chars,
+        "original_chars": sum(len(text) for text in full),
+        "kept_chars": sum(len(text) for text in contexts),
+        "truncated_chunk_ids": [item["chunk_id"] for item in passages if item["truncated"]],
+        "passages": passages,
+    }
+
+
+def _answer_context_lines(chunk: PaperChunk) -> list[ContextLine]:
     fields = extract_field_texts(chunk)
-    parts: list[str] = []
+    lines: list[ContextLine] = []
     seen: set[str] = set()
     for field_name in _CONTEXT_FIELD_ORDER:
         text = fields.text_for(field_name)
         if text:
             label = _CONTEXT_FIELD_LABELS.get(field_name, field_name)
-            _append_context_part(parts, seen, f"{label}: {text}")
+            _append_context_line(lines, seen, label, text, pinned=field_name == "title")
     for label, text in _locator_context_lines(chunk):
-        _append_context_part(parts, seen, f"{label}: {text}")
-    if not parts:
-        _append_context_part(parts, seen, chunk.content)
-    return "\n".join(parts)
+        _append_context_line(lines, seen, label, text, pinned=True)
+    if not lines:
+        _append_context_line(lines, seen, "", chunk.content, pinned=False)
+    return lines
 
 
 def _locator_context_lines(chunk: PaperChunk) -> list[tuple[str, str]]:
@@ -539,72 +603,23 @@ def _locator_context_lines(chunk: PaperChunk) -> list[tuple[str, str]]:
     return lines
 
 
-def _append_context_part(parts: list[str], seen: set[str], raw: str) -> None:
+def _append_context_line(
+    lines: list[ContextLine],
+    seen: set[str],
+    label: str,
+    raw: str,
+    *,
+    pinned: bool,
+) -> None:
     text = " ".join(str(raw or "").split())
     if not text:
         return
-    key = text.casefold()
+    key = f"{label}: {text}".casefold()
     if key in seen:
         return
-    parts.append(text)
+    lines.append(ContextLine(label, text, pinned=pinned))
     seen.add(key)
 
-
-def _compact_context_text(text: str, *, question: str, max_chars: int) -> str:
-    text = str(text or "").strip()
-    max_chars = max(200, int(max_chars))
-    if len(text) <= max_chars:
-        return text
-
-    head_size = max(120, int(max_chars * 0.55))
-    tail_size = max(80, int(max_chars * 0.25))
-    middle_size = max_chars - head_size - tail_size - 12
-    head = text[:head_size].rsplit(" ", 1)[0].strip() or text[:head_size].strip()
-    tail = text[-tail_size:].split(" ", 1)[-1].strip() or text[-tail_size:].strip()
-    middle = _query_focused_window(text, question=question, max_chars=middle_size)
-    return "\n...\n".join(_unique_texts([head, middle, tail]))[:max_chars].rstrip()
-
-
-def _query_focused_window(text: str, *, question: str, max_chars: int) -> str:
-    if max_chars < 120:
-        return ""
-    lowered = text.casefold()
-    positions = [
-        lowered.find(term)
-        for term in _context_query_terms(question)
-        if lowered.find(term) >= 0
-    ]
-    if not positions:
-        return ""
-    best_pos = min(positions)
-    start = max(0, best_pos - max_chars // 2)
-    end = min(len(text), start + max_chars)
-    start = max(0, end - max_chars)
-    window = text[start:end]
-    return window.split(" ", 1)[-1].rsplit(" ", 1)[0].strip()
-
-
-def _context_query_terms(question: str) -> list[str]:
-    tokens = [
-        token.casefold()
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", str(question or ""))
-    ]
-    priority = [
-        "average",
-        "averages",
-        "overall",
-        "result",
-        "results",
-        "accuracy",
-        "score",
-        "scores",
-        "benchmark",
-        "benchmarks",
-        "table",
-        "figure",
-        *tokens,
-    ]
-    return _unique_texts(priority)
 
 def _append_chunk(chunks: list[PaperChunk], chunk: PaperChunk) -> None:
     if any(existing.chunk_id == chunk.chunk_id for existing in chunks):
@@ -646,6 +661,9 @@ def _required_context_coverage(chunks: list[PaperChunk], required_ids: list[str]
 __all__ = [
     "ABSTENTION_TOKEN",
     "ANSWER_PROTOCOL_VERSION",
+    "CONTEXT_BUDGET_STRATEGY",
+    "CONTEXT_PASSAGE_FLOOR_CHARS",
+    "DEFAULT_MAX_CONTEXT_CHARS",
     "AnswerContextAssembler",
     "AnswerGenerator",
     "GeneratedAnswer",

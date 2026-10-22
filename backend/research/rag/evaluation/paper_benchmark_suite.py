@@ -30,7 +30,11 @@ from backend.research.rag.evaluation.paper_evidence_eval import (
 from backend.research.rag.evaluation.paper_evaluation_report import EvidenceRegressionReport
 from backend.research.rag.evaluation.paper_fixed_window_baseline import FixedWindowBaselineChunker, FixedWindowChunkerConfig
 from backend.research.rag.evaluation.paper_generation_eval import GenerationEvaluator, GenerationEvalResult
-from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator, GeneratedAnswer
+from backend.research.rag.retrieval.paper_answer_generator import (
+    DEFAULT_MAX_CONTEXT_CHARS,
+    AnswerGenerator,
+    GeneratedAnswer,
+)
 from backend.research.ports.paper_answer_model import PaperAnswerModelError, PaperAnswerModelPort
 from framework.rag.evaluation import AnswerOutcome
 from backend.research.rag.visual.page_visual_chunks import build_page_visual_chunks
@@ -628,7 +632,7 @@ class BenchmarkSuiteConfig:
     answer_eval_enabled: bool = False
     answer_eval_sample_size: int | None = None
     answer_max_context_chunks: int = 5
-    answer_max_chars_per_chunk: int = 1000
+    answer_max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS
     answer_model: PaperAnswerModelPort | None = None
     answer_judge_mode: str = "none"
     answer_judge_sample_size: int | None = None
@@ -1184,7 +1188,7 @@ async def _generate_answer_samples(
     generator = AnswerGenerator(
         answer_model,
         max_context_chunks=config.answer_max_context_chunks,
-        max_chars_per_chunk=config.answer_max_chars_per_chunk,
+        max_context_chars=config.answer_max_context_chars,
     )
     samples: list[EvidenceAnswerSample] = []
     generated: list[GeneratedAnswer | None] = []

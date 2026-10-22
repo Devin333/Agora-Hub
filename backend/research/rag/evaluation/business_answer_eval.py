@@ -132,10 +132,19 @@ def run_business_answer_eval(
     )
 
 
-def _generation_elapsed_ms(sample: EvidenceAnswerSample) -> float | None:
+def _generated_metadata(sample: EvidenceAnswerSample) -> dict[str, Any]:
     metadata = (sample.metadata.get("answer_candidate") or {}).get("metadata") or {}
-    value = (metadata.get("generated_answer_metadata") or {}).get("generation_elapsed_ms")
+    return metadata.get("generated_answer_metadata") or {}
+
+
+def _generation_elapsed_ms(sample: EvidenceAnswerSample) -> float | None:
+    value = _generated_metadata(sample).get("generation_elapsed_ms")
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _prompt_chars(sample: EvidenceAnswerSample) -> int | None:
+    value = _generated_metadata(sample).get("prompt_chars")
+    return int(value) if isinstance(value, int) else None
 
 
 def _sample_model(sample: EvidenceAnswerSample) -> str:
@@ -147,6 +156,7 @@ def _efficiency(samples: list[EvidenceAnswerSample]) -> dict[str, Any]:
     end_to_end = [float(s.metadata["end_to_end_elapsed_ms"]) for s in samples]
     generation = [v for s in samples if (v := s.metadata.get("generation_elapsed_ms")) is not None]
     usages = [s.metadata["model_usage"] for s in samples if isinstance(s.metadata.get("model_usage"), dict)]
+    prompt_chars = [value for s in samples if (value := _prompt_chars(s)) is not None]
     totals = {
         key: sum(int(usage.get(key) or 0) for usage in usages)
         for key in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens")
@@ -157,6 +167,9 @@ def _efficiency(samples: list[EvidenceAnswerSample]) -> dict[str, Any]:
         "end_to_end_ms": _latency_stats(end_to_end),
         "generation_ms": _latency_stats(generation),
         "tokens": totals,
+        # Provider input tokens can exceed what we sent (gateway-side prompt additions);
+        # compare against the characters actually sent before attributing cost.
+        "prompt_chars": {"n": len(prompt_chars), "total": sum(prompt_chars), "max": max(prompt_chars, default=None)},
         "tokens_per_model_call": (
             {key: round(value / len(usages), 1) for key, value in totals.items()} if usages else None
         ),
@@ -209,6 +222,7 @@ def _write_case_rows(path: Path, answer: EvidenceAnswerEvalResult) -> None:
                 "decision_reason": decision.get("reason"),
                 "end_to_end_elapsed_ms": sample.metadata.get("end_to_end_elapsed_ms"),
                 "generation_elapsed_ms": sample.metadata.get("generation_elapsed_ms"),
+                "prompt_chars": _prompt_chars(sample),
                 "model": _sample_model(sample),
                 "model_usage": sample.metadata.get("model_usage"),
             }
