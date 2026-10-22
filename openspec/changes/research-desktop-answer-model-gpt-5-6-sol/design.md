@@ -40,7 +40,7 @@ Electron runtime root 的公开检查结果是 `revision=0`、`llm=null`，crede
 
 ### D5：验证与完成状态
 
-repo/dev composition 测试校验专用 route 的 model/base/key-env 匹配及 `writer-primary` 隔离。Electron public preview 已证明候选 model/base 通过 preview，但 apply 被当前 release gate 拒绝，持久化 owner 仍为 `revision=0`、`llm=null`，credential 仍未配置。owned-environment admission 污染已修复并有回归测试。模型目录状态为 `listed`，但 plain-text live probe 单次 45 秒超时，不能标记为 live 成功。当前 installed release dependency drift、credential `configured=false` 和尚无成功 live completion 证据必须分别追踪。只有 release 重建重装、credential provision、成功 apply 和运行时验证全部完成后，才能记录桌面切换完成。
+repo/dev composition 测试校验专用 route 的 model/base/key-env 匹配及 `writer-primary` 隔离。Electron public preview 已证明候选 model/base 通过 preview，但 apply 被当前 release gate 拒绝，持久化 owner 仍为 `revision=0`、`llm=null`，credential 仍未配置。owned-environment admission 污染已修复并有回归测试。模型目录状态为 `listed`，但 plain-text live probe 单次 45 秒超时，不能标记为 live 成功。2026-10-22 续跑通过真实 `OpenAICompatiblePaperAnswerModel`、repo/dev 专用 deployment 和现有网关凭证完成一次文本调用：请求与返回模型均为 `gpt-5.6-sol`，合成上下文为 24 名参与者，回答为 `24 participants.`；耗时 6.75 秒，input/output tokens 为 42/7，单次 transport attempt，使用 deployment 原有 90 秒 timeout 与 256 output-token 上限。该证据证明生产模型端口可实际调用，不代表 Electron 已配置或完成全链路问答。当前 installed release dependency drift 和 credential `configured=false` 仍须分别追踪。只有 release 重建重装、credential provision、成功 apply 和运行时验证全部完成后，才能记录桌面切换完成。
 
 ## Risks / Trade-offs
 
@@ -63,5 +63,10 @@ repo/dev composition 测试校验专用 route 的 model/base/key-env 匹配及 `
 ## Open Questions
 
 - installed release 已确认存在 `desktop_release_dependency_drift`，需由主流程重建并重装；本代码修复不操作 installed resources。
-- framework client 的 plain-text live probe 已在 45 秒单次超时；后续成功证据仍待获取。
+- 初次 framework client 的 45 秒短探针超时；续跑已取得真实 paper-answer model port 的成功证据，尚未取得实际 Electron runtime 问答成功证据。
 - Electron credential provisioning、成功 apply、实际激活和运行验证尚未完成；在证据产生前，不得宣称 Electron 已切换至 `gpt-5.6-sol`。
+
+## 2026-10-22 续跑证据
+
+- 重新执行已安装宿主 `config-show` 和 `credential-inspect`：仍是 `revision=0`、`llm=null`、`configured=false`，未迁移凭证。
+- 通过 `OpenAICompatiblePaperAnswerModel` 的真实远端文本调用成功；合成测试不包含个人或论文私有数据，未输出/持久化 secret。仅将无凭证的结果回执保存在 ignored `.tmp/research-desktop-gpt56-production-port-probe.json`；关键结果已记录在 D5，避免依赖该临时文件作为唯一证据。

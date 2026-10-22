@@ -19,6 +19,8 @@
 
 ## 4. Production switch completion
 
+- [x] 4.0 Verify a real remote completion through `OpenAICompatiblePaperAnswerModel`: requested/returned `gpt-5.6-sol`, grounded synthetic answer `24 participants.`, 6.75s, tokens 42/7. This is not Electron activation evidence.
+
 - [ ] 4.1 Rebuild and reinstall the verified desktop release to resolve `desktop_release_dependency_drift`; do not install packages into the existing release, alter its manifest, or bypass validation.
 - [ ] 4.2 Provision the desktop credential through the controlled credential path after explicit authorization, preserving the fixed credential ref and never exposing the secret.
 - [ ] 4.3 Successfully apply the Electron owner configuration through preview/apply and the release workflow.
