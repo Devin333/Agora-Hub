@@ -45,3 +45,12 @@ repo/dev Research configuration MAY resolve the dedicated `gpt-5.6-sol` deployme
 - **WHEN** the new deployment has not been admitted through structured-output qualification
 - **THEN** its configuration MUST NOT declare native schema or JSON-object fallback support
 - **AND** structured-output requests MUST continue to fail closed
+
+### Requirement: Text desktop runtime does not eagerly require optional image dependencies
+The text desktop runtime MUST be able to import its actual API and Research composition without Pillow when Marker image processing is not selected. Pillow MUST be loaded at the Marker raster-validation use boundary. This MUST NOT expand the text runtime dependency profile, disable release validation, or bypass raster safety checks.
+
+#### Scenario: Text runtime has no Pillow
+- **WHEN** the text runtime imports `interfaces.api.app` and importing `PIL` is unavailable
+- **THEN** API import MUST succeed without fabricating a Pillow module
+- **AND** selecting actual Marker raster validation without its dependency MUST fail explicitly rather than accept an unvalidated image
+- **AND** existing deterministic image validation MUST remain unchanged when Pillow is available

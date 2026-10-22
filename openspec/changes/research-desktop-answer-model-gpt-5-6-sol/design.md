@@ -2,7 +2,7 @@
 
 repo/dev Research composition 由 `ResearchRuntimeSettings` 加载，再由 `_resolve_research_llm_deployment` 校验 route deployment 与环境配置。此路径及 `.env.example` 仅控制 repo/dev 配置。Electron 桌面配置的 owner 是 `scripts/local_desktop/runtime_config.py` 中的持久化 owner 投影；`resolve_desktop_app_config` 会清除继承的 Research env，因此仓库 `.env` 不能切换 Electron 的实际模型。`configs/models.yaml` 的 `writer-primary` 被其他工作流复用，不能改写该共享 route。
 
-Electron runtime root 的公开检查结果是 `revision=0`、`llm=null`，credential inspection 为 `configured=false`。public config preview 对 `gpt-5.6-sol` 与 `https://deedee.tech/v1` 成功；config apply 随后以 `desktop_runtime_config_release_required` fail closed。虽然 `active-release.json` 存在，但其旧 release 未通过当前验证，因此没有任何桌面配置写入。根因定位表明 `config_apply` 的 pre-stop admission 原先位于 `controlled_process_environment(self.config)` 之外，导致 release identity 读取继承的 repo `NEWS_MODELS_CONFIG`；真正 owned environment 下 expected 与 actual identity 一致。代码修复后 admission 与 apply 使用同一 owned environment，同时仍保持 admission 在 stop 之前。随后 active release 验证暴露独立的 `desktop_release_dependency_drift`：manifest 比实际 installed Python environment 多声明 52 个 packages（包括 `httpx`、`python-dotenv`、`numpy`、`qdrant-client`、`sentence-transformers`、`pytest` 等），实际环境没有对应新增项。该 release 必须重建并重装，不得安装补丁依赖、篡改 manifest 或绕过 gate。所有拒绝均是安全 fail-closed，不是桌面切换完成。 另外，网关模型目录仅证明 `gpt-5.6-sol` 被列出。framework client route 的 plain-text 单次模型探针使用 `max_tokens=32`、`timeout=45`、`max_attempts=1` 和提示 `Reply exactly OK`，结果为 45 秒超时；因此没有 live completion 成功证据，且此远端结果不能由本地 pytest、compile、strict 或 smoke 代替。
+Electron runtime root 的公开检查结果是 `revision=0`、`llm=null`，credential inspection 为 `configured=false`。public config preview 对 `gpt-5.6-sol` 与 `https://deedee.tech/v1` 成功；config apply 随后以 `desktop_runtime_config_release_required` fail closed。虽然 `active-release.json` 存在，但其旧 release 未通过当前验证，因此没有任何桌面配置写入。根因定位表明 `config_apply` 的 pre-stop admission 原先位于 `controlled_process_environment(self.config)` 之外，导致 release identity 读取继承的 repo `NEWS_MODELS_CONFIG`；真正 owned environment 下 expected 与 actual identity 一致。代码修复后 admission 与 apply 使用同一 owned environment，同时仍保持 admission 在 stop 之前。随后 active release 验证暴露独立的 `desktop_release_dependency_drift`：manifest 比实际 installed Python environment 多声明 52 个 packages（包括 `httpx`、`python-dotenv`、`numpy`、`qdrant-client`、`sentence-transformers`、`pytest` 等），实际环境没有对应新增项。该 release 必须重建并重装，不得安装补丁依赖、篡改 manifest 或绕过 gate。所有拒绝均是安全 fail-closed，不是桌面切换完成。 首次检查时，网关模型目录仅证明 `gpt-5.6-sol` 被列出。framework client route 的 plain-text 单次模型探针使用 `max_tokens=32`、`timeout=45`、`max_attempts=1` 和提示 `Reply exactly OK`，结果为 45 秒超时；当时没有 live completion 成功证据，且该失败结果不能由本地 pytest、compile、strict 或 smoke 代替。后续真实端口调用成功的独立证据见 D5 与续跑证据。
 
 ## Goals / Non-Goals
 
@@ -70,3 +70,21 @@ repo/dev composition 测试校验专用 route 的 model/base/key-env 匹配及 `
 
 - 重新执行已安装宿主 `config-show` 和 `credential-inspect`：仍是 `revision=0`、`llm=null`、`configured=false`，未迁移凭证。
 - 通过 `OpenAICompatiblePaperAnswerModel` 的真实远端文本调用成功；合成测试不包含个人或论文私有数据，未输出/持久化 secret。仅将无凭证的结果回执保存在 ignored `.tmp/research-desktop-gpt56-production-port-probe.json`；关键结果已记录在 D5，避免依赖该临时文件作为唯一证据。
+
+## D6：精简文本运行包的可选图像依赖边界
+
+续跑使用受控 Node `24.21.0` / npm `11.19.0`、已有可信 CPython `3.12.14` 和 `windows-x64-text-research-v1` selected Python 输入，在独立目录重建源码 release `20261022T042921Z-38540bff5579`（source revision `6bceda4ca37ad791c9774329945584dd8b21c808`）。portable stage 的真实导入 gate 拒绝该候选：`desktop_app_python_probe_failed`，底层为 `ModuleNotFoundError: No module named 'PIL'`。该候选不安装、不用于激活。
+
+根因是 `backend.research.document.marker_assets` 在 module import 时无条件加载 Pillow，导致未启用 Marker 的文本运行包经 Research composition/API import 也要求图像依赖。Pillow 只用于 Marker 栅格验证，应在实际执行该验证时加载。修复不得向已封存运行包补装依赖、扩大文本 profile 或跳过图像验证；选择图像路径却缺少其依赖时仍须明确失败。原有尺寸、像素、单帧、格式、结尾、解码、bomb-warning 与安全文件边界验证全部保留。
+
+新增隔离子进程回归：拒绝 `PIL` import 时，真实 API composition 仍能 import；实际图像验证不能假成功。代码修复后须重跑匹配图像安全测试、selected Python 真实导入探针与 required smoke，再建立新的源码 release，不能复用修复前的源码身份。
+
+修复后的定向证据：图像安全与独立 no-Pillow 子进程回归 68 项通过；desktop runtime profile/bundle 56 项通过；compile 通过；selected CPython 3.12.14 实际导入 `interfaces.api.app` 成功，174 routes、health route 存在、`PIL` 未加载。完整 required smoke 尚在执行，未将修复前的 release 或任何未完成 stage 标记为可安装。
+
+发布前并行预检：managed Node 24.21.0 / npm 11.19.0 下 desktop typecheck/build 通过，24 test files / 171 tests 通过；固定输入验证通过 33 wheels、33 distributions、3397 RECORD、33 licenses 与 1995 Node files，portable API/PDF/SQLite/TLS/auth/ACL probe 通过。仅为已验证构建输入和打包前检查，不等同于已生成 installer 或已安装。后续构建须绑定包含本修复的 clean 新 HEAD、使用全新独立输出根，并依次执行官方 source release、portable stage、runtime validation 和 dist；不得复用修复前源码身份。
+
+首次完整 smoke（session 45089）已终止：5223 passed、1 failed、1 skipped、23 deselected；失败为 `test_live_production_roots_have_zero_retired_workflow_references`。修正方案保持 scanner 和全部断言不变，移除 Pillow import 的非必需异常包装，在实际栅格验证边界直接导入，让原生 `ModuleNotFoundError` 明确传播；隔离测试须验证原始异常未被包装或吞掉、且不产生 artifact。该次 smoke 不算通过，后续提交前必须重新执行完整 gate。
+
+直接 use-boundary import 修复后的证据：zero-reference scanner 为 0 violations、0 parse failures、fallback=0；全部 architecture 259 项通过，图像/import 与 desktop profile/bundle 共 124 项通过；selected Python 3.12.14 API probe 再次通过（174 routes、health 存在、PIL 未加载）。未修改 scanner、allowlist 或架构断言。第二次 required smoke 使用新日志 `.tmp/research-desktop-optional-dependency-smoke-r2.log` 执行；第一轮失败日志保留，不将其算作通过。
+
+第二次完整 required smoke（session 75484）已成功退出 0：5224 passed、1 skipped、23 deselected，耗时 1772.17 秒；其后 AgentLoop `succeeded`、network_calls=0，sources validation `is_valid=true`、error_count=0、warning_count=0。该 gate 已覆盖修复后的当前源码；后续源码 release 必须绑定本次代码提交的新 HEAD。

@@ -14,6 +14,8 @@
 - 保持通用 writer、评测生成模型、judge 模型和其他 provider route 不变。
 - 不授予未经资格验证的 structured-output 能力；不改拒答前缀协议。
 
+- 修复可选 Marker 栅格依赖的 eager import：文本 profile 的 API import 不应要求 Pillow，实际图像验证仍 fail closed；不扩大精简 profile。
+
 ## Capabilities
 
 ### New Capabilities

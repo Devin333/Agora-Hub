@@ -17,6 +17,9 @@
 - [x] 3.5 Record evidence boundaries: the model directory only proves `listed`; the framework client plain-text probe (`max_tokens=32`, `timeout=45`, `max_attempts=1`, `Reply exactly OK`) timed out once at 45 seconds and is not live-success evidence. Keep this separate from passing local tests.
 - [x] 3.6 Run the required smoke gate and commit this bounded code repair; smoke exited 0 with 5224 passed, 1 skipped, 23 deselected; AgentLoop and source validation passed. Actual production activation remains pending below.
 
+- [x] 3.7 Move optional Pillow loading to the Marker raster-validation use boundary; preserve all deterministic image security checks and add isolated import/no-false-success regressions (68 image/import tests and 56 desktop profile/bundle tests passed).
+- [x] 3.8 Verify selected CPython 3.12.14 API import (174 routes, health present, PIL not loaded), pass 259 architecture and 124 image/desktop tests; required smoke r2 exited 0 (5224 passed, 1 skipped, 23 deselected, AgentLoop and source validation passed), then commit the dependency-boundary repair.
+
 ## 4. Production switch completion
 
 - [x] 4.0 Verify a real remote completion through `OpenAICompatiblePaperAnswerModel`: requested/returned `gpt-5.6-sol`, grounded synthetic answer `24 participants.`, 6.75s, tokens 42/7. This is not Electron activation evidence.

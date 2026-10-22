@@ -15,8 +15,6 @@ from io import BytesIO
 from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
-from PIL import Image, UnidentifiedImageError
-
 from framework.agent.artifacts.paths import (
     artifact_path_relative_to,
     validate_artifact_path_segment,
@@ -43,6 +41,8 @@ def _raster_suffix(data: bytes) -> str | None:
     """Return an allowlisted raster suffix only for a structurally valid image."""
     if not data or len(data) > MAX_MARKER_IMAGE_BYTES:
         return None
+    from PIL import Image, UnidentifiedImageError
+
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
