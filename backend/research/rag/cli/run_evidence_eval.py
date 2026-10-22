@@ -6,7 +6,7 @@ from typing import Any, Sequence
 
 from backend.research.rag.evaluation.evidence_eval_runner import (
     EvidenceEvalOptions,
-    _build_live_answer_samples,
+    build_live_answer_samples,
     _matches_filters,
     run_evidence_eval_core,
 )

@@ -4,19 +4,22 @@ import asyncio
 
 import pytest
 
-from backend.research.application import llm_client
+from backend.research.application import llm_client, llm_selectors
 from framework.llm.models import LLMResponse
 from framework.shared.graph_identity import GraphExecutionIdentity
 
-_SELECTOR_KEYS = (
-    "OPENAI_BASE_URL",
-    "OPENAI_MODEL",
-    "NEWS_LLM_BASE_URL",
-    "NEWS_LLM_MODEL",
-    "NEWS_LLM_API_KEY_ENV",
-    "NEWS_RESEARCH_LLM_BASE_URL",
-    "NEWS_RESEARCH_LLM_MODEL",
-    "NEWS_RESEARCH_LLM_API_KEY_ENV",
+_SELECTOR_KEYS = tuple(
+    dict.fromkeys(
+        (
+            "OPENAI_MODEL",
+            *llm_selectors.RESEARCH_ANSWER_BASE_URL_KEYS,
+            *llm_selectors.RESEARCH_ANSWER_MODEL_KEYS,
+            *llm_selectors.RESEARCH_ANSWER_API_KEY_ENV_KEYS,
+            *llm_selectors.EVAL_JUDGE_BASE_URL_KEYS,
+            *llm_selectors.EVAL_JUDGE_MODEL_KEYS,
+            *llm_selectors.EVAL_JUDGE_API_KEY_ENV_KEYS,
+        )
+    )
 )
 
 
@@ -256,3 +259,27 @@ def test_unity_paper_answer_model_sends_system_and_user_messages(monkeypatch) ->
     assert captured[0].max_tokens == 77
     assert captured[0].temperature == 0.0
     assert captured[0].max_transport_attempts is None
+
+
+def test_judge_uses_explicit_judge_model_and_never_falls_back(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "generic-model")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_MODEL", "answer-model")
+
+    with pytest.raises(ValueError, match="evaluation judge is not configured; missing model"):
+        llm_client.build_unity_judge_llm_call()
+
+    captured = []
+
+    class _CapturingClient(_RecordingClient):
+        def complete(self, request):
+            captured.append((self.config.model, self.config.base_url, request.temperature))
+            return LLMResponse(content="judged")
+
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _CapturingClient)
+    monkeypatch.setenv("NEWS_RAG_EVAL_JUDGE_MODEL", "judge-model")
+    call = llm_client.build_unity_judge_llm_call(max_tokens=50)
+
+    assert asyncio.run(call("judge this")) == "judged"
+    assert captured == [("judge-model", "https://generic.test/v1", 0.0)]

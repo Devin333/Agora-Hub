@@ -13,7 +13,7 @@ from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 from backend.research.rag.cli.run_evidence_eval import main
 from backend.research.rag.evaluation.evidence_eval_runner import (
     EvidenceEvalOptions,
-    _build_live_answer_samples,
+    build_live_answer_samples,
     _load_chunks_from_papers_dir,
     run_evidence_eval_core,
 )
@@ -65,7 +65,7 @@ def test_live_answer_eval_reuses_run_id_for_golden_single_paper_cases() -> None:
         Path("data/eval/golden_corpus_snapshot.json"),
         golden_set_path=Path("data/eval/golden_set.json"),
     )
-    ask = evidence_eval_runner._build_in_memory_live_answer_ask(
+    ask = evidence_eval_runner.build_in_memory_live_answer_ask(
         snapshot.chunks,
         retrieval_policy="paper_blind_semantic_rag_v1",
         visual_enabled=False,
@@ -266,7 +266,7 @@ def test_live_answer_eval_samples_preserve_gated_payload_semantics() -> None:
             "transcript_id": "rag-transcript://p1/answer",
         }
 
-    samples = _build_live_answer_samples([answer_pair, abstain_pair], ask=ask)
+    samples = build_live_answer_samples([answer_pair, abstain_pair], ask=ask)
     result = EvidenceAnswerEvaluator().evaluate(samples)
 
     assert [sample.metadata["answer_eval"] for sample in samples] == [

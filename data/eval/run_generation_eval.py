@@ -26,7 +26,7 @@ from backend.research.rag.retrieval.contracts import RetrievalRequest
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
 from backend.research.rag.evaluation.paper_generation_eval import GenerationEvaluator
 from backend.research.rag.evaluation.paper_gold_builder import load_golden_set
-from backend.research.application.llm_client import build_unity_llm_call, build_unity_paper_answer_model
+from backend.research.application.llm_client import build_unity_judge_llm_call, build_unity_paper_answer_model
 
 GOLDEN = Path("data/eval/golden_set.json")
 PER_DOMAIN = 3
@@ -52,7 +52,7 @@ async def main() -> None:
     store = PaperChunkStoreAdapter(PaperChunkStore(qdrant_store_from_env()))
     retriever = ResearchRetriever(store, reranker=CrossEncoderReranker())
     generator = AnswerGenerator(build_unity_paper_answer_model(max_tokens=600))
-    evaluator = GenerationEvaluator(build_unity_llm_call(max_tokens=400), max_concurrency=3)
+    evaluator = GenerationEvaluator(build_unity_judge_llm_call(max_tokens=400), max_concurrency=3)
 
     answers = []
     for i, qa in enumerate(pairs, 1):

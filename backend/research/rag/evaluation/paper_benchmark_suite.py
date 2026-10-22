@@ -1531,8 +1531,8 @@ def _answer_generation_sample_size(config: BenchmarkSuiteConfig) -> int | None:
 
 
 def _build_answer_judge_llm_call(*, max_tokens: int) -> LLMCall:
-    from backend.research.application.llm_client import build_unity_llm_call
-    return build_unity_llm_call(max_tokens=max_tokens, temperature=0)
+    from backend.research.application.llm_client import build_unity_judge_llm_call
+    return build_unity_judge_llm_call(max_tokens=max_tokens, temperature=0)
 
 
 def _context_chunks_for_answer(retrieval: Any, context_chunk_ids: list[str]) -> list[PaperChunk]:

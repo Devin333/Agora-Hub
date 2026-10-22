@@ -10,6 +10,9 @@ from framework.llm.clients.openai_compatible import (
     LLMRetryPolicy,
 )
 from backend.research.application.llm_selectors import (
+    EVAL_JUDGE_API_KEY_ENV_KEYS,
+    EVAL_JUDGE_BASE_URL_KEYS,
+    EVAL_JUDGE_MODEL_KEYS,
     RESEARCH_ANSWER_API_KEY_ENV_KEYS,
     RESEARCH_ANSWER_BASE_URL_KEYS,
     RESEARCH_ANSWER_MODEL_KEYS,
@@ -25,6 +28,7 @@ _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
+_DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
 
 
 def _browser_ua_transport(request: Request, timeout_seconds: float) -> bytes:
@@ -48,13 +52,42 @@ def _build_unity_client(*, base_url: str, model: str, api_key_env: str) -> OpenA
     )
 
 
+def _resolve_unity_client(
+    role: str,
+    *,
+    base_url_keys: tuple[str, ...],
+    model_keys: tuple[str, ...],
+    api_key_env_keys: tuple[str, ...],
+) -> OpenAICompatibleClient:
+    """Build a client from ordered env selectors; every role must resolve a base URL and model."""
+    load_root_env()
+    base_url = first_configured(os.environ, base_url_keys)
+    model = first_configured(os.environ, model_keys)
+    missing = [
+        name
+        for name, value in (("base URL", base_url), ("model", model))
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            f"{role} is not configured; missing "
+            + " and ".join(missing)
+            + f" (checked {', '.join(base_url_keys + model_keys)})"
+        )
+    return _build_unity_client(
+        base_url=str(base_url),
+        model=str(model),
+        api_key_env=first_configured(os.environ, api_key_env_keys) or _DEFAULT_API_KEY_ENV,
+    )
+
+
 def _build_generic_unity_client() -> OpenAICompatibleClient:
-    """Judges and auxiliary workers: OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL."""
+    """Auxiliary workers such as the RAG planner: OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL."""
     load_root_env()
     return _build_unity_client(
         base_url=os.environ["OPENAI_BASE_URL"],
         model=os.environ.get("OPENAI_MODEL", "gpt-5.4-mini"),
-        api_key_env="OPENAI_API_KEY",
+        api_key_env=_DEFAULT_API_KEY_ENV,
     )
 
 
@@ -64,24 +97,11 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
     Evaluation must generate with the production answer model, so this reads
     ``NEWS_RESEARCH_LLM_*`` before the generic ``NEWS_LLM_*`` and ``OPENAI_*`` keys.
     """
-    load_root_env()
-    base_url = first_configured(os.environ, RESEARCH_ANSWER_BASE_URL_KEYS)
-    model = first_configured(os.environ, RESEARCH_ANSWER_MODEL_KEYS)
-    missing = [
-        name
-        for name, value in (("base URL", base_url), ("model", model))
-        if value is None
-    ]
-    if missing:
-        raise ValueError(
-            "paper answer model is not configured; missing "
-            + " and ".join(missing)
-            + f" (checked {', '.join(RESEARCH_ANSWER_BASE_URL_KEYS + RESEARCH_ANSWER_MODEL_KEYS)})"
-        )
-    client = _build_unity_client(
-        base_url=str(base_url),
-        model=str(model),
-        api_key_env=first_configured(os.environ, RESEARCH_ANSWER_API_KEY_ENV_KEYS) or "OPENAI_API_KEY",
+    client = _resolve_unity_client(
+        "paper answer model",
+        base_url_keys=RESEARCH_ANSWER_BASE_URL_KEYS,
+        model_keys=RESEARCH_ANSWER_MODEL_KEYS,
+        api_key_env_keys=RESEARCH_ANSWER_API_KEY_ENV_KEYS,
     )
     return OpenAICompatiblePaperAnswerModel(
         client,
@@ -90,10 +110,27 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
     )
 
 
-def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = None):
-    """Async prompt-to-text callable for judges and other single-prompt workers."""
-    client = _build_generic_unity_client()
+def build_unity_judge_llm_call(*, max_tokens: int = 1024, temperature: float | None = 0.0):
+    """Prompt-to-text callable for evaluation judges (``NEWS_RAG_EVAL_JUDGE_*``).
 
+    The judge model must be configured explicitly; it never falls back to the generic
+    ``OPENAI_MODEL`` or to the answer model it is judging.
+    """
+    client = _resolve_unity_client(
+        "evaluation judge",
+        base_url_keys=EVAL_JUDGE_BASE_URL_KEYS,
+        model_keys=EVAL_JUDGE_MODEL_KEYS,
+        api_key_env_keys=EVAL_JUDGE_API_KEY_ENV_KEYS,
+    )
+    return _prompt_call(client, max_tokens=max_tokens, temperature=temperature)
+
+
+def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = None):
+    """Async prompt-to-text callable for auxiliary single-prompt workers."""
+    return _prompt_call(_build_generic_unity_client(), max_tokens=max_tokens, temperature=temperature)
+
+
+def _prompt_call(client: OpenAICompatibleClient, *, max_tokens: int, temperature: float | None):
     async def llm_call(
         prompt: str,
         *,
@@ -115,4 +152,4 @@ def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = 
     return llm_call
 
 
-__all__ = ["build_unity_llm_call", "build_unity_paper_answer_model"]
+__all__ = ["build_unity_judge_llm_call", "build_unity_llm_call", "build_unity_paper_answer_model"]

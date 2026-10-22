@@ -33,3 +33,11 @@
 - [x] 4.1 `openspec validate paper-rag-answer-outcome-integrity --strict`
 - [x] 4.2 `python -m scripts.dev smoke`
 - [x] 4.3 提交
+
+## 5. 首次真实数据
+
+- [x] 5.1 评测 judge 独立选择键 `NEWS_RAG_EVAL_JUDGE_*`（必须显式配置，不回退 `OPENAI_MODEL`）；基准套件与数据脚本的 judge 改用 `build_unity_judge_llm_call`
+- [x] 5.2 业务题库加载器：只评分已审阅单篇题，草稿与多论文题显式记为跳过并报告覆盖率
+- [x] 5.3 业务题库运行器与 CLI `run_business_answer_eval`：走生产门控回答链路，记录每题 outcome、端到端与生成延迟、token
+- [x] 5.4 用 `gpt-5.6-sol` 跑通 42 题，结果摘要见 `evidence/business-qb-live-20261022.md`
+

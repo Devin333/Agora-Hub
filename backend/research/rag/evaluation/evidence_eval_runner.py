@@ -175,7 +175,7 @@ def run_evidence_eval_core(
                 answer_model=answer_model,
             )
         answer = EvidenceAnswerEvaluator().evaluate(
-            _build_live_answer_samples(
+            build_live_answer_samples(
                 pairs,
                 ask=ask,
             )
@@ -323,15 +323,15 @@ def _deterministic_answer_sample(pair: EvidenceQAPair) -> EvidenceAnswerSample:
     )
 
 
-def _build_live_answer_samples(
+def build_live_answer_samples(
     pairs: list[EvidenceQAPair],
     *,
     ask: Callable[[EvidenceQAPair], dict[str, Any]],
 ) -> list[EvidenceAnswerSample]:
-    return [_live_answer_sample(pair, ask(pair)) for pair in pairs]
+    return [live_answer_sample(pair, ask(pair)) for pair in pairs]
 
 
-def _live_answer_sample(pair: EvidenceQAPair, payload: dict[str, Any]) -> EvidenceAnswerSample:
+def live_answer_sample(pair: EvidenceQAPair, payload: dict[str, Any]) -> EvidenceAnswerSample:
     citations = [dict(item) for item in payload.get("citations") or [] if isinstance(item, dict)]
     passages = [dict(item) for item in payload.get("passages") or [] if isinstance(item, dict)]
     context_chunk_ids = _unique_texts([item.get("chunk_id") for item in passages])
@@ -391,7 +391,7 @@ def _build_live_answer_ask(
             "--live-answer-eval requires --papers-dir with parsed research_document.json files "
             "or an injected live_answer_ask callable from an outer interface/script layer"
         )
-    return _build_in_memory_live_answer_ask(
+    return build_in_memory_live_answer_ask(
         chunks,
         retrieval_policy=retrieval_policy,
         visual_enabled=visual_enabled,
@@ -402,7 +402,7 @@ def _build_live_answer_ask(
     )
 
 
-def _build_in_memory_live_answer_ask(
+def build_in_memory_live_answer_ask(
     chunks: list[PaperChunk],
     *,
     retrieval_policy: str | None,
@@ -1014,5 +1014,8 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 
 __all__ = [
     "EvidenceEvalOptions",
+    "build_in_memory_live_answer_ask",
+    "build_live_answer_samples",
+    "live_answer_sample",
     "run_evidence_eval_core",
 ]
