@@ -35,10 +35,11 @@
 2. 阶段 1 可以真实调用 LLM，几百到一千多次调用可以接受。
 3. 回答修复层整体去掉。生产路径只保留两件事：校验引用编号是否合法，以及模型显式声明拒答。LLM 失败就记为失败。
 4. 拒答用固定前缀协议，不用 JSON 字段（原因见 design D1：生产模型 `deepseek-v4-flash` 的 structured output mode 是 `none`）。
-5. 模型：用户原话是"生产用 5.6 sol，judge 用 6.1-sol"。
-   - 目前 `.env` 中桌面生产 research 路由是 `NEWS_RESEARCH_LLM_MODEL=deepseek-v4-flash`，`OPENAI_MODEL` 是另一个模型。
-   - 阶段 1 开始前要先向用户确认这句话的意思：是把桌面生产也切到 `gpt-5.6-sol`，还是只在评测里用 5.6-sol 生成？
-   - 未经确认不要改 `configs/models.yaml` 或 `.env`。`.env` 含密钥，不要回显其中的值。
+5. 模型（2026-10-22 更新）：
+   - 桌面生产已切换到 `research-desktop-answer` 路由 / `gpt-5.6-sol`（见 `openspec/changes/research-desktop-answer-model-gpt-5-6-sol`）。
+   - 评测生成：`build_unity_paper_answer_model` 与生产共用 `backend/research/application/llm_selectors.py` 的选择键，按 `NEWS_RESEARCH_LLM_*` → `NEWS_LLM_*` → `OPENAI_*` 解析，当前即 `gpt-5.6-sol`。
+   - judge：仍走 `OPENAI_*`（当前 `gpt-5.6-terra`）。用户要求 judge 用 6.1-sol，**等用户确认网关上的准确模型 ID 后**再加独立的 judge 选择键，不要猜测模型名。
+   - `.env` 含密钥，不要回显其中的值。
 
 ## 3. 分支与提交状态
 

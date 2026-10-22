@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
+from backend.research.application.llm_selectors import (
+    RESEARCH_ANSWER_API_KEY_ENV_KEYS,
+    RESEARCH_ANSWER_BASE_URL_KEYS,
+    RESEARCH_ANSWER_MODEL_KEYS,
+)
 from framework.harness.runtime.result_errors import GraphArtifactResultError
 from framework.harness.runtime.result_policy import (
     GraphArtifactPersistenceConfig,
@@ -556,21 +561,17 @@ class ResearchRuntimeSettings:
             ),
             base_url=_first_text(
                 values,
-                (
-                    "NEWS_RESEARCH_LLM_BASE_URL",
-                    "NEWS_LLM_BASE_URL",
-                    "OPENAI_BASE_URL",
-                ),
+                RESEARCH_ANSWER_BASE_URL_KEYS,
                 _DEFAULT_LLM_BASE_URL,
             ),
             model=_first_text(
                 values,
-                ("NEWS_RESEARCH_LLM_MODEL", "NEWS_LLM_MODEL", "OPENAI_MODEL"),
+                RESEARCH_ANSWER_MODEL_KEYS,
                 _DEFAULT_LLM_MODEL,
             ),
             api_key_env=_first_text(
                 values,
-                ("NEWS_RESEARCH_LLM_API_KEY_ENV", "NEWS_LLM_API_KEY_ENV"),
+                RESEARCH_ANSWER_API_KEY_ENV_KEYS,
                 _default_api_key_env(values),
             ),
             timeout_seconds=_env_float(

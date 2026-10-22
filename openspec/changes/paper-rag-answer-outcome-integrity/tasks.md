@@ -25,6 +25,8 @@
 - [x] 3.5 live 评测：统一 `run_id` 并绑定语料；注入回答模型；按 session 状态映射 outcome，不合成文本
 - [x] 3.6 基准套件 `generation_track`，gold 注入只在 `oracle_context` 轨道；引用改用 `cited_context_indexes`
 - [x] 3.7 评测侧单测，以及离线复现验证（golden corpus 加假模型，确认不再全部中止）
+- [x] 3.8 修正集成测试：用 `metrics.gate_failures_by_gate` 与 `accepted_evidence_count` 断言无 dedup 失败、无中止且检索非空；分别回退规划器修复与 run_id 绑定验证测试会失败
+- [x] 3.9 评测生成模型与桌面 Research 路由共用 `llm_selectors` 选择键（`NEWS_RESEARCH_LLM_*` 优先），judge 仍走 `OPENAI_*`；测试隔离仓库 `.env`
 
 ## 4. 验证与交付
 

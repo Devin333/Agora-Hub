@@ -8,6 +8,89 @@ from backend.research.application import llm_client
 from framework.llm.models import LLMResponse
 from framework.shared.graph_identity import GraphExecutionIdentity
 
+_SELECTOR_KEYS = (
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "NEWS_LLM_BASE_URL",
+    "NEWS_LLM_MODEL",
+    "NEWS_LLM_API_KEY_ENV",
+    "NEWS_RESEARCH_LLM_BASE_URL",
+    "NEWS_RESEARCH_LLM_MODEL",
+    "NEWS_RESEARCH_LLM_API_KEY_ENV",
+)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_llm_env(monkeypatch):
+    """Keep the repository .env from leaking real endpoints or models into these tests."""
+    monkeypatch.setattr(llm_client, "load_root_env", lambda: None)
+    for key in _SELECTOR_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+class _RecordingClient:
+    def __init__(self, config, **kwargs) -> None:
+        self.config = config
+
+    def complete(self, request):
+        return LLMResponse(content="ok", model=self.config.model)
+
+
+def test_paper_answer_model_uses_research_route_not_generic_model(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "generic-judge-model")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_BASE_URL", "https://research.test/v1")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_MODEL", "research-answer-model")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_API_KEY_ENV", "RESEARCH_KEY")
+
+    answer = llm_client.build_unity_paper_answer_model()._client.config
+    judge = llm_client._build_generic_unity_client().config
+
+    assert (answer.model, answer.base_url, answer.api_key_env) == (
+        "research-answer-model",
+        "https://research.test/v1",
+        "RESEARCH_KEY",
+    )
+    assert (judge.model, judge.base_url, judge.api_key_env) == (
+        "generic-judge-model",
+        "https://generic.test/v1",
+        "OPENAI_API_KEY",
+    )
+
+
+def test_paper_answer_model_falls_back_to_generic_selectors(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+    monkeypatch.setenv("NEWS_LLM_MODEL", "news-model")
+    monkeypatch.setenv("OPENAI_MODEL", "openai-model")
+
+    answer = llm_client.build_unity_paper_answer_model()._client.config
+
+    assert answer.model == "news-model"
+    assert answer.base_url == "https://generic.test/v1"
+    assert answer.api_key_env == "OPENAI_API_KEY"
+
+
+def test_paper_answer_model_requires_configured_endpoint_and_model(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+
+    with pytest.raises(ValueError, match="missing model"):
+        llm_client.build_unity_paper_answer_model()
+
+
+def test_research_settings_and_eval_builder_share_answer_selectors() -> None:
+    from backend.research.application import llm_selectors
+    from interfaces.composition import research_settings
+
+    assert research_settings.RESEARCH_ANSWER_MODEL_KEYS is llm_selectors.RESEARCH_ANSWER_MODEL_KEYS
+    assert research_settings.RESEARCH_ANSWER_BASE_URL_KEYS is llm_selectors.RESEARCH_ANSWER_BASE_URL_KEYS
+    assert (
+        research_settings.RESEARCH_ANSWER_API_KEY_ENV_KEYS
+        is llm_selectors.RESEARCH_ANSWER_API_KEY_ENV_KEYS
+    )
+
 
 def test_build_unity_llm_call_binds_graph_execution_identity(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.test/v1")
@@ -88,6 +171,7 @@ def test_memory_send_never_retries_inside_transport_after_permission_is_revoked(
 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
     calls = []
     context = PersonalMemoryContext(policy_revision=1, items=(PersonalMemoryContextItem(
         memory_id="pmem_" + "1" * 32, revision=1, content="Prefer methods first.",

@@ -92,17 +92,19 @@ def test_live_answer_eval_reuses_run_id_for_golden_single_paper_cases() -> None:
         results.append((case["case_id"], ask(pair)))
 
     assert len(results) == 30
-    assert all(
-        payload["passages"]
-        or payload.get("decision", {}).get("metadata", {}).get("gap_report", {}).get("accepted_evidence_ids")
-        for _, payload in results
-    )
-    assert not [
+    # Every question retrieves from the run-bound corpus; an unbound run_id filters to zero.
+    assert [
+        case_id for case_id, payload in results if payload["metrics"]["accepted_evidence_count"] == 0
+    ] == []
+    # gate_failures_by_gate covers the whole transcript, including failures a replan recovered from.
+    assert [
         case_id
         for case_id, payload in results
-        if payload["status"] == "halted"
-        and payload.get("decision", {}).get("reason") == "rag_query_dedup"
-    ]
+        if "rag_query_dedup" in payload["metrics"]["gate_failures_by_gate"]
+    ] == []
+    # Retrieval gaps end as insufficient evidence; nothing halts or fails.
+    assert {payload["status"] for _, payload in results} <= {"answered", "insufficient_evidence"}
+    assert any(payload["status"] == "answered" for _, payload in results)
 
 
 def test_run_evidence_eval_writes_summary_report(tmp_path) -> None:

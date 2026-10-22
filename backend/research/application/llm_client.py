@@ -9,6 +9,12 @@ from framework.llm.clients.openai_compatible import (
     OpenAICompatibleConfig,
     LLMRetryPolicy,
 )
+from backend.research.application.llm_selectors import (
+    RESEARCH_ANSWER_API_KEY_ENV_KEYS,
+    RESEARCH_ANSWER_BASE_URL_KEYS,
+    RESEARCH_ANSWER_MODEL_KEYS,
+    first_configured,
+)
 from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
 from framework.llm.models.request import LLMRequest
 from framework.shared.env import load_root_env
@@ -27,18 +33,13 @@ def _browser_ua_transport(request: Request, timeout_seconds: float) -> bytes:
         return response.read()
 
 
-def _build_unity_client() -> OpenAICompatibleClient:
-    """Client for the OPENAI_*-configured endpoint (unity2.ai).
-
-    Uses a browser User-Agent transport to pass Cloudflare. Reads:
-      OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL.
-    """
-    load_root_env()
+def _build_unity_client(*, base_url: str, model: str, api_key_env: str) -> OpenAICompatibleClient:
+    """Client for an OpenAI-compatible gateway behind Cloudflare (browser User-Agent transport)."""
     config = OpenAICompatibleConfig(
         provider="openai-compatible",
-        base_url=os.environ["OPENAI_BASE_URL"],
-        model=os.environ.get("OPENAI_MODEL", "gpt-5.4-mini"),
-        api_key_env="OPENAI_API_KEY",
+        base_url=base_url,
+        model=model,
+        api_key_env=api_key_env,
     )
     return OpenAICompatibleClient(
         config,
@@ -47,10 +48,43 @@ def _build_unity_client() -> OpenAICompatibleClient:
     )
 
 
+def _build_generic_unity_client() -> OpenAICompatibleClient:
+    """Judges and auxiliary workers: OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL."""
+    load_root_env()
+    return _build_unity_client(
+        base_url=os.environ["OPENAI_BASE_URL"],
+        model=os.environ.get("OPENAI_MODEL", "gpt-5.4-mini"),
+        api_key_env="OPENAI_API_KEY",
+    )
+
+
 def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatiblePaperAnswerModel:
-    """Paper answer model backed by the OPENAI_*-configured endpoint."""
+    """Paper answer model resolved with the same selectors as the desktop Research route.
+
+    Evaluation must generate with the production answer model, so this reads
+    ``NEWS_RESEARCH_LLM_*`` before the generic ``NEWS_LLM_*`` and ``OPENAI_*`` keys.
+    """
+    load_root_env()
+    base_url = first_configured(os.environ, RESEARCH_ANSWER_BASE_URL_KEYS)
+    model = first_configured(os.environ, RESEARCH_ANSWER_MODEL_KEYS)
+    missing = [
+        name
+        for name, value in (("base URL", base_url), ("model", model))
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            "paper answer model is not configured; missing "
+            + " and ".join(missing)
+            + f" (checked {', '.join(RESEARCH_ANSWER_BASE_URL_KEYS + RESEARCH_ANSWER_MODEL_KEYS)})"
+        )
+    client = _build_unity_client(
+        base_url=str(base_url),
+        model=str(model),
+        api_key_env=first_configured(os.environ, RESEARCH_ANSWER_API_KEY_ENV_KEYS) or "OPENAI_API_KEY",
+    )
     return OpenAICompatiblePaperAnswerModel(
-        _build_unity_client(),
+        client,
         max_output_tokens=max_tokens,
         temperature=0.0,
     )
@@ -58,7 +92,7 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
 
 def build_unity_llm_call(*, max_tokens: int = 1024, temperature: float | None = None):
     """Async prompt-to-text callable for judges and other single-prompt workers."""
-    client = _build_unity_client()
+    client = _build_generic_unity_client()
 
     async def llm_call(
         prompt: str,
