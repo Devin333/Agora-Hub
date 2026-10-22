@@ -63,7 +63,8 @@ def evidence_results_to_rag_scorecard(
         "answer_diagnostic_tag_counts": answer.diagnostic_tag_counts() if answer is not None else {},
         "skipped_none_metrics": [],
     }
-    scorecard_metadata["skipped_none_metrics"] = _none_metric_names(metrics)
+    if answer is not None:
+        scorecard_metadata["skipped_none_metrics"] = _none_answer_metric_names(answer)
     metrics = [metric for metric in metrics if metric.value is not None]
     return RAGScorecard(
         run_id=run_id,
@@ -97,7 +98,12 @@ def _retrieval_metrics(result: EvidenceEvalResult) -> list[MetricValue]:
 
 
 def _answer_metrics(result: EvidenceAnswerEvalResult) -> list[MetricValue]:
-    values = {
+    values = _answer_metric_values(result)
+    return [MetricValue(name, value) for name, value in values.items() if value is not None]
+
+
+def _answer_metric_values(result: EvidenceAnswerEvalResult) -> dict[str, float | None]:
+    return {
         "answer.fact_coverage": result.answer_fact_coverage(),
         "answer.retrieval_context_coverage": result.retrieval_context_coverage_score(),
         "answer.citation_grounding": result.citation_grounding_score(),
@@ -115,11 +121,10 @@ def _answer_metrics(result: EvidenceAnswerEvalResult) -> list[MetricValue]:
         "answer.system_failure_rate": result.system_failure_rate(),
         "answer.over_abstention_rate": result.over_abstention_rate(),
     }
-    return [MetricValue(name, value) for name, value in values.items() if value is not None]
 
 
-def _none_metric_names(metrics: list[MetricValue]) -> list[str]:
-    return [metric.name for metric in metrics if metric.value is None]
+def _none_answer_metric_names(result: EvidenceAnswerEvalResult) -> list[str]:
+    return [name for name, value in _answer_metric_values(result).items() if value is None]
 
 
 def _generation_metrics(result: GenerationEvalResult) -> list[MetricValue]:

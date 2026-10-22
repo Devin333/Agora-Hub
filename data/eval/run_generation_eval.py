@@ -21,10 +21,11 @@ from infrastructure.storage.vector.qdrant_store import qdrant_store_from_env
 from infrastructure.storage.vector.paper_chunk_store import PaperChunkStore
 from infrastructure.external.reranker import CrossEncoderReranker
 from backend.research.document.chunk_storage import PaperChunkStoreAdapter
-from backend.research.rag.retriever import ResearchRetriever, RetrievalRequest
-from backend.research.rag.generator import AnswerGenerator
-from backend.research.rag.generation_eval import GenerationEvaluator
-from backend.research.rag.eval import load_golden_set
+from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
+from backend.research.rag.retrieval.contracts import RetrievalRequest
+from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
+from backend.research.rag.evaluation.paper_generation_eval import GenerationEvaluator
+from backend.research.rag.evaluation.paper_gold_builder import load_golden_set
 from backend.research.application.llm_client import build_unity_llm_call, build_unity_paper_answer_model
 
 GOLDEN = Path("data/eval/golden_set.json")
@@ -50,8 +51,7 @@ async def main() -> None:
 
     store = PaperChunkStoreAdapter(PaperChunkStore(qdrant_store_from_env()))
     retriever = ResearchRetriever(store, reranker=CrossEncoderReranker())
-    llm = build_unity_llm_call(max_tokens=600)
-    generator = AnswerGenerator(llm)
+    generator = AnswerGenerator(build_unity_paper_answer_model(max_tokens=600))
     evaluator = GenerationEvaluator(build_unity_llm_call(max_tokens=400), max_concurrency=3)
 
     answers = []

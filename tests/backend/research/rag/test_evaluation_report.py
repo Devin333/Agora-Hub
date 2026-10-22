@@ -9,6 +9,7 @@ from backend.research.rag.evaluation.paper_answer_eval import (
     EvidenceAnswerSample,
     EvidenceAnswerScores,
 )
+from backend.research.rag.adapters.evaluation_scorecard_adapter import evidence_results_to_rag_scorecard
 from backend.research.rag.evaluation.paper_evaluation_report import EvidenceRegressionReport
 from backend.research.rag.evaluation.paper_evidence_eval import EvidenceEvalResult, EvidenceQAPair
 from backend.research.rag.evaluation.paper_generation_eval import GenerationEvalResult, GenerationScores
@@ -228,3 +229,32 @@ def test_evidence_regression_report_writes_answer_failure_details(tmp_path) -> N
     assert rows[0]["gold_chunk_ids"] == ["tbl-1"]
     assert rows[0]["context_chunk_ids"] == ["other"]
     assert rows[0]["decision"] == {"status": "abstain"}
+
+
+def test_scorecard_records_and_omits_undefined_answer_metrics() -> None:
+    pair = EvidenceQAPair(
+        question="What is supported?",
+        paper_id="p1",
+        qa_type="citation_qa",
+        gold_chunk_ids=["para-1"],
+    )
+    sample = EvidenceAnswerSample(pair=pair, answer="", outcome=AnswerOutcome.FAILED)
+    answer = EvidenceAnswerEvalResult(scores=[
+        EvidenceAnswerScores(
+            sample=sample,
+            fact_coverage=None,
+            citation_grounding=None,
+            source_locator_grounding=None,
+            abstention_correct=None,
+            answer_success=False,
+            failure_reason="system_failure",
+        )
+    ])
+
+    scorecard = evidence_results_to_rag_scorecard(answer=answer)
+    metric_names = {metric.name for metric in scorecard.metrics}
+
+    assert "answer.fact_coverage" not in metric_names
+    assert "answer.system_failure_rate" in metric_names
+    assert "answer.fact_coverage" in scorecard.metadata["skipped_none_metrics"]
+    assert "answer.abstention_accuracy" in scorecard.metadata["skipped_none_metrics"]

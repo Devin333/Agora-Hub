@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from framework.rag.evaluation import AnswerOutcome
 
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
+from backend.research.rag.evaluation import paper_benchmark_suite as suite
 from backend.research.rag.evaluation.paper_benchmark_suite import (
     BenchmarkSuiteConfig,
     GoldEvidenceAuditItem,
@@ -41,6 +43,7 @@ from backend.research.rag.evaluation.paper_benchmark_matrix import (
 )
 from backend.research.document.models import PaperChunk
 from backend.research.rag.evaluation.paper_evidence_eval import EvidenceQAPair
+from backend.research.rag.retrieval.contracts import RetrievalResult
 from backend.research.rag.evaluation.paper_generation_eval import (
     GenerationEvalResult,
     GenerationSampleJudgment,
@@ -1323,6 +1326,109 @@ def test_evidence_pack_hydration_does_not_add_gold_without_group_hit() -> None:
     assert hydrated.ref_chunks == []
     assert metadata["evidence_pack_hit_chunk_ids"] == []
     assert metadata["evidence_pack_expanded_chunk_ids"] == []
+
+
+
+def test_answer_generation_respects_generation_track_context_injection(monkeypatch: pytest.MonkeyPatch) -> None:
+    chunk = _paper_chunk(
+        chunk_id="para-p1",
+        chunk_type="paragraph",
+        content="The method is supported by this paragraph.",
+        metadata={"source_ref": "paper://p1/para-p1"},
+    )
+    retrieval = RetrievalResult(
+        parent_chunks=[],
+        child_chunks=[chunk],
+        ref_chunks=[],
+        intent="paper_question",  # type: ignore[arg-type]
+    )
+    pair = EvidenceQAPair(
+        question="What method is used?",
+        paper_id="p1",
+        qa_type="citation_qa",
+        gold_chunk_ids=["para-p1"],
+    )
+
+    class Retriever:
+        def retrieve(self, request):
+            return retrieval
+
+        def get_chunk(self, chunk_id: str):
+            return chunk if chunk_id == chunk.chunk_id else None
+
+    class GeneratorSpy:
+        calls: list[dict] = []
+
+        def __init__(self, model, **kwargs) -> None:
+            pass
+
+        async def generate(self, question, retrieved, **kwargs):
+            self.calls.append(kwargs)
+            return GeneratedAnswer(
+                question=question,
+                answer="The method is described. [1]",
+                context_chunk_ids=[chunk.chunk_id],
+                contexts=[chunk.content],
+                cited_context_indexes=[1],
+            )
+
+    monkeypatch.setattr(suite, "AnswerGenerator", GeneratorSpy)
+    for track, gold_is_injected in (("end_to_end", False), ("oracle_context", True)):
+        GeneratorSpy.calls.clear()
+        config = BenchmarkSuiteConfig(
+            papers_dir=Path("."),
+            output_dir=Path("."),
+            answer_eval_enabled=True,
+            answer_model=_fake_answer_model(),
+            generation_track=track,
+        )
+        samples, generated = asyncio.run(suite._generate_answer_samples(config, Retriever(), [pair]))
+
+        assert len(samples) == 1
+        assert samples[0].outcome is AnswerOutcome.ANSWERED
+        assert generated[0] is not None
+        assert ("required_context_ids" in GeneratorSpy.calls[0]) is gold_is_injected
+
+
+def test_answer_model_failure_is_recorded_without_synthetic_generated_answer() -> None:
+    from backend.research.ports.paper_answer_model import PaperAnswerModelError
+
+    chunk = _paper_chunk(
+        chunk_id="para-p1",
+        chunk_type="paragraph",
+        content="The method is supported by this paragraph.",
+        metadata={"source_ref": "paper://p1/para-p1"},
+    )
+    retrieval = RetrievalResult(
+        parent_chunks=[],
+        child_chunks=[chunk],
+        ref_chunks=[],
+        intent="paper_question",  # type: ignore[arg-type]
+    )
+    pair = EvidenceQAPair(
+        question="What method is used?",
+        paper_id="p1",
+        qa_type="citation_qa",
+        gold_chunk_ids=["para-p1"],
+    )
+
+    class Retriever:
+        def retrieve(self, request):
+            return retrieval
+
+    config = BenchmarkSuiteConfig(
+        papers_dir=Path("."),
+        output_dir=Path("."),
+        answer_eval_enabled=True,
+        answer_model=FakePaperAnswerModel(PaperAnswerModelError("provider_unavailable", "offline")),
+    )
+    samples, generated = asyncio.run(suite._generate_answer_samples(config, Retriever(), [pair]))
+
+    assert len(samples) == 1
+    assert samples[0].outcome is AnswerOutcome.FAILED
+    assert samples[0].answer == ""
+    assert samples[0].metadata["model_error_code"] == "provider_unavailable"
+    assert generated == [None]
 
 
 def test_spot_check_generation_is_capped_by_sample_size(tmp_path: Path) -> None:
