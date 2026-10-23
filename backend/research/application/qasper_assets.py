@@ -145,6 +145,10 @@ class QasperAssetService:
             )
         return self._cache
 
+    def embedding_cache(self) -> OfflineEmbeddingCache:
+        """The frozen base cache; chunk vectors are only ever read from it."""
+        return self._embedding_cache()
+
     def cache_identity(self) -> QasperCacheIdentity:
         cache = self._embedding_cache()
         return QasperCacheIdentity(

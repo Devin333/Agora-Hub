@@ -21,6 +21,7 @@ from backend.research.rag.evaluation.paper_answer_eval import (
     AnswerOutcome,
     EvidenceAnswerEvaluator,
     EvidenceAnswerSample,
+    outcome_for_session_status,
 )
 from backend.research.rag.evaluation.paper_evaluation_report import EvidenceRegressionReport
 from backend.research.rag.evaluation.paper_evidence_eval import (
@@ -341,17 +342,7 @@ def live_answer_sample(pair: EvidenceQAPair, payload: dict[str, Any]) -> Evidenc
     ])
     cited_source_locators = _unique_texts([item.get("source_locator") for item in citations])
     status = str(payload.get("status") or "").casefold()
-    outcome_by_status = {
-        "answered": AnswerOutcome.ANSWERED,
-        "abstained": AnswerOutcome.ABSTAINED,
-        "insufficient_evidence": AnswerOutcome.INSUFFICIENT_EVIDENCE,
-        "halted": AnswerOutcome.HALTED,
-        "failed": AnswerOutcome.FAILED,
-    }
-    try:
-        outcome = outcome_by_status[status]
-    except KeyError as exc:
-        raise ValueError(f"unsupported live answer session status: {status!r}") from exc
+    outcome = outcome_for_session_status(status)
     answer = str(payload.get("answer") or "").strip() if outcome is AnswerOutcome.ANSWERED else ""
     candidate = payload.get("answer_candidate")
     candidate_metadata = candidate.get("metadata") if isinstance(candidate, dict) else {}

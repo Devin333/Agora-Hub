@@ -46,6 +46,9 @@ ALLOWED_BUSINESS_IMPORTS = {
     "infrastructure/research/qasper_evaluation.py": {
         "backend.research.ports.qasper_evaluation",
     },
+    "infrastructure/research/qasper_query_vector_store.py": {
+        "backend.research.ports.qasper_query_embedding",
+    },
     "infrastructure/research/personal_memory_store.py": {
         "backend.research.domain.personal_memory",
         "backend.research.ports.personal_memory",
@@ -114,6 +117,9 @@ SOURCE_STORAGE_BUSINESS_IMPORTS = {
 RESEARCH_ADAPTER_BUSINESS_IMPORTS = {
     "infrastructure/research/qasper_evaluation.py": {
         "backend.research.ports.qasper_evaluation",
+    },
+    "infrastructure/research/qasper_query_vector_store.py": {
+        "backend.research.ports.qasper_query_embedding",
     },
     "infrastructure/research/artifact_port.py": {
         "backend.research.ports.artifact_publication",

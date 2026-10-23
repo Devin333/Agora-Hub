@@ -53,6 +53,59 @@ def compose_qasper_evaluation(*, paths: QasperEvaluationPaths, manifest_factory=
     return QasperEvaluationService(assets, artifacts, config)
 
 
+def build_qasper_answer_evaluation_service(
+    *,
+    dataset_path: Path,
+    cache_path: Path,
+    query_vector_path: Path,
+    output_directory: Path,
+    seed: str,
+    per_type: int,
+    max_cases: int | None,
+    judge: bool = True,
+) -> "QasperAnswerEvaluationService":
+    """Compose the live end-to-end answer evaluation.
+
+    Unlike the offline retrieval service this reads model configuration from the
+    environment: the answer model (Research route), the judge (``NEWS_RAG_EVAL_JUDGE_*``)
+    and the embedding provider used only for query texts absent from the cache.
+    """
+    from backend.research.application.llm_client import (
+        build_unity_judge_llm_call,
+        build_unity_paper_answer_model,
+    )
+    from backend.research.application.qasper_answer_evaluation import (
+        QasperAnswerEvaluationConfig,
+        QasperAnswerEvaluationService,
+    )
+    from backend.research.rag.retrieval.policies import build_retrieval_policy_from_env
+    from framework.shared.env import load_root_env
+    from infrastructure.research.qasper_query_embedding import ProviderQueryEmbedder
+    from infrastructure.research.qasper_query_vector_store import FilesystemQueryVectorStore
+
+    for name, value in (("dataset_path", dataset_path), ("cache_path", cache_path),
+                        ("query_vector_path", query_vector_path), ("output_directory", output_directory)):
+        if not value.is_absolute():
+            raise ValueError(f"{name} must be absolute")
+    load_root_env()
+    root = Path(__file__).resolve().parents[2]
+    reader = FilesystemQasperAssets(dataset_path, cache_path, repository_root=root)
+    assets = QasperAssetService(reader)
+    dimension = assets.cache_identity().dimension
+    return QasperAnswerEvaluationService(
+        assets,
+        FilesystemQasperArtifacts(),
+        query_embedder=ProviderQueryEmbedder.from_env(vector_size=dimension),
+        query_vector_store=FilesystemQueryVectorStore(query_vector_path),
+        answer_model=build_unity_paper_answer_model(max_tokens=600),
+        judge_call=build_unity_judge_llm_call(max_tokens=400) if judge else None,
+        retrieval_policy=build_retrieval_policy_from_env(),
+        config=QasperAnswerEvaluationConfig(
+            output_directory=str(output_directory), seed=seed, per_type=per_type, max_cases=max_cases,
+        ),
+    )
+
+
 def build_qasper_evaluation_service(*, dataset_path: Path | None, cache_path: Path | None) -> QasperEvaluationService:
     """CLI composition: accept only explicit local paths, never read secrets or ambient env config."""
     root = Path(__file__).resolve().parents[2]

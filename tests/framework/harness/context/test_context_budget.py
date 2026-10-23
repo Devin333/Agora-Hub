@@ -59,6 +59,47 @@ def test_context_budget_gate_detects_over_budget_envelope() -> None:
     assert "input_tokens" in result.details["violations"]
 
 
+def _evidence_envelope(evidence_refs: tuple[str, ...]) -> ContextEnvelope:
+    return ContextEnvelope.for_graph(
+        envelope_id="context://evidence-count",
+        graph_identity=_graph_identity(),
+        phase="VERIFY",
+        worker_id="context-worker",
+        worker_type="context",
+        budget=ContextBudget(
+            max_input_tokens=4_000,
+            max_output_tokens=100,
+            max_context_segments=6,
+            max_evidence_items=8,
+            max_memory_items=6,
+            max_artifact_refs=12,
+        ),
+        segments=(
+            ContextSegment(
+                segment_id="evidence-memory",
+                segment_type="evidence_memory",
+                content_ref="evidence-memory://current",
+                summary="Accepted evidence.",
+                token_estimate=200,
+                provenance_refs=("source://paper",),
+                cache_scope="dynamic_tail",
+            ),
+        ),
+        evidence_refs=evidence_refs,
+        token_estimate=200,
+    )
+
+
+def test_evidence_memory_segment_is_not_counted_as_an_evidence_item() -> None:
+    at_cap = ContextBudgetGate().evaluate(_evidence_envelope(tuple(f"evidence://{i}" for i in range(8))))
+    over_cap = ContextBudgetGate().evaluate(_evidence_envelope(tuple(f"evidence://{i}" for i in range(9))))
+
+    assert at_cap.passed is True
+    assert at_cap.details["usage"]["evidence_items"] == 8
+    assert over_cap.passed is False
+    assert over_cap.details["violations"]["evidence_items"] == {"used": 9, "max": 8}
+
+
 def test_context_assembler_fails_closed_without_verified_compaction_runtime() -> None:
     assembler = ContextAssembler()
 

@@ -54,6 +54,22 @@ def register(operations: argparse._SubParsersAction) -> None:
     report.add_argument("--run-dir", type=Path, required=True)
     report.set_defaults(_qasper_action="report")
 
+    answer = namespaces.add_parser("answer", help="End-to-end answer evaluation with live models")
+    answer_commands = answer.add_subparsers(dest="answer_command", required=True)
+    answer_run = answer_commands.add_parser(
+        "run", help="Stratified QASPER dev run through the production gated answer path",
+    )
+    answer_run.add_argument("--output-dir", type=Path, required=True)
+    answer_run.add_argument(
+        "--query-vector-path", type=Path, required=True,
+        help="Supplementary query-vector cache; created if absent and reused on reruns",
+    )
+    answer_run.add_argument("--seed", default="qasper-answer-v1")
+    answer_run.add_argument("--per-type", type=int, default=75)
+    answer_run.add_argument("--max-cases", type=int, default=None)
+    answer_run.add_argument("--no-judge", action="store_true", help="Skip the LLM judge")
+    answer_run.set_defaults(_qasper_action="answer_run")
+
 
 def _add_parameters(parser: argparse.ArgumentParser, *, required: bool) -> None:
     # Values stay as text until _dispatch so every contract error is returned as
@@ -82,8 +98,39 @@ def _build_service(dataset_path: Path | None, cache_path: Path | None) -> Any:
     return build_qasper_evaluation_service(dataset_path=dataset_path, cache_path=cache_path)
 
 
+def _build_answer_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_evaluation import build_qasper_answer_evaluation_service
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("answer run requires --dataset-path and --cache-path")
+    return build_qasper_answer_evaluation_service(
+        dataset_path=args.dataset_path.resolve(),
+        cache_path=args.cache_path.resolve(),
+        query_vector_path=args.query_vector_path.resolve(),
+        output_directory=args.output_dir.resolve(),
+        seed=args.seed,
+        per_type=args.per_type,
+        max_cases=args.max_cases,
+        judge=not args.no_judge,
+    )
+
+
+def _dispatch_answer(args: argparse.Namespace) -> int:
+    from framework.shared.errors import FrameworkError
+
+    try:
+        report = _build_answer_service(args).run()
+    except (ValueError, OSError, RuntimeError, FrameworkError) as exc:
+        _print_json({"operation": "answer_run", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_run", "valid": True, **report})
+    return 0
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     action = args._qasper_action
+    if action == "answer_run":
+        return _dispatch_answer(args)
     parameters = None
     grid = None
     profiles: tuple[str, ...] = ()

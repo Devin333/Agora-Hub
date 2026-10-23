@@ -576,6 +576,11 @@ def _budgeted_contexts(
     }
 
 
+def render_answer_context(chunk: PaperChunk) -> str:
+    """Full passage text exactly as the answer model would see it before budget trimming."""
+    return render_lines(_answer_context_lines(chunk))
+
+
 def _answer_context_lines(chunk: PaperChunk) -> list[ContextLine]:
     fields = extract_field_texts(chunk)
     lines: list[ContextLine] = []
@@ -671,4 +676,5 @@ __all__ = [
     "build_answer_system_prompt",
     "build_answer_user_prompt",
     "parse_answer_protocol",
+    "render_answer_context",
 ]

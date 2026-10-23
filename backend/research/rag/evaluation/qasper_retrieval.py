@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -105,7 +105,13 @@ class OfflineEmbeddingCache:
 class CachedFixtureChunkStore:
     """Read-only NumPy fixture store compatible with production DenseTextChannel."""
 
-    def __init__(self, chunks: Sequence[PaperChunk], cache: OfflineEmbeddingCache) -> None:
+    def __init__(
+        self,
+        chunks: Sequence[PaperChunk],
+        cache: OfflineEmbeddingCache,
+        *,
+        query_vector: Callable[[str], np.ndarray] | None = None,
+    ) -> None:
         self._chunks: dict[str, PaperChunk] = {}
         row_ids: list[int] = []
         for chunk in chunks:
@@ -118,6 +124,8 @@ class CachedFixtureChunkStore:
         self._vector_rows = np.asarray(row_ids, dtype=np.intp)
         self._ordered_ids = tuple(self._chunks)
         self._cache = cache
+        # Chunk vectors stay offline; only query vectors may come from a resolver.
+        self._query_vector = query_vector or cache.vector_for
 
     def get_chunk(self, chunk_id: str) -> PaperChunk | None:
         return self._chunks.get(chunk_id)
@@ -130,7 +138,7 @@ class CachedFixtureChunkStore:
 
         if limit <= 0:
             return []
-        query = self._cache.vector_for(query_text)
+        query = self._query_vector(query_text)
         selected = [
             index for index, chunk_id in enumerate(self._ordered_ids)
             if self._chunks[chunk_id].paper_id == paper_id
@@ -149,11 +157,18 @@ class CachedFixtureChunkStore:
 class CachedFixtureFieldIndex:
     """Read-only field vectors backed by the same compact offline cache matrix."""
 
-    def __init__(self, chunks: Sequence[PaperChunk], cache: OfflineEmbeddingCache) -> None:
+    def __init__(
+        self,
+        chunks: Sequence[PaperChunk],
+        cache: OfflineEmbeddingCache,
+        *,
+        query_vector: Callable[[str], np.ndarray] | None = None,
+    ) -> None:
         from backend.research.rag.adapters.paper_field_text import extract_field_texts
 
         self._rows: list[tuple[PaperChunk, str, str, int]] = []
         self._cache = cache
+        self._query_vector = query_vector or cache.vector_for
         for chunk in chunks:
             for name, text in extract_field_texts(chunk).non_empty().items():
                 text = str(text)
@@ -165,7 +180,7 @@ class CachedFixtureFieldIndex:
 
         if limit <= 0:
             return []
-        query = self._cache.vector_for(query_text)
+        query = self._query_vector(query_text)
         allowed = set(field_names) if field_names is not None else None
         eligible = [(chunk, name, text, row) for chunk, name, text, row in self._rows
                     if chunk.paper_id == paper_id and (allowed is None or name in allowed)

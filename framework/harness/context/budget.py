@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from framework.harness.context.models import ContextBudget, ContextEnvelope, ContextSegmentType
+from framework.harness.context.models import ContextBudget, ContextEnvelope
 
 
 @dataclass(frozen=True)
@@ -27,12 +27,13 @@ class ContextBudgetUsage:
 
 class ContextBudgetEstimator:
     def estimate(self, envelope: ContextEnvelope) -> ContextBudgetUsage:
-        evidence_segments = [segment for segment in envelope.segments if segment.segment_type == ContextSegmentType.EVIDENCE_MEMORY]
+        # The evidence-memory segment is the carrier of the evidence items, not an item
+        # itself; its cost is already charged to input tokens and context segments.
         return ContextBudgetUsage(
             input_tokens=envelope.token_estimate or sum(segment.token_estimate for segment in envelope.segments),
             output_tokens=envelope.budget.reserved_output_tokens if envelope.budget else 0,
             context_segments=len(envelope.segments),
-            evidence_items=len(envelope.evidence_refs) + len(evidence_segments),
+            evidence_items=len(set(envelope.evidence_refs)),
             memory_items=len(envelope.memory_refs),
             artifact_refs=len(envelope.artifact_refs),
         )

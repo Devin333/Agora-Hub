@@ -11,6 +11,26 @@ from framework.rag.evaluation.failure_reason import RAGFailureReason
 OVERCONSERVATIVE_ABSTENTION_REASON = RAGFailureReason.ABSTAINED_OVER_CONSERVATIVE.value
 WRONG_ABSTENTION_REASON = RAGFailureReason.ABSTENTION_WRONG.value
 
+_OUTCOME_BY_SESSION_STATUS = {
+    "answered": AnswerOutcome.ANSWERED,
+    "abstained": AnswerOutcome.ABSTAINED,
+    "insufficient_evidence": AnswerOutcome.INSUFFICIENT_EVIDENCE,
+    "halted": AnswerOutcome.HALTED,
+    "failed": AnswerOutcome.FAILED,
+}
+
+
+def outcome_for_session_status(status: str) -> AnswerOutcome:
+    """Map a gated RAG session terminal status to its evaluation outcome.
+
+    A session that ends ``succeeded`` returned a context pack without generating, which
+    an answer evaluation never configures; it is rejected rather than guessed.
+    """
+    try:
+        return _OUTCOME_BY_SESSION_STATUS[str(status or "").casefold()]
+    except KeyError as exc:
+        raise ValueError(f"unsupported answer session status: {status!r}") from exc
+
 
 @dataclass
 class EvidenceAnswerSample:
@@ -445,6 +465,7 @@ def _format_metric(value: float | None, denominator: int, *, percent: bool = Fal
 
 
 __all__ = [
+    "outcome_for_session_status",
     "EvidenceAnswerEvalResult",
     "EvidenceAnswerEvaluator",
     "EvidenceAnswerSample",

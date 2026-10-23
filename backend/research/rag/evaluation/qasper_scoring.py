@@ -44,6 +44,39 @@ def _group_coverage(mapping: QasperMappingResult, found: set[str]) -> tuple[int,
     return covered, len(groups)
 
 
+def evidence_group_coverage(
+    frozen_case: FrozenQasperCase,
+    chunk_ids: Sequence[str],
+    *,
+    strict: bool,
+) -> tuple[int, int] | None:
+    """Required evidence groups fully covered by an unranked set of chunk ids.
+
+    Uses the same complete-path rule as ranked retrieval scoring: an anchor counts
+    only when every chunk of one of its paths is present. ``strict`` restricts paths
+    to the frozen exact-child paths; otherwise the equivalent chunk-set closure is
+    used. Returns None when the frozen mapping cannot be scored deterministically.
+    """
+    result = frozen_case.mapping_result
+    if result.disposition != "valid" or result.mapping is None or not result.mapping.required_evidence_groups:
+        return None
+    if strict:
+        paths_by_anchor = {item.anchor_id: item.paths for item in frozen_case.strict_anchors if item.paths}
+    else:
+        paths_by_anchor = {
+            anchor.anchor_id: tuple(tuple(path.chunk_ids) for path in anchor.chunk_sets)
+            for anchor in result.mapping.anchor_mappings
+            if anchor.chunk_sets
+        }
+    present = set(chunk_ids)
+    found = {
+        anchor_id
+        for anchor_id, paths in paths_by_anchor.items()
+        if any(path and set(path).issubset(present) for path in paths)
+    }
+    return _group_coverage(result, found)
+
+
 def _ndcg(found_ranks: Mapping[str, int], gold_anchor_count: int, k: int) -> float:
     # Binary per-rank gain, with each anchor credited once at path completion.
     actual_by_rank: dict[int, float] = {}
