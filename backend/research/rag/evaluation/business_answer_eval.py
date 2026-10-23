@@ -71,9 +71,9 @@ def run_business_answer_eval(
     context_limit: int = 8,
     clock: Callable[[], float] = time.perf_counter,
 ) -> BusinessAnswerEvalRun:
-    bank = load_business_question_bank(question_bank_path)
     snapshot = load_golden_corpus_snapshot(corpus_snapshot_path, golden_set_path=golden_set_path)
     chunks = list(snapshot.chunks)
+    bank = load_business_question_bank(question_bank_path, chunks=snapshot.chunks)
     missing = sorted(bank.paper_ids() - {chunk.paper_id for chunk in chunks})
     if missing:
         # Retrieval would silently return nothing for these papers.

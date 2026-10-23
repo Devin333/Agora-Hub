@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.research.document.models import PaperChunk
 from backend.research.rag.evaluation.paper_evidence_eval import EvidenceQAPair
 
 SCORABLE_ANNOTATION_STATUSES = frozenset({"reviewed", "reviewed_reused"})
@@ -52,8 +54,13 @@ class BusinessQuestionBank:
         return {pair.paper_id for pair in self.pairs}
 
 
-def load_business_question_bank(path: str | Path) -> BusinessQuestionBank:
+def load_business_question_bank(
+    path: str | Path,
+    *,
+    chunks: Iterable[PaperChunk] | None = None,
+) -> BusinessQuestionBank:
     source = Path(path)
+    equivalence = _GoldChunkEquivalence.from_chunks(chunks)
     pairs: list[EvidenceQAPair] = []
     skipped: list[SkippedCase] = []
     seen: set[str] = set()
@@ -92,8 +99,18 @@ def load_business_question_bank(path: str | Path) -> BusinessQuestionBank:
             # Cross-paper cases need a cross-source runner; they are not scored as single-paper.
             skipped.append(SkippedCase(case_id, category, "multi_paper_unsupported"))
             continue
-        pairs.append(_pair_from_row(row, case_id=case_id, category=category, paper_id=papers[0],
-                                    behavior=behavior, source=source, line_number=line_number))
+        pairs.append(
+            _pair_from_row(
+                row,
+                case_id=case_id,
+                category=category,
+                paper_id=papers[0],
+                behavior=behavior,
+                source=source,
+                line_number=line_number,
+                equivalence=equivalence,
+            )
+        )
     return BusinessQuestionBank(pairs=tuple(pairs), skipped=tuple(skipped), total_rows=total)
 
 
@@ -106,6 +123,7 @@ def _pair_from_row(
     behavior: str,
     source: Path,
     line_number: int,
+    equivalence: "_GoldChunkEquivalence",
 ) -> EvidenceQAPair:
     question = _required_text(row, "question", source, line_number)
     metadata = {
@@ -128,10 +146,72 @@ def _pair_from_row(
         paper_id=paper_id,
         qa_type=qa_type,
         gold_chunk_ids=gold_ids,
+        equivalent_gold_chunk_ids=equivalence.expand(gold_ids, paper_id=paper_id),
         gold_source_locators=list(gold.get("gold_source_locators") or []),
         required_evidence_types=list(gold.get("required_evidence_types") or []),
         metadata=metadata,
     )
+
+
+@dataclass(frozen=True)
+class _GoldChunkEquivalence:
+    paper_by_chunk_id: dict[str, str]
+    component_by_chunk_id: dict[str, tuple[str, ...]]
+
+    @classmethod
+    def from_chunks(cls, chunks: Iterable[PaperChunk] | None) -> "_GoldChunkEquivalence":
+        chunk_by_id = {chunk.chunk_id: chunk for chunk in chunks or ()}
+        adjacency: dict[str, set[str]] = {}
+        for child in chunk_by_id.values():
+            parent = chunk_by_id.get(str(child.parent_chunk_id or "").strip())
+            if parent is None or child.paper_id != parent.paper_id:
+                continue
+            child_text = _normalize_chunk_content(child.content)
+            parent_text = _normalize_chunk_content(parent.content)
+            if not child_text or child_text != parent_text:
+                continue
+            adjacency.setdefault(child.chunk_id, set()).add(parent.chunk_id)
+            adjacency.setdefault(parent.chunk_id, set()).add(child.chunk_id)
+
+        component_by_chunk_id: dict[str, tuple[str, ...]] = {}
+        visited: set[str] = set()
+        for seed in sorted(adjacency):
+            if seed in visited:
+                continue
+            component: set[str] = set()
+            pending = [seed]
+            while pending:
+                chunk_id = pending.pop()
+                if chunk_id in component:
+                    continue
+                component.add(chunk_id)
+                pending.extend(sorted(adjacency.get(chunk_id, ()), reverse=True))
+            visited.update(component)
+            ordered = tuple(sorted(component))
+            for chunk_id in component:
+                component_by_chunk_id[chunk_id] = ordered
+        return cls(
+            paper_by_chunk_id={chunk_id: chunk.paper_id for chunk_id, chunk in chunk_by_id.items()},
+            component_by_chunk_id=component_by_chunk_id,
+        )
+
+    def expand(self, gold_ids: list[str], *, paper_id: str) -> list[str]:
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for gold_id in gold_ids:
+            candidates = (gold_id,)
+            if self.paper_by_chunk_id.get(gold_id) == paper_id:
+                candidates = (gold_id, *self.component_by_chunk_id.get(gold_id, ()))
+            for chunk_id in candidates:
+                if chunk_id in seen:
+                    continue
+                seen.add(chunk_id)
+                expanded.append(chunk_id)
+        return expanded
+
+
+def _normalize_chunk_content(content: str) -> str:
+    return " ".join(str(content or "").split())
 
 
 def _required_text(row: dict[str, Any], key: str, source: Path, line_number: int) -> str:

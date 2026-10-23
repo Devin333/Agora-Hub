@@ -91,7 +91,8 @@ def test_live_answer_eval_reuses_run_id_for_golden_single_paper_cases() -> None:
         )
         results.append((case["case_id"], ask(pair)))
 
-    assert len(results) == 30
+    assert len(results) == 29
+    assert "single_007" not in {case_id for case_id, _ in results}
     # Every question retrieves from the run-bound corpus; an unbound run_id filters to zero.
     assert [
         case_id for case_id, payload in results if payload["metrics"]["accepted_evidence_count"] == 0
