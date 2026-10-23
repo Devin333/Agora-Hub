@@ -68,7 +68,27 @@ def register(operations: argparse._SubParsersAction) -> None:
     answer_run.add_argument("--per-type", type=int, default=75)
     answer_run.add_argument("--max-cases", type=int, default=None)
     answer_run.add_argument("--no-judge", action="store_true", help="Skip the LLM judge")
+    answer_run.add_argument(
+        "--retrieval-profile",
+        choices=("chunk_only", "field_only", "field_lightweight"),
+        default=None,
+        help="Explicit offline retrieval profile; defaults to NEWS_QASPER_RETRIEVAL_PROFILE or chunk_only",
+    )
+    answer_run.add_argument(
+        "--retrieval-overfetch",
+        type=int,
+        default=None,
+        help="Optional positive integer retrieval overfetch multiplier",
+    )
     answer_run.set_defaults(_qasper_action="answer_run")
+
+    answer_replay = answer_commands.add_parser(
+        "replay", help="Replay frozen answer cases through offline retrieval/context assembly only",
+    )
+    answer_replay.add_argument("--source-run-dir", type=Path, required=True)
+    answer_replay.add_argument("--output-dir", type=Path, required=True)
+    answer_replay.add_argument("--query-vector-path", type=Path, required=True)
+    answer_replay.set_defaults(_qasper_action="answer_replay")
 
     calibrate = answer_commands.add_parser("calibrate", help="Human calibration of the answer judge")
     calibrate_commands = calibrate.add_subparsers(dest="calibrate_command", required=True)
@@ -128,6 +148,8 @@ def _build_answer_service(args: argparse.Namespace) -> Any:
         per_type=args.per_type,
         max_cases=args.max_cases,
         judge=not args.no_judge,
+        retrieval_profile=args.retrieval_profile,
+        retrieval_overfetch=args.retrieval_overfetch,
     )
 
 
@@ -141,6 +163,31 @@ def _dispatch_answer(args: argparse.Namespace) -> int:
         return 2
     _print_json({"operation": "answer_run", "valid": True, **report})
     return 0
+
+
+def _build_replay_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_retrieval_replay import build_qasper_retrieval_replay_service
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("answer replay requires --dataset-path and --cache-path")
+    return build_qasper_retrieval_replay_service(
+        dataset_path=args.dataset_path.resolve(),
+        cache_path=args.cache_path.resolve(),
+        query_vector_path=args.query_vector_path.resolve(),
+        source_run_directory=args.source_run_dir.resolve(),
+        output_directory=args.output_dir.resolve(),
+    )
+
+
+def _dispatch_replay(args: argparse.Namespace) -> int:
+    try:
+        report = _build_replay_service(args).run()
+    except (ValueError, OSError, RuntimeError) as exc:
+        _print_json({"operation": "answer_replay", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    valid = report.get("status") == "completed"
+    _print_json({"operation": "answer_replay", "valid": valid, **report})
+    return 0 if valid else 1
 
 
 def _build_calibration_service(args: argparse.Namespace) -> Any:
@@ -181,6 +228,8 @@ def _dispatch(args: argparse.Namespace) -> int:
     action = args._qasper_action
     if action == "answer_run":
         return _dispatch_answer(args)
+    if action == "answer_replay":
+        return _dispatch_replay(args)
     if action in {"calibrate_export", "calibrate_score"}:
         return _dispatch_calibration(args)
     parameters = None

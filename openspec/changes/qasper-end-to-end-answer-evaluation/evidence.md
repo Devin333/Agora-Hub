@@ -42,3 +42,25 @@
 4. 可观测性：失败记录保存模型原始输出，评测输出逐题进度
 
 judge 的可信度要等 4.8 人工校准完成后才能确定，在此之前，以上 judge 口径的数字只作参考。
+
+## Judge 人工校准包（2026-10-24）
+
+从上述 300 题运行 `.tmp/qasper-answer-full-20261023221544` 确定性抽取 50 道有有效 judge 结果的已回答题。清单共 50 例，全部能在来源 `answers.jsonl` 中找到且均已实际作答并经 judge 判定；按答案类型 × judge 正误的样本数为：abstractive 7/7、boolean 6/6、extractive 6/6、none 6/6（correct/incorrect）。
+
+审核包位于 `.tmp/qasper-judge-calibration-20261024012827`，包括含完整题目、参考答案、系统回答、引用原文与 judge 理由的 `calibration.md`，机器可读的 `calibration.json` 和空白 `labels.template.csv`。空白 `labels.csv` 已由模板创建，等待人工填写；该文件没有被当作人工标签，也未将 4.8 标记为完成。工件 SHA-256：
+
+| 工件 | SHA-256 |
+|---|---|
+| `calibration.json` | `d7080d20dda63a23b6064838a4dd87733bd6e51e9cc38b8c4f3279aed3efdea1` |
+| `calibration.md` | `9fb7df65248efadace651baf8ab84b70c5ccf326ea5d6083ced4ce5e83929e4c` |
+| `labels.template.csv` | `b831c16a1957114f5f9b1aa0c876b61243c4d51338db1a5d7e995b76a0a3e1b3` |
+
+这些逐题审核工件保留在 Git 忽略的本地工件目录，版本控制只记录摘要和哈希。人工填写后，以同一目录中的 `labels.csv` 运行 `python -m scripts.dev rag-eval qasper --dataset-path F:/datasets/qasper/train-dev/qasper-dev-v0.3.json --cache-path F:/datasets/qasper/cache/qasper_dev_text-embedding-v4_1024.npz answer calibrate score --calibration-dir .tmp/qasper-judge-calibration-20261024012827` 生成一致率、Cohen's kappa、误判方向和引用级一致率；在该步骤完成前不得声称 judge 已校准。
+
+## 检索召回实现进展（2026-10-24）
+
+新变更 `qasper-answer-retrieval-recall` 已把 answer evaluation 的检索 profile、可选字段索引、轻量 reranker 注入和候选/上下文预算身份写入代码与报告。默认仍是 `chunk_only`；`field_only` 显式启用字段索引，`field_lightweight` 另外注入 reranker，由所选 `RetrievalPolicy` 按当前 query intent 决定调用。空 intent allowlist 表示全部允许，与共享策略语义一致。字段缓存不完整会在首题前失败，不会静默退回 chunk-only。
+
+同一离线缓存已核查：17,048 个 chunk、32,302 个不同的非空字段文本、45,068 条向量缓存记录，缺失字段向量数为 0。固定 300 题的四组 retrieval-only replay 已完成，并经第二次运行核验逐题结果一致；完整工件身份、复现命令与检查结果见 [检索召回对照证据](../qasper-answer-retrieval-recall/evidence.md)。
+
+扩大候选并加入字段索引后，候选 equivalent 覆盖达到 215/224（96.0%），但最终上下文最好仅为 110/224（49.1%）；本次 replay baseline 为 106/224（47.3%）。轻量 reranker 使字段方案降至 101/224（45.1%），因此没有提升为默认。该对照关闭 generation，不能与原回答运行 119/224（53.1%）的上下文覆盖直接比较，也不改变原 300 题的端到端正确率 50.9%。原始报告、回答、样本和原 query cache 的 SHA-256 均保持不变。

@@ -1,27 +1,30 @@
 """End-to-end QASPER answer evaluation through the production gated answer path.
 
-Retrieval reads chunk vectors from the frozen offline cache; only rewritten query
-texts are embedded live (see ``QueryVectorResolver``). The session is assembled the
-way the desktop Research ask path is: chunk store only, no reranker, no field index,
-generation enabled with two attempts.
+Chunk and optional field retrieval vectors come from a frozen offline cache. Rewritten
+query texts may be embedded live by ``QueryVectorResolver``. Retrieval components and
+the bounded final context are selected by an explicit evaluation profile.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from backend.research.application.ask_paper import AskPaperUseCase
 from backend.research.application.paper_rag_session import PaperRAGSession
 from backend.research.application.qasper_assets import QasperAssetService
+from backend.research.document.models import PaperChunk
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from backend.research.ports.paper_answer_model import PaperAnswerModelPort
 from backend.research.ports.qasper_evaluation import QasperArtifactStore
 from backend.research.ports.qasper_query_embedding import QueryEmbeddingPort, QueryVectorStorePort
+from backend.research.ports.field_embedding_index import FieldEmbeddingSearchPort
+from backend.research.ports.reranker import RerankerPort
 from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.evaluation.paper_answer_eval import outcome_for_session_status
 from backend.research.rag.evaluation.qasper_answer_judge import (
@@ -39,14 +42,60 @@ from backend.research.rag.evaluation.qasper_answer_report import QasperAnswerCas
 from backend.research.rag.evaluation.qasper_answer_sampling import sample_questions
 from backend.research.rag.evaluation.qasper_mapping import FrozenQasperCase, freeze_qasper_dataset
 from backend.research.rag.evaluation.qasper_query_vectors import QueryVectorResolver
-from backend.research.rag.evaluation.qasper_retrieval import CachedFixtureChunkStore
+from backend.research.rag.evaluation.qasper_retrieval import (
+    CachedFixtureChunkStore,
+    OfflineEmbeddingCache,
+)
 from backend.research.rag.evaluation.qasper_scoring import evidence_group_coverage
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator, render_answer_context
 from backend.research.rag.retrieval.policies import RetrievalPolicy
 from framework.rag.evaluation.answer_metrics import AnswerOutcome
 from framework.rag.generation import partition_citation_markers
+from framework.harness.rag.models import RAGBudget
 
 PROTOCOL = "qasper_end_to_end_answer_v1"
+
+
+@dataclass(frozen=True)
+class QasperAnswerRetrievalProfile:
+    """Explicit, serializable retrieval profile for an answer evaluation run."""
+
+    name: str = "chunk_only"
+    execution_profile: str = "fixture"
+    max_context_items: int = 8
+    max_context_tokens: int = 2048
+    field_index_enabled: bool = False
+    reranker_enabled: bool = False
+    field_reranker_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("retrieval profile name is required")
+        if not self.execution_profile.strip():
+            raise ValueError("retrieval execution profile is required")
+        for field_name in ("field_index_enabled", "reranker_enabled", "field_reranker_enabled"):
+            if type(getattr(self, field_name)) is not bool:
+                raise ValueError(f"{field_name} must be a boolean")
+        for field_name in ("max_context_items", "max_context_tokens"):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{field_name} must be a positive integer")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "execution_profile": self.execution_profile,
+            "max_context_items": self.max_context_items,
+            "max_context_tokens": self.max_context_tokens,
+            "field_index_enabled": self.field_index_enabled,
+            "reranker_enabled": self.reranker_enabled,
+            "field_reranker_enabled": self.field_reranker_enabled,
+        }
+
+
+FieldIndexFactory = Callable[
+    [list[PaperChunk], OfflineEmbeddingCache, Callable[[str], Any]], FieldEmbeddingSearchPort
+]
 
 
 @dataclass(frozen=True)
@@ -66,6 +115,24 @@ class QasperAnswerEvaluationConfig:
             raise ValueError("max_cases must be positive")
 
 
+class _TrackedReranker:
+    def __init__(self, reranker: RerankerPort | None) -> None:
+        self._reranker = reranker
+        self.calls = 0
+        self.passages = 0
+
+    @property
+    def available(self) -> bool:
+        return self._reranker is not None
+
+    def score(self, query: str, passages: list[str]) -> list[float]:
+        if self._reranker is None:
+            raise RuntimeError("reranker is unavailable")
+        self.calls += 1
+        self.passages += len(passages)
+        return self._reranker.score(query, passages)
+
+
 class QasperAnswerEvaluationService:
     def __init__(
         self,
@@ -78,8 +145,15 @@ class QasperAnswerEvaluationService:
         judge_call: JudgeCall | None,
         retrieval_policy: RetrievalPolicy,
         config: QasperAnswerEvaluationConfig,
+        field_index: FieldEmbeddingSearchPort | None = None,
+        field_index_factory: FieldIndexFactory | None = None,
+        reranker: RerankerPort | None = None,
+        field_reranker: RerankerPort | None = None,
+        retrieval_profile: QasperAnswerRetrievalProfile | None = None,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
+        if field_index is not None and field_index_factory is not None:
+            raise ValueError("field_index and field_index_factory are mutually exclusive")
         self._assets = assets
         self._artifacts = artifacts
         self._embedder = query_embedder
@@ -88,6 +162,33 @@ class QasperAnswerEvaluationService:
         self._judge_call = judge_call
         self._policy = retrieval_policy
         self._config = config
+        self._field_index = field_index
+        self._field_index_factory = field_index_factory
+        self._reranker = reranker
+        self._field_reranker = field_reranker
+        self._retrieval_profile = retrieval_profile or QasperAnswerRetrievalProfile(
+            name=(
+                "chunk_only" if field_index is None and field_index_factory is None
+                and reranker is None and field_reranker is None else "custom"
+            ),
+            field_index_enabled=field_index is not None or field_index_factory is not None,
+            reranker_enabled=reranker is not None,
+            field_reranker_enabled=field_reranker is not None,
+        )
+        if self._retrieval_profile.field_index_enabled and field_index is None and field_index_factory is None:
+            raise ValueError("retrieval profile enables field index but no field index was supplied")
+        if not self._retrieval_profile.field_index_enabled and (
+            field_index is not None or field_index_factory is not None
+        ):
+            raise ValueError("retrieval profile disables field index but a field index was supplied")
+        if self._retrieval_profile.reranker_enabled and reranker is None:
+            raise ValueError("retrieval profile enables reranker but no reranker was supplied")
+        if not self._retrieval_profile.reranker_enabled and reranker is not None:
+            raise ValueError("retrieval profile disables reranker but a reranker was supplied")
+        if self._retrieval_profile.field_reranker_enabled and field_reranker is None:
+            raise ValueError("retrieval profile enables field reranker but no field reranker was supplied")
+        if not self._retrieval_profile.field_reranker_enabled and field_reranker is not None:
+            raise ValueError("retrieval profile disables field reranker but a field reranker was supplied")
         self._clock = clock
 
     def run(self) -> dict[str, Any]:
@@ -106,11 +207,37 @@ class QasperAnswerEvaluationService:
         )
         run_id = self._config.run_id
         # Session retrieval filters on run_id, so the corpus is bound to this evaluation run.
-        chunks = [chunk.model_copy(update={"metadata": {**chunk.metadata, "run_id": run_id}}) for chunk in assets.chunks]
+        chunks = [
+            chunk.model_copy(update={"metadata": {**chunk.metadata, "run_id": run_id}})
+            for chunk in assets.chunks
+        ]
         store = CachedFixtureChunkStore(chunks, cache, query_vector=resolver)
+        field_index = self._field_index
+        if self._field_index_factory is not None:
+            # Construction is deliberately before the first question: missing field
+            # vectors must fail the selected profile rather than silently degrade.
+            field_index = self._field_index_factory(chunks, cache, resolver)
+        if self._retrieval_profile.field_index_enabled and field_index is None:
+            raise ValueError("retrieval profile enabled field index but factory returned None")
+        components = {
+            "field_index": _component_name(field_index),
+            "reranker": _component_name(self._reranker),
+            "field_reranker": _component_name(self._field_reranker),
+        }
+        reranker_tracker = _TrackedReranker(self._reranker)
+        field_reranker_tracker = _TrackedReranker(self._field_reranker)
+        budget = replace(
+            RAGBudget.safe_default(),
+            max_context_items=self._retrieval_profile.max_context_items,
+            max_context_tokens=self._retrieval_profile.max_context_tokens,
+        )
         chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
         session = PaperRAGSession(
             store,
+            budget=budget,
+            field_index=field_index,
+            reranker=reranker_tracker if reranker_tracker.available else None,
+            field_reranker=field_reranker_tracker if field_reranker_tracker.available else None,
             retrieval_policy=self._policy,
             answer_worker=PaperAnswerWorker(AnswerGenerator(self._answer_model)),
             generation_policy={"enabled": True, "max_attempts": 2},
@@ -147,9 +274,24 @@ class QasperAnswerEvaluationService:
                 "embedding_dimension": identity.dimension,
                 "code": assets.code_identity.model_dump(mode="json"),
                 "retrieval_policy": self._policy.name,
+                "retrieval_policy_settings": _policy_identity(self._policy),
+                "retrieval_profile": self._retrieval_profile.to_dict(),
+                "retrieval_components": components,
+                "reranker_activation": _reranker_activation(
+                    self._policy, reranker_tracker, field_reranker_tracker,
+                ),
+                "context_budget": budget.to_dict(),
+                "retrieval_profile_fingerprint": _profile_fingerprint(
+                    self._retrieval_profile, self._policy, components, budget.to_dict(),
+                ),
+                "fixture_boundary": (
+                    "offline_cached_chunk_and_field_vectors; "
+                    "query_vectors_resolved_by_cache_or_configured_embedder; "
+                    "no_production_qdrant"
+                ),
                 "answer_models": sorted({case.model for case in records if case.model}),
                 "judge_prompt_version": JUDGE_PROMPT_VERSION if self._judge_call is not None else None,
-                "session": "chunk_store_only; no reranker; no field index; generation max_attempts=2",
+                "session": "generation max_attempts=2",
             },
             "sample": sample.manifest(),
             "evaluated_cases": len(records),
@@ -276,8 +418,66 @@ def _number(value: Any) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _component_name(component: object | None) -> str | None:
+    if component is None:
+        return None
+    return f"{type(component).__module__}.{type(component).__qualname__}"
+
+
+def _reranker_activation(
+    policy: RetrievalPolicy,
+    reranker: _TrackedReranker,
+    field_reranker: _TrackedReranker,
+) -> dict[str, Any]:
+    return {
+        "base": {
+            "available": reranker.available,
+            "can_run": reranker.available,
+            "policy_gate_mode": "all_intents" if not policy.reranking_intents else "allowlist",
+            "eligible_intents": list(policy.reranking_intents) or "all",
+            "calls": reranker.calls,
+            "passages": reranker.passages,
+        },
+        "field": {
+            "available": field_reranker.available,
+            "policy_enabled": policy.field_reranking_enabled,
+            "can_run": field_reranker.available and policy.field_reranking_enabled,
+            "policy_gate_mode": "all_intents" if not policy.field_reranking_intents else "allowlist",
+            "eligible_intents": list(policy.field_reranking_intents) or "all",
+            "calls": field_reranker.calls,
+            "passages": field_reranker.passages,
+        },
+    }
+
+
+def _policy_identity(policy: RetrievalPolicy) -> dict[str, Any]:
+    return json.loads(json.dumps(asdict(policy), ensure_ascii=False, sort_keys=True))
+
+
+def _profile_fingerprint(
+    profile: QasperAnswerRetrievalProfile,
+    policy: RetrievalPolicy,
+    components: dict[str, str | None],
+    context_budget: dict[str, int],
+) -> str:
+    payload = {
+        "profile": profile.to_dict(),
+        "policy": _policy_identity(policy),
+        "components": components,
+        "context_budget": context_budget,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _json_bytes(payload: Any) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-__all__ = ["PROTOCOL", "QasperAnswerEvaluationConfig", "QasperAnswerEvaluationService"]
+__all__ = [
+    "PROTOCOL",
+    "FieldIndexFactory",
+    "QasperAnswerEvaluationConfig",
+    "QasperAnswerEvaluationService",
+    "QasperAnswerRetrievalProfile",
+]
