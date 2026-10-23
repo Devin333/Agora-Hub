@@ -65,3 +65,16 @@ judge MUST 只对实际作答的题调用，并且 MUST 输出包含 `correct` �
 #### Scenario: Malformed judge output
 - **WHEN** judge 返回的内容不是合法 JSON
 - **THEN** 该题 MUST 记为 judge_error，且 MUST NOT 计入 judge 正确率的分母
+
+### Requirement: Judge calibration against human labels
+
+系统 MUST 能从一次已完成的回答评测中确定性地导出 judge 校准集：只选实际作答且 judge 判定有效的题，并 MUST 在答案类型与 judge 判定（正确/错误）的组合间均衡抽取。导出 MUST 校验数据集与该次评测一致，并附上每条引用段落的原文。对人工填写的标签，系统 MUST 报告一致率、Cohen's kappa、judge 误判为正确与误判为错误的比例、引用级一致率；未填写的题 MUST 单独列出，MUST NOT 计入分母。
+
+#### Scenario: Partially labeled sheet
+- **WHEN** 标签表中有题未填写 `human_correct`
+- **THEN** 该题 MUST 出现在 unlabeled 列表中，且 MUST NOT 计入一致率的分母
+
+#### Scenario: Label references an unknown case
+- **WHEN** 标签表中的 case_id 不属于该校准集
+- **THEN** 评分 MUST 失败并指明该 case_id
+

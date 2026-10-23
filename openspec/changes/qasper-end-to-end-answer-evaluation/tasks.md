@@ -26,4 +26,6 @@
 - [x] 4.3 `openspec validate qasper-end-to-end-answer-evaluation --strict`
 - [x] 4.4 `python -m scripts.dev smoke`
 - [x] 4.5 提交
-- [ ] 4.6 300 题完整真实运行，并整理证据摘要
+- [x] 4.6 300 题完整真实运行，并整理证据摘要（见 evidence.md）
+- [x] 4.7 导出 50 题 judge 人工校准集，并提供标签评分命令
+- [ ] 4.8 人工填写校准标签并评分，确认 judge 可信度

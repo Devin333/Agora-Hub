@@ -106,6 +106,18 @@ def build_qasper_answer_evaluation_service(
     )
 
 
+def build_qasper_answer_calibration_service(*, dataset_path: Path, cache_path: Path) -> "QasperAnswerCalibrationService":
+    """Offline composition for judge calibration: filesystem only, no models or environment."""
+    from backend.research.application.qasper_answer_calibration import QasperAnswerCalibrationService
+
+    for name, value in (("dataset_path", dataset_path), ("cache_path", cache_path)):
+        if not value.is_absolute():
+            raise ValueError(f"{name} must be absolute")
+    root = Path(__file__).resolve().parents[2]
+    reader = FilesystemQasperAssets(dataset_path, cache_path, repository_root=root)
+    return QasperAnswerCalibrationService(QasperAssetService(reader), FilesystemQasperArtifacts())
+
+
 def build_qasper_evaluation_service(*, dataset_path: Path | None, cache_path: Path | None) -> QasperEvaluationService:
     """CLI composition: accept only explicit local paths, never read secrets or ambient env config."""
     root = Path(__file__).resolve().parents[2]

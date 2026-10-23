@@ -70,6 +70,22 @@ def register(operations: argparse._SubParsersAction) -> None:
     answer_run.add_argument("--no-judge", action="store_true", help="Skip the LLM judge")
     answer_run.set_defaults(_qasper_action="answer_run")
 
+    calibrate = answer_commands.add_parser("calibrate", help="Human calibration of the answer judge")
+    calibrate_commands = calibrate.add_subparsers(dest="calibrate_command", required=True)
+    calibrate_export = calibrate_commands.add_parser(
+        "export", help="Export a stratified calibration sheet from a completed answer run",
+    )
+    calibrate_export.add_argument("--run-dir", type=Path, required=True)
+    calibrate_export.add_argument("--output-dir", type=Path, required=True)
+    calibrate_export.add_argument("--size", type=int, default=50)
+    calibrate_export.add_argument("--seed", default="qasper-judge-calibration-v1")
+    calibrate_export.set_defaults(_qasper_action="calibrate_export")
+    calibrate_score = calibrate_commands.add_parser(
+        "score", help="Score filled labels.csv against the judge verdicts",
+    )
+    calibrate_score.add_argument("--calibration-dir", type=Path, required=True)
+    calibrate_score.set_defaults(_qasper_action="calibrate_score")
+
 
 def _add_parameters(parser: argparse.ArgumentParser, *, required: bool) -> None:
     # Values stay as text until _dispatch so every contract error is returned as
@@ -127,10 +143,46 @@ def _dispatch_answer(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_calibration_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_evaluation import build_qasper_answer_calibration_service
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("calibration requires --dataset-path and --cache-path")
+    return build_qasper_answer_calibration_service(
+        dataset_path=args.dataset_path.resolve(), cache_path=args.cache_path.resolve(),
+    )
+
+
+def _dispatch_calibration(args: argparse.Namespace) -> int:
+    from backend.research.rag.evaluation.qasper_answer_calibration import CalibrationLabelError
+
+    action = args._qasper_action
+    try:
+        service = _build_calibration_service(args)
+        if action == "calibrate_export":
+            result = service.export(
+                run_directory=str(args.run_dir.resolve()), output_directory=str(args.output_dir.resolve()),
+                size=args.size, seed=args.seed,
+            )
+        else:
+            result = service.score(calibration_directory=str(args.calibration_dir.resolve()))
+    except CalibrationLabelError as exc:
+        # Label diagnostics name only case ids and columns, so the reviewer can fix the sheet.
+        _print_json({"operation": action, "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, KeyError) as exc:
+        _print_json({"operation": action, "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": action, "valid": True, **result})
+    return 0
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     action = args._qasper_action
     if action == "answer_run":
         return _dispatch_answer(args)
+    if action in {"calibrate_export", "calibrate_score"}:
+        return _dispatch_calibration(args)
     parameters = None
     grid = None
     profiles: tuple[str, ...] = ()
