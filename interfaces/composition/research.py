@@ -19,7 +19,11 @@ from backend.research.application.parse_paper import ParsePaperUseCase
 from backend.research.application.bounded_document_rag import (
     BoundedDocumentRAGRuntime,
 )
-from backend.research.application.paper_rag_session import PaperRAGSession
+from backend.research.application.paper_rag_session import (
+    ContextWindowLimits,
+    PaperRAGSession,
+    RunScope,
+)
 from backend.research.application.rag_memory_admission import (
     HarnessResearchRAGMemoryAdmission,
 )
@@ -1734,6 +1738,8 @@ def _local_reader_rag_service(
     chunk_store: ChunkStorePort,
     answer_worker_factory: Callable[[], Any],
     context_assembler_factory: Callable[[RAGSessionSpec], ContextAssembler],
+    context_window: ContextWindowLimits,
+    run_scope: RunScope,
     transcript_root: Path,
 ) -> Any:
     from interfaces.services.paper_rag_service import PaperRagApplicationService
@@ -1747,6 +1753,8 @@ def _local_reader_rag_service(
             answer_worker=answer_worker_factory(),
             generation_policy={"enabled": True, "max_attempts": 2},
             context_assembler_factory=context_assembler_factory,
+            context_window=context_window,
+            run_scope=run_scope,
             event_recorder=_kwargs.get("event_recorder"),
         ),
         ask_use_case=ask_use_case,
@@ -2614,13 +2622,41 @@ def _build_configured_composition(
             llm_client,
             max_output_tokens=min(settings.llm.max_output_tokens, 900),
         )
+        # Reader Q&A is asked against a terminal Research run whose artifact manifest
+        # is already committed, so its context snapshots go to a dedicated store that
+        # is bound to the parent run id for the duration of each session.
+        reader_context_artifacts = FilesystemHarnessArtifactPort(
+            settings.rag.context_artifact_root,
+            max_write_bytes=settings.artifact.max_bytes,
+        )
+
+        def reader_rag_context_assembler_factory(spec: RAGSessionSpec) -> ContextAssembler:
+            actor_metadata = {
+                key: spec.source_policy[key]
+                for key in ("tenant_id", "user_id", "memory_namespace")
+                if spec.source_policy.get(key)
+            }
+            return build_research_context_assembler(
+                artifact_port=reader_context_artifacts,
+                event_port=scoped_event_port_factory(spec.run_id, actor_metadata),
+                provider=settings.llm.provider,
+                model=settings.llm.model,
+                max_input_tokens=settings.llm.max_input_tokens,
+                max_output_tokens=settings.llm.max_output_tokens,
+            )
+
         rag_ask_provider = _PaperRagUseCaseProvider(
             ask_use_case,
             service_factory=lambda: _local_reader_rag_service(
                 ask_use_case=ask_use_case,
                 chunk_store=chunk_store,
                 answer_worker_factory=paper_answer_worker_factory,
-                context_assembler_factory=rag_context_assembler_factory,
+                context_assembler_factory=reader_rag_context_assembler_factory,
+                context_window=ContextWindowLimits(
+                    max_input_tokens=settings.llm.max_input_tokens,
+                    max_output_tokens=settings.llm.max_output_tokens,
+                ),
+                run_scope=reader_context_artifacts.bind_run,
                 transcript_root=settings.rag.transcript_root,
             ),
         )
@@ -3169,6 +3205,7 @@ def _research_runtime_config_identity(settings: ResearchRuntimeSettings) -> str:
             "runStoreRoot": str(settings.run_store.root),
             "ragLocalRoot": str(settings.rag.local_root),
             "ragTranscriptRoot": str(settings.rag.transcript_root),
+            "ragContextArtifactRoot": str(settings.rag.context_artifact_root),
         },
         "desktop": {
             "releaseId": str(os.getenv("NEWSROOM_DESKTOP_RELEASE_ID") or ""),

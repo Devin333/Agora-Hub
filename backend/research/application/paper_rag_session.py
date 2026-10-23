@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from framework.harness.context.assembler import ContextAssembler
@@ -37,6 +39,23 @@ if TYPE_CHECKING:
     from framework.harness.rag.answer_worker import AnswerWorkerPort
 
 
+@dataclass(frozen=True)
+class ContextWindowLimits:
+    """Model input/output token window the RAG context must be admitted against."""
+
+    max_input_tokens: int
+    max_output_tokens: int
+
+    def __post_init__(self) -> None:
+        for name in ("max_input_tokens", "max_output_tokens"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+
+
+RunScope = Callable[[str], AbstractContextManager[object]]
+
+
 class PaperRAGSession:
     """
     Wires ResearchRetriever into BoundedRAGSessionController via PaperChunkRetrievalPort.
@@ -68,11 +87,17 @@ class PaperRAGSession:
             Callable[[RAGSessionSpec], ContextAssembler] | None
         ) = None,
         event_recorder: RAGEventRecorder | None = None,
+        context_window: ContextWindowLimits | None = None,
+        run_scope: RunScope | None = None,
     ) -> None:
         if context_assembler_factory is not None and not callable(
             context_assembler_factory
         ):
             raise TypeError("context_assembler_factory must be callable")
+        if context_window is not None and not isinstance(context_window, ContextWindowLimits):
+            raise TypeError("context_window must be ContextWindowLimits")
+        if run_scope is not None and not callable(run_scope):
+            raise TypeError("run_scope must be callable")
         self._chunk_store = chunk_store
         self._policy_builder = ResearchRAGPolicyBuilder()
         self._budget = budget or RAGBudget.safe_default()
@@ -90,6 +115,12 @@ class PaperRAGSession:
         self._memory = memory
         self._context_assembler_factory = context_assembler_factory
         self._event_recorder = event_recorder
+        # Without explicit limits the context budget falls back to the RAG item budget,
+        # which is far below the answer model's window once a compaction runtime admits it.
+        self._context_window = context_window
+        # Run-bound artifact ports (context compaction snapshots) only accept writes
+        # inside a binding to the session's run.
+        self._run_scope = run_scope or (lambda _run_id: nullcontext())
 
     def run(
         self,
@@ -110,6 +141,12 @@ class PaperRAGSession:
             # accepted evidence is left to the answer worker's abstention protocol.
             evidence_type_coverage=EVIDENCE_TYPE_COVERAGE_ADVISORY,
         )
+        if self._context_window is not None:
+            spec = replace(spec, context_policy={
+                **spec.context_policy,
+                "max_input_tokens": self._context_window.max_input_tokens,
+                "max_output_tokens": self._context_window.max_output_tokens,
+            })
         return self.run_spec(spec, current_section_index=current_section_index)
 
     def run_spec(
@@ -162,7 +199,8 @@ class PaperRAGSession:
                 context_assembler
             )
         controller = BoundedRAGSessionController(**controller_kwargs)
-        return controller.run(spec)
+        with self._run_scope(spec.run_id):
+            return controller.run(spec)
 
 
-__all__ = ["PaperRAGSession"]
+__all__ = ["ContextWindowLimits", "PaperRAGSession", "RunScope"]

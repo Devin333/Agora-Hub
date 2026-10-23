@@ -252,6 +252,7 @@ class ResearchRAGSettings:
     max_context_tokens: int
     max_worker_calls: int
     transcript_root: Path | None = None
+    context_artifact_root: Path | None = None
     memory_enabled: bool = False
     memory_namespace_refs: tuple[str, ...] = ()
 
@@ -264,6 +265,11 @@ class ResearchRAGSettings:
         transcript_root = self.transcript_root or (self.local_root.parent / "rag" / "transcripts")
         _directory_root(transcript_root, "research.rag.transcript_root")
         object.__setattr__(self, "transcript_root", transcript_root)
+        # Reader Q&A runs against an already terminal Research run, whose artifact
+        # manifest is sealed; its context snapshots therefore live in their own store.
+        context_artifact_root = self.context_artifact_root or (self.local_root.parent / "rag" / "context")
+        _directory_root(context_artifact_root, "research.rag.context_artifact_root")
+        object.__setattr__(self, "context_artifact_root", context_artifact_root)
         if backend == "qdrant":
             if self.qdrant_url is None:
                 _invalid("research.rag.vector_backend")
