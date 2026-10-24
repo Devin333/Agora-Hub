@@ -277,7 +277,7 @@ class BoundedRAGSessionController(RAGSessionController):
         if decision.decision_type == RAGDecisionType.ASSEMBLE_CONTEXT:
             pack = self.context_pack_assembler.assemble(
                 spec=spec,
-                accepted_evidence=tuple(state.accepted_evidence[: spec.budget.max_context_items]),
+                accepted_evidence=_context_evidence(state.accepted_evidence, spec.budget.max_context_items),
                 rejected_evidence=tuple(state.rejected_evidence),
                 conflicting_evidence=tuple(state.conflicting_evidence),
                 memory_context=tuple(state.memory_context[: spec.budget.max_memory_hits]),
@@ -611,7 +611,7 @@ class BoundedRAGSessionController(RAGSessionController):
 
         pack = self.context_pack_assembler.assemble(
             spec=spec,
-            accepted_evidence=tuple(state.accepted_evidence[: spec.budget.max_context_items]),
+            accepted_evidence=_context_evidence(state.accepted_evidence, spec.budget.max_context_items),
             rejected_evidence=tuple(state.rejected_evidence),
             conflicting_evidence=tuple(state.conflicting_evidence),
             memory_context=tuple(state.memory_context[: spec.budget.max_memory_hits]),
@@ -943,6 +943,20 @@ def _result_evidence(results: tuple[RetrievalStepResult, ...]) -> tuple[Evidence
             if isinstance(item, EvidenceCandidate):
                 evidence.append(item)
     return tuple(evidence)
+
+
+def _context_evidence(
+    evidence: list[EvidenceCandidate],
+    limit: int,
+) -> tuple[EvidenceCandidate, ...]:
+    """Most relevant accepted evidence for the context window.
+
+    Evidence accumulates round by round, so its order reflects which query found it
+    first, not how relevant it is; truncating that order lets an early, weaker query
+    crowd out stronger later evidence. Ties keep their accumulation order.
+    """
+    ranked = sorted(enumerate(evidence), key=lambda pair: (-pair[1].confidence, pair[0]))
+    return tuple(item for _, item in ranked[:limit])
 
 
 def _dedupe_evidence(

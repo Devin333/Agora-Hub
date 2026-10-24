@@ -220,11 +220,13 @@ def _install_recorded_environment(
 
 def _install_recorded_transports(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    source: bytes | None = None,
 ) -> tuple[list[str], list[str]]:
     source_requests: list[str] = []
     llm_tasks: list[str] = []
     metadata = (_FIXTURE_ROOT / "arxiv_metadata.xml").read_bytes()
-    source = (_FIXTURE_ROOT / "arxiv_source.tex").read_bytes()
+    source = source if source is not None else (_FIXTURE_ROOT / "arxiv_source.tex").read_bytes()
 
     def source_transport(request: Request, _policy: Any) -> _RecordedHTTPResponse:
         url = request.full_url
@@ -264,6 +266,17 @@ def _install_recorded_transports(
     )
     monkeypatch.setattr(openai_transport, "_urlopen_transport", llm_transport)
     return source_requests, llm_tasks
+
+
+def _source_without_limitation() -> bytes:
+    # Limitation evidence is typed from the conclusion section role, so the paper
+    # lacks it only when that section is absent.
+    source = (_FIXTURE_ROOT / "arxiv_source.tex").read_text(encoding="utf-8")
+    start = source.index(r"\section{Conclusion}")
+    end = source.index(r"\end{document}")
+    stripped = source[:start] + source[end:]
+    assert "conclusion" not in stripped.casefold()
+    return stripped.encode("utf-8")
 
 
 def test_recorded_transports_execute_full_production_research_analysis(
@@ -623,7 +636,11 @@ def test_explicit_low_rag_replan_budget_halts_and_persists(
         Fernet.generate_key().decode("ascii"),
     )
     monkeypatch.delenv("NEWS_DATABASE_DSN", raising=False)
-    source_requests, llm_tasks = _install_recorded_transports(monkeypatch)
+    # The paper genuinely lacks limitation evidence, so the first round cannot
+    # satisfy the required evidence types and a zero replan budget must halt.
+    source_requests, llm_tasks = _install_recorded_transports(
+        monkeypatch, source=_source_without_limitation(),
+    )
 
     composition = build_research_runtime_composition(settings=settings)
     reopened = None

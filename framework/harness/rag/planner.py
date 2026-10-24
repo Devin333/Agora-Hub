@@ -57,7 +57,9 @@ class DeterministicRAGPlanner:
             operation=RetrievalOperation.SEARCH_CORPUS,
             query=query_text,
             corpus=spec.allowed_corpora[0],
-            max_results=min(5, max(spec.budget.max_queries, 1)),
+            # One search must be able to fill the context window; the query budget
+            # bounds how many searches run, not how many results each returns.
+            max_results=max(spec.budget.max_context_items, 1),
             metadata={"scope_ref": spec.source_policy.get("scope_ref"), "evidence_type": evidence_type},
         )
         memory_step = RetrievalStepSpec(
