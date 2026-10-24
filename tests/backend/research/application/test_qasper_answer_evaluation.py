@@ -22,7 +22,11 @@ from backend.research.rag.evaluation.qasper_retrieval import (
 )
 from backend.research.rag.adapters.paper_field_text import extract_field_texts
 from backend.research.rag.retrieval.paper_lightweight_reranker import LightweightLexicalReranker
-from backend.research.rag.retrieval.paper_answer_generator import ABSTENTION_TOKEN
+from backend.research.rag.retrieval.paper_answer_generator import (
+    ABSTENTION_TOKEN,
+    ANSWER_PROMPT_VERSION,
+    ANSWER_PROTOCOL_VERSION,
+)
 from backend.research.rag.retrieval.policies import RetrievalPolicy, build_retrieval_policy
 from backend.research.rag.retrieval.rerank import RerankCascade
 from infrastructure.research.qasper_evaluation import FilesystemQasperArtifacts, FilesystemQasperAssets
@@ -107,6 +111,13 @@ def _service(
     field_profile: bool = False,
     retrieval_policy: RetrievalPolicy | None = None,
     context_runtime=None,
+    answer_model=None,
+    progress=None,
+    case_started=None,
+    answer_model_identity=None,
+    judge_model_identity=None,
+    recovery_source=None,
+    case_ids=None,
 ):
     dataset_path = tmp_path / "dataset.json"
     dataset_path.write_text(json.dumps(_dataset()), encoding="utf-8")
@@ -150,7 +161,7 @@ def _service(
         FilesystemQasperArtifacts(),
         query_embedder=embedder,
         query_vector_store=store,
-        answer_model=FakePaperAnswerModel(reply),
+        answer_model=answer_model or FakePaperAnswerModel(reply),
         judge_call=judge_call,
         retrieval_policy=retrieval_policy or build_retrieval_policy(None),
         field_index_factory=(
@@ -164,7 +175,14 @@ def _service(
         field_reranker=LightweightLexicalReranker() if field_profile else None,
         retrieval_profile=profile,
         context_runtime=context_runtime,
-        config=QasperAnswerEvaluationConfig(output_directory=str(tmp_path / output), per_type=5),
+        progress=progress,
+        case_started=case_started,
+        answer_model_identity=answer_model_identity,
+        judge_model_identity=judge_model_identity,
+        recovery_source=recovery_source,
+        config=QasperAnswerEvaluationConfig(
+            output_directory=str(tmp_path / output), per_type=5, case_ids=case_ids,
+        ),
     )
     return service, embedder, store
 
@@ -185,6 +203,179 @@ def test_default_report_keeps_chunk_only_profile_and_fixed_context_budget(
     }
     assert identity["context_budget"]["max_context_items"] == 8
     assert identity["context_budget"]["max_context_tokens"] == 2048
+    assert identity["answer_prompt_version"] == ANSWER_PROMPT_VERSION
+    assert identity["answer_protocol_version"] == ANSWER_PROTOCOL_VERSION
+
+
+def test_answer_run_records_model_identity_judge_requests_and_progress(
+    tmp_path: Path, repository: Path,
+) -> None:
+    async def judge(_prompt: str) -> str:
+        return '{"correct": true, "citations": [{"index": 1, "supports": true}], "rationale": "ok"}'
+
+    events: list[tuple[str, int, int, str]] = []
+    service, _embedder, _store = _service(
+        tmp_path,
+        repository,
+        judge_call=judge,
+        progress=lambda done, total, case: events.append(("end", done, total, case.case_id)),
+        case_started=lambda done, total, case_id: events.append(("start", done, total, case_id)),
+        answer_model_identity={
+            "provider": "test", "model": "answer-v1", "max_tokens": 600, "temperature": 0.0,
+            "endpoint_sha256": "1" * 64,
+        },
+        judge_model_identity={"model": "judge-v1", "max_tokens": 400, "temperature": 0.0},
+        output="identity-progress",
+    )
+
+    report = service.run()
+    identity = report["identity"]
+    assert identity["answer_model_identity"]["model"] == "answer-v1"
+    assert identity["judge_model_identity"]["model"] == "judge-v1"
+    assert [phase for phase, *_rest in events] == ["start", "end"] * 3
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "identity-progress" / "answers.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    answered = [row for row in rows if row["outcome"] == "answered"]
+    assert answered
+    assert all(row["judge_request"]["digest"] for row in answered)
+    assert all(row["judge_request"]["answer"] == row["answer"] for row in answered)
+
+
+def test_generation_failure_persists_typed_diagnostic_detail(
+    tmp_path: Path, repository: Path,
+) -> None:
+    from backend.research.ports.paper_answer_model import PaperAnswerModelError
+
+    model = FakePaperAnswerModel(PaperAnswerModelError(
+        "provider_unavailable",
+        "gateway unavailable",
+        retryable=True,
+        details={"error_type": "schema_error", "status_code": 502},
+    ))
+    service, _embedder, _store = _service(
+        tmp_path, repository, judge_call=None, answer_model=model, output="typed-failure",
+    )
+
+    service.run()
+
+    first = json.loads(
+        (tmp_path / "typed-failure" / "answers.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert first["generation_error"] == "model_provider_unavailable"
+    assert first["generation_error_detail"]["code"] == "model_provider_unavailable"
+    assert first["generation_error_detail"]["retryable"] is True
+    assert first["generation_error_detail"]["details"]["error_type"] == "schema_error"
+    assert first["generation_error_detail"]["details"]["status_code"] == 502
+
+
+def test_failed_recovery_rejects_different_model_identity_before_provider_call(
+    tmp_path: Path, repository: Path,
+) -> None:
+    from backend.research.application.qasper_answer_merge import (
+        QasperAnswerMergeError,
+        prepare_failed_answer_recovery,
+    )
+    from backend.research.ports.paper_answer_model import PaperAnswerModelError
+
+    source_model = FakePaperAnswerModel(
+        PaperAnswerModelError("provider_unavailable", "source gateway failure", retryable=True),
+        model="answer-v1",
+    )
+    source, _embedder, _store = _service(
+        tmp_path,
+        repository,
+        judge_call=None,
+        answer_model=source_model,
+        answer_model_identity={
+            "provider": "test", "model": "answer-v1", "max_tokens": 600, "temperature": 0.0,
+            "endpoint_sha256": "1" * 64,
+        },
+        output="recovery-source",
+    )
+    source.run()
+    recovery = prepare_failed_answer_recovery(
+        FilesystemQasperArtifacts(), str(tmp_path / "recovery-source"),
+    )
+    rerun_model = FakePaperAnswerModel(
+        lambda _request: "The BERT encoder [1].", model="answer-v2",
+    )
+    rerun, _embedder, _store = _service(
+        tmp_path,
+        repository,
+        judge_call=None,
+        answer_model=rerun_model,
+        answer_model_identity={
+            "provider": "test", "model": "answer-v2", "max_tokens": 600, "temperature": 0.0,
+            "endpoint_sha256": "1" * 64,
+        },
+        recovery_source=recovery,
+        case_ids=tuple(recovery["case_ids"]),
+        output="recovery-rerun",
+    )
+
+    with pytest.raises(QasperAnswerMergeError, match="different setups"):
+        rerun.run()
+
+    assert rerun_model.requests == []
+
+
+def test_real_failed_run_can_prepare_rerun_and_merge_without_regeneration_drift(
+    tmp_path: Path, repository: Path,
+) -> None:
+    from backend.research.application.qasper_answer_merge import (
+        merge_answer_runs,
+        prepare_failed_answer_recovery,
+    )
+    from backend.research.ports.paper_answer_model import PaperAnswerModelError
+
+    model_identity = {
+        "provider": "test",
+        "model": "fake-paper-answer-model",
+        "max_tokens": 600,
+        "temperature": 0.0,
+        "endpoint_sha256": "0" * 64,
+    }
+    failed_model = FakePaperAnswerModel(PaperAnswerModelError(
+        "provider_unavailable", "temporary gateway failure", retryable=True,
+    ))
+    source, _embedder, _store = _service(
+        tmp_path,
+        repository,
+        judge_call=None,
+        answer_model=failed_model,
+        answer_model_identity=model_identity,
+        output="real-recovery-source",
+    )
+    source.run()
+    artifacts = FilesystemQasperArtifacts()
+    recovery = prepare_failed_answer_recovery(artifacts, str(tmp_path / "real-recovery-source"))
+
+    rerun, _embedder, _store = _service(
+        tmp_path,
+        repository,
+        judge_call=None,
+        answer_model_identity=model_identity,
+        recovery_source=recovery,
+        case_ids=tuple(recovery["case_ids"]),
+        output="real-recovery-rerun",
+    )
+    rerun_report = rerun.run()
+
+    assert rerun_report["recovery_source"] == recovery
+    assert rerun_report["case_selection"] == {
+        "mode": "case_ids", "case_ids": recovery["case_ids"],
+    }
+    merged = merge_answer_runs(
+        artifacts,
+        base_directory=str(tmp_path / "real-recovery-source"),
+        rerun_directory=str(tmp_path / "real-recovery-rerun"),
+        output_directory=str(tmp_path / "real-recovery-merged"),
+    )
+
+    assert merged["merge"]["replaced_cases"] == len(recovery["case_ids"])
+    assert merged["merge"]["still_generation_failures"] == []
 
 
 def test_selected_field_profile_fails_before_first_question_when_cache_is_incomplete(

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from itertools import chain
 from typing import Any, Callable
@@ -12,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from framework.llm.context.openai import build_openai_chat_payload, openai_response_format
 from framework.llm.models import LLMRequest, LLMResponse, TokenUsage
-from framework.llm.redaction import redact_sensitive_values
+from framework.llm.redaction import REDACTED_VALUE, redact_sensitive_values
 from framework.llm.models import LLMStreamEvent
 from framework.llm.structured_output import (
     LLMStructuredOutputParseError,
@@ -259,13 +260,17 @@ class OpenAICompatibleClient:
             except (TimeoutError, URLError, OSError) as exc:
                 error = self._error_from_network(exc, attempts=attempt)
             else:
-                response_payload = self._parse_response_payload(raw_body, attempts=attempt)
+                response_payload, response_raw_body = self._parse_response_payload(
+                    raw_body,
+                    attempts=attempt,
+                )
                 return self._normalize_response(
                     response_payload,
                     request=execution_request,
                     attempts=attempt,
                     contract=contract,
                     projection=projection,
+                    response_raw_body=response_raw_body,
                 )
 
             if not error.retryable or attempt >= max_attempts:
@@ -583,7 +588,12 @@ class OpenAICompatibleClient:
             method="POST",
         )
 
-    def _parse_response_payload(self, raw_body: bytes, *, attempts: int) -> dict[str, Any]:
+    def _parse_response_payload(
+        self,
+        raw_body: bytes,
+        *,
+        attempts: int,
+    ) -> tuple[dict[str, Any], bytes]:
         try:
             payload = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -594,6 +604,12 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=(
+                    _provider_failure_diagnostic(
+                        raw_body=raw_body,
+                        stage="response_json_decode",
+                    ),
+                ),
             ) from exc
         if not isinstance(payload, dict):
             raise LLMProviderError(
@@ -603,11 +619,34 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=(
+                    _provider_failure_diagnostic(
+                        payload=payload,
+                        raw_body=raw_body,
+                        stage="response_shape",
+                    ),
+                ),
             )
-        return payload
+        return payload, raw_body
 
     def _parse_stream_chunk(self, data: str) -> dict[str, Any]:
-        payload = json.loads(data)
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise LLMProviderError(
+                f"{self.config.provider} stream chunk is not valid JSON",
+                provider=self.config.provider,
+                model=self.config.model,
+                error_type="schema_error",
+                retryable=False,
+                attempts=1,
+                diagnostics=(
+                    _provider_failure_diagnostic(
+                        raw_body=data.encode("utf-8"),
+                        stage="stream_json_decode",
+                    ),
+                ),
+            ) from exc
         if not isinstance(payload, dict):
             raise LLMProviderError(
                 f"{self.config.provider} stream chunk is not an object",
@@ -616,6 +655,13 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=1,
+                diagnostics=(
+                    _provider_failure_diagnostic(
+                        payload=payload,
+                        raw_body=data.encode("utf-8"),
+                        stage="stream_shape",
+                    ),
+                ),
             )
         return payload
 
@@ -627,7 +673,22 @@ class OpenAICompatibleClient:
         attempts: int,
         contract: StructuredOutputContract | None,
         projection: ProviderSchemaProjection | None,
+        response_raw_body: bytes | None = None,
     ) -> LLMResponse:
+        diagnostics: tuple[dict[str, Any], ...] | None = None
+
+        def failure_diagnostics() -> tuple[dict[str, Any], ...]:
+            nonlocal diagnostics
+            if diagnostics is None:
+                diagnostics = (
+                    _provider_failure_diagnostic(
+                        payload=payload,
+                        raw_body=response_raw_body or b"",
+                        stage="response_shape",
+                    ),
+                )
+            return diagnostics
+
         choices = payload.get("choices") or []
         if not choices:
             raise LLMProviderError(
@@ -637,6 +698,7 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=failure_diagnostics(),
             )
         choice = choices[0]
         if not isinstance(choice, dict):
@@ -647,6 +709,7 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=failure_diagnostics(),
             )
         message = choice.get("message") or {}
         if not isinstance(message, dict):
@@ -657,6 +720,7 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=failure_diagnostics(),
             )
         try:
             tool_calls = parse_openai_tool_calls(message.get("tool_calls"), request.tools)
@@ -668,6 +732,7 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=failure_diagnostics(),
             ) from exc
 
         content = message.get("content")
@@ -681,6 +746,7 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=failure_diagnostics(),
             )
         structured_output = None
         if _expects_structured_output(request):
@@ -725,6 +791,7 @@ class OpenAICompatibleClient:
                 error_type="schema_error",
                 retryable=False,
                 attempts=attempts,
+                diagnostics=failure_diagnostics(),
             ) from exc
         validation_metadata = self._structured_output_validation_metadata(
             request,
@@ -861,7 +928,8 @@ class OpenAICompatibleClient:
 
     def _error_from_http(self, exc: HTTPError, *, attempts: int) -> LLMProviderError:
         status_code = int(exc.code)
-        provider_payload = _read_bounded_http_error_payload(exc)
+        raw_body, raw_body_truncated = _read_bounded_http_error_body(exc)
+        provider_payload = _decode_provider_error_payload(raw_body, truncated=raw_body_truncated)
         provider_error_code = _provider_error_code(provider_payload)
         if status_code == 413 or provider_error_code in _CONTEXT_OVERFLOW_CODES:
             limit_tokens, usage_tokens = _provider_overflow_token_diagnostics(
@@ -879,6 +947,12 @@ class OpenAICompatibleClient:
             )
         retryable = status_code in self._retry_policy.retryable_status_codes
         error_type = _error_type_from_http_status(status_code)
+        diagnostic = _provider_failure_diagnostic(
+            payload=provider_payload,
+            raw_body=raw_body,
+            raw_body_truncated=raw_body_truncated,
+            stage="http_error_response",
+        )
         return LLMProviderError(
             f"{self.config.provider} request failed: HTTP {status_code}",
             provider=self.config.provider,
@@ -887,12 +961,14 @@ class OpenAICompatibleClient:
             retryable=retryable,
             status_code=status_code,
             attempts=attempts,
+            diagnostics=(diagnostic,),
         )
 
     def _error_from_network(self, exc: TimeoutError | URLError | OSError, *, attempts: int) -> LLMProviderError:
         reason = getattr(exc, "reason", None)
         is_timeout = isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError)
         error_type = "timeout" if is_timeout else "transient_network"
+        diagnostic = _network_failure_diagnostic(exc, reason=reason)
         return LLMProviderError(
             f"{self.config.provider} request failed: {error_type}",
             provider=self.config.provider,
@@ -900,6 +976,7 @@ class OpenAICompatibleClient:
             error_type=error_type,
             retryable=True,
             attempts=attempts,
+            diagnostics=(diagnostic,),
         )
 
 
@@ -949,6 +1026,17 @@ def _canonical_error_category(error_type: str) -> str:
 
 
 _MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
+_MAX_PROVIDER_DIAGNOSTIC_CHARS = 2_000
+_MAX_PROVIDER_FACT_CHARS = 512
+_DIAGNOSTIC_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b[A-Za-z0-9_.-]*(?:api[_-]?key|authorization|client[_-]?secret|cookie|"
+    r"credential|dsn|password|private[_-]?key|secret|token)[A-Za-z0-9_.-]*"
+    r"[\"']?\s*[:=]\s*[^\r\n]*"
+)
+_DIAGNOSTIC_PRIVATE_KEY = re.compile(
+    r"-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|\Z)",
+    re.DOTALL,
+)
 _MAX_PROVIDER_TOKEN_DIAGNOSTIC = 2_000_000_000
 _CONTEXT_OVERFLOW_CODES = {
     "context_length_exceeded",
@@ -970,18 +1058,150 @@ _PROVIDER_USAGE_TOKEN_KEYS = (
 )
 
 
-def _read_bounded_http_error_payload(exc: HTTPError) -> dict[str, Any] | None:
+def _read_bounded_http_error_body(exc: HTTPError) -> tuple[bytes, bool]:
     try:
         raw_body = exc.read(_MAX_PROVIDER_ERROR_BODY_BYTES + 1)
     except Exception:
-        return None
-    if not isinstance(raw_body, bytes) or len(raw_body) > _MAX_PROVIDER_ERROR_BODY_BYTES:
+        return b"", False
+    if not isinstance(raw_body, bytes):
+        return b"", False
+    truncated = len(raw_body) > _MAX_PROVIDER_ERROR_BODY_BYTES
+    return raw_body[:_MAX_PROVIDER_ERROR_BODY_BYTES], truncated
+
+
+def _decode_provider_error_payload(
+    raw_body: bytes,
+    *,
+    truncated: bool,
+) -> dict[str, Any] | None:
+    if truncated or not raw_body:
         return None
     try:
         payload = json.loads(raw_body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _provider_failure_diagnostic(
+    *,
+    payload: Any = None,
+    raw_body: bytes = b"",
+    raw_body_truncated: bool = False,
+    stage: str,
+) -> dict[str, Any]:
+    diagnostic: dict[str, Any] = {"stage": stage}
+    source = payload.get("error") if isinstance(payload, Mapping) else None
+    if not isinstance(source, Mapping):
+        source = payload if isinstance(payload, Mapping) else None
+    if isinstance(source, Mapping):
+        for target, keys in (
+            ("provider_error_type", ("type", "error_type")),
+            ("provider_error_code", ("code", "error_code")),
+            ("provider_message", ("message", "detail", "error")),
+        ):
+            value = _first_provider_text(source, keys)
+            if value is None and source is not payload and isinstance(payload, Mapping):
+                value = _first_provider_text(payload, keys)
+            if value is not None:
+                safe, truncated = _bounded_redacted_text(value, _MAX_PROVIDER_FACT_CHARS)
+                diagnostic[target] = safe
+                diagnostic[f"{target}_truncated"] = truncated
+                diagnostic[f"{target}_limit"] = _MAX_PROVIDER_FACT_CHARS
+    elif isinstance(payload, Mapping):
+        value = payload.get("error")
+        if isinstance(value, str):
+            safe, truncated = _bounded_redacted_text(value, _MAX_PROVIDER_FACT_CHARS)
+            diagnostic["provider_message"] = safe
+            diagnostic["provider_message_truncated"] = truncated
+            diagnostic["provider_message_limit"] = _MAX_PROVIDER_FACT_CHARS
+
+    excerpt_source: Any = payload
+    excerpt_pre_redacted = False
+    if excerpt_source is None and raw_body:
+        excerpt_source = raw_body.decode("utf-8", errors="replace")
+    if excerpt_source is not None:
+        if isinstance(excerpt_source, (Mapping, list, tuple)):
+            redacted = _redact_diagnostic_value(excerpt_source)
+            excerpt_source = json.dumps(
+                redacted,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            excerpt_pre_redacted = True
+        excerpt, excerpt_truncated = _bounded_redacted_text(
+            excerpt_source,
+            _MAX_PROVIDER_DIAGNOSTIC_CHARS,
+            pre_redacted=excerpt_pre_redacted,
+        )
+        if excerpt:
+            diagnostic.update({
+                "raw_excerpt": excerpt,
+                "raw_excerpt_truncated": raw_body_truncated or excerpt_truncated,
+                "raw_excerpt_limit": _MAX_PROVIDER_DIAGNOSTIC_CHARS,
+            })
+    return diagnostic
+
+
+def _network_failure_diagnostic(
+    exc: TimeoutError | URLError | OSError,
+    *,
+    reason: Any,
+) -> dict[str, Any]:
+    source = reason if reason is not None else exc
+    safe, truncated = _bounded_redacted_text(source, _MAX_PROVIDER_DIAGNOSTIC_CHARS)
+    return {
+        "stage": "network_transport",
+        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "network_reason": safe,
+        "raw_excerpt": safe,
+        "raw_excerpt_truncated": truncated,
+        "raw_excerpt_limit": _MAX_PROVIDER_DIAGNOSTIC_CHARS,
+    }
+
+
+def _first_provider_text(source: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                return text
+    return None
+
+
+def _bounded_redacted_text(
+    value: Any,
+    limit: int,
+    *,
+    pre_redacted: bool = False,
+) -> tuple[str, bool]:
+    safe = str(value or "") if pre_redacted else _redact_diagnostic_text(value)
+    safe = "".join(char for char in safe if char in "\n\t" or char.isprintable()).strip()
+    return safe[:limit], len(safe) > limit
+
+
+def _redact_diagnostic_value(value: Any) -> Any:
+    redacted = redact_sensitive_values(value)
+    if isinstance(redacted, Mapping):
+        return {
+            str(key): _redact_diagnostic_value(item)
+            for key, item in redacted.items()
+        }
+    if isinstance(redacted, (list, tuple)):
+        return [_redact_diagnostic_value(item) for item in redacted]
+    if isinstance(redacted, str):
+        return _redact_diagnostic_text(redacted)
+    return redacted
+
+
+def _redact_diagnostic_text(value: Any) -> str:
+    safe = str(value or "")
+    safe = _DIAGNOSTIC_PRIVATE_KEY.sub(REDACTED_VALUE, safe)
+    safe = _DIAGNOSTIC_SECRET_ASSIGNMENT.sub(REDACTED_VALUE, safe)
+    safe = str(redact_sensitive_values(safe))
+    return safe
 
 
 def _provider_error_code(payload: dict[str, Any] | None) -> str | None:

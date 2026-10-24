@@ -222,7 +222,12 @@ def test_paper_answer_worker_leaves_uncited_answers_to_claim_coverage_gate() -> 
 
 
 def test_paper_answer_worker_maps_model_failure_to_worker_error() -> None:
-    model = FakePaperAnswerModel(PaperAnswerModelError("timeout", "model timed out", retryable=True))
+    model = FakePaperAnswerModel(PaperAnswerModelError(
+        "timeout",
+        "model timed out",
+        retryable=True,
+        details={"error_type": "timeout", "status_code": 504, "attempts": 3},
+    ))
     worker = PaperAnswerWorker(AnswerGenerator(model, max_context_chunks=1))
     pack = _pack(_evidence("ev-method", _chunk("chunk-method", "Verified method evidence.")))
 
@@ -231,6 +236,13 @@ def test_paper_answer_worker_maps_model_failure_to_worker_error() -> None:
 
     assert raised.value.code == "model_timeout"
     assert raised.value.retryable is True
+    assert raised.value.details == {
+        "error_type": "timeout",
+        "status_code": 504,
+        "attempts": 3,
+        "message_truncated": False,
+        "message_limit": 2048,
+    }
 
 
 def _pack(*evidence: EvidenceCandidate) -> RAGContextPack:

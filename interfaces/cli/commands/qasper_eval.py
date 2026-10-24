@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,11 @@ def register(operations: argparse._SubParsersAction) -> None:
     answer_run.add_argument("--max-cases", type=int, default=None)
     answer_run.add_argument("--no-judge", action="store_true", help="Skip the LLM judge")
     answer_run.add_argument(
+        "--rerun-failed-from", type=Path, default=None,
+        help="Re-run only the generation system failures of this completed run, "
+             "with its seed and stratum size",
+    )
+    answer_run.add_argument(
         "--retrieval-profile",
         choices=("chunk_only", "field_only", "field_lightweight"),
         default=None,
@@ -89,6 +95,29 @@ def register(operations: argparse._SubParsersAction) -> None:
     answer_replay.add_argument("--output-dir", type=Path, required=True)
     answer_replay.add_argument("--query-vector-path", type=Path, required=True)
     answer_replay.set_defaults(_qasper_action="answer_replay")
+
+    answer_merge = answer_commands.add_parser(
+        "merge", help="Replace a run's failed cases with their re-run records and re-summarize",
+    )
+    answer_merge.add_argument("--base-run-dir", type=Path, required=True)
+    answer_merge.add_argument("--rerun-run-dir", type=Path, required=True)
+    answer_merge.add_argument("--output-dir", type=Path, required=True)
+    answer_merge.set_defaults(_qasper_action="answer_merge")
+
+    answer_rejudge = answer_commands.add_parser(
+        "rejudge", help="Re-run failed judges without regenerating answers or retrieval",
+    )
+    answer_rejudge.add_argument("--source-run-dir", type=Path, required=True)
+    answer_rejudge.add_argument("--output-dir", type=Path, required=True)
+    answer_rejudge.add_argument(
+        "--include-missing-judge", action="store_true",
+        help="Also judge answered legacy cases that have no verdict",
+    )
+    answer_rejudge.add_argument(
+        "--legacy-judge-model", default=None, metavar="NAME",
+        help="User-confirmed historical judge model for legacy runs lacking judge identity",
+    )
+    answer_rejudge.set_defaults(_qasper_action="answer_rejudge")
 
     calibrate = answer_commands.add_parser("calibrate", help="Human calibration of the answer judge")
     calibrate_commands = calibrate.add_subparsers(dest="calibrate_command", required=True)
@@ -139,7 +168,13 @@ def _build_answer_service(args: argparse.Namespace) -> Any:
 
     if args.dataset_path is None or args.cache_path is None:
         raise ValueError("answer run requires --dataset-path and --cache-path")
+    rerun_failed_from = getattr(args, "rerun_failed_from", None)
+    if rerun_failed_from is not None and getattr(args, "max_cases", None) is not None:
+        raise ValueError("--rerun-failed-from cannot be combined with --max-cases")
     return build_qasper_answer_evaluation_service(
+        progress=_print_progress,
+        case_started=_print_case_started,
+        rerun_failed_from=(rerun_failed_from.resolve() if rerun_failed_from is not None else None),
         dataset_path=args.dataset_path.resolve(),
         cache_path=args.cache_path.resolve(),
         query_vector_path=args.query_vector_path.resolve(),
@@ -151,6 +186,80 @@ def _build_answer_service(args: argparse.Namespace) -> Any:
         retrieval_profile=args.retrieval_profile,
         retrieval_overfetch=args.retrieval_overfetch,
     )
+
+
+def _print_progress(done: int, total: int, case: Any) -> None:
+    # Progress goes to stderr so stdout stays the single JSON result.
+    detail = case.generation_error or (case.judge.error if case.judge is not None and case.judge.error else "")
+    print(
+        f"[{done}/{total}] END {case.case_id} {case.outcome.value} "
+        f"{case.end_to_end_ms:.0f}ms {detail}".rstrip(),
+        file=sys.stderr, flush=True,
+    )
+
+
+def _print_case_started(done: int, total: int, case_id: str) -> None:
+    print(f"[{done}/{total}] START {case_id}", file=sys.stderr, flush=True)
+
+
+def _dispatch_answer_merge(args: argparse.Namespace) -> int:
+    from backend.research.application.qasper_answer_merge import QasperAnswerMergeError
+    from interfaces.composition.qasper_evaluation import merge_qasper_answer_runs
+
+    try:
+        report = merge_qasper_answer_runs(
+            base_directory=args.base_run_dir.resolve(),
+            rerun_directory=args.rerun_run_dir.resolve(),
+            output_directory=args.output_dir.resolve(),
+        )
+    except QasperAnswerMergeError as exc:
+        # Merge diagnostics name identity fields only, so they are safe to show.
+        _print_json({"operation": "answer_merge", "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, KeyError) as exc:
+        _print_json({"operation": "answer_merge", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_merge", "valid": True, **report})
+    return 0
+
+
+def _build_answer_rejudge_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_evaluation import build_qasper_answer_rejudge_service
+
+    return build_qasper_answer_rejudge_service(
+        source_directory=args.source_run_dir.resolve(),
+        output_directory=args.output_dir.resolve(),
+        dataset_path=args.dataset_path.resolve() if args.dataset_path is not None else None,
+        cache_path=args.cache_path.resolve() if args.cache_path is not None else None,
+        include_missing_judge=bool(getattr(args, "include_missing_judge", False)),
+        legacy_judge_model=getattr(args, "legacy_judge_model", None),
+        progress=_print_rejudge_progress,
+    )
+
+
+def _print_rejudge_progress(progress: Any) -> None:
+    suffix = "" if progress.recovered is None else f" recovered={str(progress.recovered).lower()}"
+    print(
+        f"[{progress.index}/{progress.total}] JUDGE_{progress.phase.upper()} "
+        f"{progress.case_id}{suffix}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _dispatch_answer_rejudge(args: argparse.Namespace) -> int:
+    from backend.research.application.qasper_answer_rejudge import QasperAnswerRejudgeError
+
+    try:
+        report = _build_answer_rejudge_service(args).run()
+    except QasperAnswerRejudgeError as exc:
+        _print_json({"operation": "answer_rejudge", "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, RuntimeError) as exc:
+        _print_json({"operation": "answer_rejudge", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_rejudge", "valid": True, **report})
+    return 0
 
 
 def _dispatch_answer(args: argparse.Namespace) -> int:
@@ -228,6 +337,10 @@ def _dispatch(args: argparse.Namespace) -> int:
     action = args._qasper_action
     if action == "answer_run":
         return _dispatch_answer(args)
+    if action == "answer_merge":
+        return _dispatch_answer_merge(args)
+    if action == "answer_rejudge":
+        return _dispatch_answer_rejudge(args)
     if action == "answer_replay":
         return _dispatch_replay(args)
     if action in {"calibrate_export", "calibrate_score"}:

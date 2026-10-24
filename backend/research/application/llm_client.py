@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from urllib.request import Request, urlopen
 
@@ -149,7 +150,28 @@ def _prompt_call(client: OpenAICompatibleClient, *, max_tokens: int, temperature
         response = await asyncio.to_thread(client.complete, request)
         return response.content or ""
 
+    llm_call.measurement_identity = _measurement_identity(  # type: ignore[attr-defined]
+        client, max_tokens=max_tokens, temperature=temperature,
+    )
     return llm_call
+
+
+def _measurement_identity(
+    client: OpenAICompatibleClient,
+    *,
+    max_tokens: int,
+    temperature: float | None,
+) -> dict[str, object]:
+    """Return only reproducibility fields; credentials and their env names stay private."""
+    config = client.config
+    endpoint = str(config.base_url or "").rstrip("/")
+    return {
+        "provider": str(config.provider or ""),
+        "model": str(config.model or ""),
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "endpoint_sha256": hashlib.sha256(endpoint.encode("utf-8")).hexdigest(),
+    }
 
 
 __all__ = ["build_unity_judge_llm_call", "build_unity_llm_call", "build_unity_paper_answer_model"]

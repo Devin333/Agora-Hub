@@ -95,7 +95,17 @@ def test_generation_phase_halts_when_answer_gate_fails() -> None:
 
 
 def test_generation_phase_fails_when_answer_worker_cannot_produce_candidate() -> None:
-    worker = _FailingAnswerWorker(AnswerWorkerError("model_provider_unavailable", "provider is down"))
+    worker = _FailingAnswerWorker(AnswerWorkerError(
+        "model_provider_unavailable",
+        "provider is down",
+        retryable=True,
+        details={
+            "error_type": "schema_error",
+            "status_code": 502,
+            "retryable": True,
+            "output_excerpt": "invalid provider response",
+        },
+    ))
 
     result = _controller(worker).run(_generation_spec())
 
@@ -111,12 +121,18 @@ def test_generation_phase_fails_when_answer_worker_cannot_produce_candidate() ->
         {
             "code": "model_provider_unavailable",
             "message": "provider is down",
-            "retryable": False,
+            "retryable": True,
+            "details": {
+                "error_type": "schema_error",
+                "status_code": 502,
+                "retryable": True,
+                "output_excerpt": "invalid provider response",
+            },
             "generation_attempt": 1,
             "max_generation_attempts": 1,
         }
     ]
-    assert result.decision.metadata["generation_error"]["code"] == "model_provider_unavailable"
+    assert result.decision.metadata["generation_error"] == failures[0]
     assert not any(event["event_type"] == "rag_abstained" for event in result.transcript.events)
     assert result.metrics is not None
     assert result.metrics.answer_generation_failures == 1

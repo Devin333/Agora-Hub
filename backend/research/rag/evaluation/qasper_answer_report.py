@@ -8,11 +8,11 @@ excluded from that metric's denominator instead of being counted as zero.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.research.rag.evaluation.qasper_answer_judge import JudgeVerdict
+from backend.research.rag.evaluation.qasper_answer_judge import JudgeRequest, JudgeVerdict
 from backend.research.rag.evaluation.qasper_answer_metrics import ANSWER_TYPES, AnswerType
 from framework.rag.evaluation.answer_metrics import AnswerOutcome
 
@@ -47,6 +47,10 @@ class QasperAnswerCase:
     model_usage: dict[str, Any] | None
     evidence_type_gap_accepted: bool = False
     generation_error: str = ""
+    # Redacted provider/model diagnostics for a failed generation; empty otherwise.
+    generation_error_detail: dict[str, Any] | None = None
+    judge_request: JudgeRequest | None = None
+    rejudge_attempt: dict[str, Any] | None = None
 
     @property
     def expects_abstention(self) -> bool:
@@ -98,7 +102,81 @@ class QasperAnswerCase:
             "model_usage": self.model_usage,
             "evidence_type_gap_accepted": self.evidence_type_gap_accepted,
             "generation_error": self.generation_error,
+            "generation_error_detail": self.generation_error_detail,
+            "judge_request": self.judge_request.to_dict() if self.judge_request is not None else None,
+            "rejudge_attempt": self.rejudge_attempt,
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "QasperAnswerCase":
+        """Rebuild a record from ``answers.jsonl`` so runs can be merged and re-summarized."""
+        if not isinstance(payload, Mapping):
+            raise TypeError("answer case must be an object")
+        judge = payload.get("judge")
+        judge_request = payload.get("judge_request")
+        rejudge_attempt = payload.get("rejudge_attempt")
+        if judge is not None and not isinstance(judge, Mapping):
+            raise ValueError("case.judge must be an object or null")
+        if judge_request is not None and not isinstance(judge_request, Mapping):
+            raise ValueError("case.judge_request must be an object or null")
+        if rejudge_attempt is not None and not isinstance(rejudge_attempt, Mapping):
+            raise ValueError("case.rejudge_attempt must be an object or null")
+        evidence_type_gap_accepted = payload.get("evidence_type_gap_accepted", False)
+        if not isinstance(evidence_type_gap_accepted, bool):
+            raise ValueError("case.evidence_type_gap_accepted must be a boolean")
+        stratum = _answer_type(payload.get("stratum"), "case.stratum")
+        matched_type = _answer_type(payload.get("matched_type"), "case.matched_type")
+        return cls(
+            case_id=_string(payload.get("case_id"), "case.case_id"),
+            paper_id=_string(payload.get("paper_id"), "case.paper_id"),
+            question=_string(payload.get("question"), "case.question"),
+            stratum=stratum,
+            references=_strings(payload.get("references"), "case.references"),
+            reference_types=_strings(payload.get("reference_types"), "case.reference_types"),
+            mapping_disposition=_string(payload.get("mapping_disposition"), "case.mapping_disposition"),
+            outcome=AnswerOutcome(_string(payload.get("outcome"), "case.outcome")),
+            answer=_string(payload.get("answer"), "case.answer"),
+            prediction=_string(payload.get("prediction"), "case.prediction"),
+            answer_f1=_number(payload.get("answer_f1"), "case.answer_f1"),
+            matched_type=matched_type,
+            cited_chunk_ids=_strings(payload.get("cited_chunk_ids"), "case.cited_chunk_ids"),
+            context_chunk_ids=_strings(payload.get("context_chunk_ids"), "case.context_chunk_ids"),
+            strict_citation_coverage=_optional_number(
+                payload.get("strict_citation_coverage"), "case.strict_citation_coverage",
+            ),
+            equivalent_citation_coverage=_optional_number(
+                payload.get("equivalent_citation_coverage"), "case.equivalent_citation_coverage",
+            ),
+            strict_context_coverage=_optional_number(
+                payload.get("strict_context_coverage"), "case.strict_context_coverage",
+            ),
+            equivalent_context_coverage=_optional_number(
+                payload.get("equivalent_context_coverage"), "case.equivalent_context_coverage",
+            ),
+            judge=JudgeVerdict.from_dict(judge) if judge is not None else None,
+            decision_reason=_string(payload.get("decision_reason"), "case.decision_reason"),
+            abstention_reason=_string(payload.get("abstention_reason"), "case.abstention_reason"),
+            end_to_end_ms=_number(payload.get("end_to_end_ms"), "case.end_to_end_ms"),
+            generation_ms=_optional_number(payload.get("generation_ms"), "case.generation_ms"),
+            prompt_chars=_optional_int(payload.get("prompt_chars"), "case.prompt_chars"),
+            model=_string(payload.get("model"), "case.model"),
+            model_usage=_optional_mapping(payload.get("model_usage"), "case.model_usage"),
+            evidence_type_gap_accepted=evidence_type_gap_accepted,
+            generation_error=_string(payload.get("generation_error", ""), "case.generation_error"),
+            generation_error_detail=_optional_mapping(
+                payload.get("generation_error_detail"), "case.generation_error_detail",
+            ),
+            judge_request=JudgeRequest.from_dict(judge_request) if judge_request is not None else None,
+            rejudge_attempt=dict(rejudge_attempt) if rejudge_attempt is not None else None,
+        )
+
+    @property
+    def needs_generation_rerun(self) -> bool:
+        return self.outcome.is_system_failure
+
+    @property
+    def needs_judge_rerun(self) -> bool:
+        return self.outcome is AnswerOutcome.ANSWERED and self.judge is not None and self.judge.judge_error
 
 
 @dataclass(frozen=True)
@@ -174,6 +252,50 @@ class QasperAnswerSummary:
 
 def _defined_mean(values) -> dict[str, Any]:
     return _mean([value for value in values if value is not None]).to_dict()
+
+
+def _string(value: Any, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    return value
+
+
+def _strings(value: Any, name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{name} must be an array of strings")
+    return tuple(value)
+
+
+def _number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    return float(value)
+
+
+def _optional_number(value: Any, name: str) -> float | None:
+    return None if value is None else _number(value, name)
+
+
+def _optional_int(value: Any, name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer or null")
+    return value
+
+
+def _optional_mapping(value: Any, name: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be an object or null")
+    return dict(value)
+
+
+def _answer_type(value: Any, name: str) -> AnswerType:
+    if value not in ANSWER_TYPES:
+        raise ValueError(f"{name} must be a known answer type")
+    return value
 
 
 def _counts(values) -> dict[str, int]:

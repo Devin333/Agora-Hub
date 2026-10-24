@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,12 +33,88 @@ def test_answer_builder_forwards_explicit_retrieval_profile(
         no_judge=True,
         retrieval_profile="field_only",
         retrieval_overfetch=9,
+        rerun_failed_from=None,
     )
 
     assert qasper_eval._build_answer_service(args) is sentinel
     assert captured["retrieval_profile"] == "field_only"
     assert captured["retrieval_overfetch"] == 9
     assert captured["judge"] is False
+
+
+def test_answer_cli_emits_start_and_end_progress_only_on_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    class Service:
+        def __init__(self, started, progress) -> None:
+            self.started = started
+            self.progress = progress
+
+        def run(self):
+            self.started(1, 1, "paper:q1")
+            self.progress(1, 1, SimpleNamespace(
+                case_id="paper:q1",
+                outcome=SimpleNamespace(value="answered"),
+                end_to_end_ms=12.5,
+                generation_error="",
+                judge=None,
+            ))
+            return {"evaluated_cases": 1}
+
+    def build(**kwargs):
+        return Service(kwargs["case_started"], kwargs["progress"])
+
+    monkeypatch.setattr(composition, "build_qasper_answer_evaluation_service", build)
+
+    code = qasper_eval.main([
+        "qasper", "--dataset-path", str(tmp_path / "dataset.json"),
+        "--cache-path", str(tmp_path / "cache.npz"),
+        "answer", "run", "--output-dir", str(tmp_path / "out"),
+        "--query-vector-path", str(tmp_path / "queries.json"),
+    ])
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert json.loads(captured.out)["operation"] == "answer_run"
+    assert captured.out.count("\n") == 1
+    assert captured.err.splitlines() == [
+        "[1/1] START paper:q1",
+        "[1/1] END paper:q1 answered 12ms",
+    ]
+    assert "prompt" not in captured.err.casefold()
+
+
+def test_rejudge_cli_forwards_legacy_model_without_answer_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    captured = {}
+
+    class Service:
+        def run(self):
+            return {"rejudge": {"attempts": 0}}
+
+    def build(**kwargs):
+        captured.update(kwargs)
+        return Service()
+
+    monkeypatch.setattr(composition, "build_qasper_answer_rejudge_service", build)
+
+    code = qasper_eval.main([
+        "qasper", "--dataset-path", str(tmp_path / "dataset.json"),
+        "--cache-path", str(tmp_path / "cache.npz"),
+        "answer", "rejudge", "--source-run-dir", str(tmp_path / "source"),
+        "--output-dir", str(tmp_path / "output"),
+        "--legacy-judge-model", "historical-judge",
+    ])
+
+    assert code == 0
+    assert captured["legacy_judge_model"] == "historical-judge"
+    assert captured["dataset_path"] == (tmp_path / "dataset.json").resolve()
+    assert json.loads(capsys.readouterr().out)["operation"] == "answer_rejudge"
 
 
 def test_answer_cli_accepts_field_only_profile(

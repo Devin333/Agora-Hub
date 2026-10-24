@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -47,7 +47,12 @@ from backend.research.rag.evaluation.qasper_retrieval import (
     OfflineEmbeddingCache,
 )
 from backend.research.rag.evaluation.qasper_scoring import evidence_group_coverage
-from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator, render_answer_context
+from backend.research.rag.retrieval.paper_answer_generator import (
+    ANSWER_PROMPT_VERSION,
+    ANSWER_PROTOCOL_VERSION,
+    AnswerGenerator,
+    render_answer_context,
+)
 from backend.research.rag.retrieval.policies import RetrievalPolicy
 from framework.rag.evaluation.answer_metrics import AnswerOutcome
 from framework.rag.generation import partition_citation_markers
@@ -127,6 +132,9 @@ class QasperAnswerEvaluationConfig:
     per_type: int = 75
     max_cases: int | None = None
     run_id: str = "qasper-answer-eval"
+    # Restrict the run to these sampled cases (e.g. re-running gateway failures); the
+    # sample itself, and each case's position in it, stay those of the full run.
+    case_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if not self.output_directory.strip():
@@ -135,6 +143,13 @@ class QasperAnswerEvaluationConfig:
             raise ValueError("per_type must be positive")
         if self.max_cases is not None and self.max_cases < 1:
             raise ValueError("max_cases must be positive")
+        if self.case_ids is not None:
+            if not self.case_ids:
+                raise ValueError("case_ids must not be empty")
+            if len(set(self.case_ids)) != len(self.case_ids):
+                raise ValueError("case_ids must be unique")
+            if self.max_cases is not None:
+                raise ValueError("case_ids and max_cases are mutually exclusive")
 
 
 class _TrackedReranker:
@@ -173,6 +188,11 @@ class QasperAnswerEvaluationService:
         field_reranker: RerankerPort | None = None,
         retrieval_profile: QasperAnswerRetrievalProfile | None = None,
         context_runtime: AnswerContextRuntime | None = None,
+        progress: Callable[[int, int, QasperAnswerCase], None] | None = None,
+        case_started: Callable[[int, int, str], None] | None = None,
+        recovery_source: Mapping[str, Any] | None = None,
+        answer_model_identity: Mapping[str, Any] | None = None,
+        judge_model_identity: Mapping[str, Any] | None = None,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         if field_index is not None and field_index_factory is not None:
@@ -213,6 +233,19 @@ class QasperAnswerEvaluationService:
         if not self._retrieval_profile.field_reranker_enabled and field_reranker is not None:
             raise ValueError("retrieval profile disables field reranker but a field reranker was supplied")
         self._context_runtime = context_runtime
+        self._progress = progress
+        self._case_started = case_started
+        self._recovery_source = dict(recovery_source) if recovery_source is not None else None
+        self._answer_model_identity = _measurement_identity(
+            answer_model_identity or getattr(answer_model, "measurement_identity", None)
+        )
+        self._judge_model_identity = (
+            _measurement_identity(
+                judge_model_identity or getattr(judge_call, "measurement_identity", None)
+            )
+            if judge_call is not None
+            else None
+        )
         self._clock = clock
 
     def run(self) -> dict[str, Any]:
@@ -221,7 +254,15 @@ class QasperAnswerEvaluationService:
         frozen.verify_digest()
         frozen_by_id = {case.case_id: case for case in frozen.cases}
         sample = sample_questions(assets.raw_dataset, seed=self._config.seed, per_type=self._config.per_type)
-        questions = sample.questions[: self._config.max_cases] if self._config.max_cases else sample.questions
+        positioned = list(enumerate(sample.questions))
+        if self._config.case_ids is not None:
+            wanted = set(self._config.case_ids)
+            positioned = [(index, question) for index, question in positioned if question.case_id in wanted]
+            missing = wanted - {question.case_id for _, question in positioned}
+            if missing:
+                raise ValueError(f"{len(missing)} requested case(s) are not in this sample")
+        elif self._config.max_cases:
+            positioned = positioned[: self._config.max_cases]
         qas_by_id = _qas_by_case(assets.raw_dataset)
 
         cache = self._assets.embedding_cache()
@@ -277,17 +318,69 @@ class QasperAnswerEvaluationService:
         )
         ask_use_case = AskPaperUseCase()
 
+        report_identity = {
+            "dataset_sha256": assets.dataset_sha256,
+            "mapping_digest": frozen.digest,
+            "embedding_cache_sha256": identity.sha256,
+            "embedding_model": identity.model_id,
+            "embedding_dimension": identity.dimension,
+            "code": assets.code_identity.model_dump(mode="json"),
+            "retrieval_policy": self._policy.name,
+            "retrieval_policy_settings": _policy_identity(self._policy),
+            "retrieval_profile": self._retrieval_profile.to_dict(),
+            "retrieval_components": components,
+            "reranker_activation": _reranker_activation(
+                self._policy, reranker_tracker, field_reranker_tracker,
+            ),
+            "context_budget": budget.to_dict(),
+            "retrieval_profile_fingerprint": _profile_fingerprint(
+                self._retrieval_profile, self._policy, components, budget.to_dict(),
+            ),
+            "fixture_boundary": (
+                "offline_cached_chunk_and_field_vectors; "
+                "query_vectors_resolved_by_cache_or_configured_embedder; "
+                "no_production_qdrant"
+            ),
+            "answer_prompt_version": ANSWER_PROMPT_VERSION,
+            "answer_protocol_version": ANSWER_PROTOCOL_VERSION,
+            "answer_model_identity": self._answer_model_identity,
+            "answer_models": [],
+            "judge_prompt_version": JUDGE_PROMPT_VERSION if self._judge_call is not None else None,
+            "judge_model_identity": self._judge_model_identity,
+            "session": "generation max_attempts=2",
+            "context_runtime": (
+                self._context_runtime.to_dict() if self._context_runtime is not None else {"name": "default"}
+            ),
+        }
+        if self._recovery_source is not None:
+            from backend.research.application.qasper_answer_merge import require_same_measurement
+
+            source_identity = self._recovery_source.get("identity")
+            if not isinstance(source_identity, Mapping):
+                raise ValueError("recovery source identity is required")
+            source_case_ids = self._recovery_source.get("case_ids")
+            if list(self._config.case_ids or ()) != list(source_case_ids or ()):
+                raise ValueError("recovery source case ids do not match evaluation selection")
+            # This preflight runs after local assets/components are identified but before
+            # the first answer or judge provider call.
+            require_same_measurement(source_identity, report_identity)
+
         records: list[QasperAnswerCase] = []
         try:
-            for index, question in enumerate(questions):
+            for done, (index, question) in enumerate(positioned, start=1):
                 frozen_case = frozen_by_id.get(question.case_id)
                 if frozen_case is None:
                     raise ValueError(f"sampled case {question.case_id} is absent from the frozen mapping")
-                records.append(self._evaluate_case(
+                if self._case_started is not None:
+                    self._case_started(done, len(positioned), question.case_id)
+                record = self._evaluate_case(
                     question, frozen_case, qas_by_id[question.case_id],
                     session=session, ask_use_case=ask_use_case, chunks_by_id=chunks_by_id, index=index,
-                ))
+                )
+                records.append(record)
                 resolver.flush()
+                if self._progress is not None:
+                    self._progress(done, len(positioned), record)
         finally:
             resolver.flush()
 
@@ -300,43 +393,29 @@ class QasperAnswerEvaluationService:
         report = {
             "protocol": PROTOCOL,
             "identity": {
-                "dataset_sha256": assets.dataset_sha256,
-                "mapping_digest": frozen.digest,
-                "embedding_cache_sha256": identity.sha256,
-                "embedding_model": identity.model_id,
-                "embedding_dimension": identity.dimension,
-                "code": assets.code_identity.model_dump(mode="json"),
-                "retrieval_policy": self._policy.name,
-                "retrieval_policy_settings": _policy_identity(self._policy),
-                "retrieval_profile": self._retrieval_profile.to_dict(),
-                "retrieval_components": components,
+                **report_identity,
                 "reranker_activation": _reranker_activation(
                     self._policy, reranker_tracker, field_reranker_tracker,
                 ),
-                "context_budget": budget.to_dict(),
-                "retrieval_profile_fingerprint": _profile_fingerprint(
-                    self._retrieval_profile, self._policy, components, budget.to_dict(),
-                ),
-                "fixture_boundary": (
-                    "offline_cached_chunk_and_field_vectors; "
-                    "query_vectors_resolved_by_cache_or_configured_embedder; "
-                    "no_production_qdrant"
-                ),
                 "answer_models": sorted({case.model for case in records if case.model}),
-                "judge_prompt_version": JUDGE_PROMPT_VERSION if self._judge_call is not None else None,
-                "session": "generation max_attempts=2",
-                "context_runtime": (
-                    self._context_runtime.to_dict() if self._context_runtime is not None else {"name": "default"}
-                ),
             },
             "sample": sample.manifest(),
             "evaluated_cases": len(records),
+            "case_selection": (
+                {"mode": "case_ids", "case_ids": [record.case_id for record in records]}
+                if self._config.case_ids is not None
+                else {"mode": "max_cases", "max_cases": self._config.max_cases}
+                if self._config.max_cases
+                else {"mode": "full_sample"}
+            ),
             "production_qualification": {
                 "eligible": False,
                 "reason": "Retrieval scans cached vectors in memory instead of the production Qdrant index.",
             },
             "metrics": summary.to_dict(),
         }
+        if self._recovery_source is not None:
+            report["recovery_source"] = dict(self._recovery_source)
         answers = "".join(json.dumps(case.to_dict(), ensure_ascii=False) + "\n" for case in records)
         self._artifacts.publish(self._config.output_directory, {
             "sample.json": _json_bytes(sample.manifest()),
@@ -384,8 +463,9 @@ class QasperAnswerEvaluationService:
         f1 = max_answer_f1(prediction, references)
 
         judge = None
-        if outcome is AnswerOutcome.ANSWERED and self._judge_call is not None:
-            judge = asyncio.run(judge_answer(self._judge_call, JudgeRequest(
+        judge_request = None
+        if outcome is AnswerOutcome.ANSWERED:
+            judge_request = JudgeRequest(
                 question=question.question,
                 references=[ref.answer for ref in references],
                 answer=answer,
@@ -393,8 +473,20 @@ class QasperAnswerEvaluationService:
                     (i, render_answer_context(chunks_by_id[context_ids[i - 1]]))
                     for i in markers.valid_indexes
                 ],
-            )))
-        generation_error = ((result.decision.metadata or {}).get("generation_error") or {}).get("code", "")
+            )
+            if self._judge_call is not None:
+                judge = asyncio.run(judge_answer(self._judge_call, judge_request))
+        failure = (result.decision.metadata or {}).get("generation_error") or {}
+        generation_error = failure.get("code", "")
+        generation_error_detail = (
+            {
+                "code": str(failure.get("code") or ""),
+                "message": str(failure.get("message") or ""),
+                "retryable": bool(failure.get("retryable", False)),
+                "details": dict(failure.get("details") or {}),
+            }
+            if failure else None
+        )
         return QasperAnswerCase(
             case_id=question.case_id,
             paper_id=question.paper_id,
@@ -424,6 +516,8 @@ class QasperAnswerEvaluationService:
             model_usage=metadata.get("model_usage") if isinstance(metadata.get("model_usage"), dict) else None,
             evidence_type_gap_accepted=bool(result.metrics and result.metrics.evidence_type_gap_accepted),
             generation_error=str(generation_error),
+            generation_error_detail=generation_error_detail,
+            judge_request=judge_request,
         )
 
 
@@ -458,6 +552,12 @@ def _component_name(component: object | None) -> str | None:
     if component is None:
         return None
     return f"{type(component).__module__}.{type(component).__qualname__}"
+
+
+def _measurement_identity(value: Any) -> dict[str, Any] | str:
+    if isinstance(value, Mapping):
+        return json.loads(json.dumps(dict(value), ensure_ascii=False, sort_keys=True))
+    return "unknown"
 
 
 def _reranker_activation(

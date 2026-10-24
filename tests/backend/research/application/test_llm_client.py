@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from urllib.error import URLError
 
 import pytest
 
 from backend.research.application import llm_client, llm_selectors
+from backend.research.rag.evaluation.qasper_answer_judge import JudgeRequest, judge_answer
 from framework.llm.models import LLMResponse
 from framework.shared.graph_identity import GraphExecutionIdentity
 
@@ -102,8 +106,8 @@ def test_build_unity_llm_call_binds_graph_execution_identity(monkeypatch) -> Non
     captured = []
 
     class _FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
+        def __init__(self, config, **kwargs) -> None:
+            self.config = config
 
         def complete(self, request):
             captured.append(request)
@@ -147,6 +151,7 @@ def test_unity_transport_budget_is_request_scoped_and_default_retry_is_unchanged
 
     class Client:
         def __init__(self, config, *, transport, retry_policy):
+            self.config = config
             policies.append(retry_policy)
 
         def complete(self, request):
@@ -259,6 +264,14 @@ def test_unity_paper_answer_model_sends_system_and_user_messages(monkeypatch) ->
     assert captured[0].max_tokens == 77
     assert captured[0].temperature == 0.0
     assert captured[0].max_transport_attempts is None
+    assert model.measurement_identity == {
+        "provider": "openai-compatible",
+        "model": "test-model",
+        "max_tokens": 77,
+        "temperature": 0.0,
+        "endpoint_sha256": hashlib.sha256(b"https://llm.test/v1").hexdigest(),
+    }
+    assert "api" not in json.dumps(model.measurement_identity).lower()
 
 
 def test_judge_uses_explicit_judge_model_and_never_falls_back(monkeypatch) -> None:
@@ -283,3 +296,46 @@ def test_judge_uses_explicit_judge_model_and_never_falls_back(monkeypatch) -> No
 
     assert asyncio.run(call("judge this")) == "judged"
     assert captured == [("judge-model", "https://generic.test/v1", 0.0)]
+    assert call.measurement_identity == {
+        "provider": "openai-compatible",
+        "model": "judge-model",
+        "max_tokens": 50,
+        "temperature": 0.0,
+        "endpoint_sha256": hashlib.sha256(b"https://generic.test/v1").hexdigest(),
+    }
+
+
+def test_judge_preserves_redacted_network_transport_diagnostic(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://judge.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("NEWS_RAG_EVAL_JUDGE_MODEL", "judge-model")
+
+    calls = 0
+
+    def transport(request, timeout_seconds):
+        nonlocal calls
+        calls += 1
+        raise URLError("password=plain-network-secret")
+
+    real_client = llm_client.OpenAICompatibleClient
+
+    def client(config, **kwargs):
+        return real_client(config, **kwargs, sleep=lambda _: None)
+
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", client)
+    monkeypatch.setattr(llm_client, "_browser_ua_transport", transport)
+    verdict = asyncio.run(judge_answer(
+        llm_client.build_unity_judge_llm_call(max_tokens=50),
+        JudgeRequest(question="Question?", references=("Reference.",), answer="Answer.", cited_passages=()),
+    ))
+
+    assert calls == 3
+    assert verdict.error == "judge_call_failed: LLMProviderError"
+    assert verdict.error_detail is not None
+    assert verdict.error_detail["wrapper_exception_type"].endswith("LLMProviderError")
+    assert verdict.error_detail["exception_type"] == "urllib.error.URLError"
+    assert verdict.error_detail["network_reason"] == "[redacted]"
+    assert verdict.error_detail["raw_excerpt"] == "[redacted]"
+    assert verdict.error_detail["network_reason_truncated"] is False
+    assert verdict.error_detail["raw_excerpt_truncated"] is False
+    assert "plain-network-secret" not in json.dumps(verdict.error_detail)

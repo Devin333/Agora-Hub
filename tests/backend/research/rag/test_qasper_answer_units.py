@@ -8,7 +8,9 @@ import pytest
 
 from backend.research.document.models import PaperChunk
 from backend.research.ports.qasper_query_embedding import QueryVectorSnapshot
-from backend.research.rag.evaluation.qasper_answer_judge import JudgeRequest, judge_answer, parse_verdict
+from backend.research.rag.evaluation.qasper_answer_judge import (
+    JudgeRequest, JudgeVerdict, judge_answer, parse_verdict,
+)
 from backend.research.rag.evaluation.qasper_answer_metrics import (
     UNANSWERABLE,
     max_answer_f1,
@@ -141,6 +143,87 @@ def test_references_follow_the_official_scorer() -> None:
     refs = references_for_question(qa)
 
     assert [(r.answer, r.answer_type) for r in refs] == [("BERT, GPT", "extractive"), (UNANSWERABLE, "none"), ("No", "boolean")]
+
+
+def test_judge_request_snapshot_is_canonical_and_tamper_evident() -> None:
+    request = JudgeRequest("Q?", ("A", "B"), "A [1]", ((1, "passage"),))
+
+    restored = JudgeRequest.from_dict(request.to_dict())
+
+    assert restored == request
+    assert restored.digest() == request.digest()
+    tampered = request.to_dict()
+    tampered["answer"] = "B [1]"
+    with pytest.raises(ValueError, match="digest mismatch"):
+        JudgeRequest.from_dict(tampered)
+
+
+def test_judge_verdict_decoder_does_not_coerce_false_strings() -> None:
+    with pytest.raises(ValueError, match="supports"):
+        JudgeVerdict.from_dict({
+            "correct": False, "citations": [{"index": 1, "supports": "false"}],
+            "rationale": "", "error": "",
+        })
+
+
+def test_judge_failure_preserves_redacted_bounded_provider_facts() -> None:
+    class ProviderError(RuntimeError):
+        status_code = 503
+        retryable = True
+        response_body = "Bearer super-secret-token upstream unavailable"
+
+        def to_dict(self, *, redact=True):
+            return {
+                "message": str(self), "provider": "gateway", "model": "judge-model",
+                "error_type": "upstream_response", "error_category": "provider_failure",
+                "status_code": self.status_code, "retryable": self.retryable, "attempts": 2,
+                "diagnostics": [{
+                    "provider_error_type": "invalid_request_error",
+                    "provider_error_code": "gateway_timeout",
+                    "provider_message": "request failed with sk-abcdefghijk",
+                    "raw_excerpt": self.response_body,
+                    "raw_excerpt_truncated": True,
+                    "raw_excerpt_limit": 1000,
+                }],
+            }
+
+    async def fail(_prompt: str) -> str:
+        raise ProviderError("gateway failed for sk-abcdefghijk")
+
+    verdict = asyncio.run(judge_answer(fail, JudgeRequest("Q?", ("A",), "A", ())))
+
+    assert verdict.error == "judge_call_failed: ProviderError"
+    assert verdict.error_detail["http_status"] == 503
+    assert verdict.error_detail["retryable"] is True
+    assert verdict.error_detail["error_type"] == "upstream_response"
+    assert verdict.error_detail["error_category"] == "provider_failure"
+    assert verdict.error_detail["provider"] == "gateway"
+    assert verdict.error_detail["model"] == "judge-model"
+    assert verdict.error_detail["attempts"] == 2
+    assert verdict.error_detail["provider_error_type"] == "invalid_request_error"
+    assert verdict.error_detail["provider_error_code"] == "gateway_timeout"
+    assert "***REDACTED***" in verdict.error_detail["provider_message"]
+    assert "***REDACTED***" in verdict.error_detail["message"]
+    assert verdict.error_detail["message_truncated"] is False
+    assert verdict.error_detail["message_limit"] == 2000
+    assert "super-secret-token" not in verdict.error_detail["raw_excerpt"]
+    assert verdict.error_detail["raw_excerpt_truncated"] is True
+    assert verdict.error_detail["raw_excerpt_limit"] == 1000
+
+
+def test_invalid_judge_output_redacts_assignments_and_private_keys_before_truncation() -> None:
+    raw = (
+        'not json api_key="plain-value"\n'
+        "-----BEGIN PRIVATE KEY-----\nplain-private-material\n-----END PRIVATE KEY-----"
+    )
+
+    verdict = parse_verdict(raw, cited_indexes=())
+
+    excerpt = verdict.error_detail["raw_excerpt"]
+    assert "plain-value" not in excerpt
+    assert "plain-private-material" not in excerpt
+    assert "***REDACTED***" in excerpt
+    assert verdict.error_detail["raw_excerpt_limit"] == 2000
 
 
 @pytest.mark.parametrize(
