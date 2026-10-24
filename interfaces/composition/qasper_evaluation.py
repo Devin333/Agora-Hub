@@ -143,9 +143,42 @@ def build_qasper_answer_evaluation_service(
             reranker_enabled=lightweight is not None,
             field_reranker_enabled=lightweight is not None,
         ),
+        context_runtime=_reader_answer_context_runtime(output_directory),
         config=QasperAnswerEvaluationConfig(
             output_directory=str(output_directory), seed=seed, per_type=per_type, max_cases=max_cases,
         ),
+    )
+
+
+def _reader_answer_context_runtime(output_directory: Path):
+    """Assemble context exactly as the desktop reader Q&A composition does.
+
+    Snapshots go beside, never inside, the immutable result directory.
+    """
+    from backend.research.application.paper_rag_session import ContextWindowLimits
+    from backend.research.application.qasper_answer_evaluation import AnswerContextRuntime
+    from framework.harness.control_plane.harness import InMemoryHarnessEventPort
+    from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
+    from infrastructure.research.context_runtime import build_research_context_assembler
+    from interfaces.composition.research_settings import ResearchRuntimeSettings
+
+    llm = ResearchRuntimeSettings.from_env().llm
+    snapshots = FilesystemHarnessArtifactPort(output_directory.parent / f"{output_directory.name}.context")
+
+    def assembler_factory(_spec):
+        return build_research_context_assembler(
+            artifact_port=snapshots,
+            event_port=InMemoryHarnessEventPort(),
+            provider=llm.provider,
+            model=llm.model,
+            max_input_tokens=llm.max_input_tokens,
+            max_output_tokens=llm.max_output_tokens,
+        )
+
+    return AnswerContextRuntime(
+        assembler_factory=assembler_factory,
+        window=ContextWindowLimits(llm.max_input_tokens, llm.max_output_tokens),
+        run_scope=snapshots.bind_run,
     )
 
 

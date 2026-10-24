@@ -106,6 +106,7 @@ def _service(
     output="out",
     field_profile: bool = False,
     retrieval_policy: RetrievalPolicy | None = None,
+    context_runtime=None,
 ):
     dataset_path = tmp_path / "dataset.json"
     dataset_path.write_text(json.dumps(_dataset()), encoding="utf-8")
@@ -162,6 +163,7 @@ def _service(
         reranker=LightweightLexicalReranker() if field_profile else None,
         field_reranker=LightweightLexicalReranker() if field_profile else None,
         retrieval_profile=profile,
+        context_runtime=context_runtime,
         config=QasperAnswerEvaluationConfig(output_directory=str(tmp_path / output), per_type=5),
     )
     return service, embedder, store
@@ -500,3 +502,42 @@ def test_summary_excludes_judge_errors_and_undefined_coverage_from_denominators(
     # A system failure is wrong end to end; an ungraded judge error is excluded.
     assert summary["end_to_end_correct"] == {"value": 0.5, "numerator": 1, "denominator": 2}
     assert summary["system_failure"]["numerator"] == 1
+
+
+def test_answer_run_assembles_context_through_the_production_reader_runtime(
+    tmp_path: Path, repository: Path
+) -> None:
+    from backend.research.application.paper_rag_session import ContextWindowLimits
+    from backend.research.application.qasper_answer_evaluation import AnswerContextRuntime
+    from framework.harness.control_plane.harness import InMemoryHarnessEventPort
+    from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
+    from infrastructure.research.context_runtime import build_research_context_assembler
+
+    snapshots = FilesystemHarnessArtifactPort(tmp_path / "context")
+    built: list[str] = []
+
+    def assembler_factory(spec):
+        built.append(spec.run_id)
+        return build_research_context_assembler(
+            artifact_port=snapshots, event_port=InMemoryHarnessEventPort(),
+            provider="openai-compatible", model="answer-model",
+            max_input_tokens=8192, max_output_tokens=2048,
+        )
+
+    runtime = AnswerContextRuntime(
+        assembler_factory=assembler_factory,
+        window=ContextWindowLimits(8192, 2048),
+        run_scope=snapshots.bind_run,
+    )
+    service, _embedder, _store = _service(
+        tmp_path, repository, judge_call=None, context_runtime=runtime, output="runtime",
+    )
+
+    report = service.run()
+
+    assert built and set(built) == {"qasper-answer-eval"}
+    assert report["identity"]["context_runtime"] == {
+        "name": "research_context_runtime", "max_input_tokens": 8192, "max_output_tokens": 2048,
+    }
+    assert report["metrics"]["system_failure"]["numerator"] == 0
+    assert (tmp_path / "context" / "qasper-answer-eval").is_dir()

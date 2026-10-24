@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from backend.research.application.ask_paper import AskPaperUseCase
-from backend.research.application.paper_rag_session import PaperRAGSession
+from backend.research.application.paper_rag_session import ContextWindowLimits, PaperRAGSession, RunScope
 from backend.research.application.qasper_assets import QasperAssetService
 from backend.research.document.models import PaperChunk
 from backend.research.graphs import build_paper_analysis_context_graph_identity
@@ -51,7 +51,8 @@ from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerato
 from backend.research.rag.retrieval.policies import RetrievalPolicy
 from framework.rag.evaluation.answer_metrics import AnswerOutcome
 from framework.rag.generation import partition_citation_markers
-from framework.harness.rag.models import RAGBudget
+from framework.harness.context.assembler import ContextAssembler
+from framework.harness.rag.models import RAGBudget, RAGSessionSpec
 
 PROTOCOL = "qasper_end_to_end_answer_v1"
 
@@ -90,6 +91,27 @@ class QasperAnswerRetrievalProfile:
             "field_index_enabled": self.field_index_enabled,
             "reranker_enabled": self.reranker_enabled,
             "field_reranker_enabled": self.field_reranker_enabled,
+        }
+
+
+@dataclass(frozen=True)
+class AnswerContextRuntime:
+    """Context assembly the production reader Q&A path uses, injected as one unit.
+
+    The compaction-verified assembler is only valid together with the answer model
+    window it admits against and the run binding its snapshot store requires.
+    """
+
+    assembler_factory: Callable[[RAGSessionSpec], ContextAssembler]
+    window: ContextWindowLimits
+    run_scope: RunScope
+    name: str = "research_context_runtime"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "max_input_tokens": self.window.max_input_tokens,
+            "max_output_tokens": self.window.max_output_tokens,
         }
 
 
@@ -150,6 +172,7 @@ class QasperAnswerEvaluationService:
         reranker: RerankerPort | None = None,
         field_reranker: RerankerPort | None = None,
         retrieval_profile: QasperAnswerRetrievalProfile | None = None,
+        context_runtime: AnswerContextRuntime | None = None,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         if field_index is not None and field_index_factory is not None:
@@ -189,6 +212,7 @@ class QasperAnswerEvaluationService:
             raise ValueError("retrieval profile enables field reranker but no field reranker was supplied")
         if not self._retrieval_profile.field_reranker_enabled and field_reranker is not None:
             raise ValueError("retrieval profile disables field reranker but a field reranker was supplied")
+        self._context_runtime = context_runtime
         self._clock = clock
 
     def run(self) -> dict[str, Any]:
@@ -241,6 +265,15 @@ class QasperAnswerEvaluationService:
             retrieval_policy=self._policy,
             answer_worker=PaperAnswerWorker(AnswerGenerator(self._answer_model)),
             generation_policy={"enabled": True, "max_attempts": 2},
+            **(
+                {
+                    "context_assembler_factory": self._context_runtime.assembler_factory,
+                    "context_window": self._context_runtime.window,
+                    "run_scope": self._context_runtime.run_scope,
+                }
+                if self._context_runtime is not None
+                else {}
+            ),
         )
         ask_use_case = AskPaperUseCase()
 
@@ -292,6 +325,9 @@ class QasperAnswerEvaluationService:
                 "answer_models": sorted({case.model for case in records if case.model}),
                 "judge_prompt_version": JUDGE_PROMPT_VERSION if self._judge_call is not None else None,
                 "session": "generation max_attempts=2",
+                "context_runtime": (
+                    self._context_runtime.to_dict() if self._context_runtime is not None else {"name": "default"}
+                ),
             },
             "sample": sample.manifest(),
             "evaluated_cases": len(records),
