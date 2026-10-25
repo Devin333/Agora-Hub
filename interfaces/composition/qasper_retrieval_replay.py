@@ -25,8 +25,14 @@ def build_qasper_retrieval_replay_service(
     query_vector_path: Path,
     source_run_directory: Path,
     output_directory: Path,
+    max_context_items: int | None = None,
+    max_context_tokens: int | None = None,
 ) -> QasperRetrievalReplayService:
-    """Build a filesystem-only replay; it never loads provider configuration."""
+    """Build a filesystem-only replay; it never loads provider configuration.
+
+    The optional context budget applies to every profile, so profiles stay paired
+    while one replay measures a budget other than the answer run's default.
+    """
     for name, value in (
         ("dataset_path", dataset_path),
         ("cache_path", cache_path),
@@ -47,7 +53,9 @@ def build_qasper_retrieval_replay_service(
     assets = QasperAssetService(
         FilesystemQasperAssets(dataset_path, cache_path, repository_root=root)
     )
-    profiles = default_qasper_retrieval_replay_profiles()
+    profiles = default_qasper_retrieval_replay_profiles(
+        max_context_items=max_context_items, max_context_tokens=max_context_tokens,
+    )
     rerankers = {
         profile.name: LightweightLexicalReranker()
         for profile in profiles
@@ -71,17 +79,43 @@ def build_qasper_retrieval_replay_service(
     )
 
 
-def default_qasper_retrieval_replay_profiles() -> tuple[QasperRetrievalReplayProfile, ...]:
-    """Paired policies; only candidate/component settings vary across profiles."""
+def default_qasper_retrieval_replay_profiles(
+    *,
+    max_context_items: int | None = None,
+    max_context_tokens: int | None = None,
+) -> tuple[QasperRetrievalReplayProfile, ...]:
+    """Paired policies; only candidate/component settings vary across profiles.
+
+    ``baseline_*`` profiles use the answer run's overfetch, so ``baseline_chunk``
+    mirrors ``--retrieval-profile chunk_only`` and ``baseline_field_rerank``
+    mirrors ``field_lightweight``; ``expanded_*`` profiles widen candidate recall.
+    """
+    budget = {
+        name: value
+        for name, value in (
+            ("max_context_items", max_context_items),
+            ("max_context_tokens", max_context_tokens),
+        )
+        if value is not None
+    }
     baseline = RetrievalPolicy(overfetch_multiplier=3)
     expanded = replace(baseline, overfetch_multiplier=10)
     return (
-        QasperRetrievalReplayProfile(name="baseline_chunk", policy=baseline),
-        QasperRetrievalReplayProfile(name="expanded_chunk", policy=expanded),
+        QasperRetrievalReplayProfile(name="baseline_chunk", policy=baseline, **budget),
+        QasperRetrievalReplayProfile(
+            name="baseline_field_rerank",
+            policy=baseline,
+            field_index_enabled=True,
+            reranker_enabled=True,
+            field_reranker_enabled=True,
+            **budget,
+        ),
+        QasperRetrievalReplayProfile(name="expanded_chunk", policy=expanded, **budget),
         QasperRetrievalReplayProfile(
             name="expanded_field_without_rerank",
             policy=expanded,
             field_index_enabled=True,
+            **budget,
         ),
         QasperRetrievalReplayProfile(
             name="expanded_field_rerank",
@@ -89,6 +123,7 @@ def default_qasper_retrieval_replay_profiles() -> tuple[QasperRetrievalReplayPro
             field_index_enabled=True,
             reranker_enabled=True,
             field_reranker_enabled=True,
+            **budget,
         ),
     )
 

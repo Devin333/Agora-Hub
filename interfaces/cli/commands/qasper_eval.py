@@ -94,7 +94,23 @@ def register(operations: argparse._SubParsersAction) -> None:
     answer_replay.add_argument("--source-run-dir", type=Path, required=True)
     answer_replay.add_argument("--output-dir", type=Path, required=True)
     answer_replay.add_argument("--query-vector-path", type=Path, required=True)
+    answer_replay.add_argument(
+        "--max-context-items", type=int, default=None,
+        help="Context item budget applied to every replay profile (default: answer run budget)",
+    )
+    answer_replay.add_argument(
+        "--max-context-tokens", type=int, default=None,
+        help="Context token budget applied to every replay profile (default: answer run budget)",
+    )
     answer_replay.set_defaults(_qasper_action="answer_replay")
+
+    answer_backfill = answer_commands.add_parser(
+        "backfill-query-vectors",
+        help="Embed the query texts a blocked replay reported missing into the supplementary cache",
+    )
+    answer_backfill.add_argument("--blocked-replay-dir", type=Path, required=True)
+    answer_backfill.add_argument("--query-vector-path", type=Path, required=True)
+    answer_backfill.set_defaults(_qasper_action="answer_backfill_query_vectors")
 
     answer_merge = answer_commands.add_parser(
         "merge", help="Replace a run's failed cases with their re-run records and re-summarize",
@@ -285,7 +301,38 @@ def _build_replay_service(args: argparse.Namespace) -> Any:
         query_vector_path=args.query_vector_path.resolve(),
         source_run_directory=args.source_run_dir.resolve(),
         output_directory=args.output_dir.resolve(),
+        max_context_items=getattr(args, "max_context_items", None),
+        max_context_tokens=getattr(args, "max_context_tokens", None),
     )
+
+
+def _backfill_query_vectors(args: argparse.Namespace) -> dict[str, Any]:
+    from interfaces.composition.qasper_evaluation import backfill_qasper_replay_query_vectors
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("backfill-query-vectors requires --dataset-path and --cache-path")
+    return backfill_qasper_replay_query_vectors(
+        dataset_path=args.dataset_path.resolve(),
+        cache_path=args.cache_path.resolve(),
+        query_vector_path=args.query_vector_path.resolve(),
+        blocked_replay_directory=args.blocked_replay_dir.resolve(),
+    )
+
+
+def _dispatch_backfill_query_vectors(args: argparse.Namespace) -> int:
+    from backend.research.application.qasper_query_vector_backfill import QasperQueryVectorBackfillError
+
+    try:
+        result = _backfill_query_vectors(args)
+    except QasperQueryVectorBackfillError as exc:
+        # Backfill diagnostics name artifact fields only, so they are safe to show.
+        _print_json({"operation": "answer_backfill_query_vectors", "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, RuntimeError) as exc:
+        _print_json({"operation": "answer_backfill_query_vectors", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_backfill_query_vectors", "valid": True, **result})
+    return 0
 
 
 def _dispatch_replay(args: argparse.Namespace) -> int:
@@ -343,6 +390,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         return _dispatch_answer_rejudge(args)
     if action == "answer_replay":
         return _dispatch_replay(args)
+    if action == "answer_backfill_query_vectors":
+        return _dispatch_backfill_query_vectors(args)
     if action in {"calibrate_export", "calibrate_score"}:
         return _dispatch_calibration(args)
     parameters = None

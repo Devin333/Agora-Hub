@@ -353,6 +353,50 @@ def build_qasper_answer_rejudge_service(
     )
 
 
+def backfill_qasper_replay_query_vectors(
+    *,
+    dataset_path: Path,
+    cache_path: Path,
+    query_vector_path: Path,
+    blocked_replay_directory: Path,
+) -> dict[str, Any]:
+    """Embed the query texts a blocked offline replay reported missing.
+
+    This is the only replay-adjacent path that reads embedding-provider
+    configuration; the replay itself stays filesystem-only.
+    """
+    from backend.research.application.qasper_query_vector_backfill import backfill_replay_query_vectors
+    from backend.research.rag.evaluation.qasper_query_vectors import QueryVectorResolver
+    from framework.shared.env import load_root_env
+    from infrastructure.research.qasper_query_embedding import ProviderQueryEmbedder
+    from infrastructure.research.qasper_query_vector_store import FilesystemQueryVectorStore
+
+    for name, value in (("dataset_path", dataset_path), ("cache_path", cache_path),
+                        ("query_vector_path", query_vector_path),
+                        ("blocked_replay_directory", blocked_replay_directory)):
+        if not value.is_absolute():
+            raise ValueError(f"{name} must be absolute")
+    if not blocked_replay_directory.is_dir():
+        raise ValueError("blocked_replay_directory must be an existing directory")
+    load_root_env()
+    root = Path(__file__).resolve().parents[2]
+    assets = QasperAssetService(FilesystemQasperAssets(dataset_path, cache_path, repository_root=root))
+    cache = assets.embedding_cache()
+    identity = assets.cache_identity()
+    resolver = QueryVectorResolver(
+        cache,
+        embedder=ProviderQueryEmbedder.from_env(vector_size=identity.dimension),
+        store=FilesystemQueryVectorStore(query_vector_path),
+        model_id=identity.model_id,
+    )
+    return backfill_replay_query_vectors(
+        FilesystemQasperArtifacts(),
+        blocked_replay_directory=str(blocked_replay_directory),
+        resolver=resolver,
+        base_cache_sha256=identity.sha256,
+    )
+
+
 def build_qasper_answer_calibration_service(*, dataset_path: Path, cache_path: Path) -> "QasperAnswerCalibrationService":
     """Offline composition for judge calibration: filesystem only, no models or environment."""
     from backend.research.application.qasper_answer_calibration import QasperAnswerCalibrationService
