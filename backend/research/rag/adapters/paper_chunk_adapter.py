@@ -9,6 +9,11 @@ from backend.research.rag.adapters.paper_field_text import extract_field_texts
 from backend.research.rag.adapters.paper_source_locator import source_locator_from_paper_chunk
 from framework.rag.core import RAGChunk, RAGEvidence, RAGScoreBreakdown, SourceLocator
 
+# Evidence metadata key carrying the authoritative chunk record. Harness evidence
+# summaries are bounded previews, so consumers that need the passage itself
+# (answer generation) must rebuild it from this record, never from the summary.
+PAPER_CHUNK_METADATA_KEY = "paper_chunk"
+
 _SCORE_COMPONENT_KEYS: dict[str, tuple[str, ...]] = {
     "child_similarity": ("child_similarity", "child_semantic_score"),
     "parent_relevance": ("parent_relevance", "parent_relevance_score", "parent_child_relevance_score"),
@@ -63,8 +68,24 @@ class PaperChunkAdapter:
             score=resolved_score if resolved_score is not None else 0.0,
             score_breakdown=breakdown,
             source_locator=rag_chunk.source_locator,
-            metadata={**dict(rag_chunk.metadata), **paper_chunk_to_context_metadata(chunk)},
+            metadata={
+                **dict(rag_chunk.metadata),
+                **paper_chunk_to_context_metadata(chunk),
+                PAPER_CHUNK_METADATA_KEY: chunk.model_dump(mode="json"),
+            },
         )
+
+
+def paper_chunk_from_evidence_record(raw: Any) -> PaperChunk | None:
+    """Rebuild the chunk stored under ``PAPER_CHUNK_METADATA_KEY``; None when absent or invalid."""
+    if isinstance(raw, PaperChunk):
+        return raw
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return PaperChunk(**raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def paper_chunk_to_rag_chunk(chunk: PaperChunk) -> RAGChunk:
@@ -160,7 +181,9 @@ def _as_optional_float(value: Any) -> float | None:
 
 
 __all__ = [
+    "PAPER_CHUNK_METADATA_KEY",
     "PaperChunkAdapter",
+    "paper_chunk_from_evidence_record",
     "paper_chunk_to_evidence_metadata",
     "paper_chunk_to_rag_chunk",
     "paper_chunk_to_rag_evidence",

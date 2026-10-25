@@ -4,7 +4,9 @@ from backend.research.rag.adapters.answer_worker import PaperAnswerWorker
 from backend.research.rag.adapters.llm_plan_worker import LLMResearchRAGPlanCandidateWorker
 from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
 from backend.research.rag.adapters.paper_chunk_adapter import (
+    PAPER_CHUNK_METADATA_KEY,
     PaperChunkAdapter,
+    paper_chunk_from_evidence_record,
     paper_chunk_to_evidence_metadata,
     paper_chunk_to_rag_chunk,
     paper_chunk_to_rag_evidence,
@@ -17,6 +19,7 @@ from backend.research.rag.adapters.relevance_scorer import RerankerRelevanceScor
 
 __all__ = [
     "FIELD_NAMES",
+    "PAPER_CHUNK_METADATA_KEY",
     "PaperChunkAdapter",
     "PaperChunkFieldText",
     "PaperAnswerWorker",
@@ -24,6 +27,7 @@ __all__ = [
     "ResearchRAGMemoryPort",
     "ResearchRAGPlanWorker",
     "RerankerRelevanceScorer",
+    "paper_chunk_from_evidence_record",
     "paper_chunk_to_evidence_metadata",
     "paper_chunk_to_context_metadata",
     "paper_chunk_to_rag_chunk",

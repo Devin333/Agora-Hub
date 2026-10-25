@@ -12,6 +12,10 @@ from backend.research.domain.personal_memory_context import (
     PersonalMemoryContext, PersonalMemoryContextProvider,
 )
 from backend.research.ports.paper_answer_model import PaperAnswerModelError
+from backend.research.rag.adapters.paper_chunk_adapter import (
+    PAPER_CHUNK_METADATA_KEY,
+    paper_chunk_from_evidence_record,
+)
 from backend.research.rag.retrieval.contracts import RetrievalResult
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator, GeneratedAnswer
 from backend.research.rag.retrieval.paper_policy import classify_query_intent
@@ -220,7 +224,7 @@ def _project_context_pack(pack: RAGContextPack, *, question: str) -> _ProjectedC
     chunk_to_evidence_id: dict[str, str] = {}
     evidence_id_to_span_refs: dict[str, tuple[str, ...]] = {}
     for evidence in pack.accepted_evidence:
-        chunk = _paper_chunk_from_metadata(evidence.metadata.get("paper_chunk"))
+        chunk = paper_chunk_from_evidence_record(evidence.metadata.get(PAPER_CHUNK_METADATA_KEY))
         if chunk is None:
             chunk = _paper_chunk_from_evidence(evidence)
         if chunk is None:
@@ -256,17 +260,6 @@ def _project_context_pack(pack: RAGContextPack, *, question: str) -> _ProjectedC
         chunk_to_evidence_id=chunk_to_evidence_id,
         evidence_id_to_span_refs=evidence_id_to_span_refs,
     )
-
-
-def _paper_chunk_from_metadata(raw: Any) -> PaperChunk | None:
-    if isinstance(raw, PaperChunk):
-        return raw
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return PaperChunk(**raw)
-    except Exception:
-        return None
 
 
 def _paper_chunk_from_evidence_metadata(metadata: dict[str, Any]) -> PaperChunk | None:

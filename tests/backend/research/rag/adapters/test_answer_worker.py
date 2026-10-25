@@ -4,11 +4,13 @@ import pytest
 
 from backend.research.document.models import PaperChunk
 from backend.research.ports.paper_answer_model import PaperAnswerModelError
+from backend.research.rag.adapters import PaperChunkAdapter
 from backend.research.rag.adapters.answer_worker import PaperAnswerWorker
 from backend.research.rag.retrieval.paper_answer_generator import ABSTENTION_TOKEN, AnswerGenerator
 from framework.harness.rag.answer_gate import RAGAnswerGate
 from framework.harness.rag.answer_worker import AnswerWorkerError
 from framework.harness.rag.fake import fake_rag_session_spec
+from framework.harness.rag.kernel_evidence_adapter import evidence_candidate_from_rag_evidence
 from framework.harness.rag.models import EvidenceCandidate, RAGContextPack
 from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 
@@ -58,6 +60,35 @@ def test_paper_answer_worker_forwards_physical_execution_identity_to_model() -> 
 
     assert candidate.abstained is False
     assert model.last_request.execution_identity == identity
+
+
+def test_paper_answer_worker_renders_full_passage_beyond_the_harness_summary_preview() -> None:
+    long_body = " ".join(f"Sentence {index} describes the encoder setup." for index in range(60))
+    chunk = PaperChunk(
+        chunk_id="chunk-long",
+        paper_id="p1",
+        parse_source="pymupdf",
+        chunk_type="paragraph",
+        section_title="Method",
+        section_role=["method"],
+        has_formula=True,
+        formula_latex="h = W_2 x + b",
+        content=f"{long_body} The final sentence reports a learning rate of 0.0003.",
+        metadata={"source_locator": "paper://p1/pdf#page=2"},
+    )
+    # The production retrieval path: research adapter, then the domain-neutral Harness adapter.
+    evidence = evidence_candidate_from_rag_evidence(
+        PaperChunkAdapter().to_rag_evidence(chunk), evidence_type="paper_chunk",
+    )
+    assert len(evidence.summary) < len(chunk.content)
+    model = FakePaperAnswerModel("The learning rate is 0.0003 [1].")
+    worker = PaperAnswerWorker(AnswerGenerator(model, max_context_chunks=1))
+
+    candidate = worker.generate_answer(question="What learning rate is used?", pack=_pack(evidence))
+
+    assert "learning rate of 0.0003" in model.last_request.user_prompt
+    assert "W_2 x + b" in model.last_request.user_prompt
+    assert candidate.metadata["context_chunk_ids"] == ["chunk-long"]
 
 
 def test_paper_answer_worker_can_rebuild_chunk_from_flat_evidence_metadata() -> None:
