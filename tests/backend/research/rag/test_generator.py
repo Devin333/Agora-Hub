@@ -305,6 +305,15 @@ def test_answer_system_prompt_adds_table_result_instructions() -> None:
     assert "deltas" in prompt
 
 
+def test_answer_system_prompt_requires_complete_lists_and_partial_answers_before_abstaining() -> None:
+    prompt = build_answer_system_prompt("Which datasets are used?")
+
+    assert "gather them from every passage" in prompt
+    assert "answer only part of the question, answer that part" in prompt
+    assert "only when no passage answers any part of the question" in prompt
+    assert "merely mention its topic do not count" in prompt
+
+
 def test_answer_system_prompt_declares_passages_untrusted_and_abstention_protocol() -> None:
     prompt = build_answer_system_prompt("What is the method?")
 
@@ -335,6 +344,7 @@ def test_answer_generator_sends_versioned_grounding_and_yes_no_contract(question
     assert "minimum necessary bracketed citation" in request.system_prompt
     assert "Every cited passage must independently support" in request.system_prompt
     assert "mere absence does not establish No" in request.system_prompt
+    assert "fully describes the relevant part of the study" in request.system_prompt
     assert f"{ABSTENTION_TOKEN}: <one-sentence reason>" in request.system_prompt
     assert answer.context_metadata["answer_prompt_version"] == ANSWER_PROMPT_VERSION
     assert ANSWER_PROMPT_VERSION != ANSWER_PROTOCOL_VERSION
