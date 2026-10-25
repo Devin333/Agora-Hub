@@ -294,8 +294,13 @@ class AnswerGenerator:
             current = personal_memory_context_provider.current()
             if not isinstance(current, PersonalMemoryContext) or current != personal_memory_context:
                 raise ValueError("personal memory changed before answer model invocation")
-        response = await self._model.complete(request)
-        parsed = parse_answer_protocol(response.text, context_count=len(contexts))
+        context_chunk_ids = [chunk.chunk_id for chunk in selection.chunks]
+        try:
+            response = await self._model.complete(request)
+            parsed = parse_answer_protocol(response.text, context_count=len(contexts))
+        except PaperAnswerModelError as exc:
+            exc.attach_context_chunk_ids(context_chunk_ids)
+            raise
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
         _LOGGER.info(
             "generation %s",
@@ -309,7 +314,7 @@ class AnswerGenerator:
         return GeneratedAnswer(
             question=question,
             answer=parsed.answer,
-            context_chunk_ids=[chunk.chunk_id for chunk in selection.chunks],
+            context_chunk_ids=context_chunk_ids,
             contexts=contexts,
             context_metadata={
                 **selection.metadata,

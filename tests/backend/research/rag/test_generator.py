@@ -503,6 +503,41 @@ def test_answer_generator_propagates_model_failure_instead_of_fabricating_an_ans
     assert raised.value.code == "provider_unavailable"
 
 
+def test_answer_generator_failure_names_passages_in_prompt_order() -> None:
+    model = FakePaperAnswerModel(PaperAnswerModelError("provider_unavailable", "provider is down"))
+    chunks = (
+        _chunk("p-1", "paragraph", "Method text."),
+        _chunk("p-2", "paragraph", "Result text."),
+    )
+
+    with pytest.raises(PaperAnswerModelError) as raised:
+        asyncio.run(AnswerGenerator(model).generate("What is the method?", _retrieval(*chunks)))
+
+    sent = model.last_request.user_prompt
+    assert raised.value.context_chunk_ids
+    assert set(raised.value.context_chunk_ids) == {"p-1", "p-2"}
+    expected_order = sorted(
+        raised.value.context_chunk_ids,
+        key=lambda chunk_id: sent.index(
+            "Method text." if chunk_id == "p-1" else "Result text."
+        ),
+    )
+    assert list(raised.value.context_chunk_ids) == expected_order
+
+
+def test_answer_generator_malformed_output_names_sent_passages() -> None:
+    model = FakePaperAnswerModel(f"Partly. {ABSTENTION_TOKEN}: missing details")
+
+    with pytest.raises(PaperAnswerModelError) as raised:
+        asyncio.run(AnswerGenerator(model).generate(
+            "What is the method?",
+            _retrieval(_chunk("p-1", "paragraph", "Method text.")),
+        ))
+
+    assert raised.value.code == "malformed_output"
+    assert raised.value.context_chunk_ids == ("p-1",)
+
+
 def test_answer_generator_requires_answer_model_port() -> None:
     async def legacy_llm_call(prompt: str) -> str:
         return prompt

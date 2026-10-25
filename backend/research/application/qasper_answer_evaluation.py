@@ -453,7 +453,14 @@ class QasperAnswerEvaluationService:
         candidate = result.answer
         metadata = dict(candidate.metadata) if candidate is not None else {}
         generated = dict(metadata.get("generated_answer_metadata") or {})
-        context_ids = tuple(metadata.get("context_chunk_ids") or _pack_chunk_ids(result.context_pack))
+        failure = (result.decision.metadata or {}).get("generation_error") or {}
+        # Prefer the passages exactly as sent to the model; the pack order is only a
+        # fallback for failures that happened before context selection.
+        context_ids = tuple(
+            metadata.get("context_chunk_ids")
+            or failure.get("context_chunk_ids")
+            or _pack_chunk_ids(result.context_pack)
+        )
         answer = candidate.answer_text if candidate is not None and outcome is AnswerOutcome.ANSWERED else ""
         markers = partition_citation_markers(answer, context_count=len(context_ids))
         cited_ids = tuple(context_ids[i - 1] for i in markers.valid_indexes)
@@ -476,7 +483,6 @@ class QasperAnswerEvaluationService:
             )
             if self._judge_call is not None:
                 judge = asyncio.run(judge_answer(self._judge_call, judge_request))
-        failure = (result.decision.metadata or {}).get("generation_error") or {}
         generation_error = failure.get("code", "")
         generation_error_detail = (
             {

@@ -98,6 +98,7 @@ class PaperAnswerWorker:
         except PaperAnswerModelError as exc:
             raise AnswerWorkerError(
                 f"model_{exc.code}", str(exc), retryable=exc.retryable, details=exc.details,
+                context_chunk_ids=exc.context_chunk_ids,
             ) from exc
 
         actual_used_personal_memory: list[dict[str, str | int]] = []

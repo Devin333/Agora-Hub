@@ -243,6 +243,8 @@ def test_paper_answer_worker_maps_model_failure_to_worker_error() -> None:
         "message_truncated": False,
         "message_limit": 2048,
     }
+    assert raised.value.context_chunk_ids == ("chunk-method",)
+    assert raised.value.to_dict()["context_chunk_ids"] == ["chunk-method"]
 
 
 def _pack(*evidence: EvidenceCandidate) -> RAGContextPack:

@@ -9,7 +9,7 @@ receive an empty or fabricated response in place of a failure.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -63,6 +63,13 @@ class PaperAnswerModelError(RuntimeError):
         self.details = _safe_diagnostic_mapping(details)
         self.details.setdefault("message_truncated", message_truncated)
         self.details.setdefault("message_limit", _DIAGNOSTIC_TEXT_LIMIT)
+        # Chunk ids of the passages the failed request carried, in prompt order;
+        # empty when the failure happened before any context was selected.
+        self.context_chunk_ids: tuple[str, ...] = ()
+
+    def attach_context_chunk_ids(self, chunk_ids: Sequence[str]) -> None:
+        """Record which passages the failed request carried, as the generator propagates it."""
+        self.context_chunk_ids = tuple(str(chunk_id) for chunk_id in chunk_ids)
 
 
 def _safe_diagnostic_text(value: object) -> tuple[str, bool]:

@@ -244,7 +244,7 @@ def test_answer_run_records_model_identity_judge_requests_and_progress(
 
 
 def test_generation_failure_persists_typed_diagnostic_detail(
-    tmp_path: Path, repository: Path,
+    tmp_path: Path, repository: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.research.ports.paper_answer_model import PaperAnswerModelError
 
@@ -258,11 +258,31 @@ def test_generation_failure_persists_typed_diagnostic_detail(
         tmp_path, repository, judge_call=None, answer_model=model, output="typed-failure",
     )
 
+    # The context-pack order is only a fallback; a failed generation must record
+    # the passages the generator actually sent, so the fallback must not be used.
+    from backend.research.application import qasper_answer_evaluation as evaluation_module
+
+    monkeypatch.setattr(evaluation_module, "_pack_chunk_ids", lambda _pack: ["pack-order-fallback"])
     service.run()
 
     first = json.loads(
         (tmp_path / "typed-failure" / "answers.jsonl").read_text(encoding="utf-8").splitlines()[0]
     )
+    # A failed case records the passages in the order the model received them,
+    # the same order a successful generation of that case records.
+    answering, _embedder, _store = _service(
+        tmp_path, repository, judge_call=None,
+        answer_model=FakePaperAnswerModel("INSUFFICIENT_EVIDENCE: not stated"),
+        output="typed-failure-reference",
+    )
+    answering.run()
+    def context_ids(output: str) -> dict[str, list[str]]:
+        lines = (tmp_path / output / "answers.jsonl").read_text(encoding="utf-8").splitlines()
+        return {row["case_id"]: row["context_chunk_ids"] for row in map(json.loads, lines)}
+
+    reference = context_ids("typed-failure-reference")
+    assert all(ids and ids != ["pack-order-fallback"] for ids in reference.values())
+    assert context_ids("typed-failure") == reference
     assert first["generation_error"] == "model_provider_unavailable"
     assert first["generation_error_detail"]["code"] == "model_provider_unavailable"
     assert first["generation_error_detail"]["retryable"] is True
