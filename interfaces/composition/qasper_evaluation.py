@@ -70,6 +70,8 @@ def build_qasper_answer_evaluation_service(
     judge: bool = True,
     retrieval_profile: str | None = None,
     retrieval_overfetch: int | None = None,
+    max_context_items: int | None = None,
+    max_context_tokens: int | None = None,
     case_ids: tuple[str, ...] | None = None,
     progress=None,
     case_started=None,
@@ -162,6 +164,14 @@ def build_qasper_answer_evaluation_service(
         retrieval_profile=QasperAnswerRetrievalProfile(
             name=profile_name,
             execution_profile="fixture",
+            **{
+                name: value
+                for name, value in (
+                    ("max_context_items", max_context_items),
+                    ("max_context_tokens", max_context_tokens),
+                )
+                if value is not None
+            },
             field_index_enabled=field_enabled,
             reranker_enabled=lightweight is not None,
             field_reranker_enabled=lightweight is not None,

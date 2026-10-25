@@ -635,6 +635,82 @@ def test_candidate_overfetch_expands_actual_recall_without_expanding_answer_cont
     )
 
 
+def test_larger_context_budget_reaches_the_answer_prompt(
+    tmp_path: Path, repository: Path,
+) -> None:
+    paragraphs = [f"Method paragraph {index} discusses encoder training details." for index in range(30)]
+    dataset = {
+        PAPER: {
+            "title": "Large fixture paper",
+            "abstract": "Encoder study.",
+            "full_text": [
+                {"section_name": f"Method {index}", "paragraphs": [paragraph]}
+                for index, paragraph in enumerate(paragraphs)
+            ],
+            "figures_and_tables": [],
+            "qas": [
+                _qa(
+                    "q_budget",
+                    "Which encoder training details are discussed?",
+                    {"extractive_spans": ["encoder training details"], "evidence": [paragraphs[0]]},
+                )
+            ],
+        }
+    }
+    dataset_path = tmp_path / "budget-dataset.json"
+    dataset_path.write_text(json.dumps(dataset), encoding="utf-8")
+    chunks = QasperAssetService(
+        FilesystemQasperAssets(dataset_path, None, repository_root=repository)
+    ).read_assets().chunks
+    cache_path = tmp_path / "budget-cache.npz"
+    texts = sorted({chunk.content for chunk in chunks})
+    np.savez(
+        cache_path,
+        keys=np.asarray([OfflineEmbeddingCache.key(text) for text in texts], dtype=str),
+        vectors=np.tile(np.asarray([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (len(texts), 1)),
+    )
+    prompts: list[str] = []
+
+    def reply(request) -> str:
+        prompts.append(request.user_prompt)
+        return "Encoder training details are discussed [1]."
+
+    def run(items: int, tokens: int, output_name: str) -> dict:
+        prompts.clear()
+        service = QasperAnswerEvaluationService(
+            QasperAssetService(
+                FilesystemQasperAssets(dataset_path, cache_path, repository_root=repository)
+            ),
+            FilesystemQasperArtifacts(),
+            query_embedder=_Embedder(),
+            query_vector_store=_Store(),
+            answer_model=FakePaperAnswerModel(reply),
+            judge_call=None,
+            retrieval_policy=RetrievalPolicy(overfetch_multiplier=10),
+            retrieval_profile=QasperAnswerRetrievalProfile(
+                name=f"budget-{items}", max_context_items=items, max_context_tokens=tokens,
+            ),
+            config=QasperAnswerEvaluationConfig(output_directory=str(tmp_path / output_name), per_type=1),
+        )
+        report = service.run()
+        row = json.loads((tmp_path / output_name / "answers.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        return {"report": report, "row": row, "prompt": prompts[-1]}
+
+    default = run(8, 2048, "budget-8")
+    widened = run(12, 8192, "budget-12")
+
+    assert len(default["row"]["context_chunk_ids"]) == 8
+    assert "[9]" not in default["prompt"]
+    # Every passage the widened budget admits is rendered and named, not cut at the old cap of 8.
+    assert len(widened["row"]["context_chunk_ids"]) == 12
+    assert "[12]" in widened["prompt"]
+    assert widened["report"]["identity"]["context_budget"]["max_context_items"] == 12
+    assert (
+        default["report"]["identity"]["retrieval_profile_fingerprint"]
+        != widened["report"]["identity"]["retrieval_profile_fingerprint"]
+    )
+
+
 def test_end_to_end_run_scores_every_stratum_and_publishes_artifacts(tmp_path: Path, repository: Path) -> None:
     async def judge(prompt: str) -> str:
         return '{"correct": true, "citations": [{"index": 1, "supports": true}], "rationale": "matches"}'

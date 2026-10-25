@@ -119,6 +119,26 @@ def test_answer_composition_preserves_default_or_applies_explicit_overfetch(
     assert expanded._policy.overfetch_multiplier == 9
 
 
+def test_answer_composition_applies_explicit_context_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_models(monkeypatch)
+    dataset, cache, query_vectors, output = _paths(tmp_path)
+
+    default = build_qasper_answer_evaluation_service(
+        dataset_path=dataset, cache_path=cache, query_vector_path=query_vectors,
+        output_directory=output, seed="seed", per_type=1, max_cases=1, judge=False,
+    )
+    widened = build_qasper_answer_evaluation_service(
+        dataset_path=dataset, cache_path=cache, query_vector_path=query_vectors,
+        output_directory=output, seed="seed", per_type=1, max_cases=1, judge=False,
+        max_context_items=16, max_context_tokens=4096,
+    )
+
+    assert (default._retrieval_profile.max_context_items, default._retrieval_profile.max_context_tokens) == (8, 2048)
+    assert (widened._retrieval_profile.max_context_items, widened._retrieval_profile.max_context_tokens) == (16, 4096)
+
+
 def test_field_profile_composes_real_fixture_components_with_default_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

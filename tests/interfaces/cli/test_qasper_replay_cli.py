@@ -171,3 +171,29 @@ def test_answer_backfill_query_vectors_returns_structured_refusal(
         "reason": "source is not a blocked retrieval replay",
         "valid": False,
     }
+
+
+def test_answer_run_forwards_optional_context_budget(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    service = _Service({"evaluated_cases": 1})
+    captured = {}
+
+    def build(args):
+        captured.update(vars(args))
+        return service
+
+    monkeypatch.setattr(qasper_eval, "_build_answer_service", build)
+
+    code = qasper_eval.main([
+        "qasper", "--dataset-path", str(tmp_path / "dataset"),
+        "--cache-path", str(tmp_path / "cache"), "answer", "run",
+        "--output-dir", str(tmp_path / "output"),
+        "--query-vector-path", str(tmp_path / "query"),
+        "--max-context-items", "16", "--max-context-tokens", "4096",
+    ])
+
+    assert code == 0
+    assert captured["max_context_items"] == 16
+    assert captured["max_context_tokens"] == 4096
+    capsys.readouterr()

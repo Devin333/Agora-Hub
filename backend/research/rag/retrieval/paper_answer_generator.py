@@ -39,9 +39,20 @@ _LOGGER = logging.getLogger(__name__)
 ANSWER_PROTOCOL_VERSION = "insufficient_evidence_prefix_v1"
 ANSWER_PROMPT_VERSION = "grounded_minimal_citations_v1"
 CONTEXT_BUDGET_STRATEGY = "shared_budget_relevant_sentences_v1"
+DEFAULT_MAX_CONTEXT_CHUNKS = 8
+# Shared rendering allowance per selected passage; a larger passage budget scales the
+# total so each passage keeps the same room instead of being squeezed.
+CONTEXT_CHARS_PER_PASSAGE = 1500
 # About 3k tokens: every passage of the evaluation corpus except one outlier fits whole.
-DEFAULT_MAX_CONTEXT_CHARS = 12000
+DEFAULT_MAX_CONTEXT_CHARS = DEFAULT_MAX_CONTEXT_CHUNKS * CONTEXT_CHARS_PER_PASSAGE
 CONTEXT_PASSAGE_FLOOR_CHARS = 400
+
+
+def context_chars_for_passages(max_context_chunks: int) -> int:
+    """Total rendering budget that gives each of ``max_context_chunks`` passages the default room."""
+    if type(max_context_chunks) is not int or max_context_chunks < 1:
+        raise ValueError("max_context_chunks must be a positive integer")
+    return max_context_chunks * CONTEXT_CHARS_PER_PASSAGE
 ABSTENTION_TOKEN = "INSUFFICIENT_EVIDENCE"
 _ABSTENTION_LINE_RE = re.compile(rf"{ABSTENTION_TOKEN}:[ \t]*(?P<reason>\S[^\r\n]*)")
 
@@ -132,7 +143,7 @@ class AnswerContextAssembler:
 
     strategy_name = "answer_context_assembler_v1"
 
-    def __init__(self, *, max_context_chunks: int = 8) -> None:
+    def __init__(self, *, max_context_chunks: int = DEFAULT_MAX_CONTEXT_CHUNKS) -> None:
         self._max_chunks = max_context_chunks
 
     def select(
@@ -243,7 +254,7 @@ class AnswerGenerator:
         self,
         model: PaperAnswerModelPort,
         *,
-        max_context_chunks: int = 8,
+        max_context_chunks: int = DEFAULT_MAX_CONTEXT_CHUNKS,
         max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
     ) -> None:
         if not isinstance(model, PaperAnswerModelPort):
@@ -254,8 +265,18 @@ class AnswerGenerator:
                 f"{CONTEXT_PASSAGE_FLOOR_CHARS} chars each"
             )
         self._model = model
+        self._max_context_chunks = max_context_chunks
         self._max_context_chars = max_context_chars
         self._context_assembler = AnswerContextAssembler(max_context_chunks=max_context_chunks)
+
+    @property
+    def context_limits(self) -> dict[str, int | str]:
+        """Passage and character limits this generator renders into the prompt."""
+        return {
+            "max_context_chunks": self._max_context_chunks,
+            "max_context_chars": self._max_context_chars,
+            "strategy": CONTEXT_BUDGET_STRATEGY,
+        }
 
     async def generate(
         self,
@@ -685,14 +706,17 @@ __all__ = [
     "ANSWER_PROMPT_VERSION",
     "ANSWER_PROTOCOL_VERSION",
     "CONTEXT_BUDGET_STRATEGY",
+    "CONTEXT_CHARS_PER_PASSAGE",
     "CONTEXT_PASSAGE_FLOOR_CHARS",
     "DEFAULT_MAX_CONTEXT_CHARS",
+    "DEFAULT_MAX_CONTEXT_CHUNKS",
     "AnswerContextAssembler",
     "AnswerGenerator",
     "GeneratedAnswer",
     "ParsedAnswer",
     "build_answer_system_prompt",
     "build_answer_user_prompt",
+    "context_chars_for_passages",
     "parse_answer_protocol",
     "render_answer_context",
 ]

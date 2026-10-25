@@ -51,6 +51,7 @@ from backend.research.rag.retrieval.paper_answer_generator import (
     ANSWER_PROMPT_VERSION,
     ANSWER_PROTOCOL_VERSION,
     AnswerGenerator,
+    context_chars_for_passages,
     render_answer_context,
 )
 from backend.research.rag.retrieval.policies import RetrievalPolicy
@@ -304,7 +305,13 @@ class QasperAnswerEvaluationService:
             reranker=reranker_tracker if reranker_tracker.available else None,
             field_reranker=field_reranker_tracker if field_reranker_tracker.available else None,
             retrieval_policy=self._policy,
-            answer_worker=PaperAnswerWorker(AnswerGenerator(self._answer_model)),
+            # The generator renders exactly the passages the context budget admits, each
+            # with the default per-passage room, so a larger budget is not truncated away.
+            answer_worker=PaperAnswerWorker(AnswerGenerator(
+                self._answer_model,
+                max_context_chunks=self._retrieval_profile.max_context_items,
+                max_context_chars=context_chars_for_passages(self._retrieval_profile.max_context_items),
+            )),
             generation_policy={"enabled": True, "max_attempts": 2},
             **(
                 {

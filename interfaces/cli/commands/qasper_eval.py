@@ -86,6 +86,14 @@ def register(operations: argparse._SubParsersAction) -> None:
         default=None,
         help="Optional positive integer retrieval overfetch multiplier",
     )
+    answer_run.add_argument(
+        "--max-context-items", type=int, default=None,
+        help="Context passages admitted to the answer prompt (default 8)",
+    )
+    answer_run.add_argument(
+        "--max-context-tokens", type=int, default=None,
+        help="RAG context token budget; raise together with --max-context-items (default 2048)",
+    )
     answer_run.set_defaults(_qasper_action="answer_run")
 
     answer_replay = answer_commands.add_parser(
@@ -201,6 +209,8 @@ def _build_answer_service(args: argparse.Namespace) -> Any:
         judge=not args.no_judge,
         retrieval_profile=args.retrieval_profile,
         retrieval_overfetch=args.retrieval_overfetch,
+        max_context_items=getattr(args, "max_context_items", None),
+        max_context_tokens=getattr(args, "max_context_tokens", None),
     )
 
 
