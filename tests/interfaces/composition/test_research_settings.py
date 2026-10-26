@@ -25,7 +25,7 @@ def _minimum_env(secret: str = "sk-test-research-secret") -> dict[str, str]:
     return {"DASHSCOPE_API_KEY": secret}
 
 
-def test_repo_dev_research_uses_dedicated_gpt_56_luna_route_without_changing_writer(
+def test_repo_dev_research_uses_dedicated_gpt_56_sol_route_without_changing_writer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository_root = Path(__file__).resolve().parents[3]
@@ -37,7 +37,7 @@ def test_repo_dev_research_uses_dedicated_gpt_56_luna_route_without_changing_wri
             "NEWS_RESEARCH_LLM_ROUTE_ID": "research-desktop-answer",
             "NEWS_RESEARCH_LLM_PROVIDER": "openai-compatible",
             "NEWS_RESEARCH_LLM_BASE_URL": base_url,
-            "NEWS_RESEARCH_LLM_MODEL": "gpt-5.6-luna",
+            "NEWS_RESEARCH_LLM_MODEL": "gpt-5.6-sol",
             "NEWS_RESEARCH_LLM_API_KEY_ENV": "OPENAI_API_KEY",
             "OPENAI_API_KEY": "synthetic-research-test-key",
             "NEWS_MODELS_CONFIG": str(models_config),
@@ -52,8 +52,8 @@ def test_repo_dev_research_uses_dedicated_gpt_56_luna_route_without_changing_wri
         apply_environment_overrides=False,
     )
 
-    assert research_deployment.deployment_id == "research-desktop-answer-gpt-5.6-luna"
-    assert research_deployment.config.model == "gpt-5.6-luna"
+    assert research_deployment.deployment_id == "research-desktop-answer-gpt-5.6-sol"
+    assert research_deployment.config.model == "gpt-5.6-sol"
     assert research_deployment.config.base_url == base_url
     assert research_deployment.config.api_key_env == "OPENAI_API_KEY"
     assert research_deployment.structured_output_capability is None
