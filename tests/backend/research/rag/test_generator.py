@@ -322,12 +322,27 @@ def test_answer_system_prompt_forbids_substituting_related_facts_for_the_asked_f
     assert "component sizes for a total size" in prompt
 
 
-def test_answer_system_prompt_treats_unstated_properties_as_evidence_for_neither_answer() -> None:
+def test_answer_system_prompt_answers_count_questions_from_enumerated_items() -> None:
+    prompt = build_answer_system_prompt("How many categories do the authors define?")
+
+    assert "answered by counting the items the passages enumerate" in prompt
+
+
+def test_answer_system_prompt_decides_only_or_all_questions_from_named_exceptions() -> None:
     prompt = build_answer_system_prompt("Do they report results only on English data?")
 
-    assert "A property the passages leave unstated is evidence for neither answer" in prompt
-    assert "only when a passage names a non-English language or dataset" in prompt
-    assert "When the passages establish neither Yes nor No in these ways, abstain." in prompt
+    assert "answer Yes when the passages describe all of the items as having the property" in prompt
+    assert "answer No only when a passage names an exception" in prompt
+    assert "never infer an exception because the passages omit an item's property" in prompt
+
+
+def test_answer_system_prompt_answers_yes_no_from_necessary_implication_before_abstaining() -> None:
+    prompt = build_answer_system_prompt("Do the decoders share weights?")
+
+    assert "Decide from what the passages state or necessarily imply" in prompt
+    assert "independent components where the question asks whether they are shared" in prompt
+    assert "mere absence does not establish No" in prompt
+    assert "establish neither answer to a yes/no question in the ways above" in prompt
 
 
 def test_answer_system_prompt_declares_passages_untrusted_and_abstention_protocol() -> None:
@@ -359,7 +374,7 @@ def test_answer_generator_sends_versioned_grounding_and_yes_no_contract(question
     assert "directly stated or necessarily implied" in request.system_prompt
     assert "minimum necessary bracketed citation" in request.system_prompt
     assert "Every cited passage must independently support" in request.system_prompt
-    assert "A property the passages leave unstated is evidence for neither answer" in request.system_prompt
+    assert "mere absence does not establish No" in request.system_prompt
     assert "fully describes the relevant part of the study" in request.system_prompt
     assert f"{ABSTENTION_TOKEN}: <one-sentence reason>" in request.system_prompt
     assert answer.context_metadata["answer_prompt_version"] == ANSWER_PROMPT_VERSION
