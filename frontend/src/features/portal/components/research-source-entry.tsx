@@ -396,7 +396,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                     event.target.value = "";
                 }}
             />
-            {appearance === "paper-agent" && isLocalDesktopProfile() && <section aria-label="为已识别论文准备来源">
+            {appearance === "paper-agent" && isLocalDesktopProfile() && <section aria-label="为已识别论文准备来源" data-source-preparation className={styles.sourcePreparation}>
                 <label>论文 URL / DOI<input type="text" aria-label="论文来源 URL 或 DOI" value={sourceInput} onChange={event => setSourceInput(event.target.value)} placeholder="https://… 或 10.…/…" /></label>
                 <label>目标论文<select aria-label="选择已入库的目标论文" value={selectedTarget ? sourcePaperId : ""} onChange={event => setSourcePaperId(event.target.value)} disabled={busy || targets.length === 0}><option value="">请选择当前论文库中的论文</option>{targets.map(material => <option key={material.id} value={material.referenceId}>{material.title} — {material.referenceId}</option>)}</select></label>
                 {selectedTarget && <p>已识别目标：{selectedTarget.title}（真实 ID：<code>{selectedTarget.referenceId}</code>）</p>}

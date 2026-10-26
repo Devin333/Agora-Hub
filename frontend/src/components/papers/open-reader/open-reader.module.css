@@ -1158,35 +1158,25 @@
 }
 .sourceFigureText { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; font-size: 14px; line-height: 1.8; background: #f7f7fa; }
 
-/* Formal paper-agent workspace appearance. The default portal workspace keeps its original palette. */
-.openReader.workspaceReader.monochromeLightWorkspace {
-  --reader-bg: #f7f7f5;
-  --reader-paper: #ffffff;
-  --reader-ink: #1d1d1b;
-  --reader-muted: #5b5b56;
-  --reader-soft: #e5e5e0;
-  --reader-line: #d1d1cb;
-  --reader-accent: #2b2b28;
-  --reader-accent-soft: #ecece8;
-  --reader-note: #deded6;
-  --reader-confused: #d3d3cc;
-  --reader-green: #4d4d48;
-  --reader-shadow: 0 16px 42px rgba(20, 20, 18, 0.12);
-}
-
+/*
+ * Formal paper-agent workspace appearance. Both monochrome appearances resolve
+ * through the shell design tokens (paper-agent-theme.css), which switch with the
+ * shell theme; the default portal workspace keeps its original palette.
+ */
+.openReader.workspaceReader.monochromeLightWorkspace,
 .openReader.workspaceReader.monochromeDarkWorkspace {
-  --reader-bg: #11110f;
-  --reader-paper: #191917;
-  --reader-ink: #f3f3ef;
-  --reader-muted: #b8b8b0;
-  --reader-soft: #292926;
-  --reader-line: #3c3c37;
-  --reader-accent: #e7e7e0;
-  --reader-accent-soft: #30302c;
-  --reader-note: #494942;
-  --reader-confused: #514f49;
-  --reader-green: #c7c7bf;
-  --reader-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  --reader-bg: var(--bg);
+  --reader-paper: var(--surface);
+  --reader-ink: var(--text);
+  --reader-muted: var(--muted);
+  --reader-soft: var(--fill);
+  --reader-line: var(--border);
+  --reader-accent: var(--text);
+  --reader-accent-soft: var(--fill);
+  --reader-note: var(--selected);
+  --reader-confused: var(--border-strong);
+  --reader-green: var(--muted);
+  --reader-shadow: var(--shadow-row);
 }
 
 .workspaceReader.monochromeLightWorkspace .paperCard,

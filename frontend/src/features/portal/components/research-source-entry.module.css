@@ -20,3 +20,29 @@
 .status :is(button, a) {
   color: inherit;
 }
+
+/* Structure only: hosts paint the surface, so each appearance keeps its own palette. */
+.sourcePreparation {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sourcePreparation label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sourcePreparation :is(input, select) {
+  width: 100%;
+  min-width: 0;
+}
+
+.sourcePreparation p {
+  margin: 0;
+}
+
+.sourcePreparation button {
+  justify-self: start;
+}

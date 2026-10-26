@@ -35,7 +35,7 @@ export function secureWindowOptions(outputDirectory: string, workArea: Rectangle
   return {
     ...computeWindowGeometry(workArea),
     show: false,
-    backgroundColor: "#f4f3ef",
+    backgroundColor: "#fcfcfc",
     title: "Agora Paper Agent",
     autoHideMenuBar: true,
     icon: path.join(outputDirectory, "icon.png"),

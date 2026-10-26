@@ -1,0 +1,2 @@
+/* Carries the font CSS variable only; the wrapper must not take part in layout. */
+.fontScope { display: contents; }

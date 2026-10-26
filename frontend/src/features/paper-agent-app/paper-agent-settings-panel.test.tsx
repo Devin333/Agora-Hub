@@ -61,23 +61,18 @@ function installDesktop(options: { withConfig?: boolean } = {}) {
 afterEach(() => { cleanup(); document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); delete (window as unknown as { agoraDesktop?: unknown }).agoraDesktop })
 
 describe("PaperAgentSettingsPanel CSS", () => {
-  it("keeps every literal light and dark theme color on the grayscale axis", () => {
+  it("draws every color from the shared monochrome theme tokens instead of literal values", () => {
     const css = readFileSync(resolve(process.cwd(), "src/features/paper-agent-app/paper-agent-settings-panel.module.css"), "utf8")
-    const hexColors = [...css.matchAll(/#([0-9a-f]{3,8})\b/gi)].map(match => match[1])
-    const rgbColors = [...css.matchAll(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi)]
+    const panelTokens = css.match(/^\.panel \{([\s\S]*?)\n\}/m)?.[1] ?? ""
 
-    expect(css).toContain(':global([data-theme="dark"]) .panel')
-    expect(hexColors.length).toBeGreaterThan(20)
-    for (const value of hexColors) {
-      const expanded = value.length === 3 || value.length === 4
-        ? value.slice(0, 3).split("").map(channel => channel + channel)
-        : [value.slice(0, 2), value.slice(2, 4), value.slice(4, 6)]
-      expect(new Set(expanded).size, `non-monochrome CSS color #${value}`).toBe(1)
+    // The shell tokens switch with data-theme, so the panel needs no dark-only overrides of its own.
+    expect(css).not.toContain('[data-theme="dark"]')
+    for (const [name, token] of [["ink", "text"], ["muted", "muted"], ["line", "border"], ["surface", "surface"], ["subtle", "surface-2"], ["input", "fill"]]) {
+      expect(panelTokens).toContain(`--panel-${name}: var(--${token});`)
     }
-    for (const match of rgbColors) {
-      expect(new Set(match.slice(1, 4)).size, `non-monochrome CSS color ${match[0]}`).toBe(1)
-    }
-    expect(css).not.toMatch(/\b(?:hsl|hsla|lab|lch|oklab|oklch|color-mix)\(/i)
+    expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(css).not.toMatch(/\brgba?\(/i)
+    expect(css).not.toMatch(/\b(?:hsla?|lab|lch|oklab|oklch|color-mix)\(/i)
   })
 })
 

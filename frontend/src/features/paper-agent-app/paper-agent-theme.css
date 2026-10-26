@@ -1,0 +1,98 @@
+/*
+ * Paper Agent design tokens.
+ *
+ * The single source of color, radius, elevation, and typography for the paper
+ * workspace shell and everything rendered inside it (library, reader, assistant,
+ * settings, memory). Component styles consume these semantic names and never
+ * hard-code palette values.
+ *
+ * Layering, radius scale, and density follow the Rakazo interface
+ * (https://github.com/elie222/rakazo, Apache-2.0): surfaces separate by small
+ * luminance steps instead of shadows, hairline borders, and radii that grow with
+ * element size. Colors are strictly neutral (equal RGB channels) because the
+ * workspace specification requires a black-and-white theme.
+ */
+[data-paper-agent-shell] {
+  /* Surfaces, from page to raised. */
+  --bg: #fcfcfc;
+  --surface: #ffffff;
+  --surface-2: #f7f7f7;
+  --fill: #f2f2f2;
+  /* Ink. */
+  --text: #171717;
+  --muted: #636363;
+  --faint: #666666;
+  --danger: #636363;
+  /* Lines and states. */
+  --border: #e8e8e8;
+  --border-strong: #c7c7c7;
+  --hover: #ebebeb;
+  --selected: #e6e6e6;
+  --sidebar: #f7f7f7;
+  --sidebar-accent: #ffffff;
+  --ring: #737373;
+  /* Inverted (primary) controls: --text fill, --surface ink, one step lighter on hover. */
+  --primary-hover: #3c3c3c;
+  --selection: rgb(23 23 23 / 18%);
+  /* Sticky translucent bars over scrolling content. */
+  --bar: rgb(252 252 252 / 92%);
+  /* Conversation. */
+  --chat-user: #0b0b0b;
+  --chat-user-text: #ffffff;
+  /* Elevation and scrim. */
+  --overlay: rgb(0 0 0 / 19%);
+  --shadow-row: 0 1px 2px rgb(0 0 0 / 6%), 0 0 0 1px rgb(0 0 0 / 4%);
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 8%), 0 0 0 1px rgb(0 0 0 / 6%);
+  --shadow-drawer: 16px 0 40px rgb(0 0 0 / 12%);
+  --shadow-dialog: 0 24px 64px rgb(0 0 0 / 16%);
+  --scrollbar: #c8c8c8;
+  --scrollbar-hover: #a8a8a8;
+  /* Radius scale: larger elements are rounder. */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-composer: 26px;
+  --radius-full: 999px;
+  /* Typography. Geist covers Latin UI text; CJK falls back to the platform font. */
+  --font-sans: var(--font-geist-sans, "Geist"), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  --font-serif: Georgia, "Times New Roman", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  /* Motion. */
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --duration-fast: 100ms;
+  --duration-base: 180ms;
+  color-scheme: light;
+}
+
+[data-paper-agent-shell][data-theme="dark"] {
+  --bg: #141414;
+  --surface: #1e1e1e;
+  --surface-2: #1a1a1a;
+  --fill: #242424;
+  --text: #ebebeb;
+  --muted: #a6a6a6;
+  --faint: #9e9e9e;
+  --danger: #a6a6a6;
+  --border: #2e2e2e;
+  --border-strong: #4d4d4d;
+  --hover: #2b2b2b;
+  --selected: #333333;
+  --sidebar: #1e1e1e;
+  --sidebar-accent: #2b2b2b;
+  --ring: #8f8f8f;
+  --primary-hover: #cacaca;
+  --selection: rgb(235 235 235 / 18%);
+  --bar: rgb(20 20 20 / 92%);
+  --chat-user: #5c5c5c;
+  --chat-user-text: #ffffff;
+  --overlay: rgb(0 0 0 / 40%);
+  --shadow-row: 0 0 0 1px rgb(255 255 255 / 4%);
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 36%), 0 0 0 1px rgb(255 255 255 / 6%);
+  --shadow-drawer: 16px 0 40px rgb(0 0 0 / 44%);
+  --shadow-dialog: 0 24px 64px rgb(0 0 0 / 52%);
+  --scrollbar: #2e2e2e;
+  --scrollbar-hover: #474747;
+  color-scheme: dark;
+}

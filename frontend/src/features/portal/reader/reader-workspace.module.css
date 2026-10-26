@@ -173,33 +173,68 @@
 @media (max-width: 1200px) { .layout { grid-template-columns: 155px minmax(0, 1fr) 300px; gap: 18px; padding-left: 20px; padding-right: 20px; } .focusLayout { grid-template-columns: minmax(0, 880px); } .pdfLayout { grid-template-columns: minmax(0, 1fr) 300px; } .pdfLayout.focusLayout { grid-template-columns: minmax(0, 1200px); } .paperHeading, .overviewBody { padding-left: 26px; padding-right: 26px; } .readingControls { gap: 0; } .viewSwitch button { padding-left: 9px; padding-right: 9px; } }
 @media (prefers-reduced-motion: reduce) { .workspace *, .workspace *::before, .workspace *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 
-/* The formal paper-agent shell opts the existing assistant into its monochrome palette. */
-:global([data-paper-agent-shell][data-theme="light"]) .assistant {
-  --ink: #1d1d1b;
-  --muted: #5b5b56;
-  --purple: #2b2b28;
-  --line: #d1d1cb;
-  --soft: #ecece8;
+/*
+ * The formal paper-agent shell opts the existing assistant into its design tokens
+ * (paper-agent-theme.css). `--muted` is inherited from the shell unchanged; the
+ * remaining assistant variables map onto shell tokens so the portal palette never
+ * leaks into the black-and-white workspace.
+ */
+:global([data-paper-agent-shell]) .assistant {
+  --ink: var(--text);
+  --purple: var(--text);
+  --line: var(--border);
+  --soft: var(--fill);
   color: var(--ink);
-  border-color: var(--line);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 12px 34px rgba(20, 20, 18, 0.1);
+  background: var(--bg);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  font-family: var(--font-sans);
 }
 
-:global([data-paper-agent-shell][data-theme="dark"]) .assistant {
-  --ink: #f3f3ef;
-  --muted: #b8b8b0;
-  --purple: #e7e7e0;
-  --line: #3c3c37;
-  --soft: #30302c;
-  color: var(--ink);
-  border-color: var(--line);
-  background: rgba(25, 25, 23, 0.98);
-  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.38);
+:global([data-paper-agent-shell]) .assistantHeading { padding: 18px 18px 14px; gap: 10px; }
+:global([data-paper-agent-shell]) .assistantHeading strong { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+:global([data-paper-agent-shell]) .assistantHeading p { margin-top: 3px; font-size: 12px; }
+
+:global([data-paper-agent-shell]) .spark {
+  width: 32px;
+  height: 32px;
+  color: var(--text);
+  background: var(--fill);
+  border-radius: var(--radius-md);
 }
 
-:global([data-paper-agent-shell]) .assistantHeading,
-:global([data-paper-agent-shell]) .assistantTabs,
+/* Tabs read as a segmented control: a filled track with a raised active pill. */
+:global([data-paper-agent-shell]) .assistantTabs {
+  gap: 2px;
+  margin: 0 16px;
+  padding: 3px;
+  background: var(--fill);
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+:global([data-paper-agent-shell]) .assistantTabs > button {
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+:global([data-paper-agent-shell]) .assistantTabs > button:hover { color: var(--text); }
+
+:global([data-paper-agent-shell]) .assistantTabs > button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: var(--shadow-row);
+  font-weight: 500;
+}
+
 :global([data-paper-agent-shell]) .assistantContent,
 :global([data-paper-agent-shell]) .askPanel,
 :global([data-paper-agent-shell]) .notesPanel {
@@ -207,63 +242,47 @@
   background: transparent;
 }
 
-:global([data-paper-agent-shell]) .spark,
-:global([data-paper-agent-shell]) .assistantTabs > button[aria-pressed="true"],
-:global([data-paper-agent-shell]) .answer .askedQuestion {
-  color: var(--ink);
-  background: var(--soft);
-}
+:global([data-paper-agent-shell]) .assistantContent { padding: 22px 18px 20px; }
+:global([data-paper-agent-shell]) .assistantIntro h2 { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+:global([data-paper-agent-shell]) .assistantIntro p { font-size: 13px; line-height: 1.7; }
 
-:global([data-paper-agent-shell]) .assistantTabs > button[aria-pressed="true"] {
-  border-bottom-color: var(--ink);
-}
+:global([data-paper-agent-shell]) .suggestions { gap: 6px; }
+:global([data-paper-agent-shell]) .suggestions > span { color: var(--faint); font-size: 11.5px; }
 
 :global([data-paper-agent-shell]) .suggestions button,
-:global([data-paper-agent-shell]) .researchQuestion,
-:global([data-paper-agent-shell]) .questionInput,
-:global([data-paper-agent-shell]) .notesPanel textarea,
-:global([data-paper-agent-shell]) .exportButton,
-:global([data-paper-agent-shell]) .evidence details {
+:global([data-paper-agent-shell]) .researchQuestion {
   color: var(--ink);
-  border-color: var(--line);
-  background: color-mix(in srgb, var(--soft) 42%, transparent);
+  background: var(--surface);
+  border: 0;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-row);
+  line-height: 1.6;
+  transition: background-color var(--duration-fast) ease;
 }
 
-:global([data-paper-agent-shell]) .suggestions button:hover,
-:global([data-paper-agent-shell]) .exportButton:hover {
-  border-color: var(--muted);
-  background: var(--soft);
-}
+:global([data-paper-agent-shell]) .suggestions button { padding: 10px 12px; }
+:global([data-paper-agent-shell]) .suggestions button:hover:not(:disabled),
+:global([data-paper-agent-shell]) .researchQuestion:hover:not(:disabled) { background: var(--hover); }
 
-:global([data-paper-agent-shell]) .askForm {
-  border-top-color: var(--line);
-  background: color-mix(in srgb, var(--soft) 30%, transparent);
-}
-
-:global([data-paper-agent-shell]) .questionInput:focus-within,
-:global([data-paper-agent-shell]) .notesPanel textarea:focus-visible {
-  border-color: var(--ink);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 30%, transparent);
-}
-
-:global([data-paper-agent-shell]) .questionInput textarea,
-:global([data-paper-agent-shell]) .notesPanel textarea {
-  color: var(--ink);
-  caret-color: var(--ink);
-}
-
-:global([data-paper-agent-shell]) .questionInput textarea::placeholder,
-:global([data-paper-agent-shell]) .notesPanel textarea::placeholder,
-:global([data-paper-agent-shell]) .unavailableAsk,
 :global([data-paper-agent-shell]) .suggestions button > span,
-:global([data-paper-agent-shell]) .researchQuestion small {
+:global([data-paper-agent-shell]) .researchQuestion small,
+:global([data-paper-agent-shell]) .unavailableAsk,
+:global([data-paper-agent-shell]) .footnote {
   color: var(--muted);
   opacity: 1;
 }
 
-:global([data-paper-agent-shell]) .questionInput button {
-  color: var(--soft);
-  background: var(--ink);
+:global([data-paper-agent-shell]) .suggestions button > span { font-variant-numeric: tabular-nums; }
+
+/* The asked question renders as the reader's own chat bubble. */
+:global([data-paper-agent-shell]) .answer .askedQuestion {
+  width: fit-content;
+  max-width: 88%;
+  margin-left: auto;
+  padding: 9px 14px;
+  color: var(--chat-user-text);
+  background: var(--chat-user);
+  border-radius: 18px 18px 6px 18px;
 }
 
 :global([data-paper-agent-shell]) .answer a,
@@ -274,18 +293,139 @@
 
 :global([data-paper-agent-shell]) .answer pre {
   color: var(--ink);
-  background: var(--soft);
+  background: var(--fill);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+}
+
+:global([data-paper-agent-shell]) .evidence { border-top-color: var(--border); }
+:global([data-paper-agent-shell]) .evidence > strong { color: var(--faint); }
+
+:global([data-paper-agent-shell]) .evidence details {
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
 
 :global([data-paper-agent-shell]) .evidence blockquote {
   color: var(--muted);
-  border-left-color: var(--muted);
+  border-left-color: var(--border-strong);
+}
+
+/* Composer: a rounded field lifted off the panel, with a round inverted send button. */
+:global([data-paper-agent-shell]) .askForm {
+  padding: 10px 14px 12px;
+  background: var(--bg);
+  border-top: 0;
+}
+
+:global([data-paper-agent-shell]) .askForm > label { margin: 0 6px 8px; color: var(--faint); font-size: 11.5px; }
+
+:global([data-paper-agent-shell]) .questionInput {
+  padding: 12px 10px 8px 16px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-composer);
+  box-shadow: var(--shadow-popover);
+  transition: border-color var(--duration-fast) ease;
+}
+
+:global([data-paper-agent-shell]) .questionInput:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-popover);
+}
+
+:global([data-paper-agent-shell]) .questionInput textarea {
+  min-height: 48px;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+:global([data-paper-agent-shell]) .questionInput > div > span { color: var(--faint); font-size: 11px; }
+
+:global([data-paper-agent-shell]) .questionInput button {
+  width: 32px;
+  height: 32px;
+  color: var(--surface);
+  background: var(--text);
+  border-radius: var(--radius-full);
+  transition: background-color var(--duration-fast) ease;
+}
+
+:global([data-paper-agent-shell]) .questionInput button:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+:global([data-paper-agent-shell]) .questionInput button:disabled {
+  color: var(--faint);
+  background: var(--fill);
+  opacity: 1;
+}
+
+:global([data-paper-agent-shell]) .questionInput textarea,
+:global([data-paper-agent-shell]) .notesPanel textarea {
+  color: var(--ink);
+  caret-color: var(--ink);
+}
+
+:global([data-paper-agent-shell]) .questionInput textarea::placeholder,
+:global([data-paper-agent-shell]) .notesPanel textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+:global([data-paper-agent-shell]) .notesPanel { padding: 22px 18px; }
+:global([data-paper-agent-shell]) .notesPanel > label { font-size: 14px; font-weight: 600; }
+
+:global([data-paper-agent-shell]) .notesPanel textarea {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  line-height: 1.8;
+  transition: border-color var(--duration-fast) ease;
+}
+
+:global([data-paper-agent-shell]) .notesPanel textarea:focus-visible {
+  border-color: var(--border-strong);
+  outline: 0;
+  box-shadow: none;
+}
+
+:global([data-paper-agent-shell]) .exportButton {
+  min-height: 34px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: var(--fill);
+  border: 0;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color var(--duration-fast) ease;
+}
+
+:global([data-paper-agent-shell]) .exportButton:hover:not(:disabled) { background: var(--hover); }
+
+/* Errors are distinguished by weight, not hue, inside the monochrome workspace. */
+:global([data-paper-agent-shell]) .error {
+  color: var(--text) !important;
+  font-weight: 600;
+}
+
+:global([data-paper-agent-shell]) .noteDot { background: var(--text); }
+
+:global([data-paper-agent-shell]) .assistant button:focus-visible,
+:global([data-paper-agent-shell]) .assistant summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 :global([data-paper-agent-shell]) .assistantContent,
 :global([data-paper-agent-shell]) .notesPanel,
 :global([data-paper-agent-shell]) .answer pre {
-  scrollbar-color: var(--muted) transparent;
+  scrollbar-color: var(--scrollbar) transparent;
 }
 
 :global([data-paper-agent-shell]) .assistant [hidden] {

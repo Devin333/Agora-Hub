@@ -108,12 +108,13 @@ describe("ResearchSourceEntry paper-agent appearance", () => {
       app: paperStyles.app,
       onlineSearch: paperStyles.onlineSearch,
     })
+    const themeCss = readFileSync(path.join(process.cwd(), "src/features/paper-agent-app/paper-agent-theme.css"), "utf8")
     const { chromium } = await import("playwright")
     const browser = await chromium.launch({ headless: true })
     try {
       const page = await browser.newPage()
-      for (const [theme, muted] of [["light", "rgb(91, 91, 87)"], ["dark", "rgb(194, 194, 186)"]] as const) {
-        await page.setContent(`<style>${componentCss}\n${appCss}</style><main class="${paperStyles.app}" data-theme="${theme}">${cases.join("")}</main>`)
+      for (const [theme, muted] of [["light", "rgb(99, 99, 99)"], ["dark", "rgb(166, 166, 166)"]] as const) {
+        await page.setContent(`<style>${themeCss}\n${componentCss}\n${appCss}</style><main class="${paperStyles.app}" data-paper-agent-shell data-theme="${theme}">${cases.join("")}</main>`)
         const colors = await page.$$eval("[data-case]", nodes => nodes.map(node => ({
           name: node.getAttribute("data-case"),
           colors: Array.from(node.querySelectorAll<HTMLElement>('[data-slot], [data-slot] span, [data-slot] button')).map(element => getComputedStyle(element).color),

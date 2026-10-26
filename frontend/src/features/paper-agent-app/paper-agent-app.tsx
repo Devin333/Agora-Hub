@@ -42,6 +42,7 @@ import { PaperAgentSettingsModal } from "./paper-agent-settings-panel"
 import { PaperReaderPane } from "./paper-reader-pane"
 import { useDesktopLifecycle } from "./desktop-lifecycle"
 import styles from "./paper-agent-app.module.css"
+import "./paper-agent-theme.css"
 
 const filterLabels: Record<LibraryFilter, string> = { all: "全部论文", unread: "未读", saved: "我的收藏" }
 const sortLabels: Record<LibrarySort, string> = { "updated-desc": "最近更新", "created-desc": "最近入库", "title-asc": "标题 A–Z" }
@@ -355,19 +356,20 @@ export function PaperAgentApp() {
     else { if (groupId === id) setGroupId(null); setOnlineNotice("分组已删除；其中材料保留并改为未分组，等待同步确认。") }
   }
 
-  if (!account) return <AppState title="无法初始化论文工作台" detail="请刷新页面；若仍无法打开，请重新登录并检查桌面应用或站点部署是否完整。" />
-  if (!account.resolved) return <AppState title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
-  if (!account.session) return <AuthGate localDesktop={isLocalDesktopProfile()} hasProtectedDrafts={lifecycleDirty} activeTaskCount={activeTaskCount} onLogin={element => account.openLogin(element)} error={account.error ?? workspace.message} />
+  if (!account) return <AppState theme={theme} title="无法初始化论文工作台" detail="请刷新页面；若仍无法打开，请重新登录并检查桌面应用或站点部署是否完整。" />
+  if (!account.resolved) return <AppState theme={theme} title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
+  if (!account.session) return <AuthGate theme={theme} localDesktop={isLocalDesktopProfile()} hasProtectedDrafts={lifecycleDirty} activeTaskCount={activeTaskCount} onLogin={element => account.openLogin(element)} error={account.error ?? workspace.message} />
   const sessionOwner = account.session.user.userId
   if (!workspace.ready || owner !== sessionOwner) {
     if (owner === sessionOwner && (workspace.status === "error" || workspace.status === "conflict")) {
       return <AppState
+        theme={theme}
         title="论文库暂时无法读取"
         detail={workspace.message || "账号论文库读取失败；没有使用访客或空工作区代替真实数据。"}
         onRetry={() => window.dispatchEvent(new Event(retryHistoryEvent))}
       />
     }
-    return <AppState title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
+    return <AppState theme={theme} title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
   }
 
   return <main className={styles.app} data-testid="paper-agent-app" data-paper-agent-shell data-theme={theme} data-focus={focusMode || undefined}>
@@ -448,13 +450,13 @@ function useDrawerFocus(open: boolean, drawerRef: RefObject<HTMLElement | null>)
   }, [drawerRef, open])
 }
 
-function AppState({ title, detail, busy, onRetry }: { title: string; detail: string; busy?: boolean; onRetry?: () => void }) { return <main className={styles.statePage} role={busy ? "status" : "alert"}>{busy ? <LoaderCircle className={styles.spinner} size={24} /> : <BookOpen size={24} />}<h1>{title}</h1><p>{detail}</p>{onRetry && <button type="button" className={styles.primaryButton} onClick={onRetry}>重试读取论文库</button>}</main> }
-function AuthGate({ localDesktop, hasProtectedDrafts, activeTaskCount, onLogin, error }: { localDesktop: boolean; hasProtectedDrafts: boolean; activeTaskCount: number; onLogin: (element: HTMLElement) => void; error?: string }) {
+// Pre-workspace screens render outside the workspace shell, so each one opts into the shell tokens itself.
+function AppState({ theme, title, detail, busy, onRetry }: { theme: AppTheme; title: string; detail: string; busy?: boolean; onRetry?: () => void }) { return <main className={styles.statePage} data-paper-agent-shell data-theme={theme} role={busy ? "status" : "alert"}>{busy ? <LoaderCircle className={styles.spinner} size={24} /> : <BookOpen size={24} />}<h1>{title}</h1><p>{detail}</p>{onRetry && <button type="button" className={styles.primaryButton} onClick={onRetry}>重试读取论文库</button>}</main> }
+function AuthGate({ theme, localDesktop, hasProtectedDrafts, activeTaskCount, onLogin, error }: { theme: AppTheme; localDesktop: boolean; hasProtectedDrafts: boolean; activeTaskCount: number; onLogin: (element: HTMLElement) => void; error?: string }) {
   const [dataClearOpen, setDataClearOpen] = useState(false)
-  return <>
-    <main className={styles.authGate}><section><span className={styles.eyebrow}>AGORA PAPERS</span><h1>你的论文、原文与研究记录</h1><p>{localDesktop ? "首次使用请创建本机账号；已有账号请直接登录。完成后会返回论文工作台，并读取该 owner 的私有论文库。" : "登录后读取同一 owner 的私有论文库、来源修订、笔记、请求恢复与报告。公开 catalog 不会被当成你的收藏。"}</p>{error && <p role="alert" className={styles.errorText}>{error}</p>}{localDesktop ? <><Link className={styles.primaryButton} href="/login?next=/paper-agent">创建或登录本机账号</Link><button type="button" className={styles.secondaryButton} onClick={() => setDataClearOpen(true)}>管理/清除本机数据</button><p>无法登录或本机维护未完成时，可在不读取私有论文、笔记或个人记忆的前提下检查并重新确认当前操作系统用户所属资料目录的清除状态。</p></> : <button type="button" className={styles.primaryButton} onClick={event => onLogin(event.currentTarget)}>登录并打开论文库</button>}</section></main>
-    {localDesktop && <PaperAgentPreAuthDataClearModal open={dataClearOpen} overlayClassName={styles.settingsOverlay} hasProtectedDrafts={hasProtectedDrafts} activeTaskCount={activeTaskCount} onRequestClose={() => setDataClearOpen(false)} />}
-  </>
+  return <main className={styles.authGate} data-paper-agent-shell data-theme={theme}><section><span className={styles.eyebrow}>AGORA PAPERS</span><h1>你的论文、原文与研究记录</h1><p>{localDesktop ? "首次使用请创建本机账号；已有账号请直接登录。完成后会返回论文工作台，并读取该 owner 的私有论文库。" : "登录后读取同一 owner 的私有论文库、来源修订、笔记、请求恢复与报告。公开 catalog 不会被当成你的收藏。"}</p>{error && <p role="alert" className={styles.errorText}>{error}</p>}{localDesktop ? <><Link className={styles.primaryButton} href="/login?next=/paper-agent">创建或登录本机账号</Link><button type="button" className={styles.secondaryButton} onClick={() => setDataClearOpen(true)}>管理/清除本机数据</button><p>无法登录或本机维护未完成时，可在不读取私有论文、笔记或个人记忆的前提下检查并重新确认当前操作系统用户所属资料目录的清除状态。</p></> : <button type="button" className={styles.primaryButton} onClick={event => onLogin(event.currentTarget)}>登录并打开论文库</button>}</section>
+      {localDesktop && <PaperAgentPreAuthDataClearModal open={dataClearOpen} overlayClassName={styles.settingsOverlay} hasProtectedDrafts={hasProtectedDrafts} activeTaskCount={activeTaskCount} onRequestClose={() => setDataClearOpen(false)} />}
+  </main>
 }
 function EmptyReader({ material, hasMaterials, onImport }: { material: PaperAgentMaterial | null; hasMaterials: boolean; onImport: () => void }) {
   const source = material ? materialSourceUrl(material) : null
