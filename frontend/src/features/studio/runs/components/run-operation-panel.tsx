@@ -142,7 +142,7 @@ export function RunOperationPanel({
         ) : null}
 
         {result ? (
-          <div className={`rounded-md border p-3 text-sm ${result.ok ? "border-success/30 bg-success/10 text-success" : "border-danger/30 bg-danger/10 text-danger"}`}>
+          <div className={`rounded-md border p-3 text-sm ${result.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/30 bg-destructive/10 text-destructive"}`}>
             <p>{result.ok ? result.message ?? t("studio.runs.operationAccepted") : result.message ?? t("studio.runs.operationFailed")}</p>
             {!result.ok && result.requestId ? <p className="mt-1 font-mono text-xs">requestId: {result.requestId}</p> : null}
           </div>

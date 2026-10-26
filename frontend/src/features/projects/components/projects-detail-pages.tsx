@@ -64,7 +64,7 @@ export function ProjectCaseDetailPage({ caseId }: { caseId: string }) {
   if (!detail.data) return <ProjectEmptyState />
   const item = detail.data
   return (
-    <main className="space-y-6 font-papers-research">
+    <main className="space-y-6">
       <BackLink href="/projects/cases" label="Cases" />
       <Header title={item.title} eyebrow={`${item.business_domain} / ${item.module_type}`} body={String(item.design_summary ?? item.problem ?? "")} />
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
@@ -134,7 +134,7 @@ export function ProjectLabSessionPage({ sessionId }: { sessionId: string }) {
   const solution = labSolutionValue(session) ?? (session.generated_solution ? { markdown: session.generated_solution } : null)
   const canSave = !workflow.isUnknown && Boolean(solution) && ["solution_generated"].includes(session.current_stage)
   return (
-    <main className="space-y-6 overflow-x-hidden font-papers-research">
+    <main className="space-y-6 overflow-x-hidden">
       <BackLink href="/projects/lab" label="Lab" />
       <Header title="Lab Session" eyebrow={session.current_stage} body={session.user_problem} />
       <div className="flex flex-wrap items-center gap-3">
@@ -165,7 +165,7 @@ export function ProjectLabSessionPage({ sessionId }: { sessionId: string }) {
 function ProjectV1Detail({ data }: { data: ProjectsApiProjectDetail }) {
   const project = data.project
   return (
-    <main className="space-y-6 font-papers-research">
+    <main className="space-y-6">
       <BackLink href="/projects" label="Projects" />
       <Header title={project.name} eyebrow={project.project_type} body={project.description ?? project.tagline ?? ""} />
       <ProjectSourceLine meta={data.meta} />
@@ -192,7 +192,7 @@ function ProjectV1Detail({ data }: { data: ProjectsApiProjectDetail }) {
 
 function ToolDetail({ tool }: { tool: ProjectsApiTool }) {
   return (
-    <main className="space-y-6 font-papers-research">
+    <main className="space-y-6">
       <BackLink href="/projects/tools" label="Tools" />
       <Header title={tool.project.name} eyebrow={tool.profile.tool_type} body={tool.fit_reason ?? tool.project.description ?? ""} />
       <section className="grid gap-4 lg:grid-cols-2">
@@ -205,7 +205,7 @@ function ToolDetail({ tool }: { tool: ProjectsApiTool }) {
 
 function CollectionDetail({ collection }: { collection: ProjectsApiCollection }) {
   return (
-    <main className="space-y-6 font-papers-research">
+    <main className="space-y-6">
       <BackLink href="/projects/collections" label="Collections" />
       <Header title={collection.title} eyebrow={`${collection.item_count ?? 0} items`} body={collection.description} />
       <SectionsPanel sections={collection.sections} />

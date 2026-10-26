@@ -56,7 +56,7 @@ export function StudioOverviewDashboard({ overview, notices = [] }: { overview?:
               <h2 className="text-base font-semibold text-foreground">最近智能体运行</h2>
               <p className="text-sm text-muted-foreground">Studio 工作流产生的近期运行证据。</p>
             </div>
-            <Workflow className="size-5 text-accent" />
+            <Workflow className="size-5 text-link" />
           </div>
           <div className="divide-y divide-border">
             {data.latestRuns.map((run) => (
@@ -105,7 +105,7 @@ function SummaryCard({
   detail: string
   tone?: "accent" | "success" | "danger"
 }) {
-  const color = tone === "success" ? "text-success" : tone === "danger" ? "text-danger" : "text-accent"
+  const color = tone === "success" ? "text-success" : tone === "danger" ? "text-destructive" : "text-link"
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
@@ -122,7 +122,7 @@ function Panel({ title, icon: Icon, children }: { title: string; icon: React.Com
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
-        <Icon className="size-4 text-accent" />
+        <Icon className="size-4 text-link" />
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
       </div>
       {children}

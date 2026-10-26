@@ -7,9 +7,9 @@ import type { TopicTrend } from "@/types/topic";
 
 const toneClasses = {
   good: "border-success/30 bg-success/10 text-success",
-  info: "border-info/30 bg-info/10 text-info",
+  info: "border-link/30 bg-link/10 text-link",
   warn: "border-warning/30 bg-warning/10 text-warning",
-  bad: "border-danger/30 bg-danger/10 text-danger",
+  bad: "border-destructive/30 bg-destructive/10 text-destructive",
   neutral: "border-border bg-secondary text-muted-foreground",
   accent: "border-primary/30 bg-primary/10 text-primary",
 };

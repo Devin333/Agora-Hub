@@ -44,7 +44,7 @@ export function BoardOutputPanel({ output }: { output: StudioBoardOutputViewMode
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)]">
         <Card>
           <CardHeader className="flex-row items-center gap-3">
-            <ListChecks className="size-5 text-accent" />
+            <ListChecks className="size-5 text-link" />
             <CardTitle>{t("studio.boards.cards")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -80,7 +80,7 @@ export function BoardOutputPanel({ output }: { output: StudioBoardOutputViewMode
 
         <Card>
           <CardHeader className="flex-row items-center gap-3">
-            <Lightbulb className="size-5 text-accent" />
+            <Lightbulb className="size-5 text-link" />
             <CardTitle>{t("studio.boards.insights")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -106,7 +106,7 @@ export function BoardOutputPanel({ output }: { output: StudioBoardOutputViewMode
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="flex-row items-center gap-3">
-            <FileText className="size-5 text-accent" />
+            <FileText className="size-5 text-link" />
             <CardTitle>{t("studio.boards.detailPages")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -122,7 +122,7 @@ export function BoardOutputPanel({ output }: { output: StudioBoardOutputViewMode
 
         <Card>
           <CardHeader className="flex-row items-center gap-3">
-            <BarChart3 className="size-5 text-accent" />
+            <BarChart3 className="size-5 text-link" />
             <CardTitle>{t("studio.boards.sections")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">

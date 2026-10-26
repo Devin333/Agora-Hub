@@ -108,7 +108,7 @@ export function ProjectsProductPage({ route }: ProjectsProductPageProps) {
 
   const meta = getMeta(data)
   return (
-    <main className="space-y-9 font-papers-research">
+    <main className="space-y-9">
       <ProjectHero section={section} route={route} data={data} query={query} onQueryChange={setQuery} onSearch={submitQuery} isFetching={isFetching} sourceQuestion={sourceQuestion} />
       {meta ? <ProjectDegradedNotice meta={meta} /> : null}
       <RouteContent route={route} data={data} onRefresh={() => void refetch()} />
@@ -121,7 +121,7 @@ function LabRoute({ data, section, isFetching }: { data: ProductData; section: P
   const meta = getMeta(data)
 
   return (
-    <main className="space-y-5 font-papers-research">
+    <main className="space-y-5">
       <PapersMicrobar items={[{ label: section.title }]} meta={t("projects.lab.headerMeta")} locale={locale} />
       <PapersHero
         variant="editorial"

@@ -325,8 +325,8 @@ function PaperVisualCompileBackfillContent({
           </Button>
         </div>
       </div>
-      {limitInvalid ? <p className="mt-2 text-xs text-danger">{t("studio.ops.readerBackfillLimitInvalid")}</p> : null}
-      {triggerError ? <p className="mt-2 text-xs text-danger">{triggerError.message}</p> : null}
+      {limitInvalid ? <p className="mt-2 text-xs text-destructive">{t("studio.ops.readerBackfillLimitInvalid")}</p> : null}
+      {triggerError ? <p className="mt-2 text-xs text-destructive">{triggerError.message}</p> : null}
       {triggerSuccess && !triggerError ? <p className="mt-2 text-xs text-success">{t("studio.ops.readerBackfillTriggered")}</p> : null}
     </section>
   )
@@ -391,7 +391,7 @@ function PaperIngestOpsContent({
           {triggering ? t("studio.ops.ingestTriggering") : t("studio.ops.ingestTrigger")}
         </Button>
       </div>
-      {triggerError ? <p className="mt-2 text-xs text-danger">{triggerError.message}</p> : null}
+      {triggerError ? <p className="mt-2 text-xs text-destructive">{triggerError.message}</p> : null}
       {triggerSuccess && !triggerError ? <p className="mt-2 text-xs text-success">{t("studio.ops.ingestTriggered")}</p> : null}
 
       <StudioMetricGrid className="mt-4 xl:grid-cols-4 2xl:grid-cols-4">
@@ -516,7 +516,7 @@ function SummaryRefreshForm({
   return (
     <form className="rounded-md border border-border bg-background p-3" onSubmit={onSubmit}>
       <div className="mb-3 flex items-center gap-2">
-        <RefreshCw className="size-4 text-accent" />
+        <RefreshCw className="size-4 text-link" />
         <h3 className="text-sm font-semibold text-foreground">{t("studio.ops.refreshSummary")}</h3>
       </div>
       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_8rem_minmax(0,1fr)_auto] md:items-end">
@@ -545,7 +545,7 @@ function SummaryRefreshForm({
           {pending ? t("studio.ops.refreshing") : t("common.refresh")}
         </Button>
       </div>
-      {error ? <p className="mt-2 text-xs text-danger">{error.message}</p> : null}
+      {error ? <p className="mt-2 text-xs text-destructive">{error.message}</p> : null}
       {success && !error ? <p className="mt-2 text-xs text-success">{t("studio.ops.refreshed")}</p> : null}
     </form>
   )

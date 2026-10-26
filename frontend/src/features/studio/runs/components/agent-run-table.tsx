@@ -34,7 +34,7 @@ export function AgentRunTable({ runs }: { runs: AgentRun[] }) {
           {runs.map((run) => (
             <tr key={run.id} className="border-b border-border/70 last:border-b-0 hover:bg-secondary/40">
               <td className="px-4 py-3">
-                <Link className="font-mono text-xs font-medium text-accent hover:underline" href={`/studio/runs/${encodeURIComponent(run.id)}`}>
+                <Link className="font-mono text-xs font-medium text-link hover:underline" href={`/studio/runs/${encodeURIComponent(run.id)}`}>
                   {shortRunId(run.id)}
                 </Link>
               </td>
@@ -48,7 +48,7 @@ export function AgentRunTable({ runs }: { runs: AgentRun[] }) {
               <td className="px-4 py-3 text-muted-foreground">{run.stepCount ?? 0}</td>
               <td className="px-4 py-3 text-muted-foreground">{run.artifactCount}</td>
               <td className="w-36 px-4 py-3"><ScoreMeter value={run.qualityScore ?? 0} /></td>
-              <td className={run.errorCount > 0 ? "px-4 py-3 font-semibold text-danger" : "px-4 py-3 text-muted-foreground"}>{run.errorCount}</td>
+              <td className={run.errorCount > 0 ? "px-4 py-3 font-semibold text-destructive" : "px-4 py-3 text-muted-foreground"}>{run.errorCount}</td>
             </tr>
           ))}
         </tbody>

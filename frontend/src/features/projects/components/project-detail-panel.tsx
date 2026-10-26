@@ -9,7 +9,7 @@ import type { EvidenceRef, ProjectItem, RelatedCommunityRef, RelatedNewsRef, Rel
 
 export function ProjectDetailPanel({ project }: { project: ProjectItem }) {
   return (
-    <main className="space-y-8 font-papers-research">
+    <main className="space-y-8">
       <ProjectDetailHeader project={project} backHref="/tech/repos" />
       <ProjectDetailContent project={project} />
     </main>

@@ -17,7 +17,7 @@ export function StudioPageState({
   action?: StudioPageStateAction
 }) {
   const Icon = kind === "loading" ? Loader2 : kind === "error" ? AlertTriangle : SearchX
-  const tone = kind === "error" ? "text-danger" : "text-muted-foreground"
+  const tone = kind === "error" ? "text-destructive" : "text-muted-foreground"
 
   return (
     <section className="flex min-h-48 flex-col items-center justify-center rounded-md border border-dashed border-border bg-card/70 px-6 py-10 text-center">

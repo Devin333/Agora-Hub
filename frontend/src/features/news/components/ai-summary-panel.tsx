@@ -12,7 +12,7 @@ export function AISummaryPanel({
         {summary ?? "This news item does not have a detailed AI summary yet."}
       </p>
       <div className="mt-5 rounded-md border border-[#edf1ed] bg-[#f7f9f6] p-4 dark:border-border dark:bg-background">
-        <p className="text-xs font-medium uppercase text-emerald-700 dark:text-accent">Why it matters</p>
+        <p className="text-xs font-medium uppercase text-emerald-700 dark:text-link">Why it matters</p>
         <p className="mt-2 text-sm leading-6 text-[#334155] dark:text-foreground">{whyItMatters ?? "No importance analysis is available yet."}</p>
       </div>
     </section>

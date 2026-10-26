@@ -27,7 +27,7 @@ export function NewsFilterPanel({
               reportStatus: "all",
             })
           }
-          className="text-xs font-medium text-emerald-700 hover:text-[#334155] dark:text-accent dark:hover:text-foreground"
+          className="text-xs font-medium text-emerald-700 hover:text-[#334155] dark:text-link dark:hover:text-foreground"
         >
           Reset
         </button>

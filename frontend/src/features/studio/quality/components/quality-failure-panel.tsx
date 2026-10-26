@@ -85,8 +85,8 @@ export function FailureReasonPanel({ reasons }: { reasons: string[] }) {
       ) : (
         <ul className="space-y-2">
           {reasons.map((reason) => (
-            <li key={reason} className="flex gap-2 rounded-md border border-danger/20 bg-danger/10 p-3 text-sm">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" />
+            <li key={reason} className="flex gap-2 rounded-md border border-destructive/20 bg-destructive/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
               <span className="text-foreground">{reason}</span>
             </li>
           ))}

@@ -47,7 +47,7 @@ export function NewsTable({ items }: { items: NewsItem[] }) {
               <td className="px-4 py-3 text-[#334155]/65 dark:text-muted-foreground">{formatDateTime(item.publishedAt)}</td>
               <td className="px-4 py-3">
                 {item.topicId && item.topicName ? (
-                  <Link href={`/topics/${item.topicId}`} className="text-emerald-700 hover:text-[#334155] dark:text-accent dark:hover:text-foreground">
+                  <Link href={`/topics/${item.topicId}`} className="text-emerald-700 hover:text-[#334155] dark:text-link dark:hover:text-foreground">
                     {item.topicName}
                   </Link>
                 ) : (

@@ -74,7 +74,7 @@ export function DesignDemoPage() {
   function toggleSidebar() { setCollapsed(value => { const next = !value; try { localStorage.setItem("agora-research-sidebar-collapsed", String(next)) } catch { /* Layout remains usable. */ } return next }) }
   const busy = Boolean(!ready || destination || pending)
 
-  return <div className="h-screen overflow-hidden bg-[#fbf8ff] font-papers-research text-[#211a3c] [--header-height:73px]">
+  return <div className="h-screen overflow-hidden bg-[#fbf8ff] text-[#211a3c] [--header-height:73px]">
     <header className="h-[var(--header-height)] border-b border-[#eee8f5] bg-white">
       <nav className="flex h-full items-center px-6" aria-label="主导航">
         <a href={researchHomeHref()} className={`flex items-center gap-2.5 rounded-lg ${focusStyle}`}><span className="flex size-9 items-center justify-center rounded-[10px] bg-[#7c3aed] text-white shadow-[0_5px_12px_rgba(124,58,237,0.22)]"><WandSparkles className="size-[18px]" /></span><span className="text-[19px] font-bold text-[#2b2148]">Agora<span className="text-[#7c3aed]">AI</span></span></a>

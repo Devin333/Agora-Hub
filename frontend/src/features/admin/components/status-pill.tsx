@@ -13,10 +13,10 @@ const statusLabels: Record<AdminStatus, { zh: string; en: string }> = {
 const statusClasses: Record<AdminStatus, string> = {
   ok: "border-success/30 bg-success/10 text-success",
   warning: "border-warning/30 bg-warning/10 text-warning",
-  failed: "border-danger/30 bg-danger/10 text-danger",
-  review: "border-info/30 bg-info/10 text-info",
-  running: "border-accent/30 bg-accent/10 text-accent",
-  blocked: "border-danger/30 bg-danger/10 text-danger"
+  failed: "border-destructive/30 bg-destructive/10 text-destructive",
+  review: "border-link/30 bg-link/10 text-link",
+  running: "border-link/30 bg-link/10 text-link",
+  blocked: "border-destructive/30 bg-destructive/10 text-destructive"
 }
 
 export function StatusPill({ status, lang, className }: { status: AdminStatus; lang: AdminLang; className?: string }) {

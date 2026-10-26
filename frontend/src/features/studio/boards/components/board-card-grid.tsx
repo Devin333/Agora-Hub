@@ -33,11 +33,11 @@ export function BoardCardGrid({ summaries, definitions }: BoardCardGridProps) {
             href={`/studio/boards/${summary.boardType}`}
             className="group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <Card className="grid h-full min-h-[300px] grid-rows-[auto_1fr_auto] transition-colors group-hover:border-accent/60 group-hover:bg-secondary/40">
+            <Card className="grid h-full min-h-[300px] grid-rows-[auto_1fr_auto] transition-colors group-hover:border-link/60 group-hover:bg-secondary/40">
               <CardHeader className="gap-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-accent">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-link">
                       <Boxes className="size-5" />
                     </span>
                     <div className="min-w-0">
@@ -68,7 +68,7 @@ export function BoardCardGrid({ summaries, definitions }: BoardCardGridProps) {
                 </div>
               </CardContent>
 
-              <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3 text-sm font-medium text-accent">
+              <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-3 text-sm font-medium text-link">
                 <span>{t("studio.boards.openBoard")}</span>
                 <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
               </div>

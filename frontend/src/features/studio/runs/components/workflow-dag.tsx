@@ -34,7 +34,7 @@ export function WorkflowDag({ nodes, edges }: { nodes: WorkflowDagNode[]; edges:
         target: edge.target,
         label: edge.label,
         animated: nodes.find((node) => node.id === edge.target)?.status === "running",
-        style: { stroke: "rgb(var(--border-rgb))" }
+        style: { stroke: "var(--border)" }
       })),
     [edges, nodes]
   )
@@ -53,7 +53,7 @@ export function WorkflowDag({ nodes, edges }: { nodes: WorkflowDagNode[]; edges:
           if (data.status === "failed") setActiveTab("errors")
         }}
       >
-        <Background color="rgb(var(--border-rgb))" gap={24} />
+        <Background color="var(--border)" gap={24} />
         <Controls />
         <MiniMap pannable zoomable nodeStrokeWidth={2} />
       </ReactFlow>

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useUiStore } from "@/stores/ui-store"
+import { applyResolvedTheme, resolveTheme, systemPrefersLight, watchSystemAppearance } from "@/lib/theme/appearance"
 import { ResearchHistoryTracker } from "@/components/research/research-history-tracker"
 import { PortalAccountProvider, usePortalAccount } from "@/components/auth/portal-account-provider"
 import { startHistorySync } from "@/lib/research/history-sync"
@@ -23,14 +24,19 @@ function ResearchHistoryRuntime() {
 }
 
 function ThemeBridge() {
-  const theme = useUiStore((state) => state.theme)
+  const appearance = useUiStore((state) => state.appearance)
+  const setResolvedTheme = useUiStore((state) => state.setResolvedTheme)
   const locale = useUiStore((state) => state.locale)
 
   React.useEffect(() => {
-    const root = document.documentElement
-    root.classList.toggle("dark", theme === "dark")
-    root.dataset.theme = theme
-  }, [theme])
+    const apply = (prefersLight: boolean) => {
+      const theme = resolveTheme(appearance, prefersLight)
+      applyResolvedTheme(theme)
+      setResolvedTheme(theme)
+    }
+    apply(systemPrefersLight())
+    return appearance === "system" ? watchSystemAppearance(apply) : undefined
+  }, [appearance, setResolvedTheme])
 
   React.useEffect(() => {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en"

@@ -21,7 +21,7 @@ export function StudioTopbar() {
           <PreferenceControls className="hidden sm:flex" />
           <PreferenceControls className="sm:hidden" compact />
           <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
-            <EnvironmentIcon className="size-4 text-accent" />
+            <EnvironmentIcon className="size-4 text-link" />
             <span className="font-medium text-foreground">{studioEnvironment.label}</span>
             <span className="hidden sm:inline">{studioEnvironment.status}</span>
           </div>

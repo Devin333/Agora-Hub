@@ -14,11 +14,11 @@ export function ErrorState({ title, message, onRetry }: ErrorStateProps) {
   const { t } = useI18n()
 
   return (
-    <div className="rounded-lg border border-danger/30 bg-danger/10 p-4 text-sm">
+    <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm">
       <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" />
+        <AlertTriangle className="mt-0.5 size-5 shrink-0 text-destructive" />
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-danger">{title ?? t("common.error")}</p>
+          <p className="font-semibold text-destructive">{title ?? t("common.error")}</p>
           {message ? <p className="mt-1 leading-6 text-foreground">{message}</p> : null}
           {onRetry ? (
             <Button className="mt-3" variant="outline" size="sm" onClick={onRetry}>

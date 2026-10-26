@@ -97,7 +97,7 @@ function PdfProxyStatsContent({ stats }: { stats: PaperPdfProxyStats }) {
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="rounded-md border border-border bg-background p-3">
           <div className="mb-2 flex items-center gap-2">
-            <Gauge className="size-4 text-accent" />
+            <Gauge className="size-4 text-link" />
             <h3 className="text-sm font-semibold text-foreground">{t("studio.pdfProxy.topHosts")}</h3>
           </div>
           <div className="space-y-2">

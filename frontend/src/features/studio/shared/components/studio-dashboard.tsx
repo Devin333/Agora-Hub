@@ -43,9 +43,9 @@ export function StudioMetricCard({ label, value, detail, icon: Icon, tone = "neu
     neutral: "text-foreground",
     success: "text-success",
     warning: "text-warning",
-    danger: "text-danger",
-    info: "text-info",
-    accent: "text-accent"
+    danger: "text-destructive",
+    info: "text-link",
+    accent: "text-link"
   }[tone]
 
   return (
@@ -118,9 +118,9 @@ export function StudioNotice({
 }) {
   const toneClass = {
     warning: "border-warning/30 bg-warning/10 text-warning",
-    info: "border-info/30 bg-info/10 text-info",
+    info: "border-link/30 bg-link/10 text-link",
     success: "border-success/30 bg-success/10 text-success",
-    danger: "border-danger/30 bg-danger/10 text-danger"
+    danger: "border-destructive/30 bg-destructive/10 text-destructive"
   }[tone]
   const Icon = tone === "success" ? CheckCircle2 : tone === "danger" ? XCircle : tone === "info" ? Info : AlertTriangle
 

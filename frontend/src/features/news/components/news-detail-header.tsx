@@ -50,7 +50,7 @@ export function NewsDetailHeader({ news }: { news: NewsItem }) {
       {news.topicId && news.topicName ? (
         <div className="mt-4 text-sm text-[#334155]/68 dark:text-muted-foreground">
           Related topic{" "}
-          <Link href={`/topics/${news.topicId}`} className="text-emerald-700 hover:text-[#334155] dark:text-accent dark:hover:text-foreground">
+          <Link href={`/topics/${news.topicId}`} className="text-emerald-700 hover:text-[#334155] dark:text-link dark:hover:text-foreground">
             {news.topicName}
           </Link>
         </div>

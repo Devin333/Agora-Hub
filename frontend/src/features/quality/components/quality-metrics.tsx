@@ -18,7 +18,7 @@ export function QualityMetrics({ results }: { results: QualityResult[] }) {
 }
 
 function Metric({ label, value, detail, tone }: { label: string; value: string; detail: string; tone?: "success" | "warning" | "danger" }) {
-  const toneClass = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "danger" ? "text-danger" : "text-foreground";
+  const toneClass = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : tone === "danger" ? "text-destructive" : "text-foreground";
   return (
     <Card>
       <CardContent className="p-4">

@@ -46,7 +46,7 @@ export function AppShell({ children, surface = "portal" }: { children: ReactNode
   }
 
   return (
-    <div className={cn("min-h-screen text-foreground", usesResearchFrame ? "font-papers-research bg-[#f6f7f4] dark:bg-background" : "bg-background")}>
+    <div className={cn("min-h-screen text-foreground", usesResearchFrame ? "bg-[#f6f7f4] dark:bg-background" : "bg-background")}>
       <ResearchHeader locale={locale} pathname={pathname} theme={theme} onLocaleChange={setLocale} onThemeChange={setTheme} />
       <main className={cn("min-w-0", usesResearchFrame ? "px-4 pb-16 pt-0 sm:px-6 lg:px-8" : "px-4 py-6 sm:px-6")}>
         <div className={cn("mx-auto w-full", usesResearchFrame ? "max-w-[1440px]" : "max-w-[1480px]")}>{children}</div>

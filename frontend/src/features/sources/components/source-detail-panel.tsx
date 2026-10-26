@@ -45,7 +45,7 @@ export function SourceDetailPanel({ source }: { source?: Source }) {
                 <p className="mt-1 text-muted-foreground">
                   {formatDateTime(run.startedAt)} | {t("studio.sources.items", { count: formatNumber(run.collectedCount) })} | {formatDurationMs(run.latencyMs)}
                 </p>
-                {run.errorMessage ? <p className="mt-1 text-danger">{run.errorMessage}</p> : null}
+                {run.errorMessage ? <p className="mt-1 text-destructive">{run.errorMessage}</p> : null}
               </div>
             ))
           ) : (
@@ -55,7 +55,7 @@ export function SourceDetailPanel({ source }: { source?: Source }) {
 
         <StudioPanel title={t("studio.sources.errorsAndLatest")}>
           {source.errorSummary?.length ? (
-            <ul className="mb-4 space-y-1 text-sm text-danger">
+            <ul className="mb-4 space-y-1 text-sm text-destructive">
               {source.errorSummary.map((error) => <li key={error}>{error}</li>)}
             </ul>
           ) : (

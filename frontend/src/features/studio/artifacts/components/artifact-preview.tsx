@@ -39,7 +39,7 @@ export function ArtifactPreview({ artifact }: { artifact?: StudioArtifact }) {
         </div>
 
         {artifact.readError ? (
-          <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{artifact.readError}</div>
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{artifact.readError}</div>
         ) : null}
         {artifact.previewNotice ? (
           <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">{artifact.previewNotice}</div>

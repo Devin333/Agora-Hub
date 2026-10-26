@@ -36,7 +36,7 @@ export function CommunityFilterPanel({
               sort: "trending"
             })
           }
-          className="text-xs text-accent hover:text-foreground"
+          className="text-xs text-link hover:text-foreground"
         >
           Reset
         </button>

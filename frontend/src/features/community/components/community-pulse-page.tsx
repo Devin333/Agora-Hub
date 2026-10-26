@@ -66,7 +66,7 @@ export function CommunityPulsePage({
   }
 
   return (
-    <main className="space-y-8 font-papers-research">
+    <main className="space-y-8">
       <ResearchMaterialContext />
       {sourceQuestion ? (
         <div className="rounded-lg border border-[#e7dff1] bg-[#faf7ff] px-3 py-2 text-sm text-[#695d7d]">

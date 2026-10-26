@@ -62,7 +62,7 @@ export function StudioHomePageClient({ overview, notices = [] }: { overview: Stu
               {failedRuns.slice(0, 4).map((run) => (
                 <Link key={run.id} href={`/studio/runs/${encodeURIComponent(run.id)}`} className="block rounded-md border border-border bg-secondary/30 p-3 hover:bg-secondary">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="truncate font-mono text-xs text-accent">{shortRunId(run.id)}</span>
+                    <span className="truncate font-mono text-xs text-link">{shortRunId(run.id)}</span>
                     <AgentRunStatusBadge status={run.status} />
                   </div>
                   <p className="mt-2 text-sm font-medium text-foreground">{run.workflowName ?? run.agentName}</p>
@@ -84,7 +84,7 @@ function LatestRunRow({ run }: { run: StudioRunListItem }) {
   return (
     <Link href={`/studio/runs/${encodeURIComponent(run.id)}`} className="grid gap-3 px-4 py-3 hover:bg-secondary/40 md:grid-cols-[minmax(160px,0.7fr)_minmax(220px,1fr)_120px_120px_90px] md:items-center">
       <div className="min-w-0">
-        <p className="truncate font-mono text-xs font-medium text-accent">{shortRunId(run.id)}</p>
+        <p className="truncate font-mono text-xs font-medium text-link">{shortRunId(run.id)}</p>
         <p className="mt-1 truncate text-xs text-muted-foreground">{formatDateTime(run.startedAt)}</p>
       </div>
       <div className="min-w-0">
@@ -93,7 +93,7 @@ function LatestRunRow({ run }: { run: StudioRunListItem }) {
       </div>
       <AgentRunStatusBadge status={run.status} />
       <p className="text-sm text-muted-foreground">{formatDuration(run.durationMs)}</p>
-      <p className={run.errorCount ? "text-sm font-semibold text-danger" : "text-sm text-muted-foreground"}>{run.errorCount} {t("studio.runs.errors")}</p>
+      <p className={run.errorCount ? "text-sm font-semibold text-destructive" : "text-sm text-muted-foreground"}>{run.errorCount} {t("studio.runs.errors")}</p>
     </Link>
   )
 }

@@ -24,7 +24,7 @@ export function StepDetailPanel({ step }: { step?: AgentStep }) {
       </div>
 
       {step.errorMessage ? (
-        <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{step.errorMessage}</div>
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{step.errorMessage}</div>
       ) : null}
 
       <dl className="grid gap-3 sm:grid-cols-3">

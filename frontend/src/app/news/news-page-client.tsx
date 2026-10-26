@@ -72,7 +72,7 @@ export function NewsPageClient() {
   }))
 
   return (
-    <main className="space-y-8 font-papers-research">
+    <main className="space-y-8">
       <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end">
         <div className="min-w-0">
           <p className="mb-5 text-xs font-medium uppercase tracking-[0.18em] text-[#334155]/55 dark:text-muted-foreground">

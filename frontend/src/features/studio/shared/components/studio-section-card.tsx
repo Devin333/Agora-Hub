@@ -17,12 +17,12 @@ export function StudioSectionCard({ entry }: { entry: StudioModuleEntry }) {
   return (
     <Link
       href={entry.href}
-      className="group grid min-h-[190px] grid-rows-[auto_1fr_auto] rounded-md border border-border bg-card p-4 shadow-sm transition-colors hover:border-accent/60 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group grid min-h-[190px] grid-rows-[auto_1fr_auto] rounded-md border border-border bg-card p-4 shadow-sm transition-colors hover:border-link/60 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
           {Icon ? (
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-accent">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-link">
               <Icon className="size-5" />
             </span>
           ) : null}
@@ -42,7 +42,7 @@ export function StudioSectionCard({ entry }: { entry: StudioModuleEntry }) {
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3 text-sm font-medium text-accent">
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-3 text-sm font-medium text-link">
         <span>{entry.actionLabel ?? (locale === "zh" ? "打开模块" : "Open module")}</span>
         <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
       </div>

@@ -42,12 +42,12 @@ export function RunListTable({ runs }: { runs: StudioRunListItem[] }) {
               key={run.id}
               className={cn(
                 "border-b border-border/70 last:border-b-0 hover:bg-secondary/40",
-                run.status === "failed" && "bg-danger/5",
+                run.status === "failed" && "bg-destructive/5",
                 (run.status === "blocked" || run.status === "waiting_for_human") && "bg-warning/5"
               )}
             >
               <td className="px-4 py-3">
-                <Link className="font-mono text-xs font-medium text-accent hover:underline" href={`/studio/runs/${encodeURIComponent(run.id)}`}>
+                <Link className="font-mono text-xs font-medium text-link hover:underline" href={`/studio/runs/${encodeURIComponent(run.id)}`}>
                   {shortRunId(run.id)}
                 </Link>
                 {run.dataState === "fallback" ? <p className="mt-1 text-xs text-warning">{formatDataState(locale, "fallback")}</p> : null}
@@ -65,7 +65,7 @@ export function RunListTable({ runs }: { runs: StudioRunListItem[] }) {
               <td className="px-4 py-3 text-muted-foreground">{run.stepCount ?? 0}</td>
               <td className="px-4 py-3 text-muted-foreground">{run.artifactCount}</td>
               <td className="w-36 px-4 py-3"><ScoreMeter value={run.qualityScore ?? 0} /></td>
-              <td className={run.errorCount > 0 ? "px-4 py-3 font-semibold text-danger" : "px-4 py-3 text-muted-foreground"}>{run.errorCount}</td>
+              <td className={run.errorCount > 0 ? "px-4 py-3 font-semibold text-destructive" : "px-4 py-3 text-muted-foreground"}>{run.errorCount}</td>
             </tr>
           ))}
         </tbody>

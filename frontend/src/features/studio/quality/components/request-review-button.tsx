@@ -100,7 +100,7 @@ export function RequestReviewButton({
               disabled={disabled || isPending}
             />
           </label>
-          {validation ? <p className="text-sm text-danger">{validation}</p> : null}
+          {validation ? <p className="text-sm text-destructive">{validation}</p> : null}
           {result ? (
             result.ok ? (
               <div className="rounded-md border border-success/30 bg-success/10 p-3 text-sm text-success">
@@ -109,7 +109,7 @@ export function RequestReviewButton({
                 {result.requestId ? <p className="mt-1 font-mono">RequestId: {result.requestId}</p> : null}
               </div>
             ) : (
-              <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                 <p>{result.errorMessage}</p>
                 {result.requestId ? <p className="mt-1 font-mono">RequestId: {result.requestId}</p> : null}
               </div>

@@ -67,7 +67,7 @@ export function NewsInsightPanel({
           <div className="space-y-2">
             {reports.map((report) => (
               <Link key={report.id} href={`/reports/${report.id}`} className="flex gap-2 rounded-md border border-[#dbe3dc] p-3 hover:bg-[#f7f9f6] dark:border-border dark:hover:bg-secondary">
-                <FileText className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-accent" />
+                <FileText className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-link" />
                 <span className="text-sm text-[#334155] dark:text-foreground">{report.title}</span>
               </Link>
             ))}
@@ -90,7 +90,7 @@ export function NewsInsightPanel({
       </PanelCard>
 
       <PanelCard title="Original source">
-        <a href={news.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm text-emerald-700 hover:text-[#334155] dark:text-accent dark:hover:text-foreground">
+        <a href={news.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-sm text-emerald-700 hover:text-[#334155] dark:text-link dark:hover:text-foreground">
           Open source
           <LinkIcon className="h-4 w-4" />
         </a>

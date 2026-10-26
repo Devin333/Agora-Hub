@@ -12,7 +12,7 @@ const riskConfig: Record<ReviewRiskLevel, { zh: string; en: string; className: s
   medium: {
     zh: "中",
     en: "Medium",
-    className: "border-info/30 bg-info/10 text-info"
+    className: "border-link/30 bg-link/10 text-link"
   },
   high: {
     zh: "高",
@@ -22,7 +22,7 @@ const riskConfig: Record<ReviewRiskLevel, { zh: string; en: string; className: s
   critical: {
     zh: "严重",
     en: "Critical",
-    className: "border-danger bg-danger/15 text-danger shadow-sm"
+    className: "border-destructive bg-destructive/15 text-destructive shadow-sm"
   }
 }
 

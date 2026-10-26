@@ -8,7 +8,7 @@ export type ScoreMeterProps = {
 
 export function ScoreMeter({ value, label, max = 100 }: ScoreMeterProps) {
   const normalized = Math.max(0, Math.min(100, (value / max) * 100))
-  const tone = normalized >= 85 ? "bg-success" : normalized >= 70 ? "bg-warning" : "bg-danger"
+  const tone = normalized >= 85 ? "bg-success" : normalized >= 70 ? "bg-warning" : "bg-destructive"
 
   return (
     <div className="space-y-1.5">

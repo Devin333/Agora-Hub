@@ -17,7 +17,7 @@ export function PortalHomePage({ data }: { data: PortalHomeData }) {
   const secondary = data.modules.slice(1)
 
   return (
-    <div className="space-y-10 font-papers-research">
+    <div className="space-y-10">
       <section className="grid gap-8 py-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end">
         <div className="min-w-0">
           <p className="mb-5 text-xs font-medium uppercase tracking-[0.18em] text-[#334155]/55 dark:text-muted-foreground">

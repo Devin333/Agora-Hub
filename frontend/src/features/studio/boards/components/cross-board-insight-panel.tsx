@@ -48,7 +48,7 @@ function SignalColumn({
   return (
     <Card>
       <CardHeader className="flex-row items-center gap-3">
-        <Icon className="size-5 text-accent" />
+        <Icon className="size-5 text-link" />
         <CardTitle className="text-sm">{title}</CardTitle>
       </CardHeader>
       <CardContent>

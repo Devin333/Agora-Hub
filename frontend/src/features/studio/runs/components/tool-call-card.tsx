@@ -16,7 +16,7 @@ export function ToolCallCard({ call }: { call: ToolCall }) {
         </div>
         <Badge tone={statusTone(call.status)}>{formatRunStatus(call.status)}</Badge>
       </div>
-      {call.errorMessage ? <p className="rounded-md border border-danger/30 bg-danger/10 p-2 text-sm text-danger">{call.errorMessage}</p> : null}
+      {call.errorMessage ? <p className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">{call.errorMessage}</p> : null}
       <JsonPreview label="参数" value={call.argsPreview} />
       <JsonPreview label="结果" value={call.resultPreview} />
     </article>

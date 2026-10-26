@@ -97,7 +97,7 @@ export function EvidenceGraphExplorer({ data }: { data: EvidenceGraphResponse })
   }
 
   return (
-    <div className="space-y-8 font-papers-research">
+    <div className="space-y-8">
       <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-end">
         <div className="min-w-0">
           <p className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Trends / Evidence</p>

@@ -44,7 +44,7 @@ export function ReviewQueueTable({ items }: { items: StudioReviewItem[] }) {
           </TableHeader>
           <TableBody>
             {items.map((item) => (
-              <TableRow key={item.approvalId} className={item.riskLevel === "critical" ? "bg-danger/5" : undefined}>
+              <TableRow key={item.approvalId} className={item.riskLevel === "critical" ? "bg-destructive/5" : undefined}>
                 <TableCell className="font-medium">
                   <Link className="inline-flex max-w-52 items-center gap-2 truncate text-primary hover:underline" href={`/studio/review/${encodeURIComponent(item.approvalId)}`}>
                     <span className="truncate">{item.approvalId}</span>

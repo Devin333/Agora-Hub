@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Providers } from "@/components/providers"
 import { useUiStore } from "@/stores/ui-store"
@@ -38,8 +38,7 @@ describe("Providers route isolation", () => {
     navigationState.pathname = "/login"
     process.env.NEWSROOM_DEPLOYMENT_PROFILE = "default"
     delete process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
-    useUiStore.setState({ locale: "en", theme: "light" })
-    document.documentElement.classList.remove("dark")
+    useUiStore.setState({ locale: "en", appearance: "light", theme: "light" })
     delete document.documentElement.dataset.theme
     document.documentElement.lang = "en"
   })
@@ -47,15 +46,16 @@ describe("Providers route isolation", () => {
   afterEach(() => {
     restoreEnv("NEWSROOM_DEPLOYMENT_PROFILE", originalDeploymentProfile)
     restoreEnv("NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", originalPublicDeploymentProfile)
-    document.documentElement.classList.remove("dark")
     delete document.documentElement.dataset.theme
+    document.documentElement.style.colorScheme = ""
     document.documentElement.lang = "en"
+    vi.unstubAllGlobals()
   })
 
   it.each(["/login", "/login/"])("suppresses legacy global commands on exact local-desktop login route %s without bypassing shared providers", (pathname) => {
     process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
     navigationState.pathname = pathname
-    useUiStore.setState({ locale: "zh", theme: "dark" })
+    useUiStore.setState({ locale: "zh", appearance: "dark" })
 
     render(<Providers><div>Desktop login</div></Providers>)
 
@@ -63,9 +63,35 @@ describe("Providers route isolation", () => {
     expect(screen.getByTestId("portal-account-provider")).toBeInTheDocument()
     expect(screen.getByTestId("research-history-runtime")).toBeInTheDocument()
     expect(screen.queryByTestId("research-command-palette")).not.toBeInTheDocument()
-    expect(document.documentElement).toHaveClass("dark")
     expect(document.documentElement.dataset.theme).toBe("dark")
+    expect(document.documentElement.style.colorScheme).toBe("dark")
+    expect(useUiStore.getState().theme).toBe("dark")
     expect(document.documentElement.lang).toBe("zh-CN")
+  })
+
+  it("follows the platform color scheme while the appearance is system", () => {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>()
+    const query = {
+      matches: true,
+      addEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+    }
+    vi.stubGlobal("matchMedia", vi.fn(() => query))
+    useUiStore.setState({ appearance: "system" })
+
+    render(<Providers><div>Portal</div></Providers>)
+    expect(document.documentElement.dataset.theme).toBe("light")
+
+    act(() => {
+      query.matches = false
+      listeners.forEach((listener) => listener({ matches: false } as MediaQueryListEvent))
+    })
+    expect(document.documentElement.dataset.theme).toBe("dark")
+    expect(useUiStore.getState().theme).toBe("dark")
+
+    act(() => useUiStore.getState().setTheme("light"))
+    expect(listeners.size).toBe(0)
+    expect(document.documentElement.dataset.theme).toBe("light")
   })
 
   it("keeps global commands on the ordinary Portal login route", () => {

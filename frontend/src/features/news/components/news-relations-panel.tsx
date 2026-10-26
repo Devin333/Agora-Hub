@@ -26,11 +26,11 @@ function RelationColumn({ title, items, emptyText }: { title: string; items: Rel
         <div className="mt-3 space-y-2">
           {items.slice(0, 4).map((item) =>
             item.url ? (
-              <a key={item.id} href={item.url} target="_blank" rel="noreferrer" className="block text-sm text-emerald-700 hover:text-[#334155] dark:text-accent dark:hover:text-foreground">
+              <a key={item.id} href={item.url} target="_blank" rel="noreferrer" className="block text-sm text-emerald-700 hover:text-[#334155] dark:text-link dark:hover:text-foreground">
                 {item.title}
               </a>
             ) : (
-              <Link key={item.id} href={hrefForRelation(title, item)} className="block text-sm text-emerald-700 hover:text-[#334155] dark:text-accent dark:hover:text-foreground">
+              <Link key={item.id} href={hrefForRelation(title, item)} className="block text-sm text-emerald-700 hover:text-[#334155] dark:text-link dark:hover:text-foreground">
                 {item.title}
               </Link>
             )

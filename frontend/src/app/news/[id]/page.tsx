@@ -42,7 +42,7 @@ export default function NewsDetailPage(props: { params: Promise<{ id: string }> 
   }
 
   return (
-    <main className="space-y-6 font-papers-research">
+    <main className="space-y-6">
       {data.dataState === "fallback" ? (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
           <Badge tone="warning">Degraded</Badge>

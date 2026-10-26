@@ -23,11 +23,11 @@ function ErrorTraceCard({ error }: { error: RunErrorTrace }) {
   const [open, setOpen] = useState(false)
 
   return (
-    <article className="rounded-md border border-danger/30 bg-danger/10 p-3">
+    <article className="rounded-md border border-destructive/30 bg-destructive/10 p-3">
       <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" />
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-danger">{error.message}</p>
+          <p className="text-sm font-medium text-destructive">{error.message}</p>
           <p className="mt-1 text-xs text-muted-foreground">
             {formatDateTime(error.timestamp)} {error.stepId ? `· ${error.stepId}` : ""}
           </p>

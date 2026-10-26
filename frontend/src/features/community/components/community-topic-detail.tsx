@@ -82,7 +82,7 @@ export function CommunityTopicDetail({ topic }: { topic: CommunityTopicDetailTyp
                     </div>
                     {evidence.excerpt ? <p className="mt-2 text-sm leading-6 text-muted-foreground">{evidence.excerpt}</p> : null}
                     {evidence.url ? (
-                      <a className="mt-2 inline-flex text-xs text-accent hover:text-foreground" href={evidence.url} target="_blank" rel="noreferrer">
+                      <a className="mt-2 inline-flex text-xs text-link hover:text-foreground" href={evidence.url} target="_blank" rel="noreferrer">
                         Open evidence
                       </a>
                     ) : null}
@@ -166,7 +166,7 @@ function DiscussionItem({ discussion }: { discussion: CommunityDiscussion }) {
         {discussion.commentCount !== undefined ? <span>{discussion.commentCount} comments</span> : null}
         {discussion.upvoteCount !== undefined ? <span>{discussion.upvoteCount} score</span> : null}
         {discussion.url ? (
-          <a className="text-accent hover:text-foreground" href={discussion.url} target="_blank" rel="noreferrer">
+          <a className="text-link hover:text-foreground" href={discussion.url} target="_blank" rel="noreferrer">
             Open discussion
           </a>
         ) : null}

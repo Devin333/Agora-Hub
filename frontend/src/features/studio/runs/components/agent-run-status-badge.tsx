@@ -6,7 +6,7 @@ export function AgentRunStatusBadge({ status }: { status: AgentRunStatus }) {
   const label = formatRunStatus(status)
   return (
     <Badge tone={statusTone(status)} className={status === "running" ? "relative pl-5" : undefined}>
-      {status === "running" ? <span className="absolute left-2 size-1.5 rounded-full bg-info" /> : null}
+      {status === "running" ? <span className="absolute left-2 size-1.5 rounded-full bg-link" /> : null}
       {label}
     </Badge>
   )

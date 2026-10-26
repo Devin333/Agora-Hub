@@ -842,7 +842,7 @@ function SummaryLine({ label, value }: { label: string; value: string }) {
 }
 
 function Counter({ label, value, tone }: { label: string; value: number; tone: "success" | "warning" | "danger" }) {
-  const toneClass = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : "text-danger"
+  const toneClass = tone === "success" ? "text-success" : tone === "warning" ? "text-warning" : "text-destructive"
 
   return (
     <div className="rounded-md border border-border bg-secondary/40 p-3">

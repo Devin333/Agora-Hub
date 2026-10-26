@@ -120,7 +120,7 @@ export function BoardDetailPage({ detail }: { detail: StudioBoardDetailViewModel
               className="min-h-[220px] w-full resize-y rounded-md border border-input bg-card px-3 py-2 font-mono text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
             {formError ? (
-              <p role="alert" className="text-sm text-danger">
+              <p role="alert" className="text-sm text-destructive">
                 {formError}
               </p>
             ) : null}
