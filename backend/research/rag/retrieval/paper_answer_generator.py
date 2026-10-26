@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import json
 import logging
@@ -16,6 +17,7 @@ from backend.research.ports.paper_answer_model import (
     PaperAnswerModelPort,
     PaperAnswerModelRequest,
 )
+from backend.research.ports.evidence_summarizer import EvidencePassage
 from backend.research.rag.adapters.paper_field_text import extract_field_texts
 from backend.research.rag.retrieval.answer_context_budget import (
     ContextLine,
@@ -23,6 +25,10 @@ from backend.research.rag.retrieval.answer_context_budget import (
     fit_lines,
     question_terms,
     render_lines,
+)
+from backend.research.rag.retrieval.answer_evidence_selection import (
+    EvidenceSelectionOutcome,
+    RelevanceEvidenceSelector,
 )
 from backend.research.rag.retrieval.contracts import RetrievalResult
 from framework.llm.models.usage import TokenUsage
@@ -199,47 +205,93 @@ class AnswerContextAssembler:
             _append_chunk(selected, chunk)
 
         selected = selected[: self._max_chunks]
-        source_buckets = {
-            chunk.chunk_id: bucket_by_id.get(chunk.chunk_id, "unknown")
-            for chunk in selected
-        }
-        role_buckets = {
-            chunk.chunk_id: _context_role(chunk, source_buckets.get(chunk.chunk_id, "unknown"))
-            for chunk in selected
-        }
         return AnswerContextSelection(
             chunks=selected,
-            metadata={
-                "context_selection_strategy": self.strategy_name,
-                "context_source_buckets": source_buckets,
-                "context_role_buckets": role_buckets,
-                "primary_evidence_ids": [
-                    chunk.chunk_id
-                    for chunk in selected
-                    if role_buckets.get(chunk.chunk_id) == "primary_evidence"
-                ],
-                "interpretation_context_ids": [
-                    chunk.chunk_id
-                    for chunk in selected
-                    if role_buckets.get(chunk.chunk_id) == "interpretation_context"
-                ],
-                "locator_context": _locator_context_items(
-                    selected,
-                    role_buckets=role_buckets,
-                    source_buckets=source_buckets,
-                ),
-                "context_relationships": _context_relationships(selected),
-                "related_context_ids": _unique_texts(related_ids),
-                "required_context_ids": required_ids,
-                "selected_required_context_ids": [
-                    chunk.chunk_id for chunk in selected
-                    if chunk.chunk_id in set(required_ids)
-                ],
-                "missing_required_context_ids": missing_required_ids,
-                "required_context_coverage": _required_context_coverage(selected, required_ids),
-                "retrieved_chunk_ids": [chunk.chunk_id for chunk in candidates],
-            },
+            metadata=_selection_metadata(
+                self.strategy_name,
+                selected,
+                bucket_by_id=bucket_by_id,
+                related_ids=related_ids,
+                required_ids=required_ids,
+                missing_required_ids=missing_required_ids,
+                retrieved_ids=[chunk.chunk_id for chunk in candidates],
+            ),
         )
+
+    def narrow(self, selection: AnswerContextSelection, chunk_ids: list[str] | tuple[str, ...]) -> AnswerContextSelection:
+        """Keep only ``chunk_ids`` of ``selection``, in that order, with consistent metadata."""
+        by_id = {chunk.chunk_id: chunk for chunk in selection.chunks}
+        unknown = [chunk_id for chunk_id in chunk_ids if chunk_id not in by_id]
+        if unknown:
+            raise ValueError(f"cannot narrow to passages outside the selection: {unknown}")
+        chosen = [by_id[chunk_id] for chunk_id in dict.fromkeys(chunk_ids)]
+        chosen_ids = {chunk.chunk_id for chunk in chosen}
+        metadata = selection.metadata
+        return AnswerContextSelection(
+            chunks=chosen,
+            metadata=_selection_metadata(
+                str(metadata.get("context_selection_strategy") or self.strategy_name),
+                chosen,
+                bucket_by_id=dict(metadata.get("context_source_buckets") or {}),
+                related_ids=[
+                    chunk_id for chunk_id in metadata.get("related_context_ids") or []
+                    if chunk_id in chosen_ids
+                ],
+                required_ids=list(metadata.get("required_context_ids") or []),
+                missing_required_ids=list(metadata.get("missing_required_context_ids") or []),
+                retrieved_ids=list(metadata.get("retrieved_chunk_ids") or []),
+            ),
+        )
+
+
+def _selection_metadata(
+    strategy: str,
+    selected: list[PaperChunk],
+    *,
+    bucket_by_id: dict[str, str],
+    related_ids: list[str],
+    required_ids: list[str],
+    missing_required_ids: list[str],
+    retrieved_ids: list[str],
+) -> dict[str, Any]:
+    source_buckets = {
+        chunk.chunk_id: bucket_by_id.get(chunk.chunk_id, "unknown")
+        for chunk in selected
+    }
+    role_buckets = {
+        chunk.chunk_id: _context_role(chunk, source_buckets.get(chunk.chunk_id, "unknown"))
+        for chunk in selected
+    }
+    required = set(required_ids)
+    return {
+        "context_selection_strategy": strategy,
+        "context_source_buckets": source_buckets,
+        "context_role_buckets": role_buckets,
+        "primary_evidence_ids": [
+            chunk.chunk_id
+            for chunk in selected
+            if role_buckets.get(chunk.chunk_id) == "primary_evidence"
+        ],
+        "interpretation_context_ids": [
+            chunk.chunk_id
+            for chunk in selected
+            if role_buckets.get(chunk.chunk_id) == "interpretation_context"
+        ],
+        "locator_context": _locator_context_items(
+            selected,
+            role_buckets=role_buckets,
+            source_buckets=source_buckets,
+        ),
+        "context_relationships": _context_relationships(selected),
+        "related_context_ids": _unique_texts(related_ids),
+        "required_context_ids": required_ids,
+        "selected_required_context_ids": [
+            chunk.chunk_id for chunk in selected if chunk.chunk_id in required
+        ],
+        "missing_required_context_ids": missing_required_ids,
+        "required_context_coverage": _required_context_coverage(selected, required_ids),
+        "retrieved_chunk_ids": retrieved_ids,
+    }
 
 class AnswerGenerator:
     """Drafts a grounded answer from retrieval context under the abstention protocol.
@@ -256,9 +308,12 @@ class AnswerGenerator:
         *,
         max_context_chunks: int = DEFAULT_MAX_CONTEXT_CHUNKS,
         max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS,
+        evidence_selector: RelevanceEvidenceSelector | None = None,
     ) -> None:
         if not isinstance(model, PaperAnswerModelPort):
             raise TypeError("model must implement PaperAnswerModelPort")
+        if evidence_selector is not None and evidence_selector.pool_size < max_context_chunks:
+            raise ValueError("evidence_selector pool_size must hold at least max_context_chunks passages")
         if max_context_chars < max_context_chunks * CONTEXT_PASSAGE_FLOOR_CHARS:
             raise ValueError(
                 f"max_context_chars must hold {max_context_chunks} passages at "
@@ -267,15 +322,27 @@ class AnswerGenerator:
         self._model = model
         self._max_context_chunks = max_context_chunks
         self._max_context_chars = max_context_chars
-        self._context_assembler = AnswerContextAssembler(max_context_chunks=max_context_chunks)
+        self._evidence_selector = evidence_selector
+        # With an evidence selector the assembler gathers the whole candidate pool and
+        # the selector decides which of it the answer model reads.
+        self._context_assembler = AnswerContextAssembler(
+            max_context_chunks=(
+                evidence_selector.pool_size if evidence_selector is not None else max_context_chunks
+            ),
+        )
 
     @property
-    def context_limits(self) -> dict[str, int | str]:
+    def context_limits(self) -> dict[str, Any]:
         """Passage and character limits this generator renders into the prompt."""
         return {
             "max_context_chunks": self._max_context_chunks,
             "max_context_chars": self._max_context_chars,
             "strategy": CONTEXT_BUDGET_STRATEGY,
+            "evidence_selection": (
+                self._evidence_selector.measurement_identity
+                if self._evidence_selector is not None
+                else None
+            ),
         }
 
     async def generate(
@@ -295,10 +362,28 @@ class AnswerGenerator:
             retrieval,
             required_context_ids=required_context_ids,
         )
+        evidence: EvidenceSelectionOutcome | None = None
+        if self._evidence_selector is not None:
+            try:
+                evidence = await self._evidence_selector.select(
+                    question,
+                    [
+                        EvidencePassage(chunk.chunk_id, render_answer_context(chunk))
+                        for chunk in selection.chunks
+                    ],
+                    max_passages=self._max_context_chunks,
+                    pinned_ids=selection.metadata.get("selected_required_context_ids") or (),
+                    execution_identity=execution_identity,
+                )
+            except PaperAnswerModelError as exc:
+                exc.attach_context_chunk_ids([chunk.chunk_id for chunk in selection.chunks])
+                raise
+            selection = self._context_assembler.narrow(selection, evidence.passage_ids)
         contexts, context_budget = _budgeted_contexts(
             selection,
             question=question,
             total_chars=self._max_context_chars,
+            condensed_lines=evidence.condensed_lines if evidence is not None else None,
         )
         request = PaperAnswerModelRequest(
             system_prompt=build_answer_system_prompt(
@@ -345,6 +430,17 @@ class AnswerGenerator:
                 # Characters we actually sent; compare with provider-reported input tokens.
                 "prompt_chars": len(request.system_prompt) + len(request.user_prompt),
                 "generation_elapsed_ms": elapsed_ms,
+                **(
+                    {
+                        "evidence_selection": {
+                            **evidence.metadata,
+                            "model": evidence.model,
+                            "usage": evidence.usage.to_dict(),
+                        },
+                    }
+                    if evidence is not None
+                    else {}
+                ),
                 **(
                     {"used_personal_memory": list(personal_memory_context.used_refs)}
                     if personal_memory_context is not None
@@ -600,9 +696,20 @@ def _budgeted_contexts(
     *,
     question: str,
     total_chars: int,
+    condensed_lines: Mapping[str, Sequence[ContextLine]] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """Render selected passages within one shared budget; record what each passage kept."""
-    lines = [_answer_context_lines(chunk) for chunk in selection.chunks]
+    """Render selected passages within one shared budget; record what each passage kept.
+
+    A passage in ``condensed_lines`` is rendered from its pinned original lines (title,
+    locators) followed by the condensed lines instead of its full text.
+    """
+    condensed = condensed_lines or {}
+    lines = [
+        _condensed_context_lines(chunk, condensed[chunk.chunk_id])
+        if chunk.chunk_id in condensed
+        else _answer_context_lines(chunk)
+        for chunk in selection.chunks
+    ]
     full = [render_lines(chunk_lines) for chunk_lines in lines]
     roles = selection.metadata.get("context_role_buckets") or {}
     tiers = [
@@ -627,6 +734,7 @@ def _budgeted_contexts(
             "budget_chars": budget,
             "kept_chars": len(kept),
             "truncated": len(kept) < len(original),
+            "condensed": chunk.chunk_id in condensed,
         }
         for chunk, original, budget, kept in zip(selection.chunks, full, budgets, contexts)
     ]
@@ -643,6 +751,13 @@ def _budgeted_contexts(
 def render_answer_context(chunk: PaperChunk) -> str:
     """Full passage text exactly as the answer model would see it before budget trimming."""
     return render_lines(_answer_context_lines(chunk))
+
+
+def _condensed_context_lines(chunk: PaperChunk, condensed: Sequence[ContextLine]) -> list[ContextLine]:
+    # Condensed lines stay trimmable: a tight budget keeps their most question-relevant
+    # sentences instead of dropping a pinned line whole.
+    pinned = [line for line in _answer_context_lines(chunk) if line.pinned]
+    return [*pinned, *(ContextLine(line.label, line.text, pinned=False) for line in condensed)]
 
 
 def _answer_context_lines(chunk: PaperChunk) -> list[ContextLine]:

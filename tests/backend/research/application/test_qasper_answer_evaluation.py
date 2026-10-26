@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from backend.research.rag.evaluation.qasper_retrieval import (
     QasperOfflineCacheError,
 )
 from backend.research.rag.adapters.paper_field_text import extract_field_texts
+from backend.research.rag.retrieval.answer_evidence_selection import RelevanceEvidenceSelector
+from backend.research.rag.retrieval.paper_evidence_summarizer import LLMEvidenceSummarizer
 from backend.research.rag.retrieval.paper_lightweight_reranker import LightweightLexicalReranker
 from backend.research.rag.retrieval.paper_answer_generator import (
     ABSTENTION_TOKEN,
@@ -635,9 +638,8 @@ def test_candidate_overfetch_expands_actual_recall_without_expanding_answer_cont
     )
 
 
-def test_larger_context_budget_reaches_the_answer_prompt(
-    tmp_path: Path, repository: Path,
-) -> None:
+def _large_fixture(tmp_path: Path, repository: Path) -> tuple[Path, Path]:
+    """One paper with 30 near-identical method sections, all at the same vector."""
     paragraphs = [f"Method paragraph {index} discusses encoder training details." for index in range(30)]
     dataset = {
         PAPER: {
@@ -669,6 +671,13 @@ def test_larger_context_budget_reaches_the_answer_prompt(
         keys=np.asarray([OfflineEmbeddingCache.key(text) for text in texts], dtype=str),
         vectors=np.tile(np.asarray([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (len(texts), 1)),
     )
+    return dataset_path, cache_path
+
+
+def test_larger_context_budget_reaches_the_answer_prompt(
+    tmp_path: Path, repository: Path,
+) -> None:
+    dataset_path, cache_path = _large_fixture(tmp_path, repository)
     prompts: list[str] = []
 
     def reply(request) -> str:
@@ -709,6 +718,111 @@ def test_larger_context_budget_reaches_the_answer_prompt(
         default["report"]["identity"]["retrieval_profile_fingerprint"]
         != widened["report"]["identity"]["retrieval_profile_fingerprint"]
     )
+
+
+def test_evidence_selection_scores_the_wide_pool_and_answers_from_adaptive_k(
+    tmp_path: Path, repository: Path,
+) -> None:
+    dataset_path, cache_path = _large_fixture(tmp_path, repository)
+    passage_re = re.compile(r"^\[(\d+)\] (.*)$", re.MULTILINE)
+    scored: list[int] = []
+
+    def summarize(request) -> str:
+        entries = []
+        for number, text in passage_re.findall(request.user_prompt):
+            scored.append(int(number))
+            # Only the third pooled passage is strong evidence, so it must be read first.
+            relevance = 9 if len(scored) == 3 else 1
+            entries.append({
+                "id": int(number), "relevance": relevance,
+                "summary": "Training details." if relevance > 1 else "Topic only.",
+                "quotes": ["discusses encoder training details"],
+            })
+        return json.dumps({"passages": entries})
+
+    answers: list[str] = []
+
+    def answer(request) -> str:
+        answers.append(request.user_prompt)
+        return "Encoder training details are discussed [1]."
+
+    def service(output_name: str, selector) -> QasperAnswerEvaluationService:
+        return QasperAnswerEvaluationService(
+            QasperAssetService(FilesystemQasperAssets(dataset_path, cache_path, repository_root=repository)),
+            FilesystemQasperArtifacts(),
+            query_embedder=_Embedder(),
+            query_vector_store=_Store(),
+            answer_model=FakePaperAnswerModel(answer),
+            judge_call=None,
+            retrieval_policy=RetrievalPolicy(overfetch_multiplier=10),
+            retrieval_profile=QasperAnswerRetrievalProfile(
+                name="selection", max_context_items=8, max_context_tokens=8192,
+                evidence_pool_size=None if selector is None else 20,
+            ),
+            evidence_selector=selector,
+            config=QasperAnswerEvaluationConfig(output_directory=str(tmp_path / output_name), per_type=1),
+        )
+
+    selector = RelevanceEvidenceSelector(
+        LLMEvidenceSummarizer(FakePaperAnswerModel(summarize), batch_size=5),
+        pool_size=20, min_passages=2, min_relevance=4,
+    )
+    selected_report = service("selected", selector).run()
+    baseline_report = service("baseline", None).run()
+
+    row = json.loads((tmp_path / "selected" / "answers.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    # The retrieval pack held the whole pool, and every pooled passage was scored.
+    assert len(scored) == 20
+    # One confident passage plus backfill to min_passages, not the fixed 8.
+    assert len(row["context_chunk_ids"]) == 2
+    first_passage = answers[0].split("\n[2]")[0]
+    assert "Summary: Training details." in first_passage
+    identity = selected_report["identity"]
+    assert identity["context_budget"]["max_context_items"] == 20
+    assert identity["retrieval_profile"]["evidence_pool_size"] == 20
+    assert identity["evidence_selection"]["summarizer"]["prompt_version"]
+    assert identity["retrieval_profile_fingerprint"] != baseline_report["identity"]["retrieval_profile_fingerprint"]
+    assert baseline_report["identity"]["evidence_selection"] is None
+    assert "evidence_pool_size" not in baseline_report["identity"]["retrieval_profile"]
+    case_selection = row["evidence_selection"]
+    assert len(case_selection["pool_ids"]) == 20
+    assert case_selection["selected_ids"] == row["context_chunk_ids"]
+    assert case_selection["usage"]["input_tokens"] > 0
+    metrics = selected_report["metrics"]["evidence_selection"]
+    assert metrics["cases"] == 1
+    assert metrics["selected_passages"] == {"mean": 2.0, "min": 2, "max": 2}
+    assert metrics["summarizer_calls"] == 4
+    assert "evidence_selection" not in baseline_report["metrics"]
+
+
+def test_evidence_pool_and_selector_must_be_configured_together(tmp_path: Path, repository: Path) -> None:
+    dataset_path, cache_path = _large_fixture(tmp_path, repository)
+    selector = RelevanceEvidenceSelector(
+        LLMEvidenceSummarizer(FakePaperAnswerModel("{}")), pool_size=20,
+    )
+
+    def build(pool_size, chosen_selector):
+        return QasperAnswerEvaluationService(
+            QasperAssetService(FilesystemQasperAssets(dataset_path, cache_path, repository_root=repository)),
+            FilesystemQasperArtifacts(),
+            query_embedder=_Embedder(),
+            query_vector_store=_Store(),
+            answer_model=FakePaperAnswerModel("x"),
+            judge_call=None,
+            retrieval_policy=RetrievalPolicy(),
+            retrieval_profile=QasperAnswerRetrievalProfile(evidence_pool_size=pool_size),
+            evidence_selector=chosen_selector,
+            config=QasperAnswerEvaluationConfig(output_directory=str(tmp_path / "x"), per_type=1),
+        )
+
+    with pytest.raises(ValueError, match="set together"):
+        build(20, None)
+    with pytest.raises(ValueError, match="set together"):
+        build(None, selector)
+    with pytest.raises(ValueError, match="must equal"):
+        build(24, selector)
+    with pytest.raises(ValueError, match="no smaller"):
+        QasperAnswerRetrievalProfile(max_context_items=8, evidence_pool_size=4)
 
 
 def test_end_to_end_run_scores_every_stratum_and_publishes_artifacts(tmp_path: Path, repository: Path) -> None:

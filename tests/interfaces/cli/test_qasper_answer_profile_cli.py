@@ -42,6 +42,31 @@ def test_answer_builder_forwards_explicit_retrieval_profile(
     assert captured["judge"] is False
 
 
+def test_answer_cli_parses_and_forwards_evidence_selection_options(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        composition, "build_qasper_answer_evaluation_service",
+        lambda **kwargs: captured.update(kwargs) or object(),
+    )
+    parser = argparse.ArgumentParser()
+    qasper_eval.register(parser.add_subparsers())
+    args = parser.parse_args([
+        "qasper", "--dataset-path", str(tmp_path / "d.json"), "--cache-path", str(tmp_path / "c.npz"),
+        "answer", "run", "--output-dir", str(tmp_path / "out"),
+        "--query-vector-path", str(tmp_path / "q.npz"),
+        "--max-context-items", "16", "--evidence-pool-size", "48",
+        "--evidence-min-passages", "3", "--evidence-min-relevance", "5",
+        "--evidence-render-mode", "passage",
+    ])
+
+    qasper_eval._build_answer_service(args)
+
+    assert captured["evidence_pool_size"] == 48
+    assert captured["evidence_min_passages"] == 3
+    assert captured["evidence_min_relevance"] == 5
+    assert captured["evidence_render_mode"] == "passage"
+
+
 def test_answer_cli_emits_start_and_end_progress_only_on_stderr(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

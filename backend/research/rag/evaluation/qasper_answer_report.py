@@ -51,6 +51,10 @@ class QasperAnswerCase:
     generation_error_detail: dict[str, Any] | None = None
     judge_request: JudgeRequest | None = None
     rejudge_attempt: dict[str, Any] | None = None
+    # Answer-side evidence selection, when enabled: the scored pool, per-passage
+    # relevance, the Adaptive-k decision, summarizer usage, and how much gold
+    # evidence the pool held before selection.
+    evidence_selection: dict[str, Any] | None = None
 
     @property
     def expects_abstention(self) -> bool:
@@ -105,6 +109,7 @@ class QasperAnswerCase:
             "generation_error_detail": self.generation_error_detail,
             "judge_request": self.judge_request.to_dict() if self.judge_request is not None else None,
             "rejudge_attempt": self.rejudge_attempt,
+            "evidence_selection": self.evidence_selection,
         }
 
     @classmethod
@@ -168,6 +173,7 @@ class QasperAnswerCase:
             ),
             judge_request=JudgeRequest.from_dict(judge_request) if judge_request is not None else None,
             rejudge_attempt=dict(rejudge_attempt) if rejudge_attempt is not None else None,
+            evidence_selection=_optional_mapping(payload.get("evidence_selection"), "case.evidence_selection"),
         )
 
     @property
@@ -243,11 +249,59 @@ class QasperAnswerSummary:
             "equivalent_citation_coverage": _defined_mean(case.equivalent_citation_coverage for case in answered),
             "strict_context_coverage": _defined_mean(case.strict_context_coverage for case in cases),
             "equivalent_context_coverage": _defined_mean(case.equivalent_context_coverage for case in cases),
+            **_evidence_selection_metrics(cases),
             "mapping_dispositions": _counts(case.mapping_disposition for case in cases),
             "evidence_type_gap_accepted": sum(1 for case in cases if case.evidence_type_gap_accepted),
             "efficiency": _efficiency(cases),
             **self.extra,
         }
+
+
+def _evidence_selection_metrics(cases: Sequence[QasperAnswerCase]) -> dict[str, Any]:
+    selected = [case.evidence_selection for case in cases if case.evidence_selection is not None]
+    if not selected:
+        return {}
+    usages = [item.get("usage") for item in selected if isinstance(item.get("usage"), Mapping)]
+    diagnostics = [
+        item.get("summarizer_diagnostics")
+        for item in selected
+        if isinstance(item.get("summarizer_diagnostics"), Mapping)
+    ]
+    passages = [len(item.get("selected_ids") or ()) for item in selected]
+    return {
+        "evidence_selection": {
+            "cases": len(selected),
+            "pool_equivalent_context_coverage": _defined_mean(
+                _optional_float(item.get("pool_equivalent_context_coverage")) for item in selected
+            ),
+            "pool_strict_context_coverage": _defined_mean(
+                _optional_float(item.get("pool_strict_context_coverage")) for item in selected
+            ),
+            "selected_passages": {
+                "mean": sum(passages) / len(passages),
+                "min": min(passages),
+                "max": max(passages),
+            },
+            "gap_applied": sum(
+                1 for item in selected
+                if isinstance(item.get("adaptive_k"), Mapping) and item["adaptive_k"].get("gap_applied")
+            ),
+            "summarizer_calls": sum(int(item.get("model_calls") or 0) for item in diagnostics),
+            "malformed_replies": sum(int(item.get("malformed_replies") or 0) for item in diagnostics),
+            "unassessed_passages": sum(int(item.get("unassessed_passages") or 0) for item in diagnostics),
+            "rejected_quotes": sum(int(item.get("rejected_quotes") or 0) for item in diagnostics),
+            "tokens": {
+                key: sum(int(usage.get(key) or 0) for usage in usages)
+                for key in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens")
+            },
+        },
+    }
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _defined_mean(values) -> dict[str, Any]:

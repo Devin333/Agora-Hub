@@ -17,6 +17,9 @@ from backend.research.application.llm_selectors import (
     RESEARCH_ANSWER_API_KEY_ENV_KEYS,
     RESEARCH_ANSWER_BASE_URL_KEYS,
     RESEARCH_ANSWER_MODEL_KEYS,
+    RESEARCH_EVIDENCE_API_KEY_ENV_KEYS,
+    RESEARCH_EVIDENCE_BASE_URL_KEYS,
+    RESEARCH_EVIDENCE_MODEL_KEYS,
     first_configured,
 )
 from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
@@ -111,6 +114,21 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
     )
 
 
+def build_unity_evidence_model(*, max_tokens: int = 3000) -> OpenAICompatiblePaperAnswerModel:
+    """Evidence summarizer model (``NEWS_RESEARCH_EVIDENCE_LLM_*``, else the answer model keys)."""
+    client = _resolve_unity_client(
+        "evidence summarizer model",
+        base_url_keys=RESEARCH_EVIDENCE_BASE_URL_KEYS,
+        model_keys=RESEARCH_EVIDENCE_MODEL_KEYS,
+        api_key_env_keys=RESEARCH_EVIDENCE_API_KEY_ENV_KEYS,
+    )
+    return OpenAICompatiblePaperAnswerModel(
+        client,
+        max_output_tokens=max_tokens,
+        temperature=0.0,
+    )
+
+
 def build_unity_judge_llm_call(*, max_tokens: int = 1024, temperature: float | None = 0.0):
     """Prompt-to-text callable for evaluation judges (``NEWS_RAG_EVAL_JUDGE_*``).
 
@@ -174,4 +192,9 @@ def _measurement_identity(
     }
 
 
-__all__ = ["build_unity_judge_llm_call", "build_unity_llm_call", "build_unity_paper_answer_model"]
+__all__ = [
+    "build_unity_evidence_model",
+    "build_unity_judge_llm_call",
+    "build_unity_llm_call",
+    "build_unity_paper_answer_model",
+]

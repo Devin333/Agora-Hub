@@ -94,6 +94,23 @@ def register(operations: argparse._SubParsersAction) -> None:
         "--max-context-tokens", type=int, default=None,
         help="RAG context token budget; raise together with --max-context-items (default 2048)",
     )
+    answer_run.add_argument(
+        "--evidence-pool-size", type=int, default=None,
+        help="Enable evidence selection: retrieve this many candidates, score and condense them "
+             "with the evidence model, and keep at most --max-context-items by Adaptive-k",
+    )
+    answer_run.add_argument(
+        "--evidence-min-passages", type=int, default=None,
+        help="Fewest passages evidence selection keeps (default 4)",
+    )
+    answer_run.add_argument(
+        "--evidence-min-relevance", type=int, default=None,
+        help="Lowest 0-10 relevance a passage needs to be chosen by Adaptive-k (default 4)",
+    )
+    answer_run.add_argument(
+        "--evidence-render-mode", choices=("summary", "passage"), default=None,
+        help="Send chosen passages as summary and verbatim quotes, or as original text (default summary)",
+    )
     answer_run.set_defaults(_qasper_action="answer_run")
 
     answer_replay = answer_commands.add_parser(
@@ -211,6 +228,10 @@ def _build_answer_service(args: argparse.Namespace) -> Any:
         retrieval_overfetch=args.retrieval_overfetch,
         max_context_items=getattr(args, "max_context_items", None),
         max_context_tokens=getattr(args, "max_context_tokens", None),
+        evidence_pool_size=getattr(args, "evidence_pool_size", None),
+        evidence_min_passages=getattr(args, "evidence_min_passages", None),
+        evidence_min_relevance=getattr(args, "evidence_min_relevance", None),
+        evidence_render_mode=getattr(args, "evidence_render_mode", None),
     )
 
 

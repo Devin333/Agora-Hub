@@ -27,6 +27,21 @@ RESEARCH_ANSWER_API_KEY_ENV_KEYS: tuple[str, ...] = (
     "NEWS_LLM_API_KEY_ENV",
 )
 
+# The evidence summarizer reads many passages per question; it may point at a cheaper
+# model, and otherwise uses the Research answer model.
+RESEARCH_EVIDENCE_BASE_URL_KEYS: tuple[str, ...] = (
+    "NEWS_RESEARCH_EVIDENCE_LLM_BASE_URL",
+    *RESEARCH_ANSWER_BASE_URL_KEYS,
+)
+RESEARCH_EVIDENCE_MODEL_KEYS: tuple[str, ...] = (
+    "NEWS_RESEARCH_EVIDENCE_LLM_MODEL",
+    *RESEARCH_ANSWER_MODEL_KEYS,
+)
+RESEARCH_EVIDENCE_API_KEY_ENV_KEYS: tuple[str, ...] = (
+    "NEWS_RESEARCH_EVIDENCE_LLM_API_KEY_ENV",
+    *RESEARCH_ANSWER_API_KEY_ENV_KEYS,
+)
+
 EVAL_JUDGE_BASE_URL_KEYS: tuple[str, ...] = (
     "NEWS_RAG_EVAL_JUDGE_BASE_URL",
     "OPENAI_BASE_URL",
@@ -51,5 +66,8 @@ __all__ = [
     "RESEARCH_ANSWER_API_KEY_ENV_KEYS",
     "RESEARCH_ANSWER_BASE_URL_KEYS",
     "RESEARCH_ANSWER_MODEL_KEYS",
+    "RESEARCH_EVIDENCE_API_KEY_ENV_KEYS",
+    "RESEARCH_EVIDENCE_BASE_URL_KEYS",
+    "RESEARCH_EVIDENCE_MODEL_KEYS",
     "first_configured",
 ]

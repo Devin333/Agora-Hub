@@ -72,6 +72,10 @@ def build_qasper_answer_evaluation_service(
     retrieval_overfetch: int | None = None,
     max_context_items: int | None = None,
     max_context_tokens: int | None = None,
+    evidence_pool_size: int | None = None,
+    evidence_min_passages: int | None = None,
+    evidence_min_relevance: int | None = None,
+    evidence_render_mode: str | None = None,
     case_ids: tuple[str, ...] | None = None,
     progress=None,
     case_started=None,
@@ -82,8 +86,12 @@ def build_qasper_answer_evaluation_service(
     Unlike the offline retrieval service this reads model configuration from the
     environment: the answer model (Research route), the judge (``NEWS_RAG_EVAL_JUDGE_*``)
     and the embedding provider used only for query texts absent from the cache.
+    ``evidence_pool_size`` enables answer-side evidence selection: the retrieval pack
+    holds that many candidates, the evidence model (``NEWS_RESEARCH_EVIDENCE_LLM_*``)
+    scores and condenses them, and Adaptive-k picks at most ``max_context_items``.
     """
     from backend.research.application.llm_client import (
+        build_unity_evidence_model,
         build_unity_judge_llm_call,
         build_unity_paper_answer_model,
     )
@@ -149,6 +157,13 @@ def build_qasper_answer_evaluation_service(
         return CachedFixtureFieldIndex(chunks, cache, query_vector=query_vector)
 
     answer_model = build_unity_paper_answer_model(max_tokens=600)
+    evidence_selector = _qasper_evidence_selector(
+        build_unity_evidence_model,
+        pool_size=evidence_pool_size,
+        min_passages=evidence_min_passages,
+        min_relevance=evidence_min_relevance,
+        render_mode=evidence_render_mode,
+    )
     judge_call = build_unity_judge_llm_call(max_tokens=400) if judge else None
     return QasperAnswerEvaluationService(
         assets,
@@ -172,10 +187,12 @@ def build_qasper_answer_evaluation_service(
                 )
                 if value is not None
             },
+            evidence_pool_size=evidence_pool_size,
             field_index_enabled=field_enabled,
             reranker_enabled=lightweight is not None,
             field_reranker_enabled=lightweight is not None,
         ),
+        evidence_selector=evidence_selector,
         context_runtime=_reader_answer_context_runtime(output_directory),
         progress=progress,
         case_started=case_started,
@@ -186,6 +203,38 @@ def build_qasper_answer_evaluation_service(
             output_directory=str(output_directory), seed=seed, per_type=per_type, max_cases=max_cases,
             case_ids=case_ids,
         ),
+    )
+
+
+def _qasper_evidence_selector(
+    model_factory,
+    *,
+    pool_size: int | None,
+    min_passages: int | None,
+    min_relevance: int | None,
+    render_mode: str | None,
+):
+    """Evidence selector for the run, or None when evidence selection is not requested."""
+    tuning = {
+        name: value
+        for name, value in (
+            ("min_passages", min_passages),
+            ("min_relevance", min_relevance),
+            ("render_mode", render_mode),
+        )
+        if value is not None
+    }
+    if pool_size is None:
+        if tuning:
+            raise ValueError("evidence selection options require evidence_pool_size")
+        return None
+    from backend.research.rag.retrieval.answer_evidence_selection import RelevanceEvidenceSelector
+    from backend.research.rag.retrieval.paper_evidence_summarizer import LLMEvidenceSummarizer
+
+    return RelevanceEvidenceSelector(
+        LLMEvidenceSummarizer(model_factory()),
+        pool_size=pool_size,
+        **tuning,
     )
 
 

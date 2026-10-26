@@ -47,6 +47,7 @@ from backend.research.rag.evaluation.qasper_retrieval import (
     OfflineEmbeddingCache,
 )
 from backend.research.rag.evaluation.qasper_scoring import evidence_group_coverage
+from backend.research.rag.retrieval.answer_evidence_selection import RelevanceEvidenceSelector
 from backend.research.rag.retrieval.paper_answer_generator import (
     ANSWER_PROMPT_VERSION,
     ANSWER_PROTOCOL_VERSION,
@@ -74,6 +75,9 @@ class QasperAnswerRetrievalProfile:
     field_index_enabled: bool = False
     reranker_enabled: bool = False
     field_reranker_enabled: bool = False
+    # Candidates the retrieval pack holds for the evidence selector to score; None
+    # sends the top ``max_context_items`` retrieved passages straight to the answer.
+    evidence_pool_size: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -87,6 +91,16 @@ class QasperAnswerRetrievalProfile:
             value = getattr(self, field_name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"{field_name} must be a positive integer")
+        if self.evidence_pool_size is not None and (
+            type(self.evidence_pool_size) is not int
+            or self.evidence_pool_size < self.max_context_items
+        ):
+            raise ValueError("evidence_pool_size must be an integer no smaller than max_context_items")
+
+    @property
+    def retrieval_context_items(self) -> int:
+        """Passages the retrieval context pack admits before answer-side selection."""
+        return self.evidence_pool_size or self.max_context_items
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +111,13 @@ class QasperAnswerRetrievalProfile:
             "field_index_enabled": self.field_index_enabled,
             "reranker_enabled": self.reranker_enabled,
             "field_reranker_enabled": self.field_reranker_enabled,
+            # Omitted when unset so profiles without evidence selection keep the
+            # fingerprint of runs recorded before the field existed.
+            **(
+                {"evidence_pool_size": self.evidence_pool_size}
+                if self.evidence_pool_size is not None
+                else {}
+            ),
         }
 
 
@@ -188,6 +209,7 @@ class QasperAnswerEvaluationService:
         reranker: RerankerPort | None = None,
         field_reranker: RerankerPort | None = None,
         retrieval_profile: QasperAnswerRetrievalProfile | None = None,
+        evidence_selector: RelevanceEvidenceSelector | None = None,
         context_runtime: AnswerContextRuntime | None = None,
         progress: Callable[[int, int, QasperAnswerCase], None] | None = None,
         case_started: Callable[[int, int, str], None] | None = None,
@@ -233,6 +255,12 @@ class QasperAnswerEvaluationService:
             raise ValueError("retrieval profile enables field reranker but no field reranker was supplied")
         if not self._retrieval_profile.field_reranker_enabled and field_reranker is not None:
             raise ValueError("retrieval profile disables field reranker but a field reranker was supplied")
+        pool_size = self._retrieval_profile.evidence_pool_size
+        if (pool_size is None) != (evidence_selector is None):
+            raise ValueError("retrieval profile evidence_pool_size and evidence_selector must be set together")
+        if evidence_selector is not None and evidence_selector.pool_size != pool_size:
+            raise ValueError("evidence_selector pool_size must equal the profile evidence_pool_size")
+        self._evidence_selector = evidence_selector
         self._context_runtime = context_runtime
         self._progress = progress
         self._case_started = case_started
@@ -294,7 +322,7 @@ class QasperAnswerEvaluationService:
         field_reranker_tracker = _TrackedReranker(self._field_reranker)
         budget = replace(
             RAGBudget.safe_default(),
-            max_context_items=self._retrieval_profile.max_context_items,
+            max_context_items=self._retrieval_profile.retrieval_context_items,
             max_context_tokens=self._retrieval_profile.max_context_tokens,
         )
         chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
@@ -311,6 +339,7 @@ class QasperAnswerEvaluationService:
                 self._answer_model,
                 max_context_chunks=self._retrieval_profile.max_context_items,
                 max_context_chars=context_chars_for_passages(self._retrieval_profile.max_context_items),
+                evidence_selector=self._evidence_selector,
             )),
             generation_policy={"enabled": True, "max_attempts": 2},
             **(
@@ -325,6 +354,11 @@ class QasperAnswerEvaluationService:
         )
         ask_use_case = AskPaperUseCase()
 
+        evidence_selection = (
+            _measurement_identity(self._evidence_selector.measurement_identity)
+            if self._evidence_selector is not None
+            else None
+        )
         report_identity = {
             "dataset_sha256": assets.dataset_sha256,
             "mapping_digest": frozen.digest,
@@ -340,8 +374,9 @@ class QasperAnswerEvaluationService:
                 self._policy, reranker_tracker, field_reranker_tracker,
             ),
             "context_budget": budget.to_dict(),
+            "evidence_selection": evidence_selection,
             "retrieval_profile_fingerprint": _profile_fingerprint(
-                self._retrieval_profile, self._policy, components, budget.to_dict(),
+                self._retrieval_profile, self._policy, components, budget.to_dict(), evidence_selection,
             ),
             "fixture_boundary": (
                 "offline_cached_chunk_and_field_vectors; "
@@ -531,6 +566,7 @@ class QasperAnswerEvaluationService:
             generation_error=str(generation_error),
             generation_error_detail=generation_error_detail,
             judge_request=judge_request,
+            evidence_selection=_case_evidence_selection(generated, frozen_case),
         )
 
 
@@ -603,17 +639,42 @@ def _policy_identity(policy: RetrievalPolicy) -> dict[str, Any]:
     return json.loads(json.dumps(asdict(policy), ensure_ascii=False, sort_keys=True))
 
 
+def _case_evidence_selection(
+    generated: Mapping[str, Any], frozen_case: FrozenQasperCase,
+) -> dict[str, Any] | None:
+    selection = generated.get("evidence_selection")
+    if not isinstance(selection, Mapping):
+        return None
+    # The scored passages are exactly the pool the selector chose from.
+    pool_ids = tuple(str(chunk_id) for chunk_id in (selection.get("relevance") or {}))
+    return {
+        "pool_ids": list(pool_ids),
+        "pool_strict_context_coverage": _coverage(frozen_case, pool_ids, strict=True),
+        "pool_equivalent_context_coverage": _coverage(frozen_case, pool_ids, strict=False),
+        "relevance": dict(selection.get("relevance") or {}),
+        "adaptive_k": selection.get("adaptive_k"),
+        "pinned_ids": list(selection.get("pinned_ids") or ()),
+        "selected_ids": list(selection.get("selected_ids") or ()),
+        "condensed_ids": list(selection.get("condensed_ids") or ()),
+        "summarizer_diagnostics": dict(selection.get("summarizer_diagnostics") or {}),
+        "model": str(selection.get("model") or ""),
+        "usage": dict(selection.get("usage") or {}),
+    }
+
+
 def _profile_fingerprint(
     profile: QasperAnswerRetrievalProfile,
     policy: RetrievalPolicy,
     components: dict[str, str | None],
     context_budget: dict[str, int],
+    evidence_selection: Mapping[str, Any] | None,
 ) -> str:
     payload = {
         "profile": profile.to_dict(),
         "policy": _policy_identity(policy),
         "components": components,
         "context_budget": context_budget,
+        **({"evidence_selection": evidence_selection} if evidence_selection is not None else {}),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

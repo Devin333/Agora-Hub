@@ -139,6 +139,51 @@ def test_answer_composition_applies_explicit_context_budget(
     assert (widened._retrieval_profile.max_context_items, widened._retrieval_profile.max_context_tokens) == (16, 4096)
 
 
+def test_answer_composition_enables_evidence_selection_with_the_evidence_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.fixtures.paper_answer_model import FakePaperAnswerModel
+
+    _stub_models(monkeypatch)
+    built: list[dict] = []
+
+    def evidence_model(**kwargs):
+        built.append(kwargs)
+        return FakePaperAnswerModel("{}", model="evidence-model")
+
+    monkeypatch.setattr(
+        "backend.research.application.llm_client.build_unity_evidence_model", evidence_model,
+    )
+    dataset, cache, query_vectors, output = _paths(tmp_path)
+
+    service = build_qasper_answer_evaluation_service(
+        dataset_path=dataset, cache_path=cache, query_vector_path=query_vectors,
+        output_directory=output, seed="seed", per_type=1, max_cases=1, judge=False,
+        max_context_items=16, evidence_pool_size=48, evidence_min_passages=3,
+        evidence_render_mode="passage",
+    )
+
+    assert len(built) == 1
+    assert service._retrieval_profile.evidence_pool_size == 48
+    assert service._retrieval_profile.retrieval_context_items == 48
+    identity = service._evidence_selector.measurement_identity
+    assert (identity["pool_size"], identity["min_passages"], identity["render_mode"]) == (48, 3, "passage")
+
+
+def test_answer_composition_rejects_evidence_options_without_a_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_models(monkeypatch)
+    dataset, cache, query_vectors, output = _paths(tmp_path)
+
+    with pytest.raises(ValueError, match="require evidence_pool_size"):
+        build_qasper_answer_evaluation_service(
+            dataset_path=dataset, cache_path=cache, query_vector_path=query_vectors,
+            output_directory=output, seed="seed", per_type=1, max_cases=1, judge=False,
+            evidence_min_relevance=6,
+        )
+
+
 def test_field_profile_composes_real_fixture_components_with_default_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
