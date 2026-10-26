@@ -16,7 +16,10 @@ from backend.research.rag.evaluation.business_question_bank import (
 from backend.research.rag.evaluation.evidence_eval_runner import live_answer_sample
 from backend.research.rag.evaluation.golden_corpus_snapshot import load_golden_corpus_snapshot
 from backend.research.rag.evaluation.paper_answer_eval import EvidenceAnswerEvaluator
-from backend.research.rag.retrieval.paper_answer_generator import ABSTENTION_TOKEN
+from backend.research.rag.retrieval.paper_answer_generator import (
+    ABSTENTION_TOKEN,
+    DEFAULT_MAX_CONTEXT_CHARS,
+)
 from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 
 BANK = Path("data/eval/business_question_bank_v1_draft.jsonl")
@@ -242,7 +245,10 @@ def test_business_eval_records_outcomes_latency_and_tokens(
 
     monkeypatch.setattr(business_answer_eval_module, "load_business_question_bank", load_with_snapshot)
 
+    requests = []
+
     def reply(request) -> str:
+        requests.append(request)
         if any(question in request.user_prompt for question in abstain_questions):
             return f"{ABSTENTION_TOKEN}: the paper does not cover this"
         return "The paper reports the requested result [1]."
@@ -276,7 +282,12 @@ def test_business_eval_records_outcomes_latency_and_tokens(
     assert run.efficiency["tokens"]["output_tokens"] > 0
     assert run.efficiency["estimated_cost_usd"] is None
     assert run.efficiency["prompt_chars"]["n"] == run.efficiency["model_calls_recorded"]
-    assert 0 < run.efficiency["prompt_chars"]["max"] <= 12_000 + 2_000
+    # The passage block is bounded by the context budget (plus labels and the
+    # question); instruction text is versioned separately and measured as sent.
+    assert max(len(request.user_prompt) for request in requests) <= DEFAULT_MAX_CONTEXT_CHARS + 2_000
+    assert run.efficiency["prompt_chars"]["max"] == max(
+        len(request.system_prompt) + len(request.user_prompt) for request in requests
+    )
 
     rows = [
         json.loads(line)

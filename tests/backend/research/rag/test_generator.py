@@ -309,9 +309,25 @@ def test_answer_system_prompt_requires_complete_lists_and_partial_answers_before
     prompt = build_answer_system_prompt("Which datasets are used?")
 
     assert "gather them from every passage" in prompt
-    assert "answer only part of the question, answer that part" in prompt
-    assert "only when no passage answers any part of the question" in prompt
-    assert "merely mention its topic do not count" in prompt
+    assert "If the passages answer some of those parts, answer them" in prompt
+    assert "only when no passage gives the fact asked for by the question" in prompt
+    assert "merely mention its topic or give related facts do not count" in prompt
+
+
+def test_answer_system_prompt_forbids_substituting_related_facts_for_the_asked_fact() -> None:
+    prompt = build_answer_system_prompt("What is the size of the corpus?")
+
+    assert "A question has parts only when it asks for more than one thing" in prompt
+    assert "do not substitute a related fact for it" in prompt
+    assert "component sizes for a total size" in prompt
+
+
+def test_answer_system_prompt_treats_unstated_properties_as_evidence_for_neither_answer() -> None:
+    prompt = build_answer_system_prompt("Do they report results only on English data?")
+
+    assert "A property the passages leave unstated is evidence for neither answer" in prompt
+    assert "only when a passage names a non-English language or dataset" in prompt
+    assert "When the passages establish neither Yes nor No in these ways, abstain." in prompt
 
 
 def test_answer_system_prompt_declares_passages_untrusted_and_abstention_protocol() -> None:
@@ -343,7 +359,7 @@ def test_answer_generator_sends_versioned_grounding_and_yes_no_contract(question
     assert "directly stated or necessarily implied" in request.system_prompt
     assert "minimum necessary bracketed citation" in request.system_prompt
     assert "Every cited passage must independently support" in request.system_prompt
-    assert "mere absence does not establish No" in request.system_prompt
+    assert "A property the passages leave unstated is evidence for neither answer" in request.system_prompt
     assert "fully describes the relevant part of the study" in request.system_prompt
     assert f"{ABSTENTION_TOKEN}: <one-sentence reason>" in request.system_prompt
     assert answer.context_metadata["answer_prompt_version"] == ANSWER_PROMPT_VERSION
