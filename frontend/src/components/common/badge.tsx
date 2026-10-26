@@ -1,32 +1,27 @@
-import { cn } from "@/lib/utils"
+import { Badge as UiBadge, type BadgeVariant } from "@/components/ui/badge"
 
-const toneClass = {
-  neutral: "border-border bg-secondary text-secondary-foreground",
-  success: "border-success/30 bg-success/10 text-success",
-  warning: "border-warning/30 bg-warning/10 text-warning",
-  danger: "border-destructive/30 bg-destructive/10 text-destructive",
-  info: "border-link/30 bg-link/10 text-link",
-  accent: "border-link/30 bg-link/10 text-link"
-}
+const toneVariant = {
+  neutral: "default",
+  success: "success",
+  warning: "warning",
+  danger: "danger",
+  info: "info",
+  accent: "accent"
+} satisfies Record<string, BadgeVariant>
 
+/** Tone-named wrapper kept for the evidence and quality badges built on it. */
 export function Badge({
   children,
   tone = "neutral",
   className
 }: {
   children: React.ReactNode
-  tone?: keyof typeof toneClass
+  tone?: keyof typeof toneVariant
   className?: string
 }) {
   return (
-    <span
-      className={cn(
-        "inline-flex max-w-full items-center rounded-md border px-2 py-1 text-xs font-medium leading-none",
-        toneClass[tone],
-        className
-      )}
-    >
+    <UiBadge variant={toneVariant[tone]} className={className}>
       {children}
-    </span>
+    </UiBadge>
   )
 }

@@ -2,18 +2,25 @@ import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
+/**
+ * Rakazo pill badge. Status tones (success / warning / danger / info) keep their
+ * hue as a tint so lists of states stay scannable; `default` is the quiet
+ * secondary pill most metadata uses, `primary` the inverted emphasis pill.
+ */
 const badgeVariants = cva(
-  "inline-flex min-h-6 items-center rounded-md border px-2 py-0.5 text-xs font-medium",
+  "inline-flex h-5 w-fit max-w-full shrink-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-full border border-transparent px-2 py-0.5 text-xs font-medium transition-all [&>svg]:pointer-events-none [&>svg]:!size-3",
   {
     variants: {
       variant: {
-        default: "border-border bg-secondary text-secondary-foreground",
-        success: "border-success/30 bg-success/10 text-success",
-        warning: "border-warning/30 bg-warning/10 text-warning",
-        danger: "border-destructive/30 bg-destructive/10 text-destructive",
-        info: "border-link/30 bg-link/10 text-link",
-        accent: "border-link/30 bg-link/10 text-link",
-        muted: "border-border bg-muted text-muted-foreground"
+        default: "bg-secondary text-secondary-foreground",
+        primary: "bg-primary text-primary-foreground",
+        outline: "border-border text-foreground",
+        muted: "bg-muted text-muted-foreground",
+        success: "bg-success/15 text-success",
+        warning: "bg-warning/15 text-warning",
+        danger: "bg-destructive/10 text-destructive dark:bg-destructive/20",
+        info: "bg-link/15 text-link",
+        accent: "bg-link/15 text-link"
       }
     },
     defaultVariants: {
@@ -22,8 +29,12 @@ const badgeVariants = cva(
   }
 )
 
+export type BadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>
+
 export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
 
 export function Badge({ className, variant, ...props }: BadgeProps) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />
+  return <span data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />
 }
+
+export { badgeVariants }

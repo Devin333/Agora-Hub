@@ -179,7 +179,7 @@ export function ResearchConversationIndex({ entries, transcriptRef }: ResearchCo
               </button>
             </TooltipTrigger>
             <TooltipPrimitive.Portal>
-              <TooltipContent className={styles.preview} side="right" sideOffset={8} collisionPadding={8}>
+              <TooltipContent className={styles.preview} showArrow={false} side="right" sideOffset={8} collisionPadding={8}>
                 第 {index + 1} 条：{preview}
               </TooltipContent>
             </TooltipPrimitive.Portal>
