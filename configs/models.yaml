@@ -1,10 +1,10 @@
 model_groups:
   research-desktop-answer:
     deployments:
-      - deployment_id: research-desktop-answer-gpt-5.6-sol
+      - deployment_id: research-desktop-answer-gpt-5.6-luna
         provider: openai-compatible
         provider_name: openai-compatible
-        model: gpt-5.6-sol
+        model: gpt-5.6-luna
         api_base: ${NEWS_RESEARCH_LLM_BASE_URL}
         api_key_env: OPENAI_API_KEY
         timeout_seconds: 90
