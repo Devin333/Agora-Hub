@@ -14,6 +14,15 @@ from backend.research.application.llm_selectors import (
     RESEARCH_ANSWER_BASE_URL_KEYS,
     RESEARCH_ANSWER_MODEL_KEYS,
 )
+from backend.research.ports.evidence_summarizer import (
+    EVIDENCE_RELEVANCE_MAX,
+    EVIDENCE_RELEVANCE_MIN,
+)
+from backend.research.rag.retrieval.answer_evidence_selection import (
+    DEFAULT_EVIDENCE_MIN_PASSAGES,
+    DEFAULT_EVIDENCE_MIN_RELEVANCE,
+    EVIDENCE_RENDER_MODES,
+)
 from framework.harness.runtime.result_errors import GraphArtifactResultError
 from framework.harness.runtime.result_policy import (
     GraphArtifactPersistenceConfig,
@@ -255,6 +264,23 @@ class ResearchRAGSettings:
     context_artifact_root: Path | None = None
     memory_enabled: bool = False
     memory_namespace_refs: tuple[str, ...] = ()
+    # Reader Q&A evidence selection (RCS + Adaptive-k). 0 disables it; otherwise this
+    # many retrieved candidates are scored by the evidence summarizer and at most
+    # ``max_context_items`` of them reach the answer model. Each scoring batch is an
+    # extra model call per question, so it is opt-in.
+    evidence_pool_size: int = 0
+    evidence_min_passages: int = DEFAULT_EVIDENCE_MIN_PASSAGES
+    evidence_min_relevance: int = DEFAULT_EVIDENCE_MIN_RELEVANCE
+    evidence_render_mode: str = "summary"
+
+    @property
+    def evidence_selection_enabled(self) -> bool:
+        return self.evidence_pool_size > 0
+
+    @property
+    def reader_context_items(self) -> int:
+        """Context items a reader session admits: the evidence pool when selection is on."""
+        return self.evidence_pool_size if self.evidence_selection_enabled else self.max_context_items
 
     def __post_init__(self) -> None:
         backend = str(self.backend or "").strip().lower()
@@ -298,6 +324,27 @@ class ResearchRAGSettings:
             32_768,
         )
         _bounded_int(self.max_worker_calls, "research.rag.max_worker_calls", 0, 32)
+        _bounded_int(self.evidence_pool_size, "research.rag.evidence_pool_size", 0, 64)
+        if 0 < self.evidence_pool_size < self.max_context_items:
+            _invalid("research.rag.evidence_pool_size")
+        # The selector clamps the floor to the answer context, so it is only bounded by
+        # the pool it chooses from.
+        _bounded_int(
+            self.evidence_min_passages,
+            "research.rag.evidence_min_passages",
+            1,
+            self.evidence_pool_size or 64,
+        )
+        _bounded_int(
+            self.evidence_min_relevance,
+            "research.rag.evidence_min_relevance",
+            EVIDENCE_RELEVANCE_MIN,
+            EVIDENCE_RELEVANCE_MAX,
+        )
+        render_mode = str(self.evidence_render_mode or "").strip().lower()
+        if render_mode not in EVIDENCE_RENDER_MODES:
+            _invalid("research.rag.evidence_render_mode")
+        object.__setattr__(self, "evidence_render_mode", render_mode)
         if not isinstance(self.memory_enabled, bool):
             _invalid("research.rag.memory")
         refs = tuple(str(value).strip() for value in self.memory_namespace_refs)
@@ -728,6 +775,29 @@ class ResearchRuntimeSettings:
                     "NEWS_RESEARCH_RAG_MAX_WORKER_CALLS",
                     16,
                     capability="research.rag.max_worker_calls",
+                ),
+                evidence_pool_size=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_EVIDENCE_POOL_SIZE",
+                    0,
+                    capability="research.rag.evidence_pool_size",
+                ),
+                evidence_min_passages=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_EVIDENCE_MIN_PASSAGES",
+                    DEFAULT_EVIDENCE_MIN_PASSAGES,
+                    capability="research.rag.evidence_min_passages",
+                ),
+                evidence_min_relevance=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_EVIDENCE_MIN_RELEVANCE",
+                    DEFAULT_EVIDENCE_MIN_RELEVANCE,
+                    capability="research.rag.evidence_min_relevance",
+                ),
+                evidence_render_mode=_first_text(
+                    values,
+                    ("NEWS_RESEARCH_RAG_EVIDENCE_RENDER_MODE",),
+                    "summary",
                 ),
                 memory_enabled=_env_bool(
                     values,

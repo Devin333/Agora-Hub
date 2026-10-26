@@ -33,6 +33,8 @@ from framework.shared.graph_identity import GraphExecutionIdentity
 EVIDENCE_SUMMARY_PROMPT_VERSION = "question_focused_passage_assessment_v1"
 DEFAULT_SUMMARY_BATCH_SIZE = 6
 DEFAULT_SUMMARY_MAX_CONCURRENCY = 4
+# Output room for one batch reply: a summary and up to four quotes per passage.
+DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS = 3000
 # A malformed batch reply is asked again once before its passages are left unassessed.
 _MALFORMED_REPLY_ATTEMPTS = 2
 # Generous enough for every passage of the evaluation corpus; longer passages are cut
@@ -304,6 +306,7 @@ def _sum_usage(usages: Any) -> TokenUsage:
 __all__ = [
     "DEFAULT_SUMMARY_BATCH_SIZE",
     "DEFAULT_SUMMARY_MAX_CONCURRENCY",
+    "DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS",
     "EVIDENCE_SUMMARY_PROMPT_VERSION",
     "LLMEvidenceSummarizer",
     "MAX_SUMMARY_QUOTES",

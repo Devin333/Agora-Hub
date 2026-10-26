@@ -23,6 +23,7 @@ from backend.research.application.llm_selectors import (
     first_configured,
 )
 from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
+from backend.research.rag.retrieval.paper_evidence_summarizer import DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS
 from framework.llm.models.request import LLMRequest
 from framework.shared.env import load_root_env
 from framework.shared.graph_identity import GraphExecutionIdentity
@@ -114,7 +115,9 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
     )
 
 
-def build_unity_evidence_model(*, max_tokens: int = 3000) -> OpenAICompatiblePaperAnswerModel:
+def build_unity_evidence_model(
+    *, max_tokens: int = DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+) -> OpenAICompatiblePaperAnswerModel:
     """Evidence summarizer model (``NEWS_RESEARCH_EVIDENCE_LLM_*``, else the answer model keys)."""
     client = _resolve_unity_client(
         "evidence summarizer model",

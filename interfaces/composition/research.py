@@ -13,7 +13,6 @@ from urllib.parse import urlsplit
 
 from backend.research.application.analyze_paper import AnalyzePaperUseCase
 from backend.research.application.ask_paper import AskPaperUseCase
-from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
 from backend.research.application.catalog import ResearchPaperCatalogService
 from backend.research.application.parse_paper import ParsePaperUseCase
 from backend.research.application.bounded_document_rag import (
@@ -80,9 +79,7 @@ from backend.research.document.marker_pdf_parser import (
     MarkerPdfDocumentParser,
     MarkerReadingOrderProfile,
 )
-from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
-from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
 from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
 from backend.research.ports.artifact_publication import (
     RESEARCH_ARTIFACT_MANIFEST_VERSION,
@@ -121,6 +118,7 @@ from framework.harness import (
     HarnessBudgetSnapshot,
     HarnessBudget,
     ResolvedSubAgentTaskAdapter,
+    RAGBudget,
     RAGSessionSpec,
     SubAgentRuntime,
     ChildAgentSupervisor,
@@ -250,6 +248,10 @@ from interfaces.composition.research_errors import (
     ResearchCompositionError,
     ResearchConfigurationError,
     ResearchRuntimeUnavailableError,
+)
+from interfaces.composition.research_reader_answer import (
+    reader_answer_worker_factory,
+    reader_rag_budget,
 )
 from interfaces.composition.research_settings import (
     ResearchLocalRuntimeSettings,
@@ -1720,23 +1722,12 @@ class _DurableResearchRunRecoverySource:
 
 
 
-def _configured_paper_answer_worker_factory(
-    llm_client: OpenAICompatibleClient,
-    *,
-    max_output_tokens: int,
-) -> Any:
-    answer_model = OpenAICompatiblePaperAnswerModel(
-        llm_client,
-        max_output_tokens=max_output_tokens,
-        temperature=0.0,
-    )
-    return lambda: PaperAnswerWorker(AnswerGenerator(answer_model))
-
 def _local_reader_rag_service(
     *,
     ask_use_case: AskPaperUseCase,
     chunk_store: ChunkStorePort,
     answer_worker_factory: Callable[[], Any],
+    budget: RAGBudget,
     context_assembler_factory: Callable[[RAGSessionSpec], ContextAssembler],
     context_window: ContextWindowLimits,
     run_scope: RunScope,
@@ -1750,6 +1741,7 @@ def _local_reader_rag_service(
         retriever=ResearchRetriever(chunk_store),
         session_factory=lambda **_kwargs: PaperRAGSession(
             chunk_store,
+            budget=budget,
             answer_worker=answer_worker_factory(),
             generation_policy={"enabled": True, "max_attempts": 2},
             context_assembler_factory=context_assembler_factory,
@@ -2618,8 +2610,9 @@ def _build_configured_composition(
             runtime_binding_registrar=harness_wait_runtime_registry,
         )
         ask_use_case = AskPaperUseCase()
-        paper_answer_worker_factory = _configured_paper_answer_worker_factory(
+        paper_answer_worker_factory = reader_answer_worker_factory(
             llm_client,
+            settings.rag,
             max_output_tokens=min(settings.llm.max_output_tokens, 900),
         )
         # Reader Q&A is asked against a terminal Research run whose artifact manifest
@@ -2651,6 +2644,7 @@ def _build_configured_composition(
                 ask_use_case=ask_use_case,
                 chunk_store=chunk_store,
                 answer_worker_factory=paper_answer_worker_factory,
+                budget=reader_rag_budget(settings.rag),
                 context_assembler_factory=reader_rag_context_assembler_factory,
                 context_window=ContextWindowLimits(
                     max_input_tokens=settings.llm.max_input_tokens,
