@@ -825,6 +825,104 @@ def test_evidence_pool_and_selector_must_be_configured_together(tmp_path: Path, 
         QasperAnswerRetrievalProfile(max_context_items=8, evidence_pool_size=4)
 
 
+class _LastSectionsNavigator:
+    """Picks the unread sections furthest from the read ones, as a real navigator might."""
+
+    measurement_identity = {"component": "last-sections-navigator"}
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    async def choose(self, request):
+        from backend.research.ports.section_navigator import SectionNavigationDecision
+
+        self.requests.append(request)
+        read = set(request.read_section_indexes)
+        unread = [entry.section_index for entry in request.outline.entries if entry.section_index not in read]
+        return SectionNavigationDecision(
+            tuple(reversed(unread))[: request.max_sections], model="fake-navigator",
+            diagnostics={"model_calls": 1},
+        )
+
+
+def test_section_navigation_adds_passages_and_records_identity_and_metrics(
+    tmp_path: Path, repository: Path,
+) -> None:
+    from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
+
+    dataset_path, cache_path = _large_fixture(tmp_path, repository)
+
+    def service(output_name: str, navigator) -> QasperAnswerEvaluationService:
+        return QasperAnswerEvaluationService(
+            QasperAssetService(FilesystemQasperAssets(dataset_path, cache_path, repository_root=repository)),
+            FilesystemQasperArtifacts(),
+            query_embedder=_Embedder(),
+            query_vector_store=_Store(),
+            answer_model=FakePaperAnswerModel("Encoder training details are discussed [1]."),
+            judge_call=None,
+            retrieval_policy=RetrievalPolicy(overfetch_multiplier=10),
+            retrieval_profile=QasperAnswerRetrievalProfile(
+                name="navigation", max_context_items=8, max_context_tokens=8192,
+            ),
+            section_navigator=navigator,
+            section_navigation=(
+                SectionNavigationConfig(max_sections=2, max_passages_per_section=1)
+                if navigator is not None else None
+            ),
+            config=QasperAnswerEvaluationConfig(output_directory=str(tmp_path / output_name), per_type=1),
+        )
+
+    navigator = _LastSectionsNavigator()
+    navigated_report = service("navigated", navigator).run()
+    baseline_report = service("baseline", None).run()
+
+    row = json.loads((tmp_path / "navigated" / "answers.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    navigation = row["section_navigation"]
+    assert len(navigation["added_chunk_ids"]) == 2
+    # Navigated passages took ranked slots, so they reach the answer context.
+    assert navigation["added_in_context_ids"] == navigation["added_chunk_ids"]
+    assert set(navigation["added_chunk_ids"]) <= set(row["context_chunk_ids"])
+    assert len(row["context_chunk_ids"]) == 8
+    assert len(navigation["displaced_chunk_ids"]) == 2
+    step = navigation["steps"][0]
+    assert step["chosen_sections"] and not set(step["chosen_sections"]) & set(step["read_sections"])
+    assert navigator.requests[0].max_sections == 2
+    identity = navigated_report["identity"]
+    assert identity["section_navigation"] == {
+        "config": {"max_sections": 2, "max_passages_per_section": 1, "preview_chars": 160},
+        "navigator": {"component": "last-sections-navigator"},
+    }
+    assert "section_navigation" not in baseline_report["identity"]
+    assert identity["retrieval_profile_fingerprint"] != baseline_report["identity"]["retrieval_profile_fingerprint"]
+    metrics = navigated_report["metrics"]["section_navigation"]
+    assert metrics["cases"] == 1
+    assert metrics["added_passages"] == 2
+    assert metrics["navigator_calls"] == 1
+    assert "section_navigation" not in baseline_report["metrics"]
+    baseline_row = json.loads(
+        (tmp_path / "baseline" / "answers.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert baseline_row["section_navigation"] is None
+
+
+def test_section_navigation_config_requires_a_navigator(tmp_path: Path, repository: Path) -> None:
+    from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
+
+    dataset_path, cache_path = _large_fixture(tmp_path, repository)
+    with pytest.raises(ValueError, match="requires a section_navigator"):
+        QasperAnswerEvaluationService(
+            QasperAssetService(FilesystemQasperAssets(dataset_path, cache_path, repository_root=repository)),
+            FilesystemQasperArtifacts(),
+            query_embedder=_Embedder(),
+            query_vector_store=_Store(),
+            answer_model=FakePaperAnswerModel("x"),
+            judge_call=None,
+            retrieval_policy=RetrievalPolicy(),
+            section_navigation=SectionNavigationConfig(),
+            config=QasperAnswerEvaluationConfig(output_directory=str(tmp_path / "x"), per_type=1),
+        )
+
+
 def test_end_to_end_run_scores_every_stratum_and_publishes_artifacts(tmp_path: Path, repository: Path) -> None:
     async def judge(prompt: str) -> str:
         return '{"correct": true, "citations": [{"index": 1, "supports": true}], "rationale": "matches"}'

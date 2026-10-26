@@ -76,6 +76,9 @@ def build_qasper_answer_evaluation_service(
     evidence_min_passages: int | None = None,
     evidence_min_relevance: int | None = None,
     evidence_render_mode: str | None = None,
+    section_navigation: bool = False,
+    navigation_max_sections: int | None = None,
+    navigation_max_passages_per_section: int | None = None,
     case_ids: tuple[str, ...] | None = None,
     progress=None,
     case_started=None,
@@ -89,6 +92,8 @@ def build_qasper_answer_evaluation_service(
     ``evidence_pool_size`` enables answer-side evidence selection: the retrieval pack
     holds that many candidates, the evidence model (``NEWS_RESEARCH_EVIDENCE_LLM_*``)
     scores and condenses them, and Adaptive-k picks at most ``max_context_items``.
+    ``section_navigation`` lets the same helper model read the paper outline after
+    ranking and add passages from the sections it picks.
     """
     from backend.research.application.llm_client import (
         build_unity_evidence_model,
@@ -164,6 +169,12 @@ def build_qasper_answer_evaluation_service(
         min_relevance=evidence_min_relevance,
         render_mode=evidence_render_mode,
     )
+    section_navigator, navigation_config = _qasper_section_navigation(
+        build_unity_evidence_model,
+        enabled=section_navigation,
+        max_sections=navigation_max_sections,
+        max_passages_per_section=navigation_max_passages_per_section,
+    )
     judge_call = build_unity_judge_llm_call(max_tokens=400) if judge else None
     return QasperAnswerEvaluationService(
         assets,
@@ -193,6 +204,8 @@ def build_qasper_answer_evaluation_service(
             field_reranker_enabled=lightweight is not None,
         ),
         evidence_selector=evidence_selector,
+        section_navigator=section_navigator,
+        section_navigation=navigation_config,
         context_runtime=_reader_answer_context_runtime(output_directory),
         progress=progress,
         case_started=case_started,
@@ -236,6 +249,36 @@ def _qasper_evidence_selector(
         pool_size=pool_size,
         **tuning,
     )
+
+
+def _qasper_section_navigation(
+    model_factory,
+    *,
+    enabled: bool,
+    max_sections: int | None,
+    max_passages_per_section: int | None,
+):
+    """Section navigator and its config for the run, or (None, None) when navigation is off."""
+    tuning = {
+        name: value
+        for name, value in (
+            ("max_sections", max_sections),
+            ("max_passages_per_section", max_passages_per_section),
+        )
+        if value is not None
+    }
+    if not enabled:
+        if tuning:
+            raise ValueError("section navigation options require section_navigation")
+        return None, None
+    from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
+    from backend.research.rag.retrieval.paper_section_navigator import (
+        DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS,
+        LLMSectionNavigator,
+    )
+
+    navigator = LLMSectionNavigator(model_factory(max_tokens=DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS))
+    return navigator, SectionNavigationConfig(**tuning)
 
 
 def _reader_answer_context_runtime(output_directory: Path):

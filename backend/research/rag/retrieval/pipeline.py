@@ -35,8 +35,11 @@ class RetrievalPipeline:
         field_reranker_available: bool,
         visual_store_available: bool,
         claim_index_available: bool,
+        section_navigation_expander: Any | None = None,
     ) -> None:
         self._policy = policy
+        # Optional: structure-aware expansion picks further sections from the outline.
+        self._section_navigation_expander = section_navigation_expander
         self._planner = planner
         self._recall_stage = recall_stage
         self._ranking_stage = ranking_stage
@@ -91,6 +94,13 @@ class RetrievalPipeline:
         )
         scored = filter_scored_chunks_for_request(ranking_result.scored, request)
         child_chunks = filter_chunks_for_request(ranking_result.child_chunks, request)
+        section_navigation: dict[str, Any] | None = None
+        if self._section_navigation_expander is not None:
+            navigation = self._section_navigation_expander.expand(
+                child_chunks, scored, request, limit=request.limit, trace=retrieval_trace,
+            )
+            child_chunks = filter_chunks_for_request(navigation.child_chunks, request)
+            section_navigation = navigation.report
         child_chunks = self._structural_expander.expand(child_chunks, request, route)
         child_chunks = filter_chunks_for_request(child_chunks, request)
         # Table queries should remain table-first when a real table chunk exists.
@@ -157,6 +167,8 @@ class RetrievalPipeline:
             retrieval_trace=retrieval_trace,
             parent_metrics=parent_metrics,
         )
+        if section_navigation is not None:
+            metrics["section_navigation"] = section_navigation
         logging.getLogger(__name__).info("retrieval %s", metrics)
         return self._result_factory(
             parent_chunks=parent_chunks,

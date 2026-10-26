@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
-import json
-import re
 from typing import Any
 
 from backend.research.ports.evidence_summarizer import (
@@ -27,6 +25,7 @@ from backend.research.ports.paper_answer_model import (
     PaperAnswerModelPort,
     PaperAnswerModelRequest,
 )
+from backend.research.rag.retrieval.model_json_reply import as_int, parse_json_object_reply
 from framework.llm.models.usage import TokenUsage
 from framework.shared.graph_identity import GraphExecutionIdentity
 
@@ -43,7 +42,6 @@ SUMMARY_PASSAGE_MAX_CHARS = 6000
 MAX_SUMMARY_QUOTES = 4
 _MAX_QUOTE_CHARS = 600
 _MAX_SUMMARY_CHARS = 800
-_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
 _SYSTEM_PROMPT = (
     "You assess passages from an academic paper for how much each one helps answer a single "
@@ -123,7 +121,7 @@ class LLMEvidenceSummarizer:
         return EvidenceSummaryResult(
             summaries=summaries,
             model=", ".join(models),
-            usage=_sum_usage(outcome.usage for outcome in outcomes),
+            usage=TokenUsage.sum(outcome.usage for outcome in outcomes),
             diagnostics={
                 "prompt_version": EVIDENCE_SUMMARY_PROMPT_VERSION,
                 "batches": len(batches),
@@ -163,10 +161,10 @@ class LLMEvidenceSummarizer:
                 continue
             summaries, rejected = _summaries_for_batch(batch, texts, entries)
             return _BatchOutcome(
-                summaries, model, _sum_usage(usages), len(usages), malformed, rejected, truncated,
+                summaries, model, TokenUsage.sum(usages), len(usages), malformed, rejected, truncated,
             )
         unassessed = tuple(PassageSummary(passage.passage_id, relevance=None) for passage in batch)
-        return _BatchOutcome(unassessed, model, _sum_usage(usages), len(usages), malformed, 0, truncated)
+        return _BatchOutcome(unassessed, model, TokenUsage.sum(usages), len(usages), malformed, 0, truncated)
 
 
 class _BatchOutcome:
@@ -198,28 +196,18 @@ def build_evidence_summary_user_prompt(question: str, passages: Sequence[str]) -
 
 def parse_evidence_summary_reply(text: str, *, passage_count: int) -> dict[int, dict[str, Any]]:
     """Entries keyed by 1-based passage number; raises ``malformed_output`` on bad JSON."""
-    stripped = str(text or "").strip()
-    fenced = _FENCE_RE.match(stripped)
-    if fenced:
-        stripped = fenced.group(1).strip()
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise PaperAnswerModelError(
-            "malformed_output", "evidence summary reply is not JSON",
-            details={"output_excerpt": stripped},
-        ) from exc
-    entries = payload.get("passages") if isinstance(payload, Mapping) else None
+    payload = parse_json_object_reply(text, purpose="evidence summary")
+    entries = payload.get("passages")
     if not isinstance(entries, list):
         raise PaperAnswerModelError(
             "malformed_output", "evidence summary reply has no passages list",
-            details={"output_excerpt": stripped},
+            details={"output_excerpt": str(text or "").strip()},
         )
     by_index: dict[int, dict[str, Any]] = {}
     for entry in entries:
         if not isinstance(entry, Mapping):
             continue
-        index = _as_int(entry.get("id"))
+        index = as_int(entry.get("id"))
         if index is None or not 1 <= index <= passage_count or index in by_index:
             continue
         by_index[index] = dict(entry)
@@ -235,7 +223,7 @@ def _summaries_for_batch(
     rejected = 0
     for index, (passage, text) in enumerate(zip(batch, texts), start=1):
         entry = entries.get(index)
-        relevance = _as_int(entry.get("relevance")) if entry is not None else None
+        relevance = as_int(entry.get("relevance")) if entry is not None else None
         if relevance is None or not EVIDENCE_RELEVANCE_MIN <= relevance <= EVIDENCE_RELEVANCE_MAX:
             summaries.append(PassageSummary(passage.passage_id, relevance=None))
             continue
@@ -273,34 +261,6 @@ def _verbatim_quotes(raw: Any, passage_text: str) -> tuple[tuple[str, ...], int]
 
 def _normalize(text: str) -> str:
     return " ".join(str(text or "").split()).casefold()
-
-
-def _as_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value.strip())
-    return None
-
-
-def _sum_usage(usages: Any) -> TokenUsage:
-    items = list(usages)
-    costs = [usage.estimated_cost_usd for usage in items]
-    return TokenUsage(
-        input_tokens=sum(usage.input_tokens for usage in items),
-        output_tokens=sum(usage.output_tokens for usage in items),
-        reasoning_tokens=sum(usage.reasoning_tokens for usage in items),
-        cached_input_tokens=sum(usage.cached_input_tokens for usage in items),
-        estimated_cost_usd=(
-            sum(cost for cost in costs if cost is not None)
-            if items and all(cost is not None for cost in costs)
-            else None
-        ),
-    )
 
 
 __all__ = [

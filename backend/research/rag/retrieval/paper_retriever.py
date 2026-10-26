@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING
 from backend.research.document.models import PaperChunk
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.ports.field_embedding_index import FieldEmbeddingSearchPort
+from backend.research.ports.section_navigator import SectionNavigatorPort
 from backend.research.ports.visual_chunk_index import VisualChunkSearchPort
 from backend.research.rag.retrieval.contracts import RetrievalRequest, RetrievalResult
+from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
 from backend.research.rag.retrieval.factory import build_retrieval_pipeline
 from backend.research.rag.retrieval.paper_claim_index import PaperClaimSearchPort
 from backend.research.rag.retrieval.policies import (
@@ -48,6 +50,8 @@ class ResearchRetriever:
         field_reranker: "RerankerPort | None" = None,
         visual_store: VisualChunkSearchPort | None = None,
         claim_index: PaperClaimSearchPort | None = None,
+        section_navigator: SectionNavigatorPort | None = None,
+        section_navigation: SectionNavigationConfig | None = None,
     ) -> None:
         self._store = chunk_store
         self._policy = policy or RetrievalPolicy()
@@ -59,6 +63,8 @@ class ResearchRetriever:
             field_reranker=field_reranker,
             visual_store=visual_store,
             claim_index=claim_index,
+            section_navigator=section_navigator,
+            section_navigation=section_navigation,
         )
 
     @property

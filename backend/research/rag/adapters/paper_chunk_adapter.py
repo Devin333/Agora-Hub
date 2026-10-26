@@ -57,9 +57,7 @@ class PaperChunkAdapter:
     def to_rag_evidence(self, chunk: PaperChunk, *, score: float | None = None) -> RAGEvidence:
         rag_chunk = self.to_rag_chunk(chunk)
         breakdown = _score_breakdown(chunk.metadata)
-        resolved_score = score
-        if resolved_score is None:
-            resolved_score = _first_number(chunk.metadata, _SCORE_FALLBACK_KEYS)
+        resolved_score = score if score is not None else paper_chunk_evidence_score(chunk)
         return RAGEvidence(
             evidence_id=chunk.chunk_id,
             chunk_id=rag_chunk.chunk_id,
@@ -74,6 +72,11 @@ class PaperChunkAdapter:
                 PAPER_CHUNK_METADATA_KEY: chunk.model_dump(mode="json"),
             },
         )
+
+
+def paper_chunk_evidence_score(chunk: PaperChunk) -> float | None:
+    """Score the chunk carries into evidence ranking; None when it has no retrieval score."""
+    return _first_number(chunk.metadata, _SCORE_FALLBACK_KEYS)
 
 
 def paper_chunk_from_evidence_record(raw: Any) -> PaperChunk | None:
@@ -183,6 +186,7 @@ def _as_optional_float(value: Any) -> float | None:
 __all__ = [
     "PAPER_CHUNK_METADATA_KEY",
     "PaperChunkAdapter",
+    "paper_chunk_evidence_score",
     "paper_chunk_from_evidence_record",
     "paper_chunk_to_evidence_metadata",
     "paper_chunk_to_rag_chunk",

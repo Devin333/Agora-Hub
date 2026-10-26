@@ -130,3 +130,17 @@ def test_stream_event_round_trip_exact_graph_execution_identity() -> None:
     restored = LLMStreamEvent.from_any(event.to_dict(redact=False))
 
     assert restored == event
+
+
+def test_token_usage_sum_adds_counts_and_keeps_cost_only_when_every_call_has_one() -> None:
+    priced = TokenUsage.sum([
+        TokenUsage(input_tokens=2, output_tokens=1, estimated_cost_usd=0.5),
+        TokenUsage(input_tokens=3, reasoning_tokens=4, cached_input_tokens=1, estimated_cost_usd=0.25),
+    ])
+    partial = TokenUsage.sum([TokenUsage(input_tokens=1, estimated_cost_usd=0.5), TokenUsage(input_tokens=1)])
+
+    assert (priced.input_tokens, priced.output_tokens, priced.reasoning_tokens) == (5, 1, 4)
+    assert priced.cached_input_tokens == 1
+    assert priced.estimated_cost_usd == 0.75
+    assert partial.estimated_cost_usd is None
+    assert TokenUsage.sum([]) == TokenUsage()

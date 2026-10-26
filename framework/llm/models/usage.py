@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +48,23 @@ class TokenUsage:
             estimated_cost_usd=(
                 float(payload["estimated_cost_usd"])
                 if payload.get("estimated_cost_usd") is not None
+                else None
+            ),
+        )
+
+    @classmethod
+    def sum(cls, usages: Iterable[TokenUsage]) -> TokenUsage:
+        """Total of several calls; the cost is known only when every call reports one."""
+        items = list(usages)
+        costs = [usage.estimated_cost_usd for usage in items]
+        return cls(
+            input_tokens=sum(usage.input_tokens for usage in items),
+            output_tokens=sum(usage.output_tokens for usage in items),
+            reasoning_tokens=sum(usage.reasoning_tokens for usage in items),
+            cached_input_tokens=sum(usage.cached_input_tokens for usage in items),
+            estimated_cost_usd=(
+                sum(cost for cost in costs if cost is not None)
+                if items and all(cost is not None for cost in costs)
                 else None
             ),
         )

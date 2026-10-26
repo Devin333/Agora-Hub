@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import inspect
 import json
 from collections.abc import Callable
-from threading import Thread
 from typing import Any
 
 from framework.harness.rag.models import FORBIDDEN_RAG_PLAN_KEYS
 from framework.shared.json import stable_json_dumps, to_jsonable
 from framework.shared.graph_identity import GraphExecutionIdentity
+from framework.shared.sync_bridge import resolve_maybe_awaitable
 
 
 class LLMResearchRAGPlanCandidateWorker:
@@ -37,7 +35,7 @@ class LLMResearchRAGPlanCandidateWorker:
             kwargs["timeout_seconds"] = timeout_seconds
         if max_transport_attempts is not None:
             kwargs["max_transport_attempts"] = max_transport_attempts
-        response = _run_maybe_async(self._llm_call(prompt, **kwargs))
+        response = resolve_maybe_awaitable(self._llm_call(prompt, **kwargs))
         parsed = _extract_json_object(str(response or ""))
         forbidden = _find_forbidden_fields(parsed)
         if forbidden:
@@ -117,30 +115,6 @@ def _find_forbidden_fields(value: Any, *, path: str = "") -> tuple[str, ...]:
         for index, item in enumerate(value):
             found.extend(_find_forbidden_fields(item, path=f"{path}[{index}]"))
     return tuple(found)
-
-
-def _run_maybe_async(value: Any) -> Any:
-    if not inspect.isawaitable(value):
-        return value
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(value)
-
-    result: dict[str, Any] = {}
-
-    def _target() -> None:
-        try:
-            result["value"] = asyncio.run(value)
-        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
-            result["error"] = exc
-
-    thread = Thread(target=_target, daemon=True)
-    thread.start()
-    thread.join()
-    if "error" in result:
-        raise result["error"]
-    return result["value"]
 
 
 __all__ = ["LLMResearchRAGPlanCandidateWorker"]

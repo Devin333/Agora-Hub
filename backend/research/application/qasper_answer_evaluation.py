@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -25,6 +25,7 @@ from backend.research.ports.qasper_evaluation import QasperArtifactStore
 from backend.research.ports.qasper_query_embedding import QueryEmbeddingPort, QueryVectorStorePort
 from backend.research.ports.field_embedding_index import FieldEmbeddingSearchPort
 from backend.research.ports.reranker import RerankerPort
+from backend.research.ports.section_navigator import SectionNavigatorPort
 from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.evaluation.paper_answer_eval import outcome_for_session_status
 from backend.research.rag.evaluation.qasper_answer_judge import (
@@ -48,6 +49,7 @@ from backend.research.rag.evaluation.qasper_retrieval import (
 )
 from backend.research.rag.evaluation.qasper_scoring import evidence_group_coverage
 from backend.research.rag.retrieval.answer_evidence_selection import RelevanceEvidenceSelector
+from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
 from backend.research.rag.retrieval.paper_answer_generator import (
     ANSWER_PROMPT_VERSION,
     ANSWER_PROTOCOL_VERSION,
@@ -210,6 +212,8 @@ class QasperAnswerEvaluationService:
         field_reranker: RerankerPort | None = None,
         retrieval_profile: QasperAnswerRetrievalProfile | None = None,
         evidence_selector: RelevanceEvidenceSelector | None = None,
+        section_navigator: SectionNavigatorPort | None = None,
+        section_navigation: SectionNavigationConfig | None = None,
         context_runtime: AnswerContextRuntime | None = None,
         progress: Callable[[int, int, QasperAnswerCase], None] | None = None,
         case_started: Callable[[int, int, str], None] | None = None,
@@ -261,6 +265,12 @@ class QasperAnswerEvaluationService:
         if evidence_selector is not None and evidence_selector.pool_size != pool_size:
             raise ValueError("evidence_selector pool_size must equal the profile evidence_pool_size")
         self._evidence_selector = evidence_selector
+        if section_navigation is not None and section_navigator is None:
+            raise ValueError("section_navigation config requires a section_navigator")
+        self._section_navigator = section_navigator
+        self._section_navigation = (
+            (section_navigation or SectionNavigationConfig()) if section_navigator is not None else None
+        )
         self._context_runtime = context_runtime
         self._progress = progress
         self._case_started = case_started
@@ -333,6 +343,8 @@ class QasperAnswerEvaluationService:
             reranker=reranker_tracker if reranker_tracker.available else None,
             field_reranker=field_reranker_tracker if field_reranker_tracker.available else None,
             retrieval_policy=self._policy,
+            section_navigator=self._section_navigator,
+            section_navigation=self._section_navigation,
             # The generator renders exactly the passages the context budget admits, each
             # with the default per-passage room, so a larger budget is not truncated away.
             answer_worker=PaperAnswerWorker(AnswerGenerator(
@@ -359,6 +371,14 @@ class QasperAnswerEvaluationService:
             if self._evidence_selector is not None
             else None
         )
+        section_navigation = (
+            _measurement_identity({
+                "config": self._section_navigation.to_dict(),
+                "navigator": dict(self._section_navigator.measurement_identity),
+            })
+            if self._section_navigator is not None and self._section_navigation is not None
+            else None
+        )
         report_identity = {
             "dataset_sha256": assets.dataset_sha256,
             "mapping_digest": frozen.digest,
@@ -375,8 +395,11 @@ class QasperAnswerEvaluationService:
             ),
             "context_budget": budget.to_dict(),
             "evidence_selection": evidence_selection,
+            # Omitted when unset so runs without navigation keep their recorded identity.
+            **({"section_navigation": section_navigation} if section_navigation is not None else {}),
             "retrieval_profile_fingerprint": _profile_fingerprint(
                 self._retrieval_profile, self._policy, components, budget.to_dict(), evidence_selection,
+                section_navigation,
             ),
             "fixture_boundary": (
                 "offline_cached_chunk_and_field_vectors; "
@@ -567,6 +590,7 @@ class QasperAnswerEvaluationService:
             generation_error_detail=generation_error_detail,
             judge_request=judge_request,
             evidence_selection=_case_evidence_selection(generated, frozen_case),
+            section_navigation=_case_section_navigation(result.transcript.events, frozen_case, context_ids),
         )
 
 
@@ -662,12 +686,47 @@ def _case_evidence_selection(
     }
 
 
+def _case_section_navigation(
+    events: Sequence[Mapping[str, Any]],
+    frozen_case: FrozenQasperCase,
+    context_ids: Sequence[str],
+) -> dict[str, Any] | None:
+    """Navigation reports of the session's retrieval steps, or None when navigation is off."""
+    steps = [
+        dict(navigation)
+        for event in events
+        if event.get("event_type") == "rag_step_executed"
+        and isinstance(payload := event.get("payload"), Mapping)
+        and isinstance(metadata := payload.get("metadata"), Mapping)
+        and isinstance(navigation := metadata.get("section_navigation"), Mapping)
+    ]
+    if not steps:
+        return None
+    added = tuple(dict.fromkeys(
+        str(chunk_id) for step in steps for chunk_id in (step.get("added_chunk_ids") or ())
+    ))
+    in_context = set(context_ids)
+    added_in_context = tuple(chunk_id for chunk_id in added if chunk_id in in_context)
+    added_coverage = _coverage(frozen_case, added_in_context, strict=False) if added_in_context else None
+    return {
+        "steps": steps,
+        "added_chunk_ids": list(added),
+        "displaced_chunk_ids": list(dict.fromkeys(
+            str(chunk_id) for step in steps for chunk_id in (step.get("displaced_chunk_ids") or ())
+        )),
+        "added_in_context_ids": list(added_in_context),
+        "added_equivalent_context_coverage": added_coverage,
+        "added_gold_in_context": bool(added_coverage),
+    }
+
+
 def _profile_fingerprint(
     profile: QasperAnswerRetrievalProfile,
     policy: RetrievalPolicy,
     components: dict[str, str | None],
     context_budget: dict[str, int],
     evidence_selection: Mapping[str, Any] | None,
+    section_navigation: Mapping[str, Any] | None = None,
 ) -> str:
     payload = {
         "profile": profile.to_dict(),
@@ -675,6 +734,7 @@ def _profile_fingerprint(
         "components": components,
         "context_budget": context_budget,
         **({"evidence_selection": evidence_selection} if evidence_selection is not None else {}),
+        **({"section_navigation": section_navigation} if section_navigation is not None else {}),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

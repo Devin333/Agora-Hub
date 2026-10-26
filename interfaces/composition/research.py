@@ -81,6 +81,8 @@ from backend.research.document.marker_pdf_parser import (
 )
 from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
 from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
+from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
+from backend.research.ports.section_navigator import SectionNavigatorPort
 from backend.research.ports.artifact_publication import (
     RESEARCH_ARTIFACT_MANIFEST_VERSION,
     ResearchArtifactDiagnosticClaim,
@@ -252,6 +254,7 @@ from interfaces.composition.research_errors import (
 from interfaces.composition.research_reader_answer import (
     reader_answer_worker_factory,
     reader_rag_budget,
+    reader_section_navigation,
 )
 from interfaces.composition.research_settings import (
     ResearchLocalRuntimeSettings,
@@ -1732,6 +1735,8 @@ def _local_reader_rag_service(
     context_window: ContextWindowLimits,
     run_scope: RunScope,
     transcript_root: Path,
+    section_navigator: SectionNavigatorPort | None = None,
+    section_navigation: SectionNavigationConfig | None = None,
 ) -> Any:
     from interfaces.services.paper_rag_service import PaperRagApplicationService
     from interfaces.services.paper_rag_transcript_store import PaperRagTranscriptFileStore
@@ -1748,6 +1753,8 @@ def _local_reader_rag_service(
             context_window=context_window,
             run_scope=run_scope,
             event_recorder=_kwargs.get("event_recorder"),
+            section_navigator=section_navigator,
+            section_navigation=section_navigation,
         ),
         ask_use_case=ask_use_case,
         transcript_store=PaperRagTranscriptFileStore(transcript_root),
@@ -2615,6 +2622,7 @@ def _build_configured_composition(
             settings.rag,
             max_output_tokens=min(settings.llm.max_output_tokens, 900),
         )
+        reader_navigator, reader_navigation = reader_section_navigation(llm_client, settings.rag)
         # Reader Q&A is asked against a terminal Research run whose artifact manifest
         # is already committed, so its context snapshots go to a dedicated store that
         # is bound to the parent run id for the duration of each session.
@@ -2652,6 +2660,8 @@ def _build_configured_composition(
                 ),
                 run_scope=reader_context_artifacts.bind_run,
                 transcript_root=settings.rag.transcript_root,
+                section_navigator=reader_navigator,
+                section_navigation=reader_navigation,
             ),
         )
         owned_resources.append(rag_ask_provider)

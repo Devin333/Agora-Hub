@@ -111,6 +111,19 @@ def register(operations: argparse._SubParsersAction) -> None:
         "--evidence-render-mode", choices=("summary", "passage"), default=None,
         help="Send chosen passages as summary and verbatim quotes, or as original text (default summary)",
     )
+    answer_run.add_argument(
+        "--section-navigation", action="store_true",
+        help="After ranking, let the evidence model read the paper outline and add passages "
+             "from the unread sections it picks",
+    )
+    answer_run.add_argument(
+        "--navigation-max-sections", type=int, default=None,
+        help="Most sections section navigation adds per retrieval (default 2)",
+    )
+    answer_run.add_argument(
+        "--navigation-max-passages-per-section", type=int, default=None,
+        help="Most passages section navigation takes from each chosen section (default 2)",
+    )
     answer_run.set_defaults(_qasper_action="answer_run")
 
     answer_replay = answer_commands.add_parser(
@@ -232,6 +245,9 @@ def _build_answer_service(args: argparse.Namespace) -> Any:
         evidence_min_passages=getattr(args, "evidence_min_passages", None),
         evidence_min_relevance=getattr(args, "evidence_min_relevance", None),
         evidence_render_mode=getattr(args, "evidence_render_mode", None),
+        section_navigation=bool(getattr(args, "section_navigation", False)),
+        navigation_max_sections=getattr(args, "navigation_max_sections", None),
+        navigation_max_passages_per_section=getattr(args, "navigation_max_passages_per_section", None),
     )
 
 

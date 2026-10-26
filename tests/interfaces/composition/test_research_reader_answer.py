@@ -5,6 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from backend.research.rag.retrieval.expanders.section_navigation import (
+    DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION,
+    DEFAULT_NAVIGATION_MAX_SECTIONS,
+    SectionNavigationConfig,
+)
+from backend.research.rag.retrieval.paper_section_navigator import (
+    DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS,
+    LLMSectionNavigator,
+)
 from backend.research.rag.retrieval.answer_evidence_selection import (
     DEFAULT_EVIDENCE_MIN_PASSAGES,
     EVIDENCE_SELECTION_STRATEGY,
@@ -16,6 +25,7 @@ from interfaces.composition.research_reader_answer import (
     reader_answer_worker_factory,
     reader_evidence_selector,
     reader_rag_budget,
+    reader_section_navigation,
 )
 from interfaces.composition.research_settings import ResearchRAGSettings, ResearchRuntimeSettings
 
@@ -96,6 +106,13 @@ def test_reader_answer_path_with_evidence_selection_admits_the_pool(tmp_path: Pa
         ({"evidence_pool_size": 16, "evidence_min_passages": 17}, "research.rag.evidence_min_passages"),
         ({"evidence_min_relevance": 11}, "research.rag.evidence_min_relevance"),
         ({"evidence_render_mode": "full"}, "research.rag.evidence_render_mode"),
+        ({"section_navigation_enabled": "yes"}, "research.rag.section_navigation"),
+        ({"navigation_max_sections": 0}, "research.rag.navigation_max_sections"),
+        ({"navigation_max_sections": 9}, "research.rag.navigation_max_sections"),
+        (
+            {"navigation_max_passages_per_section": 0},
+            "research.rag.navigation_max_passages_per_section",
+        ),
     ],
 )
 def test_invalid_evidence_settings_fail_closed(tmp_path: Path, overrides, capability) -> None:
@@ -129,3 +146,71 @@ def test_evidence_selection_is_off_by_default(tmp_path: Path) -> None:
 
     assert settings.rag.evidence_selection_enabled is False
     assert settings.rag.reader_context_items == settings.rag.max_context_items
+
+
+def test_section_navigation_is_off_by_default(tmp_path: Path) -> None:
+    settings = ResearchRuntimeSettings.from_env({"DASHSCOPE_API_KEY": "sk-test"}, cwd=tmp_path)
+
+    assert settings.rag.section_navigation_enabled is False
+    assert settings.rag.navigation_max_sections == DEFAULT_NAVIGATION_MAX_SECTIONS
+    assert settings.rag.navigation_max_passages_per_section == DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION
+    assert reader_section_navigation(_Client(), settings.rag) == (None, None)
+
+
+def test_section_navigation_is_read_from_the_environment_and_built_on_the_research_llm(
+    tmp_path: Path,
+) -> None:
+    settings = ResearchRuntimeSettings.from_env(
+        {
+            "DASHSCOPE_API_KEY": "sk-test-research-secret",
+            "NEWS_RESEARCH_RAG_SECTION_NAVIGATION": "on",
+            "NEWS_RESEARCH_RAG_NAVIGATION_MAX_SECTIONS": "3",
+            "NEWS_RESEARCH_RAG_NAVIGATION_MAX_PASSAGES_PER_SECTION": "1",
+        },
+        cwd=tmp_path,
+    )
+
+    navigator, config = reader_section_navigation(_Client(), settings.rag)
+
+    assert settings.rag.section_navigation_enabled is True
+    assert isinstance(navigator, LLMSectionNavigator)
+    assert config == SectionNavigationConfig(max_sections=3, max_passages_per_section=1)
+    model_identity = navigator.measurement_identity["model"]
+    assert model_identity["model"] == "test-model"
+    assert model_identity["max_tokens"] == DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS
+
+
+def test_invalid_section_navigation_environment_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(ResearchConfigurationError) as raised:
+        ResearchRuntimeSettings.from_env(
+            {"DASHSCOPE_API_KEY": "sk-test", "NEWS_RESEARCH_RAG_SECTION_NAVIGATION": "maybe"},
+            cwd=tmp_path,
+        )
+
+    assert "research.rag.section_navigation" in raised.value.capabilities
+
+
+def test_reader_rag_sessions_carry_the_configured_section_navigation(tmp_path: Path) -> None:
+    from backend.research.application.ask_paper import AskPaperUseCase
+    from backend.research.application.paper_rag_session import ContextWindowLimits
+    from interfaces.composition.research import _local_reader_rag_service
+
+    settings = _settings(tmp_path, section_navigation_enabled=True, navigation_max_sections=3)
+    navigator, config = reader_section_navigation(_Client(), settings)
+    service = _local_reader_rag_service(
+        ask_use_case=AskPaperUseCase(),
+        chunk_store=object(),  # type: ignore[arg-type]
+        answer_worker_factory=lambda: None,
+        budget=reader_rag_budget(settings),
+        context_assembler_factory=lambda _spec: None,  # type: ignore[arg-type, return-value]
+        context_window=ContextWindowLimits(max_input_tokens=8192, max_output_tokens=900),
+        run_scope=lambda _run_id: None,  # type: ignore[arg-type, return-value]
+        transcript_root=tmp_path / "transcripts",
+        section_navigator=navigator,
+        section_navigation=config,
+    )
+
+    session = service._session_factory()  # noqa: SLF001 - composition wiring under test
+
+    assert session._section_navigator is navigator  # noqa: SLF001
+    assert session._section_navigation == SectionNavigationConfig(max_sections=3)  # noqa: SLF001

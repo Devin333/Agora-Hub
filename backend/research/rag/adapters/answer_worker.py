@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import inspect
 from dataclasses import dataclass
-from threading import Thread
 from typing import Any
 from uuid import uuid4
 
@@ -22,6 +20,7 @@ from backend.research.rag.retrieval.paper_policy import classify_query_intent
 from framework.harness.rag.answer_worker import AnswerWorkerError
 from framework.harness.rag.models import AnswerClaim, GroundedAnswerCandidate, RAGContextPack
 from framework.shared.graph_identity import GraphExecutionIdentity
+from framework.shared.sync_bridge import run_coroutine_sync
 
 
 @dataclass(frozen=True)
@@ -92,7 +91,7 @@ class PaperAnswerWorker:
         if self._personal_memory_context_provider is not None:
             generator_kwargs["personal_memory_context_provider"] = self._personal_memory_context_provider
         try:
-            generated = _run_async(
+            generated = run_coroutine_sync(
                 self._generator.generate(
                     question,
                     projected.retrieval,
@@ -361,28 +360,6 @@ def _dedupe_chunks(chunks: list[PaperChunk]) -> list[PaperChunk]:
         seen.add(chunk.chunk_id)
         out.append(chunk)
     return out
-
-
-def _run_async(coro: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    result: dict[str, Any] = {}
-
-    def _target() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
-            result["error"] = exc
-
-    thread = Thread(target=_target, daemon=True)
-    thread.start()
-    thread.join()
-    if "error" in result:
-        raise result["error"]
-    return result["value"]
 
 
 __all__ = ["PaperAnswerWorker"]

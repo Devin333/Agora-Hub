@@ -118,7 +118,11 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
 def build_unity_evidence_model(
     *, max_tokens: int = DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
 ) -> OpenAICompatiblePaperAnswerModel:
-    """Evidence summarizer model (``NEWS_RESEARCH_EVIDENCE_LLM_*``, else the answer model keys)."""
+    """Retrieval-side helper model (``NEWS_RESEARCH_EVIDENCE_LLM_*``, else the answer model keys).
+
+    Serves the evidence summarizer and the section navigator; callers size the
+    output room for their own reply format.
+    """
     client = _resolve_unity_client(
         "evidence summarizer model",
         base_url_keys=RESEARCH_EVIDENCE_BASE_URL_KEYS,

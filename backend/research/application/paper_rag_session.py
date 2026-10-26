@@ -22,6 +22,7 @@ from framework.harness.rag.source_verifier import SourceVerifier
 from backend.research.rag.models import ResearchRetrievalGoal
 from backend.research.rag.adapters import ResearchRAGPlanWorker
 from backend.research.rag.retrieval_port import PaperChunkRetrievalPort
+from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
 from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
 from backend.research.rag.retrieval.candidate_experiment import (
     ResearchCandidatePlanner,
@@ -31,6 +32,7 @@ from backend.research.rag.retrieval.policies import RetrievalPolicy
 from backend.research.services.rag_policy import ResearchRAGPolicyBuilder
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.ports.field_embedding_index import FieldEmbeddingSearchPort
+from backend.research.ports.section_navigator import SectionNavigatorPort
 from backend.research.ports.visual_chunk_index import VisualChunkSearchPort
 
 if TYPE_CHECKING:
@@ -76,6 +78,8 @@ class PaperRAGSession:
         field_reranker: "RerankerPort | None" = None,
         visual_store: VisualChunkSearchPort | None = None,
         retrieval_policy: RetrievalPolicy | None = None,
+        section_navigator: SectionNavigatorPort | None = None,
+        section_navigation: SectionNavigationConfig | None = None,
         plan_worker: "ResearchCandidateWorkerPort | None" = None,
         worker_planner_min_round_index: int = 1,
         candidate_experiment: RetrievalCandidateExperimentConfig | None = None,
@@ -106,6 +110,10 @@ class PaperRAGSession:
         self._field_reranker = field_reranker
         self._visual_store = visual_store
         self._retrieval_policy = retrieval_policy
+        if section_navigation is not None and section_navigator is None:
+            raise ValueError("section_navigation config requires a section_navigator")
+        self._section_navigator = section_navigator
+        self._section_navigation = section_navigation
         self._plan_worker = plan_worker
         self._candidate_experiment = candidate_experiment or RetrievalCandidateExperimentConfig()
         self._worker_planner_min_round_index = max(0, worker_planner_min_round_index)
@@ -166,6 +174,8 @@ class PaperRAGSession:
             field_reranker=self._field_reranker,
             visual_store=self._visual_store,
             policy=self._retrieval_policy,
+            section_navigator=self._section_navigator,
+            section_navigation=self._section_navigation,
         )
         retrieval_port = PaperChunkRetrievalPort(
             retriever, default_section_index=current_section_index

@@ -6,6 +6,7 @@ from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
 from backend.research.rag.adapters.paper_chunk_adapter import (
     PAPER_CHUNK_METADATA_KEY,
     PaperChunkAdapter,
+    paper_chunk_evidence_score,
     paper_chunk_from_evidence_record,
     paper_chunk_to_evidence_metadata,
     paper_chunk_to_rag_chunk,
@@ -27,6 +28,7 @@ __all__ = [
     "ResearchRAGMemoryPort",
     "ResearchRAGPlanWorker",
     "RerankerRelevanceScorer",
+    "paper_chunk_evidence_score",
     "paper_chunk_from_evidence_record",
     "paper_chunk_to_evidence_metadata",
     "paper_chunk_to_context_metadata",

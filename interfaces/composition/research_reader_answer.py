@@ -2,7 +2,8 @@
 
 Owns how the configured RAG settings become the reader session budget and the
 answer worker, so the item budget, the rendered answer context and the optional
-evidence selection (RCS + Adaptive-k) always agree with each other.
+evidence selection (RCS + Adaptive-k) always agree with each other, and how the
+optional section navigation of the reader retrieval is built.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import replace
 from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
 from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.retrieval.answer_evidence_selection import RelevanceEvidenceSelector
+from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
 from backend.research.rag.retrieval.paper_answer_generator import (
     AnswerGenerator,
     context_chars_for_passages,
@@ -20,6 +22,10 @@ from backend.research.rag.retrieval.paper_answer_generator import (
 from backend.research.rag.retrieval.paper_evidence_summarizer import (
     DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
     LLMEvidenceSummarizer,
+)
+from backend.research.rag.retrieval.paper_section_navigator import (
+    DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS,
+    LLMSectionNavigator,
 )
 from framework.harness import RAGBudget
 from framework.llm.clients.openai_compatible import OpenAICompatibleClient
@@ -62,6 +68,25 @@ def reader_evidence_selector(
     )
 
 
+def reader_section_navigation(
+    llm_client: OpenAICompatibleClient,
+    settings: ResearchRAGSettings,
+) -> tuple[LLMSectionNavigator, SectionNavigationConfig] | tuple[None, None]:
+    """Section navigator and its config on the configured Research LLM, or (None, None)."""
+    if not settings.section_navigation_enabled:
+        return None, None
+    navigation_model = OpenAICompatiblePaperAnswerModel(
+        llm_client,
+        max_output_tokens=DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS,
+        temperature=0.0,
+    )
+    config = SectionNavigationConfig(
+        max_sections=settings.navigation_max_sections,
+        max_passages_per_section=settings.navigation_max_passages_per_section,
+    )
+    return LLMSectionNavigator(navigation_model), config
+
+
 def reader_answer_worker_factory(
     llm_client: OpenAICompatibleClient,
     settings: ResearchRAGSettings,
@@ -87,4 +112,5 @@ __all__ = [
     "reader_answer_worker_factory",
     "reader_evidence_selector",
     "reader_rag_budget",
+    "reader_section_navigation",
 ]

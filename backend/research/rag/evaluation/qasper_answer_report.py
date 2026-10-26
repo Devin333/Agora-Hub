@@ -55,6 +55,10 @@ class QasperAnswerCase:
     # relevance, the Adaptive-k decision, summarizer usage, and how much gold
     # evidence the pool held before selection.
     evidence_selection: dict[str, Any] | None = None
+    # Retrieval-side section navigation, when enabled: the sections read and chosen,
+    # the passages added and displaced, navigator usage, and whether the added
+    # passages hold gold evidence.
+    section_navigation: dict[str, Any] | None = None
 
     @property
     def expects_abstention(self) -> bool:
@@ -110,6 +114,7 @@ class QasperAnswerCase:
             "judge_request": self.judge_request.to_dict() if self.judge_request is not None else None,
             "rejudge_attempt": self.rejudge_attempt,
             "evidence_selection": self.evidence_selection,
+            "section_navigation": self.section_navigation,
         }
 
     @classmethod
@@ -174,6 +179,7 @@ class QasperAnswerCase:
             judge_request=JudgeRequest.from_dict(judge_request) if judge_request is not None else None,
             rejudge_attempt=dict(rejudge_attempt) if rejudge_attempt is not None else None,
             evidence_selection=_optional_mapping(payload.get("evidence_selection"), "case.evidence_selection"),
+            section_navigation=_optional_mapping(payload.get("section_navigation"), "case.section_navigation"),
         )
 
     @property
@@ -250,6 +256,7 @@ class QasperAnswerSummary:
             "strict_context_coverage": _defined_mean(case.strict_context_coverage for case in cases),
             "equivalent_context_coverage": _defined_mean(case.equivalent_context_coverage for case in cases),
             **_evidence_selection_metrics(cases),
+            **_section_navigation_metrics(cases),
             "mapping_dispositions": _counts(case.mapping_disposition for case in cases),
             "evidence_type_gap_accepted": sum(1 for case in cases if case.evidence_type_gap_accepted),
             "efficiency": _efficiency(cases),
@@ -290,6 +297,44 @@ def _evidence_selection_metrics(cases: Sequence[QasperAnswerCase]) -> dict[str, 
             "malformed_replies": sum(int(item.get("malformed_replies") or 0) for item in diagnostics),
             "unassessed_passages": sum(int(item.get("unassessed_passages") or 0) for item in diagnostics),
             "rejected_quotes": sum(int(item.get("rejected_quotes") or 0) for item in diagnostics),
+            "tokens": {
+                key: sum(int(usage.get(key) or 0) for usage in usages)
+                for key in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens")
+            },
+        },
+    }
+
+
+def _section_navigation_metrics(cases: Sequence[QasperAnswerCase]) -> dict[str, Any]:
+    navigated = [case.section_navigation for case in cases if case.section_navigation is not None]
+    if not navigated:
+        return {}
+    steps = [
+        step
+        for item in navigated
+        for step in (item.get("steps") or ())
+        if isinstance(step, Mapping)
+    ]
+    usages = [step.get("usage") for step in steps if isinstance(step.get("usage"), Mapping)]
+    diagnostics = [step.get("diagnostics") for step in steps if isinstance(step.get("diagnostics"), Mapping)]
+    added = [len(item.get("added_chunk_ids") or ()) for item in navigated]
+    return {
+        "section_navigation": {
+            "cases": len(navigated),
+            "cases_with_added_passages": sum(1 for count in added if count),
+            "added_passages": sum(added),
+            "displaced_passages": sum(len(item.get("displaced_chunk_ids") or ()) for item in navigated),
+            # Cases where a navigated passage holds gold evidence and survived into context.
+            "added_gold_in_context": sum(1 for item in navigated if item.get("added_gold_in_context")),
+            # Skips decided by the expander (no structure) or the navigator (all read).
+            "skipped": _counts(
+                str(reason)
+                for step in steps
+                if (reason := step.get("skipped") or (step.get("diagnostics") or {}).get("skipped"))
+            ),
+            "errors": _counts(str(step.get("error")) for step in steps if step.get("error")),
+            "navigator_calls": sum(int(item.get("model_calls") or 0) for item in diagnostics),
+            "malformed_replies": sum(int(item.get("malformed_replies") or 0) for item in diagnostics),
             "tokens": {
                 key: sum(int(usage.get(key) or 0) for usage in usages)
                 for key in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens")

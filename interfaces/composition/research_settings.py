@@ -23,6 +23,10 @@ from backend.research.rag.retrieval.answer_evidence_selection import (
     DEFAULT_EVIDENCE_MIN_RELEVANCE,
     EVIDENCE_RENDER_MODES,
 )
+from backend.research.rag.retrieval.expanders.section_navigation import (
+    DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION,
+    DEFAULT_NAVIGATION_MAX_SECTIONS,
+)
 from framework.harness.runtime.result_errors import GraphArtifactResultError
 from framework.harness.runtime.result_policy import (
     GraphArtifactPersistenceConfig,
@@ -37,6 +41,9 @@ from interfaces.composition.research_errors import (
 
 
 DESKTOP_RESEARCH_LLM_ENABLED_ENV = "NEWSROOM_DESKTOP_RESEARCH_LLM_ENABLED"
+# Navigated passages displace at most half of the ranked list, so larger
+# section or per-section caps only grow the navigator prompt.
+_NAVIGATION_TUNING_MAX = 8
 
 _DEFAULT_ARXIV_API_URL = "https://export.arxiv.org/api/query"
 _DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -272,6 +279,13 @@ class ResearchRAGSettings:
     evidence_min_passages: int = DEFAULT_EVIDENCE_MIN_PASSAGES
     evidence_min_relevance: int = DEFAULT_EVIDENCE_MIN_RELEVANCE
     evidence_render_mode: str = "summary"
+    # Reader Q&A section navigation: after ranking, a model reads the paper outline
+    # and names up to ``navigation_max_sections`` unread sections whose best
+    # passages take the tail of the ranked list. One extra model call per
+    # retrieval, so it is opt-in.
+    section_navigation_enabled: bool = False
+    navigation_max_sections: int = DEFAULT_NAVIGATION_MAX_SECTIONS
+    navigation_max_passages_per_section: int = DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION
 
     @property
     def evidence_selection_enabled(self) -> bool:
@@ -345,6 +359,20 @@ class ResearchRAGSettings:
         if render_mode not in EVIDENCE_RENDER_MODES:
             _invalid("research.rag.evidence_render_mode")
         object.__setattr__(self, "evidence_render_mode", render_mode)
+        if not isinstance(self.section_navigation_enabled, bool):
+            _invalid("research.rag.section_navigation")
+        _bounded_int(
+            self.navigation_max_sections,
+            "research.rag.navigation_max_sections",
+            1,
+            _NAVIGATION_TUNING_MAX,
+        )
+        _bounded_int(
+            self.navigation_max_passages_per_section,
+            "research.rag.navigation_max_passages_per_section",
+            1,
+            _NAVIGATION_TUNING_MAX,
+        )
         if not isinstance(self.memory_enabled, bool):
             _invalid("research.rag.memory")
         refs = tuple(str(value).strip() for value in self.memory_namespace_refs)
@@ -798,6 +826,24 @@ class ResearchRuntimeSettings:
                     values,
                     ("NEWS_RESEARCH_RAG_EVIDENCE_RENDER_MODE",),
                     "summary",
+                ),
+                section_navigation_enabled=_env_bool(
+                    values,
+                    "NEWS_RESEARCH_RAG_SECTION_NAVIGATION",
+                    False,
+                    capability="research.rag.section_navigation",
+                ),
+                navigation_max_sections=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_NAVIGATION_MAX_SECTIONS",
+                    DEFAULT_NAVIGATION_MAX_SECTIONS,
+                    capability="research.rag.navigation_max_sections",
+                ),
+                navigation_max_passages_per_section=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_NAVIGATION_MAX_PASSAGES_PER_SECTION",
+                    DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION,
+                    capability="research.rag.navigation_max_passages_per_section",
                 ),
                 memory_enabled=_env_bool(
                     values,
