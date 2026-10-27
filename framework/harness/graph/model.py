@@ -396,6 +396,7 @@ class HarnessWaitContract:
     identity_scope_path: str
     timeout_policy: WaitTimeoutPolicy | None = None
     deadline_input_path: str | None = None
+    resume_node_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "wait_id", required_text(self.wait_id, "wait.wait_id"))
@@ -437,6 +438,30 @@ class HarnessWaitContract:
             "deadline_input_path",
             optional_text(self.deadline_input_path, "wait.deadline_input_path"),
         )
+        resume_node_id = optional_text(self.resume_node_id, "wait.resume_node_id")
+        if resume_node_id is not None:
+            if self.kind is not WaitKind.APPROVAL:
+                raise HarnessValidationError(
+                    "only approval Waits can re-enter a node with a redeemable grant",
+                    code="wait_resume_node_requires_approval",
+                    details={"wait_id": self.wait_id},
+                )
+            approval_path = correlation.get("approval_id")
+            if not isinstance(approval_path, str) or not approval_path.strip():
+                raise HarnessValidationError(
+                    "re-entrant approval Wait must correlate on approval_id",
+                    code="wait_resume_approval_id_missing",
+                    details={"wait_id": self.wait_id},
+                )
+        object.__setattr__(self, "resume_node_id", resume_node_id)
+
+    @property
+    def approval_id_path(self) -> str | None:
+        """Correlation path whose value is the grant redeemed on re-entry."""
+
+        if self.resume_node_id is None:
+            return None
+        return str(self.correlation["approval_id"])
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -451,25 +476,31 @@ class HarnessWaitContract:
                 None if self.timeout_policy is None else self.timeout_policy.to_dict()
             ),
             "deadline_input_path": self.deadline_input_path,
+            # Optional so normalized Graph checksums of non re-entrant Waits
+            # remain identical to their historical form.
+            **(
+                {}
+                if self.resume_node_id is None
+                else {"resume_node_id": self.resume_node_id}
+            ),
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "HarnessWaitContract":
-        _exact_keys(
-            value,
-            {
-                "wait_id",
-                "kind",
-                "correlation",
-                "signal_type",
-                "signal_version",
-                "tenant_scope_path",
-                "identity_scope_path",
-                "timeout_policy",
-                "deadline_input_path",
-            },
-            "wait contract",
-        )
+        fields = {
+            "wait_id",
+            "kind",
+            "correlation",
+            "signal_type",
+            "signal_version",
+            "tenant_scope_path",
+            "identity_scope_path",
+            "timeout_policy",
+            "deadline_input_path",
+        }
+        if "resume_node_id" in value:
+            fields.add("resume_node_id")
+        _exact_keys(value, fields, "wait contract")
         timeout = value["timeout_policy"]
         if timeout is not None:
             _exact_keys(timeout, {"action", "target_node_id"}, "wait timeout policy")
@@ -490,6 +521,7 @@ class HarnessWaitContract:
                 )
             ),
             deadline_input_path=value["deadline_input_path"],
+            resume_node_id=value.get("resume_node_id"),
         )
 
 

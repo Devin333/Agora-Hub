@@ -67,6 +67,23 @@ class StepRef:
 
 
 @dataclass(frozen=True, slots=True)
+class Pass:
+    """Deterministic control-only node that completes as soon as it is ready.
+
+    ``Pass`` is the explicit no-op route for Choice defaults and loop exits:
+    it performs no work, produces no output and never dispatches a worker.
+    """
+
+    pass_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "pass_id", required_text(self.pass_id, "pass.pass_id"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "pass", "pass_id": self.pass_id}
+
+
+@dataclass(frozen=True, slots=True)
 class Sequence:
     children: tuple["HarnessGraphExpression", ...]
     sequence_id: str | None = None
@@ -408,6 +425,7 @@ class Wait:
     identity_scope_path: str
     timeout_policy: WaitTimeoutPolicy | None = None
     deadline_input_path: str | None = None
+    resume_node_id: str | None = None
 
     def __post_init__(self) -> None:
         wait_id = required_text(self.wait_id, "wait.wait_id")
@@ -457,6 +475,16 @@ class Wait:
             required_text(self.identity_scope_path, "wait.identity_scope_path"),
         )
         object.__setattr__(self, "deadline_input_path", deadline_path)
+        object.__setattr__(
+            self,
+            "resume_node_id",
+            _approval_resume_node_id(
+                self.resume_node_id,
+                kind=kind,
+                correlation=correlation,
+                wait_id=wait_id,
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -472,7 +500,40 @@ class Wait:
                 None if self.timeout_policy is None else self.timeout_policy.to_dict()
             ),
             "deadline_input_path": self.deadline_input_path,
+            # Emitted only when declared so pre-existing Graph checksums stay
+            # byte-identical for non re-entrant Waits.
+            **(
+                {}
+                if self.resume_node_id is None
+                else {"resume_node_id": self.resume_node_id}
+            ),
         }
+
+
+def _approval_resume_node_id(
+    value: str | None,
+    *,
+    kind: WaitKind,
+    correlation: Mapping[str, Any],
+    wait_id: str,
+) -> str | None:
+    resume_node_id = optional_text(value, "wait.resume_node_id")
+    if resume_node_id is None:
+        return None
+    if kind is not WaitKind.APPROVAL:
+        raise HarnessValidationError(
+            "only approval Waits can re-enter a node with a redeemable grant",
+            code="wait_resume_node_requires_approval",
+            details={"wait_id": wait_id},
+        )
+    approval_path = correlation.get("approval_id")
+    if not isinstance(approval_path, str) or not approval_path.strip():
+        raise HarnessValidationError(
+            "re-entrant approval Wait must correlate on approval_id",
+            code="wait_resume_approval_id_missing",
+            details={"wait_id": wait_id},
+        )
+    return resume_node_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,7 +592,14 @@ class CompensationBinding:
 
 
 HarnessGraphExpression: TypeAlias = (
-    StepRef | Sequence | Choice | ParallelAll | ParallelAny | BoundedLoop | Wait
+    StepRef
+    | Pass
+    | Sequence
+    | Choice
+    | ParallelAll
+    | ParallelAny
+    | BoundedLoop
+    | Wait
 )
 
 
@@ -649,6 +717,9 @@ def expression_from_dict(value: Mapping[str, Any]) -> HarnessGraphExpression:
     if kind == "step":
         _exact_keys(value, {"kind", "step_id", "node_id"}, "step expression")
         return StepRef(step_id=value["step_id"], node_id=value["node_id"])
+    if kind == "pass":
+        _exact_keys(value, {"kind", "pass_id"}, "pass expression")
+        return Pass(pass_id=value["pass_id"])
     if kind == "sequence":
         _exact_keys(value, {"kind", "sequence_id", "children"}, "sequence expression")
         return Sequence(
@@ -717,22 +788,21 @@ def expression_from_dict(value: Mapping[str, Any]) -> HarnessGraphExpression:
             ),
         )
     if kind == "wait":
-        _exact_keys(
-            value,
-            {
-                "kind",
-                "wait_id",
-                "wait_kind",
-                "correlation",
-                "signal_type",
-                "signal_version",
-                "tenant_scope_path",
-                "identity_scope_path",
-                "timeout_policy",
-                "deadline_input_path",
-            },
-            "wait expression",
-        )
+        wait_fields = {
+            "kind",
+            "wait_id",
+            "wait_kind",
+            "correlation",
+            "signal_type",
+            "signal_version",
+            "tenant_scope_path",
+            "identity_scope_path",
+            "timeout_policy",
+            "deadline_input_path",
+        }
+        if "resume_node_id" in value:
+            wait_fields.add("resume_node_id")
+        _exact_keys(value, wait_fields, "wait expression")
         timeout = value["timeout_policy"]
         return Wait(
             wait_id=value["wait_id"],
@@ -746,6 +816,7 @@ def expression_from_dict(value: Mapping[str, Any]) -> HarnessGraphExpression:
             if timeout is None
             else _wait_timeout_from_dict(timeout),
             deadline_input_path=value["deadline_input_path"],
+            resume_node_id=value.get("resume_node_id"),
         )
     raise HarnessValidationError(
         "unsupported graph expression kind",
@@ -861,7 +932,14 @@ def _compensation_from_dict(value: Mapping[str, Any]) -> CompensationBinding:
 def _expression(value: Any, field_name: str) -> HarnessGraphExpression:
     if not isinstance(
         value,
-        StepRef | Sequence | Choice | ParallelAll | ParallelAny | BoundedLoop | Wait,
+        StepRef
+        | Pass
+        | Sequence
+        | Choice
+        | ParallelAll
+        | ParallelAny
+        | BoundedLoop
+        | Wait,
     ):
         raise HarnessValidationError(
             f"{field_name} must be a graph expression",
@@ -973,6 +1051,7 @@ __all__ = [
     "ParallelAnyFailurePolicy",
     "ParallelBranch",
     "ParallelMerge",
+    "Pass",
     "PureMerge",
     "Sequence",
     "StepRef",

@@ -35,6 +35,8 @@ UTC = _tz.utc
 
 TOOL_APPROVAL_TYPE = "tool_execution"
 TOOL_APPROVAL_BINDING_VERSION = "tool_approval_binding.v1"
+APPROVAL_REPLAY_ORIGIN_KEY = "approval_replay_origin"
+_ORIGIN_TURN_FIELDS = ("runner_turn_ref", "runner_turn_checksum", "call_ordinal")
 _VALID_RISK_LEVELS = {"low", "medium", "high", "critical"}
 
 
@@ -452,16 +454,46 @@ def tool_call_from_approval(
     if not isinstance(tool_approval, Mapping) or not isinstance(arguments, Mapping):
         raise ValueError(f"approval is not a replayable tool approval: {record.approval_id}")
     original_call = tool_approval.get("tool_call") or {}
+    metadata: dict[str, Any] = {"approval_replay_of": original_call.get("call_id")}
+    origin = approval_replay_origin(original_call)
+    if origin is not None:
+        metadata[APPROVAL_REPLAY_ORIGIN_KEY] = origin
     return ToolCall(
         tool_name=str(tool_approval["tool_name"]),
         arguments=dict(arguments),
         requested_by_agent_id=str(original_call.get("requested_by_agent_id") or ""),
         requested_by=original_call.get("requested_by"),
         call_id=call_id or f"{original_call.get('call_id') or uuid4().hex}:approved",
-        metadata={"approval_replay_of": original_call.get("call_id")},
+        metadata=metadata,
         graph_identity=graph_identity if graph_identity is not None else record.graph_identity,
         approval_id=record.approval_id,
     )
+
+
+def approval_replay_origin(original_call: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Model-turn attribution of the originally requested call, if it had one.
+
+    Calls executed under durable tool evidence carry the committed runner turn
+    that produced them.  A replay must stay attributable to that turn, so the
+    attribution is lifted verbatim from the approval record; calls that never
+    had durable evidence have no origin and yield ``None``.
+    """
+
+    raw = original_call.get("metadata") if isinstance(original_call, Mapping) else None
+    if not isinstance(raw, Mapping) or raw.get("runner_turn_ref") is None:
+        return None
+    origin = {name: raw.get(name) for name in _ORIGIN_TURN_FIELDS}
+    if (
+        not isinstance(origin["runner_turn_ref"], str)
+        or not isinstance(origin["runner_turn_checksum"], str)
+        or isinstance(origin["call_ordinal"], bool)
+        or not isinstance(origin["call_ordinal"], int)
+    ):
+        raise ValueError("approval record carries malformed model-turn attribution")
+    model_tool_call_id = raw.get("model_tool_call_id")
+    if model_tool_call_id is not None:
+        origin["model_tool_call_id"] = str(model_tool_call_id)
+    return origin
 
 
 def is_tool_approval(record: ApprovalRequest) -> bool:

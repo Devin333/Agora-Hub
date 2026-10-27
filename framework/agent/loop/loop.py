@@ -98,11 +98,14 @@ from framework.tool import (
     ToolResult,
     ToolStatus,
 )
+from framework.tool.governance.approval import APPROVAL_REPLAY_ORIGIN_KEY
 from framework.tool.runtime.evidence import (
     ToolEvidencePersistenceError,
     ToolExecutionEvidencePort,
     ToolRunnerTurnEvidence,
 )
+
+APPROVAL_REPLAY_TURN_SCHEMA = "newsroom.agent-loop-approval-replay-turn/v1"
 
 
 class AgentLoop:
@@ -293,10 +296,23 @@ class AgentLoop:
                 tool_observation_count=0,
                 tools_available=_tool_names(tools),
             )
+            # Under durable tool evidence the replay is registered as its own
+            # logical call, attributed through a committed replay turn to the
+            # model turn that originally requested it.
+            replay_call = replace(
+                approval_replay,
+                metadata={
+                    **approval_replay.metadata,
+                    **_approval_replay_turn_metadata(
+                        self._tool_execution_evidence,
+                        approval_replay,
+                    ),
+                },
+            )
             replay_result = self._process_tool_call(
                 agent=agent,
                 inputs=inputs,
-                tool_call=approval_replay,
+                tool_call=replay_call,
                 run_id=effective_run_id,
                 metrics=metrics,
                 events=events,
@@ -2539,8 +2555,62 @@ def _runner_turn_metadata(
         raise ToolEvidencePersistenceError(
             "tool call has no unique runner turn candidate evidence"
         )
+    committed = _commit_runner_turn(evidence, matches[0].to_dict())
+    return {
+        "runner_turn_ref": committed.ref,
+        "runner_turn_checksum": committed.checksum,
+        "call_ordinal": call_ordinal,
+    }
+
+
+def _approval_replay_turn_metadata(
+    evidence: ToolExecutionEvidencePort | None,
+    call: ToolCall,
+) -> dict[str, Any]:
+    """Commit the replay turn which attributes an approved call to its origin.
+
+    A replay has no LLM call of its own, so its runner turn is the approval
+    redemption itself: the grant, the replayed call and the original model
+    turn (ref, checksum and ordinal) taken from the approval record.  The
+    content checksum is unique per grant, which gives the replay a stable
+    logical call identity across retries of the same activity attempt.
+    """
+
+    if evidence is None:
+        return {}
+    origin = call.metadata.get(APPROVAL_REPLAY_ORIGIN_KEY)
+    if not isinstance(origin, Mapping):
+        raise ToolEvidencePersistenceError(
+            "approval replay has no durable model-turn attribution"
+        )
+    committed = _commit_runner_turn(
+        evidence,
+        {
+            "schema_version": APPROVAL_REPLAY_TURN_SCHEMA,
+            "approval_id": call.approval_id,
+            "replay_call_id": call.call_id,
+            "approval_replay_of": call.metadata.get("approval_replay_of"),
+            "tool_name": call.tool_name,
+            "requested_by_agent_id": call.requested_by_agent_id or None,
+            "origin": dict(origin),
+        },
+    )
+    metadata: dict[str, Any] = {
+        "runner_turn_ref": committed.ref,
+        "runner_turn_checksum": committed.checksum,
+        "call_ordinal": 0,
+    }
+    if origin.get("model_tool_call_id"):
+        metadata["model_tool_call_id"] = str(origin["model_tool_call_id"])
+    return metadata
+
+
+def _commit_runner_turn(
+    evidence: ToolExecutionEvidencePort,
+    body: Mapping[str, Any],
+) -> ToolRunnerTurnEvidence:
     try:
-        committed = evidence.commit_runner_turn(matches[0].to_dict())
+        committed = evidence.commit_runner_turn(body)
     except ToolEvidencePersistenceError:
         raise
     except BaseException as exc:  # noqa: BLE001 - fail closed before registration
@@ -2551,11 +2621,7 @@ def _runner_turn_metadata(
         raise ToolEvidencePersistenceError(
             "runner turn writer returned invalid durable evidence"
         )
-    return {
-        "runner_turn_ref": committed.ref,
-        "runner_turn_checksum": committed.checksum,
-        "call_ordinal": call_ordinal,
-    }
+    return committed
 
 
 def _bind_llm_response_identity(

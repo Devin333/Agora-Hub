@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from framework.agent.loop.runner import AgentRunner
+from framework.harness.control_plane.graph_state import HarnessGraphState
+from framework.tool.governance.approval import ToolApprovalStore
+from interfaces.composition.tool_approval_resume import HarnessGraphToolApprovalResumer
 from framework.harness.artifacts import RunBoundArtifactPort
 from framework.harness.agent_loop import (
     AgentOrchestrationBinding,
@@ -305,9 +308,24 @@ class AgentLoopGraphRuntimeComposition:
         orchestration_feature_enabled: bool = False,
         orchestration_feature: AgentLoopOrchestrationFeature | None = None,
         orchestration_scope: str = "generic",
+        approval_store: ToolApprovalStore | None = None,
+        approval_resumer: HarnessGraphToolApprovalResumer | None = None,
     ) -> None:
         if not isinstance(agent_runner, AgentRunner):
             raise TypeError("agent_runner must be AgentRunner")
+        if approval_resumer is not None and not isinstance(
+            approval_resumer,
+            HarnessGraphToolApprovalResumer,
+        ):
+            raise TypeError("approval_resumer must be HarnessGraphToolApprovalResumer")
+        if approval_resumer is not None and approval_store is None:
+            raise ValueError(
+                "approval_resumer requires the approval_store its decisions are recorded in"
+            )
+        if approval_store is not None:
+            # Requests and replays must use the store the approval service
+            # decides on, so a re-entered node redeems the decided grant.
+            agent_runner.bind_approval_store(approval_store)
         if not isinstance(agent, AgentSpec):
             raise TypeError("agent must be AgentSpec")
         if not isinstance(artifact_port, RunBoundArtifactPort):
@@ -430,6 +448,7 @@ class AgentLoopGraphRuntimeComposition:
         self._orchestration_binding = orchestration_binding
         self._orchestration_feature = selected_feature
         self._runtime_event_publisher = runtime_event_publisher
+        self._approval_resumer = approval_resumer
 
     @property
     def binding_bundle(self) -> AgentLoopGraphActivityBindingBundle:
@@ -470,6 +489,7 @@ class AgentLoopGraphRuntimeComposition:
     def run(self, run_spec: HarnessRunSpec) -> HarnessRunResult:
         if not isinstance(run_spec, HarnessRunSpec):
             raise TypeError("run_spec must be HarnessRunSpec")
+        self._register_approval_resume(run_spec)
         return self._control_plane.run(run_spec)
 
     def recover_and_run(self, run_spec: HarnessRunSpec) -> HarnessRunResult:
@@ -477,7 +497,15 @@ class AgentLoopGraphRuntimeComposition:
 
         if not isinstance(run_spec, HarnessRunSpec):
             raise TypeError("run_spec must be HarnessRunSpec")
+        self._register_approval_resume(run_spec)
         return self._control_plane.recover_and_run(run_spec)
+
+    def recover_graph(self, run_spec: HarnessRunSpec) -> HarnessGraphState:
+        """Project the committed Graph state without driving the run."""
+
+        if not isinstance(run_spec, HarnessRunSpec):
+            raise TypeError("run_spec must be HarnessRunSpec")
+        return self._control_plane.recover_graph(run_spec)
 
     def resume_after_approval(
         self,
@@ -487,18 +515,25 @@ class AgentLoopGraphRuntimeComposition:
         approval_ref: str,
         actor_identity_scope_ref: str,
         reason: str | None = None,
+        approval_id: str | None = None,
     ) -> HarnessRunResult:
         """Resume or cancel an approval wait using durable Harness evidence."""
 
         if not isinstance(run_spec, HarnessRunSpec):
             raise TypeError("run_spec must be HarnessRunSpec")
+        self._register_approval_resume(run_spec)
         return self._control_plane.resume_after_approval(
             run_spec,
             approved=approved,
             reason=reason,
             approval_ref=approval_ref,
             actor_identity_scope_ref=actor_identity_scope_ref,
+            approval_id=approval_id,
         )
+
+    def _register_approval_resume(self, run_spec: HarnessRunSpec) -> None:
+        if self._approval_resumer is not None:
+            self._approval_resumer.register(run_spec, self)
 
 
 def build_agent_loop_graph_application_service(
@@ -544,8 +579,15 @@ def build_agent_loop_graph_runtime_composition(
     orchestration_feature_enabled: bool = False,
     orchestration_feature: AgentLoopOrchestrationFeature | None = None,
     orchestration_scope: str = "generic",
+    approval_store: ToolApprovalStore | None = None,
+    approval_resumer: HarnessGraphToolApprovalResumer | None = None,
 ) -> AgentLoopGraphRuntimeComposition:
-    """Compose one durable AgentLoop Graph worker and its Harness dispatcher."""
+    """Compose one durable AgentLoop Graph worker and its Harness dispatcher.
+
+    ``approval_store`` is the store tool approvals are requested in and
+    decided on; ``approval_resumer`` is the bridge the approval service uses
+    to re-enter this runtime's node once such an approval is decided.
+    """
 
     return AgentLoopGraphRuntimeComposition(
         agent_runner=agent_runner,
@@ -563,6 +605,8 @@ def build_agent_loop_graph_runtime_composition(
         orchestration_feature_enabled=orchestration_feature_enabled,
         orchestration_feature=orchestration_feature,
         orchestration_scope=orchestration_scope,
+        approval_store=approval_store,
+        approval_resumer=approval_resumer,
     )
 
 

@@ -1366,6 +1366,11 @@ class HarnessWaitRegistration:
     deadline_ref: str | None = None
     resolution_event_ref: str | None = None
     last_event_sequence: int = 0
+    # Present only for re-entrant approval Waits: the exact grant the resumed
+    # node redeems and the node it re-enters.  Omitted otherwise so historical
+    # projections keep their canonical checksum.
+    approval_id: str | None = None
+    resume_node_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "wait_id", required_text(self.wait_id, "wait.wait_id"))
@@ -1430,10 +1435,25 @@ class HarnessWaitRegistration:
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "deadline_ref", deadline_ref)
         object.__setattr__(self, "resolution_event_ref", resolution)
+        approval_id = optional_text(self.approval_id, "wait.approval_id")
+        resume_node_id = optional_text(self.resume_node_id, "wait.resume_node_id")
+        if (approval_id is None) != (resume_node_id is None) or (
+            approval_id is not None and self.kind is not WaitKind.APPROVAL
+        ):
+            raise HarnessValidationError(
+                "re-entrant Wait must bind an approval grant and its resume node",
+                code="invalid_wait_registration_state",
+            )
+        object.__setattr__(self, "approval_id", approval_id)
+        object.__setattr__(self, "resume_node_id", resume_node_id)
 
     @property
     def unresolved(self) -> bool:
         return self.status in _UNRESOLVED_WAIT_STATUSES
+
+    @property
+    def reentrant(self) -> bool:
+        return self.resume_node_id is not None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1449,28 +1469,35 @@ class HarnessWaitRegistration:
             "deadline_ref": self.deadline_ref,
             "resolution_event_ref": self.resolution_event_ref,
             "last_event_sequence": self.last_event_sequence,
+            **(
+                {}
+                if self.resume_node_id is None
+                else {
+                    "approval_id": self.approval_id,
+                    "resume_node_id": self.resume_node_id,
+                }
+            ),
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "HarnessWaitRegistration":
-        _exact_keys(
-            value,
-            {
-                "wait_id",
-                "node_instance_id",
-                "kind",
-                "correlation_ref",
-                "tenant_scope_ref",
-                "identity_scope_ref",
-                "signal_schema_ref",
-                "registered_sequence",
-                "status",
-                "deadline_ref",
-                "resolution_event_ref",
-                "last_event_sequence",
-            },
-            "Wait registration",
-        )
+        fields = {
+            "wait_id",
+            "node_instance_id",
+            "kind",
+            "correlation_ref",
+            "tenant_scope_ref",
+            "identity_scope_ref",
+            "signal_schema_ref",
+            "registered_sequence",
+            "status",
+            "deadline_ref",
+            "resolution_event_ref",
+            "last_event_sequence",
+        }
+        if "resume_node_id" in value or "approval_id" in value:
+            fields.update({"approval_id", "resume_node_id"})
+        _exact_keys(value, fields, "Wait registration")
         return cls(
             wait_id=value["wait_id"],
             node_instance_id=value["node_instance_id"],
@@ -1484,6 +1511,8 @@ class HarnessWaitRegistration:
             deadline_ref=value["deadline_ref"],
             resolution_event_ref=value["resolution_event_ref"],
             last_event_sequence=value["last_event_sequence"],
+            approval_id=value.get("approval_id"),
+            resume_node_id=value.get("resume_node_id"),
         )
 
 

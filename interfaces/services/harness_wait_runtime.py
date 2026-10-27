@@ -13,9 +13,11 @@ from framework.agent.artifacts.stores.fs_safety import (
     verified_exclusive_file_lock,
 )
 from framework.harness.control_plane.errors import HarnessValidationError
+from framework.harness.control_plane.graph_wait_approval import (
+    authoritative_wait_approval_id,
+)
 from framework.harness.control_plane.state import HarnessRunSpec, run_spec_checksum
 from framework.harness.graph.canonical import canonical_checksum, required_text
-from framework.harness.graph.model import HarnessGraphNodeKind
 from framework.harness.waits.models import HarnessWaitScope, approval_event_ref_for
 from framework.shared.time import parse_datetime
 from interfaces.models.actor import ActorContext
@@ -396,10 +398,10 @@ class DurableHarnessWaitApprovalResolver(HarnessWaitApprovalResolverPort):
                 "approval Wait is outside the authorized actor scope",
                 code="wait_approval_evidence_unauthorized",
             )
-        authoritative_id = _approval_id_from_state(
+        authoritative_id = authoritative_wait_approval_id(
             state,
             node_instance_id,
-            run_spec=binding.run_spec,
+            graph_inputs=binding.run_spec.inputs,
         )
         # Once the Harness has durably resumed a Wait, the resolved state no
         # longer carries the original correlation payload. A stored decision
@@ -536,43 +538,6 @@ def _approval_registration(
         ):
             return registration
     return None
-
-
-def _approval_id_from_state(
-    state: Any,
-    node_instance_id: str,
-    *,
-    run_spec: HarnessRunSpec | None = None,
-) -> str | None:
-    node = next(
-        (item for item in state.node_instances if item.instance_id == node_instance_id),
-        None,
-    )
-    if node is None or node.node_kind is not HarnessGraphNodeKind.WAIT:
-        return None
-
-    def find(value: object) -> str | None:
-        if isinstance(value, Mapping):
-            candidate = value.get("approval_id")
-            if isinstance(candidate, str) and candidate.strip():
-                candidate = candidate.strip()
-                if candidate.startswith("graph.inputs.") and run_spec is not None:
-                    input_key = candidate.removeprefix("graph.inputs.")
-                    resolved = run_spec.inputs.get(input_key)
-                    return resolved.strip() if isinstance(resolved, str) and resolved.strip() else None
-                return candidate
-            for nested in value.values():
-                found = find(nested)
-                if found is not None:
-                    return found
-        if isinstance(value, (list, tuple)):
-            for nested in value:
-                found = find(nested)
-                if found is not None:
-                    return found
-        return None
-
-    return find(node.metadata) or find(node.output_refs)
 
 
 def _registration_ref(

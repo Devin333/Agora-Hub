@@ -101,6 +101,23 @@ class AgentRunner:
 
         return self._approval_store
 
+    def bind_approval_store(self, store: ToolApprovalStore) -> None:
+        """Bind the composition-owned approval store before Graph execution.
+
+        Approval requests and approval replays must use the same store the
+        approval application service decides on; rebinding to another store
+        would let a resumed node redeem grants from a different authority.
+        """
+
+        if store is None:
+            raise ValueError("approval_store is required")
+        for method_name in ("get_approval", "upsert_approval", "consume_approval"):
+            if not callable(getattr(store, method_name, None)):
+                raise TypeError("approval_store must implement ToolApprovalStore")
+        if self._approval_store is not None and self._approval_store is not store:
+            raise ValueError("AgentRunner approval store is already bound")
+        self._approval_store = store
+
     @property
     def runtime_event_sink(self) -> Any | None:
         """Return the sink shared by AgentLoop and its ToolExecutor."""
@@ -221,11 +238,6 @@ class AgentRunner:
         ):
             raise TypeError(
                 "prepared_input_projection must be PreparedInputProjection"
-            )
-        if resume_approval_id is not None and tool_execution_evidence is not None:
-            raise ValueError(
-                "approval replay is not supported with durable tool execution "
-                "evidence: replayed calls have no model turn to attribute"
             )
         _validate_graph_identity_arguments(
             run_id=run_id,

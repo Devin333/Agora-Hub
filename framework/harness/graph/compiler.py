@@ -16,6 +16,7 @@ from framework.harness.graph.dsl import (
     HarnessGraphExpression,
     ParallelAll,
     ParallelAny,
+    Pass,
     PureMerge,
     Sequence,
     StepRef,
@@ -143,9 +144,12 @@ class _CompilerContext:
         self.repair_refs: list[HarnessRepairReference] = []
         self._node_order = 0
         self._edge_order = 0
+        self._loop_stack: list[str] = []
+        self._enclosing_loops: dict[str, tuple[str, ...]] = {}
 
     def compile(self) -> NormalizedHarnessGraph:
         fragment = self._compile_expression(self.definition.root.root)
+        self._validate_wait_resume_targets()
         self._compile_compensations()
         self._compile_repairs()
         return self._build_graph(fragment)
@@ -155,6 +159,12 @@ class _CompilerContext:
             node_id = expression.node_id or expression.step_id
             self._add_executable(expression.step_id, node_id)
             return _Fragment((node_id,), (node_id,))
+        if isinstance(expression, Pass):
+            self._add_control(
+                node_id=expression.pass_id,
+                node_kind=HarnessGraphNodeKind.TERMINAL,
+            )
+            return _Fragment((expression.pass_id,), (expression.pass_id,))
         if isinstance(expression, Sequence):
             fragments = tuple(
                 self._compile_expression(child) for child in expression.children
@@ -193,6 +203,7 @@ class _CompilerContext:
                     identity_scope_path=expression.identity_scope_path,
                     timeout_policy=expression.timeout_policy,
                     deadline_input_path=expression.deadline_input_path,
+                    resume_node_id=expression.resume_node_id,
                 ),
             )
             if (
@@ -479,7 +490,11 @@ class _CompilerContext:
                 code="loop_exit_missing",
                 details={"loop_id": expression.loop_id},
             )
-        body = self._compile_expression(expression.body)
+        self._loop_stack.append(expression.loop_id)
+        try:
+            body = self._compile_expression(expression.body)
+        finally:
+            self._loop_stack.pop()
         exit_fragment = self._compile_expression(expression.exit)
         exhaustion = (
             None
@@ -638,7 +653,40 @@ class _CompilerContext:
                 HarnessGraphEdgeKind.REPAIR,
             )
 
+    def _validate_wait_resume_targets(self) -> None:
+        """Pin each re-entrant approval Wait to a node it can re-enter.
+
+        Re-entry happens by starting the next iteration of the innermost loop
+        that encloses the Wait, so the target must be an executable node in
+        exactly that loop body; any other placement could never observe the
+        grant and would silently drop the approved call.
+        """
+
+        nodes_by_id = {node.node_id: node for node in self.nodes}
+        for node in self.nodes:
+            if not isinstance(node, HarnessControlNode) or node.wait is None:
+                continue
+            target_id = node.wait.resume_node_id
+            if target_id is None:
+                continue
+            target = nodes_by_id.get(target_id)
+            wait_loops = self._enclosing_loops.get(node.node_id, ())
+            if not isinstance(target, HarnessExecutableNode):
+                raise HarnessValidationError(
+                    "approval Wait resume target must be an executable node",
+                    code="wait_resume_node_invalid",
+                    details={"wait_id": node.node_id, "resume_node_id": target_id},
+                )
+            if not wait_loops or self._enclosing_loops.get(target_id, ()) != wait_loops:
+                raise HarnessValidationError(
+                    "approval Wait and its resume target must share the innermost "
+                    "enclosing bounded loop",
+                    code="wait_resume_node_scope_invalid",
+                    details={"wait_id": node.node_id, "resume_node_id": target_id},
+                )
+
     def _add_executable(self, activity_id: str, node_id: str) -> None:
+        self._enclosing_loops[node_id] = tuple(self._loop_stack)
         activity = self._activity(activity_id)
         leaf_binding = self.definition.leaf_activity_binding(activity_id)
         task_plan_binding = self.definition.task_plan_stage_binding(activity_id)
@@ -774,6 +822,7 @@ class _CompilerContext:
         merge: HarnessMergeContract | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        self._enclosing_loops[node_id] = tuple(self._loop_stack)
         self.nodes.append(
             HarnessControlNode(
                 node_id=node_id,

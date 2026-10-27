@@ -3223,7 +3223,7 @@ def _wait_registration_projection(
                 field_name="deadline",
             )
             deadline_ref = _reference_or_checksum(deadline)
-        return {
+        projection = {
             "wait_id": node.wait.wait_id,
             "kind": node.wait.kind.value,
             "correlation_ref": canonical_checksum(correlation),
@@ -3233,6 +3233,11 @@ def _wait_registration_projection(
             "deadline_ref": deadline_ref,
             "resolved": True,
         }
+        if node.wait.resume_node_id is not None:
+            # A re-entrant approval Wait records the exact grant it waits on so
+            # the resumed node can redeem it without trusting caller input.
+            projection["approval_id"] = _wait_approval_id(correlation, node)
+        return projection
     except HarnessValidationError as exc:
         if exc.code != "wait_registration_source_missing":
             raise
@@ -3257,6 +3262,20 @@ def _wait_registration_projection(
             ),
             "resolved": False,
         }
+
+
+def _wait_approval_id(
+    correlation: Mapping[str, Any],
+    node: HarnessControlNode,
+) -> str:
+    approval_id = correlation.get("approval_id")
+    if not isinstance(approval_id, str) or not approval_id.strip():
+        raise HarnessValidationError(
+            "re-entrant approval Wait resolved no approval_id",
+            code="wait_resume_approval_id_missing",
+            details={"wait_node_id": node.node_id},
+        )
+    return approval_id.strip()
 
 
 def _wait_runtime_context(

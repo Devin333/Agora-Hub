@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
 
 from framework.agent.loop import AgentRunner
+from framework.agent.loop.loop import APPROVAL_REPLAY_TURN_SCHEMA
 from framework.agent.models import AgentLoopPolicy, AgentLoopStatus, AgentSpec
+from framework.events.canonical import checksum_for
 from framework.llm import FakeLLMClient
+from framework.shared.attempts import AttemptIdentity, AttemptOutcome
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool import (
+    ToolCall,
     ToolDefinition,
+    ToolObservation,
     ToolPolicy,
     ToolRegistry,
     ToolSideEffect,
+)
+from framework.tool.runtime.evidence import (
+    ToolEvidencePersistenceError,
+    ToolRunnerTurnEvidence,
 )
 from framework.workers.approval import (
     ApprovalDecision,
@@ -329,20 +339,119 @@ def test_graph_bound_replay_survives_new_activity_attempt() -> None:
     assert tool.calls == [_ARGUMENTS]
 
 
-def test_replay_is_refused_with_durable_tool_evidence() -> None:
-    class _DurableEvidence:
-        is_durable = True
+class _DurableEvidence:
+    """Records the durable lifecycle facts the tool runtime commits."""
 
-    runner = _runner(FakeLLMClient([]), _PublishTool(), InMemoryApprovalStore())
+    is_durable = True
 
-    with pytest.raises(ValueError, match="durable tool execution evidence"):
-        runner.run(
+    def __init__(self) -> None:
+        self.turns: list[dict[str, Any]] = []
+        self.registered: list[ToolCall] = []
+        self.observations: list[ToolObservation] = []
+
+    def commit_runner_turn(self, turn: Mapping[str, Any]) -> ToolRunnerTurnEvidence:
+        body = dict(turn)
+        self.turns.append(body)
+        return ToolRunnerTurnEvidence(
+            ref=f"tool-turn://{_RUN_ID}/{len(self.turns)}",
+            checksum=checksum_for(body),
+        )
+
+    def register_call(self, call: ToolCall) -> None:
+        self.registered.append(call)
+
+    def bind_tool(self, call: ToolCall, definition: ToolDefinition) -> None:
+        return None
+
+    def admit_attempt(self, call: ToolCall, identity: AttemptIdentity) -> None:
+        return None
+
+    def record_attempt_terminal(self, call: ToolCall, outcome: AttemptOutcome[Any]) -> None:
+        return None
+
+    def commit_observation(
+        self,
+        observation: ToolObservation,
+        definition: ToolDefinition | None,
+    ) -> str:
+        self.observations.append(observation)
+        return f"tool-evidence://{observation.call.call_id}"
+
+
+def test_replay_under_durable_evidence_is_attributed_to_the_original_model_turn() -> None:
+    store = InMemoryApprovalStore()
+    tool = _PublishTool()
+    first_evidence = _DurableEvidence()
+    first = _runner(FakeLLMClient([_tool_call_response()]), tool, store).run(
+        _agent(),
+        {"topic": "brief"},
+        tool_execution_evidence=first_evidence,
+        **_graph_kwargs(_identity()),
+    )
+    assert first.status == AgentLoopStatus.WAITING_FOR_APPROVAL
+    approval_id = _pending_id(store)
+    (requested,) = first_evidence.registered
+    origin_ref = requested.metadata["runner_turn_ref"]
+    origin_checksum = requested.metadata["runner_turn_checksum"]
+    _decide(store, approval_id, "approve")
+
+    evidence = _DurableEvidence()
+    llm = FakeLLMClient([_final_output("published daily brief")])
+    result = _runner(llm, tool, store).run(
+        _agent(),
+        {"topic": "brief"},
+        resume_approval_id=approval_id,
+        tool_execution_evidence=evidence,
+        **_graph_kwargs(
+            _identity(node_instance_id="publish:2", activity_id="activity-2")
+        ),
+    )
+
+    assert result.status == AgentLoopStatus.ACCEPTED
+    assert tool.calls == [_ARGUMENTS]
+    assert llm.call_count == 1
+    assert store.get_approval(approval_id).status == ApprovalStatus.CONSUMED
+    replay_turn = evidence.turns[0]
+    assert replay_turn["schema_version"] == APPROVAL_REPLAY_TURN_SCHEMA
+    assert replay_turn["approval_id"] == approval_id
+    assert replay_turn["origin"]["runner_turn_ref"] == origin_ref
+    assert replay_turn["origin"]["runner_turn_checksum"] == origin_checksum
+    assert replay_turn["origin"]["call_ordinal"] == requested.metadata["call_ordinal"]
+    (replayed,) = evidence.registered
+    assert replayed.approval_id == approval_id
+    assert replayed.metadata["runner_turn_ref"] == f"tool-turn://{_RUN_ID}/1"
+    assert replayed.metadata["runner_turn_checksum"] == checksum_for(replay_turn)
+    assert replayed.metadata["call_ordinal"] == 0
+    assert [item.call.call_id for item in evidence.observations] == [replayed.call_id]
+
+
+def test_durable_replay_without_model_turn_attribution_fails_closed() -> None:
+    store = InMemoryApprovalStore()
+    tool = _PublishTool()
+    # Requested without durable evidence, so the grant has no committed turn.
+    _runner(FakeLLMClient([_tool_call_response()]), tool, store).run(
+        _agent(),
+        {"topic": "brief"},
+        **_graph_kwargs(_identity()),
+    )
+    approval_id = _pending_id(store)
+    _decide(store, approval_id, "approve")
+    evidence = _DurableEvidence()
+
+    with pytest.raises(ToolEvidencePersistenceError, match="model-turn attribution"):
+        _runner(FakeLLMClient([]), tool, store).run(
             _agent(),
             {"topic": "brief"},
-            resume_approval_id="tool_appr_1",
-            tool_execution_evidence=_DurableEvidence(),  # type: ignore[arg-type]
-            **_graph_kwargs(_identity()),
+            resume_approval_id=approval_id,
+            tool_execution_evidence=evidence,
+            **_graph_kwargs(
+                _identity(node_instance_id="publish:2", activity_id="activity-2")
+            ),
         )
+
+    assert tool.calls == []
+    assert evidence.registered == []
+    assert store.get_approval(approval_id).status == ApprovalStatus.APPROVED
 
 
 def _identity(**overrides: Any) -> GraphExecutionIdentity:

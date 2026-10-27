@@ -3844,6 +3844,13 @@ def _apply_wait_cause_observation(
             last_event_sequence=projection_sequence,
         )
     elif cause_kind is HarnessWaitCauseKind.APPROVAL:
+        # A re-entrant Wait hands its grant to the resumed node, so the
+        # decision evidence must name exactly that grant (fail closed).
+        if registration.reentrant and record.approval_id != registration.approval_id:
+            raise HarnessValidationError(
+                "approval evidence targets another grant than the durable Wait",
+                code="graph_wait_approval_id_mismatch",
+            )
         updated_registration = replace(
             registration,
             status=(
@@ -4803,6 +4810,8 @@ def _register_wait(
         "deadline_ref",
         "resolved",
     }
+    if definition.wait.resume_node_id is not None:
+        expected_fields.add("approval_id")
     if set(raw_registration) != expected_fields:
         raise HarnessValidationError(
             "Wait registration fields do not match the durable contract",
@@ -4907,6 +4916,8 @@ def _register_wait(
         deadline_ref=record.deadline_ref,
         resolution_event_ref=resolution_ref,
         last_event_sequence=projection_sequence,
+        approval_id=raw_registration.get("approval_id"),
+        resume_node_id=definition.wait.resume_node_id,
     )
     metadata = _merged_node_metadata(node, decision)
     metadata.update(
