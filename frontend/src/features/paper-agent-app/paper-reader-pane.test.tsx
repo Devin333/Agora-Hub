@@ -466,7 +466,7 @@ describe("PaperReaderPane reader routing", () => {
     renderPane(false)
     await screen.findByTestId("open-reader")
     fireEvent.click(screen.getByRole("tab", { name: "概览" }))
-    expect(screen.getByRole("button", { name: "准备真实来源" })).toBeDisabled()
+    expect(await screen.findByRole("button", { name: "准备真实来源" })).toBeDisabled()
     expect(mocks.preparationEnabled).toBe(false)
   })
 

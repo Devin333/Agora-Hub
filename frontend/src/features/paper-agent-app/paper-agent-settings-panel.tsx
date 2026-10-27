@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { AlertTriangle, CheckCircle2, CircleDot, Database, Gauge, HardDrive, LoaderCircle, RefreshCw, RotateCcw, ShieldCheck, Trash2, Wifi, X, type LucideIcon } from "lucide-react"
 import { fetchDesktopCapabilities, fetchDesktopIdentity, type DesktopCapabilities, type DesktopIdentity } from "@/lib/research/desktop/client"
 import { getPersonalMemoryInfo, getPersonalMemoryPolicy, type PersonalMemoryInfo, type PersonalMemoryPolicy } from "./personal-memory-client"
@@ -77,8 +77,12 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts
   const [loading, setLoading] = useState(true)
   const [retrying, setRetrying] = useState(false)
   const [configDraftDirty, setConfigDraftDirty] = useState(false)
-
-  useEffect(() => { onDraftChange?.(configDraftDirty) }, [configDraftDirty, onDraftChange])
+  // Forward the draft state in the same pass the form reports it, so the owner's close
+  // guard never sees a stale value while a dirty draft is already on screen.
+  const reportConfigDraft = useCallback((dirty: boolean) => {
+    setConfigDraftDirty(dirty)
+    onDraftChange?.(dirty)
+  }, [onDraftChange])
 
   const load = useCallback(async (signal?: AbortSignal) => {
     const requestId = ++requestRef.current
@@ -164,7 +168,7 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts
             return <li key={capability.id}><div className={styles.capabilityMain}><span className={styles.capabilityName}>{capability.label}</span><span className={cx(styles.badge, styles[view.tone])}>{view.label}</span><span className={styles.requirement}>{capability.required ? "必要能力" : "可选能力"}</span></div><p>{capability.message || view.description}</p>{capability.verifiedAt && <small>最近业务验证：{formatTime(capability.verifiedAt)}</small>}</li>
           })}</ul>}
           {!capabilities.value && !capabilities.error && <LoadingLine />}
-          <RuntimeConfigurationForm hasOtherDrafts={hasOtherDrafts} onDraftChange={setConfigDraftDirty} onRuntimeStatusChange={status => setHost(previous => status && previous.kind === "desktop" ? { kind: "desktop", snapshot: { ...previous.snapshot, status, diagnostics: { ...previous.snapshot.diagnostics, runtime: status } } } : { kind: "error" })} />
+          <RuntimeConfigurationForm hasOtherDrafts={hasOtherDrafts} onDraftChange={reportConfigDraft} onRuntimeStatusChange={status => setHost(previous => status && previous.kind === "desktop" ? { kind: "desktop", snapshot: { ...previous.snapshot, status, diagnostics: { ...previous.snapshot.diagnostics, runtime: status } } } : { kind: "error" })} />
         </section>
 
         <section className={styles.card} id="settings-network" aria-labelledby="settings-network-title">
@@ -322,7 +326,8 @@ function RuntimeConfigurationForm({ onDraftChange, onRuntimeStatusChange, hasOth
   const baseline = useMemo(() => current ? configDraftFromView(current) : null, [current])
   const dirty = baseline !== null && !sameConfigDraft(draft, baseline)
 
-  useEffect(() => { onDraftChange?.(dirty) }, [dirty, onDraftChange])
+  // Layout effect: the owner learns about the draft before the dirty notice is painted.
+  useLayoutEffect(() => { onDraftChange?.(dirty) }, [dirty, onDraftChange])
   useEffect(() => {
     if (!available) return
     let active = true

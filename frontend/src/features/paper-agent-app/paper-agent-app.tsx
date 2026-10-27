@@ -162,12 +162,19 @@ export function PaperAgentApp() {
     setSelectedId(materials[0]?.id ?? "")
   }, [materials, selectedId])
 
+  // Every close path (Escape, backdrop, close button) reads the latest reported draft state
+  // from the ref, so a close request racing the dirty re-render still reaches the guard.
+  const settingsDraftDirtyRef = useRef(false)
+  const reportSettingsDraft = useCallback((dirty: boolean) => {
+    settingsDraftDirtyRef.current = dirty
+    setSettingsDraftDirty(dirty)
+  }, [])
   const requestSettingsClose = useCallback(() => {
-    requestSettingsModalClose(settingsDraftDirty, () => {
+    requestSettingsModalClose(settingsDraftDirtyRef.current, () => {
       setSettingsOpen(false)
-      setSettingsDraftDirty(false)
+      reportSettingsDraft(false)
     })
-  }, [settingsDraftDirty])
+  }, [reportSettingsDraft])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -414,7 +421,7 @@ export function PaperAgentApp() {
 
     <section id="paper-reader-main" className={styles.mainPane}><div className={styles.workspaceTopbar}>{!focusMode && <><button type="button" className={styles.compactControl} aria-label="打开导航" onClick={() => setNavOpen(true)}><Menu size={16} /></button><button type="button" className={styles.compactControl} aria-label="收起或打开论文列表" onClick={() => setListOpen(value => !value)}><PanelLeftClose size={16} /></button></>}<div className={styles.capabilitySummary}><span data-ready={Boolean(identity) || undefined}>{identity ? `owner ${identity.owner.userId}` : "正在读取 identity"}</span><span>{capabilities ? `${capabilities.capabilities.filter(item => item.verified).length}/${capabilities.capabilities.length} 能力已验证` : "能力待核对"}</span></div><label className={styles.memoryToggle} title={memoryAllowed ? "本任务是否选择已授权记忆；默认关闭。" : "请先在个人记忆中保存允许远程处理的 policy。"}><input type="checkbox" checked={taskUsesMemory} disabled={!memoryAllowed} onChange={event => setUseMemory(event.target.checked)} />使用已授权记忆</label><button type="button" className={styles.assistantButton} disabled={!selectedPaperId} aria-expanded={assistantOpen} onClick={() => setAssistantOpen(value => !value)}><Sparkles size={15} />{assistantOpen ? "关闭助手" : "打开助手"}</button></div>{runtimeError && <p role="alert" className={styles.runtimeError}>{runtimeError}</p>}{workspace.status === "conflict" || workspace.status === "error" ? <p role="alert" className={styles.runtimeError}>工作区{workspace.status === "conflict" ? "存在 revision 冲突" : "保存失败"}：{workspace.message}。待保存草稿仍保留，可在条目上重试。</p> : null}{selectedPaperId ? <PaperReaderPane key={`${memoryScope}:${selectedPaperId}`} owner={owner} paperId={selectedPaperId} online={online} onActivityChange={setReaderBusy} onTaskStateChange={handleReaderTaskState} appearance={theme} assistantOpen={assistantOpen} focusMode={focusMode} initialTab={readerTab} onAssistantClose={() => setAssistantOpen(false)} onFocusChange={setFocusMode} onTabChange={setReaderTab} useMemory={taskUsesMemory} memoryAllowed={memoryAllowed} onUseMemoryChange={setUseMemory} /> : <EmptyReader material={selected} hasMaterials={materials.length > 0} onImport={() => window.dispatchEvent(new Event("agora-open-pdf-import"))} />}</section>
     {(navOpen || listOpen) && <button type="button" className={styles.mobileScrim} aria-label="关闭抽屉" onClick={() => { setNavOpen(false); setListOpen(false) }} />}
-    <PaperAgentSettingsModal open={settingsOpen} overlayClassName={styles.settingsOverlay} hasOtherDrafts={otherDraftDirty} activeTaskCount={activeTaskCount} onRequestClose={requestSettingsClose} onDraftChange={setSettingsDraftDirty} />
+    <PaperAgentSettingsModal open={settingsOpen} overlayClassName={styles.settingsOverlay} hasOtherDrafts={otherDraftDirty} activeTaskCount={activeTaskCount} onRequestClose={requestSettingsClose} onDraftChange={reportSettingsDraft} />
     <PersonalMemoryPanel key={memoryScope} open={memoryOpen} namespace={memoryNamespace} sourceContext={selected ? { sourceRef: selected.referenceId ?? selected.id, label: selected.title, ...(selectedNotebook?.sourceRevision ? { sourceRevision: selectedNotebook.sourceRevision } : {}) } : null} onClose={() => setMemoryOpen(false)} onAuthorizedChange={handleAuthorizedMemoryChange} onPolicyChange={handleMemoryPolicyChange} onDraftChange={handleMemoryDraftChange} onActivityChange={handleMemoryActivityChange} />
   </main>
 }
