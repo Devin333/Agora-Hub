@@ -1,5 +1,4 @@
 import type { ReactNode } from "react"
-import { SearchX } from "lucide-react"
 
 export type EmptyStateProps = {
   title: string
@@ -7,13 +6,15 @@ export type EmptyStateProps = {
   action?: ReactNode
 }
 
+/** Rakazo empty state: plain muted copy centred in the pane, no illustration. */
 export function EmptyState({ title, description, action }: EmptyStateProps) {
   return (
-    <div className="flex min-h-40 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-card/60 px-6 py-8 text-center">
-      <SearchX className="mb-3 size-8 text-muted-foreground" />
-      <p className="text-sm font-semibold text-foreground">{title}</p>
-      {description ? <p className="mt-1 max-w-md text-sm leading-6 text-muted-foreground">{description}</p> : null}
-      {action ? <div className="mt-4">{action}</div> : null}
+    <div className="grid min-h-40 place-items-center px-6 py-10 text-center">
+      <div className="flex flex-col items-center">
+        <p className="text-body2 font-medium text-muted-foreground">{title}</p>
+        {description ? <p className="mt-1 max-w-md text-body2 text-muted-foreground/80">{description}</p> : null}
+        {action ? <div className="mt-4">{action}</div> : null}
+      </div>
     </div>
   )
 }

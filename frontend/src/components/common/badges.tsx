@@ -1,25 +1,22 @@
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
-import { cn, formatScore, titleCase } from "@/lib/format";
+import { Badge as UiBadge, type BadgeVariant } from "@/components/ui/badge";
+import { formatScore, titleCase } from "@/lib/format";
 import type { CredibilityLevel, SourceType } from "@/types/source";
 import type { TechMaturity, TechItemType } from "@/types/tech";
 import type { TopicTrend } from "@/types/topic";
 
-const toneClasses = {
-  good: "border-success/30 bg-success/10 text-success",
-  info: "border-link/30 bg-link/10 text-link",
-  warn: "border-warning/30 bg-warning/10 text-warning",
-  bad: "border-destructive/30 bg-destructive/10 text-destructive",
-  neutral: "border-border bg-secondary text-muted-foreground",
-  accent: "border-primary/30 bg-primary/10 text-primary",
-};
+const toneVariant = {
+  good: "success",
+  info: "info",
+  warn: "warning",
+  bad: "danger",
+  neutral: "default",
+  accent: "accent",
+} satisfies Record<string, BadgeVariant>;
 
-export function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone?: keyof typeof toneClasses }) {
-  return (
-    <span className={cn("inline-flex min-h-6 items-center rounded-md border px-2 py-1 text-xs font-medium", toneClasses[tone])}>
-      {children}
-    </span>
-  );
+export function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone?: keyof typeof toneVariant }) {
+  return <UiBadge variant={toneVariant[tone]}>{children}</UiBadge>;
 }
 
 export function TrendBadge({ trend }: { trend: TopicTrend }) {
@@ -56,10 +53,16 @@ export function TechTypeBadge({ type }: { type: TechItemType }) {
 }
 
 export function ExternalTextLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const external = href.startsWith("http");
   return (
-    <Link className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline" href={href} target={href.startsWith("http") ? "_blank" : undefined}>
+    <Link
+      className="inline-flex items-center gap-1 rounded-sm text-body2 font-medium text-link underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      href={href}
+      target={external ? "_blank" : undefined}
+      rel={external ? "noreferrer" : undefined}
+    >
       {children}
-      {href.startsWith("http") ? <ExternalLink className="h-3.5 w-3.5" /> : null}
+      {external ? <ExternalLink size={14} strokeWidth={1.8} aria-hidden="true" /> : null}
     </Link>
   );
 }
