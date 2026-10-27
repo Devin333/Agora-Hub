@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
+import { Button } from "@/components/ui/button"
 import {
   DesktopResearchError,
   fetchDesktopReader,
@@ -21,9 +22,7 @@ export function DesktopReaderPage({
   const workspace = useOwnedResearchWorkspace()
   if (!workspace.ready) {
     return (
-      <main className="grid min-h-screen place-items-center bg-[#f7f4fb]" role="status">
-        正在核对账号与研究工作区…
-      </main>
+      <ReaderStatusScreen>正在核对账号与研究工作区…</ReaderStatusScreen>
     )
   }
   if (!workspace.owner) {
@@ -31,20 +30,14 @@ export function DesktopReaderPage({
       return <PaperReaderWorkspace payload={fallback} backHref={backHref} />
     }
     return (
-      <main className="grid min-h-screen place-items-center bg-[#f7f4fb] px-6">
-        <section className="max-w-lg rounded-xl border bg-white p-6 text-center">
-          <h1 className="text-xl font-semibold">需要登录</h1>
-          <p className="mt-3 text-sm text-muted-foreground">
-            这篇论文没有可用的公开正文。登录后可读取账号内的私有导入。
-          </p>
-          <a
-            className="mt-5 inline-block text-sm text-primary"
-            href={`/login?next=${encodeURIComponent(`/papers/${paperId}/read`)}`}
-          >
-            前往登录
-          </a>
-        </section>
-      </main>
+      <ReaderMessageScreen
+        title="需要登录"
+        description={<p className="mt-2 text-body2 text-muted-foreground">这篇论文没有可用的公开正文。登录后可读取账号内的私有导入。</p>}
+      >
+        <Button asChild>
+          <a href={`/login?next=${encodeURIComponent(`/papers/${paperId}/read`)}`}>前往登录</a>
+        </Button>
+      </ReaderMessageScreen>
     )
   }
   const stablePaperId = fallback?.paper.id || paperId
@@ -108,31 +101,24 @@ function OwnedDesktopReader({
 
   if (!payload && loading) {
     return (
-      <main className="grid min-h-screen place-items-center bg-[#f7f4fb]" role="status">
-        正在读取论文与来源修订…
-      </main>
+      <ReaderStatusScreen>正在读取论文与来源修订…</ReaderStatusScreen>
     )
   }
   if (!payload) {
     return (
-      <main className="grid min-h-screen place-items-center bg-[#f7f4fb] px-6">
-        <section className="max-w-lg rounded-xl border bg-white p-6 text-center">
-          <h1 className="text-xl font-semibold">论文暂时不可阅读</h1>
-          <p role="alert" className="mt-3 text-sm text-muted-foreground">
+      <ReaderMessageScreen
+        title="论文暂时不可阅读"
+        description={(
+          <p role="alert" className="mt-2 text-body2 text-muted-foreground">
             {error || "尚未取得通过完整性校验的正文或可用原 PDF。"}
           </p>
-          <div className="mt-5 flex justify-center gap-3">
-            <button
-              type="button"
-              className="text-sm text-primary underline"
-              onClick={() => setAttempt(value => value + 1)}
-            >
-              重新获取
-            </button>
-            <a className="text-sm text-primary" href={backHref}>返回论文列表</a>
-          </div>
-        </section>
-      </main>
+        )}
+      >
+        <Button type="button" onClick={() => setAttempt(value => value + 1)}>重新获取</Button>
+        <Button asChild variant="outline">
+          <a href={backHref}>返回论文列表</a>
+        </Button>
+      </ReaderMessageScreen>
     )
   }
 
@@ -144,35 +130,56 @@ function OwnedDesktopReader({
         backHref={backHref}
       />
       {error && payloadSource === "public" && (
-        <div
-          role="status"
-          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"
-        >
+        <ReaderNotice onRetry={() => setAttempt(value => value + 1)}>
           当前显示已通过公开读取路径取得的正文；私有阅读投影没有载入。{error}
-          <button
-            type="button"
-            className="ml-2 underline"
-            onClick={() => setAttempt(value => value + 1)}
-          >
-            重试
-          </button>
-        </div>
+        </ReaderNotice>
       )}
       {error && payloadSource === "private" && (
-        <div
-          role="status"
-          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"
-        >
+        <ReaderNotice onRetry={() => setAttempt(value => value + 1)}>
           刷新失败，当前仍显示本账号本次页面已取得的阅读投影。{error}
-          <button
-            type="button"
-            className="ml-2 underline"
-            onClick={() => setAttempt(value => value + 1)}
-          >
-            重试
-          </button>
-        </div>
+        </ReaderNotice>
       )}
     </>
+  )
+}
+
+function ReaderStatusScreen({ children }: { children: ReactNode }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-background px-6 text-body2 text-muted-foreground" role="status">
+      <span className="text-shimmer">{children}</span>
+    </main>
+  )
+}
+
+function ReaderMessageScreen({
+  title,
+  description,
+  children,
+}: {
+  title: string
+  description: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-background px-6">
+      <section className="w-full max-w-lg rounded-xl bg-card p-6 text-center text-card-foreground ring-1 ring-foreground/10">
+        <h1 className="text-heading3 font-semibold">{title}</h1>
+        {description}
+        <div className="mt-5 flex flex-wrap justify-center gap-2">{children}</div>
+      </section>
+    </main>
+  )
+}
+
+function ReaderNotice({ children, onRetry }: { children: ReactNode; onRetry: () => void }) {
+  return (
+    <div
+      role="status"
+      className="fixed bottom-4 left-1/2 z-50 flex max-w-[min(42rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-xl border border-warning/30 bg-popover px-4 py-2.5 text-body2 text-popover-foreground shadow-md"
+    >
+      <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-hidden="true" />
+      <span className="min-w-0">{children}</span>
+      <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onRetry}>重试</Button>
+    </div>
   )
 }

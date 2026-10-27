@@ -1,8 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { ArrowUp, BookOpen, Download, FilePenLine, Quote, Sparkles, Square } from "lucide-react"
+import { ArrowUp, BookOpen, Download, FilePenLine, Sparkles, Square } from "lucide-react"
 import ReactMarkdown from "react-markdown"
+import { Button } from "@/components/ui/button"
 import type {
   ReaderSelectionAskAnswer,
   ReaderSelectionAskRequest,
@@ -165,6 +166,13 @@ export function ReaderAssistant({
   useLayoutEffect(() => {
     updateNotebookRef.current = notebook.update
   }, [notebook.update])
+  // Auto-grow the composer field with its content; CSS max-height caps it and scrolls beyond.
+  useLayoutEffect(() => {
+    const field = questionRef.current
+    if (!field) return
+    field.style.height = "auto"
+    field.style.height = `${field.scrollHeight}px`
+  }, [notebook.question])
   useEffect(() => {
     onUnsavedChanges?.(notebook.saveStatus !== "synced")
   }, [notebook.saveStatus, onUnsavedChanges])
@@ -538,28 +546,38 @@ export function ReaderAssistant({
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
+  const canLocateCitation = (citation: PaperReaderCitation) => Boolean(
+    desktopProfile
+      ? citation.valid &&
+        citation.sourceRevision === sourceRevision &&
+        ((citation.sectionId && sectionIds.has(citation.sectionId)) || citation.page)
+      : (citation.sectionId && sectionIds.has(citation.sectionId)) || citation.page,
+  )
+
   return (
     <aside className={styles.assistant} aria-label="阅读助手">
       <div className={styles.assistantHeading}>
-        <span className={styles.spark}><Sparkles size={19} /></span>
+        <span className={styles.spark}><Sparkles size={16} strokeWidth={1.8} /></span>
         <div><strong>阅读助手</strong><p>理解、追问，留下你的思考</p></div>
       </div>
       <div className={styles.assistantTabs} role="group" aria-label="助手工具">
         <button type="button" aria-pressed={tab === "ask"} onClick={() => setTab("ask")}>
-          <Sparkles size={15} />问论文
+          <Sparkles size={15} strokeWidth={1.8} />问论文
         </button>
         <button type="button" aria-pressed={tab === "notes"} onClick={() => setTab("notes")}>
-          <FilePenLine size={15} />阅读笔记
+          <FilePenLine size={15} strokeWidth={1.8} />阅读笔记
           {notebook.note && <span className={styles.noteDot} aria-label="有笔记" />}
         </button>
       </div>
 
       <div hidden={tab !== "ask"} className={styles.askPanel}>
-        <div className={styles.assistantContent}>
+        <div className={`rk-scroll ${styles.assistantContent}`}>
           {answer ? (
             <div className={styles.answer} ref={replyRef} tabIndex={-1}>
-              <p className={styles.askedQuestion}><Quote size={15} />{answer.question}</p>
-              <ReactMarkdown>{answer.answer}</ReactMarkdown>
+              <p className={styles.askedQuestion}>{answer.question}</p>
+              <div className={styles.answerBubble}>
+                <ReactMarkdown>{answer.answer}</ReactMarkdown>
+              </div>
               {answer.executionTrace && (
                 <section className={styles.evidence} aria-label="回答执行追溯">
                   <details>
@@ -591,13 +609,9 @@ export function ReaderAssistant({
                   <details key={citation.id}>
                     <summary>{citation.label}</summary>
                     {citation.textExcerpt && <blockquote>{citation.textExcerpt}</blockquote>}
-                    {(desktopProfile
-                      ? citation.valid &&
-                        citation.sourceRevision === sourceRevision &&
-                        ((citation.sectionId && sectionIds.has(citation.sectionId)) || citation.page)
-                      : (citation.sectionId && sectionIds.has(citation.sectionId)) || citation.page) ? (
+                    {canLocateCitation(citation) ? (
                       <button type="button" onClick={() => onNavigateCitation(citation)}>
-                        {desktopProfile ? "定位原文" : "定位章节"} <BookOpen size={14} />
+                        {desktopProfile ? "定位原文" : "定位章节"} <BookOpen size={14} strokeWidth={1.8} />
                       </button>
                     ) : (
                       <small>{citation.reasonCode ? `定位不可用：${citation.reasonCode}` : "当前来源修订无法精确定位，请结合原文核对。"}</small>
@@ -646,7 +660,7 @@ export function ReaderAssistant({
         </div>
 
         <form className={styles.askForm} onSubmit={event => { event.preventDefault(); void submit() }}>
-          <label htmlFor="paper-reader-question">向这篇论文提问</label>
+          <label htmlFor="paper-reader-question" className="sr-only">向这篇论文提问</label>
           {selectionRequest?.owner === owner && selectionRequest?.sourceRevision === sourceRevision && (
             <p className={styles.unavailableAsk} role="status">
               已绑定所选原文；确认问题后再发送，不会自动运行。
@@ -655,36 +669,47 @@ export function ReaderAssistant({
           {unavailableMessage && (
             <p className={styles.unavailableAsk} role="status">{unavailableMessage} 问题可以先保留。</p>
           )}
-          <div className={styles.questionInput}>
+          <div className={styles.composer}>
             <textarea
               id="paper-reader-question"
               ref={questionRef}
+              className="rk-scroll"
+              rows={1}
               value={notebook.question}
               disabled={!notebook.ready || pending}
               maxLength={2000}
               placeholder="例如：这个方法适合什么场景？"
               onChange={event => notebook.update({ question: event.target.value })}
             />
-            <div>
-              <span>{pending ? "正在核对真实运行状态…" : requestId ? `请求 ${requestId.slice(0, 8)}…` : "仅围绕当前论文"}</span>
-              {pending ? (
-                <button type="button" aria-label={desktopProfile ? "停止等待" : "停止回答"} onClick={stopWaiting}><Square size={15} /></button>
-              ) : (
-                <button
-                  type="submit"
-                  aria-label={requestId ? "检查已有问答请求" : "发送问题"}
-                  disabled={!notebook.ready || !notebook.question.trim() || Boolean(unavailableMessage)}
-                >
-                  <ArrowUp size={19} />
-                </button>
-              )}
-            </div>
+            {pending ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-8 shrink-0 rounded-full border border-border bg-muted text-foreground/80 hover:bg-accent"
+                aria-label={desktopProfile ? "停止等待" : "停止回答"}
+                onClick={stopWaiting}
+              >
+                <Square size={11} strokeWidth={0} fill="currentColor" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                className="size-8 shrink-0 rounded-full transition-transform active:scale-95 disabled:bg-primary-disabled disabled:text-foreground/30 disabled:opacity-100"
+                aria-label={requestId ? "检查已有问答请求" : "发送问题"}
+                disabled={!notebook.ready || !notebook.question.trim() || Boolean(unavailableMessage)}
+              >
+                <ArrowUp size={16} strokeWidth={2.2} />
+              </Button>
+            )}
           </div>
           {error && <p role="alert" className={styles.error}>{error}</p>}
           {requestId && ["failed", "rejected", "needs_action"].includes(operationStatus) && (
-            <button
+            <Button
               type="button"
-              className={styles.exportButton}
+              variant="outline"
+              className="mt-3 w-full"
               onClick={() => {
                 setRequestId("")
                 setRequestGeneration("")
@@ -693,17 +718,21 @@ export function ReaderAssistant({
               }}
             >
               使用新请求身份重新提问
-            </button>
+            </Button>
           )}
-          <p className={styles.footnote}>AI 回答仅供辅助阅读，请核对引用原文。</p>
+          <div className={styles.composerMeta}>
+            <span>{pending ? "正在核对真实运行状态…" : requestId ? `请求 ${requestId.slice(0, 8)}…` : "仅围绕当前论文"}</span>
+            <p className={styles.footnote}>AI 回答仅供辅助阅读，请核对引用原文。</p>
+          </div>
         </form>
       </div>
 
-      <div hidden={tab !== "notes"} className={styles.notesPanel}>
+      <div hidden={tab !== "notes"} className={`rk-scroll ${styles.notesPanel}`}>
         <label htmlFor="paper-reader-note">我的阅读笔记</label>
         <p>记录理解、疑问和下一步想验证的事。</p>
         <textarea
           id="paper-reader-note"
+          className="rk-scroll"
           value={notebook.note}
           disabled={!notebook.ready}
           maxLength={20000}
@@ -742,13 +771,13 @@ export function ReaderAssistant({
                       : "保存在当前浏览器"}
         </p>
         {notebook.legacyAvailable && (
-          <button type="button" className={styles.exportButton} onClick={() => notebook.importLegacy()}>
+          <Button type="button" variant="outline" className="mt-3 w-full" onClick={() => notebook.importLegacy()}>
             导入此浏览器的旧笔记
-          </button>
+          </Button>
         )}
-        <button type="button" className={styles.exportButton} disabled={!notebook.note.trim()} onClick={exportNote}>
-          <Download size={16} />导出 Markdown
-        </button>
+        <Button type="button" variant="outline" className="mt-3 w-full" disabled={!notebook.note.trim()} onClick={exportNote}>
+          <Download size={15} strokeWidth={1.8} />导出 Markdown
+        </Button>
       </div>
     </aside>
   )

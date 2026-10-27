@@ -1,16 +1,33 @@
+/*
+ * Open reader palette. Every `--reader-*` value resolves through the global rakazo
+ * tokens (theme-tokens.css). The root carries `data-theme` when the reader pins a
+ * light or dark surface, so the same token names re-resolve locally; otherwise the
+ * reader follows the host theme. The warm paper option is a sepia set derived from
+ * the active tokens, defined once below.
+ */
 .openReader {
-  --reader-bg: #f1e2c5;
-  --reader-paper: #fff3d6;
-  --reader-ink: #1b1f2a;
-  --reader-muted: #786d5a;
-  --reader-soft: #dfcda8;
-  --reader-line: #d7bf96;
-  --reader-accent: #315d8a;
-  --reader-accent-soft: #e6edf5;
-  --reader-note: #fff0a3;
-  --reader-confused: #ffb4a9;
-  --reader-green: #1d6d55;
-  --reader-shadow: 0 18px 48px rgba(54, 39, 18, 0.14);
+  --reader-bg: var(--background);
+  --reader-paper: var(--background);
+  --reader-ink: var(--foreground);
+  --reader-muted: var(--muted-foreground);
+  --reader-faint: var(--faint-foreground);
+  --reader-soft: var(--muted);
+  --reader-line: var(--border);
+  --reader-accent: var(--link);
+  --reader-accent-soft: var(--accent);
+  --reader-note: var(--highlight);
+  --reader-confused: color-mix(in srgb, var(--destructive) 20%, transparent);
+  --reader-confused-ink: var(--destructive);
+  --reader-example-ink: var(--warning);
+  --reader-green: var(--success);
+  --reader-danger-text: color-mix(in srgb, var(--destructive) 75%, var(--foreground));
+  --reader-chrome: color-mix(in srgb, var(--muted) 90%, transparent);
+  --reader-chrome-ink: color-mix(in srgb, var(--foreground) 75%, transparent);
+  --reader-popover: var(--popover);
+  --reader-popover-ink: var(--popover-foreground);
+  --reader-shadow: 0 4px 6px -1px color-mix(in srgb, var(--overlay) 18%, transparent), 0 2px 4px -2px color-mix(in srgb, var(--overlay) 18%, transparent);
+  --reader-ring: color-mix(in srgb, var(--ring) 50%, transparent);
+  --reader-serif: Georgia, "Times New Roman", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", serif;
   --reader-font-size: 21px;
   --reader-content-width: 1250px;
   --open-reader-progress: 14%;
@@ -20,151 +37,73 @@
   padding-bottom: 96px;
 }
 
+/* Warm paper: a sepia set tinted from the active theme's warning hue. */
+.warmTheme {
+  --reader-bg: color-mix(in srgb, var(--warning) 14%, var(--background));
+  --reader-paper: color-mix(in srgb, var(--warning) 8%, var(--background));
+  --reader-ink: color-mix(in srgb, var(--warning) 12%, var(--foreground));
+  --reader-muted: color-mix(in srgb, var(--warning) 30%, var(--muted-foreground));
+  --reader-soft: color-mix(in srgb, var(--warning) 20%, var(--muted));
+  --reader-line: color-mix(in srgb, var(--warning) 22%, var(--border));
+  --reader-accent-soft: color-mix(in srgb, var(--warning) 12%, transparent);
+  --reader-chrome: color-mix(in srgb, color-mix(in srgb, var(--warning) 18%, var(--muted)) 90%, transparent);
+  --reader-popover: color-mix(in srgb, var(--warning) 8%, var(--popover));
+}
+
+/*
+ * Embedded workspace (portal reader and paper-agent workbench). The host owns the
+ * theme: `default` follows it, the monochrome appearances pin it via data-theme and
+ * swap the link-blue accent for ink.
+ */
 .openReader.workspaceReader {
-  --reader-bg: #fff;
-  --reader-paper: #fff;
-  --reader-ink: #29243c;
-  --reader-muted: #726a83;
-  --reader-line: #e9e2f2;
-  --reader-accent: #7534dc;
-  --reader-accent-soft: #f4effe;
-  --reader-note: #fff0a3;
-  --reader-confused: #ffd0cc;
   min-height: 0;
   padding: 0;
-  border-radius: 0 0 24px 24px;
+  border-radius: 0 0 20px 20px;
+}
+
+.openReader.workspaceReader.monochromeLightWorkspace,
+.openReader.workspaceReader.monochromeDarkWorkspace {
+  --reader-accent: var(--foreground);
+  --reader-note: var(--sidebar-accent);
+  --reader-confused: color-mix(in srgb, var(--foreground) 14%, transparent);
+  --reader-confused-ink: var(--muted-foreground);
+  --reader-example-ink: var(--muted-foreground);
+  --reader-green: var(--muted-foreground);
+  --reader-danger-text: var(--foreground);
+  --reader-shadow: none;
 }
 
 .workspaceReader .readerLayout { width: 100%; padding: 0; }
-.workspaceReader .paperCard { border: 0; border-radius: 0; padding: 32px 40px 48px; box-shadow: none; background: #fff; }
+.workspaceReader .paperCard { border: 0; border-radius: 0; padding: 32px 40px 48px; background: var(--reader-paper); box-shadow: none; }
 .workspaceReader .paragraph { line-height: 1.9; }
 .workspaceReader .readerSection { scroll-margin-top: 150px; }
-.workspaceReader .sectionLabel { font-size: 11px; }
-.storageWarning { margin: 0; padding: 16px 24px; color: #9d304e; background: #fff3f5; font-size: 13px; line-height: 1.8; }
 
-.lightTheme {
-  --reader-bg: #f6f8fb;
-  --reader-paper: #fff;
-  --reader-ink: #172033;
-  --reader-muted: #687386;
-  --reader-soft: #e7edf4;
-  --reader-line: #dce4ef;
-  --reader-accent: #2563eb;
-  --reader-accent-soft: #eff6ff;
-  --reader-note: #fff2a8;
-  --reader-confused: #ffd0cc;
-  --reader-shadow: 0 18px 48px rgba(15, 23, 42, 0.1);
+.storageWarning {
+  margin: 0;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--reader-line);
+  color: var(--reader-danger-text);
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+  font-size: 13px;
+  line-height: 18px;
 }
 
-.warmTheme {
-  --reader-bg: #f1e2c5;
-  --reader-paper: #fff3d6;
+.openReader :is(button, a):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--reader-ring);
 }
-
-.darkTheme {
-  --reader-bg: #0d1016;
-  --reader-paper: #151a22;
-  --reader-ink: #e9edf5;
-  --reader-muted: #9aa5b5;
-  --reader-soft: #222938;
-  --reader-line: #2c3546;
-  --reader-accent: #8ab4ff;
-  --reader-accent-soft: #1f2d42;
-  --reader-note: #594d1d;
-  --reader-confused: #65312d;
-  --reader-green: #8ee6c2;
-  --reader-shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
-}
-
-.topBar {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 0 26px;
-  background: color-mix(in srgb, var(--reader-bg) 86%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--reader-line) 42%, transparent);
-  backdrop-filter: blur(16px);
-}
-
-.topBarLeft {
-  display: flex;
-  flex: 0 0 auto;
-  min-width: 0;
-  align-items: center;
-  width: auto;
-  margin-left: 0;
-}
-
-.readerMarkLink {
-  flex: 0 0 auto;
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: #111827;
-  color: #fff;
-  box-shadow: 0 8px 20px rgba(17, 24, 39, 0.18);
-  text-decoration: none;
-  transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
-}
-
-.readerMarkLink:hover {
-  background: #000;
-  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.24);
-  transform: translateX(-1px);
+/* Floating back pill (standalone reader); same recipe as Button variant="floating". */
+.readerBackButton {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 50;
 }
 
 .readerMarkIcon {
-  width: 18px;
-  height: 18px;
-  stroke-width: 2.6;
-}
-
-.progressTrack {
-  width: 172px;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--reader-soft);
-}
-
-.progressTrack span {
-  display: block;
-  width: var(--open-reader-progress);
-  height: 100%;
-  border-radius: inherit;
-  background: var(--reader-accent);
-}
-
-.readerBackButton {
-  position: fixed;
-  top: 18px;
-  left: 22px;
-  z-index: 50;
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: #111827;
-  color: #fff;
-  box-shadow: 0 10px 28px rgba(17, 24, 39, 0.22);
-  text-decoration: none;
-  transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
-}
-
-.readerBackButton:hover {
-  background: #000;
-  box-shadow: 0 12px 32px rgba(17, 24, 39, 0.28);
-  transform: translateX(-1px);
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
 }
 
 .readerLayout {
@@ -176,22 +115,23 @@
 .titleBlock {
   margin-bottom: 26px;
   padding-bottom: 20px;
-  border-bottom: 1px solid color-mix(in srgb, var(--reader-line) 66%, transparent);
+  border-bottom: 1px solid var(--reader-line);
 }
 
 .kicker {
   margin-bottom: 10px;
-  color: var(--reader-muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
+  color: var(--reader-faint);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .titleBlock h1 {
   max-width: min(980px, 100%);
   margin: 0;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-family: var(--reader-serif);
   font-size: clamp(28px, 3vw, 40px);
   font-weight: 500;
   line-height: 1.16;
@@ -200,16 +140,15 @@
 .titleBlock p {
   margin-top: 14px;
   color: var(--reader-muted);
-  font-size: 15px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .paperCard {
-  background: color-mix(in srgb, var(--reader-paper) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--reader-line) 72%, transparent);
-  border-radius: 8px;
   padding: clamp(34px, 4vw, 56px);
-  box-shadow: 0 8px 28px rgba(24, 30, 40, 0.04);
+  border: 1px solid var(--reader-line);
+  border-radius: 20px;
+  background: var(--reader-paper);
 }
 
 .readerSection {
@@ -219,32 +158,16 @@
 .readerSection + .readerSection {
   margin-top: 42px;
   padding-top: 34px;
-  border-top: 1px solid color-mix(in srgb, var(--reader-line) 54%, transparent);
+  border-top: 1px solid var(--reader-line);
 }
 
-.sectionLabel {
-  margin: 0 0 10px;
-  color: var(--reader-muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.sectionHeading {
+.sectionHeading,
+.referencesSection h2 {
   display: flex;
   align-items: baseline;
   gap: 0.58em;
   margin: 0 0 18px;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
-  font-size: calc(var(--reader-font-size) * 1.36);
-  font-weight: 500;
-  line-height: 1.25;
-}
-
-.referencesSection h2 {
-  margin: 0 0 18px;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-family: var(--reader-serif);
   font-size: calc(var(--reader-font-size) * 1.36);
   font-weight: 500;
   line-height: 1.25;
@@ -261,16 +184,16 @@
   position: relative;
   margin: 0 0 22px;
   padding: 6px 0;
-  border-radius: 6px;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  border-radius: 8px;
+  font-family: var(--reader-serif);
   font-size: var(--reader-font-size);
   letter-spacing: 0.005em;
   line-height: 2;
 }
 
 .paragraph:hover {
-  background: color-mix(in srgb, var(--reader-accent-soft) 38%, transparent);
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--reader-accent-soft) 38%, transparent);
+  background: var(--reader-accent-soft);
+  box-shadow: 0 0 0 8px var(--reader-accent-soft);
 }
 
 .inlineMath,
@@ -282,7 +205,7 @@
 }
 
 .inlineMathPlain {
-  font-family: "Times New Roman", Georgia, serif;
+  font-family: var(--reader-serif);
   font-style: italic;
 }
 
@@ -328,21 +251,27 @@
   width: 100%;
 }
 
-.iconButton {
+/* Round chrome buttons (preview close, figure preview) share the floating pill look. */
+.iconButton,
+.visualPreviewButton {
   display: inline-flex;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--reader-paper) 92%, transparent);
-  color: var(--reader-ink);
+  border: 1px solid var(--reader-line);
+  border-radius: 999px;
+  background: var(--reader-chrome);
+  color: var(--reader-chrome-ink);
   cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: opacity 150ms ease, background-color 150ms ease, color 150ms ease;
 }
 
-.iconButton:hover {
-  background: var(--reader-accent-soft);
+.iconButton:hover,
+.visualPreviewButton:hover {
+  background: var(--accent);
+  color: var(--reader-ink);
 }
 
 .visualPreviewButton {
@@ -350,30 +279,14 @@
   top: 8px;
   right: 8px;
   z-index: 2;
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--reader-ink) 14%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--reader-paper) 86%, transparent);
-  color: var(--reader-ink);
-  cursor: pointer;
   opacity: 0;
-  box-shadow: 0 8px 22px rgba(24, 30, 40, 0.12);
-  transition: opacity 0.16s ease, background 0.16s ease;
 }
 
 .visualBlock:hover .visualPreviewButton,
 .visualPreviewButton:focus-visible {
   opacity: 1;
 }
-
-.visualPreviewButton:hover {
-  background: var(--reader-accent-soft);
-}
-
+/* Raster figures and source previews are white paper content in every theme. */
 .visualImage {
   display: block;
   width: auto;
@@ -381,7 +294,7 @@
   max-height: min(620px, 78vh);
   margin: 0 auto;
   object-fit: contain;
-  background: #fff;
+  background: white;
 }
 
 .visual_table .visualImage {
@@ -395,23 +308,26 @@
   padding: 4px 0 6px;
 }
 
+/* Compiled (text) tables follow the reader surface; booktabs rules use the ink color. */
 .paperCompiledTable {
+  --reader-rule-strong: color-mix(in srgb, var(--reader-ink) 88%, transparent);
+  --reader-rule: color-mix(in srgb, var(--reader-ink) 64%, transparent);
   width: max-content;
   min-width: min(100%, 620px);
   margin: 0 auto;
   border-collapse: collapse;
+  background: var(--reader-paper);
   color: var(--reader-ink);
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-family: var(--reader-serif);
   font-size: clamp(13px, calc(var(--reader-font-size) * 0.72), 17px);
   line-height: 1.38;
-  background: #fff;
 }
 
 .paperTableCell {
-  padding: 6px 12px;
-  border: 0;
   min-width: 42px;
   height: 26px;
+  padding: 6px 12px;
+  border: 0;
   vertical-align: middle;
   white-space: nowrap;
 }
@@ -421,24 +337,24 @@
 }
 
 .rule_toprule > .paperTableCell {
-  border-top: 2px solid #101826;
+  border-top: 2px solid var(--reader-rule-strong);
 }
 
 .rule_midrule > .paperTableCell,
 .rule_cmidrule > .paperTableCell {
-  border-top: 1.4px solid #313b4d;
+  border-top: 1.4px solid var(--reader-rule);
 }
 
 .rule_bottomrule > .paperTableCell {
-  border-top: 1.8px solid #101826;
+  border-top: 1.8px solid var(--reader-rule-strong);
 }
 
 .ruleAfter_bottomrule > .paperTableCell {
-  border-bottom: 1.8px solid #101826;
+  border-bottom: 1.8px solid var(--reader-rule-strong);
 }
 
 .ruleAfter_midrule > .paperTableCell {
-  border-bottom: 1.4px solid #313b4d;
+  border-bottom: 1.4px solid var(--reader-rule);
 }
 
 .alignLeft {
@@ -453,46 +369,30 @@
   text-align: right;
 }
 
+/* Source \textcolor / \cellcolor hints map onto the status hues so they stay legible in both themes. */
 .paperTableColorGray > .paperTableCell,
 .paperTableCell.paperTableColorGray {
-  background: #d8dce2;
+  background: color-mix(in srgb, var(--reader-ink) 10%, transparent);
 }
 
-.paperTableColorRed {
-  color: #b42318;
-}
-
-.paperTableColorBlue {
-  color: #1457b8;
-}
-
-.paperTableColorNeutral {
-  color: #475467;
-}
-
-.paperTableMath {
-  font-family: "Times New Roman", Georgia, serif;
-  font-style: italic;
-}
-
+.paperTableColorRed,
 .paperCompiledTable :global(.paperTableColorRed) {
-  color: #b42318;
+  color: var(--reader-danger-text);
 }
 
+.paperTableColorBlue,
 .paperCompiledTable :global(.paperTableColorBlue) {
-  color: #1457b8;
+  color: var(--link);
 }
 
-.paperCompiledTable :global(.paperTableColorGray) {
-  color: #475467;
-}
-
+.paperTableColorNeutral,
+.paperCompiledTable :global(.paperTableColorGray),
 .paperCompiledTable :global(.paperTableColorNeutral) {
-  color: #475467;
+  color: var(--reader-muted);
 }
 
 .paperCompiledTable :global(.paperTableMath) {
-  font-family: "Times New Roman", Georgia, serif;
+  font-family: var(--reader-serif);
   font-style: italic;
 }
 
@@ -511,8 +411,8 @@
 }
 
 .equationPlain {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 18px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 16px;
   line-height: 1.7;
   white-space: pre-wrap;
 }
@@ -532,16 +432,18 @@
 
 .visualBlock figcaption strong {
   color: var(--reader-ink);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .assetMissing {
   display: grid;
   min-height: 150px;
   place-items: center;
-  color: #9b3b31;
-  background: color-mix(in srgb, var(--reader-confused) 36%, transparent);
-  font-weight: 800;
+  border-radius: 12px;
+  background: var(--reader-confused);
+  color: var(--reader-danger-text);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .referencesSection {
@@ -554,7 +456,7 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  font-family: Georgia, "Times New Roman", "Noto Serif SC", serif;
+  font-family: var(--reader-serif);
   font-size: calc(var(--reader-font-size) * 0.78);
   line-height: 1.65;
 }
@@ -570,7 +472,6 @@
   color: var(--reader-accent);
   font-variant-numeric: tabular-nums;
 }
-
 .previewBackdrop {
   position: fixed;
   inset: 0;
@@ -579,7 +480,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(12, 16, 22, 0.58);
+  background: var(--overlay);
 }
 
 .previewDialog {
@@ -587,10 +488,10 @@
   max-width: min(1180px, calc(100vw - 48px));
   max-height: calc(100vh - 48px);
   overflow: hidden;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: var(--reader-paper);
-  box-shadow: var(--reader-shadow);
+  border-radius: 20px;
+  background: var(--dialog);
+  color: var(--foreground);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .previewHeader {
@@ -598,15 +499,15 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--reader-line);
+  padding: 12px 14px 12px 18px;
+  border-bottom: 1px solid var(--border);
 }
 
 .previewHeader strong {
   min-width: 0;
   overflow: hidden;
-  color: var(--reader-ink);
   font-size: 14px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -616,7 +517,7 @@
   max-width: 100%;
   max-height: calc(100vh - 116px);
   object-fit: contain;
-  background: #fff;
+  background: white;
 }
 
 .previewFrame {
@@ -626,12 +527,12 @@
   max-width: 100%;
   height: min(72vh, 720px);
   border: 0;
-  background: #fff;
+  background: white;
 }
 
 .selectionMark {
   padding: 1px 2px;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--reader-ink);
   -webkit-text-fill-color: var(--reader-ink);
@@ -648,74 +549,95 @@
 }
 
 .selection_explained {
-  background: color-mix(in srgb, var(--reader-accent-soft) 86%, var(--reader-note));
+  background: color-mix(in srgb, var(--selection) 70%, var(--reader-note));
   box-shadow: inset 0 -2px 0 var(--reader-accent);
 }
 
 .selection_exampled {
-  background: color-mix(in srgb, var(--reader-note) 86%, var(--reader-accent-soft));
-  box-shadow: inset 0 -2px 0 #b78222;
+  background: var(--reader-note);
+  box-shadow: inset 0 -2px 0 var(--reader-example-ink);
 }
 
 .selection_confused {
   background: var(--reader-confused);
-  box-shadow: inset 0 -2px 0 #dd5149;
+  box-shadow: inset 0 -2px 0 var(--reader-confused-ink);
 }
 
+/* Settings dock and table of contents: floating pills that reveal popover panels on hover. */
 .settingsDock {
   position: fixed;
-  top: 72px;
-  left: 22px;
+  top: 64px;
+  left: 16px;
   z-index: 50;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
 }
 
 .settingsOrb,
 .tocOrb {
   display: grid;
-  width: 54px;
-  height: 54px;
+  width: 40px;
+  height: 40px;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--reader-ink) 12%, transparent);
-  border-radius: 50%;
-  background: var(--reader-ink);
-  box-shadow: var(--reader-shadow);
-  color: var(--reader-paper);
+  border: 1px solid var(--reader-line);
+  border-radius: 999px;
+  background: var(--reader-chrome);
+  color: var(--reader-chrome-ink);
   cursor: pointer;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 600;
   user-select: none;
+  backdrop-filter: blur(8px);
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
-.settingsPanel {
-  width: 224px;
-  padding: 13px;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--reader-paper) 94%, transparent);
+.settingsOrb:hover,
+.tocOrb:hover,
+.settingsDock:hover .settingsOrb,
+.floatingToc:hover .tocOrb {
+  background: var(--accent);
+  color: var(--reader-ink);
+}
+
+.settingsPanel,
+.tocPanel {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--reader-popover);
+  color: var(--reader-popover-ink);
   box-shadow: var(--reader-shadow);
   opacity: 0;
   pointer-events: none;
-  transform: translateX(-8px) scale(0.97);
-  transform-origin: left top;
-  transition: opacity 0.16s ease, transform 0.16s ease;
-  backdrop-filter: blur(16px);
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
-.settingsDock:hover .settingsPanel {
+.settingsPanel {
+  width: 232px;
+  padding: 12px;
+  transform: translateX(-6px) scale(0.98);
+  transform-origin: left top;
+}
+
+.settingsDock:hover .settingsPanel,
+.settingsDock:focus-within .settingsPanel {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(0) scale(1);
 }
 
-.settingsTitle {
-  margin-bottom: 10px;
-  color: var(--reader-muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
+.settingsTitle,
+.tocPanelTitle {
+  color: var(--faint-foreground);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.settingsTitle {
+  margin: 2px 2px 8px;
 }
 
 .settingRow {
@@ -726,42 +648,51 @@
   display: flex;
   justify-content: space-between;
   margin-bottom: 6px;
-  color: var(--reader-muted);
+  color: var(--muted-foreground);
   font-size: 12px;
+  line-height: 16px;
 }
 
 .settingRow input[type="range"] {
   width: 100%;
-  accent-color: var(--reader-accent);
+  accent-color: var(--foreground);
 }
 
 .themeRow {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  margin-top: 12px;
+  gap: 2px;
+  margin-top: 14px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--muted);
 }
 
 .themeButton {
-  border: 1px solid var(--reader-line);
+  height: 26px;
+  border: 0;
   border-radius: 999px;
-  background: var(--reader-paper);
-  color: var(--reader-muted);
+  background: transparent;
+  color: var(--muted-foreground);
   cursor: pointer;
   font-size: 12px;
-  padding: 7px 0;
+  font-weight: 500;
+}
+
+.themeButton:hover {
+  color: var(--foreground);
 }
 
 .activeTheme {
-  border-color: var(--reader-ink);
-  background: var(--reader-ink);
-  color: var(--reader-paper);
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .floatingToc {
   position: fixed;
-  bottom: 34px;
-  left: 28px;
+  bottom: 24px;
+  left: 16px;
   z-index: 40;
   user-select: none;
 }
@@ -773,64 +704,52 @@
 .tocPanel {
   position: absolute;
   bottom: 0;
-  width: 268px;
+  width: 272px;
   max-height: min(520px, calc(100vh - 116px));
   overflow-y: auto;
-  padding: 12px;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--reader-paper) 94%, transparent);
-  box-shadow: var(--reader-shadow);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(10px) scale(0.97);
-  transition: opacity 0.16s ease, transform 0.16s ease;
-  backdrop-filter: blur(16px);
+  padding: 6px;
+  transform: translateY(8px) scale(0.98);
 }
 
 .sideLeft .tocPanel {
-  left: 56px;
+  left: 48px;
   transform-origin: left bottom;
 }
 
 .sideRight .tocPanel {
-  right: 56px;
+  right: 48px;
   transform-origin: right bottom;
 }
 
-.floatingToc:hover .tocPanel {
+.floatingToc:hover .tocPanel,
+.floatingToc:focus-within .tocPanel {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0) scale(1);
 }
 
 .tocPanelTitle {
-  margin: 4px 6px 9px;
-  color: var(--reader-muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
+  margin: 6px 8px 6px;
 }
-
 .tocLink {
   display: flex;
   width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 9px 10px 9px calc(10px + var(--toc-indent, 0px));
+  padding: 8px 10px 8px calc(10px + var(--toc-indent, 0px));
   border: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   background: transparent;
-  color: var(--reader-muted);
+  color: var(--muted-foreground);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 18px;
   text-align: left;
 }
 
 .tocLink[data-level="1"] {
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .tocLink[data-level="2"],
@@ -838,13 +757,13 @@
 .tocLink[data-level="4"],
 .tocLink[data-level="5"],
 .tocLink[data-level="6"] {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .tocLink:hover,
 .activeTocLink {
-  background: var(--reader-accent-soft);
-  color: var(--reader-ink);
+  background: var(--accent);
+  color: var(--popover-foreground);
 }
 
 .tocLinkText {
@@ -856,9 +775,9 @@
 }
 
 .tocNumber {
-  color: var(--reader-accent);
+  color: var(--faint-foreground);
   font-variant-numeric: tabular-nums;
-  font-weight: 800;
+  font-weight: 500;
 }
 
 .tocTitle {
@@ -870,50 +789,54 @@
 
 .tocLink small {
   flex: 0 0 auto;
-  color: var(--reader-muted);
-  font-size: 12px;
+  color: var(--faint-foreground);
+  font-size: 11px;
 }
 
-.selectionMenu {
+/* Selection menu and note popover use the popover recipe (popover surface + shadow-md). */
+.selectionMenu,
+.notePopover {
   position: fixed;
-  z-index: 100;
-  width: 220px;
-  padding: 6px;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--reader-paper) 97%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--reader-popover);
+  color: var(--reader-popover-ink);
   box-shadow: var(--reader-shadow);
 }
 
+.selectionMenu {
+  z-index: 100;
+  width: 220px;
+  padding: 4px;
+}
+
 .menuItem {
+  display: flex;
   width: 100%;
-  padding: 10px;
+  align-items: center;
+  padding: 7px 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
-  color: var(--reader-ink);
+  color: inherit;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 18px;
   text-align: left;
 }
 
 .menuItem:hover {
-  background: var(--reader-accent-soft);
+  background: var(--accent);
 }
 
 .dangerMenuItem {
-  color: #b94a44;
+  color: var(--reader-danger-text);
 }
 
 .notePopover {
-  position: fixed;
   z-index: 90;
   width: min(390px, calc(100vw - 32px));
   padding: 14px;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--reader-paper) 96%, transparent);
-  box-shadow: var(--reader-shadow);
 }
 
 .noteHead {
@@ -921,16 +844,17 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 9px;
+  margin-bottom: 8px;
 }
 
 .noteHead strong {
   font-size: 14px;
+  font-weight: 600;
 }
 
 .noteHead span,
 .mutedText {
-  color: var(--reader-muted);
+  color: var(--muted-foreground);
   font-size: 12px;
 }
 
@@ -939,8 +863,8 @@
   overflow: hidden;
   margin-bottom: 10px;
   padding-left: 10px;
-  border-left: 3px solid var(--reader-note);
-  color: var(--reader-muted);
+  border-left: 2px solid var(--reader-example-ink);
+  color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -949,36 +873,43 @@
 .assistDrawer textarea {
   width: 100%;
   min-height: 88px;
-  padding: 11px;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--reader-paper) 86%, var(--reader-bg));
-  color: var(--reader-ink);
-  line-height: 1.65;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
   outline: none;
   resize: vertical;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-.notePopover textarea:focus,
-.assistDrawer textarea:focus {
-  border-color: color-mix(in srgb, var(--reader-accent) 55%, var(--reader-line));
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--reader-accent-soft) 70%, transparent);
+.notePopover textarea::placeholder,
+.assistDrawer textarea::placeholder {
+  color: var(--muted-foreground);
 }
 
+.notePopover textarea:focus-visible,
+.assistDrawer textarea:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px var(--reader-ring);
+}
+/* Assist drawer: a floating rakazo side panel (dialog surface, hairline ring, no heavy shadow). */
 .assistDrawer {
   position: fixed;
   top: 64px;
-  right: 22px;
+  right: 16px;
   bottom: 24px;
   z-index: 45;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--reader-paper) 97%, transparent);
-  box-shadow: var(--reader-shadow);
-  backdrop-filter: blur(18px);
+  border-radius: 20px;
+  background: var(--dialog);
+  color: var(--foreground);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent), var(--reader-shadow);
 }
 
 .drawerResizeHandle {
@@ -998,10 +929,11 @@
   width: 3px;
   height: 54px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--reader-muted) 34%, transparent);
+  background: var(--scrollbar);
   content: "";
   opacity: 0;
   transform: translateY(-50%);
+  transition: opacity 150ms ease;
 }
 
 .assistDrawer:hover .drawerResizeHandle::after {
@@ -1018,38 +950,46 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--reader-line);
+  padding: 14px 14px 12px 20px;
+  border-bottom: 1px solid var(--border);
 }
 
 .drawerHead strong {
-  font-size: 16px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
 }
 
 .drawerBody {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
-  padding: 18px;
+  padding: 16px;
+  scrollbar-color: var(--scrollbar) transparent;
+  scrollbar-width: thin;
 }
 
 .drawerCard {
-  margin-bottom: 12px;
-  padding: 14px;
-  border: 1px solid var(--reader-line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--reader-paper) 88%, var(--reader-bg));
+  margin-bottom: 10px;
+  padding: 12px 18px;
+  border-radius: 20px;
+  background: var(--muted);
 }
 
 .drawerCard h3 {
-  margin: 0 0 8px;
-  font-size: 14px;
+  margin: 0 0 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
 }
 
 .drawerCard p,
 .drawerCard li {
   margin: 0;
-  color: color-mix(in srgb, var(--reader-ink) 82%, var(--reader-muted));
+  color: var(--foreground);
   font-size: 14px;
-  line-height: 1.75;
+  line-height: 22px;
 }
 
 .drawerCard ul {
@@ -1057,21 +997,52 @@
   padding-left: 18px;
 }
 
+.drawerCard textarea {
+  margin-top: 4px;
+}
+
 .drawerClose,
 .smallButton {
-  padding: 7px 12px;
-  border: 1px solid var(--reader-line);
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--reader-paper);
-  color: var(--reader-muted);
+  background: transparent;
+  color: var(--foreground);
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.drawerClose:hover,
+.smallButton:hover:not(:disabled) {
+  background: var(--accent);
+}
+
+.smallButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .primaryButton {
-  border-color: var(--reader-ink);
-  background: var(--reader-ink);
-  color: var(--reader-paper);
+  border-color: transparent;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.primaryButton:disabled {
+  background: var(--primary-disabled);
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  opacity: 1;
 }
 
 .drawerActions {
@@ -1083,19 +1054,19 @@
 
 .actionHint {
   margin-top: 8px;
-  color: var(--reader-muted);
+  color: var(--muted-foreground);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 16px;
 }
 
 .materialItem {
   margin-top: 12px;
   padding-left: 10px;
-  border-left: 3px solid var(--reader-green);
+  border-left: 2px solid var(--reader-green);
 }
 
 .confusedItem {
-  border-left-color: #dd5149;
+  border-left-color: var(--reader-confused-ink);
 }
 
 .explainItem {
@@ -1103,20 +1074,43 @@
 }
 
 .exampleItem {
-  border-left-color: #b78222;
+  border-left-color: var(--reader-example-ink);
 }
 
 .materialItem small {
   display: block;
   margin-bottom: 4px;
-  color: var(--reader-muted);
+  color: var(--muted-foreground);
+}
+
+.sourceFigurePanels {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.sourceFigurePanels > img {
+  min-width: 0;
+  flex: 1 1 220px;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.sourceFigureText {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 780px) {
-  .progressTrack {
-    width: 82px;
-  }
-
   .readerLayout {
     width: calc(100vw - 24px);
     padding-top: 30px;
@@ -1141,69 +1135,11 @@
     display: none;
   }
 }
-.sourceFigurePanels {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 16px;
-}
 
-.sourceFigurePanels > img {
-  min-width: 0;
-  flex: 1 1 220px;
-  max-width: 100%;
-  height: auto;
-  object-fit: contain;
-}
-.sourceFigureText { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; font-size: 14px; line-height: 1.8; background: #f7f7fa; }
-
-/*
- * Formal paper-agent workspace appearance. Both monochrome appearances resolve
- * through the shell design tokens (paper-agent-theme.css), which switch with the
- * shell theme; the default portal workspace keeps its original palette.
- */
-.openReader.workspaceReader.monochromeLightWorkspace,
-.openReader.workspaceReader.monochromeDarkWorkspace {
-  --reader-bg: var(--bg);
-  --reader-paper: var(--surface);
-  --reader-ink: var(--text);
-  --reader-muted: var(--muted);
-  --reader-soft: var(--fill);
-  --reader-line: var(--border);
-  --reader-accent: var(--text);
-  --reader-accent-soft: var(--fill);
-  --reader-note: var(--selected);
-  --reader-confused: var(--border-strong);
-  --reader-green: var(--muted);
-  --reader-shadow: var(--shadow-row);
-}
-
-.workspaceReader.monochromeLightWorkspace .paperCard,
-.workspaceReader.monochromeDarkWorkspace .paperCard,
-.workspaceReader.monochromeLightWorkspace .paperCompiledTable,
-.workspaceReader.monochromeDarkWorkspace .paperCompiledTable {
-  background: var(--reader-paper);
-  color: var(--reader-ink);
-}
-
-.workspaceReader.monochromeLightWorkspace .selection_exampled,
-.workspaceReader.monochromeDarkWorkspace .selection_exampled,
-.workspaceReader.monochromeLightWorkspace .selection_confused,
-.workspaceReader.monochromeDarkWorkspace .selection_confused {
-  box-shadow: inset 0 -2px 0 var(--reader-muted);
-}
-
-.workspaceReader.monochromeLightWorkspace .assetMissing,
-.workspaceReader.monochromeDarkWorkspace .assetMissing,
-.workspaceReader.monochromeLightWorkspace .dangerMenuItem,
-.workspaceReader.monochromeDarkWorkspace .dangerMenuItem {
-  color: var(--reader-ink);
-}
-
-.workspaceReader.monochromeLightWorkspace .storageWarning,
-.workspaceReader.monochromeDarkWorkspace .storageWarning {
-  color: var(--reader-ink);
-  background: var(--reader-accent-soft);
-  border-bottom: 1px solid var(--reader-line);
+@media (prefers-reduced-motion: reduce) {
+  .openReader *,
+  .openReader *::before,
+  .openReader *::after {
+    transition: none !important;
+  }
 }

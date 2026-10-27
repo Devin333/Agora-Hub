@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { FileSearch, LoaderCircle, RefreshCw, Square } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import type { Paper } from "@/lib/papers/types"
+import { ReaderTaskCard, ReaderTaskStatus } from "./reader-task-card"
 import {
   fetchDesktopIdentity,
   fetchResearchOperation,
@@ -251,64 +253,62 @@ export function ReaderPreparationControl({
   const terminal = operation && ["failed", "rejected", "needs_action"].includes(operation.status)
 
   return (
-    <section className="mb-3 rounded-xl border border-[#e4d9ef] bg-white/80 p-3 text-sm">
-      <strong className="inline-flex items-center gap-1"><FileSearch size={15} />准备论文正文</strong>
-      <p className="mt-1 text-[#756782]">解析公开来源并建立可核对的来源修订身份，完成后才能分析与问答。</p>
-      {!publicSourceUrl && (
-        <p className="mt-2 text-amber-800">当前没有可提交的公开 HTTP(S) 来源；私有导入请从工作区导入入口处理。</p>
-      )}
+    <ReaderTaskCard
+      icon={FileSearch}
+      title="准备论文正文"
+      description="解析公开来源并建立可核对的来源修订身份，完成后才能分析与问答。"
+      warning={publicSourceUrl ? undefined : "当前没有可提交的公开 HTTP(S) 来源；私有导入请从工作区导入入口处理。"}
+      error={error}
+    >
       {operation ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span role="status">{preparationStatus(operation.status)}</span>
+        <>
+          <ReaderTaskStatus>{preparationStatus(operation.status)}</ReaderTaskStatus>
           {terminal ? (
-            <button
+            <Button
               type="button"
-              className="underline"
+              variant="outline"
+              size="sm"
               onClick={() => {
                 setOperation(null)
                 setError("")
               }}
             >
               使用新请求身份重新准备
-            </button>
+            </Button>
           ) : operation.status !== "passed" ? (
-            <button
-              type="button"
-              disabled={busy}
-              className="inline-flex items-center gap-1 underline"
-              onClick={() => void check()}
-            >
-              {busy ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void check()}>
+              {busy ? <LoaderCircle size={14} strokeWidth={1.8} className="animate-spin" /> : <RefreshCw size={14} strokeWidth={1.8} />}
               检查已有请求
-            </button>
+            </Button>
           ) : null}
-        </div>
+        </>
       ) : (
-        <button
+        <Button
           type="button"
+          size="sm"
           disabled={!enabled || !owner || !publicSourceUrl || busy}
-          className="mt-2 rounded-lg bg-[#6d28d9] px-3 py-2 text-white disabled:opacity-50"
           onClick={() => void start()}
         >
           {busy ? (
-            <><LoaderCircle size={14} className="mr-1 inline animate-spin" />正在提交</>
+            <><LoaderCircle size={14} strokeWidth={1.8} className="animate-spin" />正在提交</>
           ) : (
             "准备正文"
           )}
-        </button>
+        </Button>
       )}
       {busy && (
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="icon-sm"
+          className="rounded-full bg-muted text-foreground/80 hover:bg-accent"
           aria-label="停止等待正文准备"
-          className="ml-2"
           onClick={stopWaiting}
         >
-          <Square size={14} />
-        </button>
+          <Square size={10} strokeWidth={0} fill="currentColor" />
+        </Button>
       )}
-      {error && <p role="alert" className="mt-2 text-[#a02b47]">{error}</p>}
-    </section>
+    </ReaderTaskCard>
   )
 }
 

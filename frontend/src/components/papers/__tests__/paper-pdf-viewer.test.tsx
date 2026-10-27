@@ -342,24 +342,25 @@ describe("PaperPdfViewer", () => {
     Reflect.deleteProperty(globalThis, "IntersectionObserver")
   })
 
-  it("preserves the default Portal chrome and active colors", async () => {
+  it("renders the default chrome on design tokens with floating controls and token active states", async () => {
     const { container } = renderViewer()
     const viewer = screen.getByLabelText("Reader Paper PDF viewer")
     expect(viewer).toHaveAttribute("data-pdf-appearance", "default")
-    expect(viewer).toHaveClass("bg-[#f8faf9]", "focus-visible:ring-[#315d8a]/35", "dark:bg-background")
-    expect(container.querySelector("[data-pdf-toolbar]")).toHaveClass("border-[#d8dfd8]", "bg-white", "dark:bg-card")
+    expect(viewer).toHaveClass("bg-background", "text-foreground", "focus-visible:ring-ring/50")
+    expect(container.querySelector("[data-pdf-toolbar]")).toHaveClass("border-border", "bg-background")
     // Layout groups are transparent in the default Portal flex toolbar.
     expect(container.querySelector("[data-pdf-pagination]")).toHaveClass("contents")
     expect(container.querySelector("[data-pdf-zoom]")).toHaveClass("contents")
     expect(container.querySelector("[data-pdf-page-flow]")).toHaveClass("contents")
-    expect(container.querySelector("[data-pdf-canvas-scroll]")).toHaveClass("bg-[#eef4ef]", "dark:bg-secondary/30")
-    expect(screen.getByText("Reader Paper")).toHaveClass("text-[#334155]", "dark:text-foreground")
+    expect(container.querySelector("[data-pdf-canvas-scroll]")).toHaveClass("rk-scroll", "bg-muted")
+    expect(screen.getByText("Reader Paper")).toHaveClass("text-foreground")
+    expect(screen.getByRole("button", { name: "Next page" })).toHaveClass("rounded-full", "bg-muted/90")
     await resolveViewerDocument()
-    expect(screen.getByRole("button", { name: "Go to page 1" })).toHaveClass("border-[#315d8a]", "bg-[#eef4ef]", "ring-[#315d8a]/25")
+    expect(screen.getByRole("button", { name: "Go to page 1" })).toHaveClass("border-ring", "bg-accent", "ring-ring/25")
     await waitFor(() => expect(pdfjsMock.getTextContent).toHaveBeenCalledWith(3))
     fireEvent.change(screen.getByLabelText("Search PDF text"), { target: { value: "latent" } })
     await screen.findByText("2 results")
-    expect(container.querySelector('[data-pdf-search-result][aria-current="true"]')).toHaveClass("border-[#315d8a]", "bg-[#eef4ef]", "ring-[#315d8a]/20")
+    expect(container.querySelector('[data-pdf-search-result][aria-current="true"]')).toHaveClass("border-ring", "bg-accent", "ring-ring/20")
   })
 
   it("exposes opt-in chrome slots in loading, controls, thumbnails, and search without altering document pixels", async () => {
@@ -818,7 +819,7 @@ describe("PaperPdfViewer", () => {
     expect(await screen.findByText("PDF could not be rendered; showing text fallback.")).toBeInTheDocument()
     expect(screen.getByText("Text fallback content")).toBeInTheDocument()
     const banner = screen.getByText("PDF could not be rendered; showing text fallback.").closest("[data-pdf-failure]")
-    expect(banner).toHaveClass("bg-amber-50", "text-amber-900", "dark:bg-amber-950/30", "dark:text-amber-100")
+    expect(banner).toHaveClass("bg-warning/15", "text-warning-text")
     expect(banner?.parentElement).toHaveAttribute("data-pdf-appearance", "default")
     expect(banner?.parentElement).toHaveClass("min-h-[42rem]")
     expect(banner?.parentElement).not.toHaveClass("portal-custom")
@@ -1036,7 +1037,7 @@ describe("PaperPdfViewer", () => {
 
     const highlight = await screen.findByTitle("Diffusion model")
     expect(highlight).toHaveStyle({ left: "12%", top: "14%", width: "28%", height: "3%" })
-    expect(highlight).toHaveClass("bg-emerald-300/35")
+    expect(highlight).toHaveClass("bg-success/30")
     expect(highlight.parentElement?.parentElement).toHaveAttribute("data-pdf-document")
     expect(highlight.parentElement?.parentElement?.parentElement).toHaveAttribute("data-pdf-page-flow")
 

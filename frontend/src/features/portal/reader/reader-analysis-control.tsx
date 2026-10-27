@@ -1,8 +1,10 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { LoaderCircle, RefreshCw, Square } from "lucide-react"
+import { ArrowUpRight, ChartNoAxesColumn, LoaderCircle, RefreshCw, Square } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import type { Paper } from "@/lib/papers/types"
+import { ReaderTaskCard, ReaderTaskStatus } from "./reader-task-card"
 import {
   fetchDesktopIdentity,
   fetchResearchOperation,
@@ -362,26 +364,29 @@ export function ReaderAnalysisControl({
   const terminal = operation && ["failed", "rejected", "needs_action"].includes(operation.status)
 
   return (
-    <section className="mb-3 rounded-xl border border-[#e4d9ef] bg-white/80 p-3 text-sm">
-      <strong>Research 分析</strong>
-      <p className="mt-1 text-[#756782]">报告只来自通过质量门的真实分析运行。</p>
-      {!exactSource && (
-        <p className="mt-2 text-amber-800">来源修订身份尚未确认，当前不能开始分析。</p>
-      )}
+    <ReaderTaskCard
+      icon={ChartNoAxesColumn}
+      title="Research 分析"
+      description="报告只来自通过质量门的真实分析运行。"
+      warning={exactSource ? undefined : "来源修订身份尚未确认，当前不能开始分析。"}
+      error={error}
+    >
       {runId ? (
         <a
-          className="mt-2 inline-block text-[#6d28d9] underline"
+          className="inline-flex items-center gap-1 text-body2 text-link underline-offset-4 hover:underline"
           href={`/reports/runs/${encodeURIComponent(runId)}?sourceRevision=${encodeURIComponent(sourceRevision)}`}
         >
           查看本次运行报告
+          <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" />
         </a>
       ) : operation ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span role="status">{analysisStatus(operation.status)}</span>
+        <>
+          <ReaderTaskStatus>{analysisStatus(operation.status)}</ReaderTaskStatus>
           {terminal ? (
-            <button
+            <Button
               type="button"
-              className="underline"
+              variant="outline"
+              size="sm"
               onClick={() => {
                 setOperation(null)
                 operationPersonalMemoryRef.current = undefined
@@ -389,45 +394,36 @@ export function ReaderAnalysisControl({
               }}
             >
               使用新请求身份重试
-            </button>
+            </Button>
           ) : (
-            <button
-              type="button"
-              disabled={busy}
-              className="inline-flex items-center gap-1 underline"
-              onClick={() => void check()}
-            >
-              {busy ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void check()}>
+              {busy ? <LoaderCircle size={14} strokeWidth={1.8} className="animate-spin" /> : <RefreshCw size={14} strokeWidth={1.8} />}
               检查已有请求
-            </button>
+            </Button>
           )}
-        </div>
+        </>
       ) : (
-        <button
-          type="button"
-          disabled={!enabled || !exactSource || busy}
-          className="mt-2 rounded-lg bg-[#6d28d9] px-3 py-2 text-white disabled:opacity-50"
-          onClick={() => void start()}
-        >
+        <Button type="button" size="sm" disabled={!enabled || !exactSource || busy} onClick={() => void start()}>
           {busy ? (
-            <><LoaderCircle size={14} className="mr-1 inline animate-spin" />正在提交</>
+            <><LoaderCircle size={14} strokeWidth={1.8} className="animate-spin" />正在提交</>
           ) : (
             "开始真实分析"
           )}
-        </button>
+        </Button>
       )}
       {busy && (
-        <button
+        <Button
           type="button"
+          variant="outline"
+          size="icon-sm"
+          className="rounded-full bg-muted text-foreground/80 hover:bg-accent"
           aria-label="停止等待分析"
-          className="ml-2"
           onClick={() => active.current?.abort("user")}
         >
-          <Square size={14} />
-        </button>
+          <Square size={10} strokeWidth={0} fill="currentColor" />
+        </Button>
       )}
-      {error && <p role="alert" className="mt-2 text-[#a02b47]">{error}</p>}
-    </section>
+    </ReaderTaskCard>
   )
 }
 
