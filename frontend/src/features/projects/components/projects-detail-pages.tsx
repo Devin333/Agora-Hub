@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import type { ReactNode } from "react"
 import { ArrowLeft, ExternalLink, Loader2 } from "lucide-react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
@@ -18,6 +19,15 @@ import {
 import type { ProjectsApiCollection, ProjectsApiProjectDetail, ProjectsApiTool } from "@/types/projects"
 import { ProjectEmptyState, ProjectErrorState, ProjectLoadingState, ProjectSourceLine } from "@/features/projects/components/project-product-state"
 import { formatScore, labelize } from "@/features/projects/components/project-format"
+import {
+  ProjectCodeBlock,
+  ProjectMetric,
+  ProjectPage,
+  ProjectPageBody,
+  ProjectPageHeader,
+  ProjectPanel,
+  projectInsetClassName,
+} from "@/features/projects/components/project-page-layout"
 import { LabGraph, LabSolutionPanel, LabWorkflowStatus } from "@/features/projects/components/projects-product-page"
 import { presentLabWorkflow, labSolutionValue } from "@/features/projects/components/lab-workflow"
 import { useI18n } from "@/lib/i18n/use-i18n"
@@ -64,36 +74,40 @@ export function ProjectCaseDetailPage({ caseId }: { caseId: string }) {
   if (!detail.data) return <ProjectEmptyState />
   const item = detail.data
   return (
-    <main className="space-y-6">
-      <BackLink href="/projects/cases" label="Cases" />
-      <Header title={item.title} eyebrow={`${item.business_domain} / ${item.module_type}`} body={String(item.design_summary ?? item.problem ?? "")} />
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="space-y-4">
-          <Panel title="Problem" body={String(item.problem ?? "")} />
-          <ComponentsPanel components={item.components} />
-          <PatternsPanel patterns={item.patterns} />
-        </div>
-        <aside className="space-y-3 rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-          <h2 className="text-base font-semibold text-[#202124] dark:text-foreground">Apply Context</h2>
-          <textarea
-            value={context}
-            onChange={(event) => setContext(event.target.value)}
-            className="min-h-28 w-full rounded-md border border-input bg-card px-3 py-2 text-sm"
-            placeholder="Target module context"
-          />
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => explain.mutate()} disabled={explain.isPending}>
-              Explain
-            </Button>
-            <Button type="button" onClick={() => mapping.mutate()} disabled={!context.trim() || mapping.isPending}>
-              Map
-            </Button>
+    <ProjectPage>
+      <DetailHeader backHref="/projects/cases" backLabel="Cases" title={item.title} eyebrow={`${item.business_domain} / ${item.module_type}`} body={String(item.design_summary ?? item.problem ?? "")} />
+      <ProjectPageBody>
+        <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="min-w-0 space-y-4">
+            <Panel title="Problem" body={String(item.problem ?? "")} />
+            <ComponentsPanel components={item.components} />
+            <PatternsPanel patterns={item.patterns} />
           </div>
-          {explain.data ? <Panel title="Explanation" body={explain.data.summary} /> : null}
-          {mapping.data ? <JsonPanel title={`Fit ${formatScore(mapping.data.fit_score)}`} value={mapping.data} /> : null}
-        </aside>
-      </section>
-    </main>
+          <ProjectPanel title="Apply Context" className="h-fit space-y-3">
+            <label className="sr-only" htmlFor="project-case-context">
+              Target module context
+            </label>
+            <textarea
+              id="project-case-context"
+              value={context}
+              onChange={(event) => setContext(event.target.value)}
+              className={textareaClassName}
+              placeholder="Target module context"
+            />
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" onClick={() => explain.mutate()} disabled={explain.isPending}>
+                Explain
+              </Button>
+              <Button type="button" onClick={() => mapping.mutate()} disabled={!context.trim() || mapping.isPending}>
+                Map
+              </Button>
+            </div>
+            {explain.data ? <Panel title="Explanation" body={explain.data.summary} /> : null}
+            {mapping.data ? <JsonPanel title={`Fit ${formatScore(mapping.data.fit_score)}`} value={mapping.data} /> : null}
+          </ProjectPanel>
+        </section>
+      </ProjectPageBody>
+    </ProjectPage>
   )
 }
 
@@ -107,7 +121,6 @@ export function ProjectCollectionDetailPage({ slug }: { slug: string }) {
   if (!query.data) return <ProjectEmptyState />
   return <CollectionDetail collection={query.data} />
 }
-
 export function ProjectLabSessionPage({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const [savedMessage, setSavedMessage] = useState<string | null>(null)
@@ -134,191 +147,235 @@ export function ProjectLabSessionPage({ sessionId }: { sessionId: string }) {
   const solution = labSolutionValue(session) ?? (session.generated_solution ? { markdown: session.generated_solution } : null)
   const canSave = !workflow.isUnknown && Boolean(solution) && ["solution_generated"].includes(session.current_stage)
   return (
-    <main className="space-y-6 overflow-x-hidden">
-      <BackLink href="/projects/lab" label="Lab" />
-      <Header title="Lab Session" eyebrow={session.current_stage} body={session.user_problem} />
-      <div className="flex flex-wrap items-center gap-3">
+    <ProjectPage className="overflow-x-hidden">
+      <DetailHeader
+        backHref="/projects/lab"
+        backLabel="Lab"
+        title="Lab Session"
+        eyebrow={session.current_stage}
+        body={session.user_problem}
+        actions={
+          <Button type="button" onClick={() => save.mutate()} disabled={save.isPending || !canSave} aria-busy={save.isPending}>
+            {save.isPending ? <><Loader2 className="size-4 animate-spin" /> {t("projects.lab.savingSession")}</> : t("projects.lab.saveSession")}
+          </Button>
+        }
+      >
+        {!canSave && !workflow.isUnknown && session.current_stage !== "solution_saved" ? <p className="text-body2 text-muted-foreground">{t("projects.lab.saveAvailable")}</p> : null}
+        {workflow.isUnknown ? <p className="text-body2 text-destructive-text">{t("projects.lab.unsupportedStage")}</p> : null}
+        {save.isError ? (
+          <div className="flex flex-wrap items-center gap-3 text-body2 text-destructive-text" role="alert">
+            <span>{save.error instanceof Error ? save.error.message : t("projects.lab.saveFailed")}</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => save.mutate()}>
+              {t("projects.lab.retrySave")}
+            </Button>
+          </div>
+        ) : null}
+        {savedMessage ? (
+          <p ref={saveStatusRef} tabIndex={-1} className="rounded-sm text-body2 text-success-text outline-none focus-visible:ring-3 focus-visible:ring-ring/50" aria-live="polite">
+            {savedMessage}
+          </p>
+        ) : null}
+      </DetailHeader>
+      <ProjectPageBody>
         <LabWorkflowStatus session={session} />
-        <Button
-          type="button"
-          onClick={() => save.mutate()}
-          disabled={save.isPending || !canSave}
-          aria-busy={save.isPending}
-        >
-          {save.isPending ? <><Loader2 className="size-4 animate-spin" /> {t("projects.lab.savingSession")}</> : t("projects.lab.saveSession")}
-        </Button>
-        {!canSave && !workflow.isUnknown && session.current_stage !== "solution_saved" ? <p className="basis-full text-sm text-muted-foreground">{t("projects.lab.saveAvailable")}</p> : null}
-        {workflow.isUnknown ? <p className="basis-full text-sm text-destructive">{t("projects.lab.unsupportedStage")}</p> : null}
-        {save.isError ? <div className="flex basis-full flex-wrap items-center gap-3 text-sm text-destructive" role="alert"><span>{save.error instanceof Error ? save.error.message : t("projects.lab.saveFailed")}</span><Button type="button" variant="outline" size="sm" onClick={() => save.mutate()}>{t("projects.lab.retrySave")}</Button></div> : null}
-        {savedMessage ? <p ref={saveStatusRef} tabIndex={-1} className="basis-full text-sm text-emerald-700 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-emerald-300" aria-live="polite">{savedMessage}</p> : null}
-      </div>
-      <section className="grid gap-4 lg:grid-cols-2">
-        <RequirementProfilePanel profile={session.requirement_profile} />
-        <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card"><LabGraph sessionId={session.id} graph={session.graph_state} /></section>
-        <QuestionsPanel questions={session.questions} />
-        {solution ? <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card"><LabSolutionPanel session={session} solution={solution} /></section> : <SolutionPanel solution={null} />}
-      </section>
-    </main>
+        <section className="grid gap-4 lg:grid-cols-2">
+          <RequirementProfilePanel profile={session.requirement_profile} />
+          <ProjectPanel>
+            <LabGraph sessionId={session.id} graph={session.graph_state} />
+          </ProjectPanel>
+          <QuestionsPanel questions={session.questions} />
+          {solution ? (
+            <ProjectPanel>
+              <LabSolutionPanel session={session} solution={solution} />
+            </ProjectPanel>
+          ) : (
+            <SolutionPanel solution={null} />
+          )}
+        </section>
+      </ProjectPageBody>
+    </ProjectPage>
   )
 }
 
 function ProjectV1Detail({ data }: { data: ProjectsApiProjectDetail }) {
   const project = data.project
   return (
-    <main className="space-y-6">
-      <BackLink href="/projects" label="Projects" />
-      <Header title={project.name} eyebrow={project.project_type} body={project.description ?? project.tagline ?? ""} />
-      <ProjectSourceLine meta={data.meta} />
-      <section className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Hot score" body={formatScore(project.hot_score ?? undefined)} />
-        <Panel title="Rising score" body={formatScore(project.rising_score ?? undefined)} />
-        <Panel title="Sources" body={String(project.source_count)} />
-      </section>
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="space-y-4">
-          <CapabilitiesPanel capabilities={data.capabilities} />
-          <CasesPanel cases={data.cases} />
-          <MetricsPanel metrics={data.metrics} />
-        </div>
-        <aside className="space-y-4">
-          <LinkPanel project={project} />
-          <WatchPanel status={data.watch_status} />
-          <ActionsPanel actions={data.recommended_actions} />
-        </aside>
-      </section>
-    </main>
+    <ProjectPage>
+      <DetailHeader backHref="/projects" backLabel="Projects" title={project.name} eyebrow={project.project_type} body={project.description ?? project.tagline ?? ""}>
+        <ProjectSourceLine meta={data.meta} />
+      </DetailHeader>
+      <ProjectPageBody>
+        <section className="grid gap-2 sm:grid-cols-3">
+          <ProjectMetric size="lg" label="Hot score" value={formatScore(project.hot_score ?? undefined)} />
+          <ProjectMetric size="lg" label="Rising score" value={formatScore(project.rising_score ?? undefined)} />
+          <ProjectMetric size="lg" label="Sources" value={String(project.source_count)} />
+        </section>
+        <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="min-w-0 space-y-4">
+            <CapabilitiesPanel capabilities={data.capabilities} />
+            <CasesPanel cases={data.cases} />
+            <MetricsPanel metrics={data.metrics} />
+          </div>
+          <aside className="min-w-0 space-y-4">
+            <LinkPanel project={project} />
+            <WatchPanel status={data.watch_status} />
+            <ActionsPanel actions={data.recommended_actions} />
+          </aside>
+        </section>
+      </ProjectPageBody>
+    </ProjectPage>
   )
 }
 
 function ToolDetail({ tool }: { tool: ProjectsApiTool }) {
   return (
-    <main className="space-y-6">
-      <BackLink href="/projects/tools" label="Tools" />
-      <Header title={tool.project.name} eyebrow={tool.profile.tool_type} body={tool.fit_reason ?? tool.project.description ?? ""} />
-      <section className="grid gap-4 lg:grid-cols-2">
-        <IntegrationProfilePanel profile={tool.profile} />
-        <CapabilitiesPanel capabilities={tool.capabilities} />
-      </section>
-    </main>
+    <ProjectPage>
+      <DetailHeader backHref="/projects/tools" backLabel="Tools" title={tool.project.name} eyebrow={tool.profile.tool_type} body={tool.fit_reason ?? tool.project.description ?? ""} />
+      <ProjectPageBody>
+        <section className="grid gap-4 lg:grid-cols-2">
+          <IntegrationProfilePanel profile={tool.profile} />
+          <CapabilitiesPanel capabilities={tool.capabilities} />
+        </section>
+      </ProjectPageBody>
+    </ProjectPage>
   )
 }
 
 function CollectionDetail({ collection }: { collection: ProjectsApiCollection }) {
   return (
-    <main className="space-y-6">
-      <BackLink href="/projects/collections" label="Collections" />
-      <Header title={collection.title} eyebrow={`${collection.item_count ?? 0} items`} body={collection.description} />
-      <SectionsPanel sections={collection.sections} />
-    </main>
+    <ProjectPage>
+      <DetailHeader backHref="/projects/collections" backLabel="Collections" title={collection.title} eyebrow={`${collection.item_count ?? 0} items`} body={collection.description} />
+      <ProjectPageBody>
+        <SectionsPanel sections={collection.sections} />
+      </ProjectPageBody>
+    </ProjectPage>
+  )
+}
+const textareaClassName =
+  "min-h-28 w-full resize-y rounded-lg border border-input bg-muted px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+
+function DetailHeader({
+  backHref,
+  backLabel,
+  title,
+  eyebrow,
+  body,
+  actions,
+  children,
+}: {
+  backHref: string
+  backLabel: string
+  title: string
+  eyebrow: string
+  body: string
+  actions?: ReactNode
+  children?: ReactNode
+}) {
+  return (
+    <ProjectPageHeader
+      leading={
+        <Link
+          href={backHref}
+          className="flex shrink-0 items-center gap-0.5 rounded-lg py-1 pe-1.5 text-[13px] font-medium text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          <ArrowLeft size={16} strokeWidth={1.8} aria-hidden="true" />
+          {backLabel}
+        </Link>
+      }
+      eyebrow={labelize(eyebrow)}
+      title={title}
+      subtitle={body || undefined}
+      actions={actions}
+    >
+      {children}
+    </ProjectPageHeader>
   )
 }
 
-function BackLink({ href, label }: { href: string; label: string }) {
+/** Nested record inside a panel (capability, case, component, pattern, question). */
+function RecordItem({ title, meta, body }: { title: ReactNode; meta?: ReactNode; body?: ReactNode }) {
   return (
-    <Button asChild variant="outline" size="sm">
-      <Link href={href}>
-        <ArrowLeft className="size-4" />
-        {label}
-      </Link>
-    </Button>
+    <div className={projectInsetClassName}>
+      <p className="break-words text-body2 font-medium text-foreground">{title}</p>
+      {meta ? <p className="text-label text-muted-foreground">{meta}</p> : null}
+      {body ? <p className="mt-0.5 break-words text-label text-muted-foreground">{body}</p> : null}
+    </div>
   )
 }
 
-function Header({ title, eyebrow, body }: { title: string; eyebrow: string; body: string }) {
+function RecordStack({ empty, children }: { empty: string; children: ReactNode[] }) {
+  return children.length ? <div className="space-y-2">{children}</div> : <p className="text-body2 text-muted-foreground">{empty}</p>
+}
+
+/** Label / value rows separated by hairlines. */
+function FactRow({ label, value }: { label: ReactNode; value: ReactNode }) {
   return (
-    <header className="space-y-4 py-6">
-      <p className="text-xs font-semibold uppercase text-[#667085] dark:text-muted-foreground">{labelize(eyebrow)}</p>
-      <h1 className="max-w-5xl text-4xl font-black leading-tight tracking-normal text-[#202124] sm:text-5xl dark:text-foreground">{title}</h1>
-      {body ? <p className="max-w-3xl text-base leading-7 text-[#4b5563] dark:text-muted-foreground">{body}</p> : null}
-    </header>
+    <div className="flex items-start justify-between gap-4 border-b border-border py-2 text-body2 last:border-0">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-words text-right font-medium text-foreground">{value}</span>
+    </div>
   )
 }
 
 function LinkPanel({ project }: { project: ProjectsApiProjectDetail["project"] }) {
   const url = project.github_url ?? project.website_url ?? project.canonical_url
   return (
-    <div className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-base font-semibold text-[#202124] dark:text-foreground">Links</h2>
+    <ProjectPanel title="Links">
       {url ? (
-        <Button asChild className="mt-3" size="sm">
+        <Button asChild size="sm">
           <a href={url} target="_blank" rel="noreferrer">
             Open Source
-            <ExternalLink className="size-4" />
+            <ExternalLink strokeWidth={1.8} />
           </a>
         </Button>
       ) : (
-        <p className="mt-2 text-sm text-muted-foreground">No public URL in the current artifact.</p>
+        <p className="text-body2 text-muted-foreground">No public URL in the current artifact.</p>
       )}
-    </div>
+    </ProjectPanel>
   )
 }
 
 function Panel({ title, body }: { title: string; body: string }) {
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">{title}</h2>
-      <p className="mt-2 text-sm leading-6 text-[#4b5563] dark:text-muted-foreground">{body || "Unavailable"}</p>
-    </section>
+    <ProjectPanel title={title}>
+      <p className="break-words text-body2 text-muted-foreground">{body || "Unavailable"}</p>
+    </ProjectPanel>
   )
 }
 
 function JsonPanel({ title, value }: { title: string; value: unknown }) {
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">{title}</h2>
-      <pre className="mt-3 max-h-96 overflow-auto rounded-md bg-[#111827] p-3 text-xs leading-5 text-white">{JSON.stringify(value, null, 2)}</pre>
-    </section>
+    <ProjectPanel title={title}>
+      <ProjectCodeBlock>{JSON.stringify(value, null, 2)}</ProjectCodeBlock>
+    </ProjectPanel>
   )
 }
 
 function CapabilitiesPanel({ capabilities }: { capabilities: unknown[] }) {
   const items = Array.isArray(capabilities) ? capabilities : []
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Capabilities</h2>
-      <div className="mt-3 space-y-2">
-        {items.length ? (
-          items.map((cap, idx) => {
-            const record = asRecord(cap)
-            const name = textValue(record?.name) || textValue(cap)
-            const description = textValue(record?.description)
-            return (
-            <div key={idx} className="rounded-md bg-[#f8fafc] p-2 dark:bg-background">
-              <p className="text-xs font-semibold text-[#202124] dark:text-foreground">{name}</p>
-              {description ? <p className="mt-1 text-xs text-[#4b5563] dark:text-muted-foreground">{description}</p> : null}
-            </div>
-          )})
-        ) : (
-          <p className="text-xs text-muted-foreground">No capabilities available</p>
-        )}
-      </div>
-    </section>
+    <ProjectPanel title="Capabilities">
+      <RecordStack empty="No capabilities available">
+        {items.map((cap, idx) => {
+          const record = asRecord(cap)
+          return <RecordItem key={idx} title={textValue(record?.name) || textValue(cap)} body={textValue(record?.description) || undefined} />
+        })}
+      </RecordStack>
+    </ProjectPanel>
   )
 }
 
 function CasesPanel({ cases }: { cases: unknown[] }) {
   const items = Array.isArray(cases) ? cases : []
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Cases</h2>
-      <div className="mt-3 space-y-2">
-        {items.length ? (
-          items.map((item, idx) => {
-            const record = asRecord(item)
-            const title = textValue(record?.title) || textValue(item)
-            const moduleType = textValue(record?.module_type)
-            return (
-              <div key={idx} className="rounded-md bg-[#f8fafc] p-2 dark:bg-background">
-                <p className="text-xs font-semibold text-[#202124] dark:text-foreground">{title}</p>
-                {moduleType ? <p className="text-xs text-[#667085] dark:text-muted-foreground">{moduleType}</p> : null}
-              </div>
-            )
-          })
-        ) : (
-          <p className="text-xs text-muted-foreground">No cases available</p>
-        )}
-      </div>
-    </section>
+    <ProjectPanel title="Cases">
+      <RecordStack empty="No cases available">
+        {items.map((item, idx) => {
+          const record = asRecord(item)
+          return <RecordItem key={idx} title={textValue(record?.title) || textValue(item)} meta={textValue(record?.module_type) || undefined} />
+        })}
+      </RecordStack>
+    </ProjectPanel>
   )
 }
 
@@ -334,27 +391,22 @@ function MetricsPanel({ metrics }: { metrics: unknown[] }) {
     ["Mentions", displayValue(m.source_mentions)],
   ].filter((field): field is [string, string | number] => field[1] !== undefined && field[1] !== null)
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Metrics</h2>
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+    <ProjectPanel title="Metrics">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {fields.map(([label, value]) => (
-          <div key={label} className="rounded-md bg-[#f8fafc] p-2 dark:bg-background">
-            <p className="text-[#667085] dark:text-muted-foreground">{label}</p>
-            <p className="font-semibold text-[#202124] dark:text-foreground">{value}</p>
-          </div>
+          <ProjectMetric key={label} label={label} value={value} />
         ))}
       </div>
-    </section>
+    </ProjectPanel>
   )
 }
 
 function WatchPanel({ status }: { status?: unknown }) {
   const watchStatus = textValue(asRecord(status)?.status) || "not_watched"
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Watch Status</h2>
-      <p className="mt-2 text-xs text-[#4b5563] dark:text-muted-foreground">{watchStatus}</p>
-    </section>
+    <ProjectPanel title="Watch Status">
+      <p className="text-body2 text-muted-foreground">{watchStatus}</p>
+    </ProjectPanel>
   )
 }
 
@@ -362,130 +414,100 @@ function ActionsPanel({ actions }: { actions?: unknown }) {
   const items = Array.isArray(actions) ? actions : []
   if (!items.length) return null
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Recommended</h2>
-      <div className="mt-2 space-y-1">
-        {items.map((action, idx) => {
-          const title = textValue(asRecord(action)?.title) || textValue(action)
-          return <p key={idx} className="text-xs text-[#4b5563] dark:text-muted-foreground">• {title}</p>
-        })}
-      </div>
-    </section>
+    <ProjectPanel title="Recommended">
+      <ul className="list-disc space-y-1 ps-4 text-body2 text-muted-foreground">
+        {items.map((action, idx) => (
+          <li key={idx} className="break-words">
+            {textValue(asRecord(action)?.title) || textValue(action)}
+          </li>
+        ))}
+      </ul>
+    </ProjectPanel>
   )
 }
 
 function IntegrationProfilePanel({ profile }: { profile: ProjectsApiTool["profile"] }) {
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Integration Profile</h2>
-      <div className="mt-3 space-y-2 text-xs">
-        <div className="flex justify-between">
-          <span className="text-[#667085] dark:text-muted-foreground">Type</span>
-          <span className="font-semibold text-[#202124] dark:text-foreground">{profile.tool_type}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-[#667085] dark:text-muted-foreground">Difficulty</span>
-          <span className="font-semibold text-[#202124] dark:text-foreground">{profile.integration_difficulty}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-[#667085] dark:text-muted-foreground">Has API</span>
-          <span className="font-semibold text-[#202124] dark:text-foreground">{profile.has_api ? "Yes" : "No"}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-[#667085] dark:text-muted-foreground">Has CLI</span>
-          <span className="font-semibold text-[#202124] dark:text-foreground">{profile.has_cli ? "Yes" : "No"}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-[#667085] dark:text-muted-foreground">Python SDK</span>
-          <span className="font-semibold text-[#202124] dark:text-foreground">{profile.has_python_sdk ? "Yes" : "No"}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-[#667085] dark:text-muted-foreground">Docker</span>
-          <span className="font-semibold text-[#202124] dark:text-foreground">{profile.has_docker ? "Yes" : "No"}</span>
-        </div>
-      </div>
-    </section>
+    <ProjectPanel title="Integration Profile">
+      <FactRow label="Type" value={profile.tool_type} />
+      <FactRow label="Difficulty" value={profile.integration_difficulty} />
+      <FactRow label="Has API" value={profile.has_api ? "Yes" : "No"} />
+      <FactRow label="Has CLI" value={profile.has_cli ? "Yes" : "No"} />
+      <FactRow label="Python SDK" value={profile.has_python_sdk ? "Yes" : "No"} />
+      <FactRow label="Docker" value={profile.has_docker ? "Yes" : "No"} />
+    </ProjectPanel>
   )
 }
 
 function ComponentsPanel({ components }: { components?: unknown }) {
   const items = Array.isArray(components) ? components : []
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Components</h2>
-      <div className="mt-3 space-y-2">
-        {items.length ? (
-          items.map((comp, idx) => {
-            const record = asRecord(comp)
-            return (
-              <div key={idx} className="rounded-md bg-[#f8fafc] p-2 dark:bg-background">
-                <p className="text-xs font-semibold text-[#202124] dark:text-foreground">{textValue(record?.name) || "Unnamed component"}</p>
-                {record?.component_type ? <p className="text-xs text-[#667085] dark:text-muted-foreground">{textValue(record.component_type)}</p> : null}
-                {record?.responsibility ? <p className="mt-1 text-xs text-[#4b5563] dark:text-muted-foreground">{textValue(record.responsibility)}</p> : null}
-              </div>
-            )
-          })
-        ) : (
-          <p className="text-xs text-muted-foreground">No components available</p>
-        )}
-      </div>
-    </section>
+    <ProjectPanel title="Components">
+      <RecordStack empty="No components available">
+        {items.map((comp, idx) => {
+          const record = asRecord(comp)
+          return (
+            <RecordItem
+              key={idx}
+              title={textValue(record?.name) || "Unnamed component"}
+              meta={record?.component_type ? textValue(record.component_type) : undefined}
+              body={record?.responsibility ? textValue(record.responsibility) : undefined}
+            />
+          )
+        })}
+      </RecordStack>
+    </ProjectPanel>
   )
 }
 
 function PatternsPanel({ patterns }: { patterns?: unknown }) {
   const items = Array.isArray(patterns) ? patterns : []
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Patterns</h2>
-      <div className="mt-3 space-y-2">
-        {items.length ? (
-          items.map((pat, idx) => {
-            const record = asRecord(pat)
-            return (
-              <div key={idx} className="rounded-md bg-[#f8fafc] p-2 dark:bg-background">
-                <p className="text-xs font-semibold text-[#202124] dark:text-foreground">{textValue(record?.name) || "Unnamed pattern"}</p>
-                {record?.pattern_type ? <p className="text-xs text-[#667085] dark:text-muted-foreground">{textValue(record.pattern_type)}</p> : null}
-                {record?.explanation ? <p className="mt-1 text-xs text-[#4b5563] dark:text-muted-foreground">{textValue(record.explanation)}</p> : null}
-              </div>
-            )
-          })
-        ) : (
-          <p className="text-xs text-muted-foreground">No patterns available</p>
-        )}
-      </div>
-    </section>
+    <ProjectPanel title="Patterns">
+      <RecordStack empty="No patterns available">
+        {items.map((pat, idx) => {
+          const record = asRecord(pat)
+          return (
+            <RecordItem
+              key={idx}
+              title={textValue(record?.name) || "Unnamed pattern"}
+              meta={record?.pattern_type ? textValue(record.pattern_type) : undefined}
+              body={record?.explanation ? textValue(record.explanation) : undefined}
+            />
+          )
+        })}
+      </RecordStack>
+    </ProjectPanel>
   )
 }
-
 function SectionsPanel({ sections }: { sections?: unknown }) {
   const items = Array.isArray(sections) ? sections : []
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Sections</h2>
-      <div className="mt-3 space-y-3">
-        {items.length ? (
-          items.map((sec, idx) => {
-            const record = asRecord(sec)
-            const sectionItems = Array.isArray(record?.items) ? record.items : []
-            return (
-              <div key={idx} className="rounded-md bg-[#f8fafc] p-3 dark:bg-background">
-                <p className="text-xs font-semibold text-[#202124] dark:text-foreground">{textValue(record?.title) || "Untitled section"}</p>
-                {sectionItems.length ? (
-                  <div className="mt-2 space-y-1">
+    <ProjectPanel title="Sections">
+      <RecordStack empty="No sections available">
+        {items.map((sec, idx) => {
+          const record = asRecord(sec)
+          const sectionItems = Array.isArray(record?.items) ? record.items : []
+          return (
+            <RecordItem
+              key={idx}
+              title={textValue(record?.title) || "Untitled section"}
+              body={
+                sectionItems.length ? (
+                  <span className="mt-1 block space-y-0.5">
                     {sectionItems.map((item, i) => (
-                      <p key={i} className="text-xs text-[#4b5563] dark:text-muted-foreground">• {textValue(asRecord(item)?.title) || textValue(item)}</p>
+                      <span key={i} className="block">
+                        • {textValue(asRecord(item)?.title) || textValue(item)}
+                      </span>
                     ))}
-                  </div>
-                ) : null}
-              </div>
-            )
-          })
-        ) : (
-          <p className="text-xs text-muted-foreground">No sections available</p>
-        )}
-      </div>
-    </section>
+                  </span>
+                ) : undefined
+              }
+            />
+          )
+        })}
+      </RecordStack>
+    </ProjectPanel>
   )
 }
 
@@ -493,43 +515,33 @@ function RequirementProfilePanel({ profile }: { profile?: unknown }) {
   const record = asRecord(profile)
   if (!record) return null
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Requirement Profile</h2>
-      <div className="mt-3 space-y-1 text-xs">
-        {Object.entries(record).map(([key, value]) => (
-          <div key={key} className="flex justify-between">
-            <span className="text-[#667085] dark:text-muted-foreground">{key}</span>
-            <span className="font-semibold text-[#202124] dark:text-foreground">{String(value)}</span>
-          </div>
-        ))}
-      </div>
-    </section>
+    <ProjectPanel title="Requirement Profile">
+      {Object.entries(record).map(([key, value]) => (
+        <FactRow key={key} label={key} value={String(value)} />
+      ))}
+    </ProjectPanel>
   )
 }
 
 function QuestionsPanel({ questions }: { questions?: unknown }) {
   const items = Array.isArray(questions) ? questions : []
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Questions</h2>
-      <div className="mt-3 space-y-2">
-        {items.length ? (
-          items.map((question, idx) => {
-            const record = asRecord(question)
-            const answeredValue = record?.answered_value
-            return (
-              <div key={idx} className="rounded-md bg-[#f8fafc] p-2 dark:bg-background">
-                <p className="text-xs font-semibold text-[#202124] dark:text-foreground">Q{idx + 1}</p>
-                <p className="mt-1 text-xs text-[#4b5563] dark:text-muted-foreground">{textValue(record?.question)}</p>
-                {answeredValue ? <p className="mt-1 text-xs text-[#667085] dark:text-muted-foreground">Answer: {String(answeredValue)}</p> : null}
-              </div>
-            )
-          })
-        ) : (
-          <p className="text-xs text-muted-foreground">No questions available</p>
-        )}
-      </div>
-    </section>
+    <ProjectPanel title="Questions">
+      <RecordStack empty="No questions available">
+        {items.map((question, idx) => {
+          const record = asRecord(question)
+          const answeredValue = record?.answered_value
+          return (
+            <RecordItem
+              key={idx}
+              title={`Q${idx + 1}`}
+              meta={textValue(record?.question)}
+              body={answeredValue ? `Answer: ${String(answeredValue)}` : undefined}
+            />
+          )
+        })}
+      </RecordStack>
+    </ProjectPanel>
   )
 }
 
@@ -537,10 +549,9 @@ function SolutionPanel({ solution }: { solution?: unknown }) {
   if (!solution) return null
   const text = typeof solution === "string" ? solution : JSON.stringify(solution, null, 2)
   return (
-    <section className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-      <h2 className="text-sm font-semibold text-[#202124] dark:text-foreground">Solution</h2>
-      <pre className="mt-3 max-h-96 overflow-auto rounded-md bg-[#111827] p-3 text-xs leading-5 text-white whitespace-pre-wrap break-words">{text}</pre>
-    </section>
+    <ProjectPanel title="Solution">
+      <ProjectCodeBlock className="whitespace-pre-wrap break-words">{text}</ProjectCodeBlock>
+    </ProjectPanel>
   )
 }
 

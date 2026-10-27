@@ -1,21 +1,22 @@
 import { AlertCircle, Database, Loader2 } from "lucide-react"
-import { EmptyState } from "@/components/common/empty-state"
 import { ErrorState } from "@/components/common/error-state"
 import { Badge } from "@/components/ui/badge"
+import { ProjectEmptyText } from "@/features/projects/components/project-page-layout"
+import { dataStateBadgeVariant } from "@/features/projects/components/project-tone"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type { ProjectsApiMeta } from "@/types/projects"
 
-// Projects Lab state surfaces reuse global --border, --card, --secondary, and --muted-foreground tokens;
-// no Lab-only color token is needed, so light/dark ownership stays in the shared design system.
+// Projects state surfaces only use shared theme tokens (border, card, muted, warning);
+// light/dark ownership stays in the design system.
 
 export function ProjectLoadingState({ title = "Loading Projects" }: { title?: string }) {
   const { t } = useI18n()
   return (
-    <div className="flex min-h-64 items-center justify-center rounded-md border border-[#d8dee7] bg-white p-8 dark:border-border dark:bg-card">
-      <div className="text-center">
-        <Loader2 className="mx-auto size-7 animate-spin text-primary" />
-        <p className="mt-3 text-sm font-semibold text-[#202124] dark:text-foreground">{title}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{t("projects.state.loadingDescription")}</p>
+    <div className="grid min-h-64 place-items-center px-4 py-12 text-center" role="status" aria-busy="true">
+      <div>
+        <Loader2 className="mx-auto size-5 animate-spin text-muted-foreground" strokeWidth={1.8} aria-hidden="true" />
+        <p className="mt-3 text-body2 font-medium text-foreground">{title}</p>
+        <p className="mt-1 text-body2 text-muted-foreground">{t("projects.state.loadingDescription")}</p>
       </div>
     </div>
   )
@@ -23,12 +24,16 @@ export function ProjectLoadingState({ title = "Loading Projects" }: { title?: st
 
 export function ProjectErrorState({ message, onRetry }: { message?: string; onRetry?: () => void }) {
   const { t } = useI18n()
-  return <ErrorState title={t("projects.state.errorTitle")} message={message ?? t("projects.state.errorMessage")} onRetry={onRetry} />
+  return (
+    <div className="px-4 py-5 md:px-6">
+      <ErrorState title={t("projects.state.errorTitle")} message={message ?? t("projects.state.errorMessage")} onRetry={onRetry} />
+    </div>
+  )
 }
 
 export function ProjectEmptyState({ title = "No Real Project Radar Data" }: { title?: string }) {
   const { t } = useI18n()
-  return <EmptyState title={title === "No Real Project Radar Data" ? t("projects.state.emptyTitle") : title} description={t("projects.state.emptyDescription")} />
+  return <ProjectEmptyText title={title === "No Real Project Radar Data" ? t("projects.state.emptyTitle") : title} description={t("projects.state.emptyDescription")} />
 }
 
 export function ProjectDegradedNotice({ meta }: { meta: ProjectsApiMeta }) {
@@ -39,15 +44,15 @@ export function ProjectDegradedNotice({ meta }: { meta: ProjectsApiMeta }) {
   const text = meta.data_state === "empty" ? t("projects.state.emptyDescription") : latestNotice ?? t("projects.state.realOnly")
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-amber-300 bg-amber-50 p-4 text-amber-950 sm:flex-row sm:items-start dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
-      <AlertCircle className="mt-0.5 size-5 shrink-0" />
+    <div className="flex gap-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-foreground" role="status">
+      <AlertCircle className="mt-0.5 size-4 shrink-0 text-warning-text" strokeWidth={1.8} aria-hidden="true" />
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm font-semibold">{t("projects.state.dataState")}</p>
-          <Badge variant={meta.data_state === "empty" ? "muted" : "warning"}>{dataState(meta.data_state)}</Badge>
+          <p className="text-body2 font-semibold">{t("projects.state.dataState")}</p>
+          <Badge variant={dataStateBadgeVariant(meta.data_state)}>{dataState(meta.data_state)}</Badge>
           <Badge variant="muted">{meta.source}</Badge>
         </div>
-        <p className="mt-1 text-sm leading-6">{text}</p>
+        <p className="mt-1 break-words text-body2 text-muted-foreground">{text}</p>
       </div>
     </div>
   )
@@ -56,10 +61,10 @@ export function ProjectDegradedNotice({ meta }: { meta: ProjectsApiMeta }) {
 export function ProjectSourceLine({ meta }: { meta: ProjectsApiMeta }) {
   const { t } = useI18n()
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs text-[#667085] dark:text-muted-foreground">
-      <Database className="size-3.5" />
-      <span>{t("projects.state.source", { source: meta.source })}</span>
-      {meta.source_run_id ? <span>{t("projects.state.run", { run: meta.source_run_id })}</span> : null}
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-label text-muted-foreground">
+      <Database className="size-3.5 shrink-0" strokeWidth={1.8} aria-hidden="true" />
+      <span className="break-all">{t("projects.state.source", { source: meta.source })}</span>
+      {meta.source_run_id ? <span className="break-all">{t("projects.state.run", { run: meta.source_run_id })}</span> : null}
       {meta.generated_at ? <span>{t("projects.state.generated", { time: meta.generated_at })}</span> : null}
     </div>
   )
