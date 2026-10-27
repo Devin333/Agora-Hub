@@ -44,7 +44,7 @@ test.describe("Agora Paper Agent Electron host", () => {
 
       const bridge = await page.evaluate(() => {
         const host = globalThis as unknown as {
-          agoraDesktop?: { runtime?: object; config?: object; credentials?: object; lifecycle?: object; export?: object }
+          agoraDesktop?: { runtime?: object; config?: object; credentials?: object; lifecycle?: object; export?: object; appearance?: object }
           process?: unknown
           require?: unknown
         }
@@ -57,12 +57,13 @@ test.describe("Agora Paper Agent Electron host", () => {
           credentials: Object.keys(host.agoraDesktop?.credentials ?? {}).sort(),
           lifecycle: Object.keys(host.agoraDesktop?.lifecycle ?? {}).sort(),
           export: Object.keys(host.agoraDesktop?.export ?? {}).sort(),
+          appearance: Object.keys(host.agoraDesktop?.appearance ?? {}).sort(),
           nodeProcess: typeof host.process,
           nodeRequire: typeof host.require
         }
       })
       expect(bridge).toEqual({
-        keys: ["config", "credentials", "export", "lifecycle", "runtime", "version"],
+        keys: ["appearance", "config", "credentials", "export", "lifecycle", "runtime", "version"],
         runtime: ["backup", "clearData", "diagnostics", "restore", "retry", "status"],
         restore: ["activate", "preview"],
         clearData: ["apply", "preview", "status"],
@@ -70,6 +71,7 @@ test.describe("Agora Paper Agent Electron host", () => {
         credentials: ["remove", "replace", "status"],
         lifecycle: ["onQuitRequested", "respondToQuit", "updateState"],
         export: ["save"],
+        appearance: ["set"],
         nodeProcess: "undefined",
         nodeRequire: "undefined"
       })
@@ -79,6 +81,7 @@ test.describe("Agora Paper Agent Electron host", () => {
           agoraDesktop: {
             config: { show(): Promise<unknown>; preview(value: unknown): Promise<unknown>; apply(value: unknown): Promise<unknown> }
             credentials: { status(): Promise<unknown>; replace(): Promise<unknown>; remove(): Promise<unknown> }
+            appearance: { set(value: unknown): Promise<unknown> }
           }
         }).agoraDesktop
         const invoke = async (call: () => Promise<unknown>) => {
@@ -91,7 +94,8 @@ test.describe("Agora Paper Agent Electron host", () => {
           configApply: await invoke(() => api.config.apply({ previewId: "not-owned" })),
           credentialStatus: await invoke(() => api.credentials.status()),
           credentialReplace: await invoke(() => api.credentials.replace()),
-          credentialRemove: await invoke(() => api.credentials.remove())
+          credentialRemove: await invoke(() => api.credentials.remove()),
+          appearanceSet: await invoke(() => api.appearance.set("light"))
         }
       })
       expect(rejectedStartupCalls).toEqual({
@@ -100,8 +104,19 @@ test.describe("Agora Paper Agent Electron host", () => {
         configApply: "Error invoking remote method 'agora:config:apply': Error: ipc_source_rejected",
         credentialStatus: "Error invoking remote method 'agora:credential:status': Error: ipc_source_rejected",
         credentialReplace: "Error invoking remote method 'agora:credential:replace': Error: ipc_source_rejected",
-        credentialRemove: "Error invoking remote method 'agora:credential:remove': Error: ipc_source_rejected"
+        credentialRemove: "Error invoking remote method 'agora:credential:remove': Error: ipc_source_rejected",
+        appearanceSet: "Error invoking remote method 'agora:appearance:set': Error: ipc_source_rejected"
       })
+
+      // A fresh profile follows the OS; the frame and startup page paint the matching Rakazo background.
+      const native = await electronApp.evaluate(({ BrowserWindow, nativeTheme }) => ({
+        themeSource: nativeTheme.themeSource,
+        dark: nativeTheme.shouldUseDarkColors,
+        background: BrowserWindow.getAllWindows()[0].getBackgroundColor().toLowerCase()
+      }))
+      expect(native.themeSource).toBe("system")
+      expect(native.background).toBe(native.dark ? "#161616" : "#ffffff")
+      expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(native.dark ? "rgb(22, 22, 22)" : "rgb(255, 255, 255)")
 
       const pagesBefore = electronApp.windows().length
       const opened = await page.evaluate(() => (globalThis as unknown as { open(url: string): unknown }).open("file:///C:/Windows/win.ini"))

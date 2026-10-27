@@ -69,6 +69,7 @@ function options(overrides: Record<string, unknown> = {}) {
     credentials: { invoke: vi.fn() },
     clearData: { preview: vi.fn(), apply: vi.fn(), status: vi.fn(), businessAdmissionClosed: false, destructiveExitPending: false },
     maintenanceFence: { active: false, enter: vi.fn(() => true), allowsIpc: vi.fn(() => true), isAuthorizedDocument: vi.fn(() => true) },
+    appearance: { view: { preference: "system", theme: "dark" }, set: vi.fn(), onChange: vi.fn() },
     startupFile: "C:\\Agora\\startup.html",
     getCanonicalOrigin: () => "http://127.0.0.1:3120",
     documentsPath: "C:\\Users\\tester\\Documents",
@@ -226,9 +227,17 @@ describe("native IPC transaction boundaries", () => {
     expect(fence.allowsIpc).toHaveBeenCalledWith(startup, IPC_CHANNELS.lifecycleUpdate)
     expect(fence.allowsIpc).toHaveBeenCalledWith(startup, IPC_CHANNELS.lifecycleRespond)
   })
+
+  it("accepts appearance changes only from the trusted workspace origin", async () => {
+    const base = options()
+    base.appearance.set.mockResolvedValue({ preference: "light", theme: "light" })
+    registerIpcHandlers(base as never)
+    const handler = electron.handlers.get(IPC_CHANNELS.appearanceSet)
+
+    await expect(handler?.(event(), "light")).resolves.toEqual({ preference: "light", theme: "light" })
+    expect(base.appearance.set).toHaveBeenCalledWith("light")
+    await expect(handler?.(event("file:///C:/Agora/startup.html"), "dark")).rejects.toThrow("ipc_source_rejected")
+    await expect(handler?.(event("https://evil.example/paper-agent"), "dark")).rejects.toThrow("ipc_source_rejected")
+    expect(base.appearance.set).toHaveBeenCalledOnce()
+  })
 })
-
-
-
-
-

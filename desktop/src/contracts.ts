@@ -50,6 +50,11 @@ export interface DesktopConfigApplyRequest { previewId: string }
 export interface DesktopConfigApplyResult extends DesktopConfigResult { cancelled?: boolean; restartRequired?: boolean; runtime?: RuntimeStatusView }
 export interface DesktopCredentialResult { ok: boolean; code: string; configured: boolean | null; changed?: boolean; cancelled?: boolean; restartRequired?: boolean; state?: "READY" | "STOPPED" | "UNKNOWN" }
 
+export type AppearancePreference = "system" | "light" | "dark"
+export type ResolvedTheme = "light" | "dark"
+/** The preference the host applied and the palette it resolves to right now. */
+export interface AppearanceView { preference: AppearancePreference; theme: ResolvedTheme }
+
 export interface AgoraDesktopApi {
   readonly version: 1
   runtime: {
@@ -69,6 +74,7 @@ export interface AgoraDesktopApi {
     respondToQuit(response: QuitResponse): Promise<{ accepted: boolean }>
   }
   export: { save(request: ExportRequest): Promise<ExportResult> }
+  appearance: { set(preference: AppearancePreference): Promise<AppearanceView> }
 }
 
 

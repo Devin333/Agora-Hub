@@ -14,6 +14,7 @@ import type { CredentialController } from "./native-credential-bridge"
 import { requiresNativeQuitConfirmation } from "./lifecycle-bridge"
 import type { OwnedDataClearController } from "./owned-data-clear"
 import type { OwnedWindowMaintenanceFence } from "./owned-window-maintenance"
+import type { DesktopAppearanceController } from "./appearance"
 
 export { IPC_CHANNELS } from "./channels"
 
@@ -31,6 +32,7 @@ interface RegisterIpcOptions {
   credentials: CredentialController
   clearData: OwnedDataClearController
   maintenanceFence: OwnedWindowMaintenanceFence
+  appearance: DesktopAppearanceController
   startupFile: string
   getCanonicalOrigin(): string | null
   documentsPath: string
@@ -342,6 +344,10 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
       await options.logger.write("export_failed", { error: error instanceof Error ? error.message : "unknown" })
       return exportFailure(error)
     }
+  })
+  ipcMain.handle(IPC_CHANNELS.appearanceSet, async (event, value: unknown) => {
+    assertSource(event, options, true, "app-only")
+    return await options.appearance.set(value)
   })
 
   return () => {

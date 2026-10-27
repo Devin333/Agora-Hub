@@ -301,6 +301,7 @@ def test_bounded_stdin_rejects_duplicate_keys_oversize_and_non_object() -> None:
     ("declarative_performance_observer.db-journal", False),
     ("declarative_performance_observer.db-wal", False),
     ("declarative_performance_observer.db-shm", False),
+    ("host-preferences", True),
 ])
 def test_electron_44_confirmed_top_level_owners_are_accepted_exactly(tmp_path: Path, name: str, is_directory: bool) -> None:
     owner, _resource, profile, _data_root = _fixture(tmp_path, vault=FakeVault())

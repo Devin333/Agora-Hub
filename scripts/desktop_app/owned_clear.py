@@ -60,6 +60,8 @@ _HOST_VOLATILE_NAMES = frozenset(
         "QuotaManager-journal", "VideoDecodeStats", "BrowserMetrics", "DevToolsActivePort", "CertificateRevocation",
         "AutofillStrikeDatabase", "OriginTrials", "segmentation_platform", "declarative_performance_observer.db", "declarative_performance_observer.db-journal", "declarative_performance_observer.db-wal", "declarative_performance_observer.db-shm", "component_crx_cache",
         "extensions_crx_cache", "SingletonCookie", "SingletonLock", "SingletonSocket",
+        # Desktop host preferences (desktop/src/appearance.ts HOST_PREFERENCES_DIRECTORY).
+        "host-preferences",
     )
 )
 

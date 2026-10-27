@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { AgoraDesktopApi, DataClearApplyRequest, DesktopConfigApplyRequest, DesktopConfigCandidate, ExportRequest, QuitRequest, QuitResponse, RendererLifecycleState, RestoreActivateRequest } from "./contracts"
+import type { AgoraDesktopApi, AppearancePreference, DataClearApplyRequest, DesktopConfigApplyRequest, DesktopConfigCandidate, ExportRequest, QuitRequest, QuitResponse, RendererLifecycleState, RestoreActivateRequest } from "./contracts"
 import { IPC_CHANNELS } from "./channels"
 
 const api: AgoraDesktopApi = Object.freeze({
@@ -38,7 +38,8 @@ const api: AgoraDesktopApi = Object.freeze({
     },
     respondToQuit: (response: QuitResponse) => ipcRenderer.invoke(IPC_CHANNELS.lifecycleRespond, response)
   }),
-  export: Object.freeze({ save: (request: ExportRequest) => ipcRenderer.invoke(IPC_CHANNELS.exportSave, request) })
+  export: Object.freeze({ save: (request: ExportRequest) => ipcRenderer.invoke(IPC_CHANNELS.exportSave, request) }),
+  appearance: Object.freeze({ set: (preference: AppearancePreference) => ipcRenderer.invoke(IPC_CHANNELS.appearanceSet, preference) })
 })
 
 contextBridge.exposeInMainWorld("agoraDesktop", api)

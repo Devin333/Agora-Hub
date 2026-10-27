@@ -17,7 +17,8 @@ export const IPC_CHANNELS = {
   lifecycleUpdate: "agora:lifecycle:update",
   lifecycleRespond: "agora:lifecycle:respond",
   lifecycleQuitRequested: "agora:lifecycle:quit-requested",
-  exportSave: "agora:export:save"
+  exportSave: "agora:export:save",
+  appearanceSet: "agora:appearance:set"
 } as const
 
 

@@ -1,5 +1,7 @@
 import path from "node:path"
 import type { BrowserWindowConstructorOptions, Rectangle } from "electron"
+import { windowBackgroundFor } from "./appearance"
+import type { ResolvedTheme } from "./contracts"
 
 const DESIRED_WIDTH = 1440
 const DESIRED_HEIGHT = 920
@@ -31,11 +33,12 @@ export function computeWindowGeometry(workArea: Rectangle): WindowGeometry {
   return { x, y, width, height, minWidth, minHeight }
 }
 
-export function secureWindowOptions(outputDirectory: string, workArea: Rectangle): BrowserWindowConstructorOptions {
+/** `theme` is the palette the host resolved at launch, so the frame paints the workspace background before any page loads. */
+export function secureWindowOptions(outputDirectory: string, workArea: Rectangle, theme: ResolvedTheme): BrowserWindowConstructorOptions {
   return {
     ...computeWindowGeometry(workArea),
     show: false,
-    backgroundColor: "#fcfcfc",
+    backgroundColor: windowBackgroundFor(theme),
     title: "Agora Paper Agent",
     autoHideMenuBar: true,
     icon: path.join(outputDirectory, "icon.png"),

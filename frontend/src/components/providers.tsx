@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { useUiStore } from "@/stores/ui-store"
 import { applyResolvedTheme, resolveTheme, systemPrefersLight, watchSystemAppearance } from "@/lib/theme/appearance"
+import { syncDesktopAppearance } from "@/lib/theme/desktop-appearance"
 import { ResearchHistoryTracker } from "@/components/research/research-history-tracker"
 import { PortalAccountProvider, usePortalAccount } from "@/components/auth/portal-account-provider"
 import { startHistorySync } from "@/lib/research/history-sync"
@@ -35,6 +36,7 @@ function ThemeBridge() {
       setResolvedTheme(theme)
     }
     apply(systemPrefersLight())
+    syncDesktopAppearance(appearance)
     return appearance === "system" ? watchSystemAppearance(apply) : undefined
   }, [appearance, setResolvedTheme])
 

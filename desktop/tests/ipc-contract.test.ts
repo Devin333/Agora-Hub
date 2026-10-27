@@ -5,12 +5,12 @@ import { validateConfigCandidate } from "../src/desktop-config-bridge"
 describe("preload contract", () => {
   it("contains only the exact enumerated native channels", () => {
     expect(Object.keys(IPC_CHANNELS).sort()).toEqual([
-      "configApply", "configPreview", "configShow", "credentialRemove", "credentialReplace", "credentialStatus",
+      "appearanceSet", "configApply", "configPreview", "configShow", "credentialRemove", "credentialReplace", "credentialStatus",
       "exportSave", "lifecycleQuitRequested", "lifecycleRespond", "lifecycleUpdate", "runtimeBackup",
       "runtimeClearDataApply", "runtimeClearDataPreview", "runtimeClearDataStatus", "runtimeDiagnostics", "runtimeRestoreActivate", "runtimeRestorePreview", "runtimeRetry", "runtimeStatus"
     ])
     expect(Object.values(IPC_CHANNELS).sort()).toEqual([
-      "agora:config:apply", "agora:config:preview", "agora:config:show", "agora:credential:remove",
+      "agora:appearance:set", "agora:config:apply", "agora:config:preview", "agora:config:show", "agora:credential:remove",
       "agora:credential:replace", "agora:credential:status", "agora:export:save",
       "agora:lifecycle:quit-requested", "agora:lifecycle:respond", "agora:lifecycle:update",
       "agora:runtime:backup", "agora:runtime:clear-data:apply", "agora:runtime:clear-data:preview",

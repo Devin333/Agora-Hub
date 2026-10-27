@@ -1,6 +1,6 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { app, BrowserWindow, dialog, Menu, screen, session, shell, type MessageBoxOptions } from "electron"
+import { app, BrowserWindow, dialog, Menu, nativeTheme, screen, session, shell, type MessageBoxOptions } from "electron"
 import { AuditLogger } from "./audit-log"
 import { registerIpcHandlers } from "./ipc"
 import { RendererLifecycleBridge, requiresNativeQuitConfirmation, type RendererQuitAssessment } from "./lifecycle-bridge"
@@ -16,6 +16,7 @@ import type { RuntimeStatusView } from "./contracts"
 import { redactText } from "./redaction"
 import { focusExistingWindow } from "./window-focus"
 import { secureWindowOptions } from "./window-options"
+import { appearanceFilePath, DesktopAppearance, windowBackgroundFor } from "./appearance"
 import { acquireSingleInstanceLock } from "./single-instance"
 import { resolveTestUserDataOverride } from "./user-data-override"
 import { OwnedDataClearService, UnavailableOwnedDataClearController, type OwnedDataClearController, type OwnedDataClearFinalizerRequest } from "./owned-data-clear"
@@ -46,6 +47,7 @@ let allowAppQuit = false
 let closeInProgress = false
 let removeIpcHandlers: (() => void) | null = null
 let dataClearExitArmed = false
+let appearance: DesktopAppearance | null = null
 const lifecycle = new RendererLifecycleBridge()
 const maintenanceFence = new OwnedWindowMaintenanceFence()
 const nullLogger = { write: async (_event: string, _details: Record<string, unknown> = {}) => undefined }
@@ -117,7 +119,7 @@ function installWebContentsPolicy(window: BrowserWindow): void {
 
 function createWindow(): BrowserWindow {
   const selectedDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  const window = new BrowserWindow(secureWindowOptions(__dirname, selectedDisplay.workArea))
+  const window = new BrowserWindow(secureWindowOptions(__dirname, selectedDisplay.workArea, appearance?.view.theme ?? "dark"))
   installWebContentsPolicy(window)
   window.once("ready-to-show", () => window.show())
   window.on("close", event => {
@@ -287,6 +289,10 @@ async function bootstrap(): Promise<void> {
   app.setName("Agora Paper Agent")
   app.setAppUserModelId("com.agorahub.paperagent")
   Menu.setApplicationMenu(null)
+  appearance = new DesktopAppearance(nativeTheme, appearanceFilePath(app.getPath("userData")))
+  appearance.onChange(view => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(windowBackgroundFor(view.theme))
+  })
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
 
@@ -341,6 +347,7 @@ async function bootstrap(): Promise<void> {
     credentials: credentialBridge,
     clearData,
     maintenanceFence,
+    appearance,
     startupFile: startupFilePath(),
     getCanonicalOrigin: () => canonicalOrigin,
     documentsPath: app.getPath("documents"),
@@ -372,6 +379,8 @@ if (!gotSingleInstanceLock) {
   app.on("will-quit", () => {
     removeIpcHandlers?.()
     removeIpcHandlers = null
+    appearance?.dispose()
+    appearance = null
   })
   process.on("uncaughtException", error => {
     void logger?.write("host_uncaught_exception", { name: error.name, message: error.message })

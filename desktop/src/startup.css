@@ -1,62 +1,90 @@
 /*
  * Startup and recovery screen. It loads before the web workspace exists, so it
- * mirrors the workspace tokens (frontend/src/features/paper-agent-app/paper-agent-theme.css)
- * locally instead of importing them across packages.
+ * repeats the Rakazo tokens of frontend/src/styles/theme-tokens.css locally
+ * instead of importing them across packages. The host sets
+ * `nativeTheme.themeSource` from the saved appearance, so `prefers-color-scheme`
+ * here already reflects the user's 跟随系统 / 浅色 / 深色 choice.
  */
 :root {
-  --bg: #fcfcfc;
-  --surface: #ffffff;
-  --surface-2: #f7f7f7;
-  --fill: #f2f2f2;
-  --text: #171717;
-  --muted: #636363;
-  --border: #e8e8e8;
-  --border-strong: #c7c7c7;
-  --hover: #ebebeb;
-  --ring: #737373;
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 6%), 0 0 0 1px rgb(0 0 0 / 4%);
-  color-scheme: light dark;
-  font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei UI", sans-serif;
-  background: var(--bg);
-  color: var(--text);
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #1c1c1c;
+  --card: #f2f2f2;
+  --muted: #f2f2f2;
+  --muted-foreground: #1c1c1cad;
+  --faint-foreground: #1c1c1c8f;
+  --primary: #1c1c1c;
+  --primary-foreground: #fcfcfc;
+  --primary-hover: #363636;
+  --secondary: #1c1c1c0f;
+  --accent: #1c1c1c0f;
+  --border: #1c1c1c1f;
+  --input: #1c1c1c3d;
+  --ring: #1e86fc;
+  --destructive-fill: #e72e3b;
+  --destructive-foreground: #ffffff;
+  --scrollbar: #1c1c1c3d;
+  --shadow-card: 0 1px 2px #0000000a, 0 8px 24px #0000000d;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  background: var(--background);
+  color: var(--foreground);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #141414;
-    --surface: #1e1e1e;
-    --surface-2: #1a1a1a;
-    --fill: #242424;
-    --text: #ebebeb;
-    --muted: #a6a6a6;
-    --border: #2e2e2e;
-    --border-strong: #4d4d4d;
-    --hover: #2b2b2b;
-    --ring: #8f8f8f;
-    --shadow-card: 0 0 0 1px rgb(255 255 255 / 4%);
+    color-scheme: dark;
+    --background: #161616;
+    --foreground: #f5f5f5;
+    --card: #1f1f1f;
+    --muted: #1f1f1f;
+    --muted-foreground: #f5f5f5a8;
+    --faint-foreground: #f5f5f58a;
+    --primary: #f5f5f5;
+    --primary-foreground: #121212;
+    --primary-hover: #dbdbdb;
+    --secondary: #f5f5f50a;
+    --accent: #f5f5f50f;
+    --border: #f5f5f51a;
+    --input: #f5f5f538;
+    --ring: #1884fc;
+    --destructive-fill: #cf2b35;
+    --destructive-foreground: #ffffff;
+    --scrollbar: #f5f5f538;
+    --shadow-card: 0 0 0 1px #f5f5f50a;
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 360px; min-height: 100vh; background: var(--bg); }
-.shell { min-height: 100vh; display: grid; place-items: center; padding: 40px; }
-.card { width: min(640px, 100%); padding: 36px; background: var(--surface); border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-card); }
-.mark { width: 36px; height: 4px; margin-bottom: 28px; border-radius: 999px; background: var(--text); }
-.eyebrow { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
-h1 { margin: 0; font-family: Georgia, "Noto Serif SC", serif; font-size: clamp(26px, 4.6vw, 38px); font-weight: 500; letter-spacing: -.01em; line-height: 1.15; }
-h2 { margin: 0 0 10px; font-size: 16px; font-weight: 600; }
-.message { margin: 16px 0 22px; max-width: 58ch; color: var(--muted); font-size: 14px; line-height: 1.7; }
-.status { padding: 10px 14px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; font-size: 13px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
-button, input { min-height: 34px; padding: 0 14px; color: inherit; background: var(--fill); border: 1px solid transparent; border-radius: 10px; font: inherit; font-size: 13px; }
-button { font-weight: 500; cursor: pointer; transition: background-color 100ms ease; }
-button:hover:not(:disabled) { background: var(--hover); }
+::selection { background: color-mix(in srgb, var(--ring) 28%, transparent); }
+body { margin: 0; min-width: 360px; min-height: 100vh; background: var(--background); }
+.shell { min-height: 100vh; display: grid; place-items: center; padding: 40px 24px; }
+.card { width: min(460px, 100%); display: flex; flex-direction: column; align-items: center; text-align: center; }
+
+/* Agora mark in the Rakazo auth idiom: a muted disc with two primary-ink eyes (74px). */
+.mark { display: flex; align-items: center; justify-content: center; gap: 7px; width: 74px; height: 74px; margin-bottom: 24px; border-radius: 999px; background: var(--muted); }
+.mark span { width: 9px; height: 20px; border-radius: 999px; background: var(--primary); }
+
+.eyebrow { margin: 0 0 6px; color: var(--muted-foreground); font-size: 13px; font-weight: 500; }
+h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; line-height: 1.3; }
+h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.message { margin: 10px 0 20px; max-width: 46ch; color: var(--muted-foreground); font-size: 14px; line-height: 1.6; }
+.status { display: inline-flex; align-items: center; min-height: 28px; padding: 0 12px; color: var(--muted-foreground); background: var(--secondary); border-radius: 999px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+
+.actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 24px; }
+button { min-height: 36px; padding: 0 16px; color: var(--foreground); background: transparent; border: 1px solid var(--border); border-radius: 999px; font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
+button:hover:not(:disabled) { background: var(--accent); }
+#retry { color: var(--primary-foreground); background: var(--primary); border-color: transparent; }
+#retry:hover:not(:disabled) { background: var(--primary-hover); }
+#clear-apply { color: var(--destructive-foreground); background: var(--destructive-fill); border-color: transparent; }
+#clear-apply:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive-fill) 88%, var(--foreground)); }
 button:disabled { cursor: not-allowed; opacity: .5; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-input { background: var(--surface); border-color: var(--border-strong); }
-.clear-panel { margin-top: 20px; padding: 18px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 16px; }
-.clear-explanation { min-height: 48px; color: var(--muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
-.clear-panel label { display: block; margin: 16px 0 7px; font-size: 13px; font-weight: 600; }
-.clear-panel input { width: 100%; }
-.clear-panel .actions { margin-top: 14px; }
-pre { margin: 20px 0 0; padding: 14px; max-height: 260px; overflow: auto; color: var(--text); background: var(--fill); border-radius: 12px; font: 12px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+input { width: 100%; min-height: 36px; padding: 0 12px; color: var(--foreground); background: transparent; border: 1px solid var(--input); border-radius: 10px; font: inherit; font-size: 13.5px; }
+
+.clear-panel { width: 100%; margin-top: 24px; padding: 16px; text-align: start; background: var(--card); border: 1px solid var(--border); border-radius: 16px; }
+.clear-explanation { min-height: 48px; margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.clear-panel label { display: block; margin: 14px 0 6px; font-size: 13px; font-weight: 500; }
+.clear-panel .actions { justify-content: flex-start; margin-top: 14px; }
+
+pre { width: 100%; margin: 20px 0 0; padding: 14px; max-height: 260px; overflow: auto; text-align: start; color: var(--foreground); background: var(--card); border: 1px solid var(--border); border-radius: 12px; font: 12px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-color: var(--scrollbar) transparent; }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }
