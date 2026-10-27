@@ -380,9 +380,9 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
             data-research-source-entry
             data-appearance={appearance}
             data-state={busy ? "processing" : error ? "error" : completed ? "completed" : record ? record.status : "missing"}
-            className={`${styles.root} ${record || error || busy || (appearance === "paper-agent" && isLocalDesktopProfile())
+            className={record || error || busy || (appearance === "paper-agent" && isLocalDesktopProfile())
                 ? "mt-4 flex flex-wrap items-center gap-3 text-sm"
-                : "sr-only"}`}
+                : "sr-only"}
         >
             <input
                 ref={input}
@@ -407,7 +407,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
             </section>}
             {busy && (
                 <span role="status" data-slot="status" className={`${styles.status} inline-flex items-center gap-2`}>
-                    <LoaderCircle size={15} className="animate-spin" />
+                    <LoaderCircle size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                     正在核对 {filename || "PDF"} 的真实导入状态…
                 </span>
             )}
@@ -418,13 +418,13 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                         <>
                             <span>文本已转换，可用于本次研究</span>
                             {isLocalDesktopProfile() && readerHref && (
-                                <a className="underline" href={readerHref}>打开阅读器</a>
+                                <a className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50" href={readerHref}>打开阅读器</a>
                             )}
                             {onAttach && (
                                 <button
                                     type="button"
                                     disabled={attached}
-                                    className="underline"
+                                    className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:no-underline disabled:opacity-75"
                                     onClick={addToResearch}
                                 >
                                     {attached ? saveConfirmed ? "已加入本次研究" : "入库待保存" : "用于本次研究"}
@@ -437,7 +437,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                             {["failed", "rejected", "needs_action"].includes(record.status) ? (
                                 <button
                                     type="button"
-                                    className="underline"
+                                    className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:no-underline disabled:opacity-75"
                                     onClick={() => { if (record.kind === "prepare") { setSourceInput(record.sourceUrl ?? ""); setSourcePaperId(record.paperId ?? ""); } else input.current?.click(); }}
                                 >
                                     {record.kind === "prepare" ? "修改来源后创建新请求" : "重新选择文件并创建新请求"}
@@ -445,10 +445,10 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                             ) : (
                                 <button
                                     type="button"
-                                    className="inline-flex items-center gap-1 underline"
+                                    className="inline-flex items-center gap-1 rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                                     onClick={() => void check()}
                                 >
-                                    <RefreshCw size={14} />
+                                    <RefreshCw size={14} aria-hidden="true" />
                                     {isLocalDesktopProfile() ? "检查已有请求" : "继续转换"}
                                 </button>
                             )}

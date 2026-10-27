@@ -1,9 +1,8 @@
 "use client"
 
-import * as TooltipPrimitive from "@radix-ui/react-tooltip"
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import styles from "./research-conversation-index.module.css"
+import { cn } from "@/lib/utils"
 
 export type ConversationIndexEntry = { id: string; label: string }
 
@@ -13,6 +12,11 @@ type ResearchConversationIndexProps = {
 }
 
 const PREVIEW_LENGTH = 160
+// A rail of ink marks pinned to the reading pane's left edge; it stays inside the transcript's side padding.
+const indexClass = "absolute left-0 top-1/2 z-[2] block max-h-[calc(100%-32px)] w-6 -translate-y-1/2 overflow-y-auto overscroll-contain [scrollbar-width:none] min-[761px]:w-8 [&::-webkit-scrollbar]:hidden"
+const buttonClass = "group/mark grid min-h-6 w-6 cursor-pointer place-items-center rounded-md border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring min-[761px]:w-7"
+const markClass = "block h-0.5 w-[13px] rounded-full bg-foreground/20 transition-[width,height,background-color] duration-150 ease-out group-hover/mark:w-[22px] group-hover/mark:bg-foreground/45 motion-reduce:transition-none"
+const currentMarkClass = "h-[3px] w-[23px] bg-foreground group-hover/mark:w-[25px] group-hover/mark:bg-foreground"
 
 function previewLabel(label: string) {
   const normalized = label.replace(/\s+/g, " ").trim()
@@ -158,31 +162,29 @@ export function ResearchConversationIndex({ entries, transcriptRef }: ResearchCo
   if (entries.length === 0) return null
 
   return <TooltipProvider delayDuration={180}>
-  <nav ref={navRef} className={styles.index} aria-label="聊天索引">
-    <ol className={styles.list}>
+  <nav ref={navRef} className={indexClass} aria-label="聊天索引">
+    <ol className="m-0 flex w-full list-none flex-col items-center gap-0.5 px-0 py-1">
       {entries.map((entry, index) => {
         const preview = previewLabel(entry.label)
         const current = index === currentIndex
-        return <li key={entry.id} className={styles.item}>
+        return <li key={entry.id} className="flex w-full justify-center">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                className={`${styles.button} ${current ? styles.current : ""}`}
+                className={buttonClass}
                 aria-label={`跳转到第 ${index + 1} 条消息：${preview}`}
                 aria-current={current ? "location" : undefined}
                 data-conversation-index={index}
                 onClick={() => scrollToEntry(index)}
                 onKeyDown={event => handleKeyDown(event, index)}
               >
-                <span className={styles.mark} aria-hidden="true" />
+                <span className={cn(markClass, current && currentMarkClass)} aria-hidden="true" />
               </button>
             </TooltipTrigger>
-            <TooltipPrimitive.Portal>
-              <TooltipContent className={styles.preview} showArrow={false} side="right" sideOffset={8} collisionPadding={8}>
+            <TooltipContent className="max-w-[min(320px,calc(100vw-32px))] whitespace-normal break-words text-[13px] leading-relaxed" showArrow={false} side="right" sideOffset={8} collisionPadding={8}>
                 第 {index + 1} 条：{preview}
               </TooltipContent>
-            </TooltipPrimitive.Portal>
           </Tooltip>
         </li>
       })}

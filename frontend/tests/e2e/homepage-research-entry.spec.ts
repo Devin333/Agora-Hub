@@ -8,11 +8,14 @@ async function openHome(page: Page) {
 test("desktop composer is centered beside the sidebar and keeps the 2x2 modules", async ({ page }) => {
   for (const viewport of [{ width: 2560, height: 1279 }, { width: 1440, height: 900 }, { width: 1366, height: 768 }]) {
     await page.setViewportSize(viewport); await openHome(page)
-    const navigation = page.getByRole("navigation", { name: "主导航", exact: true })
-    expect((await navigation.getByRole("link", { name: "AgoraAI" }).boundingBox())!.x).toBe(24)
-    await expect(navigation.getByRole("button", { name: "登录", exact: true })).toHaveCount(0)
-    await expect(navigation.getByRole("link", { name: "研究模块", exact: true })).toHaveCount(0)
-    await expect(navigation.getByRole("button", { name: "搜索研究和模块" })).toHaveCount(0)
+    // Rakazo layout: no top navigation bar, the brand lives in the sidebar header and the workspace only floats pills.
+    await expect(page.getByRole("navigation", { name: "主导航", exact: true })).toHaveCount(0)
+    const sidebar = page.getByRole("complementary", { name: "研究历史侧栏" })
+    const brand = (await sidebar.getByRole("link", { name: "Agora AI 首页" }).boundingBox())!
+    const sidebarBox = (await sidebar.boundingBox())!
+    expect(Math.abs(sidebarBox.width - 316)).toBeLessThan(1)
+    expect(brand.x - sidebarBox.x).toBeLessThan(40)
+    await expect(page.getByRole("link", { name: "研究模块", exact: true })).toHaveCount(0)
     const box = await page.getByRole("region", { name: "研究提问框" }).boundingBox()
     const workspace = await page.getByLabel("研究工作区", { exact: true }).boundingBox()
     expect(Math.abs(box!.x + box!.width / 2 - (workspace!.x + workspace!.width / 2))).toBeLessThan(2)
@@ -60,7 +63,7 @@ test("account actions stay in the sidebar when expanded or collapsed", async ({ 
   const sidebar = page.getByRole("complementary", { name: "研究历史侧栏" })
   const accountMenu = sidebar.getByRole("button", { name: "账户菜单" })
   await expect(accountMenu).toHaveText(/Researcher/)
-  await expect(page.getByRole("navigation", { name: "主导航", exact: true }).getByRole("button", { name: "账户菜单" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "账户菜单" })).toHaveCount(1)
   await accountMenu.click()
   await expect(page.getByRole("menuitem", { name: "退出登录" })).toBeVisible()
   await page.keyboard.press("Escape")
@@ -135,8 +138,9 @@ test("follow-up composer stays at the workspace bottom while research scrolls ab
     expect(indexBox.x + indexBox.width).toBeLessThanOrEqual(transcriptSurface.x + 1)
     expect(Math.abs(transcriptSurface.x - composerSurface.x)).toBeLessThan(2)
     expect(Math.abs(transcriptSurface.width - composerSurface.width)).toBeLessThan(2)
-    expect(transcriptSurface.width).toBeLessThanOrEqual(1041)
-    if (workspaceBox.width >= 1200) expect(Math.abs(transcriptSurface.width - 1040)).toBeLessThan(2)
+    // The transcript and composer share rakazo's 60rem reading column.
+    expect(transcriptSurface.width).toBeLessThanOrEqual(961)
+    if (workspaceBox.width >= 1200) expect(Math.abs(transcriptSurface.width - 960)).toBeLessThan(2)
     expect(Math.abs(transcriptSurface.x + transcriptSurface.width / 2 - workspaceBox.x - workspaceBox.width / 2)).toBeLessThan(2)
     expect(Math.abs(composerBox.y + composerBox.height - workspaceBox.y - workspaceBox.height)).toBeLessThan(2)
     expect(transcriptBox.y + transcriptBox.height).toBeLessThanOrEqual(composerBox.y + 1)

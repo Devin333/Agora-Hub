@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import * as Dialog from "@radix-ui/react-dialog"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
 import { Archive, BookOpen, ClipboardCheck, FileText, Folder, Github, Quote, Search, X, type LucideIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
@@ -9,7 +10,7 @@ import { moduleInfo, researchModules, type ResearchModule } from "@/lib/research
 import { prepareResearchResume, researchResumeHref } from "@/lib/research/history"
 import { groupHref, reportDraftHref } from "@/lib/research/materials"
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
-import styles from "./research-command-palette.module.css"
+import { cn } from "@/lib/utils"
 
 const moduleIcons: Record<ResearchModule, LucideIcon> = {
   papers: BookOpen,
@@ -18,6 +19,20 @@ const moduleIcons: Record<ResearchModule, LucideIcon> = {
   reports: ClipboardCheck,
 }
 const resultLimit = 8
+const itemClass = "items-center gap-3 rounded-xl px-2.5 py-2.5"
+const kbdClass = "inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-muted px-1 font-sans text-xs font-medium text-muted-foreground"
+
+/** One palette row in the rakazo command list: avatar, title, one-line subtitle and the action it runs. */
+function PaletteRow({ icon: Icon, title, subtitle, action }: { icon: LucideIcon; title: string; subtitle: string; action: string }) {
+  return <>
+    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground ring-1 ring-foreground/10"><Icon size={15} strokeWidth={1.8} aria-hidden="true" /></span>
+    <span className="min-w-0 flex-1">
+      <span className="block truncate font-medium text-foreground">{title}</span>
+      <span className="mt-0.5 block truncate text-[13px] text-muted-foreground">{subtitle}</span>
+    </span>
+    <kbd className={kbdClass}>{action}</kbd>
+  </>
+}
 
 function matches(query: string, ...values: Array<string | null | undefined>) {
   const tokens = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean)
@@ -94,66 +109,75 @@ export function ResearchCommandPalette({
 
   const hasResults = Object.values(results).some(items => items.length > 0)
 
-  return <Dialog.Root open={open} onOpenChange={next => { setOpen(next); if (!next) setQuery("") }}>
-      {showTrigger && <Dialog.Trigger asChild>
-        <button
-          type="button"
-          className={`${styles.trigger} ${inline ? styles.inlineTrigger : ""}`}
-          onClick={() => { shortcutOrigin.current = null }}
-          aria-label="搜索研究和模块"
-          aria-keyshortcuts="Control+K Meta+K"
-        >
-          <Search size={17} aria-hidden="true" />
-          <span>搜索研究</span>
-          <kbd>Ctrl / Cmd + K</kbd>
-        </button>
-      </Dialog.Trigger>}
-      <Dialog.Portal>
-        <Dialog.Overlay className={styles.overlay} />
-        <Dialog.Content className={styles.dialog} onCloseAutoFocus={event => {
-          const origin = shortcutOrigin.current
-          shortcutOrigin.current = null
-          if (!origin?.isConnected) return
-          event.preventDefault()
-          origin.focus({ preventScroll: true })
-        }}>
-          <Dialog.Title className={styles.visuallyHidden}>全局研究搜索</Dialog.Title>
-          <Dialog.Description className={styles.visuallyHidden}>搜索当前账号的研究历史、分组、资料、报告草稿和研究模块。</Dialog.Description>
-          <Command className={styles.command} label="搜索研究、资料或模块" shouldFilter={false} loop>
-            <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="搜索研究、资料或模块…" aria-label="搜索研究、资料或模块" />
-            <CommandList className={styles.list}>
-              {!state.ready && <div className={styles.state} role="status">{state.status === "error" ? "研究工作区暂时无法读取" : "正在读取研究工作区…"}</div>}
-              {state.ready && !hasResults && <CommandEmpty className={styles.state}>没有匹配的研究或操作</CommandEmpty>}
-              {state.ready && results.modules.length > 0 && <CommandGroup heading="研究模块" className={styles.group}>
-                {results.modules.map(module => { const Icon = moduleIcons[module]; return <CommandItem key={module} value={`module:${module}`} className={styles.item} onSelect={() => navigate(moduleInfo[module].path)}>
-                  <span className={styles.icon}><Icon size={17} aria-hidden="true" /></span><span className={styles.copy}><strong>{moduleInfo[module].name}</strong><small>{moduleInfo[module].description}</small></span><span className={styles.action}>打开</span>
-                </CommandItem> })}
-              </CommandGroup>}
-              {state.ready && results.visits.length > 0 && <CommandGroup heading="研究历史" className={styles.group}>
-                {results.visits.map(visit => { const Icon = moduleIcons[visit.module]; return <CommandItem key={visit.id} value={`visit:${visit.id}`} className={styles.item} onSelect={() => navigate(researchResumeHref(visit), () => prepareResearchResume(visit))}>
-                  <span className={styles.icon}>{visit.archivedAt ? <Archive size={17} aria-hidden="true" /> : <Icon size={17} aria-hidden="true" />}</span><span className={styles.copy}><strong>{visit.title}</strong><small>{visit.archivedAt ? `已归档 · ${moduleInfo[visit.module].name}` : visit.activity?.title ?? moduleInfo[visit.module].name}</small></span><span className={styles.action}>继续</span>
-                </CommandItem> })}
-              </CommandGroup>}
-              {state.ready && results.groups.length > 0 && <CommandGroup heading="研究分组" className={styles.group}>
-                {results.groups.map(group => <CommandItem key={group.id} value={`group:${group.id}`} className={styles.item} onSelect={() => navigate(groupHref(group.id))}>
-                  <span className={styles.icon}><Folder size={17} aria-hidden="true" /></span><span className={styles.copy}><strong>{group.name}</strong><small>{workspace.visits.filter(visit => !visit.deletedAt && visit.groupId === group.id).length} 条研究 · {(workspace.materials ?? []).filter(material => material.groupId === group.id).length} 项资料</small></span><span className={styles.action}>查看</span>
-                </CommandItem>)}
-              </CommandGroup>}
-              {state.ready && results.materials.length > 0 && <CommandGroup heading="研究资料" className={styles.group}>
-                {results.materials.map(material => <CommandItem key={material.id} value={`material:${material.id}`} className={styles.item} onSelect={() => navigate(material.readerHref ?? groupHref(material.groupId))}>
-                  <span className={styles.icon}><FileText size={17} aria-hidden="true" /></span><span className={styles.copy}><strong>{material.title}</strong><small>{material.notes || material.referenceId || "已保存资料"}</small></span><span className={styles.action}>{material.readerHref ? "阅读" : "查看"}</span>
-                </CommandItem>)}
-              </CommandGroup>}
-              {state.ready && results.drafts.length > 0 && <CommandGroup heading="报告草稿" className={styles.group}>
-                {results.drafts.map(draft => <CommandItem key={draft.id} value={`draft:${draft.id}`} className={styles.item} onSelect={() => navigate(reportDraftHref(draft))}>
-                  <span className={styles.icon}><ClipboardCheck size={17} aria-hidden="true" /></span><span className={styles.copy}><strong>{draft.title}</strong><small>{draft.materials.length} 项资料 · {draft.scope || "待继续编辑"}</small></span><span className={styles.action}>继续</span>
-                </CommandItem>)}
-              </CommandGroup>}
-            </CommandList>
-          </Command>
-          <footer className={styles.footer}><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 打开</span><span><kbd>Esc</kbd> 关闭</span></footer>
-          <Dialog.Close className={styles.close} aria-label="关闭全局研究搜索"><X size={17} aria-hidden="true" /></Dialog.Close>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+  return <Dialog open={open} onOpenChange={next => { setOpen(next); if (!next) setQuery("") }}>
+    {showTrigger && <DialogTrigger asChild>
+      <Button
+        type="button"
+        variant="floating"
+        size="lg"
+        className={cn("gap-2 pe-1.5 ps-3.5", inline ? "flex" : "fixed bottom-6 right-6 z-40 hidden shadow-md lg:inline-flex")}
+        onClick={() => { shortcutOrigin.current = null }}
+        aria-label="搜索研究和模块"
+        aria-keyshortcuts="Control+K Meta+K"
+      >
+        <Search size={15} strokeWidth={1.8} aria-hidden="true" />
+        <span>搜索研究</span>
+        <kbd className={cn(kbdClass, "bg-background")}>Ctrl / Cmd + K</kbd>
+      </Button>
+    </DialogTrigger>}
+    <DialogContent
+      showCloseButton={false}
+      className="top-1/3 translate-y-0 gap-0 overflow-hidden rounded-xl p-0 sm:max-w-xl"
+      onCloseAutoFocus={event => {
+        const origin = shortcutOrigin.current
+        shortcutOrigin.current = null
+        if (!origin?.isConnected) return
+        event.preventDefault()
+        origin.focus({ preventScroll: true })
+      }}
+    >
+      <DialogHeader className="sr-only">
+        <DialogTitle>全局研究搜索</DialogTitle>
+        <DialogDescription>搜索当前账号的研究历史、分组、资料、报告草稿和研究模块。</DialogDescription>
+      </DialogHeader>
+      <Command className="rounded-xl bg-popover" label="搜索研究、资料或模块" shouldFilter={false} loop>
+        <div className="pe-10"><CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="搜索研究、资料或模块…" aria-label="搜索研究、资料或模块" /></div>
+        <CommandList className="max-h-80 scroll-py-1 p-1">
+          {!state.ready && <div className="py-10 text-center text-body2 text-muted-foreground" role="status">{state.status === "error" ? "研究工作区暂时无法读取" : "正在读取研究工作区…"}</div>}
+          {state.ready && !hasResults && <CommandEmpty className="py-10">没有匹配的研究或操作</CommandEmpty>}
+          {state.ready && results.modules.length > 0 && <CommandGroup heading="研究模块">
+            {results.modules.map(module => <CommandItem key={module} value={`module:${module}`} className={itemClass} onSelect={() => navigate(moduleInfo[module].path)}>
+              <PaletteRow icon={moduleIcons[module]} title={moduleInfo[module].name} subtitle={moduleInfo[module].description} action="打开" />
+            </CommandItem>)}
+          </CommandGroup>}
+          {state.ready && results.visits.length > 0 && <CommandGroup heading="研究历史">
+            {results.visits.map(visit => <CommandItem key={visit.id} value={`visit:${visit.id}`} className={itemClass} onSelect={() => navigate(researchResumeHref(visit), () => prepareResearchResume(visit))}>
+              <PaletteRow icon={visit.archivedAt ? Archive : moduleIcons[visit.module]} title={visit.title} subtitle={visit.archivedAt ? `已归档 · ${moduleInfo[visit.module].name}` : visit.activity?.title ?? moduleInfo[visit.module].name} action="继续" />
+            </CommandItem>)}
+          </CommandGroup>}
+          {state.ready && results.groups.length > 0 && <CommandGroup heading="研究分组">
+            {results.groups.map(group => <CommandItem key={group.id} value={`group:${group.id}`} className={itemClass} onSelect={() => navigate(groupHref(group.id))}>
+              <PaletteRow icon={Folder} title={group.name} subtitle={`${workspace.visits.filter(visit => !visit.deletedAt && visit.groupId === group.id).length} 条研究 · ${(workspace.materials ?? []).filter(material => material.groupId === group.id).length} 项资料`} action="查看" />
+            </CommandItem>)}
+          </CommandGroup>}
+          {state.ready && results.materials.length > 0 && <CommandGroup heading="研究资料">
+            {results.materials.map(material => <CommandItem key={material.id} value={`material:${material.id}`} className={itemClass} onSelect={() => navigate(material.readerHref ?? groupHref(material.groupId))}>
+              <PaletteRow icon={FileText} title={material.title} subtitle={material.notes || material.referenceId || "已保存资料"} action={material.readerHref ? "阅读" : "查看"} />
+            </CommandItem>)}
+          </CommandGroup>}
+          {state.ready && results.drafts.length > 0 && <CommandGroup heading="报告草稿">
+            {results.drafts.map(draft => <CommandItem key={draft.id} value={`draft:${draft.id}`} className={itemClass} onSelect={() => navigate(reportDraftHref(draft))}>
+              <PaletteRow icon={ClipboardCheck} title={draft.title} subtitle={`${draft.materials.length} 项资料 · ${draft.scope || "待继续编辑"}`} action="继续" />
+            </CommandItem>)}
+          </CommandGroup>}
+        </CommandList>
+      </Command>
+      <footer className="flex items-center gap-4 border-t border-border bg-muted/50 px-4 py-2.5 text-label text-muted-foreground">
+        <span className="inline-flex items-center gap-1"><kbd className={kbdClass}>↑</kbd><kbd className={kbdClass}>↓</kbd>选择</span>
+        <span className="inline-flex items-center gap-1"><kbd className={kbdClass}>Enter</kbd>打开</span>
+        <span className="inline-flex items-center gap-1"><kbd className={kbdClass}>Esc</kbd>关闭</span>
+      </footer>
+      <DialogClose asChild><Button variant="ghost" size="icon-sm" className="absolute right-2 top-2" aria-label="关闭全局研究搜索"><X /></Button></DialogClose>
+    </DialogContent>
+  </Dialog>
 }

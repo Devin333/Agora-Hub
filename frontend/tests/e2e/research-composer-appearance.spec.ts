@@ -25,9 +25,19 @@ test("research composer has one rounded focus surface, grows with drafts and kee
   await expect(field).toBeFocused()
   const appearance = await field.evaluate(element => {
     const style = getComputedStyle(element), parent = getComputedStyle(element.parentElement!)
-    return { outline: style.outlineStyle, border: style.borderTopWidth, shadow: style.boxShadow, resize: style.resize, outerOutline: parent.outlineStyle, radius: parent.borderTopLeftRadius }
+    return { outline: style.outlineStyle, border: style.borderTopWidth, shadow: style.boxShadow, resize: style.resize, radius: parent.borderTopLeftRadius, outerRing: parent.boxShadow !== "none" }
   })
-  expect(appearance).toEqual({ outline: "none", border: "0px", shadow: "none", resize: "none", outerOutline: "solid", radius: "28px" })
+  // The field itself stays bare; the rakazo composer bar shows focus with its ring border and 3px ring shadow.
+  expect(appearance).toMatchObject({ outline: "none", border: "0px", shadow: "none", resize: "none", radius: "26px", outerRing: true })
+  const ringProbe = await page.evaluate(() => {
+    const probe = document.createElement("span")
+    probe.style.color = "var(--ring)"
+    document.body.append(probe)
+    const color = getComputedStyle(probe).color
+    probe.remove()
+    return color
+  })
+  await expect(page.getByTestId("research-composer-surface")).toHaveCSS("border-top-color", ringProbe)
   const singleLineHeight = (await field.boundingBox())!.height
   await field.fill("只看有代码的论文")
   await page.keyboard.press("Shift+Enter")
