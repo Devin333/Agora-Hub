@@ -3,20 +3,50 @@ import { typeScale } from "./src/styles/type-scale"
 
 /**
  * Maps a design token from `src/styles/theme-tokens.css` to a Tailwind color.
- * Tokens may already carry alpha (ink-at-opacity colors), so opacity modifiers
- * mix the token toward transparent instead of rewriting its channels:
- * `bg-border/50` is the border ink at half of its own opacity.
+ * A bare utility resolves to the token itself, so `bg-card` computes exactly to
+ * `var(--card)`. Tokens may already carry alpha (ink-at-opacity colors), so an
+ * opacity modifier mixes the token toward transparent instead of rewriting its
+ * channels: `bg-border/50` is the border ink at half of its own opacity.
  */
 function token(name: string) {
-  return `color-mix(in srgb, var(--${name}) calc(<alpha-value> * 100%), transparent)`
+  return ({ opacityValue }: { opacityValue?: string }) =>
+    opacityValue === undefined || opacityValue === "1"
+      ? `var(--${name})`
+      : `color-mix(in srgb, var(--${name}) calc(${opacityValue} * 100%), transparent)`
 }
+
+type TokenColor = ReturnType<typeof token>
+interface TokenPalette { [key: string]: TokenColor | TokenPalette }
+
+/**
+ * Tailwind 3 resolves function colors at build time (it calls them with the
+ * utility's `opacityValue`), but its config types only describe string colors.
+ */
+function themeColors(palette: TokenPalette) {
+  return palette as unknown as Record<string, string>
+}
+
+/*
+ * The legacy `*-opacity-*` utilities are off: they would feed every bare color
+ * utility a `var(--tw-*-opacity)` alpha, and opacity is expressed with `/50`
+ * modifiers instead.
+ */
+const disabledOpacityPlugins = {
+  backgroundOpacity: false,
+  borderOpacity: false,
+  divideOpacity: false,
+  placeholderOpacity: false,
+  ringOpacity: false,
+  textOpacity: false
+} as const
 
 const config: Config = {
   darkMode: ["variant", '&:where([data-theme="dark"], [data-theme="dark"] *)'],
   content: ["./src/**/*.{ts,tsx}"],
+  corePlugins: disabledOpacityPlugins,
   theme: {
     extend: {
-      colors: {
+      colors: themeColors({
         background: token("background"),
         foreground: token("foreground"),
         dialog: token("dialog"),
@@ -57,7 +87,7 @@ const config: Config = {
         "working-dot": token("working-dot"),
         overlay: token("overlay"),
         scrollbar: { DEFAULT: token("scrollbar"), hover: token("scrollbar-hover") }
-      },
+      }),
       borderRadius: {
         sm: "calc(var(--radius) - 4px)",
         md: "calc(var(--radius) - 2px)",

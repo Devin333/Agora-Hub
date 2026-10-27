@@ -59,13 +59,24 @@ async function expectDialogAppearance(page: Page, theme: keyof typeof dialogSurf
   await expect(nav.getByRole("button")).toHaveCount(6)
   await expect(nav.locator('[aria-current="true"]')).toHaveCount(1)
   // Status badges keep real status hues instead of a monochrome substitute.
-  const badgeColors = await dialog.locator("ul li span").evaluateAll(spans => spans
-    .filter(span => /已验证|待业务验证|不可达/.test(span.textContent ?? ""))
-    .map(span => getComputedStyle(span).color))
+  // Status inks are color-mix() tokens, which compute to `color(srgb …)`; paint each one
+  // on a canvas to read it back as 0–255 sRGB channels whatever its CSS notation.
+  const badgeColors = await dialog.locator("ul li span").evaluateAll(spans => {
+    const context = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!
+    return spans
+      .filter(span => /已验证|待业务验证|不可达/.test(span.textContent ?? ""))
+      .map(span => {
+        const css = getComputedStyle(span).color
+        context.clearRect(0, 0, 1, 1)
+        context.fillStyle = css
+        context.fillRect(0, 0, 1, 1)
+        const [r, g, b] = context.getImageData(0, 0, 1, 1).data
+        return { css, r, g, b }
+      })
+  })
   expect(badgeColors.length).toBeGreaterThan(0)
-  for (const color of badgeColors) {
-    const [r, g, b] = color.match(/\d+(?:\.\d+)?/g)!.map(Number)
-    expect(Math.max(r, g, b) - Math.min(r, g, b), `badge color ${color}`).toBeGreaterThan(24)
+  for (const { css, r, g, b } of badgeColors) {
+    expect(Math.max(r, g, b) - Math.min(r, g, b), `badge color ${css}`).toBeGreaterThan(24)
   }
 }
 
