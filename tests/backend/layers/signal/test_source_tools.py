@@ -1221,9 +1221,18 @@ def test_source_fetch_url_tool_default_fetch_uses_source_fetch_policy(monkeypatc
         captured["max_redirects"] = policy.max_redirects
         return Response()
 
+    def fake_robots_check(url, policy):
+        captured["robots_url"] = url
+        captured["robots_user_agent"] = policy.user_agent
+
     monkeypatch.setattr(
         "interfaces.services.source_tool_runtime.open_request_with_fetch_policy",
         fake_open_request,
+    )
+    # The robots.txt lookup is its own network request; keep the test offline.
+    monkeypatch.setattr(
+        "interfaces.services.source_tool_runtime.ensure_robots_allowed",
+        fake_robots_check,
     )
     registry = ToolRegistry()
     register_test_source_tools(
@@ -1257,6 +1266,8 @@ def test_source_fetch_url_tool_default_fetch_uses_source_fetch_policy(monkeypatc
     assert observation.result.output["status_code"] == 200
     assert observation.result.output["content_type"] == "application/rss+xml"
     assert captured == {
+        "robots_url": "https://example.com/feed.xml",
+        "robots_user_agent": "NewsRoomTest/1.0",
         "user_agent": "NewsRoomTest/1.0",
         "timeout": 3,
         "max_redirects": 2,
