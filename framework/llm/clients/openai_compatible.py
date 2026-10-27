@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import time
@@ -10,6 +11,12 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from framework.llm.clients.endpoint import (
+    LLMCredentialMode,
+    LLMCredentialUnavailableError,
+    llm_credential_mode,
+    resolve_invocation_endpoint,
+)
 from framework.llm.context.openai import build_openai_chat_payload, openai_response_format
 from framework.llm.models import LLMRequest, LLMResponse, TokenUsage
 from framework.llm.redaction import redact_sensitive_values
@@ -198,6 +205,7 @@ class OpenAICompatibleClient:
         retry_policy: LLMRetryPolicy | None = None,
         structured_output_capability: ProviderStructuredOutputCapability | None = None,
         sleep: Sleep | None = None,
+        credential_mode: LLMCredentialMode | None = None,
     ) -> None:
         self.config = config
         self._transport = transport or _urlopen_transport
@@ -205,6 +213,16 @@ class OpenAICompatibleClient:
         self._retry_policy = retry_policy or LLMRetryPolicy()
         self._structured_output_capability = structured_output_capability
         self._sleep = sleep or time.sleep
+        self._credential_mode = (
+            LLMCredentialMode(credential_mode)
+            if credential_mode is not None
+            else llm_credential_mode()
+        )
+        self._invocation_api_key: str | None = None
+
+    @property
+    def credential_mode(self) -> LLMCredentialMode:
+        return self._credential_mode
 
     @staticmethod
     def supports_structured_output_projection(
@@ -213,6 +231,47 @@ class OpenAICompatibleClient:
         return projection.mode in {"native_strict", "json_object_local_gate"}
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        return self._for_invocation()._complete(request)
+
+    def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
+        # Bind eagerly so the endpoint is taken from the caller's context, not
+        # from whichever context first advances the returned iterator.
+        return self._for_invocation()._stream(request)
+
+    def _for_invocation(self) -> OpenAICompatibleClient:
+        """Return the client that serves exactly one provider call.
+
+        In invocation mode the shared client is never mutated: the endpoint
+        bound to the current context is applied to a shallow copy, so every
+        ``self.config`` reference inside the call (URL, model, diagnostics)
+        names the caller's endpoint while transports and policies are shared.
+        """
+
+        if self._credential_mode is LLMCredentialMode.ENVIRONMENT:
+            return self
+        if self._invocation_api_key is not None:
+            return self
+        endpoint = resolve_invocation_endpoint()
+        bound = copy.copy(self)
+        bound.config = replace(
+            self.config,
+            base_url=endpoint.base_url,
+            model=endpoint.model,
+        )
+        bound._invocation_api_key = endpoint.api_key
+        return bound
+
+    def _resolve_api_key(self) -> str:
+        if self._credential_mode is LLMCredentialMode.ENVIRONMENT:
+            return self.config.resolve_api_key()
+        if self._invocation_api_key is None:
+            raise LLMCredentialUnavailableError(
+                "model_credential_required",
+                "No model credential is bound to this request",
+            )
+        return self._invocation_api_key
+
+    def _complete(self, request: LLMRequest) -> LLMResponse:
         try:
             execution_request, contract, projection = (
                 self._resolve_structured_output_execution(
@@ -241,7 +300,7 @@ class OpenAICompatibleClient:
         except LLMStructuredOutputProjectionError as exc:
             raise self._provider_projection_error(exc) from exc
 
-        api_key = self.config.resolve_api_key()
+        api_key = self._resolve_api_key()
 
         max_attempts = min(self._retry_policy.max_attempts, request.max_transport_attempts or self._retry_policy.max_attempts)
         deadline = time.monotonic() + request.timeout_seconds if request.timeout_seconds is not None else None
@@ -282,7 +341,7 @@ class OpenAICompatibleClient:
             attempts=max_attempts,
         )
 
-    def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
+    def _stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
         try:
             execution_request, contract, projection = (
                 self._resolve_structured_output_execution(
@@ -311,7 +370,7 @@ class OpenAICompatibleClient:
         except LLMStructuredOutputProjectionError as exc:
             raise self._provider_projection_error(exc) from exc
         payload["stream"] = True
-        api_key = self.config.resolve_api_key()
+        api_key = self._resolve_api_key()
 
         http_request = self._build_http_request(api_key, payload)
         try:
@@ -451,10 +510,13 @@ class OpenAICompatibleClient:
         self,
         request: LLMRequest,
     ) -> dict[str, Any]:
-        return build_openai_chat_payload(
-            request,
-            model=request.model or self.config.model,
-        )
+        # An account-bound endpoint names the only model the account agreed
+        # to pay for, so a route-level request model never overrides it.
+        if self._credential_mode is LLMCredentialMode.INVOCATION:
+            model = self.config.model
+        else:
+            model = request.model or self.config.model
+        return build_openai_chat_payload(request, model=model)
 
     @staticmethod
     def _compile_structured_output_contract(

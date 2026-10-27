@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
+import contextvars
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -1477,7 +1478,10 @@ class ChildAgentSupervisor:
                 self._owner_guard()
             return run(handle)
 
-        future = self._executor.submit(invoke)
+        # Children run on pooled threads; carry the spawning caller's context so
+        # request-scoped bindings follow the child instead of a stale pool thread.
+        caller_context = contextvars.copy_context()
+        future = self._executor.submit(caller_context.run, invoke)
         self._futures[handle.child_id] = future
         future.add_done_callback(
             lambda completed, child_id=handle.child_id: self._settle_future_safely(
@@ -1654,8 +1658,9 @@ class ChildAgentSupervisor:
             except Exception:
                 outcome.append(False)
 
+        caller_context = contextvars.copy_context()
         thread = threading.Thread(
-            target=invoke,
+            target=lambda: caller_context.run(invoke),
             name=f"newsroom-child-cancel-{handle.child_id}",
             daemon=True,
         )

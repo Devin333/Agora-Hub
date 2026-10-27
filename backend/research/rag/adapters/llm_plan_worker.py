@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 from collections.abc import Callable
+from contextvars import copy_context
 from threading import Thread
 from typing import Any
 
@@ -135,7 +136,10 @@ def _run_maybe_async(value: Any) -> Any:
         except BaseException as exc:  # pragma: no cover - re-raised in caller thread
             result["error"] = exc
 
-    thread = Thread(target=_target, daemon=True)
+    # The worker thread inherits the caller's context so request-scoped
+    # bindings (model credential, budget, attempt) stay visible to the model call.
+    caller_context = copy_context()
+    thread = Thread(target=lambda: caller_context.run(_target), daemon=True)
     thread.start()
     thread.join()
     if "error" in result:

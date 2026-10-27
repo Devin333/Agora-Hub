@@ -4,6 +4,7 @@ import asyncio
 import inspect
 from dataclasses import dataclass
 import re
+from contextvars import copy_context
 from threading import Thread
 from typing import Any
 from uuid import uuid4
@@ -665,7 +666,10 @@ def _run_async(coro: Any) -> Any:
         except BaseException as exc:  # pragma: no cover - re-raised in caller thread
             result["error"] = exc
 
-    thread = Thread(target=_target, daemon=True)
+    # The worker thread inherits the caller's context so request-scoped
+    # bindings (model credential, budget, attempt) stay visible to the model call.
+    caller_context = copy_context()
+    thread = Thread(target=lambda: caller_context.run(_target), daemon=True)
     thread.start()
     thread.join()
     if "error" in result:
