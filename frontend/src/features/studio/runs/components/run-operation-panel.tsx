@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useRunOperations } from "@/features/studio/runs/hooks/use-run-operations"
 import { useI18n } from "@/lib/i18n/use-i18n"
+import clsx from "clsx"
+import { cn } from "@/lib/utils"
 import type { AgentStep, RunOperationType, StudioRunDetail } from "@/types/agent"
 
 type OperationOption = {
@@ -38,28 +40,28 @@ export function RunOperationPanel({
         label: t("studio.runs.cancel"),
         description: t("studio.runs.cancelDescription"),
         enabled: detail.operations.canCancel,
-        icon: <Ban className="size-4" />
+        icon: <Ban size={16} strokeWidth={1.8} aria-hidden="true" />
       },
       {
         type: "rerun-from-step",
         label: t("studio.runs.rerunFromStep"),
         description: t("studio.runs.rerunFromStepDescription"),
         enabled: detail.operations.canRerunFromStep && Boolean(selectedStep),
-        icon: <RotateCcw className="size-4" />
+        icon: <RotateCcw size={16} strokeWidth={1.8} aria-hidden="true" />
       },
       {
         type: "skip-step",
         label: t("studio.runs.skipStep"),
         description: t("studio.runs.skipStepDescription"),
         enabled: detail.operations.canSkipStep && Boolean(selectedStep),
-        icon: <FastForward className="size-4" />
+        icon: <FastForward size={16} strokeWidth={1.8} aria-hidden="true" />
       },
       {
         type: "mark-blocked-resolved",
         label: t("studio.runs.markBlockedResolved"),
         description: t("studio.runs.markBlockedResolvedDescription"),
         enabled: detail.operations.canResolveBlocked,
-        icon: <ShieldCheck className="size-4" />
+        icon: <ShieldCheck size={16} strokeWidth={1.8} aria-hidden="true" />
       }
     ],
     [detail.operations, selectedStep, t]
@@ -82,11 +84,11 @@ export function RunOperationPanel({
   }
 
   return (
-    <section className="space-y-4 rounded-lg border border-border bg-card p-4">
+    <section className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-foreground">{t("studio.runs.operations")}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t("studio.runs.operationsDescription")}</p>
+          <h2 className="text-[15px] font-semibold text-foreground">{t("studio.runs.operations")}</h2>
+          <p className="mt-0.5 text-label text-muted-foreground">{t("studio.runs.operationsDescription")}</p>
         </div>
         {detail.dataState === "fallback" ? <Badge tone="warning">{t("studio.runs.disabledFallback")}</Badge> : null}
       </div>
@@ -97,54 +99,56 @@ export function RunOperationPanel({
             key={item.type}
             type="button"
             disabled={!item.enabled}
-            className={`rounded-md border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-              operation === item.type ? "border-primary bg-primary/10" : "border-border bg-secondary/35 hover:bg-secondary"
-            }`}
+            aria-pressed={operation === item.type}
+            className={cn(
+              "rounded-xl border border-border px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50",
+              operation === item.type ? "bg-accent" : "enabled:hover:bg-accent/40"
+            )}
             onClick={() => {
               setOperation(item.type)
               clearResult()
             }}
           >
-            <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <span className="flex items-center gap-2 text-[13.5px] font-medium text-foreground">
               {item.icon}
               {item.label}
             </span>
-            <span className="mt-1 block text-xs text-muted-foreground">{item.description}</span>
+            <span className="mt-0.5 block text-label text-muted-foreground">{item.description}</span>
           </button>
         ))}
       </div>
 
       <form className="space-y-3" onSubmit={onSubmit}>
         {requiresStep ? (
-          <div className="rounded-md border border-border bg-secondary/35 p-3">
-            <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{t("studio.runs.selectedStep")}</p>
-            <p className="mt-1 font-mono text-xs text-foreground">{selectedStep?.id ?? t("studio.runs.noStepSelected")}</p>
+          <div className="rounded-xl border border-border px-3 py-2.5">
+            <p className="text-label text-muted-foreground">{t("studio.runs.selectedStep")}</p>
+            <p className="mt-0.5 font-mono text-label text-foreground">{selectedStep?.id ?? t("studio.runs.noStepSelected")}</p>
           </div>
         ) : null}
-        <label className="grid gap-1 text-sm text-muted-foreground">
+        <label className="grid gap-1 text-label text-muted-foreground">
           {t("studio.runs.reason")}
           <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("studio.runs.reasonPlaceholder")} />
         </label>
-        <label className="grid gap-1 text-sm text-muted-foreground">
+        <label className="grid gap-1 text-label text-muted-foreground">
           {t("studio.runs.actorId")}
           <Input value={actorId} onChange={(event) => setActorId(event.target.value)} placeholder={t("studio.runs.actorPlaceholder")} />
         </label>
-        <label className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-          <input className="mt-0.5" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
+        <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5 text-body2 text-warning-text">
+          <input className="mt-0.5 accent-primary" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
           {t("studio.runs.confirmRuntime")}
         </label>
 
         {!active.enabled ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <AlertTriangle className="size-4" />
+          <p className="flex items-center gap-2 text-body2 text-muted-foreground">
+            <AlertTriangle size={16} strokeWidth={1.8} aria-hidden="true" />
             {t("studio.runs.operationUnavailable")}
           </p>
         ) : null}
 
         {result ? (
-          <div className={`rounded-md border p-3 text-sm ${result.ok ? "border-success/30 bg-success/10 text-success" : "border-destructive/30 bg-destructive/10 text-destructive"}`}>
+          <div role="status" className={clsx("rounded-xl border px-3 py-2.5 text-body2", result.ok ? "border-success/40 bg-success/10 text-success-text" : "border-destructive/30 bg-destructive/10 text-destructive-text")}>
             <p>{result.ok ? result.message ?? t("studio.runs.operationAccepted") : result.message ?? t("studio.runs.operationFailed")}</p>
-            {!result.ok && result.requestId ? <p className="mt-1 font-mono text-xs">requestId: {result.requestId}</p> : null}
+            {!result.ok && result.requestId ? <p className="mt-1 font-mono text-label">requestId: {result.requestId}</p> : null}
           </div>
         ) : null}
 

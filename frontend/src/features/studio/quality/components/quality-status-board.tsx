@@ -2,13 +2,15 @@ import { AlertTriangle, CheckCircle2, CircleHelp, ShieldAlert, ShieldCheck } fro
 import {
   StudioMetricCard,
   StudioMetricGrid,
-  StudioPanel
+  StudioPanel,
+  type StudioIcon,
+  type StudioTone
 } from "@/features/studio/shared/components/studio-dashboard"
 import { formatStatus } from "@/lib/i18n"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type { StudioQualityDashboard, StudioQualityStatus } from "@/types/quality"
 
-const statusConfig: Record<StudioQualityStatus, { tone: "success" | "warning" | "danger" | "info" | "neutral"; icon: React.ComponentType<{ className?: string }> }> = {
+const statusConfig: Record<StudioQualityStatus, { tone: StudioTone; icon: StudioIcon }> = {
   passed: { tone: "success", icon: ShieldCheck },
   warning: { tone: "warning", icon: AlertTriangle },
   failed: { tone: "danger", icon: ShieldAlert },
@@ -50,9 +52,9 @@ export function QualityMetricBoard({ dashboard }: { dashboard: StudioQualityDash
     <StudioPanel title={t("studio.quality.gateMetrics")} description={t("studio.quality.gateMetricsDescription")}>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {metrics.map(([label, value]) => (
-          <div key={label} className="rounded-md border border-border bg-secondary/30 p-3">
-            <p className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{label}</p>
-            <p className="mt-2 text-2xl font-semibold text-foreground">{value}</p>
+          <div key={label} className="rounded-xl bg-muted/60 p-3">
+            <p className="text-label text-muted-foreground">{label}</p>
+            <p className="mt-1.5 text-heading2 font-semibold tabular-nums text-foreground">{value}</p>
           </div>
         ))}
       </div>

@@ -1,14 +1,14 @@
 "use client"
 
 import Link from "next/link"
-import { Search } from "lucide-react"
 import { useMemo, useState } from "react"
 import { EmptyState } from "@/components/common/empty-state"
+import { SearchField } from "@/components/common/search-field"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import { StudioPanel } from "@/features/studio/shared/components/studio-dashboard"
 import { formatBytes } from "@/lib/format"
 import { useI18n } from "@/lib/i18n/use-i18n"
+import { cn } from "@/lib/utils"
 import type { StudioArtifact } from "@/types/artifact"
 
 export function ArtifactListPanel({
@@ -35,47 +35,48 @@ export function ArtifactListPanel({
   }, [artifacts, query])
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("studio.artifacts.list")}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <label className="relative block">
-          <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-          <Input className="pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("studio.artifacts.searchPlaceholder")} />
-        </label>
+    <StudioPanel title={t("studio.artifacts.list")} contentClassName="space-y-3">
+      <SearchField
+        aria-label={t("studio.artifacts.searchPlaceholder")}
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder={t("studio.artifacts.searchPlaceholder")}
+      />
 
-        {!filtered.length ? (
-          <EmptyState title={t("studio.artifacts.empty")} description={t("studio.artifacts.emptyDescription")} />
-        ) : (
-          <div className="space-y-2">
-            {filtered.map((artifact) => (
+      {!filtered.length ? (
+        <EmptyState title={t("studio.artifacts.empty")} description={t("studio.artifacts.emptyDescription")} />
+      ) : (
+        <div className="rk-scroll max-h-[36rem] divide-y divide-border overflow-auto rounded-xl border border-border">
+          {filtered.map((artifact) => {
+            const selected = artifact.artifactKey === selectedArtifactKey
+            return (
               <Link
                 key={artifact.artifactKey}
                 href={`/studio/artifacts/runs/${encodeURIComponent(runId)}?artifact=${encodeURIComponent(artifact.artifactKey)}`}
-                className={[
-                  "block rounded-md border p-3 transition-colors hover:border-primary/50 hover:bg-secondary/40",
-                  artifact.artifactKey === selectedArtifactKey ? "border-primary/50 bg-primary/10" : "border-border"
-                ].join(" ")}
+                aria-current={selected ? "true" : undefined}
+                className={cn(
+                  "block px-4 py-3 outline-none transition-colors focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50",
+                  selected ? "bg-accent" : "hover:bg-accent/40"
+                )}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">{artifact.artifactKey}</p>
-                    <p className="mt-1 truncate text-xs text-muted-foreground">{artifact.relativePath ?? t("studio.artifacts.noPath")}</p>
+                    <p className="truncate text-[13.5px] font-medium text-foreground">{artifact.artifactKey}</p>
+                    <p className="mt-0.5 truncate text-label text-muted-foreground">{artifact.relativePath ?? t("studio.artifacts.noPath")}</p>
                   </div>
                   <Badge variant={artifact.readError ? "danger" : "info"}>{artifact.previewKind}</Badge>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-label text-faint-foreground">
                   <span>{artifact.contentType ?? "unknown"}</span>
-                  <span>{formatBytes(artifact.sizeBytes)}</span>
+                  <span className="tabular-nums">{formatBytes(artifact.sizeBytes)}</span>
                   {artifact.truncated ? <span>{t("studio.artifacts.truncated")}</span> : null}
                   {artifact.redacted ? <span>{t("studio.artifacts.redacted")}</span> : null}
                 </div>
               </Link>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            )
+          })}
+        </div>
+      )}
+    </StudioPanel>
   )
 }

@@ -13,7 +13,7 @@ export function ArtifactRunSummaryGrid({ run }: { run: StudioArtifactRunSummary 
       <StudioMetricCard label={t("studio.artifacts.events")} value={formatNumber(run.eventCount)} detail={t("studio.artifacts.runtimeEvents")} icon={Workflow} />
       <StudioMetricCard label={t("studio.artifacts.stepResults")} value={formatNumber(run.stepResultCount)} detail={t("studio.artifacts.stepOutputRecords")} icon={ListTree} />
       <StudioMetricCard label={t("common.status")} value={formatStatus(locale, run.status)} detail={run.profile ?? t("studio.artifacts.unknownProfile")} icon={FileJson2} />
-      <StudioMetricCard label={t("studio.runs.started")} value={<span className="text-sm">{formatDateTime(run.startedAt)}</span>} detail={t("studio.artifacts.runStartTime")} icon={Clock} />
+      <StudioMetricCard label={t("studio.runs.started")} value={<span className="text-body1 font-medium">{formatDateTime(run.startedAt)}</span>} detail={t("studio.artifacts.runStartTime")} icon={Clock} />
     </StudioMetricGrid>
   )
 }

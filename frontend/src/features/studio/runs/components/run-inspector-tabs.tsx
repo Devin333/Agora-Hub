@@ -6,6 +6,7 @@ import { MemoryHitList } from "@/features/studio/runs/components/memory-hit-list
 import { RunLogList } from "@/features/studio/runs/components/run-log-list"
 import { RunQualityPanel } from "@/features/studio/runs/components/run-quality-panel"
 import { ToolCallList } from "@/features/studio/runs/components/tool-call-list"
+import { StudioSegmentTabs } from "@/features/studio/shared/components/studio-filters"
 import { useRunInspectorStore, type InspectorTab } from "@/stores/run-inspector-store"
 import type { AgentRunDetail } from "@/types/agent"
 
@@ -23,22 +24,11 @@ export function RunInspectorTabs({ detail }: { detail: AgentRunDetail }) {
   const setActiveTab = useRunInspectorStore((state) => state.setActiveTab)
 
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex gap-1 overflow-x-auto border-b border-border p-2">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`h-8 shrink-0 rounded-md px-3 text-sm transition-colors ${
-              activeTab === tab.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
+    <section className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="border-b border-border p-3">
+        <StudioSegmentTabs tabs={tabs} active={activeTab} onChange={setActiveTab} className="w-fit max-w-full" />
       </div>
-      <div className="max-h-[720px] overflow-auto p-4">
+      <div className="rk-scroll max-h-[720px] overflow-auto p-4">
         {activeTab === "logs" ? <RunLogList logs={detail.logs} /> : null}
         {activeTab === "tools" ? <ToolCallList calls={detail.toolCalls} /> : null}
         {activeTab === "memory" ? <MemoryHitList hits={detail.memoryHits} /> : null}

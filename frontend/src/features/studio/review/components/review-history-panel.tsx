@@ -19,21 +19,23 @@ export function ReviewHistoryPanel({
   const events = history ?? eventsFromItems(items ?? [])
 
   return (
-    <StudioPanel title={title ?? t("studio.review.operationHistory")} actions={<Badge variant="muted">{events.length}</Badge>} contentClassName="space-y-3">
+    <StudioPanel title={title ?? t("studio.review.operationHistory")} actions={<Badge variant="muted">{events.length}</Badge>}>
       {events.length ? (
-        events.map((event) => (
-          <div key={event.id} className="rounded-md border border-border bg-background p-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="default">{formatStatus(locale, event.type)}</Badge>
-              {event.status ? <span className="text-xs text-muted-foreground">{formatStatus(locale, event.status)}</span> : null}
-              {event.actor ? <span className="text-xs text-muted-foreground">{t("studio.review.byActor", { actor: event.actor })}</span> : null}
-              {event.at ? <span className="text-xs text-muted-foreground">{formatLocalizedDateTime(locale, event.at)}</span> : null}
-            </div>
-            {event.reason ? <p className="mt-2 text-sm leading-6 text-muted-foreground">{event.reason}</p> : null}
-          </div>
-        ))
+        <ol className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+          {events.map((event) => (
+            <li key={event.id} className="px-4 py-3">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-label text-muted-foreground">
+                <Badge variant="default">{formatStatus(locale, event.type)}</Badge>
+                {event.status ? <span>{formatStatus(locale, event.status)}</span> : null}
+                {event.actor ? <span>{t("studio.review.byActor", { actor: event.actor })}</span> : null}
+                {event.at ? <span className="tabular-nums">{formatLocalizedDateTime(locale, event.at)}</span> : null}
+              </div>
+              {event.reason ? <p className="mt-1.5 text-body2 text-muted-foreground">{event.reason}</p> : null}
+            </li>
+          ))}
+        </ol>
       ) : (
-        <p className="text-sm text-muted-foreground">{t("studio.review.noDecisions")}</p>
+        <p className="text-body2 text-muted-foreground">{t("studio.review.noDecisions")}</p>
       )}
     </StudioPanel>
   )

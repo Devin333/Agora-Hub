@@ -11,23 +11,23 @@ export function StepDetailPanel({ step }: { step?: AgentStep }) {
   }
 
   return (
-    <section className="space-y-4 rounded-lg border border-border bg-card p-4">
+    <section className="min-w-0 space-y-3 rounded-2xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold text-foreground">{step.label}</h2>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">{step.id}</p>
+          <h2 className="text-[15px] font-semibold text-foreground">{step.label}</h2>
+          <p className="mt-0.5 font-mono text-label text-muted-foreground">{step.id}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5">
           <Badge tone={statusTone(step.status)}>{formatRunStatus(step.status)}</Badge>
           <Badge tone="neutral">{step.type}</Badge>
         </div>
       </div>
 
       {step.errorMessage ? (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{step.errorMessage}</div>
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-body2 text-destructive-text">{step.errorMessage}</div>
       ) : null}
 
-      <dl className="grid gap-3 sm:grid-cols-3">
+      <dl className="grid gap-2 sm:grid-cols-3">
         <Field label="节点" value={step.nodeId} />
         <Field label="开始" value={formatDateTime(step.startedAt)} />
         <Field label="耗时" value={formatDuration(step.durationMs)} />
@@ -36,16 +36,16 @@ export function StepDetailPanel({ step }: { step?: AgentStep }) {
       <JsonPreview label="输入预览" value={step.inputPreview} />
       <JsonPreview label="输出预览" value={step.outputPreview} />
 
-      <div className="rounded-md border border-border bg-secondary/40 p-3">
-        <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">产物</p>
+      <div className="rounded-xl border border-border px-3 py-2.5">
+        <p className="text-label text-muted-foreground">产物</p>
         {step.artifactIds?.length ? (
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-1.5">
             {step.artifactIds.map((artifactId) => (
               <Badge key={artifactId} tone="accent">{artifactId}</Badge>
             ))}
           </div>
         ) : (
-          <p className="mt-2 text-sm text-muted-foreground">这个步骤没有附加产物。</p>
+          <p className="mt-1 text-body2 text-muted-foreground">这个步骤没有附加产物。</p>
         )}
       </div>
     </section>
@@ -54,9 +54,9 @@ export function StepDetailPanel({ step }: { step?: AgentStep }) {
 
 function Field({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-secondary/40 p-3">
-      <dt className="text-xs uppercase tracking-normal text-muted-foreground">{label}</dt>
-      <dd className="mt-1 truncate text-sm text-foreground">{value}</dd>
+    <div className="min-w-0 rounded-xl border border-border px-3 py-2.5">
+      <dt className="text-label text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 truncate text-[13.5px] font-medium text-foreground">{value}</dd>
     </div>
   )
 }

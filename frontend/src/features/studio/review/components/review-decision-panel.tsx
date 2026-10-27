@@ -6,6 +6,7 @@ import { ErrorState } from "@/components/common/error-state"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useReviewActions } from "@/features/studio/review/hooks/use-review-actions"
+import { StudioNotice, StudioPanel } from "@/features/studio/shared/components/studio-dashboard"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type { ReviewActionRequest, ReviewActionResult, ReviewDecisionAction, StudioReviewItem } from "@/types/review"
 
@@ -66,34 +67,30 @@ export function ReviewDecisionPanel({
   const showApprovalButtons = item.actionKind === "approval_decision"
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="mb-4 flex items-start gap-3">
-        <ShieldAlert className="mt-0.5 size-5 text-primary" />
-        <div>
-          <h2 className="text-sm font-semibold text-foreground">{t("studio.review.decision")}</h2>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">{disabledReason ?? decisionSummary(item, t)}</p>
-        </div>
-      </div>
+    <StudioPanel
+      title={t("studio.review.decision")}
+      description={disabledReason ?? decisionSummary(item, t)}
+      actions={<ShieldAlert size={16} strokeWidth={1.8} aria-hidden="true" className="text-muted-foreground" />}
+      className="h-fit"
+      contentClassName="space-y-3"
+    >
 
       {error ? <ErrorState title={error.title ?? t("studio.review.actionFailed")} message={error.message} /> : null}
       {success ? (
-        <div className="mb-4 rounded-lg border border-success/30 bg-success/10 p-3 text-sm text-success">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="size-4" />
-            <span>{success}</span>
-          </div>
+        <div role="status">
+          <StudioNotice tone="success">{success}</StudioNotice>
         </div>
       ) : null}
 
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2">
         {showApprovalButtons ? (
           <>
             <Button disabled={Boolean(disabledReason) || isSubmitting} onClick={() => beginAction("approve")} type="button">
-              <CheckCircle2 className="size-4" />
+              <CheckCircle2 size={15} strokeWidth={1.8} aria-hidden="true" />
               {t("studio.review.approve")}
             </Button>
             <Button disabled={Boolean(disabledReason) || isSubmitting} onClick={() => beginAction("reject")} type="button" variant="destructive">
-              <XCircle className="size-4" />
+              <XCircle size={15} strokeWidth={1.8} aria-hidden="true" />
               {t("studio.review.reject")}
             </Button>
           </>
@@ -108,7 +105,7 @@ export function ReviewDecisionPanel({
               {t("studio.review.confirmDescription", { approvalId: item.approvalId })}
             </DialogDescription>
           </DialogHeader>
-          <div className="mt-4 flex justify-end gap-2">
+          <div className="mt-2 flex justify-end gap-2">
             <Button disabled={isSubmitting} onClick={() => setPendingRequest(null)} type="button" variant="outline">
               {t("common.cancel")}
             </Button>
@@ -118,7 +115,7 @@ export function ReviewDecisionPanel({
           </div>
         </DialogContent>
       </Dialog>
-    </section>
+    </StudioPanel>
   )
 }
 

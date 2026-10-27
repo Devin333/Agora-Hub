@@ -6,17 +6,17 @@ import type { ToolCall } from "@/types/agent"
 
 export function ToolCallCard({ call }: { call: ToolCall }) {
   return (
-    <article className="space-y-3 rounded-md border border-border bg-secondary/35 p-3">
+    <article className="space-y-3 px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">{call.toolName}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
+        <div className="min-w-0">
+          <h3 className="text-[13.5px] font-medium text-foreground">{call.toolName}</h3>
+          <p className="mt-0.5 text-label text-muted-foreground">
             {formatDateTime(call.startedAt)} · {formatDuration(call.durationMs)}
           </p>
         </div>
         <Badge tone={statusTone(call.status)}>{formatRunStatus(call.status)}</Badge>
       </div>
-      {call.errorMessage ? <p className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive">{call.errorMessage}</p> : null}
+      {call.errorMessage ? <p className="rounded-lg bg-destructive/10 px-3 py-2 text-body2 text-destructive-text">{call.errorMessage}</p> : null}
       <JsonPreview label="参数" value={call.argsPreview} />
       <JsonPreview label="结果" value={call.resultPreview} />
     </article>

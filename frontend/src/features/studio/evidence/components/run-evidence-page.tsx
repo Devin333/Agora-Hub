@@ -20,15 +20,15 @@ import type { StudioRunEvidenceDetail } from "@/types/evidence"
 export function RunEvidencePage({ detail }: { detail: StudioRunEvidenceDetail }) {
   const { t, dataState, status } = useI18n()
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.module.evidenceCenter.title")}
         title={detail.workflowName ?? detail.runId}
         description={t("studio.evidence.runDetailDescription")}
         actions={
-          <Button asChild variant="outline">
+          <Button asChild variant="outline" size="sm">
             <Link href="/studio/evidence">
-              <ArrowLeft className="size-4" />
+              <ArrowLeft size={15} strokeWidth={1.8} aria-hidden="true" />
               {t("studio.evidence.backToEvidence")}
             </Link>
           </Button>
@@ -43,7 +43,7 @@ export function RunEvidencePage({ detail }: { detail: StudioRunEvidenceDetail })
       <NoticeList notices={detail.notices} tone={detail.dataState === "ready" ? "success" : "warning"} />
 
       <StudioMetricGrid className="xl:grid-cols-5 2xl:grid-cols-5">
-        <StudioMetricCard label={t("studio.runs.runId")} value={<span className="text-sm">{detail.runId}</span>} detail={detail.reportId ? `${t("studio.evidence.report")} ${detail.reportId}` : t("studio.evidence.noReportLinked")} icon={Route} />
+        <StudioMetricCard label={t("studio.runs.runId")} value={<span className="block truncate font-mono text-body2">{detail.runId}</span>} detail={detail.reportId ? `${t("studio.evidence.report")} ${detail.reportId}` : t("studio.evidence.noReportLinked")} icon={Route} />
         <StudioMetricCard label={t("studio.evidence.decision")} value={detail.qualityDecision ? status(detail.qualityDecision) : t("common.unknown")} detail={detail.qualityRoute ?? t("studio.evidence.noQualityRoute")} icon={Gauge} tone={detail.qualityDecision === "blocked" ? "danger" : "accent"} />
         <StudioMetricCard label={t("studio.evidence.accepted")} value={detail.counts.accepted} detail={t("studio.evidence.supported")} icon={CheckCircle2} tone="success" />
         <StudioMetricCard label={t("studio.evidence.rejected")} value={detail.counts.rejected} detail={t("studio.evidence.rejected")} icon={XCircle} tone="danger" />
@@ -60,7 +60,7 @@ export function RunEvidencePage({ detail }: { detail: StudioRunEvidenceDetail })
       <QualityLineageGraph claims={detail.claims} />
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <ClaimSupportTable claims={detail.claims} />
-        <div className="space-y-4">
+        <div className="space-y-3">
           <UnsupportedClaimsPanel claims={detail.claims} />
           <LlmTracePanel trace={detail.llmTrace} />
         </div>

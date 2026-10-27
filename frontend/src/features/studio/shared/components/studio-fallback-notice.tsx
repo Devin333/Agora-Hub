@@ -15,14 +15,14 @@ export function StudioFallbackNotice({
   const resolvedRequestId = requestId ?? error?.requestId
 
   return (
-    <section className="rounded-md border border-warning/30 bg-warning/10 p-4 text-sm">
+    <section role="status" className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-body2">
       <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 size-5 shrink-0 text-warning" />
+        <AlertTriangle size={16} strokeWidth={1.8} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-warning">{title ?? t("studio.fallback.title")}</p>
-          <p className="mt-1 leading-6 text-foreground">{message}</p>
+          <p className="font-medium text-warning-text">{title ?? t("studio.fallback.title")}</p>
+          <p className="mt-1 text-foreground/80">{message}</p>
           {resolvedRequestId ? (
-            <p className="mt-2 font-mono text-xs text-muted-foreground">request_id={resolvedRequestId}</p>
+            <p className="mt-2 font-mono text-label text-muted-foreground">request_id={resolvedRequestId}</p>
           ) : null}
           {action ? <div className="mt-3">{action}</div> : null}
         </div>

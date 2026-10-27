@@ -11,12 +11,14 @@ import { ArtifactListPanel } from "@/features/studio/artifacts/components/artifa
 import { ArtifactStatusBadge } from "@/features/studio/artifacts/components/artifact-status-badge"
 import { LineageViewer } from "@/features/studio/artifacts/components/lineage-viewer"
 import { ReplayBundleViewer } from "@/features/studio/artifacts/components/replay-bundle-viewer"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
   StudioField,
   StudioFieldGrid,
   StudioPageHeader,
   StudioPanel,
-  StudioTableFrame
+  studioTableCellClass,
+  studioTableHeadClass
 } from "@/features/studio/shared/components/studio-dashboard"
 import { formatDateTime, formatNumber } from "@/lib/format"
 import { useI18n } from "@/lib/i18n/use-i18n"
@@ -25,7 +27,7 @@ import type { StudioArtifactRunDetail, StudioArtifactRunSummary, StudioLineageRe
 export function ArtifactReplayHomePage({ runs, notices }: { runs: StudioArtifactRunSummary[]; notices: string[] }) {
   const { locale, t } = useI18n()
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={locale === "zh" ? "运行时" : "Runtime"}
         title={t("studio.module.artifactReplay.title")}
@@ -33,67 +35,61 @@ export function ArtifactReplayHomePage({ runs, notices }: { runs: StudioArtifact
       />
       <ArtifactNotice notices={notices} />
 
-      <StudioPanel title={t("studio.artifacts.recentRuns")} description={t("studio.artifacts.recentRunsDescription")} contentClassName="p-0">
+      <StudioPanel title={t("studio.artifacts.recentRuns")} description={t("studio.artifacts.recentRunsDescription")} flush>
         {!runs.length ? (
-          <div className="p-4">
-            <EmptyState title={t("studio.artifacts.noRuns")} description={t("studio.artifacts.noRunsDescription")} />
-          </div>
+          <EmptyState title={t("studio.artifacts.noRuns")} description={t("studio.artifacts.noRunsDescription")} />
         ) : (
-          <StudioTableFrame className="border-0 shadow-none">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
-                <thead className="border-b border-border bg-secondary/80 text-xs uppercase text-muted-foreground">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">{t("studio.runs.runId")}</th>
-                    <th className="px-4 py-3 font-medium">{t("common.status")}</th>
-                    <th className="px-4 py-3 font-medium">{t("studio.quality.artifacts")}</th>
-                    <th className="px-4 py-3 font-medium">{t("studio.artifacts.events")}</th>
-                    <th className="px-4 py-3 font-medium">{t("studio.artifacts.stepResults")}</th>
-                    <th className="px-4 py-3 font-medium">{t("studio.artifacts.manifest")}</th>
-                    <th className="px-4 py-3 font-medium">{t("studio.runs.started")}</th>
-                    <th className="px-4 py-3 font-medium">{t("common.actions")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runs.map((run) => (
-                    <tr key={run.runId} className="border-b border-border/70 last:border-b-0 hover:bg-secondary/40">
-                      <td className="max-w-[16rem] px-4 py-3">
-                        <p className="truncate font-medium">{run.runId}</p>
-                        <p className="truncate text-xs text-muted-foreground">{run.workflowId ?? t("studio.artifacts.unknownWorkflow")}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <ArtifactStatusBadge status={run.artifactStatus} />
-                          <span className="text-xs text-muted-foreground">{run.status}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">{formatNumber(run.artifactCount)}</td>
-                      <td className="px-4 py-3">{formatNumber(run.eventCount)}</td>
-                      <td className="px-4 py-3">{formatNumber(run.stepResultCount)}</td>
-                      <td className="max-w-[18rem] truncate px-4 py-3">{run.manifestPath ?? t("studio.artifacts.noManifestPath")}</td>
-                      <td className="px-4 py-3">{formatDateTime(run.startedAt)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <Button asChild variant="outline" size="sm">
-                            <Link href={`/studio/artifacts/runs/${encodeURIComponent(run.runId)}`}>
-                              <Eye className="size-4" />
-                              {t("studio.artifacts.view")}
-                            </Link>
-                          </Button>
-                          <Button asChild variant="ghost" size="sm">
-                            <Link href={`/studio/artifacts/runs/${encodeURIComponent(run.runId)}/replay`}>
-                              <RotateCcw className="size-4" />
-                              {t("studio.artifacts.replay")}
-                            </Link>
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </StudioTableFrame>
+          <Table className="min-w-[1080px] text-body2">
+            <TableHeader className="text-label">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className={studioTableHeadClass}>{t("studio.runs.runId")}</TableHead>
+                <TableHead className={studioTableHeadClass}>{t("common.status")}</TableHead>
+                <TableHead className={studioTableHeadClass}>{t("studio.quality.artifacts")}</TableHead>
+                <TableHead className={studioTableHeadClass}>{t("studio.artifacts.events")}</TableHead>
+                <TableHead className={studioTableHeadClass}>{t("studio.artifacts.stepResults")}</TableHead>
+                <TableHead className={studioTableHeadClass}>{t("studio.artifacts.manifest")}</TableHead>
+                <TableHead className={studioTableHeadClass}>{t("studio.runs.started")}</TableHead>
+                <TableHead className={studioTableHeadClass}>{t("common.actions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {runs.map((run) => (
+                <TableRow key={run.runId} className="hover:bg-accent/40">
+                  <TableCell className={`${studioTableCellClass} max-w-[16rem]`}>
+                    <p className="truncate text-[13.5px] font-medium text-foreground">{run.runId}</p>
+                    <p className="mt-0.5 truncate text-label text-muted-foreground">{run.workflowId ?? t("studio.artifacts.unknownWorkflow")}</p>
+                  </TableCell>
+                  <TableCell className={studioTableCellClass}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ArtifactStatusBadge status={run.artifactStatus} />
+                      <span className="text-label text-muted-foreground">{run.status}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className={`${studioTableCellClass} tabular-nums`}>{formatNumber(run.artifactCount)}</TableCell>
+                  <TableCell className={`${studioTableCellClass} tabular-nums`}>{formatNumber(run.eventCount)}</TableCell>
+                  <TableCell className={`${studioTableCellClass} tabular-nums`}>{formatNumber(run.stepResultCount)}</TableCell>
+                  <TableCell className={`${studioTableCellClass} max-w-[18rem] truncate font-mono text-label text-muted-foreground`}>{run.manifestPath ?? t("studio.artifacts.noManifestPath")}</TableCell>
+                  <TableCell className={`${studioTableCellClass} text-muted-foreground`}>{formatDateTime(run.startedAt)}</TableCell>
+                  <TableCell className={studioTableCellClass}>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/studio/artifacts/runs/${encodeURIComponent(run.runId)}`}>
+                          <Eye size={15} strokeWidth={1.8} aria-hidden="true" />
+                          {t("studio.artifacts.view")}
+                        </Link>
+                      </Button>
+                      <Button asChild variant="ghost" size="sm">
+                        <Link href={`/studio/artifacts/runs/${encodeURIComponent(run.runId)}/replay`}>
+                          <RotateCcw size={15} strokeWidth={1.8} aria-hidden="true" />
+                          {t("studio.artifacts.replay")}
+                        </Link>
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </StudioPanel>
     </main>
@@ -112,7 +108,7 @@ export function ArtifactRunDetailPage({
     detail.artifacts.find((artifact) => artifact.artifactKey === selectedArtifactKey) ?? detail.selectedArtifact
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.module.artifactReplay.title")}
         title={t("studio.artifacts.runArtifacts")}
@@ -120,7 +116,7 @@ export function ArtifactRunDetailPage({
         actions={
           <Button asChild variant="outline">
             <Link href={`/studio/artifacts/runs/${encodeURIComponent(detail.run.runId)}/replay`}>
-              <RotateCcw className="size-4" />
+              <RotateCcw size={16} strokeWidth={1.8} aria-hidden="true" />
               {t("studio.artifacts.replayBundle")}
             </Link>
           </Button>
@@ -139,7 +135,7 @@ export function ArtifactRunDetailPage({
         </StudioFieldGrid>
       </StudioPanel>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(18rem,0.9fr)_minmax(0,1.4fr)]">
+      <section className="grid gap-3 xl:grid-cols-[minmax(18rem,0.9fr)_minmax(0,1.4fr)]">
         <ArtifactListPanel runId={detail.run.runId} artifacts={detail.artifacts} selectedArtifactKey={selectedArtifact?.artifactKey} />
         <ArtifactPreview artifact={selectedArtifact} />
       </section>
@@ -163,7 +159,7 @@ export function ArtifactRunReplayPage({
 }) {
   const { t } = useI18n()
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.module.artifactReplay.title")}
         title={t("studio.artifacts.replayBundle")}
@@ -171,7 +167,7 @@ export function ArtifactRunReplayPage({
         actions={
           <Button asChild variant="outline">
             <Link href={`/studio/artifacts/runs/${encodeURIComponent(replay.runId)}`}>
-              <Archive className="size-4" />
+              <Archive size={16} strokeWidth={1.8} aria-hidden="true" />
               {t("studio.artifacts.backToArtifacts")}
             </Link>
           </Button>
@@ -193,7 +189,7 @@ function ReplayDigest({ replay }: { replay: StudioReplayBundle }) {
       actions={
         <Button asChild variant="ghost" size="sm">
           <Link href={`/studio/artifacts/runs/${encodeURIComponent(replay.runId)}/replay`}>
-            <RotateCcw className="size-4" />
+            <RotateCcw size={16} strokeWidth={1.8} aria-hidden="true" />
             {t("studio.artifacts.openReplay")}
           </Link>
         </Button>

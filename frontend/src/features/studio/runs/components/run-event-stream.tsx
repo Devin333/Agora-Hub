@@ -21,18 +21,18 @@ export function RunEventStream({ events }: { events: RunLogItem[] }) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
       {events.map((event) => (
-        <article key={event.id} className="rounded-md border border-border bg-secondary/35 p-3">
+        <article key={event.id} className="px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={levelTone[event.level]}>{event.level}</Badge>
               {event.eventType ? <Badge tone="neutral">{event.eventType}</Badge> : null}
             </div>
-            <span className="text-xs text-muted-foreground">{formatDateTime(event.timestamp)}</span>
+            <span className="text-label text-muted-foreground">{formatDateTime(event.timestamp)}</span>
           </div>
-          <p className="mt-2 text-sm text-foreground">{event.message}</p>
-          {event.stepId ? <p className="mt-1 font-mono text-xs text-muted-foreground">{event.stepId}</p> : null}
+          <p className="mt-1.5 text-[13.5px] text-foreground">{event.message}</p>
+          {event.stepId ? <p className="mt-0.5 font-mono text-label text-muted-foreground">{event.stepId}</p> : null}
           {event.payload ? <div className="mt-3"><JsonPreview label={t("studio.runs.payload")} value={event.payload} /></div> : null}
         </article>
       ))}

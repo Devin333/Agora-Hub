@@ -24,7 +24,7 @@ export function SourcesPageClient() {
   } = useSources()
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.nav.system")}
         title={t("studio.module.sources.title")}

@@ -1,5 +1,6 @@
 "use client"
 
+import type { ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { AlertTriangle, Ban, Clock3, FileText, Gauge } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -14,8 +15,11 @@ import {
   StudioMetricGrid,
   StudioNotice,
   StudioPanel,
+  type StudioIcon
 } from "@/features/studio/shared/components/studio-dashboard"
 import type { PaperPdfProxyStats } from "@/types/studio"
+
+const PROXY_LIST_CLASS = "divide-y divide-border overflow-hidden rounded-xl border border-border"
 
 export function PaperPdfProxyStatsPanel({ windowHours = 24 }: { windowHours?: number }) {
   const { locale, t, dateTime } = useI18n()
@@ -31,7 +35,7 @@ export function PaperPdfProxyStatsPanel({ windowHours = 24 }: { windowHours?: nu
       <StudioPanel title={t("studio.pdfProxy.title")} description={t("studio.pdfProxy.loading")}>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {[0, 1, 2, 3].map((item) => (
-            <div key={item} className="h-24 animate-pulse rounded-md border border-border bg-secondary/50" />
+            <div key={item} className="h-24 animate-pulse rounded-2xl bg-muted" />
           ))}
         </div>
       </StudioPanel>
@@ -43,7 +47,7 @@ export function PaperPdfProxyStatsPanel({ windowHours = 24 }: { windowHours?: nu
       <StudioNotice tone="danger" title={t("studio.pdfProxy.errorTitle")}>
         <p>{error instanceof Error ? error.message : t("studio.pdfProxy.errorMessage")}</p>
         {error instanceof ApiRequestError && error.requestId ? (
-          <p className="mt-1 font-mono text-xs">requestId={error.requestId}</p>
+          <p className="mt-1 font-mono text-label">requestId={error.requestId}</p>
         ) : null}
       </StudioNotice>
     )
@@ -76,7 +80,7 @@ function PdfProxyStatsContent({ stats }: { stats: PaperPdfProxyStats }) {
   const topError = Object.entries(stats.errorsByCode).sort(([, left], [, right]) => right - left)[0]
   const topHost = stats.topHosts[0]
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {stats.dataState === "partial" || stats.notices.length ? (
         <StudioNotice tone={stats.dataState === "partial" ? "warning" : "info"} title={t("studio.pdfProxy.notice")}>
           <div className="space-y-1">
@@ -94,47 +98,55 @@ function PdfProxyStatsContent({ stats }: { stats: PaperPdfProxyStats }) {
         <StudioMetricCard label={t("studio.pdfProxy.blocked")} value={stats.blockedCount} detail={topHost ? topHost.host : t("studio.pdfProxy.noHostData")} icon={Ban} tone={stats.blockedCount ? "danger" : "neutral"} />
       </StudioMetricGrid>
 
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="rounded-md border border-border bg-background p-3">
-          <div className="mb-2 flex items-center gap-2">
-            <Gauge className="size-4 text-link" />
-            <h3 className="text-sm font-semibold text-foreground">{t("studio.pdfProxy.topHosts")}</h3>
-          </div>
-          <div className="space-y-2">
-            {stats.topHosts.length ? (
-              stats.topHosts.map((host) => (
-                <div key={host.host} className="flex items-center justify-between gap-3 rounded-md bg-secondary/40 px-3 py-2 text-sm">
-                  <span className="truncate font-medium text-foreground">{host.host}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
+      <section className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <ProxyListSection icon={Gauge} title={t("studio.pdfProxy.topHosts")}>
+          {stats.topHosts.length ? (
+            <ul className={PROXY_LIST_CLASS}>
+              {stats.topHosts.map((host) => (
+                <li key={host.host} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="truncate text-[13.5px] font-medium text-foreground">{host.host}</span>
+                  <span className="shrink-0 text-label tabular-nums text-muted-foreground">
                     {t("studio.pdfProxy.hostRow", { requests: host.requestCount, errors: host.errorCount })}
                   </span>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground">{t("studio.pdfProxy.noHostWindow")}</p>
-            )}
-          </div>
-        </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-body2 text-muted-foreground">{t("studio.pdfProxy.noHostWindow")}</p>
+          )}
+        </ProxyListSection>
 
-        <div className="rounded-md border border-border bg-background p-3">
-          <h3 className="text-sm font-semibold text-foreground">{t("studio.pdfProxy.recentErrors")}</h3>
-          <div className="mt-2 space-y-2">
-            {stats.recentErrors.length ? (
-              stats.recentErrors.map((item) => (
-                <div key={`${item.timestamp}-${item.code}-${item.path}`} className="rounded-md bg-secondary/40 px-3 py-2 text-xs">
+        <ProxyListSection icon={AlertTriangle} title={t("studio.pdfProxy.recentErrors")}>
+          {stats.recentErrors.length ? (
+            <ul className={PROXY_LIST_CLASS}>
+              {stats.recentErrors.map((item) => (
+                <li key={`${item.timestamp}-${item.code}-${item.path}`} className="px-4 py-2.5 text-label">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-warning">{item.code}</span>
-                    <span className="text-muted-foreground">{dateTime(item.timestamp)}</span>
+                    <span className="font-mono font-semibold text-warning-text">{item.code}</span>
+                    <span className="tabular-nums text-muted-foreground">{dateTime(item.timestamp)}</span>
                   </div>
-                  <p className="mt-1 truncate text-muted-foreground">{[item.host, item.path].filter(Boolean).join("")}</p>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground">{t("studio.pdfProxy.noRecentErrors")}</p>
-            )}
-          </div>
-        </div>
+                  <p className="mt-0.5 truncate text-muted-foreground">{[item.host, item.path].filter(Boolean).join("")}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-body2 text-muted-foreground">{t("studio.pdfProxy.noRecentErrors")}</p>
+          )}
+        </ProxyListSection>
       </section>
     </div>
+  )
+}
+
+/** Unframed sub-section inside the proxy panel: icon + 13.5px title above a divided list. */
+function ProxyListSection({ icon: Icon, title, children }: { icon: StudioIcon; title: string; children: ReactNode }) {
+  return (
+    <section className="min-w-0 space-y-2">
+      <div className="flex items-center gap-2">
+        <Icon size={16} strokeWidth={1.8} aria-hidden="true" className="text-muted-foreground" />
+        <h3 className="text-[13.5px] font-semibold text-foreground">{title}</h3>
+      </div>
+      {children}
+    </section>
   )
 }

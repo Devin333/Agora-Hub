@@ -39,7 +39,7 @@ export function RunCenterDetailPage({ runId, detail }: { runId: string; detail?:
   const selectedStep = data.steps.find((step) => step.id === selectedStepId) ?? defaultStep
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <PageHeader
         eyebrow={t("studio.runs.detailEyebrow")}
         title={t("studio.runs.observability")}
@@ -56,7 +56,7 @@ export function RunCenterDetailPage({ runId, detail }: { runId: string; detail?:
       ) : null}
 
       {data.run.artifactDir || data.run.manifestPath || data.run.reportId ? (
-        <section className="grid gap-3 rounded-lg border border-border bg-card p-4 text-sm md:grid-cols-3">
+        <section className="grid gap-3 rounded-2xl border border-border bg-card p-4 text-body2 md:grid-cols-3">
           <Meta label={t("studio.runs.report")} value={data.run.reportId} empty={t("common.none")} />
           <Meta label={t("studio.runs.artifactDirectory")} value={data.run.artifactDir} empty={t("common.none")} />
           <Meta label={t("studio.runs.manifest")} value={data.run.manifestPath} empty={t("common.none")} />
@@ -66,7 +66,7 @@ export function RunCenterDetailPage({ runId, detail }: { runId: string; detail?:
       {!data.steps.length ? (
         <EmptyState title={t("studio.runs.noSteps")} description={t("studio.runs.noStepsDescription")} />
       ) : (
-        <section className="grid gap-6 2xl:grid-cols-[minmax(300px,0.9fr)_minmax(360px,1fr)_minmax(420px,1.1fr)]">
+        <section className="grid gap-4 2xl:grid-cols-[minmax(300px,0.9fr)_minmax(360px,1fr)_minmax(420px,1.1fr)]">
           <div className="hidden 2xl:block">
             <WorkflowDag nodes={data.dag.nodes} edges={data.dag.edges} />
           </div>
@@ -84,8 +84,8 @@ export function RunCenterDetailPage({ runId, detail }: { runId: string; detail?:
 function Meta({ label, value, empty }: { label: string; value?: string; empty: string }) {
   return (
     <div className="min-w-0">
-      <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate font-mono text-xs text-foreground">{value ?? empty}</p>
+      <p className="text-label text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate font-mono text-label text-foreground">{value ?? empty}</p>
     </div>
   )
 }

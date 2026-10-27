@@ -1,10 +1,15 @@
 import Link from "next/link"
 import { EmptyState } from "@/components/common/empty-state"
 import { ScoreMeter } from "@/components/common/score-meter"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { AgentRunStatusBadge } from "@/features/studio/runs/components/agent-run-status-badge"
 import { formatDuration, shortRunId } from "@/features/studio/runs/lib/run-format"
+import { StudioTableFrame, studioTableCellClass, studioTableHeadClass } from "@/features/studio/shared/components/studio-dashboard"
+import { cn } from "@/lib/utils"
 import { formatDateTime } from "@/lib/format"
 import type { AgentRun } from "@/types/agent"
+
+const columns = ["运行 ID", "智能体", "配置", "状态", "开始", "耗时", "输入", "输出", "步骤", "产物", "质量", "错误"]
 
 export function AgentRunTable({ runs }: { runs: AgentRun[] }) {
   if (!runs.length) {
@@ -12,47 +17,40 @@ export function AgentRunTable({ runs }: { runs: AgentRun[] }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
-        <thead className="border-b border-border bg-secondary/70 text-xs uppercase text-muted-foreground">
-          <tr>
-            <th className="px-4 py-3 font-medium">运行 ID</th>
-            <th className="px-4 py-3 font-medium">智能体</th>
-            <th className="px-4 py-3 font-medium">配置</th>
-            <th className="px-4 py-3 font-medium">状态</th>
-            <th className="px-4 py-3 font-medium">开始</th>
-            <th className="px-4 py-3 font-medium">耗时</th>
-            <th className="px-4 py-3 font-medium">输入</th>
-            <th className="px-4 py-3 font-medium">输出</th>
-            <th className="px-4 py-3 font-medium">步骤</th>
-            <th className="px-4 py-3 font-medium">产物</th>
-            <th className="px-4 py-3 font-medium">质量</th>
-            <th className="px-4 py-3 font-medium">错误</th>
-          </tr>
-        </thead>
-        <tbody>
+    <StudioTableFrame>
+      <Table className="min-w-[1120px] text-body2">
+        <TableHeader className="text-label">
+          <TableRow className="hover:bg-transparent">
+            {columns.map((column) => (
+              <TableHead key={column} className={studioTableHeadClass}>
+                {column}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {runs.map((run) => (
-            <tr key={run.id} className="border-b border-border/70 last:border-b-0 hover:bg-secondary/40">
-              <td className="px-4 py-3">
-                <Link className="font-mono text-xs font-medium text-link hover:underline" href={`/studio/runs/${encodeURIComponent(run.id)}`}>
+            <TableRow key={run.id}>
+              <TableCell className={studioTableCellClass}>
+                <Link className="font-mono text-label font-medium text-link hover:underline" href={`/studio/runs/${encodeURIComponent(run.id)}`}>
                   {shortRunId(run.id)}
                 </Link>
-              </td>
-              <td className="px-4 py-3 font-medium text-foreground">{run.agentName}</td>
-              <td className="px-4 py-3 text-muted-foreground">{run.profile}</td>
-              <td className="px-4 py-3"><AgentRunStatusBadge status={run.status} /></td>
-              <td className="px-4 py-3 text-muted-foreground">{formatDateTime(run.startedAt)}</td>
-              <td className="px-4 py-3 text-muted-foreground">{formatDuration(run.durationMs)}</td>
-              <td className="px-4 py-3 text-muted-foreground">{run.inputCount}</td>
-              <td className="px-4 py-3 text-muted-foreground">{run.outputCount}</td>
-              <td className="px-4 py-3 text-muted-foreground">{run.stepCount ?? 0}</td>
-              <td className="px-4 py-3 text-muted-foreground">{run.artifactCount}</td>
-              <td className="w-36 px-4 py-3"><ScoreMeter value={run.qualityScore ?? 0} /></td>
-              <td className={run.errorCount > 0 ? "px-4 py-3 font-semibold text-destructive" : "px-4 py-3 text-muted-foreground"}>{run.errorCount}</td>
-            </tr>
+              </TableCell>
+              <TableCell className={cn(studioTableCellClass, "font-medium text-foreground")}>{run.agentName}</TableCell>
+              <TableCell className={cn(studioTableCellClass, "text-muted-foreground")}>{run.profile}</TableCell>
+              <TableCell className={studioTableCellClass}><AgentRunStatusBadge status={run.status} /></TableCell>
+              <TableCell className={cn(studioTableCellClass, "text-muted-foreground")}>{formatDateTime(run.startedAt)}</TableCell>
+              <TableCell className={cn(studioTableCellClass, "tabular-nums text-muted-foreground")}>{formatDuration(run.durationMs)}</TableCell>
+              <TableCell className={cn(studioTableCellClass, "tabular-nums text-muted-foreground")}>{run.inputCount}</TableCell>
+              <TableCell className={cn(studioTableCellClass, "tabular-nums text-muted-foreground")}>{run.outputCount}</TableCell>
+              <TableCell className={cn(studioTableCellClass, "tabular-nums text-muted-foreground")}>{run.stepCount ?? 0}</TableCell>
+              <TableCell className={cn(studioTableCellClass, "tabular-nums text-muted-foreground")}>{run.artifactCount}</TableCell>
+              <TableCell className={cn(studioTableCellClass, "w-36")}><ScoreMeter value={run.qualityScore ?? 0} /></TableCell>
+              <TableCell className={cn(studioTableCellClass, "tabular-nums", run.errorCount > 0 ? "font-semibold text-destructive-text" : "text-muted-foreground")}>{run.errorCount}</TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </Table>
+    </StudioTableFrame>
   )
 }

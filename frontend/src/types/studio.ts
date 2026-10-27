@@ -1,4 +1,5 @@
-import type { ComponentType, ReactNode } from "react"
+import type { LucideIcon } from "lucide-react"
+import type { ReactNode } from "react"
 
 export type StudioApiError = {
   code: string
@@ -16,7 +17,7 @@ export type StudioNavigationItem = {
   label: string
   href: string
   description?: string
-  icon?: ComponentType<{ className?: string }>
+  icon?: LucideIcon
   status?: StudioModuleStatus
 }
 
@@ -32,7 +33,7 @@ export type StudioModuleEntry = {
   coreObject: string
   targetApi: string
   status: StudioModuleStatus
-  icon?: ComponentType<{ className?: string }>
+  icon?: LucideIcon
   actionLabel?: string
 }
 

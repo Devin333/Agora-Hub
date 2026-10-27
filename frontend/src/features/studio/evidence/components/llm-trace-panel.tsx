@@ -1,5 +1,5 @@
 import { EmptyState } from "@/components/common/empty-state"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { StudioCodeBlock, StudioField, StudioPanel } from "@/features/studio/shared/components/studio-dashboard"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type { StudioLlmTrace } from "@/types/evidence"
 
@@ -9,7 +9,7 @@ export function LlmTracePanel({ trace }: { trace?: StudioLlmTrace }) {
     return <EmptyState title={t("studio.evidence.noLlmTrace")} description={t("studio.evidence.noLlmTraceDescription")} />
   }
 
-  const metrics = [
+  const metrics: Array<[string, string | number]> = [
     [t("studio.evidence.deployment"), trace.selectedDeploymentId ?? t("common.unknown")],
     [t("studio.evidence.fallback"), trace.fallbackUsed ? t("common.yes") : t("common.no")],
     [t("studio.evidence.fallbackCount"), trace.fallbackCount ?? 0],
@@ -19,23 +19,13 @@ export function LlmTracePanel({ trace }: { trace?: StudioLlmTrace }) {
   ]
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t("studio.evidence.llmTrace")}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {metrics.map(([label, value]) => (
-            <div key={label} className="rounded-md border border-border bg-secondary/30 p-3">
-              <p className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{label}</p>
-              <p className="mt-1 text-sm font-medium text-foreground">{String(value)}</p>
-            </div>
-          ))}
-        </div>
-        <pre className="max-h-80 overflow-auto rounded-md border border-border bg-secondary/40 p-3 text-xs leading-5 text-foreground">
-          {JSON.stringify(trace.sanitized, null, 2)}
-        </pre>
-      </CardContent>
-    </Card>
+    <StudioPanel title={t("studio.evidence.llmTrace")} contentClassName="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        {metrics.map(([label, value]) => (
+          <StudioField key={label} label={label} value={<span className="block break-words tabular-nums">{String(value)}</span>} />
+        ))}
+      </div>
+      <StudioCodeBlock className="max-h-80">{JSON.stringify(trace.sanitized, null, 2)}</StudioCodeBlock>
+    </StudioPanel>
   )
 }

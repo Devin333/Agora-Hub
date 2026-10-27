@@ -12,6 +12,7 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { StudioNotice, studioFieldClass } from "@/features/studio/shared/components/studio-dashboard"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type {
   StudioQualityDataState,
@@ -66,7 +67,7 @@ export function RequestReviewButton({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button disabled={disabled} title={disabled ? t("studio.quality.requestReviewDisabledTitle") : undefined}>
-          <Send className="size-4" />
+          <Send size={15} strokeWidth={1.8} aria-hidden="true" />
           {t("studio.quality.requestReview")}
         </Button>
       </DialogTrigger>
@@ -76,15 +77,13 @@ export function RequestReviewButton({
           <DialogDescription>{t("studio.quality.requestReviewDescription")}</DialogDescription>
         </DialogHeader>
         {disabled ? (
-          <p className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-            {t("studio.quality.requestReviewDisabled")}
-          </p>
+          <StudioNotice>{t("studio.quality.requestReviewDisabled")}</StudioNotice>
         ) : null}
-        <div className="space-y-4">
+        <div className="space-y-3">
           <label className="block space-y-1.5">
-            <span className="text-sm font-medium text-foreground">{t("studio.runs.reason")}</span>
+            <span className="text-label font-medium text-muted-foreground">{t("studio.runs.reason")}</span>
             <textarea
-              className="min-h-28 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              className={`${studioFieldClass} rk-scroll min-h-28 resize-y py-2 text-[13px]`}
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               placeholder={t("studio.quality.reasonPlaceholder")}
@@ -92,7 +91,7 @@ export function RequestReviewButton({
             />
           </label>
           <label className="block space-y-1.5">
-            <span className="text-sm font-medium text-foreground">{t("studio.quality.requestedBy")}</span>
+            <span className="text-label font-medium text-muted-foreground">{t("studio.quality.requestedBy")}</span>
             <Input
               value={requestedBy}
               onChange={(event) => setRequestedBy(event.target.value)}
@@ -100,18 +99,18 @@ export function RequestReviewButton({
               disabled={disabled || isPending}
             />
           </label>
-          {validation ? <p className="text-sm text-destructive">{validation}</p> : null}
+          {validation ? <p role="alert" className="text-body2 text-destructive-text">{validation}</p> : null}
           {result ? (
             result.ok ? (
-              <div className="rounded-md border border-success/30 bg-success/10 p-3 text-sm text-success">
+              <div role="status" className="rounded-xl border border-success/40 bg-success/10 px-4 py-3 text-body2 text-success-text">
                 <p>{result.message}</p>
-                {result.approvalId ? <p className="mt-1 font-mono">{t("studio.quality.approval", { approvalId: result.approvalId })}</p> : null}
-                {result.requestId ? <p className="mt-1 font-mono">RequestId: {result.requestId}</p> : null}
+                {result.approvalId ? <p className="mt-1 font-mono text-label">{t("studio.quality.approval", { approvalId: result.approvalId })}</p> : null}
+                {result.requestId ? <p className="mt-1 font-mono text-label">RequestId: {result.requestId}</p> : null}
               </div>
             ) : (
-              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-body2 text-destructive-text">
                 <p>{result.errorMessage}</p>
-                {result.requestId ? <p className="mt-1 font-mono">RequestId: {result.requestId}</p> : null}
+                {result.requestId ? <p className="mt-1 font-mono text-label">RequestId: {result.requestId}</p> : null}
               </div>
             )
           ) : null}
@@ -120,7 +119,7 @@ export function RequestReviewButton({
               {t("common.close")}
             </Button>
             <Button type="button" onClick={submit} disabled={disabled || isPending}>
-              <Send className="size-4" />
+              <Send size={15} strokeWidth={1.8} aria-hidden="true" />
               {isPending ? t("studio.runs.submitting") : t("common.submit")}
             </Button>
           </div>

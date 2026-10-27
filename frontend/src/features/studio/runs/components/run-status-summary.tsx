@@ -13,7 +13,7 @@ export function RunStatusSummary({ runs }: { runs: StudioRunListItem[] }) {
 
   return (
     <StudioMetricGrid className="xl:grid-cols-5 2xl:grid-cols-5">
-      <StudioMetricCard label="Total runs" value={runs.length} detail="Loaded from /api/v1/runs" icon={Activity} tone="accent" />
+      <StudioMetricCard label="Total runs" value={runs.length} detail="Loaded from /api/v1/runs" icon={Activity} />
       <StudioMetricCard label="Running" value={running} detail="Active workflows" icon={Clock} tone="info" />
       <StudioMetricCard label="Completed" value={completed} detail="Successful runs" icon={CheckCircle2} tone="success" />
       <StudioMetricCard label="Needs attention" value={failed + waiting} detail={`${failed} failed, ${waiting} blocked`} icon={AlertTriangle} tone={failed + waiting ? "warning" : "neutral"} />
