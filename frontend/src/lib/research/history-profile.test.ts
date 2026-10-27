@@ -59,8 +59,8 @@ describe("research history profile migration", () => {
     expect(validated?.reportDrafts?.[0].notes).toBe("Existing draft remains unchanged")
   })
 
-  it("normalizes the same bookmark idempotently only in local desktop", () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+  it("normalizes the same bookmark idempotently only in the hosted service", () => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     const migrated = validateWorkspace(legacyWorkspace)
     expect(migrated?.visits[0].href).toBe(
       "/papers?question=Agent&researchSession=study-1",

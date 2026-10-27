@@ -14,7 +14,7 @@ export function LoginForm({ defaultNextPath = "/papers" }: { defaultNextPath?: s
   const searchParams = useSearchParams()
   const { t } = useI18n()
   const nextPath = safeNextPath(searchParams.get("next"), defaultNextPath)
-  const [initialized, setInitialized] = useState<boolean | null>(null)
+  const [bootstrapAvailable, setBootstrapAvailable] = useState<boolean | null>(null)
   const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle")
@@ -25,14 +25,14 @@ export function LoginForm({ defaultNextPath = "/papers" }: { defaultNextPath?: s
     fetchAuthSession()
       .then((result) => {
         if (cancelled) return
-        setInitialized(result.initialized)
+        setBootstrapAvailable(result.bootstrapAvailable)
         if (result.session) {
           router.replace(nextPath)
         }
       })
       .catch((requestError) => {
         if (!cancelled) {
-          setInitialized(true)
+          setBootstrapAvailable(false)
           setError(requestError instanceof Error ? requestError.message : t("auth.sessionCheckFailed"))
         }
       })
@@ -46,7 +46,7 @@ export function LoginForm({ defaultNextPath = "/papers" }: { defaultNextPath?: s
     setStatus("loading")
     setError(null)
     try {
-      if (initialized === false) {
+      if (bootstrapAvailable) {
         await bootstrapAccount(username, password)
       } else {
         await login(username, password)
@@ -60,7 +60,7 @@ export function LoginForm({ defaultNextPath = "/papers" }: { defaultNextPath?: s
     }
   }
 
-  const isBootstrap = initialized === false
+  const isBootstrap = bootstrapAvailable === true
   const title = isBootstrap ? t("auth.bootstrap.title") : t("auth.login.title")
 
   return (
@@ -104,7 +104,7 @@ export function LoginForm({ defaultNextPath = "/papers" }: { defaultNextPath?: s
           {error}
         </p>
       ) : null}
-      <Button type="submit" size="xl" className="mt-6 w-full" disabled={status === "loading" || initialized === null}>
+      <Button type="submit" size="xl" className="mt-6 w-full" disabled={status === "loading" || bootstrapAvailable === null}>
         {status === "loading" ? t("auth.working") : isBootstrap ? t("auth.createAccount") : t("auth.signIn")}
       </Button>
     </AuthFrame>

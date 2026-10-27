@@ -38,8 +38,6 @@ export const personalMemoryPolicySchema = z.object({
 export const personalMemoryInfoSchema = z.object({
   storage: z.string().optional(),
   status: z.string().optional(),
-  data_root: z.string().max(4096).optional(),
-  database_path: z.string().max(4096).optional(),
   remote_processing_default: z.boolean().optional(),
   remote_processing_channel_defaults: personalMemoryRemoteProcessingPermissionsSchema.optional(),
   remote_processing_channels: z.array(z.enum(["model", "tool", "embedding"])).max(3).optional(),

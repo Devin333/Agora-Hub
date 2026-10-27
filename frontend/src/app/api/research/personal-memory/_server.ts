@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { safeApiDelete, safeApiPatch, safeApiPut, type SafeApiResult } from "@/lib/api/server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
 import { authFailure, isSameOrigin, readBoundedJson } from "@/lib/auth/portal-server"
-import { desktopCanonicalOrigin } from "@/lib/deployment-profile"
+import { serverOwnedMutationOriginHeaders } from "@/lib/deployment-profile"
 import { desktopFailure, desktopGet, desktopPost } from "@/lib/research/desktop/server-proxy"
 
 const PRIVATE_HEADERS = {
@@ -40,7 +40,7 @@ async function personalMemoryMutation(
   if (!token) return authFailure("auth_required", 401)
   const headers = {
     "X-Newsroom-Session": token,
-    "Origin": desktopCanonicalOrigin(),
+    ...serverOwnedMutationOriginHeaders(),
     "Content-Type": "application/json",
   }
   const signal = AbortSignal.any([request.signal, AbortSignal.timeout(120000)])

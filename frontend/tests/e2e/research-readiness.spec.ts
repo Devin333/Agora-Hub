@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from "./fixtures"
 const fingerprint = `sha256:${"a".repeat(64)}`
 const generation = "gen_0123456789abcdef0123456789abcdef"
 
-interface DesktopFixtureState {
+interface ResearchFixtureState {
   owner: string
   analyzePosts: number
   operationGets: number
@@ -12,15 +12,15 @@ interface DesktopFixtureState {
   workspace: Record<string, unknown>
 }
 
-test.describe("local desktop research regression", () => {
+test.describe("hosted research regression", () => {
   test.skip(
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE !== "local-desktop",
-    "requires the local-desktop profile",
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE !== "hosted",
+    "requires the hosted profile",
   )
 
   test("migrates legacy reader URLs and preserves query location", async ({ page, baseURL }) => {
     const state = fixtureState()
-    await installDesktopFixture(page, baseURL, state)
+    await installResearchFixture(page, baseURL, state)
     await page.goto(
       `/design-demo/papers/2601.01234/read?resumeSection=methods&resumePage=3&returnTo=${encodeURIComponent("/design-demo/papers?q=Agent")}`,
     )
@@ -35,7 +35,7 @@ test.describe("local desktop research regression", () => {
     baseURL,
   }) => {
     const state = fixtureState()
-    await installDesktopFixture(page, baseURL, state)
+    await installResearchFixture(page, baseURL, state)
     await page.goto("/papers/2601.01234/read")
     await expect(page.getByRole("heading", { name: "Owner alice paper" })).toBeVisible()
 
@@ -57,7 +57,7 @@ test.describe("local desktop research regression", () => {
 
   test("clears owner-scoped reader data after account change", async ({ page, baseURL }) => {
     const state = fixtureState()
-    await installDesktopFixture(page, baseURL, state)
+    await installResearchFixture(page, baseURL, state)
     await page.goto("/papers/2601.01234/read")
     await expect(page.getByRole("heading", { name: "Owner alice paper" })).toBeVisible()
 
@@ -72,12 +72,12 @@ test.describe("local desktop research regression", () => {
     await expect(page.getByRole("heading", { name: "Owner alice paper" })).toHaveCount(0)
   })
 
-  test("keeps primary desktop reader actions visible and keyboard reachable", async ({
+  test("keeps primary reader actions visible and keyboard reachable", async ({
     page,
     baseURL,
   }) => {
     const state = fixtureState()
-    await installDesktopFixture(page, baseURL, state)
+    await installResearchFixture(page, baseURL, state)
     const viewports = [
       { name: "1366x768", width: 1366, height: 768 },
       { name: "1920x1080", width: 1920, height: 1080 },
@@ -123,7 +123,7 @@ test.describe("local desktop research regression", () => {
   })
 })
 
-function fixtureState(): DesktopFixtureState {
+function fixtureState(): ResearchFixtureState {
   return {
     owner: "alice",
     analyzePosts: 0,
@@ -134,15 +134,15 @@ function fixtureState(): DesktopFixtureState {
   }
 }
 
-async function installDesktopFixture(
+async function installResearchFixture(
   page: Page,
   baseURL: string | undefined,
-  state: DesktopFixtureState,
+  state: ResearchFixtureState,
 ) {
   await page.context().addCookies([
     {
       name: "newsroom_session",
-      value: "desktop-e2e-session",
+      value: "research-e2e-session",
       url: baseURL ?? "http://127.0.0.1:3000",
     },
   ])
@@ -151,13 +151,8 @@ async function installDesktopFixture(
       json: {
         success: true,
         data: {
-          local_desktop: {
-            deployment_profile: "local-desktop",
-            instance_key: `local-desktop:${baseURL ?? "http://127.0.0.1:3000"}`,
-            release_id: "desktop-e2e-release",
-            config_digest: "a".repeat(64),
-            boot_id: "b".repeat(32),
-          },
+          initialized: true,
+          bootstrapAvailable: false,
           session: {
             sessionId: `session-${state.owner}`,
             expiresAt: "2099-12-31T00:00:00Z",
@@ -227,7 +222,7 @@ async function installDesktopFixture(
   })
 }
 
-function readerPayload(state: DesktopFixtureState) {
+function readerPayload(state: ResearchFixtureState) {
   const paper = {
     id: "2601.01234",
     slug: "2601.01234",
@@ -283,7 +278,7 @@ function readerPayload(state: DesktopFixtureState) {
   }
 }
 
-function durableOperation(state: DesktopFixtureState, requestId: string) {
+function durableOperation(state: ResearchFixtureState, requestId: string) {
   const operations = Array.isArray(state.workspace.pendingOperations)
     ? state.workspace.pendingOperations
     : []

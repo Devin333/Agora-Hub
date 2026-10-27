@@ -1,5 +1,5 @@
 /*
- * Paper Agent settings and local data dialogs, on the Rakazo settings recipe: a 200px
+ * Paper Agent settings dialog, on the Rakazo settings recipe: a 200px
  * navigation column beside a scrolling content column, grouped hairline cards and real
  * status colors (success / warning / destructive) from styles/theme-tokens.css.
  */
@@ -36,7 +36,7 @@
 .header h2 { margin: 2px 0 6px; font-size: 20px; font-weight: 600; line-height: 28px; letter-spacing: -.01em; }
 .header p { margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; }
 .eyebrow { margin: 0; color: var(--faint-foreground) !important; font-size: 12px !important; font-weight: 500; }
-.headerActions, .hostActions { display: flex; align-items: center; gap: 8px; }
+.headerActions { display: flex; align-items: center; gap: 8px; }
 
 .primaryButton, .secondaryButton, .iconButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 12px; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color 100ms ease, color 100ms ease; }
 .primaryButton { padding: 0 12px; color: var(--primary-foreground); background: var(--primary); }
@@ -60,7 +60,6 @@
 .summaryCard div { display: grid; min-width: 0; gap: 3px; }
 .summaryCard span { color: var(--muted-foreground); font-size: 12px; }
 .summaryCard strong { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
-.phaseDot { flex: 0 0 auto; width: 10px; height: 10px; margin: 0 4px; background: var(--tone, var(--muted-foreground)); border-radius: 50%; box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone, var(--muted-foreground)) 20%, transparent); }
 
 .sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .card { min-width: 0; padding: 18px 20px; background: var(--dialog); border: 1px solid var(--border); border-radius: 16px; }
@@ -77,18 +76,18 @@
 .definitionList > div:last-child { border-bottom: 0; }
 .definitionList dt { color: var(--muted-foreground); font-size: 13px; }
 .definitionList dd { min-width: 0; margin: 0; font-size: 13px; text-align: right; }
-.definitionList code, .hostFacts code, .events code { font-family: theme("fontFamily.mono"); font-size: 12px; overflow-wrap: anywhere; white-space: normal; }
+.definitionList code { font-family: theme("fontFamily.mono"); font-size: 12px; overflow-wrap: anywhere; white-space: normal; }
 
-.notice, .gapNotice, .browserNotice, .policyState { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 12px; }
+.notice, .gapNotice, .policyState { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 12px; }
 .notice { color: var(--foreground); background: var(--settings-well); }
 .notice svg { color: var(--muted-foreground); }
-.gapNotice, .browserNotice, .policyWarning { color: var(--foreground); background: color-mix(in srgb, var(--warning) 12%, transparent); }
-.gapNotice svg, .browserNotice svg, .policyWarning svg { color: var(--warning); }
+.gapNotice, .policyWarning { color: var(--foreground); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.gapNotice svg, .policyWarning svg { color: var(--warning); }
 .policySafe { color: var(--foreground); background: color-mix(in srgb, var(--success) 12%, transparent); }
 .policySafe svg { color: var(--success); }
-.notice svg, .gapNotice svg, .browserNotice svg, .policyState svg { flex: 0 0 auto; margin-top: 1px; }
-.notice strong, .gapNotice strong, .browserNotice strong, .policyState strong { font-size: 13px; font-weight: 600; }
-.notice p, .gapNotice p, .browserNotice p, .policyState p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.55; }
+.notice svg, .gapNotice svg, .policyState svg { flex: 0 0 auto; margin-top: 1px; }
+.notice strong, .gapNotice strong, .policyState strong { font-size: 13px; font-weight: 600; }
+.notice p, .gapNotice p, .policyState p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.55; }
 
 .capabilityList { display: grid; margin: 0; padding: 0; overflow: hidden; list-style: none; border: 1px solid var(--border); border-radius: 12px; }
 .capabilityList li { padding: 12px 16px; border-bottom: 1px solid var(--border); }
@@ -115,98 +114,48 @@
 .dataTable strong { font-weight: 600; }
 .dataTable span { color: var(--muted-foreground); line-height: 1.45; }
 
-.hostBody { display: grid; gap: 12px; }
-.hostStatus { display: flex; align-items: center; gap: 10px; }
-.hostStatus strong { font-size: 13.5px; font-weight: 600; }
-.hostStatus p { margin: 3px 0 0; color: var(--muted-foreground); font-size: 12px; }
-.hostFacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
-.hostFacts div { min-width: 0; padding: 10px 12px; background: var(--settings-well); border-radius: 12px; }
-.hostFacts dt { color: var(--muted-foreground); font-size: 11.5px; }
-.hostFacts dd { margin: 4px 0 0; font-size: 12px; overflow-wrap: anywhere; }
-.events > strong { font-size: 13px; font-weight: 600; }
-.events > p { color: var(--muted-foreground); font-size: 12px; }
-.events ul { display: grid; gap: 4px; margin: 7px 0 0; padding: 0; list-style: none; }
-.events li { display: grid; grid-template-columns: minmax(115px, auto) auto 1fr auto; align-items: center; gap: 7px; padding: 7px 10px; background: var(--settings-well); border-radius: 10px; font-size: 11.5px; }
-.events time { color: var(--muted-foreground); }
 .spinner { animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.maintenanceBox { display: grid; gap: 10px; margin-top: 14px; }
 .maintenanceActions { display: flex; flex-wrap: wrap; gap: 8px; }
-.maintenanceResult { padding: 12px 14px; border-radius: 12px; font-size: 12px; }
-.maintenanceResult strong { font-size: 13px; }
-.maintenanceResult p { margin: 5px 0; }
-.maintenanceResult span { display: block; margin-top: 5px; line-height: 1.5; }
-.restorePreview { display: grid; gap: 5px; }
-.restorePreview .secondaryButton { justify-self: start; margin-top: 5px; }
 
 .configEditor { display: grid; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
-.configStatus, .credentialBox { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.configStatus > div, .credentialBox > div:first-child { display: grid; gap: 4px; }
-.configStatus span, .credentialBox span, .credentialBox small { color: var(--muted-foreground); font-size: 12px; line-height: 1.45; }
+.configStatus { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.configStatus > div { display: grid; gap: 4px; }
+.configStatus span { color: var(--muted-foreground); font-size: 12px; line-height: 1.45; }
 .configFieldset { min-width: 0; margin: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; }
 .configFieldset legend { padding: 0 6px; font-size: 13px; font-weight: 600; }
-.checkField { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; }
-.checkField input { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); }
-.fixedFacts { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 9px 0; color: var(--muted-foreground); font-size: 12px; }
 .formGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .formGrid label { display: grid; min-width: 0; gap: 6px; color: var(--foreground); font-size: 12.5px; font-weight: 500; }
-.formGrid input, .clearConfirmationField input { width: 100%; min-height: 36px; padding: 0 12px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); border-radius: 10px; font: inherit; font-size: 13px; font-weight: 400; transition: border-color 100ms ease, box-shadow 100ms ease; }
-:global([data-theme="dark"]) .formGrid input, :global([data-theme="dark"]) .clearConfirmationField input { background: var(--input); }
-.formGrid input:focus-visible, .clearConfirmationField input:focus-visible { border-color: var(--ring); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent); }
+.formGrid input { width: 100%; min-height: 36px; padding: 0 12px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); border-radius: 10px; font: inherit; font-size: 13px; font-weight: 400; transition: border-color 100ms ease, box-shadow 100ms ease; }
+:global([data-theme="dark"]) .formGrid input { background: var(--input); }
+.formGrid input:focus-visible { border-color: var(--ring); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent); }
 .formGrid input[aria-invalid="true"] { border-color: var(--destructive); }
-.formGrid input:disabled, .clearConfirmationField input:disabled { color: var(--faint-foreground); background: var(--settings-well); cursor: not-allowed; }
+.formGrid input:disabled { color: var(--faint-foreground); background: var(--settings-well); cursor: not-allowed; }
 .formGrid small { color: var(--destructive-text); font-size: 12px; font-weight: 500; line-height: 1.4; }
 .wideField { grid-column: 1 / -1; }
-.credentialBox { padding: 12px 16px; background: var(--settings-well); border-radius: 12px; }
 .configActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.configPreview, .configResult { display: grid; gap: 7px; padding: 12px 14px; border-radius: 12px; font-size: 12px; line-height: 1.5; }
-.configPreview { color: var(--foreground); background: var(--settings-well); border: 1px solid var(--border); }
-.configPreview .primaryButton { justify-self: start; margin-top: 3px; }
-.configResult { margin-top: 0; }
 .draftWarning { color: var(--warning-text); font-weight: 500; }
 
-/* Local data clear: the only destructive flow, so it alone uses the destructive tint. */
-.clearCard { border-color: color-mix(in srgb, var(--destructive) 35%, transparent); }
-.clearCard .sectionHeading svg { color: var(--destructive); }
-.clearPanel { display: grid; gap: 13px; }
-.clearIntro, .clearUnavailable, .clearBlocked, .clearPrepared, .clearResult, .clearError { display: flex; align-items: flex-start; gap: 10px; }
-.clearIntro { padding: 12px 14px; background: var(--settings-well); border-radius: 12px; }
-.clearIntro > div, .clearUnavailable > div, .clearPrepared > div, .clearResult > div { display: grid; gap: 4px; }
-.clearIntro p, .clearUnavailable p, .clearPrepared p, .clearResult p, .clearStatus p, .clearFinal p { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.55; }
-.clearIntro svg, .clearUnavailable svg, .clearBlocked svg, .clearPrepared svg, .clearResult svg, .clearError svg { flex: 0 0 auto; margin-top: 1px; }
-.clearDisclosure { display: grid; gap: 7px; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
-.clearDisclosure p { margin: 0; }
-.clearUnavailable { padding: 12px 14px; background: var(--settings-well); border-radius: 12px; }
-.clearBlocked { padding: 10px 14px; color: var(--foreground); background: color-mix(in srgb, var(--warning) 12%, transparent); border-radius: 12px; font-size: 12px; line-height: 1.5; }
-.clearBlocked svg { color: var(--warning); }
-.clearActions, .clearConfirmActions { display: flex; flex-wrap: wrap; gap: 8px; }
-.clearPreviewButton, .clearApplyButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border: 1px solid transparent; border-radius: 12px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background-color 100ms ease; }
-.clearPreviewButton { color: var(--foreground); background: transparent; border-color: var(--border); }
-.clearPreviewButton:hover:not(:disabled) { background: var(--accent); }
-.clearApplyButton { color: var(--destructive-foreground); background: var(--destructive-fill); }
-.clearApplyButton:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive-fill) 88%, var(--foreground)); }
-.clearPreviewButton:focus-visible, .clearApplyButton:focus-visible { outline: 3px solid color-mix(in srgb, var(--ring) 50%, transparent); outline-offset: 1px; }
-.clearPreviewButton:disabled, .clearApplyButton:disabled { cursor: not-allowed; opacity: .5; }
-.clearPreview { display: grid; gap: 12px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--destructive) 35%, transparent); border-radius: 12px; }
-.clearPreviewHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.clearPreviewHeader > div { display: grid; gap: 4px; }
-.clearPreviewHeader span { color: var(--muted-foreground); font-size: 12px; }
-.clearFacts { display: grid; gap: 8px; margin: 0; }
-.clearFacts > div { display: grid; grid-template-columns: minmax(100px, .35fr) minmax(0, 1fr); gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.clearFacts dt { color: var(--muted-foreground); font-size: 12px; font-weight: 500; }
-.clearFacts dd { min-width: 0; margin: 0; font-size: 12px; overflow-wrap: anywhere; }
-.clearScopeList { display: grid; gap: 6px; }
-.clearScopeList > strong { font-size: 13px; }
-.clearScopeList ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--muted-foreground); font-size: 12px; line-height: 1.45; }
-.clearConfirmationField { display: grid; gap: 7px; font-size: 12.5px; font-weight: 500; }
-.clearMismatch { margin: -4px 0 0; color: var(--destructive-text); font-size: 12px; font-weight: 500; }
-.clearPrepared, .clearResult, .clearStatus, .clearFinal { padding: 12px 14px; border-radius: 12px; font-size: 12px; line-height: 1.5; }
-.clearPrepared, .clearResult { background: color-mix(in srgb, var(--warning) 12%, transparent); }
-.clearPrepared svg, .clearResult svg { color: var(--warning); }
-.clearStatus { background: var(--settings-well); }
-.clearFinal { background: color-mix(in srgb, var(--success) 12%, transparent); }
-.clearError { margin: 0; padding: 9px 12px; color: var(--destructive-text); background: color-mix(in srgb, var(--destructive) 10%, transparent); border-radius: 12px; font-size: 12px; font-weight: 500; line-height: 1.45; }
+.formGrid select, .accountMain select { width: 100%; min-height: 36px; padding: 0 10px; color: var(--foreground); background: var(--background); border: 1px solid var(--border); border-radius: 10px; font: inherit; font-size: 13px; font-weight: 400; }
+:global([data-theme="dark"]) .formGrid select, :global([data-theme="dark"]) .accountMain select { background: var(--input); }
+.formGrid select:focus-visible, .accountMain select:focus-visible { border-color: var(--ring); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent); }
+.configStatus small { color: var(--faint-foreground); font-size: 11.5px; }
+.footnote code { font-family: theme("fontFamily.mono"); font-size: 11.5px; overflow-wrap: anywhere; }
+.resultLine { margin: 0; padding: 9px 12px; color: var(--foreground); background: color-mix(in srgb, var(--tone, var(--success)) 12%, transparent); border-radius: 12px; font-size: 13px; font-weight: 500; }
+
+/* Account administration: one grouped row per account. */
+.accountList { display: grid; margin: 0; padding: 0; overflow: hidden; list-style: none; border: 1px solid var(--border); border-radius: 12px; }
+.accountList li { display: grid; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.accountList li:last-child { border-bottom: 0; }
+.accountList p { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.45; }
+.accountMain { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.accountMain select { width: auto; min-height: 30px; }
+.issuedPassword { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 14px; background: color-mix(in srgb, var(--warning) 12%, transparent); border-radius: 12px; }
+.issuedPassword > div:first-child { display: grid; gap: 6px; min-width: 0; }
+.issuedPassword strong { font-size: 13px; font-weight: 600; }
+.issuedPassword p { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.55; }
+.issuedPassword code { justify-self: start; padding: 6px 10px; background: var(--dialog); border: 1px solid var(--border); border-radius: 8px; font-family: theme("fontFamily.mono"); font-size: 13px; user-select: all; overflow-wrap: anywhere; }
 
 @media (max-width: 860px) {
   .navigable { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
@@ -226,15 +175,9 @@
   .definitionList dd { text-align: left; }
   .dataTable > div { grid-template-columns: 1fr; gap: 3px; }
   .dataTableHeader { display: none; }
-  .hostFacts { grid-template-columns: 1fr; }
-  .events li { grid-template-columns: 1fr auto; }
-  .events li span { grid-column: 1 / -1; }
-  .configStatus, .credentialBox { align-items: stretch; flex-direction: column; }
+  .configStatus { align-items: stretch; flex-direction: column; }
   .formGrid { grid-template-columns: 1fr; }
   .wideField { grid-column: auto; }
-  .configActions > button, .credentialBox .maintenanceActions > button { flex: 1; }
-  .clearPreviewHeader, .clearFacts > div { grid-template-columns: 1fr; }
-  .clearPreviewHeader { flex-direction: column; }
-  .clearActions > button, .clearConfirmActions > button { flex: 1 1 100%; }
+  .configActions > button { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

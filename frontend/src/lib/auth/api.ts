@@ -15,6 +15,9 @@ type ApiEnvelope<T> = {
 
 export type AuthSessionStatus = {
   initialized: boolean
+  // Only a fresh default-profile install offers browser bootstrap; a hosted
+  // service creates its first administrator from the server CLI.
+  bootstrapAvailable: boolean
   session: AuthSession | null
 }
 

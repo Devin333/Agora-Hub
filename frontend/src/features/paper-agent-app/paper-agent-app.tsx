@@ -1,13 +1,13 @@
 "use client"
 
-import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { Bookmark, BookOpen, Brain, ChevronLeft, FilePlus2, FolderPen, Library, LoaderCircle, Menu, PanelLeftClose, Plus, RefreshCw, Search, Settings, Sparkles, Tag, Trash2, Wifi, WifiOff, X } from "lucide-react"
 import { usePortalAccount } from "@/components/auth/portal-account-provider"
 import { BrandMark } from "@/components/brand/brand-mark"
 import { useAppearanceOptions } from "@/components/theme/appearance-menu"
 import { ResearchSourceEntry } from "@/features/portal/components/research-source-entry"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { modelCredentialChangedEvent } from "@/lib/account/model-credential-events"
+import { openSettingsEvent, parseSettingsSection, settingsQueryKey, settingsSectionFrom, type SettingsSection } from "@/lib/account/settings-navigation"
 import { fetchDesktopCapabilities, fetchDesktopIdentity, fetchResearchOperation } from "@/lib/research/desktop/client"
 import type { DesktopCapabilities, DesktopIdentity } from "@/lib/research/desktop/contracts"
 import { historyState, removeResearchGroup, saveResearchGroup, saveResearchMaterial } from "@/lib/research/history"
@@ -40,7 +40,6 @@ import {
 } from "./model"
 import type { PersonalMemoryPolicy, PersonalMemoryRecord } from "./personal-memory-client"
 import { PersonalMemoryPanel } from "./personal-memory-panel"
-import { PaperAgentPreAuthDataClearModal } from "./paper-agent-data-clear-panel"
 import { PaperAgentSettingsModal } from "./paper-agent-settings-panel"
 import { PaperReaderPane } from "./paper-reader-pane"
 import { useDesktopLifecycle } from "./desktop-lifecycle"
@@ -48,7 +47,7 @@ import styles from "./paper-agent-app.module.css"
 
 const filterLabels: Record<LibraryFilter, string> = { all: "全部论文", unread: "未读", saved: "我的收藏" }
 const sortLabels: Record<LibrarySort, string> = { "updated-desc": "最近更新", "created-desc": "最近入库", "title-asc": "标题 A–Z" }
-const settingsDiscardMessage = "设置中仍有尚未应用的修改。关闭后将放弃这些输入，是否继续？"
+const settingsDiscardMessage = "设置中仍有尚未保存的输入。关闭后将放弃这些输入，是否继续？"
 
 export function requestSettingsModalClose(
   dirty: boolean,
@@ -86,6 +85,7 @@ export function PaperAgentApp() {
   const [listOpen, setListOpen] = useState(false)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | undefined>(undefined)
   const [settingsDraftDirty, setSettingsDraftDirty] = useState(false)
   const [identity, setIdentity] = useState<DesktopIdentity | null>(null)
   const [capabilities, setCapabilities] = useState<DesktopCapabilities | null>(null)
@@ -144,18 +144,26 @@ export function PaperAgentApp() {
     return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update) }
   }, [])
 
+  // Bumped when the account's model key changes, so the capability summary re-reads.
+  const [capabilityRevision, setCapabilityRevision] = useState(0)
+  useEffect(() => {
+    const onChanged = () => setCapabilityRevision(value => value + 1)
+    window.addEventListener(modelCredentialChangedEvent, onChanged)
+    return () => window.removeEventListener(modelCredentialChangedEvent, onChanged)
+  }, [])
+
   useEffect(() => {
     if (!owner) { setIdentity(null); setCapabilities(null); return }
     const controller = new AbortController()
     setRuntimeError("")
     Promise.all([fetchDesktopIdentity(controller.signal), fetchDesktopCapabilities(controller.signal)])
       .then(([nextIdentity, nextCapabilities]) => {
-        if (nextIdentity.owner.userId !== owner) throw new Error("desktop identity 与当前登录 owner 不一致。")
+        if (nextIdentity.owner.userId !== owner) throw new Error("研究服务返回的账号与当前登录账号不一致，已停止读取。请刷新页面或重新登录。")
         setIdentity(nextIdentity); setCapabilities(nextCapabilities)
       })
       .catch(cause => { if (!controller.signal.aborted) setRuntimeError(cause instanceof Error ? cause.message : "研究运行能力读取失败。") })
     return () => controller.abort()
-  }, [owner])
+  }, [capabilityRevision, owner])
 
   useEffect(() => {
     if (selectedId && materials.some(item => item.id === selectedId)) return
@@ -175,6 +183,30 @@ export function PaperAgentApp() {
       reportSettingsDraft(false)
     })
   }, [reportSettingsDraft])
+  const openSettingsAt = useCallback((section?: SettingsSection) => {
+    setSettingsSection(section)
+    setSettingsOpen(true)
+  }, [])
+
+  // Research surfaces ask for the section that fixes their failure (for example the model key);
+  // claiming the event tells them the dialog is here, so they do not navigate.
+  useEffect(() => {
+    const onOpenSettings = (event: Event) => { event.preventDefault(); openSettingsAt(settingsSectionFrom(event)) }
+    window.addEventListener(openSettingsEvent, onOpenSettings)
+    return () => window.removeEventListener(openSettingsEvent, onOpenSettings)
+  }, [openSettingsAt])
+
+  // Pages without the dialog send the user here with ?settings=<section>; open it once signed in.
+  const signedIn = Boolean(account?.session)
+  useEffect(() => {
+    if (!signedIn) return
+    const url = new URL(window.location.href)
+    const section = parseSettingsSection(url.searchParams.get(settingsQueryKey))
+    if (!section) return
+    url.searchParams.delete(settingsQueryKey)
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`)
+    openSettingsAt(section)
+  }, [openSettingsAt, signedIn])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -222,7 +254,7 @@ export function PaperAgentApp() {
   const otherDraftDirty = workspace.dirty || Boolean(onlineQuery.trim() && onlineQuery.trim() !== submittedOnlineQuery) || memoryDraftDirty || readerUnsaved
   const lifecycleDirty = otherDraftDirty || settingsDraftDirty
   const lifecycleSummary = lifecycleDirty || activeTaskCount
-    ? `${settingsDraftDirty ? "设置有待应用修改" : "设置无待应用修改"}；${otherDraftDirty ? "另有未保存草稿" : "无其他未保存草稿"}；${activeTaskCount} 个活动请求`
+    ? `${settingsDraftDirty ? "设置有未保存输入" : "设置无未保存输入"}；${otherDraftDirty ? "另有未保存草稿" : "无其他未保存草稿"}；${activeTaskCount} 个活动请求`
     : undefined
   useDesktopLifecycle({ dirty: lifecycleDirty, activeTaskCount, summary: lifecycleSummary })
 
@@ -366,9 +398,9 @@ export function PaperAgentApp() {
     else { if (groupId === id) setGroupId(null); setOnlineNotice("分组已删除；其中材料保留并改为未分组，等待同步确认。") }
   }
 
-  if (!account) return <AppState title="无法初始化论文工作台" detail="请刷新页面；若仍无法打开，请重新登录并检查桌面应用或站点部署是否完整。" />
+  if (!account) return <AppState title="无法初始化论文工作台" detail="请刷新页面；若仍无法打开，请重新登录或联系管理员检查服务状态。" />
   if (!account.resolved) return <AppState title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
-  if (!account.session) return <AuthGate localDesktop={isLocalDesktopProfile()} hasProtectedDrafts={lifecycleDirty} activeTaskCount={activeTaskCount} onLogin={element => account.openLogin(element)} error={account.error ?? workspace.message} />
+  if (!account.session) return <AuthGate onLogin={element => account.openLogin(element)} error={account.error ?? workspace.message} />
   const sessionOwner = account.session.user.userId
   if (!workspace.ready || owner !== sessionOwner) {
     if (owner === sessionOwner && (workspace.status === "error" || workspace.status === "conflict")) {
@@ -395,7 +427,7 @@ export function PaperAgentApp() {
         <div className={styles.groupCreate}><input maxLength={60} value={newGroupName} onChange={event => setNewGroupName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); createGroup() } }} placeholder="新建分组" aria-label="新分组名称" /><button type="button" aria-label="创建分组" disabled={!newGroupName.trim()} onClick={createGroup}><Plus size={14} /></button></div>
         {allTags.length > 0 && <><span className={styles.navLabel}>标签</span><div className={styles.tagNavigation}>{allTags.map(tag => <button type="button" key={tag} data-active={tagFilter === tag || undefined} onClick={() => { setTagFilter(tagFilter === tag ? "" : tag); setGroupId(null); setFilter("all"); setNavOpen(false) }}><Tag size={13} />{tag}<small>{materials.filter(item => materialTags(item).includes(tag)).length}</small></button>)}</div></>}
       </nav>
-      <div className={styles.sidebarBottom}><button type="button" onClick={() => setMemoryOpen(true)}><Brain size={16} /><span>个人记忆</span><small>管理</small></button><button type="button" onClick={() => setSettingsOpen(true)}><Settings size={16} /><span>设置与诊断</span></button><AppearanceSwitch /><div className={styles.connectionState} data-online={online || undefined}>{online ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{online ? "网络已连接" : "离线模式"}</span></div></div>
+      <div className={styles.sidebarBottom}><button type="button" onClick={() => setMemoryOpen(true)}><Brain size={16} /><span>个人记忆</span><small>管理</small></button><button type="button" onClick={() => openSettingsAt()}><Settings size={16} /><span>设置</span></button><AppearanceSwitch /><div className={styles.connectionState} data-online={online || undefined}>{online ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{online ? "网络已连接" : "离线模式"}</span></div></div>
     </aside>}
 
     {!focusMode && <section ref={listDrawerRef} tabIndex={-1} className={`${styles.libraryPane} ${listOpen ? styles.drawerOpen : ""}`} aria-label="论文列表">
@@ -419,9 +451,9 @@ export function PaperAgentApp() {
       })}</div>}</section>
     </section>}
 
-    <section id="paper-reader-main" className={styles.mainPane}><div className={styles.workspaceTopbar}>{!focusMode && <><button type="button" className={styles.compactControl} aria-label="打开导航" onClick={() => setNavOpen(true)}><Menu size={16} /></button><button type="button" className={styles.compactControl} aria-label="收起或打开论文列表" onClick={() => setListOpen(value => !value)}><PanelLeftClose size={16} /></button></>}<div className={styles.capabilitySummary}><span data-ready={Boolean(identity) || undefined}>{identity ? `owner ${identity.owner.userId}` : "正在读取 identity"}</span><span>{capabilities ? `${capabilities.capabilities.filter(item => item.verified).length}/${capabilities.capabilities.length} 能力已验证` : "能力待核对"}</span></div><label className={styles.memoryToggle} title={memoryAllowed ? "本任务是否选择已授权记忆；默认关闭。" : "请先在个人记忆中保存允许远程处理的 policy。"}><input type="checkbox" checked={taskUsesMemory} disabled={!memoryAllowed} onChange={event => setUseMemory(event.target.checked)} />使用已授权记忆</label><button type="button" className={styles.assistantButton} disabled={!selectedPaperId} aria-expanded={assistantOpen} onClick={() => setAssistantOpen(value => !value)}><Sparkles size={15} />{assistantOpen ? "关闭助手" : "打开助手"}</button></div>{runtimeError && <p role="alert" className={styles.runtimeError}>{runtimeError}</p>}{workspace.status === "conflict" || workspace.status === "error" ? <p role="alert" className={styles.runtimeError}>工作区{workspace.status === "conflict" ? "存在 revision 冲突" : "保存失败"}：{workspace.message}。待保存草稿仍保留，可在条目上重试。</p> : null}{selectedPaperId ? <PaperReaderPane key={`${memoryScope}:${selectedPaperId}`} owner={owner} paperId={selectedPaperId} online={online} onActivityChange={setReaderBusy} onTaskStateChange={handleReaderTaskState} appearance={theme} assistantOpen={assistantOpen} focusMode={focusMode} initialTab={readerTab} onAssistantClose={() => setAssistantOpen(false)} onFocusChange={setFocusMode} onTabChange={setReaderTab} useMemory={taskUsesMemory} memoryAllowed={memoryAllowed} onUseMemoryChange={setUseMemory} /> : <EmptyReader material={selected} hasMaterials={materials.length > 0} onImport={() => window.dispatchEvent(new Event("agora-open-pdf-import"))} />}</section>
+    <section id="paper-reader-main" className={styles.mainPane}><div className={styles.workspaceTopbar}>{!focusMode && <><button type="button" className={styles.compactControl} aria-label="打开导航" onClick={() => setNavOpen(true)}><Menu size={16} /></button><button type="button" className={styles.compactControl} aria-label="收起或打开论文列表" onClick={() => setListOpen(value => !value)}><PanelLeftClose size={16} /></button></>}<div className={styles.capabilitySummary}><span data-ready={Boolean(identity) || undefined}>{identity ? account.session.user.username : "正在连接账号空间"}</span><span>{capabilities ? `${capabilities.capabilities.filter(item => item.verified).length}/${capabilities.capabilities.length} 能力已验证` : "能力待核对"}</span></div><label className={styles.memoryToggle} title={memoryAllowed ? "本任务是否选择已授权记忆；默认关闭。" : "请先在个人记忆中保存允许远程处理的 policy。"}><input type="checkbox" checked={taskUsesMemory} disabled={!memoryAllowed} onChange={event => setUseMemory(event.target.checked)} />使用已授权记忆</label><button type="button" className={styles.assistantButton} disabled={!selectedPaperId} aria-expanded={assistantOpen} onClick={() => setAssistantOpen(value => !value)}><Sparkles size={15} />{assistantOpen ? "关闭助手" : "打开助手"}</button></div>{runtimeError && <p role="alert" className={styles.runtimeError}>{runtimeError}</p>}{workspace.status === "conflict" || workspace.status === "error" ? <p role="alert" className={styles.runtimeError}>工作区{workspace.status === "conflict" ? "存在 revision 冲突" : "保存失败"}：{workspace.message}。待保存草稿仍保留，可在条目上重试。</p> : null}{selectedPaperId ? <PaperReaderPane key={`${memoryScope}:${selectedPaperId}`} owner={owner} paperId={selectedPaperId} online={online} onActivityChange={setReaderBusy} onTaskStateChange={handleReaderTaskState} appearance={theme} assistantOpen={assistantOpen} focusMode={focusMode} initialTab={readerTab} onAssistantClose={() => setAssistantOpen(false)} onFocusChange={setFocusMode} onTabChange={setReaderTab} useMemory={taskUsesMemory} memoryAllowed={memoryAllowed} onUseMemoryChange={setUseMemory} /> : <EmptyReader material={selected} hasMaterials={materials.length > 0} onImport={() => window.dispatchEvent(new Event("agora-open-pdf-import"))} />}</section>
     {(navOpen || listOpen) && <button type="button" className={styles.mobileScrim} aria-label="关闭抽屉" onClick={() => { setNavOpen(false); setListOpen(false) }} />}
-    <PaperAgentSettingsModal open={settingsOpen} overlayClassName={styles.settingsOverlay} hasOtherDrafts={otherDraftDirty} activeTaskCount={activeTaskCount} onRequestClose={requestSettingsClose} onDraftChange={reportSettingsDraft} />
+    <PaperAgentSettingsModal open={settingsOpen} overlayClassName={styles.settingsOverlay} initialSection={settingsSection} onRequestClose={requestSettingsClose} onDraftChange={reportSettingsDraft} />
     <PersonalMemoryPanel key={memoryScope} open={memoryOpen} namespace={memoryNamespace} sourceContext={selected ? { sourceRef: selected.referenceId ?? selected.id, label: selected.title, ...(selectedNotebook?.sourceRevision ? { sourceRevision: selectedNotebook.sourceRevision } : {}) } : null} onClose={() => setMemoryOpen(false)} onAuthorizedChange={handleAuthorizedMemoryChange} onPolicyChange={handleMemoryPolicyChange} onDraftChange={handleMemoryDraftChange} onActivityChange={handleMemoryActivityChange} />
   </main>
 }
@@ -469,11 +501,8 @@ function AppearanceSwitch() {
 
 // Pre-workspace screens render outside the workspace shell; they share its markers so shell-scoped styles apply.
 function AppState({ title, detail, busy, onRetry }: { title: string; detail: string; busy?: boolean; onRetry?: () => void }) { return <main className={styles.statePage} data-paper-agent-shell role={busy ? "status" : "alert"}>{busy ? <LoaderCircle className={styles.spinner} size={24} /> : <BookOpen size={24} />}<h1>{title}</h1><p>{detail}</p>{onRetry && <button type="button" className={styles.primaryButton} onClick={onRetry}>重试读取论文库</button>}</main> }
-function AuthGate({ localDesktop, hasProtectedDrafts, activeTaskCount, onLogin, error }: { localDesktop: boolean; hasProtectedDrafts: boolean; activeTaskCount: number; onLogin: (element: HTMLElement) => void; error?: string }) {
-  const [dataClearOpen, setDataClearOpen] = useState(false)
-  return <main className={styles.authGate} data-paper-agent-shell><section><BrandMark size={74} /><h1>你的论文、原文与研究记录</h1><p>{localDesktop ? "首次使用请创建本机账号；已有账号请直接登录。完成后会返回论文工作台，并读取该 owner 的私有论文库。" : "登录后读取同一 owner 的私有论文库、来源修订、笔记、请求恢复与报告。公开 catalog 不会被当成你的收藏。"}</p>{error && <p role="alert" className={styles.errorText}>{error}</p>}{localDesktop ? <><Link className={styles.primaryButton} href="/login?next=/paper-agent">创建或登录本机账号</Link><button type="button" className={styles.secondaryButton} onClick={() => setDataClearOpen(true)}>管理/清除本机数据</button><p>无法登录或本机维护未完成时，可在不读取私有论文、笔记或个人记忆的前提下检查并重新确认当前操作系统用户所属资料目录的清除状态。</p></> : <button type="button" className={styles.primaryButton} onClick={event => onLogin(event.currentTarget)}>登录并打开论文库</button>}</section>
-      {localDesktop && <PaperAgentPreAuthDataClearModal open={dataClearOpen} overlayClassName={styles.settingsOverlay} hasProtectedDrafts={hasProtectedDrafts} activeTaskCount={activeTaskCount} onRequestClose={() => setDataClearOpen(false)} />}
-  </main>
+function AuthGate({ onLogin, error }: { onLogin: (element: HTMLElement) => void; error?: string }) {
+  return <main className={styles.authGate} data-paper-agent-shell><section><BrandMark size={74} /><h1>你的论文、原文与研究记录</h1><p>登录后读取你账号下的私有论文库、来源修订、笔记、请求恢复与报告。账号由管理员创建；没有账号请联系管理员。</p>{error && <p role="alert" className={styles.errorText}>{error}</p>}<button type="button" className={styles.primaryButton} onClick={event => onLogin(event.currentTarget)}>登录并打开论文库</button></section></main>
 }
 function EmptyReader({ material, hasMaterials, onImport }: { material: PaperAgentMaterial | null; hasMaterials: boolean; onImport: () => void }) {
   const source = material ? materialSourceUrl(material) : null

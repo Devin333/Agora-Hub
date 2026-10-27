@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
-
-const DEFAULT_API_BASE_URL = "http://localhost:8000"
+import { apiBaseUrl } from "@/lib/deployment-profile"
 
 export async function proxyBackendBinary(path: string) {
   const response = await fetch(backendUrl(path), {
@@ -34,9 +33,8 @@ export async function proxyBackendBinary(path: string) {
 
 function backendUrl(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) return path
-  const baseUrl = process.env.NEWSROOM_API_BASE_URL ?? DEFAULT_API_BASE_URL
   const suffix = path.startsWith("/") ? path : `/${path}`
-  return `${baseUrl.replace(/\/$/, "")}${suffix}`
+  return `${apiBaseUrl()}${suffix}`
 }
 
 function requestHeaders(): HeadersInit {

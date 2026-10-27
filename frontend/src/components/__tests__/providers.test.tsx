@@ -52,14 +52,14 @@ describe("Providers route isolation", () => {
     vi.unstubAllGlobals()
   })
 
-  it.each(["/login", "/login/"])("suppresses legacy global commands on exact local-desktop login route %s without bypassing shared providers", (pathname) => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+  it.each(["/login", "/login/"])("suppresses legacy global commands on exact hosted login route %s without bypassing shared providers", (pathname) => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     navigationState.pathname = pathname
     useUiStore.setState({ locale: "zh", appearance: "dark" })
 
-    render(<Providers><div>Desktop login</div></Providers>)
+    render(<Providers><div>Hosted login</div></Providers>)
 
-    expect(screen.getByText("Desktop login")).toBeInTheDocument()
+    expect(screen.getByText("Hosted login")).toBeInTheDocument()
     expect(screen.getByTestId("portal-account-provider")).toBeInTheDocument()
     expect(screen.getByTestId("research-history-runtime")).toBeInTheDocument()
     expect(screen.queryByTestId("research-command-palette")).not.toBeInTheDocument()
@@ -100,8 +100,8 @@ describe("Providers route isolation", () => {
     expect(screen.getByTestId("research-command-palette")).toBeInTheDocument()
   })
 
-  it("does not suppress global commands on a similarly prefixed local-desktop route", () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+  it("does not suppress global commands on a similarly prefixed hosted route", () => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     navigationState.pathname = "/login/help"
 
     render(<Providers><div>Login help</div></Providers>)

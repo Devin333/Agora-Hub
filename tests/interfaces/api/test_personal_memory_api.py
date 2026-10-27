@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
@@ -235,8 +236,9 @@ def test_personal_memory_complete_management_recall_export_and_policy_flow(
         assert not {"api_key", "token", "secret"} & set(export_data["policy"])
 
         info = client.get(f"{BASE}/info", headers=_headers()).json()["data"]["info"]
-        assert info["storage"] == "local_sqlite"
-        assert info["database_path"].endswith("personal-memory.sqlite3")
+        assert info["storage"] == "server_sqlite"
+        assert not {"data_root", "database_path"} & set(info)
+        assert "personal-memory.sqlite3" not in json.dumps(info)
         assert info["remote_processing_default"] is False
         assert info["remote_processing_channel_defaults"] == {
             "model": False,

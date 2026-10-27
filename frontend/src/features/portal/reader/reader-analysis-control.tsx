@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react"
 import { ArrowUpRight, ChartNoAxesColumn, LoaderCircle, RefreshCw, Square } from "lucide-react"
+import { ModelCredentialAction } from "@/components/account/model-credential-action"
 import { Button } from "@/components/ui/button"
 import type { Paper } from "@/lib/papers/types"
 import { ReaderTaskCard, ReaderTaskStatus } from "./reader-task-card"
 import {
+  DesktopResearchError,
   fetchDesktopIdentity,
   fetchResearchOperation,
   submitResearchAnalyze,
@@ -70,12 +72,15 @@ export function ReaderAnalysisControl({
   const [operation, setOperation] = useState<ResearchOperation | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  // Code of a failure thrown before an operation existed (for example a missing model key).
+  const [errorCode, setErrorCode] = useState<string | null>(null)
+  const clearError = () => { setError(""); setErrorCode(null) }
   const active = useRef<AbortController | null>(null)
 
   useEffect(() => {
     active.current?.abort()
     setBusy(false)
-    setError("")
+    setError(""); setErrorCode(null)
     operationPersonalMemoryRef.current = undefined
     const saved = recoverableResearchOperations("analyze").find(
       item =>
@@ -212,7 +217,7 @@ export function ReaderAnalysisControl({
     const controller = new AbortController()
     active.current = controller
     setBusy(true)
-    setError("")
+    clearError()
     let preparedView: ResearchOperation | null = null
     try {
       const identity = await fetchDesktopIdentity(controller.signal)
@@ -303,6 +308,7 @@ export function ReaderAnalysisControl({
         setOperation(uncertain)
         updateResearchOperation(uncertain.requestId, { status: "unknown" })
       }
+      setErrorCode(!controller.signal.aborted && cause instanceof DesktopResearchError ? cause.code : null)
       setError(
         controller.signal.aborted
           ? "已停止等待；分析任务没有被标记为取消，可按请求身份继续核对。"
@@ -327,7 +333,7 @@ export function ReaderAnalysisControl({
     const controller = new AbortController()
     active.current = controller
     setBusy(true)
-    setError("")
+    clearError()
     try {
       const response = await fetchResearchOperation(
         operation.requestId,
@@ -362,6 +368,7 @@ export function ReaderAnalysisControl({
   const exactSource = hasExactSourceIdentity(sourceRevision, sourceFingerprint)
   const runId = initialRunId || (operation?.status === "passed" ? operation.runId : undefined)
   const terminal = operation && ["failed", "rejected", "needs_action"].includes(operation.status)
+  const failureCode = errorCode ?? (terminal ? operation.errorCode : null)
 
   return (
     <ReaderTaskCard
@@ -370,6 +377,7 @@ export function ReaderAnalysisControl({
       description="报告只来自通过质量门的真实分析运行。"
       warning={exactSource ? undefined : "来源修订身份尚未确认，当前不能开始分析。"}
       error={error}
+      errorAction={<ModelCredentialAction code={failureCode} />}
     >
       {runId ? (
         <a
@@ -390,7 +398,7 @@ export function ReaderAnalysisControl({
               onClick={() => {
                 setOperation(null)
                 operationPersonalMemoryRef.current = undefined
-                setError("")
+                clearError()
               }}
             >
               使用新请求身份重试

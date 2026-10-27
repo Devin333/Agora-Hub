@@ -181,7 +181,7 @@ vi.mock("@/features/portal/reader/reader-preparation-control", () => ({
 }))
 
 vi.mock("@/lib/deployment-profile", () => ({
-  isLocalDesktopProfile: () => true,
+  isHostedProfile: () => true,
 }))
 
 vi.mock("./user-export", () => ({

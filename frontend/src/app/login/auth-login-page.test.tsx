@@ -45,7 +45,7 @@ describe("LoginPage", () => {
   })
 
   it("shows first-admin bootstrap when auth is uninitialized", async () => {
-    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: false, session: null })
+    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: false, bootstrapAvailable: true, session: null })
     vi.mocked(bootstrapAccount).mockResolvedValue({
       user: { userId: "user-1", username: "admin", role: "admin" },
       sessionId: "sess-1",
@@ -75,7 +75,7 @@ describe("LoginPage", () => {
 
   it("shows login after initialization and respects safe next paths", async () => {
     navigation.searchParams = new URLSearchParams({ next: "/papers/reader-paper" })
-    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: true, session: null })
+    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: true, bootstrapAvailable: false, session: null })
     vi.mocked(login).mockResolvedValue({
       user: { userId: "user-1", username: "admin", role: "admin" },
       sessionId: "sess-1",
@@ -99,6 +99,7 @@ describe("LoginPage", () => {
     navigation.searchParams = new URLSearchParams({ next: "//evil.example" })
     vi.mocked(fetchAuthSession).mockResolvedValue({
       initialized: true,
+      bootstrapAvailable: false,
       session: {
         user: { userId: "user-1", username: "admin", role: "admin" },
         sessionId: "sess-1",
@@ -117,6 +118,7 @@ describe("LoginPage", () => {
     process.env.NEWSROOM_FRONTEND_SURFACE = "admin"
     vi.mocked(fetchAuthSession).mockResolvedValue({
       initialized: true,
+      bootstrapAvailable: false,
       session: {
         user: { userId: "user-1", username: "admin", role: "admin" },
         sessionId: "sess-1",

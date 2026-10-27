@@ -11,7 +11,7 @@ import { ReaderAssistant, safeReaderSourceUrl } from "@/features/portal/reader/r
 import { ReaderPreparationControl } from "@/features/portal/reader/reader-preparation-control"
 import { hasOwnedAnalysisSource, needsOwnedSourcePreparation, readerUnavailableMessage, type ReaderWorkspacePayload } from "@/features/portal/reader/reader-contract"
 import { useReaderNotebook } from "@/features/portal/reader/use-reader-notebook"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 import { formatPaperDate } from "@/lib/papers/format"
 import type { PaperReaderCitation } from "@/lib/papers/types"
 import { downloadResearchReport, fetchDesktopReader, fetchResearchReport, saveResearchReport } from "@/lib/research/desktop/client"
@@ -190,7 +190,7 @@ function LoadedReader({
   const requestedPdfPage = pendingPdfLocator?.sourceIdentity === sourceIdentity ? pendingPdfLocator.page : notebook.pdfPage
   const preparationSource = normalizeAnalyzeTransportUrl(source) ?? normalizeAnalyzeTransportUrl(pdf)
   const canAnalyze = hasOwnedAnalysisSource(payload)
-  const needsPreparation = needsOwnedSourcePreparation(payload, isLocalDesktopProfile())
+  const needsPreparation = needsOwnedSourcePreparation(payload, isHostedProfile())
   sourceRevisionRef.current = payload.sourceRevision
   sourceIdentityRef.current = sourceIdentity
   pendingPdfLocatorRef.current = pendingPdfLocator

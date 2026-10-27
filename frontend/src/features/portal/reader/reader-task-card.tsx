@@ -12,6 +12,7 @@ export function ReaderTaskCard({
   description,
   warning,
   error,
+  errorAction,
   className,
   children,
 }: {
@@ -20,6 +21,8 @@ export function ReaderTaskCard({
   description: string
   warning?: ReactNode
   error?: string
+  /** Recovery control shown under the error, such as a link to the settings that fix it. */
+  errorAction?: ReactNode
   className?: string
   children?: ReactNode
 }) {
@@ -43,6 +46,7 @@ export function ReaderTaskCard({
       )}
       {children && <div className="mt-2.5 flex flex-wrap items-center gap-2">{children}</div>}
       {error && <p role="alert" className="mt-2 text-label text-destructive-text">{error}</p>}
+      {error && errorAction && <div className="mt-2 flex flex-wrap items-center gap-2">{errorAction}</div>}
     </section>
   )
 }

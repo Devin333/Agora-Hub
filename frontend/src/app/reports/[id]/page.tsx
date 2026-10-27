@@ -15,12 +15,12 @@ import { ReportMetadataPanel } from "@/features/reports/components/report-metada
 import { ReportToc } from "@/features/reports/components/report-toc";
 import { useReportDetail } from "@/features/reports/hooks/use-report-detail";
 import { TopicCard } from "@/features/topics/components/topic-card";
-import { isLocalDesktopProfile } from "@/lib/deployment-profile";
+import { isHostedProfile } from "@/lib/deployment-profile";
 import { DesktopSavedReportDetail } from "@/app/reports/desktop-report-detail";
 
 export default function ReportDetailPage(props: { params: Promise<{ id: string }> }) {
   const params = use(props.params);
-  return isLocalDesktopProfile()
+  return isHostedProfile()
     ? <DesktopSavedReportDetail reportId={params.id} />
     : <LegacyReportDetail reportId={params.id} />
 }

@@ -5,7 +5,7 @@ import { loadPaperDocumentPayload } from "@/lib/paper-reader/server-loader"
 import { loadReaderWorkspace } from "@/features/portal/reader/reader-server"
 import { decodePaperRouteSlug } from "@/lib/papers/routes"
 import { safePaperReturnTo } from "@/lib/papers/discovery-navigation"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 
 export const dynamic = "force-dynamic"
 export default async function PaperDocumentReadRoute(
@@ -15,7 +15,7 @@ export default async function PaperDocumentReadRoute(
   const params = await props.params;
   const paperId = decodePaperRouteSlug(params.slug)
   const backHref = safePaperReturnTo(typeof searchParams?.returnTo === "string" ? searchParams.returnTo : null)
-  if (isLocalDesktopProfile()) return <DesktopReaderPage paperId={paperId} fallback={await loadReaderWorkspace(paperId)} backHref={backHref} />
+  if (isHostedProfile()) return <DesktopReaderPage paperId={paperId} fallback={await loadReaderWorkspace(paperId)} backHref={backHref} />
   const payload = await loadPaperDocumentPayload(paperId)
   if (!payload) notFound()
   return <PaperDocumentReaderPageClient payload={payload} backHref={backHref} />

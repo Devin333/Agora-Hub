@@ -1,7 +1,11 @@
 import { NextRequest } from "next/server";
 import { authFailure, authResponse, isSameOrigin, publicAuthPost, readBoundedJson } from "@/lib/auth/portal-server";
+import { isHostedProfile } from "@/lib/deployment-profile";
 export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
+    // Hosted accounts are created by an administrator, never from the browser.
+    if (isHostedProfile())
+        return authFailure("auth_route_unavailable", 404);
     if (!isSameOrigin(request))
         return authFailure("auth_invalid_origin", 403);
     const body = await readBoundedJson(request);

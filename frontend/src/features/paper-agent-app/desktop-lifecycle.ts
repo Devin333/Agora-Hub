@@ -9,7 +9,7 @@ export type RendererLifecycleState = {
   summary?: string
 }
 
-export type RendererQuitReason = "window-close" | "app-quit" | "config-apply" | "data-clear"
+export type RendererQuitReason = "window-close" | "app-quit"
 
 type QuitRequest = {
   requestId: string
@@ -38,11 +38,9 @@ export function quitDecision(
 ): "allow" | "cancel" {
   if (!state.dirty && state.activeTaskCount === 0) return "allow"
   const parts = [state.dirty ? "仍有未保存草稿" : "", state.activeTaskCount > 0 ? `仍有 ${state.activeTaskCount} 个活动请求` : ""].filter(Boolean)
-  const impact = reason === "data-clear"
-    ? "继续清除申请将停止接受新操作，并由桌面宿主等待当前请求安全结束；随后仍需独立原生确认。此步骤不代表数据已经清除。仍要继续吗？"
-    : reason === "config-apply"
-      ? "继续应用配置将停止接受新操作，并由桌面宿主等待当前请求安全结束；不会自动重放请求。仍要继续吗？"
-      : "退出将停止接受新操作，并由桌面宿主等待当前请求安全结束；不会自动重放请求。仍要退出吗？"
+  const impact = reason === "window-close"
+    ? "关闭窗口将停止接受新操作，并等待当前请求安全结束；不会自动重放请求。仍要关闭吗？"
+    : "退出将停止接受新操作，并等待当前请求安全结束；不会自动重放请求。仍要退出吗？"
   return confirmAction(`${parts.join("，")}。${impact}`) ? "allow" : "cancel"
 }
 

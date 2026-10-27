@@ -7,6 +7,8 @@ type LoadedConfig = {
     hasExperimental: boolean
     hasIsrFlushToDisk: boolean
     isrFlushToDisk?: boolean
+    output?: string
+    rewrites: unknown[]
   }
   defaults: {
     cacheMaxMemorySize: number
@@ -14,7 +16,7 @@ type LoadedConfig = {
   }
 }
 
-const loadConfig = (deploymentProfile: "default" | "local-desktop"): LoadedConfig => {
+const loadConfig = (deploymentProfile: "default" | "hosted"): LoadedConfig => {
   const script = `
     import nextConfig from "./next.config.mjs"
     import { defaultConfig } from "next/dist/server/config-shared.js"
@@ -25,6 +27,8 @@ const loadConfig = (deploymentProfile: "default" | "local-desktop"): LoadedConfi
         hasExperimental: Object.hasOwn(nextConfig, "experimental"),
         hasIsrFlushToDisk: Object.hasOwn(nextConfig.experimental ?? {}, "isrFlushToDisk"),
         isrFlushToDisk: nextConfig.experimental?.isrFlushToDisk,
+        output: nextConfig.output,
+        rewrites: await nextConfig.rewrites(),
       },
       defaults: {
         cacheMaxMemorySize: defaultConfig.cacheMaxMemorySize,
@@ -38,9 +42,8 @@ const loadConfig = (deploymentProfile: "default" | "local-desktop"): LoadedConfi
     env: {
       ...process.env,
       NEWSROOM_API_BASE_URL: "http://127.0.0.1:8000",
-      NEWSROOM_CANONICAL_ORIGIN: "http://127.0.0.1:3000",
       NEWSROOM_DEPLOYMENT_PROFILE: deploymentProfile,
-      NEWSROOM_DESKTOP_CANONICAL_ORIGIN: "http://127.0.0.1:3000",
+      NEWSROOM_PUBLIC_ORIGIN: "https://papers.example.com",
     },
   })
 
@@ -51,33 +54,27 @@ const loadConfig = (deploymentProfile: "default" | "local-desktop"): LoadedConfi
   return JSON.parse(result.stdout) as LoadedConfig
 }
 
-describe("Next.js route cache configuration", () => {
-  it("keeps the default profile on the installed Next.js cache defaults", () => {
+describe("Next.js deployment configuration", () => {
+  it("keeps the default profile on the installed cache defaults and the API rewrite", () => {
     const config = loadConfig("default")
 
     expect(config.defaults).toEqual({
       cacheMaxMemorySize: 50 * 1024 * 1024,
       isrFlushToDisk: true,
     })
-    expect(config.configured).toEqual({
+    expect(config.configured).toMatchObject({
       hasCacheMaxMemorySize: false,
       hasExperimental: false,
       hasIsrFlushToDisk: false,
     })
+    expect(config.configured.output).toBeUndefined()
+    expect(config.configured.rewrites).toHaveLength(1)
   })
 
-  it("disables route-cache disk flush only for local-desktop", () => {
-    const config = loadConfig("local-desktop")
+  it("builds the hosted profile as a standalone server with no raw API rewrite", () => {
+    const config = loadConfig("hosted")
 
-    expect(config.defaults).toEqual({
-      cacheMaxMemorySize: 50 * 1024 * 1024,
-      isrFlushToDisk: true,
-    })
-    expect(config.configured).toEqual({
-      hasCacheMaxMemorySize: false,
-      hasExperimental: true,
-      hasIsrFlushToDisk: true,
-      isrFlushToDisk: false,
-    })
+    expect(config.configured).toMatchObject({ hasExperimental: false, output: "standalone" })
+    expect(config.configured.rewrites).toEqual([])
   })
 })

@@ -7,7 +7,7 @@ import type { ResearchReaderNotebook } from "@/lib/research/workspace-items"
 import { useReaderNotebook } from "./use-reader-notebook"
 
 vi.mock("@/components/auth/portal-account-provider", () => ({ usePortalAccount: () => null }))
-vi.mock("@/lib/deployment-profile", () => ({ isLocalDesktopProfile: () => true }))
+vi.mock("@/lib/deployment-profile", () => ({ isHostedProfile: () => true }))
 
 let ownerSequence = 0
 const sourceRevision = "revision-1"

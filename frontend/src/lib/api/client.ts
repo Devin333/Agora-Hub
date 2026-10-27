@@ -2,6 +2,7 @@ import { normalizeApiError } from "@/lib/api/api-errors"
 import { unwrapApiEnvelope } from "@/lib/api/api-envelope"
 import { resolveMockPath } from "@/lib/api/mock-data"
 import type { StudioApiError } from "@/types/studio"
+import { isHostedProfile } from "@/lib/deployment-profile"
 
 const DEFAULT_API_BASE_URL = ""
 
@@ -147,6 +148,6 @@ function apiUrl(path: string): string {
 export function shouldUseMock(): boolean {
   return (
     process.env.NEXT_PUBLIC_NEWSROOM_USE_MOCKS === "true" &&
-    process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE !== "local-desktop"
+    !isHostedProfile()
   )
 }

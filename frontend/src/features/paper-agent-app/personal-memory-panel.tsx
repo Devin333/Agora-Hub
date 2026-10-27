@@ -334,7 +334,6 @@ export function PersonalMemoryPanel({
 
   if (!open) return null
   const visibleRecords = includeDeleted ? records : records.filter(record => record.status !== "deleted")
-  const storagePath = info?.database_path ?? info?.data_root ?? "由本机服务决定"
 
   const remotePermissions = policy?.remote_processing_permissions ?? {
     model: policy?.allow_remote_processing ?? false,
@@ -344,10 +343,10 @@ export function PersonalMemoryPanel({
 
   return <div className={styles.memoryOverlay} role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) requestClose() }}>
     <aside ref={panelRef} className={styles.memoryPanel} role="dialog" aria-modal="true" aria-labelledby="memory-title" tabIndex={-1}>
-      <header><div><span className={styles.eyebrow}>LOCAL MEMORY</span><h2 id="memory-title">个人记忆</h2></div><button ref={closeRef} type="button" aria-label="关闭个人记忆" onClick={requestClose}><X size={18} /></button></header>
+      <header><div><span className={styles.eyebrow}>PERSONAL MEMORY</span><h2 id="memory-title">个人记忆</h2></div><button ref={closeRef} type="button" aria-label="关闭个人记忆" onClick={requestClose}><X size={18} /></button></header>
       <section className={styles.memoryInfo}>
         <p><strong>命名空间</strong><span>{namespace ?? "正在读取"}</span></p>
-        <p><strong>本机路径</strong><span title={storagePath}>{storagePath}</span></p>
+        <p><strong>存储位置</strong><span>{info?.status === "available" ? "服务器账号空间（仅本账号可见）" : "正在读取"}</span></p>
         <p><strong>联网规则</strong><span>{policy?.allow_remote_processing ? "策略允许模型、工具和 embedding；本次不用记忆仍优先" : "模型、工具和 embedding 默认全部禁止"}</span></p>
       </section>
       <section className={styles.policyCard}>

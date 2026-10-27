@@ -21,7 +21,7 @@ async function installFixture(page: Page, initialWorkspace: Workspace, options: 
   const operationRequests: Array<{ method: string; requestId: string; generation: string | null }> = []
   const memoryPolicyMethods: string[] = []
   const memoryMutations: Array<{ method: string; path: string; memoryId: string; body: Record<string, unknown> }> = []
-  await page.route("**/api/auth/session", route => route.fulfill({ json: { success: true, data: { session: { sessionId: "session-alice", expiresAt: "2099-12-31T00:00:00Z", user: { userId: "alice", username: "alice", role: "user" } } } } }))
+  await page.route("**/api/auth/session", route => route.fulfill({ json: { success: true, data: { initialized: true, bootstrapAvailable: false, session: { sessionId: "session-alice", expiresAt: "2099-12-31T00:00:00Z", user: { userId: "alice", username: "alice", role: "user" } } } } }))
   await page.route("**/api/research/history", async route => {
     if (route.request().method() === "PUT") {
       if (options.historyConflict) return route.fulfill({ status: 409, json: { success: false, error: { code: "revision_conflict", message: "Revision changed" } } })
@@ -54,7 +54,7 @@ async function installFixture(page: Page, initialWorkspace: Workspace, options: 
       const allowed = options.memoryRemoteAllowed === true
       return route.fulfill({ json: { policy: { allow_remote_processing: allowed, remote_processing_permissions: { model: allowed, tool: allowed, embedding: allowed }, revision: 1, created_at: "2026-10-14T00:00:00Z", updated_at: "2026-10-14T00:00:00Z" } } })
     }
-    if (url.pathname.endsWith("/info")) return route.fulfill({ json: { info: { storage: "local_sqlite", status: "available", database_path: "C:/Agora/memory.db", remote_processing_default: false, remote_processing_auto_enabled: false } } })
+    if (url.pathname.endsWith("/info")) return route.fulfill({ json: { info: { storage: "server_sqlite", status: "available", remote_processing_default: false, remote_processing_auto_enabled: false } } })
     if (url.pathname.endsWith("/export")) return route.fulfill({ json: { export: { schema_version: "1", exported_at: "2026-10-14T00:00:00Z", records: memoryRecords, policy: { allow_remote_processing: false, revision: 1 }, notices: [] } } })
     if (route.request().method() === "POST" && url.pathname.endsWith("/personal-memory")) {
       const body = JSON.parse(route.request().postData() ?? "{}")
@@ -483,7 +483,7 @@ test("IME 确认不误发在线搜索，材料 CAS 冲突逐条显示失败并�
 test("手动确认记忆发送真实结构化 refs，默认导出排除 deleted", async ({ page }) => {
   const fixture = await installFixture(page, { visits: [], groups: [], materials: [material("paper-1", "First Paper")] })
   await page.goto("/paper-agent"); await page.getByRole("button", { name: /个人记忆/ }).click()
-  const dialog = page.getByRole("dialog", { name: "个人记忆" }); await expect(dialog).toBeVisible(); await expect(dialog.getByText("C:/Agora/memory.db")).toBeVisible()
+  const dialog = page.getByRole("dialog", { name: "个人记忆" }); await expect(dialog).toBeVisible(); await expect(dialog.getByText("服务器账号空间（仅本账号可见）")).toBeVisible()
   await dialog.getByLabel("新个人记忆").fill("优先阅读可复现实验")
   await dialog.getByRole("button", { name: "保存并确认" }).click()
   await expect.poll(() => fixture.memoryCreates.length).toBe(1)

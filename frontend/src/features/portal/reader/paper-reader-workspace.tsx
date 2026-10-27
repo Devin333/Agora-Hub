@@ -9,7 +9,7 @@ import { PaperPdfViewer } from "@/components/papers/shared/paper-pdf-viewer"
 import { BrandMark } from "@/components/brand/brand-mark"
 import { apiGet } from "@/lib/api/client"
 import { fetchDesktopReader } from "@/lib/research/desktop/client"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 import { buildReaderParagraphs, buildReaderToc } from "@/components/papers/open-reader/open-reader-utils"
 import {
   hasOwnedAnalysisSource,
@@ -56,12 +56,12 @@ export function PaperReaderWorkspace({ payload, backHref }: { payload: ReaderWor
   ownerRef.current = workspace.owner
   const sourceRevisionRef = useRef(current.sourceRevision)
   sourceRevisionRef.current = current.sourceRevision
-  const desktopProfile = isLocalDesktopProfile()
+  const hostedProfile = isHostedProfile()
   const paper = current.paper
   const sourceRevision = current.sourceRevision ?? ""
   const sourceIdentityExact = Boolean(current.sourceRevision && current.sourceFingerprint)
   const canAnalyze = hasOwnedAnalysisSource(current)
-  const needsPreparation = needsOwnedSourcePreparation(current, desktopProfile)
+  const needsPreparation = needsOwnedSourcePreparation(current, hostedProfile)
   const notebook = useReaderNotebook(paper.id, sourceRevision)
   const updateNotebook = notebook.update
   const notebookReady = notebook.ready
@@ -75,7 +75,7 @@ export function PaperReaderWorkspace({ payload, backHref }: { payload: ReaderWor
   const ownedMaterial = (workspace.workspace.materials ?? []).find(
     item => item.id === materialId && item.referenceId === paper.id,
   )
-  const saved = desktopProfile ? Boolean(ownedMaterial) : locallySaved
+  const saved = hostedProfile ? Boolean(ownedMaterial) : locallySaved
   const pdf = safeReaderSourceUrl(paperPdfUrl(paper))
   const source = safeReaderSourceUrl(current.sourceUrl || paper.paperUrl || paper.arxivUrl)
   const repository = safeReaderSourceUrl(paper.repoUrl)
@@ -227,7 +227,7 @@ export function PaperReaderWorkspace({ payload, backHref }: { payload: ReaderWor
     const timeout = window.setTimeout(() => controller.abort(), 30000)
     try {
       let next: ReaderWorkspacePayload
-      if (desktopProfile) {
+      if (hostedProfile) {
         next = await fetchDesktopReader(paper.id, controller.signal)
         if (expectedRunId && next.runId !== expectedRunId) {
           throw new Error("新分析运行尚未成为当前可核对的阅读投影。")
@@ -261,7 +261,7 @@ export function PaperReaderWorkspace({ payload, backHref }: { payload: ReaderWor
   }
 
   function toggleSavedPaper() {
-    if (!desktopProfile) {
+    if (!hostedProfile) {
       toggleLocalSaved(paper.id)
       return
     }

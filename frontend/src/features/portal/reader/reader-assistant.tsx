@@ -1,17 +1,19 @@
 "use client"
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react"
 import { ArrowUp, BookOpen, Download, FilePenLine, Sparkles, Square } from "lucide-react"
 import ReactMarkdown from "react-markdown"
+import { ModelCredentialAction } from "@/components/account/model-credential-action"
 import { Button } from "@/components/ui/button"
 import type {
   ReaderSelectionAskAnswer,
   ReaderSelectionAskRequest,
 } from "@/components/papers/open-reader/open-reader-types"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 import { askPaper } from "@/lib/papers/api"
 import type { Paper, PaperReaderAnswer, PaperReaderCitation } from "@/lib/papers/types"
 import {
+  DesktopResearchError,
   fetchDesktopIdentity,
   fetchResearchOperation,
   submitResearchAsk,
@@ -129,7 +131,7 @@ export function ReaderAssistant({
   onUnsavedChanges,
   onExportNote,
 }: ReaderAssistantProps) {
-  const desktopProfile = isLocalDesktopProfile()
+  const hostedProfile = isHostedProfile()
   const workspace = useOwnedResearchWorkspace()
   const owner = workspace.owner
   const ownerRef = useRef(owner)
@@ -154,7 +156,9 @@ export function ReaderAssistant({
   const [tab, setTab] = useState<"ask" | "notes">("ask")
   const [answer, setAnswer] = useState<PaperReaderAnswer | null>(null)
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState("")
+  // A plain message clears the failure code; coded failures can offer a recovery action.
+  const [failure, setError] = useReducer(nextFailure, emptyFailure)
+  const error = failure.message
   const [requestId, setRequestId] = useState("")
   const [requestGeneration, setRequestGeneration] = useState("")
   const [operationStatus, setOperationStatus] = useState<ResearchOperation["status"] | "">("")
@@ -270,12 +274,13 @@ export function ReaderAssistant({
     }
 
     if (["failed", "rejected", "needs_action"].includes(operation.status)) {
-      setError(
-        operation.message ||
+      setError({
+        message: operation.message ||
           (operation.status === "needs_action"
             ? "本次问答需要人工核对，不能作为已接受回答。"
             : "问答运行失败，请查看诊断后创建新的请求。"),
-      )
+        code: operation.errorCode ?? null,
+      })
       return
     }
     setError("任务已接收，正在等待真实运行状态。稍后可按请求身份继续核对。")
@@ -295,7 +300,7 @@ export function ReaderAssistant({
     setRequestGeneration("")
     setOperationStatus("")
 
-    if (!desktopProfile || !owner || !sourceRevision) return
+    if (!hostedProfile || !owner || !sourceRevision) return
     const existing = recoverableResearchOperations("ask").find(item =>
       item.paperId === paper.id &&
       item.sourceRevision === sourceRevision &&
@@ -340,7 +345,7 @@ export function ReaderAssistant({
         }
       })
     return () => controller.abort()
-  }, [applyOperation, desktopProfile, owner, paper.id, runId, selectionRequest, sourceFingerprint, sourceRevision])
+  }, [applyOperation, hostedProfile, owner, paper.id, runId, selectionRequest, sourceFingerprint, sourceRevision])
 
   useEffect(() => {
     if (
@@ -367,7 +372,7 @@ export function ReaderAssistant({
   async function submit() {
     const question = notebook.question.trim()
     if (!question || pending || unavailableMessage) return
-    if (desktopProfile && (!owner || !runId || !sourceFingerprint || !sourceRevision)) {
+    if (hostedProfile && (!owner || !runId || !sourceFingerprint || !sourceRevision)) {
       setError("这篇论文尚未绑定可核对的已接受分析运行，暂时不能问答。")
       return
     }
@@ -397,7 +402,7 @@ export function ReaderAssistant({
     }, 90_000)
 
     try {
-      if (!desktopProfile) {
+      if (!hostedProfile) {
         setAnswer(await askPaper(paper.id, question, "zh", { signal: controller.signal }))
         return
       }
@@ -497,19 +502,20 @@ export function ReaderAssistant({
         updateResearchOperation(preparedId, { status: "unknown" })
         setOperationStatus("unknown")
       }
-      setError(
-        timedOut
+      setError({
+        code: !timedOut && !controller.signal.aborted && cause instanceof DesktopResearchError ? cause.code : null,
+        message: timedOut
           ? "等待已停止，任务结果仍需按请求身份核对。"
           : controller.signal.aborted
-            ? desktopProfile
+            ? hostedProfile
               ? "已停止等待，后端任务没有被标记为取消。"
               : "已停止回答，问题已保留。"
             : cause instanceof Error
-              ? desktopProfile
+              ? hostedProfile
                 ? cause.message
                 : `${cause.message}，问题已保留，可重试。`
               : "问答结果暂时无法确认，问题已保留。",
-      )
+      })
     } finally {
       window.clearTimeout(timeout)
       if (request.current === controller) {
@@ -528,7 +534,7 @@ export function ReaderAssistant({
     request.current?.abort("user")
     request.current = null
     setPending(false)
-    setError(desktopProfile ? "已停止等待，后端任务没有被标记为取消；稍后可按请求身份继续核对。" : "已停止回答，问题已保留。")
+    setError(hostedProfile ? "已停止等待，后端任务没有被标记为取消；稍后可按请求身份继续核对。" : "已停止回答，问题已保留。")
   }
 
   function exportNote() {
@@ -547,7 +553,7 @@ export function ReaderAssistant({
   }
 
   const canLocateCitation = (citation: PaperReaderCitation) => Boolean(
-    desktopProfile
+    hostedProfile
       ? citation.valid &&
         citation.sourceRevision === sourceRevision &&
         ((citation.sectionId && sectionIds.has(citation.sectionId)) || citation.page)
@@ -611,7 +617,7 @@ export function ReaderAssistant({
                     {citation.textExcerpt && <blockquote>{citation.textExcerpt}</blockquote>}
                     {canLocateCitation(citation) ? (
                       <button type="button" onClick={() => onNavigateCitation(citation)}>
-                        {desktopProfile ? "定位原文" : "定位章节"} <BookOpen size={14} strokeWidth={1.8} />
+                        {hostedProfile ? "定位原文" : "定位章节"} <BookOpen size={14} strokeWidth={1.8} />
                       </button>
                     ) : (
                       <small>{citation.reasonCode ? `定位不可用：${citation.reasonCode}` : "当前来源修订无法精确定位，请结合原文核对。"}</small>
@@ -687,7 +693,7 @@ export function ReaderAssistant({
                 variant="outline"
                 size="icon"
                 className="size-8 shrink-0 rounded-full border border-border bg-muted text-foreground/80 hover:bg-accent"
-                aria-label={desktopProfile ? "停止等待" : "停止回答"}
+                aria-label={hostedProfile ? "停止等待" : "停止回答"}
                 onClick={stopWaiting}
               >
                 <Square size={11} strokeWidth={0} fill="currentColor" />
@@ -705,6 +711,7 @@ export function ReaderAssistant({
             )}
           </div>
           {error && <p role="alert" className={styles.error}>{error}</p>}
+          {error && <ModelCredentialAction code={failure.code} className="mt-3 w-full" />}
           {requestId && ["failed", "rejected", "needs_action"].includes(operationStatus) && (
             <Button
               type="button"
@@ -761,7 +768,7 @@ export function ReaderAssistant({
               : notebook.saveStatus === "conflict"
                 ? "另一标签页已更新工作区。本地笔记仍保留，请先处理同步冲突。"
                 : notebook.storageError
-                  ? desktopProfile
+                  ? hostedProfile
                     ? "笔记尚未保存，请导出后再离开。"
                     : "浏览器未能保存，请导出笔记后再离开。"
                   : notebook.saveStatus === "synced"
@@ -857,4 +864,11 @@ export function recoverSelectionRequest(
 
 function inferSelectionMode(question: string): "explain" | "example" {
   return /例子|示例|example/i.test(question) ? "example" : "explain"
+}
+
+type AssistantFailure = { message: string; code: string | null }
+const emptyFailure: AssistantFailure = { message: "", code: null }
+
+function nextFailure(_previous: AssistantFailure, next: string | AssistantFailure): AssistantFailure {
+  return typeof next === "string" ? { message: next, code: null } : next
 }

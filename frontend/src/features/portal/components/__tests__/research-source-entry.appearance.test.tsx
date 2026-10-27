@@ -77,7 +77,8 @@ describe("ResearchSourceEntry paper-agent appearance", () => {
     expect(rendered.entry).toHaveClass("sr-only")
   })
 
-  it("resolves status and error text to the global theme tokens for both appearances in light and dark", async () => {
+  // Launches a real Chromium to resolve the cascade, so it needs a browser-scale budget.
+  it("resolves status and error text to the global theme tokens for both appearances in light and dark", { timeout: 60_000 }, async () => {
     const cases: string[] = []
     const componentClasses: Record<string, string> = {}
     for (const appearance of ["portal", "paper-agent"] as const) {

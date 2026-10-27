@@ -62,8 +62,8 @@ describe("browser api client", () => {
     )
   })
 
-  it("disables browser mock data in local desktop", () => {
-    vi.stubEnv("NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", "local-desktop")
+  it("disables browser mock data in the hosted service", () => {
+    vi.stubEnv("NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", "hosted")
     vi.stubEnv("NEXT_PUBLIC_NEWSROOM_USE_MOCKS", "true")
 
     expect(shouldUseMock()).toBe(false)

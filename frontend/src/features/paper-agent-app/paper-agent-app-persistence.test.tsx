@@ -109,8 +109,10 @@ function showOnlineResult() {
 let stopSync: (() => void) | undefined
 
 beforeEach(() => {
-  vi.stubEnv("NEWSROOM_DEPLOYMENT_PROFILE", "local-desktop")
-  vi.stubEnv("NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", "local-desktop")
+  vi.stubEnv("NEWSROOM_DEPLOYMENT_PROFILE", "hosted")
+  vi.stubEnv("NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", "hosted")
+  vi.stubEnv("NEWSROOM_PUBLIC_ORIGIN", "http://127.0.0.1:3120")
+  vi.stubEnv("NEWSROOM_ALLOW_INSECURE_ORIGIN", "1")
   localStorage.clear()
   sessionStorage.clear()
   selectHistoryOwner(null)

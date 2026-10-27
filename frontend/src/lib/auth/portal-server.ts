@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { safeApiPost, type SafeApiResult } from "@/lib/api/server";
 import { NEWSROOM_SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/session";
-import { desktopCanonicalOrigin, isLocalDesktopProfile } from "@/lib/deployment-profile";
+import { hostedPublicOrigin, isHostedProfile, serverOwnedMutationOriginHeaders } from "@/lib/deployment-profile";
 export const AUTH_BINDING_COOKIE = "newsroom_auth_binding";
 export const AUTH_RETURN_COOKIE = "newsroom_auth_return";
 export const AUTH_CALLBACK_COOKIE = "newsroom_auth_callback";
@@ -14,27 +14,28 @@ export function bindingFor(request: NextRequest) {
 }
 export function safeReturnPath(value: unknown): string {
     if (typeof value !== "string" || !value.startsWith("/") || /[\\\x00-\x20]/.test(value) || value.startsWith("//"))
-        return isLocalDesktopProfile() ? "/" : "/design-demo";
+        return isHostedProfile() ? "/" : "/design-demo";
     try {
         const base = "https://agora.invalid";
         const parsed = new URL(value, base);
         const decoded = decodeURIComponent(parsed.pathname);
         if (parsed.origin !== base || /[\\\x00-\x20]/.test(decoded) || decoded.startsWith("//") || /^\/(?:api|login)(?:\/|$)/.test(decoded))
-            return isLocalDesktopProfile() ? "/" : "/design-demo";
+            return isHostedProfile() ? "/" : "/design-demo";
         return `${parsed.pathname}${parsed.search}${parsed.hash}`;
     }
     catch {
-        return isLocalDesktopProfile() ? "/" : "/design-demo";
+        return isHostedProfile() ? "/" : "/design-demo";
     }
 }
 export function authFailure(code: string, status = 400) {
     return NextResponse.json({ success: false, error: { code } }, { status, headers: privateHeaders });
 }
 export function requestOrigin(request: NextRequest) {
-    if (isLocalDesktopProfile()) {
-        const origin = desktopCanonicalOrigin();
-        const configured = new URL(origin);
-        return request.headers.get("host") === configured.host ? origin : null;
+    if (isHostedProfile()) {
+        // The reverse proxy forwards the public Host; any other Host means the
+        // request did not arrive through the configured public origin.
+        const origin = hostedPublicOrigin();
+        return request.headers.get("host") === new URL(origin).host ? origin : null;
     }
     // Next's internal URL can use localhost even when the browser requests 127.0.0.1.
     // Host is supplied by the browser/proxy and cannot be set by cross-origin JS.
@@ -81,9 +82,7 @@ export async function publicAuthPost<T>(path: string, body?: unknown, init?: Omi
     if (!/^\/api\/v1\/auth\//.test(path))
         return { ok: false, errorCode: "auth_service_unavailable", errorMessage: "Auth endpoint is not allowed" };
     const { headers: suppliedHeaders, ...requestInit } = init ?? {};
-    const headers = { ...suppliedHeaders };
-    if (isLocalDesktopProfile())
-        headers.Origin = desktopCanonicalOrigin();
+    const headers = { ...suppliedHeaders, ...serverOwnedMutationOriginHeaders() };
     return safeApiPost<T>(path, body, {
         ...requestInit,
         ...(Object.keys(headers).length > 0 ? { headers } : {}),
@@ -135,7 +134,7 @@ export async function proxyAuthPost(request: NextRequest, path: string, parse: (
     const body = parse(payload);
     if (!body)
         return authFailure("auth_invalid_request");
-    return authResponse(await safeApiPost(path, body, { headers: { "X-Newsroom-Auth-Binding": binding }, signal: AbortSignal.timeout(15000) }));
+    return authResponse(await safeApiPost(path, body, { headers: { "X-Newsroom-Auth-Binding": binding, ...serverOwnedMutationOriginHeaders() }, signal: AbortSignal.timeout(15000) }));
 }
 export function validProvider(value: string): value is "google" | "wechat" | "qq" {
     return ["google", "wechat", "qq"].includes(value);

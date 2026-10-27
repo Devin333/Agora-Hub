@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 import { acceptAccountHistory, historyState, saveReaderNotebook } from "@/lib/research/history"
 import { validateWorkspace, type ResearchWorkspace } from "@/lib/research/history-model"
 import { retryHistoryEvent } from "@/lib/research/history-sync"
@@ -60,7 +60,7 @@ export function useReaderNotebook(paperId: string, sourceRevision = "") {
   const workspace = useOwnedResearchWorkspace()
   const owner = workspace.owner
   const exactSource = Boolean(sourceRevision)
-  const canPersist = !isLocalDesktopProfile() || exactSource
+  const canPersist = !isHostedProfile() || exactSource
   const scope = JSON.stringify([owner, paperId, sourceRevision])
   const scopeRef = useRef(scope)
   scopeRef.current = scope

@@ -1,6 +1,6 @@
 import type { FormEvent, ReactNode } from "react"
 import { BrandMark } from "@/components/brand/brand-mark"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 import { cn } from "@/lib/utils"
 
 /**
@@ -11,7 +11,7 @@ export type AuthFrameLayout = "standalone" | "embedded"
 
 /** The local desktop app renders login without app chrome, so the frame fills the viewport. */
 export function authFrameLayout(): AuthFrameLayout {
-  return isLocalDesktopProfile() ? "standalone" : "embedded"
+  return isHostedProfile() ? "standalone" : "embedded"
 }
 
 /**

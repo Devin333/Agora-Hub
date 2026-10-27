@@ -10,8 +10,8 @@ import { PUT } from "@/app/api/research/history/route"
 const envKeys = [
   "NEWSROOM_DEPLOYMENT_PROFILE",
   "NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE",
-  "NEWSROOM_CANONICAL_ORIGIN",
-  "NEWSROOM_DESKTOP_CANONICAL_ORIGIN",
+  "NEWSROOM_PUBLIC_ORIGIN",
+  "NEWSROOM_ALLOW_INSECURE_ORIGIN",
   "NEWSROOM_API_BASE_URL",
 ] as const
 const originalEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
@@ -20,7 +20,6 @@ describe("research history upstream contract", () => {
   beforeEach(() => {
     process.env.NEWSROOM_API_BASE_URL = "http://127.0.0.1:8120"
     delete process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
-    delete process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN
   })
 
   afterEach(() => {
@@ -32,9 +31,10 @@ describe("research history upstream contract", () => {
     }
   })
 
-  it("forwards the server-owned canonical Origin to the local-desktop upstream", async () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
+  it("forwards the configured public Origin to the hosted upstream", async () => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
+    process.env.NEWSROOM_PUBLIC_ORIGIN = "http://127.0.0.1:3120"
+    process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN = "1"
     const upstream = successfulUpstream()
     vi.stubGlobal("fetch", upstream)
 
@@ -56,8 +56,9 @@ describe("research history upstream contract", () => {
   })
 
   it("rejects a foreign browser Origin before making an upstream call", async () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
+    process.env.NEWSROOM_PUBLIC_ORIGIN = "http://127.0.0.1:3120"
+    process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN = "1"
     const upstream = vi.fn()
     vi.stubGlobal("fetch", upstream)
 
@@ -74,7 +75,7 @@ describe("research history upstream contract", () => {
 
   it("keeps default-profile forwarding unchanged without a synthetic Origin", async () => {
     process.env.NEWSROOM_DEPLOYMENT_PROFILE = "default"
-    delete process.env.NEWSROOM_CANONICAL_ORIGIN
+    delete process.env.NEWSROOM_PUBLIC_ORIGIN
     const upstream = successfulUpstream()
     vi.stubGlobal("fetch", upstream)
 

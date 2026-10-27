@@ -62,7 +62,7 @@ vi.mock("@/lib/research/history-sync", () => ({
 }))
 
 vi.mock("@/lib/deployment-profile", () => ({
-  isLocalDesktopProfile: () => false,
+  isHostedProfile: () => false,
 }))
 
 describe("paper agent lab provider isolation", () => {

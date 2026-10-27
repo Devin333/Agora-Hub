@@ -2,8 +2,7 @@ import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session";
 import { authFailure, isSameOrigin } from "@/lib/auth/portal-server";
-import { desktopCanonicalOrigin } from "@/lib/deployment-profile";
-const DEFAULT_API_BASE = "http://127.0.0.1:8000";
+import { apiBaseUrl, serverOwnedMutationOriginHeaders } from "@/lib/deployment-profile";
 const PRIVATE_HEADERS = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" };
 const MAX_JSON_BYTES = 256 * 1024;
 export async function desktopGet(path: string, request?: NextRequest) { return desktopForward(path, { method: "GET", request }); }
@@ -32,8 +31,7 @@ async function desktopForward(path: string, options: {
     const token = (await cookies()).get(NEWSROOM_SESSION_COOKIE)?.value;
     if (!token)
         return authFailure("auth_required", 401);
-    const base = process.env.NEWSROOM_API_BASE_URL ?? DEFAULT_API_BASE;
-    const response = await fetch(`${base.replace(/\/$/, "")}${path}`, { method: options.method, headers: { Accept: "application/json", "X-Newsroom-Session": token, ...(options.method === "POST" ? { Origin: desktopCanonicalOrigin() } : {}), ...(typeof options.body === "string" ? { "Content-Type": "application/json" } : {}), ...options.headers }, body: options.body, cache: "no-store", signal: options.request ? AbortSignal.any([options.request.signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000) }).catch(() => null);
+    const response = await fetch(`${apiBaseUrl()}${path}`, { method: options.method, headers: { Accept: "application/json", "X-Newsroom-Session": token, ...(options.method === "POST" ? serverOwnedMutationOriginHeaders() : {}), ...(typeof options.body === "string" ? { "Content-Type": "application/json" } : {}), ...options.headers }, body: options.body, cache: "no-store", signal: options.request ? AbortSignal.any([options.request.signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000) }).catch(() => null);
     if (!response)
         return desktopFailure("research_service_unavailable", 503, "研究服务暂时不可用，请稍后核对已有请求。");
     return new NextResponse(response.body, { status: response.status, headers: { ...PRIVATE_HEADERS, "Content-Type": response.headers.get("content-type") ?? "application/json", ...(response.headers.get("content-disposition") ? { "Content-Disposition": response.headers.get("content-disposition")! } : {}) } });
