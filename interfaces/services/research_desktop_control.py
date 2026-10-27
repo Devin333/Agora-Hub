@@ -382,11 +382,14 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
         self,
         *,
         capability_id: str,
-        provenance: Mapping[str, Any],
+        operation: str,
         runtime_identity: str,
     ) -> Mapping[str, Any]:
         capability = _required_text(capability_id, "capability_id", maximum=100)
-        details = _json_mapping(provenance, "provenance")
+        details = {
+            "verificationKind": "business_operation",
+            "operation": _required_text(operation, "operation", maximum=100),
+        }
         identity = _fingerprint(runtime_identity)
         with locked_json_file(self.path) as resolved:
             payload = self._read_or_initialize(resolved)

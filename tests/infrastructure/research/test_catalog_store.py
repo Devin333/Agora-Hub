@@ -731,6 +731,19 @@ def test_chunk_manifest_artifact_supports_relative_catalog_root(tmp_path, monkey
     assert loaded["payload"]["manifest_path"] == str(manifest.resolve())
 
 
+def test_store_scoped_artifact_is_never_visible_to_an_actor(tmp_path) -> None:
+    store = FilesystemResearchCatalogStore(tmp_path)
+    ref = store.publish(
+        artifact_type="parser-execution-receipt",
+        payload={"backend": "pymupdf"},
+        metadata={"paper_id": "paper-1"},
+    )
+
+    assert store.read(ref, actor_scope={})["artifactRef"] == ref
+    with pytest.raises(ResearchCatalogArtifactScopeError):
+        store.read(ref, actor_scope={"user_id": "user-a", "memory_namespace": "research:user:user-a"})
+
+
 def test_chunk_manifest_artifact_rejects_path_outside_bound_paper_scope(tmp_path) -> None:
     scope = {"user_id": "user-a"}
     store = FilesystemResearchCatalogStore(tmp_path / "catalog")

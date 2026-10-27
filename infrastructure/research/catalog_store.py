@@ -420,6 +420,10 @@ class FilesystemResearchCatalogStore:
         expected_scope_ref = actor_scope_ref(persisted_scope) if persisted_scope else self.scope_ref
         if str(metadata.get("scope_ref") or "") != expected_scope_ref:
             raise ResearchCatalogStoreCorruptionError("research artifact scope metadata is invalid")
+        if requested_scope and not persisted_scope:
+            # Store-scoped artifacts are system evidence (parser execution
+            # receipts, operator manifests) and never belong to an actor.
+            raise ResearchCatalogArtifactScopeError("research artifact is not visible to actor scope")
         if requested_scope and not actor_scope_matches(persisted_scope, requested_scope):
             raise ResearchCatalogArtifactScopeError("research artifact is not visible to actor scope")
         with locked_json_file(marker_path) as resolved:

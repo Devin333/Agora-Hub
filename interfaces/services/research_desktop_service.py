@@ -52,6 +52,9 @@ from interfaces.services.research_service import (
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 _MISSING = object()
+# Source types the resolver fetches over the network; ``local``, ``manual``
+# and the GitHub observation path never apply to a public paper link.
+_REMOTE_SOURCE_TYPES = frozenset({"arxiv", "openreview", "doi", "crossref", "publisher"})
 
 
 class ResearchDesktopServiceError(RuntimeError):
@@ -346,8 +349,11 @@ class ResearchDesktopApplicationService:
         except ResearchServiceError as exc:
             if exc.code not in {"paper_not_found", "analysis_not_found", "quality_gate_failed"}:
                 raise _service_error(exc) from exc
-        document_payload = self._research.get_document(paper, actor=actor)
-        catalog_payload = self._research.get_catalog(paper, actor=actor)
+        try:
+            document_payload = self._research.get_document(paper, actor=actor)
+            catalog_payload = self._research.get_catalog(paper, actor=actor)
+        except ResearchServiceError as exc:
+            raise _service_error(exc) from exc
         document = document_payload.get("document") if isinstance(document_payload.get("document"), Mapping) else {}
         revision = _document_source_revision(document)
         fingerprint = _document_source_fingerprint(document)
@@ -398,19 +404,10 @@ class ResearchDesktopApplicationService:
             ),
         }
 
-    def _record_capability(
-        self,
-        capability_id: str,
-        *,
-        operation: str,
-        authority_id: str | None = None,
-    ) -> None:
-        provenance = {"verificationKind": "business_operation", "operation": operation}
-        if authority_id is not None:
-            provenance["authorityId"] = authority_id
+    def _record_capability(self, capability_id: str, *, operation: str) -> None:
         self._requests.record_capability_verification(
             capability_id=capability_id,
-            provenance=provenance,
+            operation=operation,
             runtime_identity=self._research.capability_runtime_identity(),
         )
 
@@ -451,7 +448,7 @@ class ResearchDesktopApplicationService:
                 status_code=422,
                 user_action_required=True,
             )
-        actual_source_type = _optional_text(source_type, "sourceType", maximum=64)
+        actual_source_type = _remote_source_type(source_type)
         semantic = {
             "kind": "prepare",
             "paperId": actual_paper,
@@ -513,7 +510,7 @@ class ResearchDesktopApplicationService:
             )
             self._record_failure(actual, request_id=request_id, generation=generation, exc=error)
             raise error
-        self._record_capability("source", operation="prepare", authority_id=run_id)
+        self._record_capability("source", operation="prepare")
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -645,7 +642,7 @@ class ResearchDesktopApplicationService:
         authority_run_id = str(response.get("runId") or run_id)
         projection = self._research.get_run_projection(authority_run_id, actor=actual.actor())
         result = _analysis_operation_result(projection, source_revision=revision)
-        self._record_capability("single-paper-analysis", operation="analyze", authority_id=authority_run_id)
+        self._record_capability("single-paper-analysis", operation="analyze")
         if not _result_identity_matches(
             projection,
             run_id=authority_run_id,
@@ -692,7 +689,7 @@ class ResearchDesktopApplicationService:
                 },
             )
             return self._operation_response(rejected)
-        self._record_capability("accepted-report", operation="analyze", authority_id=authority_run_id)
+        self._record_capability("accepted-report", operation="analyze")
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -845,7 +842,7 @@ class ResearchDesktopApplicationService:
                 needs_review=True,
             )
             return self._operation_response(failed)
-        self._record_capability("paper-question-answering", operation="ask", authority_id=response["transcriptId"])
+        self._record_capability("paper-question-answering", operation="ask")
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -941,8 +938,8 @@ class ResearchDesktopApplicationService:
                 },
             )
             return self._operation_response(failed)
-        self._record_capability("pdf-import", operation="import", authority_id=import_id)
-        self._record_capability("source", operation="import", authority_id=import_id)
+        self._record_capability("pdf-import", operation="import")
+        self._record_capability("source", operation="import")
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -1403,7 +1400,10 @@ class ResearchDesktopApplicationService:
         source_revision: str,
         source_fingerprint: str | None = None,
     ) -> dict[str, Any]:
-        projection = self._research.get_run_projection(_safe_id(run_id, "runId"), actor=owner.actor())
+        try:
+            projection = self._research.get_run_projection(_safe_id(run_id, "runId"), actor=owner.actor())
+        except ResearchServiceError as exc:
+            raise _service_error(exc) from exc
         actual_revision = projection.get("sourceRevision")
         if actual_revision is None:
             raise ResearchDesktopServiceError(
@@ -2852,6 +2852,26 @@ def _optional_text(value: Any, field: str, *, maximum: int) -> str | None:
     if value is None:
         return None
     return _required_text(value, field, maximum=maximum)
+
+
+def _remote_source_type(value: Any) -> str | None:
+    """Accept only source types that resolve over the network.
+
+    Local paths are reached through the owner-scoped PDF import; letting a
+    caller name ``local`` here would make the server read its own files.
+    """
+
+    text = _optional_text(value, "sourceType", maximum=64)
+    if text is None:
+        return None
+    if text not in _REMOTE_SOURCE_TYPES:
+        raise ResearchDesktopServiceError(
+            "source_type_unsupported",
+            "sourceType must name a remote paper source",
+            status_code=422,
+            user_action_required=True,
+        )
+    return text
 
 
 def _optional_url(value: Any, field: str) -> str | None:

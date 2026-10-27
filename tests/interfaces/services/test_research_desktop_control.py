@@ -62,13 +62,14 @@ def test_drain_blocks_all_business_admission_and_capability_receipts_are_runtime
     changed_release_identity = "sha256:" + "b" * 64
     receipt = store.record_capability_verification(
         capability_id="pdf-import",
-        provenance={"verificationKind": "business_operation", "authorityId": "imp_123"},
+        operation="import",
         runtime_identity=runtime_identity,
     )
     assert receipt["verifiedAt"]
     assert receipt["runtimeIdentity"] == runtime_identity
     visible = store.capability_verifications(runtime_identity=runtime_identity)
-    assert visible["pdf-import"]["provenance"]["authorityId"] == "imp_123"
+    # Verifications are shared by every account and name no owner's records.
+    assert visible["pdf-import"]["provenance"] == {"verificationKind": "business_operation", "operation": "import"}
     assert store.capability_verifications(runtime_identity=changed_release_identity) == {}
 
     assert store.begin_drain(timeout_seconds=0.01)["status"] == "drained"

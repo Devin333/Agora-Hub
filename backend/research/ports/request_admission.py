@@ -151,9 +151,15 @@ class ResearchDesktopRequestStore(Protocol):
         self,
         *,
         capability_id: str,
-        provenance: Mapping[str, Any],
+        operation: str,
         runtime_identity: str,
-    ) -> Mapping[str, Any]: ...
+    ) -> Mapping[str, Any]:
+        """Record that a business operation proved a capability.
+
+        The record is shared by every account, so it carries only the
+        operation kind and never an owner's run, import or transcript id.
+        """
+        ...
 
     def capability_verifications(
         self, *, runtime_identity: str

@@ -146,7 +146,6 @@ class ResearchServiceError(Exception):
             "document_not_found": "Research document was not found",
             "catalog_not_found": "Research catalog entry was not found",
             "artifact_not_found": "Research artifact was not found",
-            "artifact_forbidden": "Research artifact is not authorized",
             "artifact_corrupt": "Research artifact integrity could not be verified",
         }
         return messages.get(self.code, "Research paper operation failed")
@@ -634,10 +633,12 @@ class ResearchApplicationService:
                 user_action_required=True,
             ) from exc
         except PermissionError as exc:
+            # Another owner's artifact is reported exactly like a missing one
+            # so a digest never confirms that someone else's artifact exists.
             raise ResearchServiceError(
-                "artifact_forbidden",
-                "research artifact is not authorized",
-                status_code=403,
+                "artifact_not_found",
+                "research artifact was not found",
+                status_code=404,
                 user_action_required=True,
             ) from exc
         except Exception as exc:
@@ -1123,14 +1124,11 @@ class ResearchApplicationService:
     ) -> dict[str, Any]:
         question = _require_text(request.question, "question")
         mode = _ask_mode(request.mode)
+        _reject_identity_options(request.options)
         actor_scope = _resolve_actor_scope(
             self._ask_use_case,
             tenant_id=request.tenant_id,
-            user_id=(
-                request.user_id
-                or _optional_text(request.options.get("userId"))
-                or _optional_text(request.options.get("user_id"))
-            ),
+            user_id=request.user_id,
             memory_namespace=request.memory_namespace,
         )
         if mode == "chunk_rag":
@@ -1644,6 +1642,25 @@ def _runtime_options(command: ResearchAnalyzeInput) -> dict[str, Any]:
     if command.metadata:
         options["metadata"] = dict(command.metadata)
     return options
+
+
+_IDENTITY_OPTION_KEYS = frozenset(
+    {"userId", "user_id", "tenantId", "tenant_id", "memoryNamespace", "memory_namespace"}
+)
+
+
+def _reject_identity_options(options: Mapping[str, Any]) -> None:
+    """Identity comes from the authenticated actor only, never from options."""
+
+    supplied = sorted(_IDENTITY_OPTION_KEYS.intersection(options))
+    if supplied:
+        raise ResearchServiceError(
+            "invalid_request",
+            "Research ask options cannot carry actor identity",
+            status_code=400,
+            details={"fields": supplied},
+            user_action_required=True,
+        )
 
 
 def _resolve_actor_scope(

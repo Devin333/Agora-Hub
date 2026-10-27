@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+import socket
 
 import pytest
 
@@ -34,6 +35,17 @@ from backend.research.application.parse_paper import ParsePaperRequest
 
 
 UTC = timezone.utc
+# A fixed public address, so the resolver's routability check never depends on
+# the DNS of the machine running the tests.
+_PUBLIC_TEST_ADDRESS = "93.184.215.14"
+
+
+@pytest.fixture(autouse=True)
+def _offline_public_dns(monkeypatch) -> None:
+    def resolve(host, port, *_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_PUBLIC_TEST_ADDRESS, port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
 
 
 def test_local_source_resolver_keeps_file_locator_without_breaking_legacy_source_url() -> None:

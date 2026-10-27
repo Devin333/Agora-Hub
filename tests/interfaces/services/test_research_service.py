@@ -393,7 +393,7 @@ def test_authenticated_actor_scope_overrides_or_rejects_requested_scope() -> Non
     assert forbidden.value.code == "forbidden"
 
 
-def test_research_service_ask_preserves_options_user_id_compatibility() -> None:
+def test_research_service_ask_refuses_identity_carried_in_options() -> None:
     rag = _CapturingRagAskUseCase(response=_grounded_rag_response())
     service = ResearchApplicationService(
         analyze_use_case=FakeAnalyzeUseCase(),
@@ -407,16 +407,15 @@ def test_research_service_ask_preserves_options_user_id_compatibility() -> None:
         )
     )
 
-    service.ask_paper(
-        "paper-1",
-        ResearchAskInput(
-            question="What is the method?",
-            options={"userId": "legacy-user"},
-        ),
-    )
-
-    assert rag.calls[0][2]["user_id"] == "legacy-user"
-    assert rag.calls[0][2]["memory_namespace"] == "research:user:legacy-user"
+    for key in ("userId", "user_id", "tenantId", "memory_namespace"):
+        with pytest.raises(ResearchServiceError) as refused:
+            service.ask_paper(
+                "paper-1",
+                ResearchAskInput(question="What is the method?", options={key: "other-user"}),
+            )
+        assert refused.value.code == "invalid_request"
+        assert refused.value.details == {"fields": [key]}
+    assert rag.calls == []
 
 
 def test_research_service_does_not_expose_tenant_run_without_tenant_actor() -> None:
