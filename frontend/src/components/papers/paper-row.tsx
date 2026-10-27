@@ -1,12 +1,11 @@
 "use client"
 
-"use client"
-
 import { Fragment, type MouseEvent, type ReactNode } from "react"
 import Link from "next/link"
 import { Bell, BookMarked, BookOpen, Clock3, ExternalLink, Eye, FileText, Github, GitCompareArrows, Heart, Quote } from "lucide-react"
 import { PaperTags } from "@/components/papers/paper-tags"
 import { PaperThumbnail } from "@/components/papers/paper-thumbnail"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { translate } from "@/lib/i18n"
 import { papersCopy, t } from "@/lib/papers/copy"
@@ -51,14 +50,14 @@ export function PaperRow({
   return (
     <article
       data-testid="paper-row"
-      className={cn("group cursor-pointer rounded-xl px-3 py-5 transition-colors first:pt-5 last:pb-3 hover:bg-white/70 sm:px-4 dark:hover:bg-card/45", className)}
+      className={cn("group cursor-pointer px-4 py-4 transition-colors hover:bg-accent/40", className)}
       onClick={handleRowClick}
     >
-      <div className="grid gap-5 lg:grid-cols-[8.5rem_minmax(0,1fr)] xl:gap-6">
+      <div className="grid gap-4 lg:grid-cols-[8.5rem_minmax(0,1fr)] xl:gap-5">
         <div
           role="button"
           tabIndex={0}
-          className="group w-fit shrink-0 justify-self-center sm:justify-self-start"
+          className="group w-fit shrink-0 justify-self-center rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:justify-self-start"
           onClick={() => onPreview(paper)}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
@@ -71,23 +70,23 @@ export function PaperRow({
           <PaperThumbnail paper={paper} locale={locale} renderPdfPreview={renderPdfPreview} />
         </div>
 
-        <div className="min-w-0 space-y-4">
-          <Link href={papersRoutes.detail(paper.slug || paper.id)} className="block text-left hover:text-primary">
-            <h2 className="max-w-4xl text-balance text-xl font-semibold leading-7 text-[#1f2933] sm:text-[1.35rem] sm:leading-8 dark:text-foreground">
+        <div className="min-w-0 space-y-3">
+          <Link href={papersRoutes.detail(paper.slug || paper.id)} className="block rounded-sm text-left outline-none underline-offset-4 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+            <h2 className="max-w-4xl text-balance text-heading3 font-semibold text-foreground">
               {paperTitle(paper, locale)}
             </h2>
           </Link>
 
-          <p data-paper-field="metadata" className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm text-[#334155]/55 dark:text-muted-foreground">
+          <p data-paper-field="metadata" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-label text-muted-foreground">
             {metadata.map((item, index) => (
               <Fragment key={`${paper.id}-meta-${index}`}>
                 {index > 0 ? <PaperMetaSeparator /> : null}
-                <span className={index === 0 ? "font-semibold text-[#334155]/68 dark:text-foreground/80" : undefined}>{item}</span>
+                <span className={index === 0 ? "font-medium text-foreground/80" : undefined}>{item}</span>
               </Fragment>
             ))}
           </p>
 
-          <p data-paper-field="abstract" className="line-clamp-3 max-w-4xl text-[0.95rem] leading-6 text-[#334155]/72 dark:text-muted-foreground">
+          <p data-paper-field="abstract" className="line-clamp-3 max-w-4xl text-body2 text-muted-foreground">
             {paperSnippet(paper, locale)}
           </p>
 
@@ -95,18 +94,18 @@ export function PaperRow({
             <PaperTags tasks={tasks} methods={methods} tags={tags} locale={locale} />
           </div>
 
-          <div data-paper-field="actions" className="flex flex-wrap items-center gap-2.5">
+          <div data-paper-field="actions" className="flex flex-wrap items-center gap-1.5">
             <PaperActionButton
               type="button"
               ariaLabel={`${translate(locale, "papers.previewPaper")} ${paper.title}`}
-              icon={<Eye className="size-4" />}
+              icon={<Eye className="size-3.5" strokeWidth={1.8} />}
               label={translate(locale, "papers.previewPaper")}
               onClick={() => onPreview(paper)}
             />
             <PaperActionLink
               href={papersRoutes.reader(paper.slug || paper.id)}
               ariaLabel={`${translate(locale, "papers.readPaper")} ${paper.title}`}
-              icon={<BookOpen className="size-4" />}
+              icon={<BookOpen className="size-3.5" strokeWidth={1.8} />}
               label={translate(locale, "papers.readPaper")}
             />
             {pdfHref ? (
@@ -114,7 +113,7 @@ export function PaperRow({
                 href={pdfHref}
                 external
                 ariaLabel={t(papersCopy.openPaper, locale)}
-                icon={<FileText className="size-4" />}
+                icon={<FileText className="size-3.5" strokeWidth={1.8} />}
                 label="PDF"
               />
             ) : null}
@@ -123,26 +122,26 @@ export function PaperRow({
                 href={repoHref}
                 external
                 ariaLabel={t(papersCopy.openCode, locale)}
-                icon={<Github className="size-4" />}
+                icon={<Github className="size-3.5" strokeWidth={1.8} />}
                 label={translate(locale, "papers.reader.code")}
                 meta={typeof paper.githubStars === "number" ? `${formatCompactNumber(paper.githubStars)} ${translate(locale, "papers.reader.stars")}` : undefined}
               />
             ) : null}
             {typeof paper.citationCount === "number" ? (
-              <span className="inline-flex h-8 items-center gap-2 rounded-full border border-transparent bg-[#f4f7f3] px-3 text-xs font-semibold text-[#334155]/65 dark:bg-secondary dark:text-muted-foreground">
-                <Quote className="size-3.5" />
+              <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-muted px-2.5 text-label font-medium tabular-nums text-muted-foreground">
+                <Quote className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
                 {formatCompactNumber(paper.citationCount)} {translate(locale, "papers.reader.cites")}
               </span>
             ) : null}
           </div>
 
-          <div data-paper-field="workspace" className="flex flex-wrap items-center gap-2">
+          <div data-paper-field="workspace" className="flex flex-wrap items-center gap-1.5">
             <WorkspaceActionButton
               list="readingList"
               active={readingListActive}
               paper={paper}
               locale={locale}
-              icon={<BookMarked className="size-3.5" />}
+              icon={<BookMarked className="size-3.5" strokeWidth={1.8} />}
               onToggle={togglePaper}
             />
             <WorkspaceActionButton
@@ -150,7 +149,7 @@ export function PaperRow({
               active={compareActive}
               paper={paper}
               locale={locale}
-              icon={<GitCompareArrows className="size-3.5" />}
+              icon={<GitCompareArrows className="size-3.5" strokeWidth={1.8} />}
               onToggle={togglePaper}
             />
             <WorkspaceActionButton
@@ -158,24 +157,24 @@ export function PaperRow({
               active={laterActive}
               paper={paper}
               locale={locale}
-              icon={<Clock3 className="size-3.5" />}
+              icon={<Clock3 className="size-3.5" strokeWidth={1.8} />}
               onToggle={togglePaper}
             />
           </div>
 
           {paper.userState?.favorite || paper.userState?.subscribed ? (
-            <div className="flex flex-wrap gap-2 text-xs font-semibold text-[#334155]/60 dark:text-muted-foreground">
+            <div className="flex flex-wrap gap-1.5">
               {paper.userState.favorite ? (
-                <span className="inline-flex items-center gap-1 rounded-sm bg-[#eef4ef] px-2 py-1 dark:bg-secondary">
-                  <Heart className="size-3 fill-current" />
+                <Badge variant="muted">
+                  <Heart className="fill-current" aria-hidden="true" />
                   {translate(locale, "papers.reader.favorite")}
-                </span>
+                </Badge>
               ) : null}
               {paper.userState.subscribed ? (
-                <span className="inline-flex items-center gap-1 rounded-sm bg-[#eef4ef] px-2 py-1 dark:bg-secondary">
-                  <Bell className="size-3" />
+                <Badge variant="muted">
+                  <Bell aria-hidden="true" />
                   {translate(locale, "papers.reader.subscribed")}
-                </span>
+                </Badge>
               ) : null}
             </div>
           ) : null}
@@ -204,20 +203,15 @@ function WorkspaceActionButton({
   return (
     <Button
       type="button"
-      variant="outline"
-      size="sm"
+      variant={active ? "default" : "outline"}
+      size="xs"
       aria-pressed={active}
       aria-label={`${label} ${paper.title}`}
-      className={[
-        "h-7 rounded-full border-[#dbe3dc] px-2.5 text-left text-[0.72rem] shadow-none",
-        active
-          ? "bg-[#172033] text-white hover:bg-[#172033]/90 dark:bg-primary dark:text-primary-foreground"
-          : "bg-white text-[#334155]/70 hover:bg-[#eef4ef] dark:border-border dark:bg-card dark:text-muted-foreground dark:hover:bg-secondary"
-      ].join(" ")}
+      className={cn("rounded-full px-2.5 text-left", !active && "text-muted-foreground hover:text-foreground")}
       onClick={() => onToggle(list, paper.id)}
     >
-      <span className={active ? "text-white" : "text-[#334155]/60 dark:text-muted-foreground"}>{icon}</span>
-      <span className="font-semibold">{label}</span>
+      {icon}
+      <span>{label}</span>
     </Button>
   )
 }
@@ -228,7 +222,7 @@ function workspaceLabel(list: PaperWorkspaceList, active: boolean, locale: Local
 }
 
 function PaperMetaSeparator() {
-  return <span aria-hidden="true" className="size-1 rounded-full bg-[#94a3b8]/60" />
+  return <span aria-hidden="true" className="size-1 rounded-full bg-faint-foreground/60" />
 }
 
 function PaperActionLink({
@@ -248,10 +242,10 @@ function PaperActionLink({
 }) {
   const content = (
     <>
-      <span className="text-[#334155]/65 dark:text-muted-foreground">{icon}</span>
-      <span className="font-semibold text-[#334155] dark:text-foreground">{label}</span>
-      {meta ? <span className="text-[#334155]/50 dark:text-muted-foreground">{meta}</span> : null}
-      {external ? <ExternalLink className="size-3.5 text-[#334155]/45 dark:text-muted-foreground" aria-hidden="true" /> : null}
+      <span className="text-muted-foreground">{icon}</span>
+      <span>{label}</span>
+      {meta ? <span className="tabular-nums text-muted-foreground">{meta}</span> : null}
+      {external ? <ExternalLink className="size-3 text-faint-foreground" strokeWidth={1.8} aria-hidden="true" /> : null}
     </>
   )
 
@@ -261,14 +255,14 @@ function PaperActionLink({
       variant="outline"
       size="sm"
       aria-label={ariaLabel}
-      className="h-8 rounded-full border-[#dbe3dc] bg-white px-3 text-left text-xs shadow-none hover:bg-[#eef4ef] dark:border-border dark:bg-card dark:hover:bg-secondary"
+      className="rounded-full px-2.5 text-left"
     >
       {external ? (
-        <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2">
+        <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5">
           {content}
         </a>
       ) : (
-        <Link href={href} className="inline-flex items-center gap-2">
+        <Link href={href} className="inline-flex items-center gap-1.5">
           {content}
         </Link>
       )}
@@ -295,11 +289,11 @@ function PaperActionButton({
       variant="outline"
       size="sm"
       aria-label={ariaLabel}
-      className="h-8 rounded-full border-[#dbe3dc] bg-white px-3 text-left text-xs shadow-none hover:bg-[#eef4ef] dark:border-border dark:bg-card dark:hover:bg-secondary"
+      className="rounded-full px-2.5 text-left"
       onClick={onClick}
     >
-      <span className="text-[#334155]/65 dark:text-muted-foreground">{icon}</span>
-      <span className="font-semibold text-[#334155] dark:text-foreground">{label}</span>
+      <span className="text-muted-foreground">{icon}</span>
+      <span>{label}</span>
     </Button>
   )
 }

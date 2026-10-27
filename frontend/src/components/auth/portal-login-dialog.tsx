@@ -2,10 +2,11 @@
 
 import * as Dialog from "@radix-ui/react-dialog"
 import * as Tabs from "@radix-ui/react-tabs"
-import { ArrowLeft, ArrowUpRight, Check, LoaderCircle, Mail, RefreshCw, ShieldCheck, Smartphone, WandSparkles, X } from "lucide-react"
+import { ArrowLeft, ArrowUpRight, Check, LoaderCircle, Mail, RefreshCw, ShieldCheck, Smartphone, X } from "lucide-react"
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import { authErrorMessage, authorizeProvider, fetchLoginMethods, fetchPortalSession, requestOtp, verifyOtp, type AuthMethods, type OAuthProvider, type OtpChallenge, type OtpChannel } from "@/lib/auth/portal-api"
 import type { AuthSession } from "@/lib/papers/types"
+import { BrandMark } from "@/components/brand/brand-mark"
 import { ProviderIcon } from "./provider-icons"
 import styles from "./portal-login.module.css"
 import { preserveResearchForRedirect } from "@/lib/auth/research-return-context"
@@ -162,8 +163,8 @@ export function PortalLoginDialog({ open, onOpenChange, onAuthenticated, onResto
 
   return <Dialog.Root open={open} onOpenChange={onOpenChange}>
     <Dialog.Portal><Dialog.Overlay className={styles.overlay} /><Dialog.Content className={styles.dialog} onCloseAutoFocus={(event) => { event.preventDefault(); onRestoreFocus() }} onOpenAutoFocus={(event) => { event.preventDefault(); input.current?.focus() }}>
-      <Dialog.Close className={styles.close} aria-label="关闭登录" title="关闭登录"><X size={21} /></Dialog.Close>
-      <div className={styles.heading}><div className={styles.brandMark}><WandSparkles size={23} /></div><Dialog.Title className={styles.title}>{auth ? `${providerNames[auth.provider]}登录` : <>登录 Agora<span>AI</span></>}</Dialog.Title></div>
+      <Dialog.Close className={styles.close} aria-label="关闭登录" title="关闭登录"><X size={16} strokeWidth={1.8} /></Dialog.Close>
+      <div className={styles.heading}><BrandMark size={56} /><Dialog.Title className={styles.title}>{auth ? `${providerNames[auth.provider]}登录` : <>登录 Agora<span>AI</span></>}</Dialog.Title></div>
       <Dialog.Description className={styles.subtitle}>{auth ? (auth.provider === "wechat" ? "使用微信扫码，在手机上确认登录" : `在 ${providerNames[auth.provider]} 窗口中完成授权`) : "继续你的下一次发现。"}</Dialog.Description>
       {auth ? <div className={styles.authorization}>
         {authExpired ? <div className={styles.providerStatus}><RefreshCw size={30} /><p>本次授权已过期</p><button type="button" className={styles.primary} onClick={() => void startProvider(auth.provider)}>重新获取</button></div>
@@ -172,7 +173,7 @@ export function PortalLoginDialog({ open, onOpenChange, onAuthenticated, onResto
         <button type="button" className={styles.back} onClick={back}><ArrowLeft size={16} />其他登录方式</button>
       </div> : <>
         <Tabs.Root value={channel} onValueChange={(value) => { setChannel(value as OtpChannel); setError("") }}>
-          <Tabs.List className={styles.tabs} aria-label="登录方式"><Tabs.Trigger value="phone" disabled={Boolean(busy)}><Smartphone size={17} />手机号</Tabs.Trigger><Tabs.Trigger value="email" disabled={Boolean(busy)}><Mail size={17} />邮箱</Tabs.Trigger></Tabs.List>
+          <Tabs.List className={styles.tabs} aria-label="登录方式"><Tabs.Trigger value="phone" disabled={Boolean(busy)}><Smartphone size={15} strokeWidth={1.8} />手机号</Tabs.Trigger><Tabs.Trigger value="email" disabled={Boolean(busy)}><Mail size={15} strokeWidth={1.8} />邮箱</Tabs.Trigger></Tabs.List>
           <form onSubmit={submit} className={styles.form} noValidate>
             <label htmlFor="portal-login-identity" className={styles.label}>{channel === "phone" ? "手机号" : "邮箱地址"}</label>
             <div className={styles.inputShell}>{channel === "phone" && <select aria-label="国家或地区代码" value={draft.country} disabled={Boolean(busy)} onChange={(event) => updateDraft({ country: event.target.value })}><option value="+86">+86</option><option value="+852">+852</option><option value="+886">+886</option><option value="+1">+1</option><option value="+44">+44</option><option value="+81">+81</option><option value="+49">+49</option><option value="+61">+61</option></select>}<input ref={input} id="portal-login-identity" type={channel === "phone" ? "tel" : "email"} autoComplete={channel === "phone" ? "tel-national" : "email"} value={draft.value} maxLength={channel === "phone" ? 24 : 254} disabled={Boolean(busy)} onChange={(event) => updateDraft({ value: event.target.value })} placeholder={channel === "phone" ? "输入手机号" : "name@example.com"} aria-describedby={error ? "portal-login-error" : undefined} /></div>

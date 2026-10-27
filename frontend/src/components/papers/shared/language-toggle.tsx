@@ -20,18 +20,16 @@ export function PapersLanguageToggle({
       type="button"
       variant="outline"
       size="sm"
-      className="h-10 gap-2 rounded-full border-[#d7dfd8] bg-white px-2.5 shadow-sm dark:border-border dark:bg-card"
+      className="gap-2 rounded-full px-2"
       title={t(papersCopy.languageToggle, locale)}
       onClick={() => onLocaleChange(nextLocale)}
     >
-      <Languages className="size-4" />
-      <span className="flex items-center gap-1 text-xs font-semibold">
+      <Languages className="size-4" strokeWidth={1.8} aria-hidden="true" />
+      <span className="flex items-center gap-0.5 text-label font-semibold">
         <span
           className={cn(
             "rounded-full px-2 py-0.5 transition-colors",
-            locale === "zh"
-              ? "bg-[#334155] text-white dark:bg-foreground dark:text-background"
-              : "text-[#334155]/55 dark:text-muted-foreground"
+            locale === "zh" ? "bg-primary text-primary-foreground" : "text-muted-foreground"
           )}
         >
           中
@@ -39,9 +37,7 @@ export function PapersLanguageToggle({
         <span
           className={cn(
             "rounded-full px-2 py-0.5 transition-colors",
-            locale === "en"
-              ? "bg-[#334155] text-white dark:bg-foreground dark:text-background"
-              : "text-[#334155]/55 dark:text-muted-foreground"
+            locale === "en" ? "bg-primary text-primary-foreground" : "text-muted-foreground"
           )}
         >
           EN

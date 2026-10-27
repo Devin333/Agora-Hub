@@ -53,7 +53,7 @@ export function MethodDetailPage({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0">
       <PapersMicrobar
         items={[{ label: "Methods", href: papersRoutes.methods }, { label: method.name }]}
         meta={t(papersCopy.methodDetailMeta, locale)}
@@ -69,9 +69,13 @@ export function MethodDetailPage({
           { label: t(papersCopy.implementations, locale), value: methodStats.implementationCount }
         ]}
       />
-      <InlineNotice message={notice} locale={locale} onDismiss={() => setNotice(null)} />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <main className="space-y-6">
+      {notice ? (
+        <div className="px-4 pt-4 md:px-6">
+          <InlineNotice message={notice} locale={locale} onDismiss={() => setNotice(null)} />
+        </div>
+      ) : null}
+      <div className="grid gap-6 px-4 py-4 md:px-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <main className="min-w-0 space-y-6">
           {selectedBenchmark ? (
             <BenchmarkEvidencePanel
               benchmark={selectedBenchmark}

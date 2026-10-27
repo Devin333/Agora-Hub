@@ -112,14 +112,14 @@ export function PaperDetailDrawer({
         eyebrow={translate(locale, "papers.reader.paper")}
         onOpenChange={onOpenChange}
       >
-        <div className="min-h-0 flex-1 overflow-y-auto px-7 py-7">
+        <div className="rk-scroll min-h-0 flex-1 overflow-y-auto px-6 py-6">
           {detailError ? (
-            <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+            <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-body2 text-destructive-text">
               {detailError}
             </div>
           ) : (
-            <div className="flex items-center gap-3 rounded-md border border-[#d8dfd8] bg-white px-4 py-4 text-sm text-[#334155]/68 dark:border-border dark:bg-card dark:text-muted-foreground">
-              <RefreshCw className="size-4 animate-spin" />
+            <div role="status" className="flex items-center gap-3 rounded-xl border px-4 py-3 text-body2 text-muted-foreground">
+              <RefreshCw className="size-4 animate-spin" strokeWidth={1.8} aria-hidden="true" />
               {translate(locale, "papers.reader.loading")}
             </div>
           )}
@@ -136,7 +136,7 @@ export function PaperDetailDrawer({
       eyebrow={<PaperDetailEyebrow paper={activePaper} locale={locale} />}
       onOpenChange={onOpenChange}
     >
-      <div className="min-h-0 flex-1 overflow-y-auto px-7 py-7">
+      <div className="rk-scroll min-h-0 flex-1 overflow-y-auto px-6 py-6">
         <PaperDetailContent paper={activePaper} locale={locale} detailError={detailError} titleLevel={2} returnTo={returnTo} />
       </div>
     </PaperDetailFrame>
@@ -192,7 +192,7 @@ function PaperDetailFrame({
     <>
       <div
         className={cn(
-          "fixed inset-0 z-50 bg-[#0f172a]/25 backdrop-blur-sm transition-[opacity,backdrop-filter] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          "fixed inset-0 z-50 bg-overlay backdrop-blur-[4px] transition-[opacity,backdrop-filter] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
           isVisible ? "opacity-100" : "pointer-events-none opacity-0 backdrop-blur-0"
         )}
         aria-hidden="true"
@@ -201,7 +201,7 @@ function PaperDetailFrame({
       <aside
         ref={frame}
         className={cn(
-          "fixed inset-y-0 right-0 z-50 flex w-[min(44rem,92vw)] flex-col border-l border-[#d8dfd8] bg-[#f7f9f6] shadow-[-24px_0_70px_rgba(15,23,42,0.18)] transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] dark:border-border dark:bg-background lg:w-[min(48rem,64vw)] xl:w-[min(52rem,56vw)] 2xl:w-[56rem]",
+          "fixed inset-y-0 right-0 z-50 flex w-[min(44rem,92vw)] flex-col border-l bg-background text-foreground shadow-lg transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] lg:w-[min(48rem,64vw)] xl:w-[min(52rem,56vw)] 2xl:w-[56rem]",
           isVisible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-full opacity-0"
         )}
         aria-label="Paper detail"
@@ -209,19 +209,19 @@ function PaperDetailFrame({
         aria-hidden={!isVisible}
         role="dialog"
       >
-        <div className="flex items-center justify-between border-b border-[#d8dfd8] px-7 py-5 dark:border-border">
-          <div className="text-xs uppercase tracking-[0.16em] text-[#334155]/55">{eyebrow}</div>
+        <div className="flex items-center justify-between gap-3 border-b px-6 py-3">
+          <div className="min-w-0 truncate text-label font-medium text-muted-foreground">{eyebrow}</div>
           <a
             href={closeHref ?? "/papers"}
             role="button"
-            className="rounded-full p-2 text-[#334155]/55 transition-colors hover:bg-white hover:text-[#334155] dark:hover:bg-card dark:hover:text-foreground"
+            className="grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
             aria-label={t(papersCopy.dismiss, locale)}
             onClick={(event) => {
               event.preventDefault()
               onOpenChange(false)
             }}
           >
-            <X className="size-5" />
+            <X className="size-4" strokeWidth={1.8} aria-hidden="true" />
           </a>
         </div>
 

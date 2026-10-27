@@ -16,13 +16,13 @@ export function PaperMetrics({ paper, locale }: { paper: Paper; locale: Locale }
   return (
     <div className="grid gap-3">
       {hasGithubStars ? (
-        <Metric icon={<Github className="size-4" />} value={formatCompactNumber(paper.githubStars)} label={t(papersCopy.githubStars, locale)} />
+        <Metric icon={<Github className="size-4" strokeWidth={1.8} aria-hidden="true" />} value={formatCompactNumber(paper.githubStars)} label={t(papersCopy.githubStars, locale)} />
       ) : null}
       {hasCitations ? (
-        <Metric icon={<Quote className="size-4" />} value={formatCompactNumber(paper.citationCount)} label={t(papersCopy.citations, locale)} />
+        <Metric icon={<Quote className="size-4" strokeWidth={1.8} aria-hidden="true" />} value={formatCompactNumber(paper.citationCount)} label={t(papersCopy.citations, locale)} />
       ) : null}
       {hasMomentum ? (
-        <Metric icon={<TrendingUp className="size-4" />} value={formatCompactNumber(paper.githubMomentum)} label={t(papersCopy.githubMomentum, locale)} tone="green" />
+        <Metric icon={<TrendingUp className="size-4" strokeWidth={1.8} aria-hidden="true" />} value={formatCompactNumber(paper.githubMomentum)} label={t(papersCopy.githubMomentum, locale)} tone="success" />
       ) : null}
     </div>
   )
@@ -37,17 +37,17 @@ function Metric({
   icon: ReactNode
   value: string
   label: string
-  tone?: "neutral" | "green"
+  tone?: "neutral" | "success"
 }) {
   return (
     <div className="flex items-center gap-2.5 text-left">
-      <span className={tone === "green" ? "text-emerald-600" : "text-[#334155]/55 dark:text-muted-foreground"}>{icon}</span>
+      <span className={tone === "success" ? "text-success" : "text-muted-foreground"}>{icon}</span>
       <span className="min-w-0">
-        <span className="flex items-center gap-1.5 text-base font-black leading-5 text-[#334155] dark:text-foreground">
+        <span className="flex items-center gap-1.5 text-body1 font-semibold tabular-nums text-foreground">
           {value}
-          {label.includes("GitHub") ? <Star className="size-3 text-amber-500" /> : null}
+          {label.includes("GitHub") ? <Star className="size-3 text-warning" strokeWidth={1.8} aria-hidden="true" /> : null}
         </span>
-        <span className="block truncate text-[0.68rem] font-medium leading-4 text-[#334155]/55 dark:text-muted-foreground">
+        <span className="block truncate text-caption text-muted-foreground">
           {label}
         </span>
       </span>

@@ -47,60 +47,34 @@ export function TaskDetailPage({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="min-w-0">
       <PapersMicrobar
         items={[{ label: "Tasks", href: papersRoutes.tasks }, { label: task.name.toUpperCase() }]}
         meta={t(papersCopy.taskDetailMeta, locale)}
         locale={locale}
       />
 
-      {/* Hero */}
-      <section className="border-b border-[#d7dfd8] pb-8 pt-1 dark:border-border">
-        <p className="text-[0.72rem] font-black uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-400">
-          Task
-        </p>
-        <h1 className="mt-3 max-w-5xl text-balance text-5xl font-black uppercase leading-[0.95] tracking-normal text-[#334155] sm:text-6xl lg:text-7xl dark:text-foreground">
+      <section className="border-b px-4 py-4 md:px-6">
+        <p className="text-label font-medium text-muted-foreground">Task</p>
+        <h1 className="mt-1 max-w-5xl break-keep text-balance text-heading2 font-semibold text-foreground">
           {taskName(task, locale)}
         </h1>
-        <p className="mt-5 max-w-3xl text-base leading-7 text-[#334155]/70 dark:text-muted-foreground">
-          {taskDescription(task, locale)}
-        </p>
-        {/* Inline stats — Papers with Code style */}
-        <p className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[#334155]/60 dark:text-muted-foreground">
-          <span>
-            <strong className="font-black text-[#334155] dark:text-foreground">
-              {formatWholeNumber(taskPapers.length, locale)}
-            </strong>{" "}
-            <span className="text-[0.72rem] font-black uppercase tracking-[0.12em]">
-              {t(papersCopy.papers, locale)}
-            </span>
-          </span>
-          <span aria-hidden="true" className="text-[#d7dfd8]">·</span>
-          <span>
-            <strong className="font-black text-[#334155] dark:text-foreground">
-              {formatWholeNumber(taskStats.benchmarkCount, locale)}
-            </strong>{" "}
-            <span className="text-[0.72rem] font-black uppercase tracking-[0.12em]">
-              {t(papersCopy.benchmarks, locale)}
-            </span>
-          </span>
-          <span aria-hidden="true" className="text-[#d7dfd8]">·</span>
-          <span>
-            <strong className="font-black text-[#334155] dark:text-foreground">
-              {formatWholeNumber(taskStats.methodCount, locale)}
-            </strong>{" "}
-            <span className="text-[0.72rem] font-black uppercase tracking-[0.12em]">
-              {t(papersCopy.methodsUsed, locale)}
-            </span>
-          </span>
-        </p>
+        <p className="mt-1 max-w-3xl text-body2 text-muted-foreground">{taskDescription(task, locale)}</p>
+        <dl className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-label text-muted-foreground">
+          <TaskStat value={formatWholeNumber(taskPapers.length, locale)} label={t(papersCopy.papers, locale)} />
+          <TaskStat value={formatWholeNumber(taskStats.benchmarkCount, locale)} label={t(papersCopy.benchmarks, locale)} />
+          <TaskStat value={formatWholeNumber(taskStats.methodCount, locale)} label={t(papersCopy.methodsUsed, locale)} />
+        </dl>
       </section>
 
-      <InlineNotice message={notice} locale={locale} onDismiss={() => setNotice(null)} />
+      {notice ? (
+        <div className="px-4 pt-4 md:px-6">
+          <InlineNotice message={notice} locale={locale} onDismiss={() => setNotice(null)} />
+        </div>
+      ) : null}
 
-      {/* Main + sidebar */}
-      <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_18rem] 2xl:grid-cols-[minmax(0,1fr)_19rem]">
-        <main className="space-y-10">
+      <div className="grid gap-6 px-4 py-4 md:px-6 xl:grid-cols-[minmax(0,1fr)_18rem] 2xl:grid-cols-[minmax(0,1fr)_19rem]">
+        <main className="min-w-0 space-y-6">
           {selectedBenchmark ? (
             <BenchmarkEvidencePanel
               benchmark={selectedBenchmark}
@@ -130,7 +104,7 @@ export function TaskDetailPage({
           />
         </main>
 
-        <aside className="space-y-0 border-t border-[#d7dfd8] pt-6 xl:sticky xl:top-24 xl:self-start xl:border-t-0 xl:pt-0 dark:border-border">
+        <aside className="space-y-6 xl:sticky xl:top-24 xl:self-start">
           <SisterTasksPanel tasks={task.sisterTasks} papers={papers ?? []} locale={locale} />
           <CommonMethodsPanel methods={task.commonMethods} papers={papers ?? []} locale={locale} />
         </aside>
@@ -142,6 +116,15 @@ export function TaskDetailPage({
         open={Boolean(selectedPaper)}
         onOpenChange={(open) => { if (!open) setSelectedPaper(null) }}
       />
+    </div>
+  )
+}
+
+function TaskStat({ value, label }: { value: string; label: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <dt>{label}</dt>
+      <dd className="order-first text-body2 font-semibold tabular-nums text-foreground">{value}</dd>
     </div>
   )
 }

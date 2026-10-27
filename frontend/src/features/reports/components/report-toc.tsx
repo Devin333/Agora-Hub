@@ -22,11 +22,11 @@ export function extractToc(markdown: string): TocItem[] {
 export function ReportToc({ markdown }: { markdown: string }) {
   const items = extractToc(markdown);
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <h2 className="text-base font-semibold text-foreground">目录</h2>
-      <div className="mt-3 space-y-2">
+    <section className="space-y-3">
+      <h2 className="text-body1 font-semibold text-foreground">目录</h2>
+      <div className="space-y-2 rounded-xl border px-4 py-3">
         {items.map((item) => (
-          <p key={item.id} className="text-sm text-muted-foreground" style={{ paddingLeft: `${(item.depth - 1) * 12}px` }}>
+          <p key={item.id} className="text-body2 text-muted-foreground" style={{ paddingLeft: `${(item.depth - 1) * 12}px` }}>
             {item.title}
           </p>
         ))}

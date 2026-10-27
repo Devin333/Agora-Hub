@@ -6,6 +6,9 @@ import type { MethodAreaDomain } from "@/lib/papers/metrics"
 import type { Locale, Paper, TaskRef } from "@/lib/papers/types"
 import { cn } from "@/lib/utils"
 
+type SidebarItem = { key: string; href: string; label: string; count: number }
+
+/** Rakazo sidebar: sectioned list of method areas and top tasks with live paper counts. */
 export function PapersDomainSidebar({
   methodAreas,
   topTasks,
@@ -20,10 +23,14 @@ export function PapersDomainSidebar({
   className?: string
 }) {
   return (
-    <aside className={cn("space-y-3 xl:sticky xl:top-24", className)}>
+    <aside
+      aria-label={locale === "zh" ? "论文领域" : "Paper domains"}
+      className={cn(
+        "rk-scroll flex flex-col gap-3 rounded-2xl border border-sidebar-border bg-sidebar py-3 text-sidebar-foreground xl:sticky xl:top-24 xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto",
+        className
+      )}
+    >
       <SidebarSection
-        accent="emerald"
-        index="01"
         title={t(papersCopy.methods, locale)}
         items={methodAreas.map((area) => ({
           key: area.slug,
@@ -34,8 +41,6 @@ export function PapersDomainSidebar({
         locale={locale}
       />
       <SidebarSection
-        accent="sky"
-        index="02"
         title={t(papersCopy.tasks, locale)}
         items={topTasks.map((task) => ({
           key: task.id,
@@ -49,53 +54,30 @@ export function PapersDomainSidebar({
   )
 }
 
-function SidebarSection({
-  accent,
-  index,
-  title,
-  items,
-  locale
-}: {
-  accent: "emerald" | "sky"
-  index: string
-  title: string
-  items: Array<{ key: string; href: string; label: string; count: number }>
-  locale: Locale
-}) {
-  const rowAccentClass = accent === "emerald" ? "hover:border-emerald-200 hover:bg-emerald-50/70 hover:text-emerald-800" : "hover:border-sky-200 hover:bg-sky-50/70 hover:text-sky-800"
-  const countAccentClass = accent === "emerald" ? "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100" : "bg-sky-50 text-sky-800 ring-1 ring-sky-100"
-  const indexAccentClass = accent === "emerald" ? "text-emerald-600" : "text-sky-600"
-
+function SidebarSection({ title, items, locale }: { title: string; items: SidebarItem[]; locale: Locale }) {
   return (
-    <section className="rounded-xl border border-[#dfe5df] bg-white/70 p-3 shadow-sm dark:border-border dark:bg-card/60">
-      <div className="flex items-end justify-between gap-3 border-b border-[#e6ebe4] pb-2.5 dark:border-border">
-        <div>
-          <p className={cn("text-[0.68rem] font-semibold tracking-[0.14em]", indexAccentClass)}>{index}</p>
-          <h2 className="mt-1.5 text-[0.76rem] font-semibold uppercase tracking-[0.14em] text-[#1f2933] dark:text-foreground">
-            {title}
-          </h2>
-        </div>
-        <span className={cn("rounded-full px-2.5 py-1 text-[0.65rem] font-semibold", countAccentClass)}>
-          {formatWholeNumber(items.length, locale)}
-        </span>
-      </div>
-      <div className="mt-3 flex gap-2 overflow-x-auto xl:grid xl:overflow-visible">
-        {items.map((item) => (
-          <Link
-            key={item.key}
-            href={item.href}
-            className={cn(
-              "group flex shrink-0 items-center justify-between gap-3 rounded-full border border-transparent bg-[#f7faf5] px-3 py-2 text-[#334155] transition-all xl:shrink xl:rounded-lg xl:py-2.5 dark:bg-background/70 dark:text-foreground",
-              rowAccentClass
-            )}
-          >
-            <span className="text-sm font-medium leading-5">{item.label}</span>
-            <span className={cn("rounded-full px-2.5 py-1 text-[0.68rem] font-semibold", countAccentClass)}>
-              {formatWholeNumber(item.count, locale)}
-            </span>
-          </Link>
-        ))}
-      </div>
+    <section className="px-2.5">
+      <h2 className="flex items-center justify-between px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">
+        <span>{title}</span>
+        <span className="tabular-nums">{formatWholeNumber(items.length, locale)}</span>
+      </h2>
+      {items.length ? (
+        <ul className="mt-1 space-y-0.5">
+          {items.map((item) => (
+            <li key={item.key}>
+              <Link
+                href={item.href}
+                className="flex items-center gap-3 rounded-xl px-2.5 py-[10px] outline-none transition-colors hover:bg-sidebar-accent/60 focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                <span className="min-w-0 flex-1 truncate text-body2 font-medium">{item.label}</span>
+                <span className="shrink-0 text-label tabular-nums text-faint-foreground">{formatWholeNumber(item.count, locale)}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="px-2.5 py-2 text-label text-muted-foreground">{locale === "zh" ? "暂无数据" : "No data yet"}</p>
+      )}
     </section>
   )
 }

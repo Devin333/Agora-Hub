@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { ErrorState } from "@/components/common/error-state"
 import { PageSkeleton } from "@/components/common/loading-skeleton"
 import { PageHeader } from "@/components/layout/page-header"
+import { Button } from "@/components/ui/button"
+import { ArrowLeft, FilePlus2 } from "lucide-react"
 import { ReportList } from "@/features/reports/components/report-list"
 import { ReportPreparation } from "@/features/reports/components/report-preparation"
 import { ReportToolbar } from "@/features/reports/components/report-toolbar"
@@ -48,10 +50,19 @@ export function ReportsPageClient() {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow={t("portal.reports.eyebrow")} title={t("portal.reports.title")} description={t("portal.reports.description")} />
-      <div className="flex items-center justify-between gap-4"><a href={researchHomeHref()} className="rounded text-sm text-[#7c3aed] hover:underline focus-visible:ring-2 focus-visible:ring-[#8b5cf6]">返回首页</a>{!compose && <button type="button" onClick={() => replaceParams(params => params.set("compose", "1"))} className="rounded-xl border border-[#e0d3f2] bg-[#faf7ff] px-4 py-2.5 text-sm font-medium text-[#6d28d9] focus-visible:ring-2 focus-visible:ring-[#8b5cf6]">准备研究报告</button>}</div>
+      <PageHeader
+        eyebrow={t("portal.reports.eyebrow")}
+        title={t("portal.reports.title")}
+        description={t("portal.reports.description")}
+        actions={<>
+          <Button asChild variant="ghost">
+            <a href={researchHomeHref()}><ArrowLeft size={15} strokeWidth={1.8} />返回首页</a>
+          </Button>
+          {!compose && <Button type="button" onClick={() => replaceParams(params => params.set("compose", "1"))}><FilePlus2 size={15} strokeWidth={1.8} />准备研究报告</Button>}
+        </>}
+      />
       {compose ? <ReportPreparation question={question} draftId={draftId} onSaved={rememberDraft} /> : question ? <QuestionContext question={question} /> : null}
-      <h2 className="text-lg font-semibold">已有报告</h2>
+      <h2 className="text-heading3 font-semibold">已有报告</h2>
       <ReportToolbar filters={filters} onChange={setFilters} />
       {reports.isLoading ? <PageSkeleton /> : null}
       {reports.isError ? <ErrorState title="报告加载失败" message={reports.error?.message} onRetry={reports.refetch} /> : null}
@@ -62,8 +73,8 @@ export function ReportsPageClient() {
 
 function QuestionContext({ question }: { question: string }) {
   return (
-    <div className="rounded-xl border border-[#e7dff1] bg-[#faf7ff] px-4 py-3 text-sm text-[#695d7d]">
-      来自首页的问题：<span className="font-medium text-[#382758]">{question}</span>
+    <div className="rounded-xl border bg-muted/50 px-4 py-3 text-body2 text-muted-foreground">
+      来自首页的问题：<span className="font-medium text-foreground">{question}</span>
     </div>
   )
 }
