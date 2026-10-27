@@ -21,7 +21,8 @@ import type { ReaderPersonalMemoryControl, ReaderTaskActivity } from "@/features
 import { normalizeAnalyzeTransportUrl } from "@/lib/research/desktop/request-contracts"
 import { resolveCitationLocation } from "@/lib/research/reader-location"
 import { matchesSelectionAnswerScope } from "@/lib/research/selection-ask"
-import type { AppTheme, ReaderTab } from "./model"
+import type { ResolvedTheme } from "@/lib/theme/appearance"
+import type { ReaderTab } from "./model"
 import { activeReaderRequestIds, readerTaskSnapshots, usedReaderMemoryRefs } from "./reader-task-state"
 import { saveUserExport } from "./user-export"
 import styles from "./paper-agent-app.module.css"
@@ -59,7 +60,7 @@ export function PaperReaderPane({
   owner: string
   onActivityChange: (active: boolean) => void
   onTaskStateChange: (state: { activeRequestIds: string[]; unsaved: boolean }) => void
-  appearance: AppTheme
+  appearance: ResolvedTheme
 }) {
   const [payload, setPayload] = useState<ReaderWorkspacePayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -139,7 +140,7 @@ function LoadedReader({
   onUseMemoryChange: (enabled: boolean) => void
   owner: string
   onTaskStateChange: (state: { activeRequestIds: string[]; unsaved: boolean }) => void
-  appearance: AppTheme
+  appearance: ResolvedTheme
 }) {
   const [payload, setPayload] = useState(initialPayload)
   const [tab, setTab] = useState<ReaderTab>(initialTab)

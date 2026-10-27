@@ -61,18 +61,54 @@ function installDesktop(options: { withConfig?: boolean } = {}) {
 afterEach(() => { cleanup(); document.body.replaceChildren(); vi.unstubAllGlobals(); vi.restoreAllMocks(); delete (window as unknown as { agoraDesktop?: unknown }).agoraDesktop })
 
 describe("PaperAgentSettingsPanel CSS", () => {
-  it("draws every color from the shared monochrome theme tokens instead of literal values", () => {
-    const css = readFileSync(resolve(process.cwd(), "src/features/paper-agent-app/paper-agent-settings-panel.module.css"), "utf8")
-    const panelTokens = css.match(/^\.panel \{([\s\S]*?)\n\}/m)?.[1] ?? ""
+  const css = readFileSync(resolve(process.cwd(), "src/features/paper-agent-app/paper-agent-settings-panel.module.css"), "utf8")
 
-    // The shell tokens switch with data-theme, so the panel needs no dark-only overrides of its own.
-    expect(css).not.toContain('[data-theme="dark"]')
-    for (const [name, token] of [["ink", "text"], ["muted", "muted"], ["line", "border"], ["surface", "surface"], ["subtle", "surface-2"], ["input", "fill"]]) {
-      expect(panelTokens).toContain(`--panel-${name}: var(--${token});`)
-    }
+  it("draws every color from the global design tokens instead of literal or legacy shell values", () => {
     expect(css).not.toMatch(/#[0-9a-f]{3,8}\b/i)
     expect(css).not.toMatch(/\brgba?\(/i)
-    expect(css).not.toMatch(/\b(?:hsla?|lab|lch|oklab|oklch|color-mix)\(/i)
+    expect(css).not.toMatch(/\b(?:hsla?|lab|lch|oklab|oklch)\(/i)
+    // Legacy paper-agent shell variables are gone; only styles/theme-tokens.css names remain.
+    expect(css).not.toMatch(/var\(--(?:text|surface|surface-2|fill|hover|faint|border-strong|radius-[a-z0-9]+|panel-[a-z]+)\)/)
+    for (const match of css.matchAll(/color-mix\([^,]*,[^,)]*\)/g)) expect(match[0]).toMatch(/^color-mix\(in srgb, var\(--[a-z-]+\)/)
+  })
+
+  it("keeps real status colors for badges, policy notices and the destructive clear flow", () => {
+    expect(css).toMatch(/\.badgeSuccess \{[^}]*color: var\(--success-text\)/)
+    expect(css).toMatch(/\.badgeWarning \{[^}]*color: var\(--warning-text\)/)
+    expect(css).toMatch(/\.badgeDanger \{[^}]*color: var\(--destructive-text\)/)
+    expect(css).toMatch(/\.policySafe \{[^}]*var\(--success\)/)
+    expect(css).toMatch(/\.inlineError \{[^}]*color: var\(--destructive-text\)/)
+    expect(css).toMatch(/\.clearApplyButton \{[^}]*background: var\(--destructive-fill\)/)
+  })
+
+  it("lays the dialog out as a 200px navigation column beside a scrolling content column", () => {
+    expect(css).toMatch(/\.navigable \{[^}]*grid-template-columns: 200px minmax\(0, 1fr\)/)
+    expect(css).toMatch(/\.content \{[^}]*overflow: auto/)
+    expect(css).toMatch(/\.navItem\[aria-current="true"\] \{[^}]*background: var\(--accent\)/)
+  })
+})
+
+describe("PaperAgentSettingsPanel navigation", () => {
+  it("lists every section and jumps to the chosen one", async () => {
+    installFetch()
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView })
+    try {
+      render(<PaperAgentSettingsPanel />)
+      const nav = screen.getByRole("navigation", { name: "设置分区" })
+      const items = within(nav).getAllByRole("button")
+      expect(items.map(item => item.textContent)).toEqual(["运行概览", "数据位置", "能力与配置", "联网与记忆授权", "宿主诊断与备份", "清除本机数据"])
+      expect(items[0]).toHaveAttribute("aria-current", "true")
+      for (const id of ["settings-overview", "settings-data", "settings-capabilities", "settings-network", "settings-host", "settings-clear"]) expect(document.getElementById(id)).not.toBeNull()
+
+      fireEvent.click(within(nav).getByRole("button", { name: "联网与记忆授权" }))
+      expect(within(nav).getByRole("button", { name: "联网与记忆授权" })).toHaveAttribute("aria-current", "true")
+      expect(items[0]).not.toHaveAttribute("aria-current")
+      expect(scrollIntoView).toHaveBeenCalledTimes(1)
+      expect(scrollIntoView.mock.contexts[0]).toBe(document.getElementById("settings-network"))
+    } finally {
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
   })
 })
 

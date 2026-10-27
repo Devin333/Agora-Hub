@@ -6,7 +6,6 @@ export type LibraryFilter = "all" | "unread" | "saved"
 export type LibrarySort = "updated-desc" | "created-desc" | "title-asc"
 export type MaterialAccessState = "metadata-only" | "reader-projection" | "local-pdf"
 export type ReaderTab = "original" | "overview" | "notes" | "details"
-export type AppTheme = "light" | "dark"
 export type ReadingStatus = "unread" | "reading" | "read"
 
 export type PaperAgentMaterial = ResearchMaterial

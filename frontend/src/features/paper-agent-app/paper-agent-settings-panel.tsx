@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { AlertTriangle, CheckCircle2, CircleDot, Database, HardDrive, LoaderCircle, RefreshCw, RotateCcw, ShieldCheck, Wifi, X } from "lucide-react"
+import { AlertTriangle, CheckCircle2, CircleDot, Database, Gauge, HardDrive, LoaderCircle, RefreshCw, RotateCcw, ShieldCheck, Trash2, Wifi, X, type LucideIcon } from "lucide-react"
 import { fetchDesktopCapabilities, fetchDesktopIdentity, type DesktopCapabilities, type DesktopIdentity } from "@/lib/research/desktop/client"
 import { getPersonalMemoryInfo, getPersonalMemoryPolicy, type PersonalMemoryInfo, type PersonalMemoryPolicy } from "./personal-memory-client"
 import { PaperAgentDataClearPanel } from "./paper-agent-data-clear-panel"
@@ -16,6 +16,16 @@ type HostState =
   | { kind: "error" }
 
 const empty = <T,>(): LoadState<T> => ({ value: null, error: false })
+
+/** Sections reachable from the dialog navigation; `id` is the section element id, `${id}-title` its heading. */
+const settingsSections: ReadonlyArray<{ id: string; label: string; icon: LucideIcon }> = [
+  { id: "settings-overview", label: "运行概览", icon: Gauge },
+  { id: "settings-data", label: "数据位置", icon: Database },
+  { id: "settings-capabilities", label: "能力与配置", icon: CircleDot },
+  { id: "settings-network", label: "联网与记忆授权", icon: Wifi },
+  { id: "settings-host", label: "宿主诊断与备份", icon: HardDrive },
+  { id: "settings-clear", label: "清除本机数据", icon: Trash2 },
+]
 const cx = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(" ")
 
 export function PaperAgentSettingsModal({
@@ -56,6 +66,7 @@ export function PaperAgentSettingsModal({
 export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts = false, activeTaskCount, modal = false, className }: { onClose?: () => void; onDraftChange?: (dirty: boolean) => void; hasOtherDrafts?: boolean; activeTaskCount?: number; modal?: boolean; className?: string }) {
   const panelRef = useRef<HTMLElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   useSettingsModalFocus(modal, panelRef, closeRef)
   const requestRef = useRef(0)
   const [identity, setIdentity] = useState<LoadState<DesktopIdentity>>(empty)
@@ -112,8 +123,10 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts
 
   const memoryRemoteAllowed = memoryPolicy.value?.allow_remote_processing === true
   return (
-    <section ref={panelRef} className={cx(styles.panel, className)} role={modal ? "dialog" : undefined} aria-modal={modal || undefined} aria-labelledby="paper-agent-settings-title" tabIndex={modal ? -1 : undefined}>
-      <header className={styles.header}>
+    <section ref={panelRef} className={cx(styles.panel, styles.navigable, className)} role={modal ? "dialog" : undefined} aria-modal={modal || undefined} aria-labelledby="paper-agent-settings-title" tabIndex={modal ? -1 : undefined}>
+      <SettingsNavigation contentRef={contentRef} />
+      <div ref={contentRef} className={styles.content}>
+      <header className={styles.header} id="settings-overview">
         <div><p className={styles.eyebrow}>本机设置与可靠性</p><h2 id="paper-agent-settings-title">运行状态、数据边界与诊断</h2><p>只展示受控服务返回的真实状态；不会读取或显示 API 密钥。</p></div>
         <div className={styles.headerActions}>
           <button type="button" className={styles.secondaryButton} disabled={loading} onClick={() => void load()}>{loading ? <LoaderCircle className={styles.spinner} size={16} /> : <RefreshCw size={16} />}刷新全部状态</button>
@@ -128,7 +141,7 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts
       </div>
 
       <div className={styles.sections}>
-        <section className={styles.card} aria-labelledby="settings-data-title">
+        <section className={styles.card} id="settings-data" aria-labelledby="settings-data-title">
           <SectionHeading icon={<Database size={18} />} title="真实数据位置" id="settings-data-title" />
           {memoryInfo.error && <InlineError>无法读取个人记忆数据位置；未使用猜测路径替代。</InlineError>}
           <dl className={styles.definitionList}>
@@ -142,7 +155,7 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts
           <Notice icon={<ShieldCheck size={17} />} title="数据分类：本机个人研究数据">包括论文、笔记、运行记录与个人记忆。所有者来自已验证会话，不能由页面 payload 指定。</Notice>
         </section>
 
-        <section className={styles.card} aria-labelledby="settings-capabilities-title">
+        <section className={styles.card} id="settings-capabilities" aria-labelledby="settings-capabilities-title">
           <SectionHeading icon={<CircleDot size={18} />} title="实际能力与待配置状态" id="settings-capabilities-title" />
           <p className={styles.sectionLead}>“已配置”只说明组件存在；只有受控业务操作留下验证记录时才标记“已验证”。</p>
           {capabilities.error && <InlineError>无法读取能力清单；不会把配置存在误报为可用。</InlineError>}
@@ -154,7 +167,7 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts
           <RuntimeConfigurationForm hasOtherDrafts={hasOtherDrafts} onDraftChange={setConfigDraftDirty} onRuntimeStatusChange={status => setHost(previous => status && previous.kind === "desktop" ? { kind: "desktop", snapshot: { ...previous.snapshot, status, diagnostics: { ...previous.snapshot.diagnostics, runtime: status } } } : { kind: "error" })} />
         </section>
 
-        <section className={styles.card} aria-labelledby="settings-network-title">
+        <section className={styles.card} id="settings-network" aria-labelledby="settings-network-title">
           <SectionHeading icon={<Wifi size={18} />} title="联网范围与个人记忆授权" id="settings-network-title" />
           {memoryPolicy.error ? <InlineError>无法确认个人记忆远程处理策略；按未授权处理，不能回传伪成功。</InlineError> : memoryPolicy.value ? (
             <div className={cx(styles.policyState, memoryRemoteAllowed ? styles.policyWarning : styles.policySafe)}>{memoryRemoteAllowed ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}<div><strong>{memoryRemoteAllowed ? "个人记忆远程处理已授权" : "个人记忆远程处理未授权"}</strong><p>权威策略 revision {memoryPolicy.value.revision}。{memoryRemoteAllowed ? "只有任务明确选择的 active 记忆才具备发送资格。" : "默认关闭；配置存在、界面勾选或 capability 状态都不会自动开启。"}</p></div></div>
@@ -168,18 +181,62 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, hasOtherDrafts
           <p className={styles.footnote}>此面板本身不会发起模型、检索或 embedding 调用，也不会因为检测到配置而开启联网权限。</p>
         </section>
 
-        <section className={styles.card} aria-labelledby="settings-host-title">
+        <section className={styles.card} id="settings-host" aria-labelledby="settings-host-title">
           <SectionHeading icon={<HardDrive size={18} />} title="本机宿主诊断" id="settings-host-title" />
           <HostDiagnostics host={host} retrying={retrying} onRetry={() => void retryRuntime()} />
           <MaintenancePanel host={host} />
         </section>
 
-        <section className={cx(styles.card, styles.clearCard)} aria-labelledby="settings-clear-title">
+        <section className={cx(styles.card, styles.clearCard)} id="settings-clear" aria-labelledby="settings-clear-title">
           <div className={styles.sectionHeading}><ShieldCheck size={18} /><h3 id="settings-clear-title">清除本机 Agora 数据</h3></div>
           <PaperAgentDataClearPanel hasProtectedDrafts={hasOtherDrafts || configDraftDirty} activeTaskCount={activeTaskCount} />
         </section>
       </div>
+      </div>
     </section>
+  )
+}
+
+/** Left navigation of the settings dialog: jumps to a section and tracks the one being read. */
+function SettingsNavigation({ contentRef }: { contentRef: { current: HTMLDivElement | null } }) {
+  const [activeId, setActiveId] = useState(settingsSections[0].id)
+  useEffect(() => {
+    const root = contentRef.current
+    if (!root || typeof IntersectionObserver === "undefined") return
+    const visible = new Map<string, number>()
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) visible.set(entry.target.id, entry.boundingClientRect.top)
+        else visible.delete(entry.target.id)
+      }
+      const first = settingsSections.find(section => visible.has(section.id))
+      if (first) setActiveId(first.id)
+    }, { root, rootMargin: "0px 0px -55% 0px" })
+    for (const section of settingsSections) {
+      const element = root.querySelector<HTMLElement>(`#${section.id}`)
+      if (element) observer.observe(element)
+    }
+    return () => observer.disconnect()
+  }, [contentRef])
+
+  function jumpTo(id: string) {
+    const target = contentRef.current?.querySelector<HTMLElement>(`#${id}`)
+    if (!target) return
+    setActiveId(id)
+    const reducedMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    target.scrollIntoView?.({ behavior: reducedMotion ? "auto" : "smooth", block: "start" })
+  }
+
+  return (
+    <nav className={styles.nav} aria-label="设置分区">
+      <p className={styles.navTitle}>设置</p>
+      {settingsSections.map(section => (
+        <button key={section.id} type="button" className={styles.navItem} aria-current={activeId === section.id ? "true" : undefined} onClick={() => jumpTo(section.id)}>
+          <section.icon size={16} strokeWidth={1.8} aria-hidden="true" />
+          <span>{section.label}</span>
+        </button>
+      ))}
+    </nav>
   )
 }
 

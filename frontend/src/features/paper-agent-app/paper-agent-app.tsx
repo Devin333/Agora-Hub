@@ -2,8 +2,10 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
-import { Bookmark, BookOpen, Brain, ChevronLeft, FilePlus2, FolderPen, Library, LoaderCircle, Menu, Moon, PanelLeftClose, Plus, RefreshCw, Search, Settings, Sparkles, Sun, Tag, Trash2, Wifi, WifiOff, X } from "lucide-react"
+import { Bookmark, BookOpen, Brain, ChevronLeft, FilePlus2, FolderPen, Library, LoaderCircle, Menu, PanelLeftClose, Plus, RefreshCw, Search, Settings, Sparkles, Tag, Trash2, Wifi, WifiOff, X } from "lucide-react"
 import { usePortalAccount } from "@/components/auth/portal-account-provider"
+import { BrandMark } from "@/components/brand/brand-mark"
+import { useAppearanceOptions } from "@/components/theme/appearance-menu"
 import { ResearchSourceEntry } from "@/features/portal/components/research-source-entry"
 import { isLocalDesktopProfile } from "@/lib/deployment-profile"
 import { fetchDesktopCapabilities, fetchDesktopIdentity, fetchResearchOperation } from "@/lib/research/desktop/client"
@@ -12,6 +14,8 @@ import { historyState, removeResearchGroup, saveResearchGroup, saveResearchMater
 import { retryHistoryEvent } from "@/lib/research/history-sync"
 import { useGuidedResearch } from "@/lib/research/use-guided-research"
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
+import type { AppearancePreference } from "@/lib/theme/appearance"
+import { useUiStore } from "@/stores/ui-store"
 import type { ResearchResult } from "@/lib/research/conversation"
 import { operationReceiptMatches, operationReceiptUpdate, updateResearchOperation } from "@/lib/research/pending-operations"
 import type { ResearchPendingOperation } from "@/lib/research/workspace-items"
@@ -28,7 +32,6 @@ import {
   sameResearchMaterial,
   sortMaterials,
   stableResultMaterial,
-  type AppTheme,
   type LibraryFilter,
   type LibrarySort,
   type MaterialSaveReceipt,
@@ -42,7 +45,6 @@ import { PaperAgentSettingsModal } from "./paper-agent-settings-panel"
 import { PaperReaderPane } from "./paper-reader-pane"
 import { useDesktopLifecycle } from "./desktop-lifecycle"
 import styles from "./paper-agent-app.module.css"
-import "./paper-agent-theme.css"
 
 const filterLabels: Record<LibraryFilter, string> = { all: "全部论文", unread: "未读", saved: "我的收藏" }
 const sortLabels: Record<LibrarySort, string> = { "updated-desc": "最近更新", "created-desc": "最近入库", "title-asc": "标题 A–Z" }
@@ -66,7 +68,8 @@ export function PaperAgentApp() {
   const navDrawerRef = useRef<HTMLElement>(null)
   const listDrawerRef = useRef<HTMLElement>(null)
   const composing = useRef(false)
-  const [theme, setTheme] = useState<AppTheme>("light")
+  // The resolved app-wide appearance; ThemeBridge owns `html[data-theme]`.
+  const theme = useUiStore(state => state.theme)
   const [filter, setFilter] = useState<LibraryFilter>("all")
   const [sort, setSort] = useState<LibrarySort>("updated-desc")
   const [groupId, setGroupId] = useState<string | null>(null)
@@ -356,28 +359,27 @@ export function PaperAgentApp() {
     else { if (groupId === id) setGroupId(null); setOnlineNotice("分组已删除；其中材料保留并改为未分组，等待同步确认。") }
   }
 
-  if (!account) return <AppState theme={theme} title="无法初始化论文工作台" detail="请刷新页面；若仍无法打开，请重新登录并检查桌面应用或站点部署是否完整。" />
-  if (!account.resolved) return <AppState theme={theme} title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
-  if (!account.session) return <AuthGate theme={theme} localDesktop={isLocalDesktopProfile()} hasProtectedDrafts={lifecycleDirty} activeTaskCount={activeTaskCount} onLogin={element => account.openLogin(element)} error={account.error ?? workspace.message} />
+  if (!account) return <AppState title="无法初始化论文工作台" detail="请刷新页面；若仍无法打开，请重新登录并检查桌面应用或站点部署是否完整。" />
+  if (!account.resolved) return <AppState title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
+  if (!account.session) return <AuthGate localDesktop={isLocalDesktopProfile()} hasProtectedDrafts={lifecycleDirty} activeTaskCount={activeTaskCount} onLogin={element => account.openLogin(element)} error={account.error ?? workspace.message} />
   const sessionOwner = account.session.user.userId
   if (!workspace.ready || owner !== sessionOwner) {
     if (owner === sessionOwner && (workspace.status === "error" || workspace.status === "conflict")) {
       return <AppState
-        theme={theme}
         title="论文库暂时无法读取"
         detail={workspace.message || "账号论文库读取失败；没有使用访客或空工作区代替真实数据。"}
         onRetry={() => window.dispatchEvent(new Event(retryHistoryEvent))}
       />
     }
-    return <AppState theme={theme} title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
+    return <AppState title="正在核对账号与论文库" detail="正在读取登录状态、owner 和工作区 revision…" busy />
   }
 
-  return <main className={styles.app} data-testid="paper-agent-app" data-paper-agent-shell data-theme={theme} data-focus={focusMode || undefined}>
+  return <main className={styles.app} data-testid="paper-agent-app" data-paper-agent-shell data-focus={focusMode || undefined}>
     <a className={styles.skipLink} href="#paper-reader-main">跳到论文正文</a>
-    <header className={styles.mobileBar}><button type="button" aria-label="打开导航" onClick={() => setNavOpen(true)}><Menu size={18} /></button><strong>Agora</strong><button type="button" aria-label="打开论文列表" onClick={() => setListOpen(true)}><Library size={18} /></button></header>
+    <header className={styles.mobileBar}><button type="button" aria-label="打开导航" onClick={() => setNavOpen(true)}><Menu size={18} strokeWidth={1.8} /></button><strong>Agora</strong><button type="button" aria-label="打开论文列表" onClick={() => setListOpen(true)}><Library size={18} /></button></header>
 
     {!focusMode && <aside ref={navDrawerRef} tabIndex={-1} className={`${styles.sidebar} ${navOpen ? styles.drawerOpen : ""}`} aria-label="论文工作台导航">
-      <div className={styles.brandRow}><strong>Agora</strong><button type="button" className={styles.drawerClose} aria-label="关闭导航" onClick={() => setNavOpen(false)}><X size={17} /></button></div>
+      <div className={styles.brandRow}><span><BrandMark size={28} /><strong>Agora</strong></span><button type="button" className={styles.drawerClose} aria-label="关闭导航" onClick={() => setNavOpen(false)}><X size={17} /></button></div>
       <nav aria-label="论文库视图" className={styles.primaryNav}>
         <span className={styles.navLabel}>资料库</span>
         {(["all", "unread", "saved"] as const).map(item => <button type="button" className={styles.navItem} key={item} aria-current={filter === item && !groupId && !tagFilter ? "page" : undefined} data-active={filter === item && !groupId && !tagFilter || undefined} onClick={() => { setFilter(item); setGroupId(null); setTagFilter(""); setNavOpen(false) }}><span className={styles.navItemContent}>{item === "all" ? <BookOpen size={16} /> : item === "unread" ? <Menu size={16} /> : <Bookmark size={16} />}<span className={styles.navItemLabel} data-paper-agent-nav-label>{filterLabels[item]}</span></span><small>{item === "unread" ? unreadCount : item === "saved" ? favoriteCount : materials.length}</small></button>)}
@@ -386,11 +388,11 @@ export function PaperAgentApp() {
         <div className={styles.groupCreate}><input maxLength={60} value={newGroupName} onChange={event => setNewGroupName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); createGroup() } }} placeholder="新建分组" aria-label="新分组名称" /><button type="button" aria-label="创建分组" disabled={!newGroupName.trim()} onClick={createGroup}><Plus size={14} /></button></div>
         {allTags.length > 0 && <><span className={styles.navLabel}>标签</span><div className={styles.tagNavigation}>{allTags.map(tag => <button type="button" key={tag} data-active={tagFilter === tag || undefined} onClick={() => { setTagFilter(tagFilter === tag ? "" : tag); setGroupId(null); setFilter("all"); setNavOpen(false) }}><Tag size={13} />{tag}<small>{materials.filter(item => materialTags(item).includes(tag)).length}</small></button>)}</div></>}
       </nav>
-      <div className={styles.sidebarBottom}><button type="button" onClick={() => setMemoryOpen(true)}><Brain size={16} /><span>个人记忆</span><small>管理</small></button><button type="button" onClick={() => setSettingsOpen(true)}><Settings size={16} /><span>设置与诊断</span></button><div className={styles.themeSwitch} aria-label="界面主题"><button type="button" aria-label="使用白色主题" aria-pressed={theme === "light"} onClick={() => setTheme("light")}><Sun size={14} />浅色</button><button type="button" aria-label="使用黑色主题" aria-pressed={theme === "dark"} onClick={() => setTheme("dark")}><Moon size={14} />深色</button></div><div className={styles.connectionState} data-online={online || undefined}>{online ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{online ? "网络已连接" : "离线模式"}</span></div></div>
+      <div className={styles.sidebarBottom}><button type="button" onClick={() => setMemoryOpen(true)}><Brain size={16} /><span>个人记忆</span><small>管理</small></button><button type="button" onClick={() => setSettingsOpen(true)}><Settings size={16} /><span>设置与诊断</span></button><AppearanceSwitch /><div className={styles.connectionState} data-online={online || undefined}>{online ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{online ? "网络已连接" : "离线模式"}</span></div></div>
     </aside>}
 
     {!focusMode && <section ref={listDrawerRef} tabIndex={-1} className={`${styles.libraryPane} ${listOpen ? styles.drawerOpen : ""}`} aria-label="论文列表">
-      <header className={styles.libraryHeader}><div><span className={styles.eyebrow}>LIBRARY</span><h2>{tagFilter ? `# ${tagFilter}` : groupId ? groups.find(item => item.id === groupId)?.name : filterLabels[filter]}</h2></div><button type="button" className={styles.drawerClose} aria-label="关闭论文列表" onClick={() => setListOpen(false)}><X size={17} /></button></header>
+      <header className={styles.libraryHeader}><h2>{tagFilter ? `# ${tagFilter}` : groupId ? groups.find(item => item.id === groupId)?.name : filterLabels[filter]}</h2><button type="button" className={styles.drawerClose} aria-label="关闭论文列表" onClick={() => setListOpen(false)}><X size={17} /></button></header>
       <label className={styles.searchBox}><Search size={15} aria-hidden="true" /><input ref={localSearchRef} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="筛选本地论文库" aria-label="筛选本地论文库" /><kbd>{shortcutLabel}</kbd></label><div className={styles.libraryControls}><p className={styles.localHint}>本地筛选和排序不会联网。</p><label>排序<select aria-label="论文排序" value={sort} onChange={event => setSort(event.target.value as LibrarySort)}>{(Object.keys(sortLabels) as LibrarySort[]).map(value => <option key={value} value={value}>{sortLabels[value]}</option>)}</select></label></div>
       <div className={styles.materialList}>{visibleMaterials.length === 0 && <div className={styles.emptyCompact}><strong>{materials.length ? "没有匹配的论文" : "你的论文库还是空的"}</strong><p>{materials.length ? "清除筛选、标签或切换分组。" : "显式在线搜索并入库，或从本机选择 PDF。"}</p></div>}{visibleMaterials.map(material => {
         const receipt = saveReceipts[material.id]?.owner === sessionOwner ? saveReceipts[material.id] : undefined
@@ -450,11 +452,19 @@ function useDrawerFocus(open: boolean, drawerRef: RefObject<HTMLElement | null>)
   }, [drawerRef, open])
 }
 
-// Pre-workspace screens render outside the workspace shell, so each one opts into the shell tokens itself.
-function AppState({ theme, title, detail, busy, onRetry }: { theme: AppTheme; title: string; detail: string; busy?: boolean; onRetry?: () => void }) { return <main className={styles.statePage} data-paper-agent-shell data-theme={theme} role={busy ? "status" : "alert"}>{busy ? <LoaderCircle className={styles.spinner} size={24} /> : <BookOpen size={24} />}<h1>{title}</h1><p>{detail}</p>{onRetry && <button type="button" className={styles.primaryButton} onClick={onRetry}>重试读取论文库</button>}</main> }
-function AuthGate({ theme, localDesktop, hasProtectedDrafts, activeTaskCount, onLogin, error }: { theme: AppTheme; localDesktop: boolean; hasProtectedDrafts: boolean; activeTaskCount: number; onLogin: (element: HTMLElement) => void; error?: string }) {
+const appearanceActionLabels: Record<AppearancePreference, string> = { system: "跟随系统主题", light: "使用浅色主题", dark: "使用深色主题" }
+
+/** System / light / dark segmented control bound to the app-wide appearance preference. */
+function AppearanceSwitch() {
+  const { appearance, setAppearance, options, title } = useAppearanceOptions()
+  return <div className={styles.themeSwitch} role="group" aria-label={title}>{options.map(option => <button type="button" key={option.value} aria-label={appearanceActionLabels[option.value]} aria-pressed={appearance === option.value} onClick={() => setAppearance(option.value)}><option.icon size={14} strokeWidth={1.8} aria-hidden="true" />{option.label}</button>)}</div>
+}
+
+// Pre-workspace screens render outside the workspace shell; they share its markers so shell-scoped styles apply.
+function AppState({ title, detail, busy, onRetry }: { title: string; detail: string; busy?: boolean; onRetry?: () => void }) { return <main className={styles.statePage} data-paper-agent-shell role={busy ? "status" : "alert"}>{busy ? <LoaderCircle className={styles.spinner} size={24} /> : <BookOpen size={24} />}<h1>{title}</h1><p>{detail}</p>{onRetry && <button type="button" className={styles.primaryButton} onClick={onRetry}>重试读取论文库</button>}</main> }
+function AuthGate({ localDesktop, hasProtectedDrafts, activeTaskCount, onLogin, error }: { localDesktop: boolean; hasProtectedDrafts: boolean; activeTaskCount: number; onLogin: (element: HTMLElement) => void; error?: string }) {
   const [dataClearOpen, setDataClearOpen] = useState(false)
-  return <main className={styles.authGate} data-paper-agent-shell data-theme={theme}><section><span className={styles.eyebrow}>AGORA PAPERS</span><h1>你的论文、原文与研究记录</h1><p>{localDesktop ? "首次使用请创建本机账号；已有账号请直接登录。完成后会返回论文工作台，并读取该 owner 的私有论文库。" : "登录后读取同一 owner 的私有论文库、来源修订、笔记、请求恢复与报告。公开 catalog 不会被当成你的收藏。"}</p>{error && <p role="alert" className={styles.errorText}>{error}</p>}{localDesktop ? <><Link className={styles.primaryButton} href="/login?next=/paper-agent">创建或登录本机账号</Link><button type="button" className={styles.secondaryButton} onClick={() => setDataClearOpen(true)}>管理/清除本机数据</button><p>无法登录或本机维护未完成时，可在不读取私有论文、笔记或个人记忆的前提下检查并重新确认当前操作系统用户所属资料目录的清除状态。</p></> : <button type="button" className={styles.primaryButton} onClick={event => onLogin(event.currentTarget)}>登录并打开论文库</button>}</section>
+  return <main className={styles.authGate} data-paper-agent-shell><section><BrandMark size={74} /><h1>你的论文、原文与研究记录</h1><p>{localDesktop ? "首次使用请创建本机账号；已有账号请直接登录。完成后会返回论文工作台，并读取该 owner 的私有论文库。" : "登录后读取同一 owner 的私有论文库、来源修订、笔记、请求恢复与报告。公开 catalog 不会被当成你的收藏。"}</p>{error && <p role="alert" className={styles.errorText}>{error}</p>}{localDesktop ? <><Link className={styles.primaryButton} href="/login?next=/paper-agent">创建或登录本机账号</Link><button type="button" className={styles.secondaryButton} onClick={() => setDataClearOpen(true)}>管理/清除本机数据</button><p>无法登录或本机维护未完成时，可在不读取私有论文、笔记或个人记忆的前提下检查并重新确认当前操作系统用户所属资料目录的清除状态。</p></> : <button type="button" className={styles.primaryButton} onClick={event => onLogin(event.currentTarget)}>登录并打开论文库</button>}</section>
       {localDesktop && <PaperAgentPreAuthDataClearModal open={dataClearOpen} overlayClassName={styles.settingsOverlay} hasProtectedDrafts={hasProtectedDrafts} activeTaskCount={activeTaskCount} onRequestClose={() => setDataClearOpen(false)} />}
   </main>
 }

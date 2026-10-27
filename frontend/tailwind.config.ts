@@ -35,7 +35,8 @@ const config: Config = {
         destructive: {
           DEFAULT: token("destructive"),
           fill: token("destructive-fill"),
-          foreground: token("destructive-foreground")
+          foreground: token("destructive-foreground"),
+          text: token("destructive-text")
         },
         border: token("border"),
         input: token("input"),
@@ -48,8 +49,8 @@ const config: Config = {
           "accent-foreground": token("sidebar-accent-foreground")
         },
         link: token("link"),
-        success: token("success"),
-        warning: token("warning"),
+        success: { DEFAULT: token("success"), text: token("success-text") },
+        warning: { DEFAULT: token("warning"), text: token("warning-text") },
         "status-working": token("status-working"),
         unread: token("unread"),
         "working-dot": token("working-dot"),

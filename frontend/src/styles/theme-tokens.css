@@ -105,3 +105,14 @@
   --highlight-active: #0b6dd347;
   --radius: 0.75rem;
 }
+
+/*
+ * Status text inks. Raw status hues are tuned for icons, dots and tints; text set in
+ * a status color on cards or on that color's own tint needs extra contrast, so it is
+ * pulled a quarter of the way toward the foreground (WCAG AA in both themes).
+ */
+:root {
+  --success-text: color-mix(in srgb, var(--success) 75%, var(--foreground));
+  --warning-text: color-mix(in srgb, var(--warning) 75%, var(--foreground));
+  --destructive-text: color-mix(in srgb, var(--destructive) 75%, var(--foreground));
+}
