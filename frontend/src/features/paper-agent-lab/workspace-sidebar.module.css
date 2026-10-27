@@ -1,20 +1,24 @@
+/*
+ * Navigation column on the Rakazo sidebar recipe. Colors are global design tokens
+ * from styles/theme-tokens.css only.
+ */
 .sidebar {
   display: flex;
   min-width: 0;
   height: 100%;
   flex-direction: column;
-  color: var(--lab-text);
-  background: var(--lab-sidebar);
-  border-right: 1px solid var(--lab-border);
+  color: var(--sidebar-foreground);
+  background: var(--sidebar);
+  border-right: 1px solid var(--sidebar-border);
 }
 
 .brandRow {
   display: flex;
-  min-height: 62px;
+  min-height: 60px;
   align-items: center;
   justify-content: space-between;
-  padding: 0 13px 0 14px;
-  border-bottom: 1px solid var(--lab-border);
+  gap: 10px;
+  padding: 16px 18px 12px;
 }
 
 .brand {
@@ -25,47 +29,57 @@
 }
 
 .brand strong {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 18px;
-  line-height: 1.25;
-  letter-spacing: 0.01em;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+}
+
+.brand small {
+  margin-left: -4px;
+  color: var(--faint-foreground);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .closeButton {
   display: none;
-  width: 44px;
-  height: 44px;
-  align-items: center;
-  justify-content: center;
-  color: var(--lab-muted);
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  color: var(--muted-foreground);
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
+  transition: background-color 100ms ease, color 100ms ease;
 }
 
 .closeButton:hover {
-  color: var(--lab-text);
-  background: var(--lab-hover);
+  color: var(--sidebar-foreground);
+  background: var(--sidebar-accent);
 }
 
 .navigation {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding: 15px 10px;
+  padding: 0 10px 14px;
 }
 
 .sectionLabel {
-  margin: 0 8px 6px;
-  color: var(--lab-faint);
+  margin: 4px 0 2px;
+  padding: 4px 10px;
+  color: var(--faint-foreground);
   font-size: 11px;
-  font-weight: 680;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .sectionLabel:not(:first-child) {
-  margin-top: 22px;
+  margin-top: 16px;
 }
 
 .navList {
@@ -76,35 +90,36 @@
 .navItem {
   display: grid;
   width: 100%;
-  min-height: 38px;
-  grid-template-columns: 17px minmax(0, 1fr) auto;
+  min-height: 36px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
-  padding: 0 8px;
-  color: var(--lab-secondary);
+  gap: 9px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   font: inherit;
-  font-size: 13px;
+  font-size: 13.5px;
+  transition: background-color 100ms ease, color 100ms ease;
 }
 
 .navItem:hover {
-  color: var(--lab-text);
-  background: var(--lab-hover);
+  color: var(--sidebar-foreground);
+  background: color-mix(in srgb, var(--sidebar-accent) 60%, transparent);
 }
 
 .navItem[data-active] {
-  color: var(--lab-text);
-  background: var(--lab-selected);
-  font-weight: 650;
+  color: var(--sidebar-accent-foreground);
+  background: var(--sidebar-accent);
+  font-weight: 500;
 }
 
 .count {
   min-width: 16px;
-  color: var(--lab-faint);
-  font-size: 11px;
+  color: var(--faint-foreground);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -113,21 +128,21 @@
   display: grid;
   gap: 10px;
   padding: 12px 10px;
-  border-top: 1px solid var(--lab-border);
+  border-top: 1px solid var(--sidebar-border);
 }
 
 .previewBoundary {
   display: grid;
-  grid-template-columns: 7px minmax(0, 1fr);
+  grid-template-columns: 6px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  padding: 0 7px;
+  gap: 9px;
+  padding: 0 10px;
 }
 
 .previewDot {
   width: 6px;
   height: 6px;
-  background: var(--lab-faint);
+  background: var(--faint-foreground);
   border-radius: 999px;
 }
 
@@ -137,56 +152,55 @@
 }
 
 .previewBoundary strong {
-  color: var(--lab-secondary);
-  font-size: 12px;
-  font-weight: 650;
+  color: var(--sidebar-foreground);
+  font-size: 12.5px;
+  font-weight: 500;
 }
 
 .previewBoundary small {
-  color: var(--lab-faint);
-  font-size: 11px;
+  color: var(--faint-foreground);
+  font-size: 11.5px;
 }
 
 .themeSwitch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 2px;
-  padding: 2px;
-  background: var(--lab-control);
-  border: 1px solid var(--lab-border);
-  border-radius: 7px;
+  padding: 3px;
+  background: var(--accent);
+  border-radius: 12px;
 }
 
 .themeSwitch button {
   display: flex;
+  min-width: 0;
   min-height: 28px;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  color: var(--lab-muted);
+  padding: 0 6px;
+  color: var(--muted-foreground);
   background: transparent;
   border: 0;
-  border-radius: 5px;
+  border-radius: 9px;
   font: inherit;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .themeSwitch button:hover {
-  color: var(--lab-text);
+  color: var(--foreground);
 }
 
-.themeSwitch button[data-active] {
-  color: var(--lab-text);
-  background: var(--lab-surface);
-  box-shadow: inset 0 0 0 1px var(--lab-border);
+.themeSwitch button[aria-pressed="true"] {
+  color: var(--foreground);
+  background: var(--background);
+  box-shadow: 0 0 0 1px var(--border);
+  font-weight: 500;
 }
 
 @media (max-width: 1100px) {
   .closeButton {
-    display: flex;
+    display: grid;
   }
 }
-
-
-
-

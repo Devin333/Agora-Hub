@@ -64,14 +64,17 @@ test("honors initial query state, canonicalizes invalid state, and keeps browser
   const apiRequests = trackApiRequests(page)
   await page.goto("/paper-agent-lab?theme=dark&paper=rag&view=all&tab=details&focus=false&assistant=true")
 
+  // `?theme=` is applied once as the app-wide appearance and dropped from the canonical URL.
   await expect(page.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "dark")
+  await expect(page).toHaveURL("/paper-agent-lab?paper=rag&view=all&tab=details&focus=false&assistant=true")
   await expect(page.getByRole("heading", { name: papers[2][1] })).toBeVisible()
   await expect(page.getByRole("tab", { name: "详情" })).toHaveAttribute("aria-selected", "true")
   await expect(page.getByRole("button", { name: "关闭论文助手", exact: true })).toBeVisible()
 
-  await page.goto("/paper-agent-lab?theme=dark&paper=rag&view=all&tab=details&focus=false&assistant=false")
-  await page.getByRole("button", { name: "使用白色主题" }).click()
-  await expect(page).toHaveURL(/theme=light/)
+  await page.goto("/paper-agent-lab?paper=rag&view=all&tab=details&focus=false&assistant=false")
+  await page.getByRole("button", { name: "使用浅色主题" }).click()
+  await expect(page.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "light")
+  await expect(page).not.toHaveURL(/theme=/)
   await openPaper(page, papers[5])
   await expect(page).toHaveURL(/paper=attention/)
 
@@ -83,10 +86,28 @@ test("honors initial query state, canonicalizes invalid state, and keeps browser
   await expect(page.getByRole("heading", { name: papers[5][1] })).toBeVisible()
 
   await page.goto("/paper-agent-lab?style=gallery&mode=app&theme=sepia&paper=missing&view=recent&tab=full&focus=1&assistant=yes")
-  await expect(page).toHaveURL(
-    "/paper-agent-lab?theme=light&paper=memgpt&view=all&tab=overview&focus=false&assistant=false",
-  )
+  await expect(page).toHaveURL("/paper-agent-lab?paper=memgpt&view=all&tab=overview&focus=false&assistant=false")
+  await expect(page.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "light")
   await expect(page.getByRole("heading", { name: papers[0][1] })).toBeVisible()
+  expect(apiRequests).toEqual([])
+})
+
+test("the theme switch follows the system by default and writes the app-wide appearance", async ({ page }) => {
+  const apiRequests = trackApiRequests(page)
+  await page.emulateMedia({ colorScheme: "dark" })
+  await page.goto("/paper-agent-lab")
+  const root = page.getByTestId("paper-agent-lab")
+  await expect(root).toHaveAttribute("data-theme", "dark")
+  await expect(page.getByRole("button", { name: "跟随系统主题" })).toHaveAttribute("aria-pressed", "true")
+  await page.emulateMedia({ colorScheme: "light" })
+  await expect(root).toHaveAttribute("data-theme", "light")
+
+  await page.getByRole("button", { name: "使用深色主题" }).click()
+  await expect(root).toHaveAttribute("data-theme", "dark")
+  await page.reload()
+  await expect(root).toHaveAttribute("data-theme", "dark")
+  await expect(page.getByRole("button", { name: "使用深色主题" })).toHaveAttribute("aria-pressed", "true")
+  expect(await root.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(22, 22, 22)")
   expect(apiRequests).toEqual([])
 })
 
@@ -157,9 +178,9 @@ test("keeps saved, unread, and per-paper notes as honest page-only state", async
 test("supports keyboard search, focus reading, assistant suggestions, and paper-scoped questions", async ({ page }) => {
   const apiRequests = trackApiRequests(page)
   await page.goto("/paper-agent-lab")
-  await page.getByRole("button", { name: "使用黑色主题" }).click()
+  await page.getByRole("button", { name: "使用深色主题" }).click()
   await expect(page.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "dark")
-  await page.getByRole("button", { name: "使用白色主题" }).click()
+  await page.getByRole("button", { name: "使用浅色主题" }).click()
   await expect(page.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "light")
 
   await page.keyboard.press(process.platform === "darwin" ? "Meta+k" : "Control+k")
@@ -212,7 +233,7 @@ test("assistant is non-modal on desktop and modal with an inert background on na
 
   await page.getByRole("button", { name: "关闭论文助手", exact: true }).click()
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto("/paper-agent-lab?theme=light&paper=memgpt&view=all&tab=overview&focus=false&assistant=true")
+  await page.goto("/paper-agent-lab?paper=memgpt&view=all&tab=overview&focus=false&assistant=true")
   const narrowAssistant = page.getByRole("dialog", { name: "论文助手" })
   await expect(narrowAssistant).toBeVisible()
   await expect(narrowAssistant).toHaveAttribute("aria-modal", "true")

@@ -4,6 +4,7 @@ import {
   DEFAULT_PREVIEW_STATE,
   createPreviewHref,
   parsePreviewState,
+  parseRequestedTheme,
 } from "./preview-state"
 import type { PreviewState } from "./types"
 
@@ -20,7 +21,6 @@ describe("paper agent preview state", () => {
   it("keeps the fixed paper catalogue and desktop-workspace default stable", () => {
     expect(PREVIEW_PAPERS.map((paper) => paper.id)).toEqual(paperIds)
     expect(DEFAULT_PREVIEW_STATE).toEqual({
-      theme: "light",
       paperId: "memgpt",
       view: "all",
       tab: "overview",
@@ -33,7 +33,6 @@ describe("paper agent preview state", () => {
     expect(parsePreviewState(
       `?theme=dark&paper=${paperId}&view=saved&tab=details&focus=true&assistant=true`,
     )).toEqual({
-      theme: "dark",
       paperId,
       view: "saved",
       tab: "details",
@@ -46,7 +45,6 @@ describe("paper agent preview state", () => {
     ["", DEFAULT_PREVIEW_STATE],
     ["?theme=sepia&paper=missing&view=recent&tab=full&focus=1&assistant=yes", DEFAULT_PREVIEW_STATE],
     ["theme=dark&paper=rag&view=unread&tab=notes&focus=true&assistant=true", {
-      theme: "dark",
       paperId: "rag",
       view: "unread",
       tab: "notes",
@@ -54,26 +52,21 @@ describe("paper agent preview state", () => {
       assistant: true,
     }],
     ["?theme=dark&paper=missing&view=saved&tab=invalid&focus=false&assistant=false", {
-      theme: "dark",
       paperId: "memgpt",
       view: "saved",
       tab: "overview",
       focus: false,
       assistant: false,
     }],
-    ["?style=gallery&mode=app&theme=dark", {
-      ...DEFAULT_PREVIEW_STATE,
-      theme: "dark",
-    }],
+    ["?style=gallery&mode=app&theme=dark", DEFAULT_PREVIEW_STATE],
   ] as const)("normalizes %s without throwing", (search, expected) => {
     expect(parsePreviewState(search)).toEqual(expected)
   })
 
   it("uses the first value for duplicate canonical parameters and rejects non-canonical booleans", () => {
     expect(parsePreviewState(
-      "?theme=dark&theme=light&paper=rag&paper=memgpt&view=unread&tab=notes&focus=TRUE&assistant=1",
+      "?paper=rag&paper=memgpt&view=unread&view=all&tab=notes&focus=TRUE&assistant=1",
     )).toEqual({
-      theme: "dark",
       paperId: "rag",
       view: "unread",
       tab: "notes",
@@ -82,9 +75,20 @@ describe("paper agent preview state", () => {
     })
   })
 
-  it("serializes the complete state in one stable canonical order", () => {
+  it.each([
+    ["?theme=dark", "dark"],
+    ["theme=light&paper=rag", "light"],
+    ["?theme=dark&theme=light", "dark"],
+    ["?theme=sepia", null],
+    ["?theme=system", null],
+    ["?theme=DARK", null],
+    ["", null],
+  ] as const)("reads the one-off appearance request in %s as %s", (search, expected) => {
+    expect(parseRequestedTheme(search)).toBe(expected)
+  })
+
+  it("serializes the complete state in one stable canonical order without a theme", () => {
     const state: PreviewState = {
-      theme: "dark",
       paperId: "lost-middle",
       view: "unread",
       tab: "notes",
@@ -93,21 +97,20 @@ describe("paper agent preview state", () => {
     }
 
     expect(createPreviewHref(state)).toBe(
-      "/paper-agent-lab?theme=dark&paper=lost-middle&view=unread&tab=notes&focus=true&assistant=true",
+      "/paper-agent-lab?paper=lost-middle&view=unread&tab=notes&focus=true&assistant=true",
     )
     expect(parsePreviewState(createPreviewHref(state).split("?")[1])).toEqual(state)
   })
 
   it("falls back only an unknown paper while preserving the remaining serialized state", () => {
     expect(createPreviewHref({
-      theme: "dark",
       paperId: "unknown",
       view: "saved",
       tab: "details",
       focus: false,
       assistant: true,
     })).toBe(
-      "/paper-agent-lab?theme=dark&paper=memgpt&view=saved&tab=details&focus=false&assistant=true",
+      "/paper-agent-lab?paper=memgpt&view=saved&tab=details&focus=false&assistant=true",
     )
   })
 })

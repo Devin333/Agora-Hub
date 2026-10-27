@@ -1,3 +1,10 @@
+/*
+ * Paper Agent design preview shell, laid out on the Rakazo recipes: a navigation
+ * column, a 316px paper list, a reader with floating pills and a right chat panel.
+ * Every color is a global design token from styles/theme-tokens.css. The root's
+ * `data-theme` mirrors the app-wide appearance preference (see
+ * use-preview-appearance.ts); this module never defines a palette of its own.
+ */
 .root,
 .root *,
 .root *::before,
@@ -6,33 +13,9 @@
 }
 
 .root {
-  --lab-sidebar: #f5f5f5;
-  --lab-list: #fafafa;
-  --lab-surface: #ffffff;
-  --lab-control: #eeeeee;
-  --lab-hover: #ececec;
-  --lab-hover-strong: #e7e7e7;
-  --lab-selected: #e8e8e8;
-  --lab-selected-soft: #f0f0f0;
-  --lab-border: #dedede;
-  --lab-strong-border: #bdbdbd;
-  --lab-focus-border: #969696;
-  --lab-focus-ring: rgba(0, 0, 0, 0.08);
-  --lab-text: #181818;
-  --lab-secondary: #3f3f3f;
-  --lab-muted: #555555;
-  --lab-faint: #666666;
-  --pa-bg: #ffffff;
-  --pa-panel: #fafafa;
-  --pa-soft: #f2f2f2;
-  --pa-line: #dedede;
-  --pa-fg: #191919;
-  --pa-muted: #696969;
-  --pa-inverse: #1c1c1c;
-  --pa-inverse-fg: #ffffff;
-  --pa-sans: "Segoe UI", "Microsoft YaHei", "微软雅黑", system-ui, sans-serif;
-  --pa-serif: Georgia, "Times New Roman", "Songti SC", serif;
-  --pa-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  /* Layout hooks for the fixed drawers below; not colors. */
+  --topbar-height: 0px;
+  --statusbar-height: 28px;
 
   position: fixed;
   z-index: 80;
@@ -42,74 +25,75 @@
   height: 100dvh;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 44px minmax(0, 1fr) 24px;
+  grid-template-rows: var(--topbar-height) minmax(0, 1fr) var(--statusbar-height);
   overflow: hidden;
-  color: var(--lab-text);
-  background: var(--lab-surface);
-  font-family: var(--pa-sans);
-  font-size: 12px;
-  color-scheme: light;
+  color: var(--foreground);
+  background: var(--background);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.root[data-theme="dark"] {
-  --lab-sidebar: #151515;
-  --lab-list: #191919;
-  --lab-surface: #202020;
-  --lab-control: #252525;
-  --lab-hover: #242424;
-  --lab-hover-strong: #2b2b2b;
-  --lab-selected: #2b2b2b;
-  --lab-selected-soft: #242424;
-  --lab-border: #303030;
-  --lab-strong-border: #4b4b4b;
-  --lab-focus-border: #737373;
-  --lab-focus-ring: rgba(255, 255, 255, 0.08);
-  --lab-text: #f0f0f0;
-  --lab-secondary: #c8c8c8;
-  --lab-muted: #b7b7b7;
-  --lab-faint: #969696;
-  --pa-bg: #202020;
-  --pa-panel: #191919;
-  --pa-soft: #252525;
-  --pa-line: #303030;
-  --pa-fg: #eeeeee;
-  --pa-muted: #9c9c9c;
-  --pa-inverse: #ededed;
-  --pa-inverse-fg: #1a1a1a;
-  color-scheme: dark;
-}
-
-.root button,
-.root input,
-.root select,
-.root textarea {
+:where(.root) :is(button, input, select, textarea) {
   font-family: inherit;
 }
 
-.root button,
-.root select {
+:where(.root) :is(button, select) {
   cursor: pointer;
 }
 
-.root button:focus-visible,
-.root input:focus-visible,
-.root select:focus-visible,
-.root textarea:focus-visible {
-  outline: 2px solid var(--lab-text);
-  outline-offset: -2px;
+:where(.root) :is(button, a) {
+  -webkit-tap-highlight-color: transparent;
 }
 
+:where(.root) :is(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--ring) 50%, transparent);
+  outline-offset: 1px;
+}
+
+.root ::selection {
+  background: var(--selection);
+}
+
+.root * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+.root *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.root *::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 3px;
+}
+
+.root *::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+
+/*
+ * Slim bar for narrow layouts and focus reading. On the desktop workspace the
+ * columns carry the chrome, so the bar collapses to a zero-height row.
+ */
 .topbar {
   position: relative;
   z-index: 30;
-  display: flex;
+  grid-row: 1;
+  display: none;
   min-width: 0;
+  height: var(--topbar-height);
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 10px 0 13px;
-  background: var(--lab-sidebar);
-  border-bottom: 1px solid var(--lab-border);
+  gap: 12px;
+  padding: 0 8px 0 16px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  border-bottom: 1px solid var(--border);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
 .topbarStart,
@@ -121,87 +105,96 @@
 
 .topbarStart {
   flex: 1;
-  gap: 10px;
+  gap: 8px;
 }
 
 .topbarEnd {
   flex: 0 0 auto;
-  gap: 10px;
+  gap: 8px;
 }
 
 .menuButton {
   display: none;
-  width: 44px;
-  height: 44px;
-  align-items: center;
-  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
   padding: 0;
-  color: var(--lab-secondary);
+  color: var(--muted-foreground);
   background: transparent;
   border: 0;
-  border-radius: 5px;
+  border-radius: 999px;
+  transition: background-color 100ms ease, color 100ms ease;
 }
 
-.menuButton:hover,
-.textButton:hover {
-  background: var(--lab-hover);
+.menuButton:hover {
+  color: var(--foreground);
+  background: var(--accent);
 }
 
 .topbarBrand {
-  font-size: 13px;
-  font-weight: 720;
-  letter-spacing: 0.01em;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
 .topbarBrand small {
-  margin-left: 3px;
-  color: var(--lab-muted);
-  font-size: 11px;
-  font-weight: 520;
-}
-
-.divider {
-  width: 1px;
-  height: 14px;
-  background: var(--lab-border);
+  margin-left: -4px;
+  color: var(--faint-foreground);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .currentPaper {
+  min-width: 0;
   overflow: hidden;
-  color: var(--lab-muted);
-  font-size: 12px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .memoryNotice {
-  color: var(--lab-faint);
-  font-size: 11px;
+  color: var(--faint-foreground);
+  font-size: 11.5px;
   white-space: nowrap;
 }
 
 .textButton {
   display: inline-flex;
-  min-height: 28px;
+  min-height: 32px;
   align-items: center;
   gap: 6px;
-  padding: 0 8px;
-  color: var(--lab-secondary);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  font-size: 12px;
+  padding: 0 12px;
+  color: color-mix(in srgb, var(--foreground) 75%, transparent);
+  background: color-mix(in srgb, var(--muted) 90%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition: background-color 100ms ease, color 100ms ease;
 }
 
+.textButton:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+/* ── Workspace columns ─────────────────────────────────────────────────── */
 .workspace {
   position: relative;
+  grid-row: 2;
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-columns: 204px 368px minmax(0, 1fr);
+  grid-template-columns: 232px 316px minmax(0, 1fr);
   overflow: hidden;
-  background: var(--lab-surface);
+  background: var(--background);
 }
 
 .sidebarShell,
@@ -220,13 +213,15 @@
 .libraryShell {
   display: grid;
   grid-column: 2;
+  border-right: 1px solid var(--sidebar-border);
 }
 
 .readerShell {
   display: flex;
   grid-column: 3;
+  flex-direction: column;
   overflow: hidden;
-  background: var(--pa-bg);
+  background: var(--background);
 }
 
 .emptyReader {
@@ -237,50 +232,55 @@
   gap: 8px;
   margin: auto;
   padding: 32px;
-  color: var(--lab-text);
+  color: var(--foreground);
   text-align: center;
 }
 
 .emptyReader span {
-  color: var(--lab-faint);
+  color: var(--faint-foreground);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .emptyReader h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
 }
 
 .emptyReader p {
   margin: 0;
-  color: var(--lab-muted);
-  font-size: 12px;
-  line-height: 1.6;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .emptyReader button {
   min-height: 32px;
-  margin-top: 6px;
-  padding: 0 11px;
-  color: var(--lab-text);
-  background: var(--lab-control);
-  border: 1px solid var(--lab-border);
-  border-radius: 6px;
-  font-size: 12px;
+  margin-top: 8px;
+  padding: 0 14px;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 100ms ease;
 }
 
 .emptyReader button:hover {
-  background: var(--lab-hover-strong);
+  background: var(--accent);
 }
 
 .assistantShell {
   display: flex;
   grid-column: 4;
   overflow: hidden;
-  background: var(--pa-panel);
+  background: var(--background);
+  border-left: 1px solid var(--border);
 }
 
 .assistantShell > * {
@@ -292,10 +292,10 @@
 .assistantBackdrop {
   position: fixed;
   z-index: 40;
-  inset: 44px 0 24px;
+  inset: var(--topbar-height) 0 var(--statusbar-height);
   display: none;
   padding: 0;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--overlay);
   border: 0;
   cursor: default;
 }
@@ -305,7 +305,7 @@
 }
 
 .root[data-assistant] .workspace {
-  grid-template-columns: 204px minmax(0, 1fr) 350px;
+  grid-template-columns: 232px minmax(0, 1fr) 384px;
 }
 
 .root[data-assistant] .libraryShell {
@@ -320,11 +320,19 @@
   grid-column: 3;
 }
 
+.root[data-focus] {
+  --topbar-height: 48px;
+}
+
+.root[data-focus] .topbar {
+  display: flex;
+}
+
 .root[data-focus] .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   justify-items: center;
-  background: var(--lab-list);
+  background: var(--sidebar);
 }
 
 .root[data-focus] .sidebarShell,
@@ -338,23 +346,25 @@
 .root[data-focus] .readerShell {
   width: min(100%, 900px);
   grid-column: 1;
-  border-right: 1px solid var(--lab-border);
-  border-left: 1px solid var(--lab-border);
+  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
 }
 
+/* ── Preview boundary footer ───────────────────────────────────────────── */
 .statusbar {
   position: relative;
   z-index: 30;
+  grid-row: 3;
   display: flex;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 10px 0 13px;
-  color: var(--lab-faint);
-  background: var(--lab-sidebar);
-  border-top: 1px solid var(--lab-border);
-  font-size: 11px;
+  padding: 0 18px;
+  color: var(--faint-foreground);
+  background: var(--sidebar);
+  border-top: 1px solid var(--sidebar-border);
+  font-size: 11.5px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -365,26 +375,35 @@
 }
 
 @media (max-width: 1100px) {
-  .menuButton {
+  .root {
+    --topbar-height: 48px;
+  }
+
+  .topbar {
     display: flex;
+    padding-left: 6px;
+  }
+
+  .menuButton {
+    display: grid;
   }
 
   .workspace,
   .root[data-assistant] .workspace {
-    grid-template-columns: 350px minmax(0, 1fr);
+    grid-template-columns: 316px minmax(0, 1fr);
   }
 
   .sidebarShell {
     position: fixed;
     z-index: 52;
-    top: 44px;
-    bottom: 24px;
+    top: var(--topbar-height);
+    bottom: var(--statusbar-height);
     left: 0;
-    width: min(300px, 86vw);
+    width: min(300px, calc(100vw - 42px));
     grid-column: auto;
     visibility: hidden;
-    transform: translateX(-100%);
-    transition: visibility 160ms ease, transform 160ms ease;
+    transform: translateX(-105%);
+    transition: visibility 180ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 
   .sidebarShell[data-open] {
@@ -419,12 +438,13 @@
   .root[data-assistant] .assistantShell {
     position: fixed;
     z-index: 48;
-    top: 44px;
+    top: var(--topbar-height);
     right: 0;
-    bottom: 24px;
-    width: min(390px, 92vw);
+    bottom: var(--statusbar-height);
+    width: min(430px, 100vw);
     grid-column: auto;
-    border-left: 1px solid var(--lab-border);
+    border-left: 0;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
   }
 
   .root[data-focus] .workspace {
@@ -437,15 +457,6 @@
 }
 
 @media (max-width: 700px) {
-  .root {
-    grid-template-rows: 44px minmax(0, 1fr) 24px;
-  }
-
-  .topbar {
-    padding-left: 8px;
-  }
-
-  .divider,
   .memoryNotice {
     display: none;
   }
@@ -464,6 +475,7 @@
   .root[data-assistant] .libraryShell {
     display: grid;
     grid-column: 1;
+    border-right: 0;
   }
 
   .readerShell,
@@ -482,20 +494,26 @@
   }
 
   .mobileBack {
-    position: absolute;
-    z-index: 8;
-    top: 49px;
-    left: 8px;
     display: inline-flex;
-    min-height: 44px;
+    min-height: 36px;
+    flex: 0 0 auto;
     align-items: center;
-    gap: 5px;
-    padding: 0 8px;
-    color: var(--lab-secondary);
-    background: var(--lab-surface);
-    border: 1px solid var(--lab-border);
-    border-radius: 6px;
-    font-size: 12px;
+    align-self: flex-start;
+    gap: 6px;
+    margin: 12px 16px 0;
+    padding: 0 14px;
+    color: color-mix(in srgb, var(--foreground) 75%, transparent);
+    background: color-mix(in srgb, var(--muted) 90%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 13px;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+
+  .mobileBack:hover {
+    color: var(--foreground);
+    background: var(--accent);
   }
 
   .root[data-focus] .mobileBack {
@@ -510,7 +528,7 @@
 
   .statusbar {
     justify-content: center;
-    padding: 0 8px;
+    padding: 0 12px;
   }
 
   .statusDetail {
@@ -523,7 +541,3 @@
     transition: none;
   }
 }
-
-
-
-

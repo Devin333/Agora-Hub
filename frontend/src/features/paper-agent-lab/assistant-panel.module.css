@@ -1,3 +1,8 @@
+/*
+ * Paper assistant on the Rakazo chat recipe: user questions sit in `--chat-user`
+ * bubbles, assistant notices in `--muted` bubbles, above a rounded 26px composer
+ * with a round send button. Colors are global design tokens only.
+ */
 .panel,
 .panel *,
 .panel *::before,
@@ -7,16 +12,14 @@
 
 .panel {
   display: flex;
-  width: clamp(320px, 25vw, 350px);
-  min-width: 320px;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
-  border-left: 1px solid var(--pa-line);
-  background: var(--pa-panel);
-  color: var(--pa-fg);
-  font-family: var(--pa-sans);
+  color: var(--foreground);
+  background: var(--background);
 }
 
 .panel button,
@@ -24,94 +27,98 @@
   font: inherit;
 }
 
+/* ── Header ────────────────────────────────────────────────────────────── */
 .header {
   display: flex;
   min-width: 0;
-  min-height: 56px;
-  flex: 0 0 56px;
+  min-height: 60px;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--pa-line);
-  padding-left: 16px;
+  gap: 8px;
+  padding: 12px 12px 12px 18px;
 }
 
 .heading {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  color: var(--muted-foreground);
 }
 
 .heading > svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
-  stroke-width: 1.7;
+  stroke-width: 1.8;
 }
 
 .heading div {
   display: flex;
   min-width: 0;
   align-items: baseline;
-  gap: 7px;
-}
-
-.heading span {
-  color: var(--pa-fg);
-  font-size: 13px;
-  font-weight: 720;
-  line-height: 1.2;
+  gap: 8px;
 }
 
 .heading strong {
-  color: var(--pa-muted);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.2;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.heading span {
+  color: var(--faint-foreground);
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .closeButton {
   display: inline-grid;
-  width: 56px;
-  min-width: 44px;
-  height: 56px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
   place-items: center;
-  border: 0;
-  border-left: 1px solid var(--pa-line);
+  padding: 0;
+  color: var(--muted-foreground);
   background: transparent;
-  color: var(--pa-muted);
+  border: 0;
+  border-radius: 999px;
   cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
 }
 
 .closeButton:hover {
-  background: var(--pa-soft);
-  color: var(--pa-fg);
+  color: var(--foreground);
+  background: var(--accent);
 }
 
 .closeButton svg {
   width: 16px;
   height: 16px;
-  stroke-width: 1.7;
+  stroke-width: 1.8;
 }
 
 .currentPaper {
   display: grid;
   min-width: 0;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
   flex: 0 0 auto;
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: start;
-  border-bottom: 1px solid var(--pa-line);
-  padding: 13px 16px 14px;
-  background: var(--pa-soft);
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 12px 16px;
+  background: var(--muted);
+  border-radius: 16px;
 }
 
 .currentPaper > svg {
   width: 15px;
   height: 15px;
-  margin-top: 3px;
-  color: var(--pa-muted);
-  stroke-width: 1.7;
+  margin-top: 1px;
+  color: var(--muted-foreground);
+  stroke-width: 1.8;
 }
 
 .currentPaper div {
@@ -120,31 +127,33 @@
 
 .currentPaper span {
   display: block;
-  color: var(--pa-muted);
+  color: var(--faint-foreground);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 16px;
+  text-transform: uppercase;
 }
 
 .currentPaper p {
-  margin: 3px 0 0;
-  color: var(--pa-fg);
-  font-family: var(--pa-serif);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.5;
+  margin: 2px 0 0;
   overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* ── Transcript ────────────────────────────────────────────────────────── */
 .conversation {
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
@@ -153,258 +162,250 @@
   min-height: 100%;
   flex-direction: column;
   justify-content: center;
-  padding: 42px 24px 34px;
+  padding: 32px 20px;
 }
 
 .emptyIcon {
   display: inline-grid;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   place-items: center;
-  border: 1px solid var(--pa-line);
-  color: var(--pa-fg);
+  color: var(--foreground);
+  background: var(--muted);
+  border-radius: 999px;
 }
 
 .emptyIcon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.6;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
 }
 
 .emptyState h2 {
-  margin: 20px 0 0;
-  color: var(--pa-fg);
-  font-family: var(--pa-serif);
-  font-size: 19px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  line-height: 1.4;
+  margin: 16px 0 0;
+  color: var(--foreground);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
 }
 
 .emptyState > p {
-  margin: 9px 0 0;
-  color: var(--pa-muted);
-  font-size: 12px;
-  line-height: 1.75;
+  margin: 6px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 18px;
 }
 
 .suggestions {
-  display: flex;
-  flex-direction: column;
-  margin-top: 25px;
-  border-top: 1px solid var(--pa-line);
+  display: grid;
+  gap: 6px;
+  margin-top: 20px;
 }
 
 .suggestions button {
   display: grid;
   min-width: 0;
-  min-height: 48px;
+  min-height: 44px;
   grid-template-columns: minmax(0, 1fr) 16px;
-  gap: 10px;
   align-items: center;
-  border: 0;
-  border-bottom: 1px solid var(--pa-line);
-  background: transparent;
-  color: var(--pa-fg);
-  padding: 10px 2px;
+  gap: 10px;
+  padding: 10px 14px;
+  color: var(--foreground);
   text-align: left;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 16px;
   cursor: pointer;
+  transition: background-color 100ms ease;
 }
 
 .suggestions button:hover {
-  background: var(--pa-soft);
-  padding-inline: 8px;
+  background: var(--accent);
 }
 
 .suggestions button span {
   min-width: 0;
-  font-family: var(--pa-serif);
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 18px;
   overflow-wrap: anywhere;
 }
 
 .suggestions button svg {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+  stroke-width: 1.8;
   transform: rotate(45deg);
-  color: var(--pa-muted);
-  stroke-width: 1.7;
 }
 
 .thread {
+  display: grid;
+  gap: 20px;
   margin: 0;
-  padding: 0 20px 30px;
+  padding: 8px 16px 24px;
   list-style: none;
 }
 
 .thread > li {
-  padding: 26px 0 24px;
-  border-bottom: 1px solid var(--pa-line);
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .questionMeta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.questionMeta span {
-  color: var(--pa-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  line-height: 1.4;
+  align-self: flex-end;
+  padding: 0 6px;
+  color: var(--faint-foreground);
+  font-size: 11.5px;
+  line-height: 16px;
 }
 
 .question {
-  margin: 8px 0 0;
-  color: var(--pa-fg);
-  font-family: var(--pa-serif);
+  max-width: 80%;
+  margin: 0 0 0 auto;
+  padding: 12px 18px;
+  color: var(--chat-user-foreground);
+  background: var(--chat-user);
+  border-radius: 20px;
   font-size: 14px;
-  line-height: 1.72;
+  line-height: 20px;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .previewNotice {
   display: grid;
+  max-width: 90%;
   min-width: 0;
-  grid-template-columns: 17px minmax(0, 1fr);
-  gap: 9px;
-  margin-top: 17px;
-  padding: 12px 0 0;
-  border-top: 1px solid var(--pa-line);
-  color: var(--pa-muted);
+  align-self: flex-start;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 6px;
+  padding: 12px 18px;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-radius: 20px;
 }
 
 .previewNotice svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   margin-top: 2px;
-  stroke-width: 1.7;
+  stroke-width: 1.8;
 }
 
 .previewNotice p {
   min-width: 0;
   margin: 0;
-  font-size: 11px;
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 
-
+/* ── Composer ──────────────────────────────────────────────────────────── */
 .composer {
   min-width: 0;
   flex: 0 0 auto;
-  border-top: 1px solid var(--pa-line);
-  background: var(--pa-panel);
-  padding: 14px 16px 12px;
-}
-
-.composer > label {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--pa-fg);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.4;
+  padding: 8px 16px 12px;
+  background: var(--background);
 }
 
 .inputShell {
-  position: relative;
+  display: flex;
   min-width: 0;
-  border: 1px solid var(--pa-line);
-  background: var(--pa-bg);
+  align-items: flex-end;
+  gap: 8px;
+  padding: 9px 10px 9px 16px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  transition: border-color 100ms ease, box-shadow 100ms ease;
 }
 
 .inputShell:focus-within {
-  border-color: var(--pa-fg);
-  outline: 1px solid var(--pa-fg);
-  outline-offset: -1px;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
 }
 
 .inputShell textarea {
   display: block;
-  width: 100%;
-  min-height: 78px;
+  min-width: 0;
+  min-height: 32px;
   max-height: 148px;
-  resize: vertical;
-  border: 0;
-  border-radius: 0;
-  outline: 0;
+  flex: 1 1 auto;
+  resize: none;
+  padding: 6px 0;
+  overflow-y: auto;
+  color: var(--foreground);
   background: transparent;
-  color: var(--pa-fg);
-  padding: 11px 44px 13px 12px;
-  font-size: 13px;
-  line-height: 1.6;
+  border: 0;
+  outline: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.inputShell textarea:focus-visible {
+  outline: 0;
 }
 
 .inputShell textarea::placeholder {
-  color: var(--pa-muted);
+  color: var(--muted-foreground);
   opacity: 1;
 }
 
 .inputShell button {
-  position: absolute;
-  right: 6px;
-  bottom: 6px;
   display: inline-grid;
   width: 32px;
   height: 32px;
+  flex: 0 0 auto;
   place-items: center;
-  border: 1px solid var(--pa-fg);
-  border-radius: 0;
-  background: var(--pa-inverse);
-  color: var(--pa-inverse-fg);
+  padding: 0;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border: 0;
+  border-radius: 999px;
   cursor: pointer;
+  transition: background-color 100ms ease;
+}
+
+.inputShell button:not(:disabled):hover {
+  background: var(--primary-hover);
 }
 
 .inputShell button:disabled {
-  border-color: var(--pa-line);
-  background: var(--pa-soft);
-  color: var(--pa-muted);
+  background: var(--primary-disabled);
   cursor: not-allowed;
 }
 
 .inputShell button svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.8;
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
 }
 
 .composer > p {
-  margin: 7px 0 0;
-  color: var(--pa-muted);
-  font-size: 11px;
-  line-height: 1.5;
+  margin: 6px 0 0;
+  color: var(--faint-foreground);
+  font-size: 11.5px;
+  line-height: 16px;
+  text-align: center;
 }
 
-.closeButton:focus-visible,
-.suggestions button:focus-visible,
-.inputShell button:focus-visible {
-  outline: 2px solid var(--pa-fg);
-  outline-offset: -3px;
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
 }
 
 @media (pointer: coarse) {
   .inputShell button {
-    right: 3px;
-    bottom: 3px;
-    width: 44px;
-    height: 44px;
-  }
-
-  .inputShell textarea {
-    min-height: 84px;
-    padding-right: 52px;
-  }
-}
-@media (max-width: 720px) {
-  .panel {
-    width: 100%;
-    min-width: 0;
-    border-left: 0;
+    width: 40px;
+    height: 40px;
   }
 }
 
@@ -418,5 +419,3 @@
     animation-iteration-count: 1 !important;
   }
 }
-
-
