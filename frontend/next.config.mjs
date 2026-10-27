@@ -26,10 +26,15 @@ if (deploymentProfile === "local-desktop") {
   if (parsedApi.username || parsedApi.password || parsedApi.pathname !== "/" || parsedApi.search || parsedApi.hash || parsedApi.origin !== apiBaseUrl.replace(/\/$/, "")) throw new Error("local-desktop API base must contain only scheme, loopback host, and port")
 }
 
+// `next dev` only trusts its own `localhost` host for dev resources (HMR, dev chunks);
+// the app is opened on a loopback IP, so allow the loopback hosts and nothing else.
+const allowedDevOrigins = ["127.0.0.1", "::1", "localhost"]
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   devIndicators: false,
+  allowedDevOrigins,
   ...(deploymentProfile === "local-desktop"
     ? {
         output: "standalone",
