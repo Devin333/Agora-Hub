@@ -181,6 +181,8 @@ def test_real_auth_session_reaches_disabled_research_desktop_and_local_stores(
         assert composition.availability_error.to_public_dict()["capabilities"] == [
             "research.llm.route"
         ]
+        # The warm-up runs beside the server so it never delays the listening socket.
+        assert app.state.reranker_warmup.wait(timeout=10)
         assert preload_calls == ["preload"]
         assert storage_io_path(data_root / "desktop" / "control" / "control.json").is_file()
         assert storage_io_path(data_root / "research" / "personal-memory.sqlite3").is_file()

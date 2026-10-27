@@ -7,11 +7,10 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
-import pymupdf
-
 from backend.foundation import build_stable_id
 from backend.research.document.docker_pdf_parser import page_rects
 from backend.research.document.latex_compiler import LatexSourceParser
+from backend.research.document.pymupdf_loader import load_pymupdf
 from backend.research.document.recovery_policy import (
     DocumentRecoveryPolicy,
     RecoveryCandidateRecord,
@@ -223,6 +222,8 @@ class PyMuPDFTextDocumentParser:
         source_hash = sha256(source_bytes).hexdigest()
         sections: list[ResearchSection] = []
         extracted_chars = 0
+        # Resolved outside the open guard: a missing PyMuPDF is an install error, not a bad PDF.
+        pymupdf = load_pymupdf()
         try:
             doc = pymupdf.open(stream=source_bytes, filetype="pdf")
         except Exception as exc:
@@ -323,7 +324,7 @@ class SelectableTextPdfDocumentParser:
         return document.model_copy(
             update={
                 "parser_backend": "pymupdf",
-                "parser_version": str(pymupdf.version[0]),
+                "parser_version": str(load_pymupdf().version[0]),
                 "normalization_version": "native-page-text-v1",
                 "metadata": metadata,
             }

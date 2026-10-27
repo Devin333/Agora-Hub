@@ -46,6 +46,7 @@ from interfaces.models.actor import (
 from interfaces.models.contracts import RunStatus
 from interfaces.api.deps import ApiRouteHelpers, build_api_services
 from interfaces.api.rate_limit import Clock, InMemoryRateLimiter
+from interfaces.api.warmup import BackgroundWarmup
 from interfaces.api.openapi import configure_openapi_contract
 from interfaces.api.routers import include_routers, personal_memory
 from interfaces.api.responses import (
@@ -635,21 +636,24 @@ def create_app(
             route.operation_id = "research_update_desktop_memory_policy"
     api.openapi_schema = None
 
+    # Warm the cross-encoder weights so the first /rag-ask is fast (~18s cold load)
+    # without holding back the listening socket for it. Opt-out via
+    # NEWS_PRELOAD_RERANKER=0 (tests/CI). Failure is non-fatal.
+    reranker_warmup = BackgroundWarmup("reranker", _preload_reranker)
+    api.state.reranker_warmup = reranker_warmup
+
     @api.on_event("startup")
-    def _preload_reranker() -> None:
-        # Warm the cross-encoder weights so the first /rag-ask is fast (~18s cold load).
-        # Opt-out via NEWS_PRELOAD_RERANKER=0 (tests/CI). Failure is non-fatal.
-        import os
-        if os.getenv("NEWS_PRELOAD_RERANKER", "1") not in ("1", "true", "yes"):
-            return
-        try:
-            from interfaces.services.paper_rag_factory import preload_reranker
-            preload_reranker()
-        except Exception:
-            import logging
-            logging.getLogger(__name__).warning("reranker preload skipped", exc_info=True)
+    def _start_reranker_warmup() -> None:
+        if os.getenv("NEWS_PRELOAD_RERANKER", "1") in ("1", "true", "yes"):
+            reranker_warmup.start()
 
     return api
+
+
+def _preload_reranker() -> None:
+    from interfaces.services.paper_rag_factory import preload_reranker
+
+    preload_reranker()
 
 
 def _run_result_response(result) -> dict[str, Any]:

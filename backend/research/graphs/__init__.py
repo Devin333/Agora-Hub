@@ -1,116 +1,8 @@
 from __future__ import annotations
 
-from backend.research.graphs.claim_evidence_eligibility_gate import (
-    CLAIM_ELIGIBILITY_OUTPUT_KEY,
-    ResearchClaimEvidenceEligibilityGate,
-    build_claim_evidence_eligibility_payload,
-    claim_evidence_eligibility_gate_registration,
-    numeric_comparison_table_locator,
-    trusted_claim_evidence_binding_values,
-)
-from backend.research.graphs.contracts import (
-    RESEARCH_ARTIFACT_NOT_REQUIRED_EVIDENCE_REF,
-    RESEARCH_ARTIFACT_TERMINAL_POLICY_ID,
-    RESEARCH_ARTIFACT_TERMINAL_POLICY_VERSION,
-    RESEARCH_DYNAMIC_AGGREGATOR_REF,
-    RESEARCH_DYNAMIC_CAPABILITIES,
-    RESEARCH_DYNAMIC_CAPABILITY_REGISTRY_REF,
-    RESEARCH_DYNAMIC_CANDIDATE_BUILDER_REF,
-    RESEARCH_DYNAMIC_GATE_REFS,
-    RESEARCH_DYNAMIC_GATES_BY_CAPABILITY,
-    RESEARCH_DYNAMIC_GATE_REGISTRY_REF,
-    RESEARCH_DYNAMIC_INPUT_REFS,
-    RESEARCH_DYNAMIC_OUTPUT_ROLES,
-    RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY,
-    RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS,
-    RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID,
-    RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID,
-    RESEARCH_DYNAMIC_POLICY_REF,
-    RESEARCH_DYNAMIC_RESULT_STORE_REF,
-    RESEARCH_DYNAMIC_STAGE_ID,
-    RESEARCH_DYNAMIC_SUBAGENT_IDS,
-    RESEARCH_DYNAMIC_TOOL_IDS,
-    RESEARCH_DYNAMIC_WORKER_CONTRACT_REFS,
-    RESEARCH_DYNAMIC_WORKER_REFS,
-    RESEARCH_PAPER_ANALYSIS_GRAPH_ID,
-    RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION,
-    build_research_artifact_terminal_policy,
-)
-from backend.research.graphs.gates import (
-    PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES,
-    PAPER_ANALYSIS_GATE_REFERENCES,
-    PAPER_ANALYSIS_QUALITY_GATE_REFERENCES,
-    build_paper_analysis_gate_registry,
-)
-from backend.research.graphs.paper_analysis import (
-    build_dynamic_paper_analysis_graph_definition,
-    build_paper_analysis_context_graph_identity,
-    build_paper_analysis_graph_definition,
-    build_quality_dynamic_paper_analysis_graph_definition,
-)
-from backend.research.graphs.paper_analysis_runtime import (
-    build_paper_analysis_runtime_binding_authority,
-)
-from backend.research.graphs.reader_repair import (
-    READER_REPAIR_GRAPH_ID,
-    READER_REPAIR_GRAPH_VERSION,
-    READER_REPAIR_APPLICATION_OUTPUT_KEY,
-    READER_REPAIR_COMMITTED_OUTPUT_BINDING_ID,
-    READER_REPAIR_COMMITTED_OUTPUT_RECEIPT_KEY,
-    READER_REPAIR_FAILURE_DIAGNOSTIC_EFFECT_KIND,
-    READER_REPAIR_FAILURE_DIAGNOSTIC_HANDLER_REF,
-    READER_REPAIR_FAILURE_DIAGNOSTIC_NOT_REQUIRED_EVIDENCE_REF,
-    READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_ID,
-    READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_VERSION,
-    READER_REPAIR_MEMORY_EFFECT_KIND,
-    READER_REPAIR_MEMORY_HANDLER_REF,
-    READER_REPAIR_MEMORY_NOT_REQUIRED_EVIDENCE_REF,
-    READER_REPAIR_MEMORY_POLICY_ID,
-    READER_REPAIR_MEMORY_POLICY_VERSION,
-    READER_REPAIR_SUBAGENT_IDS,
-    READER_REPAIR_SUBAGENT_WORKER_REFS,
-    build_reader_repair_graph_definition,
-    build_reader_repair_context_graph_identity,
-    build_reader_repair_failure_diagnostic_terminal_policy,
-    build_reader_repair_memory_terminal_policy,
-    build_reader_repair_subagent_specs,
-)
-from backend.research.graphs.reader_repair_gates import (
-    READER_REPAIR_GATE_REFERENCES,
-    build_reader_repair_gate_registry,
-)
-from backend.research.graphs.reader_repair_execution_gates import (
-    READER_REPAIR_EXECUTION_GATE_REFERENCES,
-    build_reader_repair_execution_gate_registry,
-)
-from backend.research.graphs.reader_repair_execution_workers import (
-    READER_REPAIR_APPLICATION_STEP_ID,
-    READER_REPAIR_APPLICATION_VERIFICATION_OUTPUT_KEY,
-    READER_REPAIR_APPLICATION_VERIFICATION_STEP_ID,
-    READER_REPAIR_RESULT_OUTPUT_KEY,
-    READER_REPAIR_RESULT_STEP_ID,
-    build_reader_repair_application_verification_worker_result,
-    build_reader_repair_application_worker_result,
-    build_reader_repair_committed_result,
-    build_reader_repair_result_worker_result,
-)
-from backend.research.graphs.reader_repair_workers import (
-    READER_REPAIR_MEMORY_STEP_ID,
-    build_reader_repair_memory_worker_result,
-)
-from backend.research.graphs.task_plan import (
-    ResearchAnalysisPlanCandidateBuilder,
-    ResearchAnalysisTaskPlanAggregator,
-    ResearchAnalysisTaskPlanStageWorker,
-    build_research_analysis_capability_registry,
-    build_research_analysis_subagent_specs,
-    build_research_analysis_task_gate_registry,
-    build_research_analysis_task_plan_aggregator,
-    build_research_analysis_task_plan_policy,
-    build_research_analysis_task_plan_policy_registry,
-    validate_research_analysis_candidate,
-)
+from typing import TYPE_CHECKING, Any
 
+from framework.shared.lazy_exports import LazyExports
 
 __all__ = [
     "CLAIM_ELIGIBILITY_OUTPUT_KEY",
@@ -202,3 +94,218 @@ __all__ = [
     "build_research_artifact_terminal_policy",
     "validate_research_analysis_candidate",
 ]
+
+_LAZY = LazyExports(
+    __name__,
+    {
+        "CLAIM_ELIGIBILITY_OUTPUT_KEY": ("backend.research.graphs.claim_evidence_eligibility_gate", "CLAIM_ELIGIBILITY_OUTPUT_KEY"),
+        "ResearchClaimEvidenceEligibilityGate": ("backend.research.graphs.claim_evidence_eligibility_gate", "ResearchClaimEvidenceEligibilityGate"),
+        "build_claim_evidence_eligibility_payload": ("backend.research.graphs.claim_evidence_eligibility_gate", "build_claim_evidence_eligibility_payload"),
+        "claim_evidence_eligibility_gate_registration": ("backend.research.graphs.claim_evidence_eligibility_gate", "claim_evidence_eligibility_gate_registration"),
+        "numeric_comparison_table_locator": ("backend.research.graphs.claim_evidence_eligibility_gate", "numeric_comparison_table_locator"),
+        "trusted_claim_evidence_binding_values": ("backend.research.graphs.claim_evidence_eligibility_gate", "trusted_claim_evidence_binding_values"),
+        "RESEARCH_ARTIFACT_NOT_REQUIRED_EVIDENCE_REF": ("backend.research.graphs.contracts", "RESEARCH_ARTIFACT_NOT_REQUIRED_EVIDENCE_REF"),
+        "RESEARCH_ARTIFACT_TERMINAL_POLICY_ID": ("backend.research.graphs.contracts", "RESEARCH_ARTIFACT_TERMINAL_POLICY_ID"),
+        "RESEARCH_ARTIFACT_TERMINAL_POLICY_VERSION": ("backend.research.graphs.contracts", "RESEARCH_ARTIFACT_TERMINAL_POLICY_VERSION"),
+        "RESEARCH_DYNAMIC_AGGREGATOR_REF": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_AGGREGATOR_REF"),
+        "RESEARCH_DYNAMIC_CAPABILITIES": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_CAPABILITIES"),
+        "RESEARCH_DYNAMIC_CAPABILITY_REGISTRY_REF": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_CAPABILITY_REGISTRY_REF"),
+        "RESEARCH_DYNAMIC_CANDIDATE_BUILDER_REF": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_CANDIDATE_BUILDER_REF"),
+        "RESEARCH_DYNAMIC_GATE_REFS": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_GATE_REFS"),
+        "RESEARCH_DYNAMIC_GATES_BY_CAPABILITY": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_GATES_BY_CAPABILITY"),
+        "RESEARCH_DYNAMIC_GATE_REGISTRY_REF": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_GATE_REGISTRY_REF"),
+        "RESEARCH_DYNAMIC_INPUT_REFS": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_INPUT_REFS"),
+        "RESEARCH_DYNAMIC_OUTPUT_ROLES": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_OUTPUT_ROLES"),
+        "RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY"),
+        "RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS"),
+        "RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID"),
+        "RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID"),
+        "RESEARCH_DYNAMIC_POLICY_REF": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_POLICY_REF"),
+        "RESEARCH_DYNAMIC_RESULT_STORE_REF": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_RESULT_STORE_REF"),
+        "RESEARCH_DYNAMIC_STAGE_ID": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_STAGE_ID"),
+        "RESEARCH_DYNAMIC_SUBAGENT_IDS": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_SUBAGENT_IDS"),
+        "RESEARCH_DYNAMIC_TOOL_IDS": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_TOOL_IDS"),
+        "RESEARCH_DYNAMIC_WORKER_CONTRACT_REFS": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_WORKER_CONTRACT_REFS"),
+        "RESEARCH_DYNAMIC_WORKER_REFS": ("backend.research.graphs.contracts", "RESEARCH_DYNAMIC_WORKER_REFS"),
+        "RESEARCH_PAPER_ANALYSIS_GRAPH_ID": ("backend.research.graphs.contracts", "RESEARCH_PAPER_ANALYSIS_GRAPH_ID"),
+        "RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION": ("backend.research.graphs.contracts", "RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION"),
+        "build_research_artifact_terminal_policy": ("backend.research.graphs.contracts", "build_research_artifact_terminal_policy"),
+        "PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES": ("backend.research.graphs.gates", "PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES"),
+        "PAPER_ANALYSIS_GATE_REFERENCES": ("backend.research.graphs.gates", "PAPER_ANALYSIS_GATE_REFERENCES"),
+        "PAPER_ANALYSIS_QUALITY_GATE_REFERENCES": ("backend.research.graphs.gates", "PAPER_ANALYSIS_QUALITY_GATE_REFERENCES"),
+        "build_paper_analysis_gate_registry": ("backend.research.graphs.gates", "build_paper_analysis_gate_registry"),
+        "build_dynamic_paper_analysis_graph_definition": ("backend.research.graphs.paper_analysis", "build_dynamic_paper_analysis_graph_definition"),
+        "build_paper_analysis_context_graph_identity": ("backend.research.graphs.paper_analysis", "build_paper_analysis_context_graph_identity"),
+        "build_paper_analysis_graph_definition": ("backend.research.graphs.paper_analysis", "build_paper_analysis_graph_definition"),
+        "build_quality_dynamic_paper_analysis_graph_definition": ("backend.research.graphs.paper_analysis", "build_quality_dynamic_paper_analysis_graph_definition"),
+        "build_paper_analysis_runtime_binding_authority": ("backend.research.graphs.paper_analysis_runtime", "build_paper_analysis_runtime_binding_authority"),
+        "READER_REPAIR_GRAPH_ID": ("backend.research.graphs.reader_repair", "READER_REPAIR_GRAPH_ID"),
+        "READER_REPAIR_GRAPH_VERSION": ("backend.research.graphs.reader_repair", "READER_REPAIR_GRAPH_VERSION"),
+        "READER_REPAIR_APPLICATION_OUTPUT_KEY": ("backend.research.graphs.reader_repair", "READER_REPAIR_APPLICATION_OUTPUT_KEY"),
+        "READER_REPAIR_COMMITTED_OUTPUT_BINDING_ID": ("backend.research.graphs.reader_repair", "READER_REPAIR_COMMITTED_OUTPUT_BINDING_ID"),
+        "READER_REPAIR_COMMITTED_OUTPUT_RECEIPT_KEY": ("backend.research.graphs.reader_repair", "READER_REPAIR_COMMITTED_OUTPUT_RECEIPT_KEY"),
+        "READER_REPAIR_FAILURE_DIAGNOSTIC_EFFECT_KIND": ("backend.research.graphs.reader_repair", "READER_REPAIR_FAILURE_DIAGNOSTIC_EFFECT_KIND"),
+        "READER_REPAIR_FAILURE_DIAGNOSTIC_HANDLER_REF": ("backend.research.graphs.reader_repair", "READER_REPAIR_FAILURE_DIAGNOSTIC_HANDLER_REF"),
+        "READER_REPAIR_FAILURE_DIAGNOSTIC_NOT_REQUIRED_EVIDENCE_REF": ("backend.research.graphs.reader_repair", "READER_REPAIR_FAILURE_DIAGNOSTIC_NOT_REQUIRED_EVIDENCE_REF"),
+        "READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_ID": ("backend.research.graphs.reader_repair", "READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_ID"),
+        "READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_VERSION": ("backend.research.graphs.reader_repair", "READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_VERSION"),
+        "READER_REPAIR_MEMORY_EFFECT_KIND": ("backend.research.graphs.reader_repair", "READER_REPAIR_MEMORY_EFFECT_KIND"),
+        "READER_REPAIR_MEMORY_HANDLER_REF": ("backend.research.graphs.reader_repair", "READER_REPAIR_MEMORY_HANDLER_REF"),
+        "READER_REPAIR_MEMORY_NOT_REQUIRED_EVIDENCE_REF": ("backend.research.graphs.reader_repair", "READER_REPAIR_MEMORY_NOT_REQUIRED_EVIDENCE_REF"),
+        "READER_REPAIR_MEMORY_POLICY_ID": ("backend.research.graphs.reader_repair", "READER_REPAIR_MEMORY_POLICY_ID"),
+        "READER_REPAIR_MEMORY_POLICY_VERSION": ("backend.research.graphs.reader_repair", "READER_REPAIR_MEMORY_POLICY_VERSION"),
+        "READER_REPAIR_SUBAGENT_IDS": ("backend.research.graphs.reader_repair", "READER_REPAIR_SUBAGENT_IDS"),
+        "READER_REPAIR_SUBAGENT_WORKER_REFS": ("backend.research.graphs.reader_repair", "READER_REPAIR_SUBAGENT_WORKER_REFS"),
+        "build_reader_repair_graph_definition": ("backend.research.graphs.reader_repair", "build_reader_repair_graph_definition"),
+        "build_reader_repair_context_graph_identity": ("backend.research.graphs.reader_repair", "build_reader_repair_context_graph_identity"),
+        "build_reader_repair_failure_diagnostic_terminal_policy": ("backend.research.graphs.reader_repair", "build_reader_repair_failure_diagnostic_terminal_policy"),
+        "build_reader_repair_memory_terminal_policy": ("backend.research.graphs.reader_repair", "build_reader_repair_memory_terminal_policy"),
+        "build_reader_repair_subagent_specs": ("backend.research.graphs.reader_repair", "build_reader_repair_subagent_specs"),
+        "READER_REPAIR_GATE_REFERENCES": ("backend.research.graphs.reader_repair_gates", "READER_REPAIR_GATE_REFERENCES"),
+        "build_reader_repair_gate_registry": ("backend.research.graphs.reader_repair_gates", "build_reader_repair_gate_registry"),
+        "READER_REPAIR_EXECUTION_GATE_REFERENCES": ("backend.research.graphs.reader_repair_execution_gates", "READER_REPAIR_EXECUTION_GATE_REFERENCES"),
+        "build_reader_repair_execution_gate_registry": ("backend.research.graphs.reader_repair_execution_gates", "build_reader_repair_execution_gate_registry"),
+        "READER_REPAIR_APPLICATION_STEP_ID": ("backend.research.graphs.reader_repair_execution_workers", "READER_REPAIR_APPLICATION_STEP_ID"),
+        "READER_REPAIR_APPLICATION_VERIFICATION_OUTPUT_KEY": ("backend.research.graphs.reader_repair_execution_workers", "READER_REPAIR_APPLICATION_VERIFICATION_OUTPUT_KEY"),
+        "READER_REPAIR_APPLICATION_VERIFICATION_STEP_ID": ("backend.research.graphs.reader_repair_execution_workers", "READER_REPAIR_APPLICATION_VERIFICATION_STEP_ID"),
+        "READER_REPAIR_RESULT_OUTPUT_KEY": ("backend.research.graphs.reader_repair_execution_workers", "READER_REPAIR_RESULT_OUTPUT_KEY"),
+        "READER_REPAIR_RESULT_STEP_ID": ("backend.research.graphs.reader_repair_execution_workers", "READER_REPAIR_RESULT_STEP_ID"),
+        "build_reader_repair_application_verification_worker_result": ("backend.research.graphs.reader_repair_execution_workers", "build_reader_repair_application_verification_worker_result"),
+        "build_reader_repair_application_worker_result": ("backend.research.graphs.reader_repair_execution_workers", "build_reader_repair_application_worker_result"),
+        "build_reader_repair_committed_result": ("backend.research.graphs.reader_repair_execution_workers", "build_reader_repair_committed_result"),
+        "build_reader_repair_result_worker_result": ("backend.research.graphs.reader_repair_execution_workers", "build_reader_repair_result_worker_result"),
+        "READER_REPAIR_MEMORY_STEP_ID": ("backend.research.graphs.reader_repair_workers", "READER_REPAIR_MEMORY_STEP_ID"),
+        "build_reader_repair_memory_worker_result": ("backend.research.graphs.reader_repair_workers", "build_reader_repair_memory_worker_result"),
+        "ResearchAnalysisPlanCandidateBuilder": ("backend.research.graphs.task_plan", "ResearchAnalysisPlanCandidateBuilder"),
+        "ResearchAnalysisTaskPlanAggregator": ("backend.research.graphs.task_plan", "ResearchAnalysisTaskPlanAggregator"),
+        "ResearchAnalysisTaskPlanStageWorker": ("backend.research.graphs.task_plan", "ResearchAnalysisTaskPlanStageWorker"),
+        "build_research_analysis_capability_registry": ("backend.research.graphs.task_plan", "build_research_analysis_capability_registry"),
+        "build_research_analysis_subagent_specs": ("backend.research.graphs.task_plan", "build_research_analysis_subagent_specs"),
+        "build_research_analysis_task_gate_registry": ("backend.research.graphs.task_plan", "build_research_analysis_task_gate_registry"),
+        "build_research_analysis_task_plan_aggregator": ("backend.research.graphs.task_plan", "build_research_analysis_task_plan_aggregator"),
+        "build_research_analysis_task_plan_policy": ("backend.research.graphs.task_plan", "build_research_analysis_task_plan_policy"),
+        "build_research_analysis_task_plan_policy_registry": ("backend.research.graphs.task_plan", "build_research_analysis_task_plan_policy_registry"),
+        "validate_research_analysis_candidate": ("backend.research.graphs.task_plan", "validate_research_analysis_candidate"),
+    },
+)
+
+
+def __getattr__(name: str) -> Any:
+    return _LAZY.getattr(name)
+
+
+def __dir__() -> list[str]:
+    return _LAZY.dir()
+
+
+if TYPE_CHECKING:
+    from backend.research.graphs.claim_evidence_eligibility_gate import (
+        CLAIM_ELIGIBILITY_OUTPUT_KEY,
+        ResearchClaimEvidenceEligibilityGate,
+        build_claim_evidence_eligibility_payload,
+        claim_evidence_eligibility_gate_registration,
+        numeric_comparison_table_locator,
+        trusted_claim_evidence_binding_values,
+    )
+    from backend.research.graphs.contracts import (
+        RESEARCH_ARTIFACT_NOT_REQUIRED_EVIDENCE_REF,
+        RESEARCH_ARTIFACT_TERMINAL_POLICY_ID,
+        RESEARCH_ARTIFACT_TERMINAL_POLICY_VERSION,
+        RESEARCH_DYNAMIC_AGGREGATOR_REF,
+        RESEARCH_DYNAMIC_CAPABILITIES,
+        RESEARCH_DYNAMIC_CAPABILITY_REGISTRY_REF,
+        RESEARCH_DYNAMIC_CANDIDATE_BUILDER_REF,
+        RESEARCH_DYNAMIC_GATE_REFS,
+        RESEARCH_DYNAMIC_GATES_BY_CAPABILITY,
+        RESEARCH_DYNAMIC_GATE_REGISTRY_REF,
+        RESEARCH_DYNAMIC_INPUT_REFS,
+        RESEARCH_DYNAMIC_OUTPUT_ROLES,
+        RESEARCH_DYNAMIC_OUTPUT_ROLES_BY_CAPABILITY,
+        RESEARCH_DYNAMIC_OUTPUT_SCHEMA_REFS,
+        RESEARCH_DYNAMIC_PAPER_ANALYSIS_GRAPH_ID,
+        RESEARCH_DYNAMIC_QUALITY_PAPER_ANALYSIS_GRAPH_ID,
+        RESEARCH_DYNAMIC_POLICY_REF,
+        RESEARCH_DYNAMIC_RESULT_STORE_REF,
+        RESEARCH_DYNAMIC_STAGE_ID,
+        RESEARCH_DYNAMIC_SUBAGENT_IDS,
+        RESEARCH_DYNAMIC_TOOL_IDS,
+        RESEARCH_DYNAMIC_WORKER_CONTRACT_REFS,
+        RESEARCH_DYNAMIC_WORKER_REFS,
+        RESEARCH_PAPER_ANALYSIS_GRAPH_ID,
+        RESEARCH_PAPER_ANALYSIS_GRAPH_VERSION,
+        build_research_artifact_terminal_policy,
+    )
+    from backend.research.graphs.gates import (
+        PAPER_ANALYSIS_AVAILABLE_GATE_REFERENCES,
+        PAPER_ANALYSIS_GATE_REFERENCES,
+        PAPER_ANALYSIS_QUALITY_GATE_REFERENCES,
+        build_paper_analysis_gate_registry,
+    )
+    from backend.research.graphs.paper_analysis import (
+        build_dynamic_paper_analysis_graph_definition,
+        build_paper_analysis_context_graph_identity,
+        build_paper_analysis_graph_definition,
+        build_quality_dynamic_paper_analysis_graph_definition,
+    )
+    from backend.research.graphs.paper_analysis_runtime import (
+        build_paper_analysis_runtime_binding_authority,
+    )
+    from backend.research.graphs.reader_repair import (
+        READER_REPAIR_GRAPH_ID,
+        READER_REPAIR_GRAPH_VERSION,
+        READER_REPAIR_APPLICATION_OUTPUT_KEY,
+        READER_REPAIR_COMMITTED_OUTPUT_BINDING_ID,
+        READER_REPAIR_COMMITTED_OUTPUT_RECEIPT_KEY,
+        READER_REPAIR_FAILURE_DIAGNOSTIC_EFFECT_KIND,
+        READER_REPAIR_FAILURE_DIAGNOSTIC_HANDLER_REF,
+        READER_REPAIR_FAILURE_DIAGNOSTIC_NOT_REQUIRED_EVIDENCE_REF,
+        READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_ID,
+        READER_REPAIR_FAILURE_DIAGNOSTIC_POLICY_VERSION,
+        READER_REPAIR_MEMORY_EFFECT_KIND,
+        READER_REPAIR_MEMORY_HANDLER_REF,
+        READER_REPAIR_MEMORY_NOT_REQUIRED_EVIDENCE_REF,
+        READER_REPAIR_MEMORY_POLICY_ID,
+        READER_REPAIR_MEMORY_POLICY_VERSION,
+        READER_REPAIR_SUBAGENT_IDS,
+        READER_REPAIR_SUBAGENT_WORKER_REFS,
+        build_reader_repair_graph_definition,
+        build_reader_repair_context_graph_identity,
+        build_reader_repair_failure_diagnostic_terminal_policy,
+        build_reader_repair_memory_terminal_policy,
+        build_reader_repair_subagent_specs,
+    )
+    from backend.research.graphs.reader_repair_gates import (
+        READER_REPAIR_GATE_REFERENCES,
+        build_reader_repair_gate_registry,
+    )
+    from backend.research.graphs.reader_repair_execution_gates import (
+        READER_REPAIR_EXECUTION_GATE_REFERENCES,
+        build_reader_repair_execution_gate_registry,
+    )
+    from backend.research.graphs.reader_repair_execution_workers import (
+        READER_REPAIR_APPLICATION_STEP_ID,
+        READER_REPAIR_APPLICATION_VERIFICATION_OUTPUT_KEY,
+        READER_REPAIR_APPLICATION_VERIFICATION_STEP_ID,
+        READER_REPAIR_RESULT_OUTPUT_KEY,
+        READER_REPAIR_RESULT_STEP_ID,
+        build_reader_repair_application_verification_worker_result,
+        build_reader_repair_application_worker_result,
+        build_reader_repair_committed_result,
+        build_reader_repair_result_worker_result,
+    )
+    from backend.research.graphs.reader_repair_workers import (
+        READER_REPAIR_MEMORY_STEP_ID,
+        build_reader_repair_memory_worker_result,
+    )
+    from backend.research.graphs.task_plan import (
+        ResearchAnalysisPlanCandidateBuilder,
+        ResearchAnalysisTaskPlanAggregator,
+        ResearchAnalysisTaskPlanStageWorker,
+        build_research_analysis_capability_registry,
+        build_research_analysis_subagent_specs,
+        build_research_analysis_task_gate_registry,
+        build_research_analysis_task_plan_aggregator,
+        build_research_analysis_task_plan_policy,
+        build_research_analysis_task_plan_policy_registry,
+        validate_research_analysis_candidate,
+    )
