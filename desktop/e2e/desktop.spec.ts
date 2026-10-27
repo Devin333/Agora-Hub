@@ -116,6 +116,8 @@ test.describe("Agora Paper Agent Electron host", () => {
       }))
       expect(native.themeSource).toBe("system")
       expect(native.background).toBe(native.dark ? "#161616" : "#ffffff")
+      // Playwright emulates a light color scheme by default; drop it so the page sees the host's nativeTheme.
+      await page.emulateMedia({ colorScheme: null })
       expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(native.dark ? "rgb(22, 22, 22)" : "rgb(255, 255, 255)")
 
       const pagesBefore = electronApp.windows().length
