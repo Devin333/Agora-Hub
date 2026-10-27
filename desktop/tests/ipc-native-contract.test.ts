@@ -240,4 +240,40 @@ describe("native IPC transaction boundaries", () => {
     await expect(handler?.(event("https://evil.example/paper-agent"), "dark")).rejects.toThrow("ipc_source_rejected")
     expect(base.appearance.set).toHaveBeenCalledOnce()
   })
+
+  it("holds service-backed calls until the host resolves its services, then reads the resolved controllers", async () => {
+    let release: () => void = () => undefined
+    const servicesReady = new Promise<void>(resolve => { release = resolve })
+    const early = options()
+    const resolved = options()
+    resolved.coordinator.refresh.mockResolvedValue({ phase: "starting" })
+    let current = early
+    const onRuntimeStatus = vi.fn()
+    registerIpcHandlers({
+      ...early,
+      get coordinator() { return current.coordinator },
+      onRuntimeStatus,
+      servicesReady
+    } as never)
+
+    const pending = electron.handlers.get(IPC_CHANNELS.runtimeStatus)?.(event("file:///C:/Agora/startup.html"))
+    await Promise.resolve()
+    expect(early.coordinator.refresh).not.toHaveBeenCalled()
+    current = resolved
+    release()
+
+    await expect(pending).resolves.toEqual({ phase: "starting" })
+    expect(early.coordinator.refresh).not.toHaveBeenCalled()
+    expect(resolved.coordinator.refresh).toHaveBeenCalledOnce()
+    expect(onRuntimeStatus).toHaveBeenCalledWith({ phase: "starting" })
+    expect(early.onRuntimeReady).not.toHaveBeenCalled()
+  })
+
+  it("answers lifecycle state without waiting for host services", () => {
+    const base = options()
+    base.lifecycle.update.mockReturnValue({ accepted: true, revision: 1 })
+    registerIpcHandlers({ ...base, servicesReady: new Promise<void>(() => undefined) } as never)
+
+    expect(electron.handlers.get(IPC_CHANNELS.lifecycleUpdate)?.(event(), { revision: 1, dirty: false, activeTaskCount: 0 })).toEqual({ accepted: true, revision: 1 })
+  })
 })

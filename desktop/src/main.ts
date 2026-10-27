@@ -1,6 +1,6 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { app, BrowserWindow, dialog, Menu, nativeTheme, screen, session, shell, type MessageBoxOptions } from "electron"
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, screen, session, shell, Tray, type MessageBoxOptions } from "electron"
 import { AuditLogger } from "./audit-log"
 import { registerIpcHandlers } from "./ipc"
 import { RendererLifecycleBridge, requiresNativeQuitConfirmation, type RendererQuitAssessment } from "./lifecycle-bridge"
@@ -23,6 +23,7 @@ import { OwnedDataClearService, UnavailableOwnedDataClearController, type OwnedD
 import { OwnedWindowMaintenanceFence } from "./owned-window-maintenance"
 import { readWindowsElectronProcessIdentity } from "./electron-process-identity"
 import { armOwnedDataClearFinalizer } from "./owned-data-clear-exit"
+import { BackgroundTray, isBackgroundLaunch, LaunchAtLogin, trayStatusFor } from "./background-host"
 
 const testUserDataPath = resolveTestUserDataOverride({
   argv: process.argv,
@@ -32,6 +33,7 @@ const testUserDataPath = resolveTestUserDataOverride({
 if (testUserDataPath) app.setPath("userData", testUserDataPath)
 
 const HOST_VERSION = app.getVersion()
+const launchedInBackground = isBackgroundLaunch(process.argv)
 const gotSingleInstanceLock = acquireSingleInstanceLock(app)
 
 let mainWindow: BrowserWindow | null = null
@@ -48,6 +50,9 @@ let closeInProgress = false
 let removeIpcHandlers: (() => void) | null = null
 let dataClearExitArmed = false
 let appearance: DesktopAppearance | null = null
+let backgroundTray: BackgroundTray | null = null
+/** Settles once bootstrap has resolved the runtime controllers (or their unavailable stand-ins). */
+let hostServicesReady: Promise<void> = new Promise(() => undefined)
 const lifecycle = new RendererLifecycleBridge()
 const maintenanceFence = new OwnedWindowMaintenanceFence()
 const nullLogger = { write: async (_event: string, _details: Record<string, unknown> = {}) => undefined }
@@ -117,14 +122,20 @@ function installWebContentsPolicy(window: BrowserWindow): void {
   })
 }
 
-function createWindow(): BrowserWindow {
+function createWindow(revealWhenReady: boolean): BrowserWindow {
   const selectedDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const window = new BrowserWindow(secureWindowOptions(__dirname, selectedDisplay.workArea, appearance?.view.theme ?? "dark"))
   installWebContentsPolicy(window)
-  window.once("ready-to-show", () => window.show())
+  if (revealWhenReady) window.once("ready-to-show", () => window.show())
   window.on("close", event => {
     if (allowWindowClose) return
     event.preventDefault()
+    // With a tray icon, closing only hides the window: the host and its runtime
+    // keep running and nothing unsaved is at risk, so no exit assessment is due.
+    if (backgroundTray) {
+      if (!closeInProgress) window.hide()
+      return
+    }
     void requestClose("window-close")
   })
   window.on("closed", () => {
@@ -162,6 +173,46 @@ async function confirmCloseWithNativeDialog(reason: "window-close" | "app-quit",
   return result.response === 1
 }
 
+function showMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) focusExistingWindow(mainWindow)
+}
+
+function hideMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+}
+
+/** The 256px app icon pre-scaled per DPI step so the notification area never shows a blurry downscale. */
+function trayIcon(): Electron.NativeImage {
+  const source = nativeImage.createFromPath(path.join(__dirname, "icon.png"))
+  const icon = nativeImage.createEmpty()
+  for (const scaleFactor of [1, 1.25, 1.5, 2]) {
+    const size = Math.round(16 * scaleFactor)
+    icon.addRepresentation({ scaleFactor, width: size, height: size, buffer: source.resize({ width: size, height: size, quality: "best" }).toPNG() })
+  }
+  return icon
+}
+
+function createBackgroundTray(): void {
+  try {
+    backgroundTray = new BackgroundTray({
+      createTray: () => new Tray(trayIcon()),
+      buildMenu: template => Menu.buildFromTemplate(template),
+      launchAtLogin: new LaunchAtLogin(app),
+      actions: { showWindow: showMainWindow, quit: () => void requestClose("app-quit") },
+      onLaunchAtLoginError: error => void logger?.write("launch_at_login_update_failed", { error: redactText(error instanceof Error ? error.message : error, 300) })
+    })
+  } catch (error) {
+    // Without a notification-area icon a hidden window could not be reopened,
+    // so closing falls back to the full exit path.
+    backgroundTray = null
+    void logger?.write("background_tray_unavailable", { error: redactText(error instanceof Error ? error.message : error, 300) })
+  }
+}
+
+function reflectRuntimeStatus(status: RuntimeStatusView): void {
+  backgroundTray?.setStatus(trayStatusFor(status.phase))
+}
+
 function setHostExitTitle(status: string): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   mainWindow.setTitle(`Agora Paper Agent — ${status}`)
@@ -181,6 +232,8 @@ async function stopOwnedRuntime(): Promise<boolean> {
   setHostExitTitle("退出未完成（本机服务状态未知）")
   await logger?.write("runtime_stop_unconfirmed", { phase: stopped.phase, state: stopped.state, code: stopped.code })
   if (!mainWindow || mainWindow.isDestroyed()) return false
+  // The window was hidden when the exit was approved; bring it back with the warning.
+  showMainWindow()
   await dialog.showMessageBox(mainWindow, {
     type: "warning",
     title: "本机服务状态未确认",
@@ -197,6 +250,9 @@ async function stopOwnedRuntime(): Promise<boolean> {
 async function requestClose(reason: "window-close" | "app-quit"): Promise<void> {
   if (closeInProgress) return
   closeInProgress = true
+  // A quit during the first moments of launch must still drain the runtime the
+  // coordinator is about to own, so it waits for the controllers to exist.
+  await hostServicesReady
   const originalTitle = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getTitle() : null
   let exitApproved = false
   let retainExitStatus = false
@@ -207,6 +263,7 @@ async function requestClose(reason: "window-close" | "app-quit"): Promise<void> 
         detail: "为避免未确认的 finalizer 在普通退出后删除数据，宿主保持打开。请在当前页面重新预览并明确确认，或检查状态。",
         buttons: ["返回清除恢复"], defaultId: 0, cancelId: 0, noLink: true
       }
+      showMainWindow()
       if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, options)
       else await dialog.showMessageBox(options)
       return
@@ -222,7 +279,13 @@ async function requestClose(reason: "window-close" | "app-quit"): Promise<void> 
     if (rendererAssessment.status === "unknown") {
       await logger?.write("renderer_quit_state_unknown", { reason: rendererAssessment.reason, revision: rendererAssessment.lastKnownState.revision })
     }
-    if (requiresNativeQuitConfirmation(rendererAssessment) && !(await confirmCloseWithNativeDialog(reason, rendererAssessment))) return
+    if (requiresNativeQuitConfirmation(rendererAssessment)) {
+      showMainWindow()
+      if (!(await confirmCloseWithNativeDialog(reason, rendererAssessment))) return
+    }
+    // The exit is approved: leave the screen at once and drain the runtime behind the tray icon.
+    backgroundTray?.setQuitting(true)
+    hideMainWindow()
     if (!(await stopOwnedRuntime())) {
       retainExitStatus = true
       return
@@ -238,6 +301,7 @@ async function requestClose(reason: "window-close" | "app-quit"): Promise<void> 
     if (!exitApproved && !retainExitStatus && originalTitle && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setTitle(originalTitle)
     }
+    if (!exitApproved) backgroundTray?.setQuitting(false)
     closeInProgress = false
   }
 }
@@ -265,6 +329,7 @@ async function prepareOwnedDataClearExit(client: RuntimeClient, request: OwnedDa
   }
 }
 function navigateWhenReady(status: RuntimeStatusView): void {
+  reflectRuntimeStatus(status)
   if (!status.localTransportReady || !status.canonicalOrigin || !mainWindow || mainWindow.isDestroyed()) return
   canonicalOrigin = status.canonicalOrigin
   const target = paperAgentUrl(status.canonicalOrigin)
@@ -295,6 +360,34 @@ async function bootstrap(): Promise<void> {
   })
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
+
+  createBackgroundTray()
+  // Handlers go in before the window so the startup page can call the bridge at
+  // once; service-backed handlers wait for `services` and read the resolved
+  // controllers through these getters only afterwards.
+  let markServicesReady: () => void = () => undefined
+  const services = new Promise<void>(resolve => { markServicesReady = resolve })
+  hostServicesReady = services
+  removeIpcHandlers = registerIpcHandlers({
+    get coordinator() { return coordinator as RuntimeController },
+    lifecycle,
+    get maintenance() { return maintenance },
+    get config() { return configBridge },
+    get credentials() { return credentialBridge },
+    get clearData() { return clearData },
+    maintenanceFence,
+    appearance,
+    startupFile: startupFilePath(),
+    getCanonicalOrigin: () => canonicalOrigin,
+    documentsPath: app.getPath("documents"),
+    get logger() { return logger ?? nullLogger },
+    onRuntimeReady: navigateWhenReady,
+    onRuntimeStatus: reflectRuntimeStatus,
+    servicesReady: services
+  })
+  // The startup page paints while the runtime layout and data-clear state are
+  // still being resolved; a login-item launch stays hidden behind the tray icon.
+  mainWindow = createWindow(!(launchedInBackground && backgroundTray))
 
   let startupBlocked = true
   try {
@@ -339,23 +432,11 @@ async function bootstrap(): Promise<void> {
     })
   }
 
-  removeIpcHandlers = registerIpcHandlers({
-    coordinator,
-    lifecycle,
-    maintenance,
-    config: configBridge,
-    credentials: credentialBridge,
-    clearData,
-    maintenanceFence,
-    appearance,
-    startupFile: startupFilePath(),
-    getCanonicalOrigin: () => canonicalOrigin,
-    documentsPath: app.getPath("documents"),
-    logger: logger ?? nullLogger,
-    onRuntimeReady: navigateWhenReady
-  })
-  mainWindow = createWindow()
-  const status = await coordinator.initialize()
+  markServicesReady()
+  const runtime = coordinator as RuntimeController
+  reflectRuntimeStatus(runtime.status)
+  const status = await runtime.initialize()
+  reflectRuntimeStatus(status)
   if (!startupBlocked) navigateWhenReady(status)
   if (startupBlocked) await logger?.write("data_clear_startup_blocked", { code: status.code, state: status.state })
   else if (status.localTransportReady && status.phase === "degraded") await logger?.write("runtime_remote_capabilities_limited", { phase: status.phase, state: status.state, code: status.code })
@@ -364,9 +445,11 @@ async function bootstrap(): Promise<void> {
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, argv) => {
+    // A login-item launch while the host already runs has nothing to reveal.
+    if (isBackgroundLaunch(argv)) return
     void logger?.write("second_instance_focused")
-    focusExistingWindow(mainWindow)
+    showMainWindow()
   })
   app.on("before-quit", event => {
     if (allowAppQuit) return
@@ -377,6 +460,8 @@ if (!gotSingleInstanceLock) {
     if (allowAppQuit) app.quit()
   })
   app.on("will-quit", () => {
+    backgroundTray?.destroy()
+    backgroundTray = null
     removeIpcHandlers?.()
     removeIpcHandlers = null
     appearance?.dispose()
@@ -390,21 +475,3 @@ if (!gotSingleInstanceLock) {
   })
   void app.whenReady().then(bootstrap)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

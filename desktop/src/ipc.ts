@@ -38,6 +38,15 @@ interface RegisterIpcOptions {
   documentsPath: string
   logger: Pick<AuditLogger, "write">
   onRuntimeReady(status: RuntimeStatusView): void
+  /** Observes every status the startup page reads or retries, e.g. for the tray tooltip. */
+  onRuntimeStatus?(status: RuntimeStatusView): void
+  /**
+   * Settles once the host has resolved its runtime services. Handlers are
+   * registered before the first window opens so the startup page can call the
+   * bridge immediately; every service-backed handler waits on this first and
+   * reads its dependencies only afterwards.
+   */
+  servicesReady?: Promise<void>
 }
 
 function sourceUrl(event: IpcMainInvokeEvent): string {
@@ -130,23 +139,31 @@ async function confirmDataClear(event: IpcMainInvokeEvent, preview: DataClearPre
   }) === 1
 }
 export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
-  ipcMain.handle(IPC_CHANNELS.runtimeStatus, async event => {
+  const handleWhenReady = (channel: string, listener: (event: IpcMainInvokeEvent, value?: unknown) => unknown) => {
+    ipcMain.handle(channel, async (event, value?: unknown) => {
+      await options.servicesReady
+      return await listener(event, value)
+    })
+  }
+  handleWhenReady(IPC_CHANNELS.runtimeStatus, async event => {
     assertSource(event, options, false, IPC_CHANNELS.runtimeStatus)
     const status = await options.coordinator.refresh()
+    options.onRuntimeStatus?.(status)
     if (status.phase === "ready") options.onRuntimeReady(status)
     return status
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeRetry, async event => {
+  handleWhenReady(IPC_CHANNELS.runtimeRetry, async event => {
     assertSource(event, options, false, IPC_CHANNELS.runtimeStatus)
     const status = await options.coordinator.retry()
+    options.onRuntimeStatus?.(status)
     if (status.phase === "ready") options.onRuntimeReady(status)
     return status
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeDiagnostics, event => {
+  handleWhenReady(IPC_CHANNELS.runtimeDiagnostics, event => {
     assertSource(event, options, false, IPC_CHANNELS.runtimeStatus)
     return options.coordinator.diagnostics
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeBackup, async event => {
+  handleWhenReady(IPC_CHANNELS.runtimeBackup, async event => {
     assertSource(event, options, true, "app-only")
     const parent = BrowserWindow.fromWebContents(event.sender)
     const dialogOptions: SaveDialogOptions = {
@@ -169,7 +186,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
       return { ok: false, state: "ERROR", code, message: "所选备份目标不安全或不可用。" }
     }
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeRestorePreview, async event => {
+  handleWhenReady(IPC_CHANNELS.runtimeRestorePreview, async event => {
     assertSource(event, options, true, "app-only")
     const parent = BrowserWindow.fromWebContents(event.sender)
     const dialogOptions: OpenDialogOptions = {
@@ -191,13 +208,13 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
       return { ok: false, state: "ERROR", code, message: "所选备份文件不安全或不可用。" }
     }
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeRestoreActivate, async (event, value: unknown) => {
+  handleWhenReady(IPC_CHANNELS.runtimeRestoreActivate, async (event, value: unknown) => {
     assertSource(event, options, true, "app-only")
     const result = await options.maintenance.activate(value, summary => confirmRestore(event, summary))
     await options.logger.write(result.ok ? "restore_activated" : "restore_activation_not_completed", { code: result.code, backupId: result.backupId ?? null })
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeClearDataPreview, async event => {
+  handleWhenReady(IPC_CHANNELS.runtimeClearDataPreview, async event => {
     assertSource(event, options, false, IPC_CHANNELS.runtimeClearDataPreview)
     if (!options.maintenanceFence.enter(event)) throw new Error("ipc_maintenance_document_rejected")
     const result = await options.clearData.preview()
@@ -210,7 +227,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
     })
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeClearDataApply, async (event, value: unknown) => {
+  handleWhenReady(IPC_CHANNELS.runtimeClearDataApply, async (event, value: unknown) => {
     assertSource(event, options, false, IPC_CHANNELS.runtimeClearDataApply)
     const parent = BrowserWindow.fromWebContents(event.sender)
     const freshLifecycle = async () => {
@@ -236,21 +253,21 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
     await options.logger.write(result.ok ? "data_clear_prepared" : "data_clear_not_prepared", { code: result.code, state: result.state, operationId: result.operationId ?? null, exitRequired: result.exitRequired === true })
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.runtimeClearDataStatus, async event => {
+  handleWhenReady(IPC_CHANNELS.runtimeClearDataStatus, async event => {
     assertSource(event, options, false, IPC_CHANNELS.runtimeClearDataStatus)
     const result = await options.clearData.status()
     if (!result.ok || result.state === "FAILED_PARTIAL") await options.logger.write("data_clear_status_blocked", { code: result.code, state: result.state, operationId: result.operationId ?? null })
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.configShow, async event => {
+  handleWhenReady(IPC_CHANNELS.configShow, async event => {
     assertSource(event, options, true, "app-only")
     return await options.config.show()
   })
-  ipcMain.handle(IPC_CHANNELS.configPreview, async (event, value: unknown) => {
+  handleWhenReady(IPC_CHANNELS.configPreview, async (event, value: unknown) => {
     assertSource(event, options, true, "app-only")
     return await options.config.preview(value)
   })
-  ipcMain.handle(IPC_CHANNELS.configApply, async (event, value: unknown) => {
+  handleWhenReady(IPC_CHANNELS.configApply, async (event, value: unknown) => {
     assertSource(event, options, true, "app-only")
     const parent = BrowserWindow.fromWebContents(event.sender)
     const freshLifecycle = async () => {
@@ -270,11 +287,11 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
     await options.logger.write(result.ok ? "runtime_config_applied" : "runtime_config_not_applied", { code: result.code, state: result.state })
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.credentialStatus, async event => {
+  handleWhenReady(IPC_CHANNELS.credentialStatus, async event => {
     assertSource(event, options, true, "app-only")
     return await options.credentials.invoke("status")
   })
-  ipcMain.handle(IPC_CHANNELS.credentialReplace, async event => {
+  handleWhenReady(IPC_CHANNELS.credentialReplace, async event => {
     assertSource(event, options, true, "app-only")
     const parent = BrowserWindow.fromWebContents(event.sender)
     if (!parent || parent.isDestroyed()) return { ok: false, code: "desktop_credential_parent_invalid", configured: null, state: "UNKNOWN" }
@@ -292,7 +309,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
     await options.logger.write(result.ok && !result.cancelled ? "credential_replaced" : "credential_not_replaced", { code: result.code, configured: result.configured, cancelled: result.cancelled === true })
     return result
   })
-  ipcMain.handle(IPC_CHANNELS.credentialRemove, async event => {
+  handleWhenReady(IPC_CHANNELS.credentialRemove, async event => {
     assertSource(event, options, true, "app-only")
     const confirmed = await showNativeMessage(event, { type: "warning", title: "删除 Research 密钥", message: "从 Windows Credential Manager 删除本 App 的 Research 密钥？", detail: "删除前 owner 将验证并停止本 App 服务；本地阅读仍可使用，远程模型能力将受限。", buttons: ["保留密钥", "删除密钥"], defaultId: 0, cancelId: 0, noLink: true }) === 1
     if (!confirmed) {
@@ -325,7 +342,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
     assertSource(event, options, false, IPC_CHANNELS.lifecycleRespond)
     return options.lifecycle.respond(response)
   })
-  ipcMain.handle(IPC_CHANNELS.exportSave, async (event, value: unknown) => {
+  handleWhenReady(IPC_CHANNELS.exportSave, async (event, value: unknown) => {
     assertSource(event, options, true, "app-only")
     try {
       const request = validateExportRequest(value)
@@ -345,7 +362,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
       return exportFailure(error)
     }
   })
-  ipcMain.handle(IPC_CHANNELS.appearanceSet, async (event, value: unknown) => {
+  handleWhenReady(IPC_CHANNELS.appearanceSet, async (event, value: unknown) => {
     assertSource(event, options, true, "app-only")
     return await options.appearance.set(value)
   })

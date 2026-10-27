@@ -134,6 +134,23 @@ test.describe("Agora Paper Agent Electron host", () => {
       })
       expect(duplicateExit).toBe(0)
       await expect.poll(() => electronApp.windows().length).toBe(1)
+
+      // Closing the window keeps the host resident behind the tray: the window
+      // only hides, and a second launch brings the same window back at once.
+      const windowState = () => electronApp.evaluate(({ BrowserWindow }) => {
+        const windows = BrowserWindow.getAllWindows()
+        return { count: windows.length, visible: windows[0]?.isVisible() ?? false }
+      })
+      await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
+      await expect.poll(windowState).toEqual({ count: 1, visible: false })
+      expect(electronApp.process().exitCode).toBeNull()
+      const reopenExit = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn(electronExecutable, [desktopRoot, userDataArg], { windowsHide: true, stdio: "ignore", env: environment })
+        child.once("error", reject)
+        child.once("exit", resolve)
+      })
+      expect(reopenExit).toBe(0)
+      await expect.poll(windowState).toEqual({ count: 1, visible: true })
     } finally {
       const process = electronApp.process()
       if (process.exitCode === null) {
