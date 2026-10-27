@@ -126,6 +126,10 @@ describe("public auth BFF", () => {
     expect(response.cookies.get("newsroom_auth_callback")?.value).toBe("")
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'self'")
     expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+    // Rakazo surfaces in both schemes, with no leftover legacy purple.
+    expect(html).toContain("--background:#ffffff")
+    expect(html).toContain("@media (prefers-color-scheme:dark){:root{--background:#161616")
+    expect(html).not.toMatch(/#7c3aed|#fbf8ff|#302640/i)
   })
   it("does not interpolate untrusted callback strings into script markup", async () => {
     const response = await callback(callbackRequest(`state=${encodeURIComponent('</script><script>alert(1)</script>')}`), { params: Promise.resolve({ provider: "google" }) })

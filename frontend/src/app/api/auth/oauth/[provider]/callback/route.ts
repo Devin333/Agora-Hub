@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { safeApiPost } from "@/lib/api/server"
 import { AUTH_BINDING_COOKIE, AUTH_CALLBACK_COOKIE, AUTH_RETURN_COOKIE, authFailure, isSameOrigin, requestOrigin, safeReturnPath, validProvider } from "@/lib/auth/portal-server"
 import { NEWSROOM_SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth/session"
+import { CALLBACK_DOCUMENT_STYLE } from "@/lib/auth/callback-document-style"
 
 export const dynamic = "force-dynamic"
 
@@ -54,7 +55,7 @@ async function completeCallback(request: NextRequest, provider: string, code: st
   const payload = JSON.stringify({ type: "agora-auth-complete", provider, state: state.slice(0, 512), success: Boolean(token), error: token ? null : error }).replace(/</g, "\\u003c")
   const origin = JSON.stringify(requestOrigin(request) ?? request.nextUrl.origin).replace(/</g, "\\u003c")
   const href = returnTo.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agora AI</title><style nonce="${nonce}">body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fbf8ff;color:#302640;font:16px Arial,sans-serif;text-align:center}h1{font-size:24px}a{color:#7c3aed;line-height:3}</style><main><h1>${token ? "登录成功" : "登录未完成"}</h1><p>${token ? "可以返回原页面继续研究。" : "请返回原页面，重试或选择其他登录方式。"}</p><a href="${href}" target="_top" rel="noreferrer">返回研究</a></main><script nonce="${nonce}">const message=${payload};const targetOrigin=${origin};if(window.opener){window.opener.postMessage(message,targetOrigin);window.close()}else if(window.parent!==window){window.parent.postMessage(message,targetOrigin)}else if(message.success){window.location.replace(${JSON.stringify(returnTo).replace(/</g, "\\u003c")})}</script></html>`
+  const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agora AI</title><style nonce="${nonce}">${CALLBACK_DOCUMENT_STYLE}</style><main><h1>${token ? "登录成功" : "登录未完成"}</h1><p>${token ? "可以返回原页面继续研究。" : "请返回原页面，重试或选择其他登录方式。"}</p><a href="${href}" target="_top" rel="noreferrer">返回研究</a></main><script nonce="${nonce}">const message=${payload};const targetOrigin=${origin};if(window.opener){window.opener.postMessage(message,targetOrigin);window.close()}else if(window.parent!==window){window.parent.postMessage(message,targetOrigin)}else if(message.success){window.location.replace(${JSON.stringify(returnTo).replace(/</g, "\\u003c")})}</script></html>`
   const response = new NextResponse(html, { headers: {
     "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'`,
