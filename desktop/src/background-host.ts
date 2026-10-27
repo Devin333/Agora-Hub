@@ -1,13 +1,14 @@
 import type { MenuItemConstructorOptions } from "electron"
+import type { ConnectionPhase } from "./contracts"
 
 /**
  * Background residency for the desktop host.
  *
- * Closing the window keeps the host and its owned runtime alive behind a
+ * Closing the window keeps the host and the loaded workspace alive behind a
  * notification-area icon, so reopening is instant; only an explicit quit (tray
- * menu, OS session end) runs the drain-and-stop exit path. A launch carrying
- * {@link BACKGROUND_LAUNCH_ARGUMENT} (the login item) starts the runtime without
- * showing the window.
+ * menu, OS session end) runs the exit path. A launch carrying
+ * {@link BACKGROUND_LAUNCH_ARGUMENT} (the login item) connects to the server
+ * without showing the window.
  */
 export const BACKGROUND_LAUNCH_ARGUMENT = "--agora-background"
 
@@ -56,6 +57,7 @@ export interface TrayLike {
 
 export interface BackgroundTrayActions {
   showWindow(): void
+  changeServer(): void
   quit(): void
 }
 
@@ -71,7 +73,7 @@ export const TRAY_TITLE = "Agora Paper Agent"
 
 export class BackgroundTray {
   private readonly tray: TrayLike
-  private status = "正在启动本机服务…"
+  private status = "正在连接服务器…"
   private quitting = false
 
   constructor(private readonly options: BackgroundTrayOptions) {
@@ -82,14 +84,14 @@ export class BackgroundTray {
     this.render()
   }
 
-  /** Short runtime state shown in the icon tooltip, e.g. "本机服务已就绪". */
+  /** Short connection state shown in the icon tooltip, e.g. "已连接 agora.example.com". */
   setStatus(status: string): void {
     if (status === this.status) return
     this.status = status
     this.render()
   }
 
-  /** While an approved quit drains the runtime the menu cannot start a second one. */
+  /** While an approved quit is leaving the menu cannot start a second one. */
   setQuitting(quitting: boolean): void {
     if (quitting === this.quitting) return
     this.quitting = quitting
@@ -104,6 +106,7 @@ export class BackgroundTray {
     const { launchAtLogin } = this.options
     return [
       { label: "显示 Agora Paper Agent", enabled: !this.quitting, click: () => this.showWindow() },
+      { label: "更换服务器地址…", enabled: !this.quitting, click: () => this.options.actions.changeServer() },
       { type: "separator" },
       {
         label: "登录 Windows 时在后台启动",
@@ -133,18 +136,19 @@ export class BackgroundTray {
 
   private render(): void {
     if (this.tray.isDestroyed()) return
-    this.tray.setToolTip(`${TRAY_TITLE} — ${this.quitting ? "正在安全退出…" : this.status}`)
+    this.tray.setToolTip(`${TRAY_TITLE} — ${this.quitting ? "正在退出…" : this.status}`)
     this.tray.setContextMenu(this.options.buildMenu(this.menuTemplate()))
   }
 }
 
-/** Tooltip wording for a runtime phase; unknown phases never read as healthy. */
-export function trayStatusFor(phase: string): string {
+/** Tooltip wording for a connection phase; anything not connected never reads as healthy. */
+export function trayStatusFor(phase: ConnectionPhase, origin: string | null): string {
+  const host = origin ? new URL(origin).host : null
   switch (phase) {
-    case "ready": return "本机服务已就绪"
-    case "degraded": return "本机服务已就绪（远程能力受限）"
-    case "starting": return "正在启动本机服务…"
-    case "stopped": return "本机服务未运行"
-    default: return "本机服务状态未知"
+    case "connected": return host ? `已连接 ${host}` : "已连接服务器"
+    case "connecting": return "正在连接服务器…"
+    case "failed": return "无法连接服务器"
+    case "editing": return "正在更换服务器地址"
+    case "unconfigured": return "尚未设置服务器地址"
   }
 }

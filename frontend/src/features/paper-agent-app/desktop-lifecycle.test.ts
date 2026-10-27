@@ -14,11 +14,18 @@ describe("desktop lifecycle quit decision", () => {
     expect(quitDecision(state({ dirty: true }), () => false)).toBe("cancel")
   })
 
-  it("allows host drain only after explicit confirmation and never requests replay", () => {
+  it("leaves only after explicit confirmation and says interrupted requests are not replayed", () => {
     let message = ""
     expect(quitDecision(state({ activeTaskCount: 2 }), value => { message = value; return true })).toBe("allow")
-    expect(message).toContain("等待当前请求安全结束")
+    expect(message).toContain("进行中的请求会被中断")
     expect(message).toContain("不会自动重放")
+  })
+
+  it("asks about changing the server when the host is about to leave this server", () => {
+    let message = ""
+    expect(quitDecision(state({ dirty: true }), value => { message = value; return false }, "server-change")).toBe("cancel")
+    expect(message).toContain("未保存的草稿会丢失")
+    expect(message).toContain("仍要更换服务器地址吗")
   })
 
   it("words a window close as closing rather than quitting", () => {

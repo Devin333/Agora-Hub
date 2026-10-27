@@ -9,7 +9,7 @@ export type RendererLifecycleState = {
   summary?: string
 }
 
-export type RendererQuitReason = "window-close" | "app-quit"
+export type RendererQuitReason = "window-close" | "app-quit" | "server-change"
 
 type QuitRequest = {
   requestId: string
@@ -31,6 +31,14 @@ type DesktopLifecycleBridge = {
 
 type LifecycleWindow = Window & { agoraDesktop?: { version: 1; lifecycle: DesktopLifecycleBridge } }
 
+// The workspace runs on the server: leaving the page drops what only this page holds.
+const LEAVE_IMPACT = "离开后，未保存的草稿会丢失，进行中的请求会被中断且不会自动重放。"
+const LEAVE_QUESTION: Record<RendererQuitReason, string> = {
+  "window-close": "仍要关闭吗？",
+  "app-quit": "仍要退出吗？",
+  "server-change": "仍要更换服务器地址吗？",
+}
+
 export function quitDecision(
   state: RendererLifecycleState,
   confirmAction: (message: string) => boolean,
@@ -38,10 +46,7 @@ export function quitDecision(
 ): "allow" | "cancel" {
   if (!state.dirty && state.activeTaskCount === 0) return "allow"
   const parts = [state.dirty ? "仍有未保存草稿" : "", state.activeTaskCount > 0 ? `仍有 ${state.activeTaskCount} 个活动请求` : ""].filter(Boolean)
-  const impact = reason === "window-close"
-    ? "关闭窗口将停止接受新操作，并等待当前请求安全结束；不会自动重放请求。仍要关闭吗？"
-    : "退出将停止接受新操作，并等待当前请求安全结束；不会自动重放请求。仍要退出吗？"
-  return confirmAction(`${parts.join("，")}。${impact}`) ? "allow" : "cancel"
+  return confirmAction(`${parts.join("，")}。${LEAVE_IMPACT}${LEAVE_QUESTION[reason] ?? LEAVE_QUESTION["app-quit"]}`) ? "allow" : "cancel"
 }
 
 export function useDesktopLifecycle(input: { dirty: boolean; activeTaskCount: number; summary?: string }) {

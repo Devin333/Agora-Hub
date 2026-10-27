@@ -1,29 +1,20 @@
-import { randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { mkdir, rename, rm, writeFile } from "node:fs/promises"
-import path from "node:path"
 import type { AppearancePreference, AppearanceView, ResolvedTheme } from "./contracts"
+import { hostPreferencePath, PreferenceWriteQueue, readPreferenceDocument, writePreferenceDocument } from "./host-preferences"
 
 /**
  * Host side of the appearance preference the workspace offers (跟随系统 / 浅色 / 深色).
  *
  * The renderer owns the choice and reports it here; the host applies it to
- * `nativeTheme.themeSource`, so the startup page's `prefers-color-scheme`, native
+ * `nativeTheme.themeSource`, so the connection page's `prefers-color-scheme`, native
  * dialogs and the window background follow the same palette, and persists it so
  * the next launch paints the right color before the workspace has loaded.
  */
 export const APPEARANCE_PREFERENCES: readonly AppearancePreference[] = ["system", "light", "dark"]
 export const DEFAULT_APPEARANCE: AppearancePreference = "system"
-/**
- * Host-owned preferences live in one top-level userData directory so temporary
- * write files never appear as unknown profile owners; scripts/desktop_app/owned_clear.py
- * lists this name among the host entries a full data clear removes.
- */
-export const HOST_PREFERENCES_DIRECTORY = "host-preferences"
 export const APPEARANCE_FILE_NAME = "appearance.json"
 
 export function appearanceFilePath(userDataPath: string): string {
-  return path.join(userDataPath, HOST_PREFERENCES_DIRECTORY, APPEARANCE_FILE_NAME)
+  return hostPreferencePath(userDataPath, APPEARANCE_FILE_NAME)
 }
 const APPEARANCE_SCHEMA = "agora.desktop-appearance/v1"
 
@@ -41,28 +32,17 @@ export function validateAppearancePreference(value: unknown): AppearancePreferen
 
 /** Reads the persisted preference; a missing, unreadable or foreign file means "follow the system". */
 export function readAppearancePreference(filePath: string): AppearancePreference {
+  const document = readPreferenceDocument(filePath, APPEARANCE_SCHEMA)
+  if (!document) return DEFAULT_APPEARANCE
   try {
-    const parsed: unknown = JSON.parse(readFileSync(filePath, "utf8"))
-    if (!parsed || typeof parsed !== "object") return DEFAULT_APPEARANCE
-    const record = parsed as Record<string, unknown>
-    if (record.schema !== APPEARANCE_SCHEMA) return DEFAULT_APPEARANCE
-    return validateAppearancePreference(record.preference)
+    return validateAppearancePreference(document.preference)
   } catch {
     return DEFAULT_APPEARANCE
   }
 }
 
-/** Replaces the preference file atomically so a crash never leaves a torn document. */
 export async function writeAppearancePreference(filePath: string, preference: AppearancePreference): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true })
-  const temporary = `${filePath}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporary, `${JSON.stringify({ schema: APPEARANCE_SCHEMA, preference })}\n`, { encoding: "utf8", flag: "wx" })
-    await rename(temporary, filePath)
-  } catch (error) {
-    await rm(temporary, { force: true })
-    throw error
-  }
+  await writePreferenceDocument(filePath, APPEARANCE_SCHEMA, { preference })
 }
 
 export interface NativeThemeLike {
@@ -80,7 +60,7 @@ export interface DesktopAppearanceController {
 
 export class DesktopAppearance implements DesktopAppearanceController {
   private readonly listeners = new Set<(view: AppearanceView) => void>()
-  private persisted: Promise<void> = Promise.resolve()
+  private readonly writes = new PreferenceWriteQueue()
   private lastTheme: ResolvedTheme
 
   constructor(private readonly nativeTheme: NativeThemeLike, private readonly filePath: string) {
@@ -100,10 +80,7 @@ export class DesktopAppearance implements DesktopAppearanceController {
       this.nativeTheme.themeSource = preference
       this.handleNativeUpdate()
     }
-    // Writes are chained so rapid toggles land on disk in the order they were made.
-    const write = this.persisted.then(() => writeAppearancePreference(this.filePath, preference))
-    this.persisted = write.catch(() => undefined)
-    await write
+    await this.writes.run(() => writeAppearancePreference(this.filePath, preference))
     return this.view
   }
 

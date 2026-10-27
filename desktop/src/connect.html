@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agora Paper Agent</title>
+  <link rel="stylesheet" href="./connect.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="card" aria-labelledby="title">
+      <div class="mark" aria-hidden="true"><span></span><span></span></div>
+      <p class="eyebrow">Agora Paper Agent</p>
+      <h1 id="title">正在连接服务器</h1>
+      <p id="message" class="message">正在打开论文工作台。</p>
+      <div id="status" class="status" role="status" aria-live="polite">连接中</div>
+      <div id="actions" class="actions">
+        <button id="retry" class="primary" type="button" hidden>立即重试</button>
+        <button id="change" type="button" hidden>更换服务器地址</button>
+      </div>
+      <form id="address-form" class="address-form" novalidate hidden>
+        <label for="address">服务器地址</label>
+        <input id="address" name="address" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://agora.example.com" aria-describedby="address-hint address-error">
+        <p id="address-hint" class="hint">填写管理员提供的地址。地址只保存在这台电脑上，可随时从托盘菜单更换。</p>
+        <p id="address-error" class="error" role="alert"></p>
+        <div class="actions">
+          <button id="save" class="primary" type="submit">连接</button>
+          <button id="cancel" type="button" hidden>取消</button>
+          <button id="reset" class="link" type="button" hidden>恢复默认地址</button>
+        </div>
+      </form>
+      <p id="origin" class="origin" hidden></p>
+    </section>
+  </main>
+  <script src="./connect.js"></script>
+</body>
+</html>

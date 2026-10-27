@@ -1,5 +1,6 @@
 /*
- * Startup and recovery screen. It loads before the web workspace exists, so it
+ * Connection screen. It is packaged with the app and shows whenever the
+ * workspace on the server is not, so it
  * repeats the Rakazo tokens of frontend/src/styles/theme-tokens.css locally
  * instead of importing them across packages. The host sets
  * `nativeTheme.themeSource` from the saved appearance, so `prefers-color-scheme`
@@ -73,18 +74,19 @@ h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
 .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 24px; }
 button { min-height: 36px; padding: 0 16px; color: var(--foreground); background: transparent; border: 1px solid var(--border); border-radius: 999px; font: inherit; font-size: 13.5px; font-weight: 500; cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
 button:hover:not(:disabled) { background: var(--accent); }
-#retry { color: var(--primary-foreground); background: var(--primary); border-color: transparent; }
-#retry:hover:not(:disabled) { background: var(--primary-hover); }
-#clear-apply { color: var(--destructive-foreground); background: var(--destructive-fill); border-color: transparent; }
-#clear-apply:hover:not(:disabled) { background: color-mix(in srgb, var(--destructive-fill) 88%, var(--foreground)); }
+button.primary { color: var(--primary-foreground); background: var(--primary); border-color: transparent; }
+button.primary:hover:not(:disabled) { background: var(--primary-hover); }
+button.link { min-height: 28px; padding: 0 4px; color: var(--muted-foreground); border-color: transparent; font-size: 13px; }
+button.link:hover:not(:disabled) { color: var(--foreground); background: transparent; text-decoration: underline; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
-input { width: 100%; min-height: 36px; padding: 0 12px; color: var(--foreground); background: transparent; border: 1px solid var(--input); border-radius: 10px; font: inherit; font-size: 13.5px; }
 
-.clear-panel { width: 100%; margin-top: 24px; padding: 16px; text-align: start; background: var(--card); border: 1px solid var(--border); border-radius: 16px; }
-.clear-explanation { min-height: 48px; margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
-.clear-panel label { display: block; margin: 14px 0 6px; font-size: 13px; font-weight: 500; }
-.clear-panel .actions { justify-content: flex-start; margin-top: 14px; }
-
-pre { width: 100%; margin: 20px 0 0; padding: 14px; max-height: 260px; overflow: auto; text-align: start; color: var(--foreground); background: var(--card); border: 1px solid var(--border); border-radius: 12px; font: 12px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-color: var(--scrollbar) transparent; }
+.address-form { width: 100%; margin-top: 24px; text-align: start; }
+.address-form label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 500; }
+input { width: 100%; min-height: 40px; padding: 0 12px; color: var(--foreground); background: transparent; border: 1px solid var(--input); border-radius: 10px; font: inherit; font-size: 14px; }
+input[aria-invalid="true"] { border-color: var(--destructive-fill); }
+.hint { margin: 8px 0 0; color: var(--faint-foreground); font-size: 12.5px; line-height: 1.55; }
+.error { min-height: 20px; margin: 8px 0 0; color: var(--destructive-fill); font-size: 13px; line-height: 1.55; }
+.address-form .actions { justify-content: flex-start; margin-top: 12px; }
+.origin { margin: 18px 0 0; color: var(--faint-foreground); font-size: 12.5px; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }

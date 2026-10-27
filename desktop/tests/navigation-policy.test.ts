@@ -1,33 +1,42 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, it } from "vitest"
-import { decideNavigation, isAllowedApplicationUrl, isTrustedIpcSource, paperAgentUrl } from "../src/navigation-policy"
+import { connectionPageUrl, decideNavigation, isConnectionPage, isWorkspaceUrl } from "../src/navigation-policy"
 
-const origin = "http://127.0.0.1:3120"
-const startup = path.resolve("out/startup.html")
+const origin = "https://agora.example.com"
+const connectionFile = path.resolve("out/connect.html")
 
 describe("navigation policy", () => {
-  it("allows only the paper agent and login on the exact canonical origin", () => {
-    expect(isAllowedApplicationUrl(`${origin}/paper-agent`, origin)).toBe(true)
-    expect(isAllowedApplicationUrl(`${origin}/paper-agent/library?id=1`, origin)).toBe(true)
-    expect(isAllowedApplicationUrl(`${origin}/login`, origin)).toBe(true)
-    expect(isAllowedApplicationUrl(`${origin}/admin`, origin)).toBe(false)
-    expect(isAllowedApplicationUrl("http://localhost:3120/paper-agent", origin)).toBe(false)
+  it("treats only login and the paper agent on the exact origin as the workspace", () => {
+    expect(isWorkspaceUrl(`${origin}/paper-agent`, origin)).toBe(true)
+    expect(isWorkspaceUrl(`${origin}/paper-agent/library?id=1`, origin)).toBe(true)
+    expect(isWorkspaceUrl(`${origin}/login?next=%2Fpaper-agent`, origin)).toBe(true)
+    expect(isWorkspaceUrl(`${origin}/paper-agentx`, origin)).toBe(false)
+    expect(isWorkspaceUrl(`${origin}/admin`, origin)).toBe(false)
+    expect(isWorkspaceUrl("https://agora.example.com:8443/paper-agent", origin)).toBe(false)
+    expect(isWorkspaceUrl("http://agora.example.com/paper-agent", origin)).toBe(false)
+    expect(isWorkspaceUrl("https://user:secret@agora.example.com/paper-agent", origin)).toBe(false)
   })
 
-  it("sends credentialless HTTP links external and denies dangerous schemes or credentials", () => {
-    expect(decideNavigation("https://example.org/paper", origin)).toEqual({ action: "external", url: "https://example.org/paper" })
-    expect(decideNavigation(`${origin}/admin`, origin)).toEqual({ action: "deny" })
-    expect(decideNavigation("https://user:secret@example.org/paper", origin)).toEqual({ action: "deny" })
-    expect(decideNavigation("file:///C:/Windows/win.ini", origin)).toEqual({ action: "deny" })
-    expect(decideNavigation("javascript:alert(1)", origin)).toEqual({ action: "deny" })
+  it("recognizes exactly the packaged connection page", () => {
+    expect(isConnectionPage(connectionPageUrl(connectionFile), connectionFile)).toBe(true)
+    expect(isConnectionPage(`${connectionPageUrl(connectionFile)}#retry`, connectionFile)).toBe(true)
+    expect(isConnectionPage(pathToFileURL(path.resolve("out/other.html")).href, connectionFile)).toBe(false)
+    expect(isConnectionPage("file:///C:/Windows/win.ini", connectionFile)).toBe(false)
   })
 
-  it("checks every IPC source against the exact startup file or canonical app route", () => {
-    expect(isTrustedIpcSource(pathToFileURL(startup).href, null, startup)).toBe(true)
-    expect(isTrustedIpcSource(pathToFileURL(path.resolve("out/other.html")).href, null, startup)).toBe(false)
-    expect(isTrustedIpcSource(`${origin}/paper-agent`, origin, startup)).toBe(true)
-    expect(isTrustedIpcSource("https://evil.example/paper-agent", origin, startup)).toBe(false)
-    expect(paperAgentUrl(origin)).toBe(`${origin}/paper-agent`)
+  it("keeps the window on the connection page or the workspace and sends other web links out", () => {
+    expect(decideNavigation(connectionPageUrl(connectionFile), null, connectionFile)).toEqual({ action: "allow" })
+    expect(decideNavigation(`${origin}/paper-agent`, origin, connectionFile)).toEqual({ action: "allow" })
+    expect(decideNavigation(`${origin}/paper-agent`, null, connectionFile)).toEqual({ action: "external", url: `${origin}/paper-agent` })
+    expect(decideNavigation("https://arxiv.org/abs/2401.00001", origin, connectionFile)).toEqual({ action: "external", url: "https://arxiv.org/abs/2401.00001" })
+    expect(decideNavigation(`${origin}/admin`, origin, connectionFile)).toEqual({ action: "deny" })
+  })
+
+  it("denies dangerous schemes and links carrying credentials", () => {
+    expect(decideNavigation("https://user:secret@example.org/paper", origin, connectionFile)).toEqual({ action: "deny" })
+    expect(decideNavigation("file:///C:/Windows/win.ini", origin, connectionFile)).toEqual({ action: "deny" })
+    expect(decideNavigation("javascript:alert(1)", origin, connectionFile)).toEqual({ action: "deny" })
+    expect(decideNavigation("not a url", origin, connectionFile)).toEqual({ action: "deny" })
   })
 })

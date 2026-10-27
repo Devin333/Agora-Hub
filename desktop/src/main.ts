@@ -1,29 +1,21 @@
 import path from "node:path"
-import { pathToFileURL } from "node:url"
-import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, screen, session, shell, Tray, type MessageBoxOptions } from "electron"
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, net, screen, session, shell, Tray, type MessageBoxOptions } from "electron"
+import { appearanceFilePath, DesktopAppearance, windowBackgroundFor } from "./appearance"
 import { AuditLogger } from "./audit-log"
+import { BackgroundTray, isBackgroundLaunch, LaunchAtLogin, trayStatusFor } from "./background-host"
+import { HOST_EVENTS } from "./channels"
+import type { ConnectionStatusView, QuitReason } from "./contracts"
 import { registerIpcHandlers } from "./ipc"
 import { RendererLifecycleBridge, requiresNativeQuitConfirmation, type RendererQuitAssessment } from "./lifecycle-bridge"
-import { decideNavigation, isAllowedApplicationUrl, isTrustedIpcSource, paperAgentUrl } from "./navigation-policy"
-import { RuntimeClient } from "./runtime-client"
-import { RuntimeCoordinator, UnavailableRuntimeController, type RuntimeController } from "./runtime-coordinator"
-import { RuntimeMaintenanceService, UnavailableRuntimeMaintenanceController, type RuntimeMaintenanceController } from "./runtime-maintenance"
-import { RestoreArchiveSnapshotStore } from "./restore-archive-snapshot"
-import { DesktopConfigBridge, UnavailableDesktopConfigBridge, type DesktopConfigController } from "./desktop-config-bridge"
-import { NativeCredentialBridge, UnavailableCredentialBridge, type CredentialController } from "./native-credential-bridge"
-import { resolveRuntimeLayout } from "./runtime-layout"
-import type { RuntimeStatusView } from "./contracts"
+import { decideNavigation, isConnectionPage, isWorkspaceUrl } from "./navigation-policy"
 import { redactText } from "./redaction"
-import { focusExistingWindow } from "./window-focus"
-import { secureWindowOptions } from "./window-options"
-import { appearanceFilePath, DesktopAppearance, windowBackgroundFor } from "./appearance"
+import { bundledServerFilePath, connectionFilePath, readBundledServerOrigin, ServerConnectionStore } from "./server-connection"
+import { probeServer } from "./server-probe"
 import { acquireSingleInstanceLock } from "./single-instance"
 import { resolveTestUserDataOverride } from "./user-data-override"
-import { OwnedDataClearService, UnavailableOwnedDataClearController, type OwnedDataClearController, type OwnedDataClearFinalizerRequest } from "./owned-data-clear"
-import { OwnedWindowMaintenanceFence } from "./owned-window-maintenance"
-import { readWindowsElectronProcessIdentity } from "./electron-process-identity"
-import { armOwnedDataClearFinalizer } from "./owned-data-clear-exit"
-import { BackgroundTray, isBackgroundLaunch, LaunchAtLogin, trayStatusFor } from "./background-host"
+import { focusExistingWindow } from "./window-focus"
+import { secureWindowOptions } from "./window-options"
+import { WorkspaceConnection } from "./workspace-connection"
 
 const testUserDataPath = resolveTestUserDataOverride({
   argv: process.argv,
@@ -32,94 +24,92 @@ const testUserDataPath = resolveTestUserDataOverride({
 })
 if (testUserDataPath) app.setPath("userData", testUserDataPath)
 
-const HOST_VERSION = app.getVersion()
 const launchedInBackground = isBackgroundLaunch(process.argv)
 const gotSingleInstanceLock = acquireSingleInstanceLock(app)
+const CONNECTION_PAGE = path.join(__dirname, "connect.html")
 
 let mainWindow: BrowserWindow | null = null
-let coordinator: RuntimeController | null = null
-let maintenance: RuntimeMaintenanceController = new UnavailableRuntimeMaintenanceController()
-let configBridge: DesktopConfigController = new UnavailableDesktopConfigBridge()
-let credentialBridge: CredentialController = new UnavailableCredentialBridge()
-let clearData: OwnedDataClearController = new UnavailableOwnedDataClearController()
+let connection: WorkspaceConnection | null = null
 let logger: AuditLogger | null = null
-let canonicalOrigin: string | null = null
-let allowWindowClose = false
-let allowAppQuit = false
-let closeInProgress = false
-let removeIpcHandlers: (() => void) | null = null
-let dataClearExitArmed = false
 let appearance: DesktopAppearance | null = null
 let backgroundTray: BackgroundTray | null = null
-/** Settles once bootstrap has resolved the runtime controllers (or their unavailable stand-ins). */
-let hostServicesReady: Promise<void> = new Promise(() => undefined)
+let removeIpcHandlers: (() => void) | null = null
+let allowWindowClose = false
+let allowAppQuit = false
+let leaveInProgress = false
 const lifecycle = new RendererLifecycleBridge()
-const maintenanceFence = new OwnedWindowMaintenanceFence()
-const nullLogger = { write: async (_event: string, _details: Record<string, unknown> = {}) => undefined }
 
-function startupFilePath(): string {
-  return path.join(__dirname, "startup.html")
+function log(event: string, details: Record<string, unknown> = {}): void {
+  void logger?.write(event, details)
+}
+
+function errorText(error: unknown): string {
+  return redactText(error instanceof Error ? error.message : error, 300)
 }
 
 async function openExternalUrl(url: string): Promise<void> {
   try {
     await shell.openExternal(url, { activate: true })
-    await logger?.write("external_url_opened", { protocol: new URL(url).protocol, host: new URL(url).host })
+    log("external_url_opened", { protocol: new URL(url).protocol, host: new URL(url).host })
   } catch (error) {
-    await logger?.write("external_url_failed", { error: error instanceof Error ? error.message : "unknown" })
+    log("external_url_failed", { error: errorText(error) })
   }
 }
 
-function installWebContentsPolicy(window: BrowserWindow): void {
-  const startupUrl = pathToFileURL(startupFilePath()).href
-  const handleNavigation = (event: Electron.Event, target: string) => {
-    if (maintenanceFence.blocksNavigation(window.webContents.id)) {
-      event.preventDefault()
-      return
-    }
-    if (target === startupUrl) {
-      maintenanceFence.revokeDocument(window.webContents.id)
-      return
-    }
-    if (!canonicalOrigin) {
-      event.preventDefault()
-      return
-    }
-    const decision = decideNavigation(target, canonicalOrigin)
-    if (decision.action === "allow") {
-      maintenanceFence.revokeDocument(window.webContents.id)
-      return
-    }
-    event.preventDefault()
-    if (decision.action === "external" && decision.url) void openExternalUrl(decision.url)
-  }
+function workspaceOrigin(): string | null {
+  return connection?.workspaceOrigin ?? null
+}
 
-  window.webContents.on("will-navigate", handleNavigation)
-  window.webContents.on("will-redirect", handleNavigation)
-  window.webContents.on("will-attach-webview", event => event.preventDefault())
-  window.webContents.setWindowOpenHandler(details => {
-    if (canonicalOrigin) {
-      const decision = decideNavigation(details.url, canonicalOrigin)
-      if (decision.action === "external" && decision.url) void openExternalUrl(decision.url)
+function installWebContentsPolicy(window: BrowserWindow): void {
+  const contents = window.webContents
+  const handleNavigation = (event: Electron.Event, target: string, redirect: boolean) => {
+    const decision = decideNavigation(target, workspaceOrigin(), CONNECTION_PAGE)
+    if (decision.action === "allow") return
+    event.preventDefault()
+    if (redirect) {
+      // A server answer that leaves the workspace is refused, never followed elsewhere.
+      log("workspace_redirect_refused", { protocol: safeProtocol(target) })
+      connection?.redirectRefused()
+    } else if (decision.action === "external" && decision.url) {
+      void openExternalUrl(decision.url)
     }
+  }
+  contents.on("will-navigate", (event, target) => handleNavigation(event, target, false))
+  contents.on("will-redirect", (event, target) => handleNavigation(event, target, true))
+  contents.on("will-attach-webview", event => event.preventDefault())
+  contents.setWindowOpenHandler(details => {
+    const decision = decideNavigation(details.url, workspaceOrigin(), CONNECTION_PAGE)
+    if (decision.action === "external" && decision.url) void openExternalUrl(decision.url)
     return { action: "deny" }
   })
-  window.webContents.session.on("will-download", (_event, item) => {
+  contents.session.on("will-download", (_event, item) => {
     item.cancel()
-    void logger?.write("renderer_download_blocked", { fileName: item.getFilename() })
+    log("renderer_download_blocked", { fileName: item.getFilename() })
   })
-  window.webContents.on("before-input-event", (event, input) => {
-    if (maintenanceFence.blocksInputReload(window.webContents.id, input.key, input.control, input.meta, input.shift)) event.preventDefault()
+  contents.on("did-navigate", (_event, url, httpResponseCode) => {
+    // A new document starts its lifecycle revisions over; the old one's report no longer holds.
+    lifecycle.documentReplaced()
+    connection?.mainFrameNavigated(url, httpResponseCode)
   })
-  window.webContents.session.webRequest.onBeforeRequest((details, callback) => {
-    callback(maintenanceFence.blocksRequest(details) ? { cancel: true } : {})
+  contents.on("did-fail-load", (_event, _code, description, _url, isMainFrame) => {
+    if (isMainFrame) connection?.mainFrameFailed(description)
   })
-  window.webContents.on("render-process-gone", (_event, details) => {
+  contents.on("render-process-gone", (_event, details) => {
     lifecycle.rendererGone()
-    maintenanceFence.revokeDocument(window.webContents.id)
-    void logger?.write("renderer_process_gone", { reason: details.reason, exitCode: details.exitCode })
-    if (!window.isDestroyed()) void window.loadFile(startupFilePath())
+    log("renderer_process_gone", { reason: details.reason, exitCode: details.exitCode })
+    connection?.rendererGone()
   })
+  contents.on("did-finish-load", () => {
+    if (connection && isConnectionPage(contents.getURL(), CONNECTION_PAGE)) contents.send(HOST_EVENTS.connectionChanged, connection.status)
+  })
+}
+
+function safeProtocol(raw: string): string {
+  try {
+    return new URL(raw).protocol
+  } catch {
+    return "invalid"
+  }
 }
 
 function createWindow(revealWhenReady: boolean): BrowserWindow {
@@ -130,10 +120,10 @@ function createWindow(revealWhenReady: boolean): BrowserWindow {
   window.on("close", event => {
     if (allowWindowClose) return
     event.preventDefault()
-    // With a tray icon, closing only hides the window: the host and its runtime
-    // keep running and nothing unsaved is at risk, so no exit assessment is due.
+    // With a tray icon, closing only hides the window: the workspace stays loaded
+    // and nothing unsaved is at risk, so no exit assessment is due.
     if (backgroundTray) {
-      if (!closeInProgress) window.hide()
+      if (!leaveInProgress) window.hide()
       return
     }
     void requestClose("window-close")
@@ -141,28 +131,39 @@ function createWindow(revealWhenReady: boolean): BrowserWindow {
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null
   })
-  void window.loadFile(startupFilePath())
   return window
 }
 
-async function confirmCloseWithNativeDialog(reason: "window-close" | "app-quit", assessment: RendererQuitAssessment): Promise<boolean> {
+function showMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) focusExistingWindow(mainWindow)
+}
+
+function showsWorkspace(window: BrowserWindow): boolean {
+  const origin = workspaceOrigin()
+  return origin !== null && isWorkspaceUrl(window.webContents.getURL(), origin)
+}
+
+const LEAVE_TITLES: Record<QuitReason, { title: string; message: string; proceed: string }> = {
+  "window-close": { title: "确认关闭 Agora Paper Agent", message: "要关闭论文工作台吗？", proceed: "仍然关闭" },
+  "app-quit": { title: "确认退出 Agora Paper Agent", message: "应用正在请求退出", proceed: "仍然退出" },
+  "server-change": { title: "确认更换服务器地址", message: "更换地址会离开当前工作台", proceed: "仍然更换" }
+}
+
+async function confirmLeaveWithNativeDialog(reason: QuitReason, assessment: RendererQuitAssessment): Promise<boolean> {
   const state = assessment.status === "confirmed" ? assessment.state : assessment.lastKnownState
+  const wording = LEAVE_TITLES[reason]
   const detail = [
-    assessment.status === "unknown" ? "无法从当前页面取得与最新 revision 匹配的退出确认；未保存内容和活动任务状态未知。" : null,
-    assessment.status === "unknown" ? `通信结果：${assessment.reason}。旧快照只供参考，不能证明草稿已保存。` : null,
-    state.dirty ? "最近一次有效状态显示存在尚未确认已保存的编辑。" : null,
-    state.activeTaskCount > 0 ? `最近一次有效状态显示仍有 ${state.activeTaskCount} 个活动任务。` : null,
-    "继续退出只会请求既有 runtime manager 安全收敛；runtime drain/stop 成功不代表草稿已保存。",
-    "默认保留窗口；宿主不会强杀身份不明的进程。"
+    assessment.status === "unknown" ? "无法从当前页面确认是否还有未保存的内容。" : null,
+    state.dirty ? "页面最近报告有尚未保存的编辑。" : null,
+    state.activeTaskCount > 0 ? `页面最近报告仍有 ${state.activeTaskCount} 个进行中的请求。` : null,
+    "已保存到服务器的内容不受影响；离开后，未保存的草稿会丢失，进行中的请求会被中断。"
   ].filter(Boolean).join("\n")
   const options: MessageBoxOptions = {
     type: "warning",
-    title: "确认退出 Agora Paper Agent",
-    message: assessment.status === "unknown"
-      ? "页面保存与运行状态未知"
-      : reason === "app-quit" ? "应用正在请求退出" : "要关闭论文工作台吗？",
+    title: wording.title,
+    message: assessment.status === "unknown" ? "页面保存状态未知" : wording.message,
     detail,
-    buttons: ["保留窗口", "仍然退出并安全收敛"],
+    buttons: ["留在工作台", wording.proceed],
     defaultId: 0,
     cancelId: 0,
     noLink: true
@@ -173,12 +174,44 @@ async function confirmCloseWithNativeDialog(reason: "window-close" | "app-quit",
   return result.response === 1
 }
 
-function showMainWindow(): void {
-  if (mainWindow && !mainWindow.isDestroyed()) focusExistingWindow(mainWindow)
+/** Asks the workspace (and, when it cannot vouch for itself, the user) whether leaving it now is fine. */
+async function confirmLeavingWorkspace(reason: QuitReason): Promise<boolean> {
+  if (!mainWindow || mainWindow.isDestroyed() || !showsWorkspace(mainWindow)) return true
+  const assessment = await lifecycle.requestQuit(mainWindow, reason)
+  if (assessment.status === "confirmed" && assessment.decision === "cancel") return false
+  if (assessment.status === "unknown") log("renderer_quit_state_unknown", { reason: assessment.reason, revision: assessment.lastKnownState.revision })
+  if (!requiresNativeQuitConfirmation(assessment)) return true
+  showMainWindow()
+  return await confirmLeaveWithNativeDialog(reason, assessment)
 }
 
-function hideMainWindow(): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+async function requestClose(reason: "window-close" | "app-quit"): Promise<void> {
+  if (leaveInProgress) return
+  leaveInProgress = true
+  try {
+    if (!(await confirmLeavingWorkspace(reason))) return
+    backgroundTray?.setQuitting(true)
+    allowWindowClose = true
+    allowAppQuit = true
+    lifecycle.cancelPending()
+    log("host_exit", { reason })
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+    app.quit()
+  } finally {
+    leaveInProgress = false
+  }
+}
+
+async function changeServer(): Promise<void> {
+  if (leaveInProgress || !connection) return
+  leaveInProgress = true
+  try {
+    showMainWindow()
+    if (!(await confirmLeavingWorkspace("server-change"))) return
+    await connection.edit()
+  } finally {
+    leaveInProgress = false
+  }
 }
 
 /** The 256px app icon pre-scaled per DPI step so the notification area never shows a blurry downscale. */
@@ -198,155 +231,53 @@ function createBackgroundTray(): void {
       createTray: () => new Tray(trayIcon()),
       buildMenu: template => Menu.buildFromTemplate(template),
       launchAtLogin: new LaunchAtLogin(app),
-      actions: { showWindow: showMainWindow, quit: () => void requestClose("app-quit") },
-      onLaunchAtLoginError: error => void logger?.write("launch_at_login_update_failed", { error: redactText(error instanceof Error ? error.message : error, 300) })
+      actions: { showWindow: showMainWindow, changeServer: () => void changeServer(), quit: () => void requestClose("app-quit") },
+      onLaunchAtLoginError: error => log("launch_at_login_update_failed", { error: errorText(error) })
     })
   } catch (error) {
     // Without a notification-area icon a hidden window could not be reopened,
     // so closing falls back to the full exit path.
     backgroundTray = null
-    void logger?.write("background_tray_unavailable", { error: redactText(error instanceof Error ? error.message : error, 300) })
+    log("background_tray_unavailable", { error: errorText(error) })
   }
 }
 
-function reflectRuntimeStatus(status: RuntimeStatusView): void {
-  backgroundTray?.setStatus(trayStatusFor(status.phase))
+function reflectConnection(status: ConnectionStatusView): void {
+  backgroundTray?.setStatus(trayStatusFor(status.phase, status.origin))
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  // Without an address there is nothing to run in the background, so the window asks for one.
+  // A lost connection only shows in the tray: the user hid the window and decides when to look.
+  if (status.phase === "unconfigured") showMainWindow()
+  if (isConnectionPage(window.webContents.getURL(), CONNECTION_PAGE)) window.webContents.send(HOST_EVENTS.connectionChanged, status)
 }
 
-function setHostExitTitle(status: string): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  mainWindow.setTitle(`Agora Paper Agent — ${status}`)
-}
-
-async function stopOwnedRuntime(): Promise<boolean> {
-  if (!coordinator) return true
-  const before = coordinator.status
-  setHostExitTitle("正在安全收敛本机服务…")
-  await logger?.write("runtime_stop_requested", { phase: before.phase, code: before.code })
-  const stopped = await coordinator.stop()
-  if (stopped.phase === "stopped") {
-    setHostExitTitle("本机服务已停止，正在退出…")
-    await logger?.write("runtime_stopped", { state: stopped.state, code: stopped.code })
-    return true
-  }
-  setHostExitTitle("退出未完成（本机服务状态未知）")
-  await logger?.write("runtime_stop_unconfirmed", { phase: stopped.phase, state: stopped.state, code: stopped.code })
-  if (!mainWindow || mainWindow.isDestroyed()) return false
-  // The window was hidden when the exit was approved; bring it back with the warning.
-  showMainWindow()
-  await dialog.showMessageBox(mainWindow, {
-    type: "warning",
-    title: "本机服务状态未确认",
-    message: "runtime manager 未确认完成 drain 与进程收敛，宿主将保持打开。",
-    detail: `${stopped.message}\n不会终止身份不明的进程，也不会把无 JSON、超时或取消确认当作已停止。请保留窗口；待当前启动命令或 owner 状态收敛后，可再次关闭以重新执行 stop 核验，或查看只读诊断。`,
-    buttons: ["保留窗口"],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true
+function createConnection(window: BrowserWindow): WorkspaceConnection {
+  const policy = { allowLoopbackHttp: !app.isPackaged }
+  const store = new ServerConnectionStore({
+    connectionFile: connectionFilePath(app.getPath("userData")),
+    bundledOrigin: readBundledServerOrigin(bundledServerFilePath(__dirname), policy),
+    policy
   })
-  return false
-}
-
-async function requestClose(reason: "window-close" | "app-quit"): Promise<void> {
-  if (closeInProgress) return
-  closeInProgress = true
-  // A quit during the first moments of launch must still drain the runtime the
-  // coordinator is about to own, so it waits for the controllers to exist.
-  await hostServicesReady
-  const originalTitle = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getTitle() : null
-  let exitApproved = false
-  let retainExitStatus = false
-  try {
-    if (clearData.destructiveExitPending && !dataClearExitArmed) {
-      const options: MessageBoxOptions = {
-        type: "warning", title: "数据清除仍在受控恢复中", message: "当前存在 PREPARED 或 finalizer 未就绪的清除事务。",
-        detail: "为避免未确认的 finalizer 在普通退出后删除数据，宿主保持打开。请在当前页面重新预览并明确确认，或检查状态。",
-        buttons: ["返回清除恢复"], defaultId: 0, cancelId: 0, noLink: true
-      }
-      showMainWindow()
-      if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, options)
-      else await dialog.showMessageBox(options)
-      return
-    }
-    setHostExitTitle("正在确认页面状态…")
-    let rendererAssessment: RendererQuitAssessment = {
-      status: "unknown",
-      reason: "renderer-unavailable",
-      lastKnownState: lifecycle.snapshot()
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) rendererAssessment = await lifecycle.requestQuit(mainWindow, reason)
-    if (rendererAssessment.status === "confirmed" && rendererAssessment.decision === "cancel") return
-    if (rendererAssessment.status === "unknown") {
-      await logger?.write("renderer_quit_state_unknown", { reason: rendererAssessment.reason, revision: rendererAssessment.lastKnownState.revision })
-    }
-    if (requiresNativeQuitConfirmation(rendererAssessment)) {
-      showMainWindow()
-      if (!(await confirmCloseWithNativeDialog(reason, rendererAssessment))) return
-    }
-    // The exit is approved: leave the screen at once and drain the runtime behind the tray icon.
-    backgroundTray?.setQuitting(true)
-    hideMainWindow()
-    if (!(await stopOwnedRuntime())) {
-      retainExitStatus = true
-      return
-    }
-    exitApproved = true
-    allowWindowClose = true
-    allowAppQuit = true
-    lifecycle.cancelPending()
-    await logger?.write("host_exit", { reason })
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
-    app.quit()
-  } finally {
-    if (!exitApproved && !retainExitStatus && originalTitle && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setTitle(originalTitle)
-    }
-    if (!exitApproved) backgroundTray?.setQuitting(false)
-    closeInProgress = false
-  }
-}
-
-async function prepareOwnedDataClearExit(client: RuntimeClient, request: OwnedDataClearFinalizerRequest): Promise<boolean> {
-  if (dataClearExitArmed) return false
-  try {
-    const ownedSession = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.session : session.defaultSession
-    await armOwnedDataClearFinalizer(ownedSession, () => client.launchDataClearFinalizer(request))
-    dataClearExitArmed = true
-    await logger?.write("data_clear_finalizer_ready", { operationId: request.operationId })
-    setTimeout(() => {
-      allowWindowClose = true
-      allowAppQuit = true
-      lifecycle.cancelPending()
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
-      app.quit()
-    }, 100)
-    return true
-  } catch (error) {
-    await logger?.write("data_clear_host_exit_not_ready", {
-      code: error && typeof error === "object" && "code" in error ? String(error.code) : "desktop_data_clear_host_exit_not_ready"
-    })
-    return false
-  }
-}
-function navigateWhenReady(status: RuntimeStatusView): void {
-  reflectRuntimeStatus(status)
-  if (!status.localTransportReady || !status.canonicalOrigin || !mainWindow || mainWindow.isDestroyed()) return
-  canonicalOrigin = status.canonicalOrigin
-  const target = paperAgentUrl(status.canonicalOrigin)
-  const current = mainWindow.webContents.getURL()
-  if (current === target || isTrustedIpcSource(current, canonicalOrigin, startupFilePath()) && current.startsWith(canonicalOrigin)) return
-  void logger?.write(status.phase === "ready" ? "runtime_ready" : "runtime_local_transport_ready", { state: status.state, code: status.code, instanceKey: status.instanceKey })
-  const ownedWindow = mainWindow
-  void ownedWindow.loadURL(target).then(() => {
-    if (ownedWindow.isDestroyed()) return
-    const loadedUrl = ownedWindow.webContents.getURL()
-    const frame = ownedWindow.webContents.mainFrame
-    if (!frame.isDestroyed() && isAllowedApplicationUrl(loadedUrl, status.canonicalOrigin as string)) {
-      maintenanceFence.authorizeDocument(ownedWindow.webContents.id, frame.processId, frame.routingId)
-    }
-  }).catch(async error => {
-    await logger?.write("frontend_load_failed", { error: redactText(error instanceof Error ? error.message : error, 500) })
-    if (!ownedWindow.isDestroyed()) await ownedWindow.loadFile(startupFilePath())
+  return new WorkspaceConnection({
+    store,
+    probe: origin => probeServer((url, init) => net.fetch(url, init), origin),
+    surface: {
+      showConnectionPage: async () => {
+        if (window.isDestroyed()) return
+        // A workspace load still in flight must not land after the attempt that started it was abandoned.
+        if (window.webContents.isLoading()) window.webContents.stop()
+        if (isConnectionPage(window.webContents.getURL(), CONNECTION_PAGE)) return
+        await window.loadFile(CONNECTION_PAGE)
+      },
+      showWorkspace: async url => {
+        if (!window.isDestroyed()) await window.loadURL(url)
+      },
+      currentUrl: () => window.isDestroyed() ? "" : window.webContents.getURL()
+    },
+    timer: { set: (callback, delay) => setTimeout(callback, delay), clear: handle => clearTimeout(handle as NodeJS.Timeout), now: () => Date.now() },
+    isWorkspaceUrl,
+    onEvent: (event, details) => log(event, details)
   })
 }
 
@@ -354,6 +285,8 @@ async function bootstrap(): Promise<void> {
   app.setName("Agora Paper Agent")
   app.setAppUserModelId("com.agorahub.paperagent")
   Menu.setApplicationMenu(null)
+  logger = new AuditLogger(path.join(app.getPath("userData"), "logs"))
+  log("host_start", { version: app.getVersion(), packaged: app.isPackaged })
   appearance = new DesktopAppearance(nativeTheme, appearanceFilePath(app.getPath("userData")))
   appearance.onChange(view => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(windowBackgroundFor(view.theme))
@@ -362,93 +295,29 @@ async function bootstrap(): Promise<void> {
   session.defaultSession.setPermissionCheckHandler(() => false)
 
   createBackgroundTray()
-  // Handlers go in before the window so the startup page can call the bridge at
-  // once; service-backed handlers wait for `services` and read the resolved
-  // controllers through these getters only afterwards.
-  let markServicesReady: () => void = () => undefined
-  const services = new Promise<void>(resolve => { markServicesReady = resolve })
-  hostServicesReady = services
+  // A login-item launch stays hidden behind the tray icon until the user opens it.
+  const window = createWindow(!(launchedInBackground && backgroundTray))
+  mainWindow = window
+  connection = createConnection(window)
+  connection.onChange(reflectConnection)
   removeIpcHandlers = registerIpcHandlers({
-    get coordinator() { return coordinator as RuntimeController },
+    connection,
     lifecycle,
-    get maintenance() { return maintenance },
-    get config() { return configBridge },
-    get credentials() { return credentialBridge },
-    get clearData() { return clearData },
-    maintenanceFence,
     appearance,
-    startupFile: startupFilePath(),
-    getCanonicalOrigin: () => canonicalOrigin,
+    connectionFile: CONNECTION_PAGE,
     documentsPath: app.getPath("documents"),
-    get logger() { return logger ?? nullLogger },
-    onRuntimeReady: navigateWhenReady,
-    onRuntimeStatus: reflectRuntimeStatus,
-    servicesReady: services
+    logger: { write: async (event, details) => log(event, details) }
   })
-  // The startup page paints while the runtime layout and data-clear state are
-  // still being resolved; a login-item launch stays hidden behind the tray icon.
-  mainWindow = createWindow(!(launchedInBackground && backgroundTray))
-
-  let startupBlocked = true
-  try {
-    const layout = await resolveRuntimeLayout({
-      isPackaged: app.isPackaged,
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      userDataPath: app.getPath("userData")
-    })
-    if (testUserDataPath) {
-      const testState = globalThis as typeof globalThis & { __AGORA_DESKTOP_TEST_LAYOUT__?: { userDataPath: string; dataRoot: string } }
-      testState.__AGORA_DESKTOP_TEST_LAYOUT__ = { userDataPath: app.getPath("userData"), dataRoot: layout.dataRoot }
-    }
-    const client = new RuntimeClient(layout)
-    clearData = new OwnedDataClearService(
-      client,
-      () => readWindowsElectronProcessIdentity(process.pid),
-      request => prepareOwnedDataClearExit(client, request)
-    )
-    const clearStatus = await clearData.status()
-    startupBlocked = clearData.businessAdmissionClosed
-    if (startupBlocked) {
-      const error = Object.assign(new Error(clearStatus.message), { code: clearStatus.code })
-      coordinator = new UnavailableRuntimeController(error, HOST_VERSION, app.isPackaged)
-    } else {
-      logger = new AuditLogger(path.join(app.getPath("userData"), "logs"))
-      await logger.write("host_start", { version: HOST_VERSION, packaged: app.isPackaged, dataClearState: clearStatus.state })
-      coordinator = new RuntimeCoordinator(client, HOST_VERSION, app.isPackaged)
-      maintenance = new RuntimeMaintenanceService(client, coordinator, new RestoreArchiveSnapshotStore(path.join(layout.dataRoot, "desktop", "restore-snapshots")))
-      configBridge = new DesktopConfigBridge(client, coordinator)
-      credentialBridge = new NativeCredentialBridge(client)
-    }
-  } catch (error) {
-    coordinator = new UnavailableRuntimeController(error, HOST_VERSION, app.isPackaged)
-    maintenance = new UnavailableRuntimeMaintenanceController()
-    configBridge = new UnavailableDesktopConfigBridge()
-    credentialBridge = new UnavailableCredentialBridge()
-    clearData = new UnavailableOwnedDataClearController()
-    await logger?.write("runtime_configuration_failed", {
-      code: error && typeof error === "object" && "code" in error ? String(error.code) : "runtime_configuration_failed",
-      message: error instanceof Error ? error.message : "Unknown runtime configuration failure"
-    })
-  }
-
-  markServicesReady()
-  const runtime = coordinator as RuntimeController
-  reflectRuntimeStatus(runtime.status)
-  const status = await runtime.initialize()
-  reflectRuntimeStatus(status)
-  if (!startupBlocked) navigateWhenReady(status)
-  if (startupBlocked) await logger?.write("data_clear_startup_blocked", { code: status.code, state: status.state })
-  else if (status.localTransportReady && status.phase === "degraded") await logger?.write("runtime_remote_capabilities_limited", { phase: status.phase, state: status.state, code: status.code })
-  else if (status.phase !== "ready") await logger?.write("runtime_start_incomplete", { phase: status.phase, state: status.state, code: status.code })
+  await connection.connect()
 }
+
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
   app.on("second-instance", (_event, argv) => {
     // A login-item launch while the host already runs has nothing to reveal.
     if (isBackgroundLaunch(argv)) return
-    void logger?.write("second_instance_focused")
+    log("second_instance_focused")
     showMainWindow()
   })
   app.on("before-quit", event => {
@@ -460,6 +329,8 @@ if (!gotSingleInstanceLock) {
     if (allowAppQuit) app.quit()
   })
   app.on("will-quit", () => {
+    connection?.dispose()
+    connection = null
     backgroundTray?.destroy()
     backgroundTray = null
     removeIpcHandlers?.()
@@ -468,10 +339,10 @@ if (!gotSingleInstanceLock) {
     appearance = null
   })
   process.on("uncaughtException", error => {
-    void logger?.write("host_uncaught_exception", { name: error.name, message: error.message })
+    log("host_uncaught_exception", { name: error.name, message: error.message })
   })
   process.on("unhandledRejection", reason => {
-    void logger?.write("host_unhandled_rejection", { message: reason instanceof Error ? reason.message : String(reason) })
+    log("host_unhandled_rejection", { message: reason instanceof Error ? reason.message : String(reason) })
   })
   void app.whenReady().then(bootstrap)
 }
