@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures"
 
-test("admin console supports bilingual navigation and core selections", async ({ page }) => {
+test("admin console supports bilingual navigation and core selections", { tag: "@admin" }, async ({ page }) => {
   await page.goto("/admin")
 
   await expect(page).toHaveURL(/\/studio$/)

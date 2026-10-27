@@ -18,7 +18,7 @@ async function switchStudioToEnglish(page: Page) {
   await expect(page.getByRole("navigation", { name: "Operations Studio" })).toBeVisible()
 }
 
-test.describe("Operations Studio acceptance smoke", () => {
+test.describe("Operations Studio acceptance smoke", { tag: "@admin" }, () => {
   test.describe.configure({ mode: "serial" })
 
   for (const route of existingStudioRoutes) {

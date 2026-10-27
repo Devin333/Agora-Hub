@@ -14,6 +14,8 @@ export default defineConfig({
   fullyParallel: true,
   workers: process.env.PLAYWRIGHT_WORKERS ? Number(process.env.PLAYWRIGHT_WORKERS) : 1,
   reporter: "list",
+  // Operations Studio specs need the admin surface; playwright.admin.config.ts runs them.
+  grepInvert: /@admin/,
   use: {
     baseURL,
     trace: "on-first-retry"
