@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from interfaces.composition.research import build_research_application_service
 from interfaces.composition.guided_research import build_guided_research_service
@@ -40,6 +40,8 @@ from interfaces.services.subscription_service import SubscriptionApplicationServ
 from interfaces.services.worker_service import WorkerApplicationService
 from framework.events.runtime.projection import RuntimeOperatorStatusService
 from framework.execution_environment.composition import RuntimeExecutionComposition
+from interfaces.composition.hosted import HostedRuntime
+from interfaces.services.deployment_profile import hosted_profile_enabled
 
 
 WorkerServiceFactory = Callable[[], WorkerApplicationService]
@@ -97,6 +99,8 @@ class ApiServices:
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None
     runtime_operator_status_service_factory: RuntimeOperatorStatusServiceFactory | None = None
     runtime_execution_composition: RuntimeExecutionComposition | None = None
+    # Present only in the hosted profile; account routes exist only there.
+    hosted_runtime: HostedRuntime | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +143,7 @@ def build_api_services(
     harness_wait_service_factory: HarnessWaitServiceFactory | None = None,
     runtime_operator_status_service_factory: RuntimeOperatorStatusServiceFactory | None = None,
     runtime_execution_composition: RuntimeExecutionComposition | None = None,
+    hosted_runtime: HostedRuntime | None = None,
 ) -> ApiServices:
     return ApiServices(
         worker_service_factory=worker_service_factory,
@@ -167,6 +172,7 @@ def build_api_services(
         harness_wait_service_factory=harness_wait_service_factory,
         runtime_operator_status_service_factory=runtime_operator_status_service_factory,
         runtime_execution_composition=runtime_execution_composition,
+        hosted_runtime=hosted_runtime,
     )
 
 
@@ -174,4 +180,8 @@ def get_actor_context(request: Request) -> ActorContext:
     actor = getattr(request.state, "actor_context", None)
     if isinstance(actor, ActorContext):
         return actor
+    if hosted_profile_enabled():
+        # The hosted boundary sets the actor for every signed-in route; a
+        # handler that reaches here without one must not trust client headers.
+        raise HTTPException(status_code=401, detail="auth_required")
     return actor_context_from_headers(request.headers, request_id="")

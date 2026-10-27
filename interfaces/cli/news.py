@@ -7,6 +7,7 @@ from typing import Any, Sequence
 from interfaces.cli.commands.sources import build_source_runtime_provider
 from interfaces.composition.runtime_execution import build_process_execution_composition
 from interfaces.cli.commands import (
+    accounts,
     api,
     artifacts,
     dev,
@@ -47,6 +48,7 @@ COMMAND_MODULES = (
     tools,
     mcp,
     paper,
+    accounts,
 )
 
 

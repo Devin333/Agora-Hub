@@ -20,7 +20,7 @@ from backend.research.ports.personal_memory import (
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
 from interfaces.models import ActorContext
 from interfaces.services.personal_memory_service import PersonalMemoryApplicationService
-from interfaces.services.research_desktop_auth import local_desktop_profile_enabled
+from interfaces.services.deployment_profile import hosted_profile_enabled
 from interfaces.services.research_desktop_service import ResearchDesktopOwner
 
 
@@ -338,7 +338,7 @@ def _memory_response(
         [PersonalMemoryApplicationService, ResearchDesktopOwner], dict[str, Any]
     ],
 ):
-    if not local_desktop_profile_enabled():
+    if not hosted_profile_enabled():
         return helpers.error(
             status_code=404,
             code="not_found",

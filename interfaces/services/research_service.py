@@ -53,6 +53,7 @@ from backend.research.ports.run_store import (
 )
 from backend.research.rag import ResearchRetrievalGoal
 from framework.harness.context.models import ContextGraphIdentity
+from framework.llm.clients import LLMCredentialUnavailableError, credential_unavailable_cause
 from interfaces.models import ActorContext
 
 
@@ -380,6 +381,9 @@ class ResearchApplicationService:
         except ValueError as exc:
             raise ResearchServiceError("invalid_request", str(exc), status_code=400, user_action_required=True) from exc
         except Exception as exc:
+            credential_failure = credential_unavailable_cause(exc)
+            if credential_failure is not None:
+                raise model_credential_service_error(credential_failure) from exc
             raise ResearchServiceError(
                 "research_parse_failed",
                 "Research paper parse request failed",
@@ -1313,6 +1317,9 @@ class ResearchApplicationService:
                 user_action_required=True,
             ) from exc
         except Exception as exc:
+            credential_failure = credential_unavailable_cause(exc)
+            if credential_failure is not None:
+                raise model_credential_service_error(credential_failure) from exc
             raise ResearchServiceError(
                 "research_run_failed",
                 "research RAG request failed",
@@ -2430,9 +2437,24 @@ def _run_store_service_error(
     )
 
 
+def model_credential_service_error(error: LLMCredentialUnavailableError) -> ResearchServiceError:
+    """The account's model credential is missing or unusable; the user fixes it."""
+
+    return ResearchServiceError(
+        error.code,
+        str(error),
+        status_code=409,
+        retryable=False,
+        user_action_required=True,
+    )
+
+
 def _research_runtime_service_error(error: Exception) -> ResearchServiceError:
     from interfaces.composition.research_errors import ResearchCompositionError
 
+    credential_failure = credential_unavailable_cause(error)
+    if credential_failure is not None:
+        return model_credential_service_error(credential_failure)
     if isinstance(error, ResearchCompositionError):
         public = error.to_public_dict()
         return ResearchServiceError(
@@ -2525,4 +2547,5 @@ __all__ = [
     "ResearchRunStore",
     "ResearchServiceError",
     "bind_research_actor_input",
+    "model_credential_service_error",
 ]

@@ -4,6 +4,8 @@ from fastapi import FastAPI
 
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
 from interfaces.api.routers import (
+    account,
+    admin_accounts,
     auth,
     entities,
     events,
@@ -27,7 +29,24 @@ from interfaces.api.routers import (
 
 
 def include_routers(api: FastAPI, *, services: ApiServices, helpers: ApiRouteHelpers) -> None:
-    for router in (
+    for router in (*_core_routers(services, helpers), *_hosted_routers(services, helpers)):
+        # FastAPI 0.1xx stores an ``_IncludedRouter`` wrapper when using
+        # ``include_router``. The application has no router prefixes or
+        # include-level dependencies, so append the concrete routes directly;
+        # this keeps route introspection and the OpenAPI contract consistent
+        # across FastAPI versions.
+        api.router.routes.extend(router.routes)
+        mark_routes_changed = getattr(api.router, "_mark_routes_changed", None)
+        if callable(mark_routes_changed):
+            mark_routes_changed()
+        for handler in router.on_startup:
+            api.router.add_event_handler("startup", handler)
+        for handler in router.on_shutdown:
+            api.router.add_event_handler("shutdown", handler)
+
+
+def _core_routers(services: ApiServices, helpers: ApiRouteHelpers) -> tuple:
+    return (
         health.create_router(services, helpers),
         auth.create_router(services, helpers),
         runs.create_router(services, helpers),
@@ -47,17 +66,14 @@ def include_routers(api: FastAPI, *, services: ApiServices, helpers: ApiRouteHel
         schedules.create_router(services, helpers),
         harness_graph.create_router(services, helpers),
         harness_waits.create_router(services, helpers),
-    ):
-        # FastAPI 0.1xx stores an ``_IncludedRouter`` wrapper when using
-        # ``include_router``. The application has no router prefixes or
-        # include-level dependencies, so append the concrete routes directly;
-        # this keeps route introspection and the OpenAPI contract consistent
-        # across FastAPI versions.
-        api.router.routes.extend(router.routes)
-        mark_routes_changed = getattr(api.router, "_mark_routes_changed", None)
-        if callable(mark_routes_changed):
-            mark_routes_changed()
-        for handler in router.on_startup:
-            api.router.add_event_handler("startup", handler)
-        for handler in router.on_shutdown:
-            api.router.add_event_handler("shutdown", handler)
+    )
+
+
+def _hosted_routers(services: ApiServices, helpers: ApiRouteHelpers) -> tuple:
+    # Account self-service and administration exist only where accounts do.
+    if services.hosted_runtime is None:
+        return ()
+    return (
+        account.create_router(services, helpers),
+        admin_accounts.create_router(services, helpers),
+    )

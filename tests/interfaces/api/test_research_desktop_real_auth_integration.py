@@ -17,22 +17,27 @@ from interfaces.composition.research import (
     default_research_runtime_provider,
     reset_default_research_runtime,
 )
-from interfaces.services.auth_service import AuthApplicationService
 from interfaces.services.research_desktop_control import canonical_request_fingerprint
+from tests.interfaces.api.hosted_support import (
+    HOSTED_ORIGIN,
+    build_test_hosted_runtime,
+    configure_hosted_env,
+    sign_in,
+)
 
 
-_ORIGIN = "http://127.0.0.1:3000"
-_OWNER = "desktop-owner"
+_ORIGIN = HOSTED_ORIGIN
+_OWNER = "research-owner"
 _PASSWORD = "correct-horse-battery-staple"
 _MEMORY_PATH = "/api/v1/research/desktop/memory"
 
 
-def test_real_auth_session_reaches_disabled_research_desktop_and_local_stores(
+def test_real_account_session_reaches_disabled_research_and_account_stores(
     monkeypatch,
     short_desktop_data_root: tuple[Path, Path],
 ) -> None:
     data_root, import_root = short_desktop_data_root
-    _configure_disabled_desktop(monkeypatch, data_root)
+    _configure_research_without_llm(monkeypatch, data_root)
     monkeypatch.setenv("NEWSROOM_RESEARCH_IMPORT_DIR", str(import_root))
 
     preload_calls: list[str] = []
@@ -45,29 +50,22 @@ def test_real_auth_session_reaches_disabled_research_desktop_and_local_stores(
         preload_reranker,
     )
 
-    auth = AuthApplicationService(
-        user_store_path=data_root / "auth" / "users.json",
-        session_store_path=data_root / "auth" / "sessions.json",
-    )
+    hosted_runtime = build_test_hosted_runtime(data_root)
+    # Accounts exist only through server-side administration; there is no
+    # browser bootstrap in the hosted profile.
+    headers = sign_in(hosted_runtime, _OWNER, _PASSWORD)
     reset_default_research_runtime()
     app = create_app(
-        auth_service_factory=lambda: auth,
+        hosted_runtime=hosted_runtime,
         audit_emitter_factory=None,
     )
 
     try:
         with TestClient(app) as client, monkeypatch.context() as network_guard:
             _forbid_network(network_guard)
-            bootstrap = client.post(
-                "/api/v1/auth/bootstrap",
-                headers={"Origin": _ORIGIN},
-                json={"username": _OWNER, "password": _PASSWORD},
-            )
-            assert bootstrap.status_code == 200
-            session = bootstrap.json()["data"]["session"]
-            token = session["sessionToken"]
-            user_id = session["user"]["userId"]
-            headers = {"X-Newsroom-Session": token}
+            session = client.get("/api/v1/auth/session", headers=headers)
+            assert session.status_code == 200
+            user_id = session.json()["data"]["session"]["user"]["userId"]
 
             history = client.get("/api/v1/research/history", headers=headers)
             assert history.status_code == 200
@@ -211,14 +209,9 @@ def short_desktop_data_root(request):
         shutil.rmtree(storage_io_path(root))
 
 
-def _configure_disabled_desktop(monkeypatch, data_root: Path) -> None:
+def _configure_research_without_llm(monkeypatch, data_root: Path) -> None:
+    configure_hosted_env(monkeypatch, data_root)
     values = {
-        "NEWSROOM_DEPLOYMENT_PROFILE": "local-desktop",
-        "NEWSROOM_DESKTOP_CANONICAL_ORIGIN": _ORIGIN,
-        "NEWSROOM_DESKTOP_INSTANCE_KEY": f"local-desktop:{_ORIGIN}",
-        "NEWSROOM_DESKTOP_RELEASE_ID": "release-real-auth-test",
-        "NEWSROOM_DESKTOP_CONFIG_DIGEST": "a" * 64,
-        "NEWSROOM_DESKTOP_BOOT_ID": "b" * 32,
         "NEWSROOM_DESKTOP_RESEARCH_LLM_ENABLED": "0",
         "NEWS_PRELOAD_RERANKER": "1",
         "NEWS_RESEARCH_ROOT": str(data_root / "research"),
@@ -242,12 +235,11 @@ def _configure_disabled_desktop(monkeypatch, data_root: Path) -> None:
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.delenv("NEWSROOM_CANONICAL_ORIGIN", raising=False)
 
 
 def _forbid_network(monkeypatch) -> None:
     def forbidden(*_args, **_kwargs):
-        raise AssertionError("network access is forbidden in real desktop integration tests")
+        raise AssertionError("network access is forbidden in real research integration tests")
 
     monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(socket.socket, "connect", forbidden)

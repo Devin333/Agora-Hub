@@ -89,17 +89,12 @@ from interfaces.services.project_service import ProjectApplicationService
 from interfaces.services.personal_memory_service import PersonalMemoryApplicationService
 from interfaces.services.research_service import ResearchApplicationService
 from interfaces.services.research_desktop_service import ResearchDesktopApplicationService
-from interfaces.services.research_desktop_control import ResearchDesktopControlError
-from interfaces.services.research_desktop_auth import (
-    ResearchDesktopAuthError,
-    authenticate_desktop_actor,
-    desktop_auth_path,
-    desktop_legacy_operation_path,
-    desktop_operator_path_forbidden,
-    desktop_path_requires_session,
-    local_desktop_profile_enabled,
-    require_desktop_origin,
+from interfaces.services.deployment_profile import (
+    DeploymentConfigurationError,
+    hosted_profile_enabled,
 )
+from interfaces.composition.hosted import HostedRuntime, build_hosted_runtime
+from interfaces.api.hosted_middleware import install_hosted_boundary
 from interfaces.services.research_history_service import ResearchHistoryService
 from interfaces.services.guided_research_service import GuidedResearchService
 from interfaces.composition.guided_research import build_guided_research_service
@@ -188,8 +183,18 @@ def create_app(
     rate_limit_clock: Clock | None = None,
     trace_propagator: W3CTracePropagator | None = None,
     telemetry: EventTelemetry | None = None,
+    hosted_runtime: HostedRuntime | None = None,
 ) -> FastAPI:
     api = FastAPI(title="Agora Hub API", version="0.1.0")
+    resolved_hosted_runtime = hosted_runtime
+    if resolved_hosted_runtime is None and hosted_profile_enabled():
+        resolved_hosted_runtime = build_hosted_runtime()
+    if resolved_hosted_runtime is not None:
+        hosted_auth = resolved_hosted_runtime.auth
+
+        # Every route that resolves a session reads the hosted account store.
+        def auth_service_factory() -> AuthApplicationService:
+            return hosted_auth
     if runtime_execution_composition is None:
         runtime_execution_composition = build_process_execution_composition()
     if not isinstance(runtime_execution_composition, RuntimeExecutionComposition):
@@ -197,6 +202,20 @@ def create_app(
     runtime_execution_composition.verify_integrity()
     api.state.runtime_execution_composition = runtime_execution_composition
     resolved_api_keys = _build_api_key_registry(api_token=api_token, api_keys=api_keys)
+    if resolved_hosted_runtime is not None and resolved_api_keys:
+        # Bearer keys would sit beside the account boundary as a second,
+        # unscoped way in; the hosted service accepts account sessions only.
+        raise DeploymentConfigurationError(
+            "NEWS_API_KEYS", "API keys and tokens are not accepted in the hosted profile"
+        )
+    if resolved_hosted_runtime is not None and api_rate_limit_per_minute is not None:
+        # The generic limiter keys on the socket peer, which is the reverse
+        # proxy for every account; the hosted boundary throttles per client
+        # address and per account instead.
+        raise DeploymentConfigurationError(
+            "NEWS_API_RATE_LIMIT_PER_MINUTE",
+            "use the NEWSROOM_HOSTED_*_RATE_LIMIT_PER_MINUTE settings in the hosted profile",
+        )
     rate_limiter = _build_rate_limiter(api_rate_limit_per_minute, clock=rate_limit_clock)
     audit_emitter = audit_emitter_factory() if audit_emitter_factory else None
     actual_trace_propagator = trace_propagator or W3CTracePropagator()
@@ -254,17 +273,6 @@ def create_app(
                     research=research_service_factory(),
                 )
 
-    desktop_auth_rate_limiter = (
-        InMemoryRateLimiter(
-            limit=max(1, min(60, int(os.environ.get("NEWSROOM_DESKTOP_AUTH_RATE_LIMIT_PER_MINUTE", "10")))),
-            window_seconds=60,
-            clock=rate_limit_clock,
-        )
-        if local_desktop_profile_enabled()
-        else None
-    )
-
-
     if rate_limiter is not None:
 
         @api.middleware("http")
@@ -292,11 +300,6 @@ def create_app(
         async def bearer_token_rbac(request: Request, call_next):
             if not _requires_api_auth(request.url.path):
                 return await call_next(request)
-            if local_desktop_profile_enabled() and (
-                desktop_path_requires_session(request.url.path)
-                or desktop_auth_path(request.url.path)
-            ):
-                return await call_next(request)
             actor = _authorized_api_actor(request, resolved_api_keys)
             if actor is None:
                 return _error(
@@ -321,80 +324,15 @@ def create_app(
                 )
             return await call_next(request)
 
-    if local_desktop_profile_enabled():
-
-        @api.middleware("http")
-        async def local_desktop_session_boundary(request: Request, call_next):
-            path = request.url.path
-            try:
-                if desktop_operator_path_forbidden(path):
-                    return _error(
-                        status_code=403,
-                        code="desktop_operator_api_disabled",
-                        message="This operator API is unavailable in local desktop profile",
-                        user_action_required=True,
-                    )
-                if desktop_path_requires_session(path):
-                    actor = authenticate_desktop_actor(
-                        request,
-                        auth_service_factory(),
-                    )
-                    request.state.actor_context = actor
-                    if desktop_legacy_operation_path(path, request.method):
-                        return _error(
-                            status_code=409,
-                            code="desktop_request_contract_required",
-                            message="Use the durable Research desktop operation endpoint",
-                            user_action_required=True,
-                        )
-                elif desktop_auth_path(path):
-                    require_desktop_origin(request)
-                    if desktop_auth_rate_limiter is not None and request.method.upper() == "POST":
-                        decision = desktop_auth_rate_limiter.check(_client_rate_limit_key(request))
-                        if not decision.allowed:
-                            return _error(
-                                status_code=429,
-                                code="auth_rate_limited",
-                                message="Authentication rate limit exceeded",
-                                details={
-                                    "limit": decision.limit,
-                                    "window_seconds": desktop_auth_rate_limiter.window_seconds,
-                                    "remaining": decision.remaining,
-                                },
-                                retryable=True,
-                                user_action_required=True,
-                                headers={"Retry-After": str(decision.retry_after_seconds)},
-                            )
-            except ResearchDesktopAuthError as exc:
-                return _error(
-                    status_code=exc.status_code,
-                    code=exc.code,
-                    message=str(exc),
-                    user_action_required=True,
-                )
-            lease_id = None
-            desktop_service = None
-            try:
-                is_desktop_writer = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and (
-                    desktop_path_requires_session(path) or desktop_auth_path(path)
-                )
-                if is_desktop_writer:
-                    desktop_service = resolved_research_desktop_service_factory()
-                    lease_id = desktop_service.begin_business_operation(
-                        operation=f"{request.method.upper()} {path}"
-                    )
-                return await call_next(request)
-            except ResearchDesktopControlError as exc:
-                return _error(
-                    status_code=exc.status_code,
-                    code=exc.code,
-                    message=str(exc),
-                    retryable=exc.retryable,
-                    user_action_required=True,
-                )
-            finally:
-                if lease_id is not None and desktop_service is not None:
-                    desktop_service.end_business_operation(lease_id)
+    if resolved_hosted_runtime is not None:
+        # Runs inside the request-id and tracing middlewares, so rejections
+        # still carry a request id, and before every route handler.
+        install_hosted_boundary(
+            api,
+            runtime=resolved_hosted_runtime,
+            error=_error,
+            clock=rate_limit_clock,
+        )
 
     @api.middleware("http")
     async def request_id_middleware(request: Request, call_next):
@@ -605,6 +543,7 @@ def create_app(
         harness_wait_service_factory=harness_wait_service_factory,
         runtime_operator_status_service_factory=runtime_operator_status_service_factory,
         runtime_execution_composition=runtime_execution_composition,
+        hosted_runtime=resolved_hosted_runtime,
     )
     helpers = ApiRouteHelpers(
         success=_success,

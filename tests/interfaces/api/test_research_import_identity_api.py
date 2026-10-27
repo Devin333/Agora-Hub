@@ -16,11 +16,16 @@ import pytest
 from framework.shared.windows_paths import resolve_storage_path, storage_io_path
 from interfaces.api import create_app
 from interfaces.composition.research import reset_default_research_runtime
-from interfaces.services.auth_service import AuthApplicationService
 from interfaces.services.research_desktop_control import canonical_request_fingerprint
+from tests.interfaces.api.hosted_support import (
+    HOSTED_ORIGIN,
+    build_test_hosted_runtime,
+    configure_hosted_env,
+    sign_in,
+)
 
 
-_ORIGIN = "http://127.0.0.1:3000"
+_ORIGIN = HOSTED_ORIGIN
 _PASSWORD = "correct-horse-battery-staple"
 
 
@@ -29,15 +34,14 @@ def test_pdf_import_api_uses_owner_scoped_content_identity_across_paths_and_rest
     short_api_root: tuple[Path, Path],
 ) -> None:
     data_root, import_root = short_api_root
-    _configure_disabled_desktop(monkeypatch, data_root)
+    _configure_research_without_llm(monkeypatch, data_root)
     monkeypatch.setenv("NEWSROOM_RESEARCH_IMPORT_DIR", str(import_root))
     monkeypatch.setattr("interfaces.services.paper_rag_factory.preload_reranker", lambda: None)
-    auth = AuthApplicationService(
-        user_store_path=data_root / "auth" / "users.json",
-        session_store_path=data_root / "auth" / "sessions.json",
-    )
+    hosted_runtime = build_test_hosted_runtime(data_root)
+    alice_headers = sign_in(hosted_runtime, "alice", _PASSWORD)
+    bob_headers = sign_in(hosted_runtime, "bob", _PASSWORD)
     reset_default_research_runtime()
-    app = create_app(auth_service_factory=lambda: auth, audit_emitter_factory=None)
+    app = create_app(hosted_runtime=hosted_runtime, audit_emitter_factory=None)
     first_pdf = _selectable_text_pdf("stable-api-content")
     different_pdf = _selectable_text_pdf("different-api-content")
     first_fingerprint = _fingerprint(first_pdf)
@@ -45,18 +49,6 @@ def test_pdf_import_api_uses_owner_scoped_content_identity_across_paths_and_rest
     try:
         with TestClient(app) as client, monkeypatch.context() as network_guard:
             _forbid_network(network_guard)
-            alice_session = client.post(
-                "/api/v1/auth/bootstrap",
-                headers={"Origin": _ORIGIN},
-                json={"username": "alice", "password": _PASSWORD},
-            ).json()["data"]["session"]
-            bob_session = auth.create_identity_session(
-                provider="google",
-                subject="bob-subject",
-                username="bob",
-            )
-            alice_headers = {"X-Newsroom-Session": alice_session["sessionToken"]}
-            bob_headers = {"X-Newsroom-Session": bob_session.sessionToken}
             generation = client.get(
                 "/api/v1/research/desktop/identity",
                 headers=alice_headers,
@@ -137,7 +129,12 @@ def test_pdf_import_api_uses_owner_scoped_content_identity_across_paths_and_rest
             assert attacked_source.status_code == 404
 
         reset_default_research_runtime()
-        reopened_app = create_app(auth_service_factory=lambda: auth, audit_emitter_factory=None)
+        # A restarted server reads the same account store, so the session
+        # issued before the restart still identifies alice.
+        reopened_app = create_app(
+            hosted_runtime=build_test_hosted_runtime(data_root),
+            audit_emitter_factory=None,
+        )
         with TestClient(reopened_app) as reopened_client, monkeypatch.context() as network_guard:
             _forbid_network(network_guard)
             reopened_generation = reopened_client.get(
@@ -228,14 +225,9 @@ def short_api_root(request):
         shutil.rmtree(storage_io_path(root))
 
 
-def _configure_disabled_desktop(monkeypatch, data_root: Path) -> None:
+def _configure_research_without_llm(monkeypatch, data_root: Path) -> None:
+    configure_hosted_env(monkeypatch, data_root)
     values = {
-        "NEWSROOM_DEPLOYMENT_PROFILE": "local-desktop",
-        "NEWSROOM_DESKTOP_CANONICAL_ORIGIN": _ORIGIN,
-        "NEWSROOM_DESKTOP_INSTANCE_KEY": f"local-desktop:{_ORIGIN}",
-        "NEWSROOM_DESKTOP_RELEASE_ID": "release-import-identity-test",
-        "NEWSROOM_DESKTOP_CONFIG_DIGEST": "a" * 64,
-        "NEWSROOM_DESKTOP_BOOT_ID": "b" * 32,
         "NEWSROOM_DESKTOP_RESEARCH_LLM_ENABLED": "0",
         "NEWS_PRELOAD_RERANKER": "1",
         "NEWS_RESEARCH_ROOT": str(data_root / "research"),
@@ -251,7 +243,6 @@ def _configure_disabled_desktop(monkeypatch, data_root: Path) -> None:
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.delenv("NEWSROOM_CANONICAL_ORIGIN", raising=False)
 
 
 def _forbid_network(monkeypatch) -> None:

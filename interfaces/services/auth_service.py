@@ -5,11 +5,11 @@ import hmac
 import os
 import re
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone as _tz
 UTC = _tz.utc
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from interfaces.services.json_file_store import locked_json_file, read_json_object_unlocked, write_json_object_unlocked
 
@@ -34,6 +34,21 @@ class AuthInvalidCredentialsError(AuthError):
 
 class AuthSessionInvalidError(AuthError):
     code = "auth_session_invalid"
+
+
+class AuthAccountDisabledError(AuthError):
+    code = "account_disabled"
+
+
+class AuthAccountNotFoundError(AuthError):
+    code = "account_not_found"
+
+
+class AuthAccountExistsError(AuthError):
+    code = "account_exists"
+
+
+ACCOUNT_ROLES = frozenset({"admin", "user"})
 
 
 @dataclass(frozen=True)
@@ -68,14 +83,23 @@ class AuthUser:
     role: str = "admin"
     createdAt: datetime = field(default_factory=lambda: datetime.now(UTC))
     updatedAt: datetime = field(default_factory=lambda: datetime.now(UTC))
+    disabledAt: datetime | None = None
+    passwordChangedAt: datetime | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.disabledAt is None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "userId": self.userId,
             "username": self.username,
             "role": self.role,
+            "enabled": self.enabled,
             "createdAt": _format_datetime(self.createdAt),
             "updatedAt": _format_datetime(self.updatedAt),
+            "disabledAt": _format_optional_datetime(self.disabledAt),
+            "passwordChangedAt": _format_optional_datetime(self.passwordChangedAt),
         }
 
 
@@ -84,9 +108,17 @@ class StoredAuthUser(AuthUser):
     passwordHash: str = ""
     passwordSalt: str = ""
     passwordIterations: int = PASSWORD_HASH_ITERATIONS
+    # Sessions issued before this instant are void. It moves forward whenever
+    # the account is disabled or its password or role changes, so a stale
+    # session stops working even if an explicit revocation was missed.
+    sessionsValidFrom: datetime | None = None
 
     def to_record(self) -> dict[str, Any]:
         payload = self.to_dict()
+        payload.pop("enabled", None)
+        for key in ("disabledAt", "passwordChangedAt"):
+            if payload.get(key) is None:
+                payload.pop(key)
         payload.update(
             {
                 "passwordHash": self.passwordHash,
@@ -94,7 +126,14 @@ class StoredAuthUser(AuthUser):
                 "passwordIterations": self.passwordIterations,
             }
         )
+        if self.sessionsValidFrom is not None:
+            payload["sessionsValidFrom"] = _format_datetime(self.sessionsValidFrom)
         return payload
+
+    def accepts_session(self, session: "AuthSession") -> bool:
+        if self.disabledAt is not None:
+            return False
+        return self.sessionsValidFrom is None or session.createdAt >= self.sessionsValidFrom
 
     @classmethod
     def from_record(cls, payload: dict[str, Any]) -> "StoredAuthUser":
@@ -104,9 +143,12 @@ class StoredAuthUser(AuthUser):
             role=str(payload.get("role") or "admin"),
             createdAt=_parse_datetime(payload.get("createdAt")),
             updatedAt=_parse_datetime(payload.get("updatedAt")),
+            disabledAt=_parse_optional_datetime(payload.get("disabledAt")),
+            passwordChangedAt=_parse_optional_datetime(payload.get("passwordChangedAt")),
             passwordHash=str(payload.get("passwordHash") or ""),
             passwordSalt=str(payload.get("passwordSalt") or ""),
             passwordIterations=int(payload.get("passwordIterations") or PASSWORD_HASH_ITERATIONS),
+            sessionsValidFrom=_parse_optional_datetime(payload.get("sessionsValidFrom")),
         )
 
 
@@ -121,7 +163,10 @@ class AuthSession:
 
     @property
     def active(self) -> bool:
-        return self.revokedAt is None and self.expiresAt > datetime.now(UTC)
+        return self.is_active_at(datetime.now(UTC))
+
+    def is_active_at(self, now: datetime) -> bool:
+        return self.revokedAt is None and self.expiresAt > now
 
     def to_record(self) -> dict[str, Any]:
         payload = {
@@ -168,11 +213,15 @@ class AuthSessionResult:
         return payload
 
 
+UserMutation = Callable[[StoredAuthUser, list[StoredAuthUser]], StoredAuthUser]
+
+
 class AuthUserRepository(Protocol):
     def list_users(self) -> list[StoredAuthUser]: ...
     def get_user_by_username(self, username: str) -> StoredAuthUser | None: ...
     def get_user(self, user_id: str) -> StoredAuthUser | None: ...
     def add_user(self, user: StoredAuthUser) -> StoredAuthUser: ...
+    def update_user(self, user_id: str, mutation: UserMutation) -> StoredAuthUser: ...
     def bootstrap_first_user(self, user: StoredAuthUser) -> StoredAuthUser: ...
     def resolve_identity(self, *, provider: str, subject: str, username: str) -> StoredAuthUser: ...
 
@@ -181,6 +230,7 @@ class AuthSessionRepository(Protocol):
     def create_session(self, session: AuthSession) -> AuthSession: ...
     def get_session_by_digest(self, token_digest: str) -> AuthSession | None: ...
     def revoke_session(self, token_digest: str) -> bool: ...
+    def revoke_user_sessions(self, user_id: str, *, keep_session_id: str | None = None) -> int: ...
 
 
 class LocalJsonAuthUserRepository:
@@ -204,10 +254,29 @@ class LocalJsonAuthUserRepository:
         with locked_json_file(self.path) as path:
             records, identities = self._read_payload_unlocked(path)
             if user.userId in records or any(item.username.lower() == user.username.lower() for item in records.values()):
-                raise ValueError("user already exists")
+                raise AuthAccountExistsError("an account with this username already exists")
             records[user.userId] = user
             self._write_payload_unlocked(path, records, identities)
         return user
+
+    def update_user(self, user_id: str, mutation: UserMutation) -> StoredAuthUser:
+        """Apply ``mutation`` under the store lock so invariant checks that
+        look at every account (such as the last-administrator rule) cannot
+        race with a concurrent change."""
+
+        with locked_json_file(self.path) as path:
+            records, identities = self._read_payload_unlocked(path)
+            current = records.get(user_id)
+            if current is None:
+                raise AuthAccountNotFoundError("account was not found")
+            updated = mutation(current, list(records.values()))
+            if updated.userId != current.userId:
+                raise ValueError("account identifier cannot change")
+            if updated == current:
+                return current
+            records[user_id] = updated
+            self._write_payload_unlocked(path, records, identities)
+            return updated
 
     def bootstrap_first_user(self, user: StoredAuthUser) -> StoredAuthUser:
         with locked_json_file(self.path) as path:
@@ -296,6 +365,10 @@ class LocalJsonAuthSessionRepository:
     def create_session(self, session: AuthSession) -> AuthSession:
         with locked_json_file(self.path) as path:
             records = self._read_records_unlocked(path)
+            # Every sign-in also sweeps sessions that can never be used again.
+            records = {
+                key: value for key, value in records.items() if value.is_active_at(session.createdAt)
+            }
             records[session.sessionId] = session
             self._write_records_unlocked(path, records)
         return session
@@ -324,6 +397,34 @@ class LocalJsonAuthSessionRepository:
             if changed:
                 self._write_records_unlocked(path, records)
             return changed
+
+    def revoke_user_sessions(self, user_id: str, *, keep_session_id: str | None = None) -> int:
+        now = datetime.now(UTC)
+        with locked_json_file(self.path) as path:
+            records = self._read_records_unlocked(path)
+            revoked = 0
+            for session_id, session in list(records.items()):
+                if session.userId != user_id or session.sessionId == keep_session_id:
+                    continue
+                if session.revokedAt is not None:
+                    continue
+                records[session_id] = replace(session, revokedAt=now)
+                revoked += 1
+            if revoked:
+                self._write_records_unlocked(path, records)
+            return revoked
+
+    def purge_inactive_sessions(self, *, now: datetime | None = None) -> int:
+        """Drop expired and revoked sessions so the store does not grow forever."""
+
+        instant = now or datetime.now(UTC)
+        with locked_json_file(self.path) as path:
+            records = self._read_records_unlocked(path)
+            kept = {key: value for key, value in records.items() if value.is_active_at(instant)}
+            removed = len(records) - len(kept)
+            if removed:
+                self._write_records_unlocked(path, kept)
+            return removed
 
     def _read_records(self) -> dict[str, AuthSession]:
         with locked_json_file(self.path) as path:
@@ -384,6 +485,9 @@ class AuthApplicationService:
         user = self.users.get_user_by_username(username)
         if user is None or not _verify_password(password, user):
             raise AuthInvalidCredentialsError("invalid username or password")
+        # Disabled status is revealed only to a caller who proved the password.
+        if not user.enabled:
+            raise AuthAccountDisabledError("this account is disabled")
         return self._create_session_result(user)
 
     def logout(self, session_token: str | None) -> bool:
@@ -400,7 +504,72 @@ class AuthApplicationService:
         user = self.users.get_user(session.userId)
         if user is None:
             raise AuthSessionInvalidError("session user was not found")
+        if not user.accepts_session(session):
+            raise AuthSessionInvalidError("valid session required")
         return AuthSessionResult(user=_public_user(user), sessionId=session.sessionId, expiresAt=session.expiresAt)
+
+    def list_accounts(self) -> list[AuthUser]:
+        return [_public_user(user) for user in self.users.list_users()]
+
+    def get_account(self, user_id: str) -> AuthUser:
+        user = self.users.get_user(user_id)
+        if user is None:
+            raise AuthAccountNotFoundError("account was not found")
+        return _public_user(user)
+
+    def create_account(self, *, username: str, password: str, role: str) -> AuthUser:
+        validate_account_role(role)
+        return _public_user(self.users.add_user(self._build_user(username=username, password=password, role=role)))
+
+    def modify_account(
+        self,
+        user_id: str,
+        change: UserMutation,
+        *,
+        keep_session_id: str | None = None,
+    ) -> AuthUser:
+        """Apply an account change atomically and end the sessions it voids.
+
+        ``change`` receives the stored account and every account in the store;
+        it returns the replacement. When the replacement moves
+        ``sessionsValidFrom`` forward, all other sessions of the account are
+        revoked as well, so stores do not keep stale sessions around.
+        """
+
+        before = self.users.get_user(user_id)
+        if before is None:
+            raise AuthAccountNotFoundError("account was not found")
+        updated = self.users.update_user(user_id, change)
+        if updated.sessionsValidFrom != before.sessionsValidFrom or not updated.enabled:
+            self.sessions.revoke_user_sessions(user_id, keep_session_id=keep_session_id)
+        return _public_user(updated)
+
+    def change_own_password(
+        self,
+        *,
+        session_token: str | None,
+        current_password: str,
+        new_password: str,
+    ) -> AuthSessionResult:
+        """Change the caller's password and hand back a fresh session.
+
+        Every session issued before the change becomes void, including the one
+        that asked; the caller stays signed in through the new session.
+        """
+
+        current = self.get_session(session_token)
+        _validate_password(new_password)
+
+        def change(user: StoredAuthUser, _accounts: list[StoredAuthUser]) -> StoredAuthUser:
+            if not _verify_password(current_password, user):
+                raise AuthInvalidCredentialsError("current password is incorrect")
+            return with_new_password(user, new_password)
+
+        self.modify_account(current.user.userId, change)
+        refreshed = self.users.get_user(current.user.userId)
+        if refreshed is None:
+            raise AuthSessionInvalidError("session user was not found")
+        return self._create_session_result(refreshed)
 
     def _create_user(self, *, username: str, password: str, role: str) -> StoredAuthUser:
         return self.users.add_user(self._build_user(username=username, password=password, role=role))
@@ -517,6 +686,29 @@ class AuthApplicationService:
         return self._public_auth_service
 
 
+def with_new_password(user: StoredAuthUser, password: str, *, now: datetime | None = None) -> StoredAuthUser:
+    """Return ``user`` with a freshly salted hash; earlier sessions become void."""
+
+    _validate_password(password)
+    instant = now or datetime.now(UTC)
+    salt = secrets.token_hex(16)
+    return replace(
+        user,
+        passwordHash=_password_hash(password, salt, PASSWORD_HASH_ITERATIONS),
+        passwordSalt=salt,
+        passwordIterations=PASSWORD_HASH_ITERATIONS,
+        passwordChangedAt=instant,
+        sessionsValidFrom=instant,
+        updatedAt=instant,
+    )
+
+
+def validate_account_role(role: str) -> str:
+    if role not in ACCOUNT_ROLES:
+        raise ValueError("role must be admin or user")
+    return role
+
+
 def _public_user(user: StoredAuthUser) -> AuthUser:
     return AuthUser(
         userId=user.userId,
@@ -524,6 +716,8 @@ def _public_user(user: StoredAuthUser) -> AuthUser:
         role=user.role,
         createdAt=user.createdAt,
         updatedAt=user.updatedAt,
+        disabledAt=user.disabledAt,
+        passwordChangedAt=user.passwordChangedAt,
     )
 
 
@@ -573,6 +767,14 @@ def _token_digest(token: str) -> str:
 def _format_datetime(value: datetime) -> str:
     actual = value if value.tzinfo else value.replace(tzinfo=UTC)
     return actual.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _format_optional_datetime(value: datetime | None) -> str | None:
+    return _format_datetime(value) if value is not None else None
+
+
+def _parse_optional_datetime(value: Any) -> datetime | None:
+    return _parse_datetime(value) if value else None
 
 
 def _parse_datetime(value: Any) -> datetime:

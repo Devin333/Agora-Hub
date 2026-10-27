@@ -9,6 +9,14 @@ from backend.research.ports.guided_research import (
     GuidedResearchError,
     GuidedSearchResponse,
 )
+from framework.llm.clients import (
+    CREDENTIAL_MODE_ENV,
+    LLMCredentialMode,
+    LLMCredentialUnavailableError,
+    LLMEndpoint,
+    bind_llm_endpoint_source,
+    resolve_invocation_endpoint,
+)
 from interfaces.services.guided_research_service import GuidedResearchService, ProjectGuidedSearch
 from interfaces.services.research_conversation_model import ConversationTurn
 from interfaces.services.research_history_service import ResearchHistorySnapshot
@@ -238,3 +246,64 @@ def test_project_search_reports_missing_source_instead_of_empty_match() -> None:
             materials=[], actor_user_id=None,
         )
     assert raised.value.code == "guided_projects_source_unavailable"
+
+
+class _CredentialFailingCandidate:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate_candidate(self, payload):
+        del payload
+        self.calls += 1
+        try:
+            resolve_invocation_endpoint()
+        except LLMCredentialUnavailableError as exc:
+            raise RuntimeError("provider call failed") from exc
+        raise AssertionError("no endpoint is bound in this test")
+
+
+def _invocation_service(candidate) -> GuidedResearchService:
+    search = _EmptySearch()
+    return GuidedResearchService(
+        application=GuidedResearchApplication(intent_candidate=candidate, paper_search=search, project_search=search),
+        history=_History(),
+        research=_NoDocuments(),
+    )
+
+
+def test_intent_without_an_account_model_credential_is_refused_before_the_model(monkeypatch) -> None:
+    monkeypatch.setenv(CREDENTIAL_MODE_ENV, LLMCredentialMode.INVOCATION.value)
+    candidate = _CredentialFailingCandidate()
+
+    with pytest.raises(GuidedResearchError) as raised:
+        _invocation_service(candidate).interpret(
+            _IntentRequest(question="找论文", answers=[], previous=[], materialIds=[], skipClarification=True),
+            user_id="user-1",
+        )
+
+    assert raised.value.code == "model_credential_required"
+    assert raised.value.status_code == 409
+    assert raised.value.user_action_required is True
+    assert candidate.calls == 0
+
+
+def test_credential_failure_inside_the_model_call_keeps_its_public_code(monkeypatch) -> None:
+    monkeypatch.setenv(CREDENTIAL_MODE_ENV, LLMCredentialMode.INVOCATION.value)
+    candidate = _CredentialFailingCandidate()
+    calls = iter((None,))
+
+    def bound_once():
+        # The admission check sees a key; the key is gone by the model call.
+        if next(calls, "gone") is None:
+            return LLMEndpoint(base_url="https://api.example.test", model="m", api_key="sk-test")
+        raise LLMCredentialUnavailableError("model_credential_key_rotated", "key rotated")
+
+    with bind_llm_endpoint_source(bound_once), pytest.raises(GuidedResearchError) as raised:
+        _invocation_service(candidate).interpret(
+            _IntentRequest(question="找论文", answers=[], previous=[], materialIds=[], skipClarification=True),
+            user_id="user-1",
+        )
+
+    assert raised.value.code == "model_credential_key_rotated"
+    assert raised.value.status_code == 409
+    assert candidate.calls == 1
