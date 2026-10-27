@@ -98,9 +98,26 @@ class LocalDesktopDoctor:
         self.port_checker = port_checker or _port_is_listening
         self.startup_required_capability_ids = startup_required_capability_ids
 
-    def run(self, *, probe_network: bool = False, budget: ProbeBudget | None = None) -> DoctorReport:
+    def run(
+        self,
+        *,
+        probe_network: bool = False,
+        budget: ProbeBudget | None = None,
+        verified_release: tuple[Path, Mapping[str, Any]] | None = None,
+    ) -> DoctorReport:
+        """Run the offline checks once.
+
+        ``verified_release`` is the active release a caller already verified in the
+        same operation (start verifies it under the instance lock right before the
+        doctor runs). Passing it avoids hashing every release resource a second time;
+        callers must never pass a result retained from an earlier operation.
+        """
         actual_budget = budget or ProbeBudget()
-        active_release = self._inspect_active_release()
+        active_release = (
+            _ActiveReleaseInspection("verified", path=verified_release[0], manifest=verified_release[1])
+            if verified_release is not None
+            else self._inspect_active_release()
+        )
         checks = [
             self._profile_check(),
             self._python_check(),

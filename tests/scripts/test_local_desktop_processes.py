@@ -66,7 +66,11 @@ class FakeControl:
 
 
 class FakeDoctor:
-    def run(self):
+    def __init__(self):
+        self.verified_releases = []
+
+    def run(self, *, verified_release=None):
+        self.verified_releases.append(verified_release)
         return DoctorReport("ok", (), ())
 
 
@@ -651,6 +655,53 @@ def test_start_child_environment_prevents_packaged_python_bytecode(tmp_path: Pat
     assert imported.returncode == 0, imported.stderr.decode("utf-8", errors="strict")
     assert not list(release_app.rglob("*.pyc"))
     assert not list(release_app.rglob("__pycache__"))
+
+
+def test_start_hands_the_release_it_verified_to_doctor_instead_of_verifying_twice(tmp_path: Path, monkeypatch) -> None:
+    manager, _ = _start_manager(tmp_path)
+    api_children, next_pid = _fake_launch("api", start_pid=60)
+    frontend_children, _ = _fake_launch("frontend", start_pid=next_pid)
+    monkeypatch.setattr(manager, "_launch", lambda role, *_args: api_children if role == "api" else frontend_children)
+    monkeypatch.setattr("scripts.local_desktop.processes._port_is_listening", lambda _host, _port: False)
+    monkeypatch.setattr(manager, "_frontend_command", lambda *_args: ["node", "next"])
+    monkeypatch.setattr(
+        manager,
+        "_wait_for_readiness",
+        lambda *_args, **_kwargs: {"api": True, "frontend": True, "bff": True, "raw_rewrite": True, "runtime": True},
+    )
+
+    assert manager.start(readiness_timeout=0.1).status == "READY"
+    assert manager.doctor.verified_releases == [(manager.release_manager.release_path, manager.release_manager.manifest)]
+
+
+def test_readiness_round_runs_every_probe_concurrently(tmp_path: Path, monkeypatch) -> None:
+    import threading
+
+    manager, _ = _start_manager(tmp_path)
+    expected = {"release_id": "release-1"}
+    barrier = threading.Barrier(5, timeout=5)
+    probed: list[str] = []
+
+    def json_probe(url: str, *, timeout: float):
+        probed.append(url)
+        barrier.wait()
+        return None
+
+    def html_probe(url: str, *, timeout: float):
+        probed.append(url)
+        barrier.wait()
+        return True
+
+    monkeypatch.setattr("scripts.local_desktop.processes._json_http", json_probe)
+    monkeypatch.setattr("scripts.local_desktop.processes._html_ready", html_probe)
+
+    # Every probe blocks on a five-party barrier, so a sequential round would
+    # time out instead of returning.
+    result = manager._readiness_once(expected)
+
+    assert len(probed) == 5
+    assert result["frontend"] is True
+    assert not any(result[item] for item in ("api", "runtime", "bff", "raw_rewrite"))
 
 
 def test_start_cleans_every_owned_child_when_frontend_launch_fails(tmp_path: Path, monkeypatch) -> None:

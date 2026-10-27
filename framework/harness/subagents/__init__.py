@@ -1,102 +1,8 @@
 from __future__ import annotations
 
-from framework.harness.subagents.context import SubAgentContextBuilder
-from framework.harness.subagents.fake import FakeSubAgentContextBuilder, FakeSubAgentRuntime, FakeSubAgentWorker, fake_subagent_spec
-from framework.harness.subagents.gates import (
-    FakeSubAgentGateSuite,
-    SubAgentBudgetGate,
-    SubAgentContextBoundaryGate,
-    SubAgentGateResult,
-    SubAgentHandoffSchemaGate,
-    SubAgentInputSchemaGate,
-    SubAgentMemoryNamespaceGate,
-    SubAgentOutputSchemaGate,
-    SubAgentToolAllowlistGate,
-    SubAgentTranscriptGate,
-)
-from framework.harness.subagents.handoff import verify_handoff
-from framework.harness.subagents.models import (
-    FORBIDDEN_SUBAGENT_CONTEXT_KEYS,
-    FORBIDDEN_SUBAGENT_RESULT_KEYS,
-    SUBAGENT_INVOCATION_SCHEMA_V3,
-    SubAgentContextEnvelope,
-    SubAgentHandoff,
-    SubAgentInvocation,
-    SubAgentResult,
-    SubAgentSpec,
-    SubAgentStatus,
-)
-from framework.harness.subagents.observability import (
-    SUBAGENT_TRANSCRIPT_BYTES,
-    SUBAGENT_TRANSCRIPT_COMMIT_FAILED,
-    SUBAGENT_TRANSCRIPT_COMMIT_LATENCY_MS,
-    SUBAGENT_TRANSCRIPT_COMMIT_SUCCEEDED,
-    SUBAGENT_TRANSCRIPT_CONFLICT,
-    SUBAGENT_TRANSCRIPT_CORRUPT,
-    SUBAGENT_TRANSCRIPT_RECOVERY_REUSED_TOTAL,
-    SUBAGENT_TRANSCRIPT_VERIFY_FAILED,
-    SubAgentTranscriptObservation,
-    SubAgentTranscriptObservationSink,
-)
-from framework.harness.subagents.policy import SubAgentBudget, SubAgentMemoryPolicy, SubAgentToolPolicy
-from framework.harness.subagents.runtime import (
-    SubAgentRuntime,
-    subagent_attempt_identity,
-)
-from framework.harness.subagents.supervisor import (
-    ChildAgentAdmissionError,
-    ChildAgentEventReader,
-    ChildAgentEventSink,
-    ChildAgentHandle,
-    ChildAgentHeartbeat,
-    ChildAgentLease,
-    ChildAgentNotFoundError,
-    ChildAgentOperationConflict,
-    ChildAgentOperationResult,
-    ChildAgentSpawnRequest,
-    ChildAgentState,
-    ChildAgentSupervisor,
-    ChildAgentSupervisorError,
-    ChildAgentTerminalReceipt,
-    ChildAgentWorker,
-    InMemoryChildAgentEventLog,
-    TERMINAL_CHILD_STATES,
-)
-from framework.harness.subagents.supervisor_store import (
-    CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
-    DurableChildAgentEventLog,
-)
-from framework.harness.subagents.owned_runtime import HarnessOwnedChildAgentRuntime
-from framework.harness.subagents.transcript import (
-    DEFAULT_MAX_BUNDLE_BYTES,
-    DEFAULT_MAX_OUTPUT_BYTES,
-    DEFAULT_MAX_TRANSCRIPT_BYTES,
-    FakeSubAgentTranscriptStore,
-    SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
-    SUBAGENT_BUNDLE_SCHEMA_V3,
-    SUBAGENT_CONTEXT_SCHEMA_V3,
-    SUBAGENT_OUTPUT_SCHEMA_V3,
-    SUBAGENT_RECEIPT_SCHEMA_V3,
-    SUBAGENT_TRANSCRIPT_SCHEMA_V3,
-    SubAgentAttemptIdentity,
-    SubAgentContextEvidence,
-    SubAgentEvidenceSchemas,
-    SubAgentOutputDocument,
-    SubAgentTranscript,
-    SubAgentTranscriptConflictError,
-    SubAgentTranscriptCorruptError,
-    SubAgentTranscriptReceipt,
-    SubAgentTranscriptStoreError,
-    SubAgentTranscriptStorePort,
-    subagent_context_ref,
-    subagent_evidence_schemas,
-)
-from framework.harness.subagents.transcript_metadata import (
-    SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1,
-    SubAgentAttemptDescriptor,
-    SubAgentAttemptMetadataIncompleteError,
-    SubAgentTranscriptDescriptorPort,
-)
+from typing import TYPE_CHECKING, Any
+
+from framework.shared.lazy_exports import LazyExports
 
 __all__ = [
     "HarnessOwnedChildAgentRuntime",
@@ -186,3 +92,218 @@ __all__ = [
     "subagent_context_ref",
     "subagent_evidence_schemas",
 ]
+
+_LAZY = LazyExports(
+    __name__,
+    {
+        "SubAgentContextBuilder": ("framework.harness.subagents.context", "SubAgentContextBuilder"),
+        "FakeSubAgentContextBuilder": ("framework.harness.subagents.fake", "FakeSubAgentContextBuilder"),
+        "FakeSubAgentRuntime": ("framework.harness.subagents.fake", "FakeSubAgentRuntime"),
+        "FakeSubAgentWorker": ("framework.harness.subagents.fake", "FakeSubAgentWorker"),
+        "fake_subagent_spec": ("framework.harness.subagents.fake", "fake_subagent_spec"),
+        "FakeSubAgentGateSuite": ("framework.harness.subagents.gates", "FakeSubAgentGateSuite"),
+        "SubAgentBudgetGate": ("framework.harness.subagents.gates", "SubAgentBudgetGate"),
+        "SubAgentContextBoundaryGate": ("framework.harness.subagents.gates", "SubAgentContextBoundaryGate"),
+        "SubAgentGateResult": ("framework.harness.subagents.gates", "SubAgentGateResult"),
+        "SubAgentHandoffSchemaGate": ("framework.harness.subagents.gates", "SubAgentHandoffSchemaGate"),
+        "SubAgentInputSchemaGate": ("framework.harness.subagents.gates", "SubAgentInputSchemaGate"),
+        "SubAgentMemoryNamespaceGate": ("framework.harness.subagents.gates", "SubAgentMemoryNamespaceGate"),
+        "SubAgentOutputSchemaGate": ("framework.harness.subagents.gates", "SubAgentOutputSchemaGate"),
+        "SubAgentToolAllowlistGate": ("framework.harness.subagents.gates", "SubAgentToolAllowlistGate"),
+        "SubAgentTranscriptGate": ("framework.harness.subagents.gates", "SubAgentTranscriptGate"),
+        "verify_handoff": ("framework.harness.subagents.handoff", "verify_handoff"),
+        "FORBIDDEN_SUBAGENT_CONTEXT_KEYS": ("framework.harness.subagents.models", "FORBIDDEN_SUBAGENT_CONTEXT_KEYS"),
+        "FORBIDDEN_SUBAGENT_RESULT_KEYS": ("framework.harness.subagents.models", "FORBIDDEN_SUBAGENT_RESULT_KEYS"),
+        "SUBAGENT_INVOCATION_SCHEMA_V3": ("framework.harness.subagents.models", "SUBAGENT_INVOCATION_SCHEMA_V3"),
+        "SubAgentContextEnvelope": ("framework.harness.subagents.models", "SubAgentContextEnvelope"),
+        "SubAgentHandoff": ("framework.harness.subagents.models", "SubAgentHandoff"),
+        "SubAgentInvocation": ("framework.harness.subagents.models", "SubAgentInvocation"),
+        "SubAgentResult": ("framework.harness.subagents.models", "SubAgentResult"),
+        "SubAgentSpec": ("framework.harness.subagents.models", "SubAgentSpec"),
+        "SubAgentStatus": ("framework.harness.subagents.models", "SubAgentStatus"),
+        "SUBAGENT_TRANSCRIPT_BYTES": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_BYTES"),
+        "SUBAGENT_TRANSCRIPT_COMMIT_FAILED": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_COMMIT_FAILED"),
+        "SUBAGENT_TRANSCRIPT_COMMIT_LATENCY_MS": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_COMMIT_LATENCY_MS"),
+        "SUBAGENT_TRANSCRIPT_COMMIT_SUCCEEDED": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_COMMIT_SUCCEEDED"),
+        "SUBAGENT_TRANSCRIPT_CONFLICT": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_CONFLICT"),
+        "SUBAGENT_TRANSCRIPT_CORRUPT": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_CORRUPT"),
+        "SUBAGENT_TRANSCRIPT_RECOVERY_REUSED_TOTAL": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_RECOVERY_REUSED_TOTAL"),
+        "SUBAGENT_TRANSCRIPT_VERIFY_FAILED": ("framework.harness.subagents.observability", "SUBAGENT_TRANSCRIPT_VERIFY_FAILED"),
+        "SubAgentTranscriptObservation": ("framework.harness.subagents.observability", "SubAgentTranscriptObservation"),
+        "SubAgentTranscriptObservationSink": ("framework.harness.subagents.observability", "SubAgentTranscriptObservationSink"),
+        "SubAgentBudget": ("framework.harness.subagents.policy", "SubAgentBudget"),
+        "SubAgentMemoryPolicy": ("framework.harness.subagents.policy", "SubAgentMemoryPolicy"),
+        "SubAgentToolPolicy": ("framework.harness.subagents.policy", "SubAgentToolPolicy"),
+        "SubAgentRuntime": ("framework.harness.subagents.runtime", "SubAgentRuntime"),
+        "subagent_attempt_identity": ("framework.harness.subagents.runtime", "subagent_attempt_identity"),
+        "ChildAgentAdmissionError": ("framework.harness.subagents.supervisor", "ChildAgentAdmissionError"),
+        "ChildAgentEventReader": ("framework.harness.subagents.supervisor", "ChildAgentEventReader"),
+        "ChildAgentEventSink": ("framework.harness.subagents.supervisor", "ChildAgentEventSink"),
+        "ChildAgentHandle": ("framework.harness.subagents.supervisor", "ChildAgentHandle"),
+        "ChildAgentHeartbeat": ("framework.harness.subagents.supervisor", "ChildAgentHeartbeat"),
+        "ChildAgentLease": ("framework.harness.subagents.supervisor", "ChildAgentLease"),
+        "ChildAgentNotFoundError": ("framework.harness.subagents.supervisor", "ChildAgentNotFoundError"),
+        "ChildAgentOperationConflict": ("framework.harness.subagents.supervisor", "ChildAgentOperationConflict"),
+        "ChildAgentOperationResult": ("framework.harness.subagents.supervisor", "ChildAgentOperationResult"),
+        "ChildAgentSpawnRequest": ("framework.harness.subagents.supervisor", "ChildAgentSpawnRequest"),
+        "ChildAgentState": ("framework.harness.subagents.supervisor", "ChildAgentState"),
+        "ChildAgentSupervisor": ("framework.harness.subagents.supervisor", "ChildAgentSupervisor"),
+        "ChildAgentSupervisorError": ("framework.harness.subagents.supervisor", "ChildAgentSupervisorError"),
+        "ChildAgentTerminalReceipt": ("framework.harness.subagents.supervisor", "ChildAgentTerminalReceipt"),
+        "ChildAgentWorker": ("framework.harness.subagents.supervisor", "ChildAgentWorker"),
+        "InMemoryChildAgentEventLog": ("framework.harness.subagents.supervisor", "InMemoryChildAgentEventLog"),
+        "TERMINAL_CHILD_STATES": ("framework.harness.subagents.supervisor", "TERMINAL_CHILD_STATES"),
+        "CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE": ("framework.harness.subagents.supervisor_store", "CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE"),
+        "DurableChildAgentEventLog": ("framework.harness.subagents.supervisor_store", "DurableChildAgentEventLog"),
+        "HarnessOwnedChildAgentRuntime": ("framework.harness.subagents.owned_runtime", "HarnessOwnedChildAgentRuntime"),
+        "DEFAULT_MAX_BUNDLE_BYTES": ("framework.harness.subagents.transcript", "DEFAULT_MAX_BUNDLE_BYTES"),
+        "DEFAULT_MAX_OUTPUT_BYTES": ("framework.harness.subagents.transcript", "DEFAULT_MAX_OUTPUT_BYTES"),
+        "DEFAULT_MAX_TRANSCRIPT_BYTES": ("framework.harness.subagents.transcript", "DEFAULT_MAX_TRANSCRIPT_BYTES"),
+        "FakeSubAgentTranscriptStore": ("framework.harness.subagents.transcript", "FakeSubAgentTranscriptStore"),
+        "SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3": ("framework.harness.subagents.transcript", "SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3"),
+        "SUBAGENT_BUNDLE_SCHEMA_V3": ("framework.harness.subagents.transcript", "SUBAGENT_BUNDLE_SCHEMA_V3"),
+        "SUBAGENT_CONTEXT_SCHEMA_V3": ("framework.harness.subagents.transcript", "SUBAGENT_CONTEXT_SCHEMA_V3"),
+        "SUBAGENT_OUTPUT_SCHEMA_V3": ("framework.harness.subagents.transcript", "SUBAGENT_OUTPUT_SCHEMA_V3"),
+        "SUBAGENT_RECEIPT_SCHEMA_V3": ("framework.harness.subagents.transcript", "SUBAGENT_RECEIPT_SCHEMA_V3"),
+        "SUBAGENT_TRANSCRIPT_SCHEMA_V3": ("framework.harness.subagents.transcript", "SUBAGENT_TRANSCRIPT_SCHEMA_V3"),
+        "SubAgentAttemptIdentity": ("framework.harness.subagents.transcript", "SubAgentAttemptIdentity"),
+        "SubAgentContextEvidence": ("framework.harness.subagents.transcript", "SubAgentContextEvidence"),
+        "SubAgentEvidenceSchemas": ("framework.harness.subagents.transcript", "SubAgentEvidenceSchemas"),
+        "SubAgentOutputDocument": ("framework.harness.subagents.transcript", "SubAgentOutputDocument"),
+        "SubAgentTranscript": ("framework.harness.subagents.transcript", "SubAgentTranscript"),
+        "SubAgentTranscriptConflictError": ("framework.harness.subagents.transcript", "SubAgentTranscriptConflictError"),
+        "SubAgentTranscriptCorruptError": ("framework.harness.subagents.transcript", "SubAgentTranscriptCorruptError"),
+        "SubAgentTranscriptReceipt": ("framework.harness.subagents.transcript", "SubAgentTranscriptReceipt"),
+        "SubAgentTranscriptStoreError": ("framework.harness.subagents.transcript", "SubAgentTranscriptStoreError"),
+        "SubAgentTranscriptStorePort": ("framework.harness.subagents.transcript", "SubAgentTranscriptStorePort"),
+        "subagent_context_ref": ("framework.harness.subagents.transcript", "subagent_context_ref"),
+        "subagent_evidence_schemas": ("framework.harness.subagents.transcript", "subagent_evidence_schemas"),
+        "SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1": ("framework.harness.subagents.transcript_metadata", "SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1"),
+        "SubAgentAttemptDescriptor": ("framework.harness.subagents.transcript_metadata", "SubAgentAttemptDescriptor"),
+        "SubAgentAttemptMetadataIncompleteError": ("framework.harness.subagents.transcript_metadata", "SubAgentAttemptMetadataIncompleteError"),
+        "SubAgentTranscriptDescriptorPort": ("framework.harness.subagents.transcript_metadata", "SubAgentTranscriptDescriptorPort"),
+    },
+)
+
+
+def __getattr__(name: str) -> Any:
+    return _LAZY.getattr(name)
+
+
+def __dir__() -> list[str]:
+    return _LAZY.dir()
+
+
+if TYPE_CHECKING:
+    from framework.harness.subagents.context import (
+        SubAgentContextBuilder,
+    )
+    from framework.harness.subagents.fake import (
+        FakeSubAgentContextBuilder,
+        FakeSubAgentRuntime,
+        FakeSubAgentWorker,
+        fake_subagent_spec,
+    )
+    from framework.harness.subagents.gates import (
+        FakeSubAgentGateSuite,
+        SubAgentBudgetGate,
+        SubAgentContextBoundaryGate,
+        SubAgentGateResult,
+        SubAgentHandoffSchemaGate,
+        SubAgentInputSchemaGate,
+        SubAgentMemoryNamespaceGate,
+        SubAgentOutputSchemaGate,
+        SubAgentToolAllowlistGate,
+        SubAgentTranscriptGate,
+    )
+    from framework.harness.subagents.handoff import (
+        verify_handoff,
+    )
+    from framework.harness.subagents.models import (
+        FORBIDDEN_SUBAGENT_CONTEXT_KEYS,
+        FORBIDDEN_SUBAGENT_RESULT_KEYS,
+        SUBAGENT_INVOCATION_SCHEMA_V3,
+        SubAgentContextEnvelope,
+        SubAgentHandoff,
+        SubAgentInvocation,
+        SubAgentResult,
+        SubAgentSpec,
+        SubAgentStatus,
+    )
+    from framework.harness.subagents.observability import (
+        SUBAGENT_TRANSCRIPT_BYTES,
+        SUBAGENT_TRANSCRIPT_COMMIT_FAILED,
+        SUBAGENT_TRANSCRIPT_COMMIT_LATENCY_MS,
+        SUBAGENT_TRANSCRIPT_COMMIT_SUCCEEDED,
+        SUBAGENT_TRANSCRIPT_CONFLICT,
+        SUBAGENT_TRANSCRIPT_CORRUPT,
+        SUBAGENT_TRANSCRIPT_RECOVERY_REUSED_TOTAL,
+        SUBAGENT_TRANSCRIPT_VERIFY_FAILED,
+        SubAgentTranscriptObservation,
+        SubAgentTranscriptObservationSink,
+    )
+    from framework.harness.subagents.policy import (
+        SubAgentBudget,
+        SubAgentMemoryPolicy,
+        SubAgentToolPolicy,
+    )
+    from framework.harness.subagents.runtime import (
+        SubAgentRuntime,
+        subagent_attempt_identity,
+    )
+    from framework.harness.subagents.supervisor import (
+        ChildAgentAdmissionError,
+        ChildAgentEventReader,
+        ChildAgentEventSink,
+        ChildAgentHandle,
+        ChildAgentHeartbeat,
+        ChildAgentLease,
+        ChildAgentNotFoundError,
+        ChildAgentOperationConflict,
+        ChildAgentOperationResult,
+        ChildAgentSpawnRequest,
+        ChildAgentState,
+        ChildAgentSupervisor,
+        ChildAgentSupervisorError,
+        ChildAgentTerminalReceipt,
+        ChildAgentWorker,
+        InMemoryChildAgentEventLog,
+        TERMINAL_CHILD_STATES,
+    )
+    from framework.harness.subagents.supervisor_store import (
+        CHILD_AGENT_LIFECYCLE_STATE_NAMESPACE,
+        DurableChildAgentEventLog,
+    )
+    from framework.harness.subagents.owned_runtime import (
+        HarnessOwnedChildAgentRuntime,
+    )
+    from framework.harness.subagents.transcript import (
+        DEFAULT_MAX_BUNDLE_BYTES,
+        DEFAULT_MAX_OUTPUT_BYTES,
+        DEFAULT_MAX_TRANSCRIPT_BYTES,
+        FakeSubAgentTranscriptStore,
+        SUBAGENT_ATTEMPT_IDENTITY_SCHEMA_V3,
+        SUBAGENT_BUNDLE_SCHEMA_V3,
+        SUBAGENT_CONTEXT_SCHEMA_V3,
+        SUBAGENT_OUTPUT_SCHEMA_V3,
+        SUBAGENT_RECEIPT_SCHEMA_V3,
+        SUBAGENT_TRANSCRIPT_SCHEMA_V3,
+        SubAgentAttemptIdentity,
+        SubAgentContextEvidence,
+        SubAgentEvidenceSchemas,
+        SubAgentOutputDocument,
+        SubAgentTranscript,
+        SubAgentTranscriptConflictError,
+        SubAgentTranscriptCorruptError,
+        SubAgentTranscriptReceipt,
+        SubAgentTranscriptStoreError,
+        SubAgentTranscriptStorePort,
+        subagent_context_ref,
+        subagent_evidence_schemas,
+    )
+    from framework.harness.subagents.transcript_metadata import (
+        SUBAGENT_ATTEMPT_DESCRIPTOR_SCHEMA_V1,
+        SubAgentAttemptDescriptor,
+        SubAgentAttemptMetadataIncompleteError,
+        SubAgentTranscriptDescriptorPort,
+    )

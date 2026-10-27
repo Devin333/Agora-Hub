@@ -301,20 +301,27 @@ def _hash_file(
     captured = bytearray() if capture else None
     try:
         check_startup_cancellation()
-        with open(windows_extended_path(path), "rb") as handle:
+        # Unbuffered reads into one buffer sized to the file: ``read(n)`` would
+        # allocate a fresh ``n``-byte object per call, which dominates hashing a
+        # release made mostly of small files.
+        with open(windows_extended_path(path), "rb", buffering=0) as handle:
             opened = os.fstat(handle.fileno())
             if not stat.S_ISREG(opened.st_mode) or not _same_identity(metadata, opened) or not _same_content_state(metadata, opened):
                 raise DesktopOperationError(
                     filesystem_reason_code,
                     f"{filesystem_message}: tree entry changed while it was being opened",
                 )
+            # One spare byte lets a file that grew past its fstat size surface as
+            # a size mismatch below instead of a silently truncated digest.
+            view = memoryview(bytearray(max(1, min(_READ_CHUNK_SIZE, opened.st_size + 1))))
             while True:
                 check_startup_cancellation()
-                chunk = handle.read(_READ_CHUNK_SIZE)
-                if not chunk:
+                count = handle.readinto(view)
+                if not count:
                     break
+                chunk = view[:count]
                 digest.update(chunk)
-                size += len(chunk)
+                size += count
                 if captured is not None:
                     captured.extend(chunk)
                 check_startup_cancellation()

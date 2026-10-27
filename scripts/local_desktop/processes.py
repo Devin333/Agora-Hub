@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -31,6 +32,10 @@ from scripts.local_desktop.release import ReleaseManager
 INSTANCE_SCHEMA = "newsroom.local-desktop-instance/v1"
 PROCESS_SCHEMA = "newsroom.local-desktop-process/v1"
 RUNNING_STATES = {"STARTING", "READY", "DEGRADED"}
+# Readiness is polled on loopback, so a short fixed interval costs nothing and
+# keeps the gap between "children ready" and "start returns" well under a second.
+_READINESS_POLL_INTERVAL = 0.15
+_READINESS_PROBE_TIMEOUT = 1.0
 
 
 @dataclass(frozen=True)
@@ -292,7 +297,7 @@ class LifecycleManager:
             if conflicts:
                 raise DesktopOperationError("desktop_port_owned_elsewhere", "a required desktop port is occupied by an unrelated process", details={"endpoints": [f"{host}:{port}" for host, port in conflicts]})
             release_path, manifest = self.release_manager.active()
-            doctor_report = self.doctor.run()
+            doctor_report = self.doctor.run(verified_release=(release_path, manifest))
             if doctor_report.status == "error":
                 raise DesktopOperationError("desktop_doctor_blocked_start", "required local desktop checks failed", details={"doctor": doctor_report.to_dict()})
             self.config.runtime_root.mkdir(parents=True, exist_ok=True)
@@ -744,7 +749,6 @@ class LifecycleManager:
 
     def _wait_for_readiness(self, children: list[tuple[subprocess.Popen[Any], ProcessIdentity]], expected: Mapping[str, str], *, deadline: float) -> dict[str, Any]:
         last = {"api": False, "frontend": False, "bff": False, "raw_rewrite": False, "runtime": False, "reason_code": "desktop_readiness_pending"}
-        delay = 0.1
         while time.monotonic() < deadline:
             check_startup_cancellation()
             exited = [identity.role for process, identity in children if process.poll() is not None]
@@ -756,21 +760,27 @@ class LifecycleManager:
             last = self._readiness_once(expected)
             if all(last[item] for item in ("api", "frontend", "bff", "raw_rewrite")):
                 return last
-            time.sleep(delay)
-            delay = min(delay * 1.5, 1.0)
+            time.sleep(max(0.0, min(_READINESS_POLL_INTERVAL, deadline - time.monotonic())))
         return {**last, "reason_code": "desktop_readiness_deadline"}
 
     def _readiness_once(self, expected: Mapping[str, str]) -> dict[str, Any]:
-        api = _json_http(f"{self.config.api_base_url}/health", timeout=1.0)
-        runtime = _json_http(f"{self.config.api_base_url}/health/ready", timeout=1.0)
-        raw_rewrite = _json_http(f"{self.config.canonical_origin}/api/v1/auth/session", timeout=1.0)
-        bff = _json_http(f"{self.config.canonical_origin}/api/auth/session", timeout=1.0)
+        # The probes are independent loopback requests; while a child is still
+        # booting each one waits out a refused connect, so run them together and
+        # let one round cost a single probe's latency instead of five.
+        api_base, origin = self.config.api_base_url, self.config.canonical_origin
+        timeout = _READINESS_PROBE_TIMEOUT
+        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="desktop-readiness") as probes:
+            api = probes.submit(_json_http, f"{api_base}/health", timeout=timeout)
+            runtime = probes.submit(_json_http, f"{api_base}/health/ready", timeout=timeout)
+            raw_rewrite = probes.submit(_json_http, f"{origin}/api/v1/auth/session", timeout=timeout)
+            bff = probes.submit(_json_http, f"{origin}/api/auth/session", timeout=timeout)
+            frontend = probes.submit(_html_ready, origin, timeout=timeout)
         return {
-            "api": _api_health_ready(api, expected, require_runtime=False),
-            "runtime": _api_health_ready(runtime, expected, require_runtime=True),
-            "frontend": _html_ready(self.config.canonical_origin, timeout=1.0),
-            "raw_rewrite": _auth_route_ready(raw_rewrite, expected),
-            "bff": _auth_route_ready(bff, expected),
+            "api": _api_health_ready(api.result(), expected, require_runtime=False),
+            "runtime": _api_health_ready(runtime.result(), expected, require_runtime=True),
+            "frontend": frontend.result(),
+            "raw_rewrite": _auth_route_ready(raw_rewrite.result(), expected),
+            "bff": _auth_route_ready(bff.result(), expected),
             "checked_at": utc_timestamp(),
         }
 

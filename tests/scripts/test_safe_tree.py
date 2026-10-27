@@ -337,3 +337,57 @@ def test_scan_tree_checks_startup_cancellation_between_file_blocks(
 
     assert raised.value.reason_code == "desktop_start_cancelled"
     assert checks == 12
+
+
+
+@pytest.mark.parametrize("payload", [b"", b"x", b"0123456789abcdef" * 5 + b"tail"])
+def test_scan_tree_hashes_and_captures_files_across_read_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: bytes,
+) -> None:
+    root = tmp_path / "runtime"
+    root.mkdir()
+    (root / "captured.bin").write_bytes(payload)
+    monkeypatch.setattr(safe_tree_module, "_READ_CHUNK_SIZE", 7)
+
+    snapshot = safe_tree_module.scan_tree(
+        root,
+        captured={"captured.bin"},
+        filesystem_reason_code="test_tree_scan_failed",
+        filesystem_message="test tree scan failed",
+        node_type_reason_code="test_tree_node_invalid",
+    )
+
+    assert snapshot.resources["captured.bin"] == (len(payload), sha256(payload).hexdigest())
+    assert snapshot.captured["captured.bin"] == payload
+
+
+def test_scan_tree_rejects_file_that_grew_past_its_opened_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "runtime"
+    root.mkdir()
+    target = root / "growing.bin"
+    target.write_bytes(b"0123456789")
+    original_fstat = safe_tree_module.os.fstat
+    calls = 0
+
+    def stale_open_size(descriptor: int):
+        # The first fstat reports the size from before an append that lands
+        # between open and read, so the read sees more bytes than announced.
+        nonlocal calls
+        calls += 1
+        metadata = original_fstat(descriptor)
+        if calls == 1:
+            target.write_bytes(b"0123456789-appended")
+            return _changed_metadata(metadata, st_size=metadata.st_size)
+        return metadata
+
+    monkeypatch.setattr(safe_tree_module.os, "fstat", stale_open_size)
+
+    with pytest.raises(DesktopOperationError) as raised:
+        _scan(root)
+
+    assert raised.value.reason_code == "test_tree_scan_failed"
