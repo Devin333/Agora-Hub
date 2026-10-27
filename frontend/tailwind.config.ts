@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss"
+import { typeScale } from "./src/styles/type-scale"
 
 /**
  * Maps a design token from `src/styles/theme-tokens.css` to a Tailwind color.
@@ -78,15 +79,7 @@ const config: Config = {
         serif: ["Georgia", '"Times New Roman"', '"Noto Serif CJK SC"', '"Source Han Serif SC"', '"Songti SC"', "serif"],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "Consolas", '"Liberation Mono"', '"Courier New"', "monospace"]
       },
-      fontSize: {
-        caption: ["11px", { lineHeight: "16px", letterSpacing: "0.005em" }],
-        label: ["12px", { lineHeight: "16px" }],
-        body2: ["13px", { lineHeight: "18px" }],
-        body1: ["14px", { lineHeight: "20px" }],
-        heading3: ["17px", { lineHeight: "24px", letterSpacing: "-0.008em" }],
-        heading2: ["22px", { lineHeight: "28px", letterSpacing: "-0.012em" }],
-        heading1: ["26px", { lineHeight: "32px", letterSpacing: "-0.015em" }]
-      },
+      fontSize: typeScale,
       ringWidth: {
         3: "3px"
       },
