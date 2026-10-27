@@ -3,17 +3,16 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useMemo, useState } from "react"
-import {
-  ArrowRight,
-  BookOpen,
-  Check,
-  FileText,
-  GitBranch,
-  MessageSquareText,
-  Network,
-  Newspaper,
-  Search,
-} from "lucide-react"
+import { ArrowRight, ArrowUpRight, Network, Search } from "lucide-react"
+import { EmptyState } from "@/components/common/empty-state"
+import { FilterChip } from "@/components/common/filter-chip"
+import { NativeSelect, NativeSelectOption } from "@/components/common/native-select"
+import { SearchField } from "@/components/common/search-field"
+import { SectionCaption, SectionPanel } from "@/components/common/section-panel"
+import { PageHeader } from "@/components/layout/page-header"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { NodeKindIcon, NodeKindMarker, NodeKindPill, nodeTypeLabels } from "@/features/evidence-graph/evidence-node-appearance"
 import { cn } from "@/lib/utils"
 import type {
   EvidenceEdge,
@@ -38,19 +37,6 @@ const periods = [
   { value: "daily", label: "今日" },
 ]
 
-const nodeTypeLabels: Record<EvidenceNodeType, string> = {
-  topic: "Topic",
-  paper: "Paper",
-  project: "Project",
-  news: "News",
-  community_signal: "Community",
-  company: "Company",
-  model: "Model",
-  method: "Method",
-  task: "Task",
-  report: "Report",
-}
-
 const edgeLabels: Record<string, string> = {
   mentions: "提及",
   implements: "实现",
@@ -63,6 +49,20 @@ const edgeLabels: Record<string, string> = {
   released_by: "发布方",
   reported_by: "报告收录",
 }
+
+/** Shared list recipe: hairline-divided rows inside a rounded frame. */
+const listFrameClass = "divide-y divide-border overflow-hidden rounded-xl border border-border"
+
+/** Shared interactive row recipe used by every selectable evidence list. */
+function rowClass(selected: boolean) {
+  return cn(
+    "w-full px-4 py-3 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50",
+    selected ? "bg-accent/60" : "hover:bg-accent/40"
+  )
+}
+
+const fieldClass =
+  "h-8 w-full rounded-lg border border-border bg-background px-3 py-1.5 text-[13px] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
 
 export function EvidenceGraphExplorer({ data }: { data: EvidenceGraphResponse }) {
   const router = useRouter()
@@ -97,213 +97,209 @@ export function EvidenceGraphExplorer({ data }: { data: EvidenceGraphResponse })
   }
 
   return (
-    <div className="space-y-8">
-      <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-end">
-        <div className="min-w-0">
-          <p className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Trends / Evidence</p>
-          <h1 className="max-w-5xl text-5xl font-black leading-none tracking-normal text-slate-900 sm:text-6xl lg:text-7xl dark:text-foreground">
-            Cross-board Evidence Graph
-          </h1>
-          <p className="mt-6 max-w-3xl text-base leading-7 text-slate-600 dark:text-muted-foreground">{data.summary.summary}</p>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <PageHeader
+          eyebrow="Trends / Evidence"
+          title="Cross-board Evidence Graph"
+          description={data.summary.summary}
+          actions={
+            <div className="flex items-center gap-2.5 rounded-xl border border-border px-3 py-1.5">
+              <Network size={16} strokeWidth={1.8} aria-hidden="true" className="text-muted-foreground" />
+              <span className="text-label text-muted-foreground">当前图谱规模</span>
+              <span className="text-body1 font-semibold tabular-nums text-foreground">{graphScale}</span>
+            </div>
+          }
+        />
 
-        <form onSubmit={submitSearch} className="rounded-md border border-slate-200 bg-white p-5 shadow-sm dark:border-border dark:bg-card">
-          <div className="flex items-center gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-slate-950 text-white">
-              <Network className="size-5" />
-            </span>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-normal text-slate-500">当前图谱规模</p>
-              <p className="text-2xl font-semibold text-slate-900 dark:text-foreground">{graphScale}</p>
-            </div>
-          </div>
-          <div className="mt-5 grid gap-3">
-            <label className="text-xs font-semibold text-slate-500" htmlFor="evidence-topic-search">
-              搜索主题
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="evidence-topic-search"
-                className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 dark:border-border dark:bg-background dark:text-foreground"
-                value={topic}
-                placeholder="Agent Memory"
-                onChange={(event) => setTopic(event.target.value)}
-              />
-              <button
-                type="submit"
-                className="inline-flex size-10 shrink-0 items-center justify-center rounded-md bg-slate-950 text-white transition-colors hover:bg-slate-800"
-                aria-label="搜索证据图谱"
-              >
-                <Search className="size-4" />
-              </button>
-            </div>
-            <input
-              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 dark:border-border dark:bg-background dark:text-foreground"
-              value={entity}
-              placeholder="实体，例如 OpenAI"
-              onChange={(event) => setEntity(event.target.value)}
+        <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2 border-b border-border py-3">
+          <label className="sr-only" htmlFor="evidence-topic-search">
+            搜索主题
+          </label>
+          <div className="flex w-full max-w-[320px] items-center gap-1.5">
+            <SearchField
+              id="evidence-topic-search"
+              className="flex-1"
+              value={topic}
+              placeholder="Agent Memory"
+              onChange={(event) => setTopic(event.target.value)}
             />
-            <select
-              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-border dark:bg-background dark:text-foreground"
-              value={period}
-              onChange={(event) => setPeriod(event.target.value as EvidenceGraphPeriod)}
-              aria-label="时间范围"
-            >
-              {periods.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
+            <Button type="submit" size="icon" aria-label="搜索证据图谱">
+              <Search size={15} strokeWidth={1.8} />
+            </Button>
           </div>
-          <div className="mt-4 grid grid-cols-2 gap-2">
+          <input
+            className={cn(fieldClass, "max-w-[220px]")}
+            value={entity}
+            placeholder="实体，例如 OpenAI"
+            aria-label="实体"
+            onChange={(event) => setEntity(event.target.value)}
+          />
+          <NativeSelect value={period} onChange={(event) => setPeriod(event.target.value as EvidenceGraphPeriod)} aria-label="时间范围">
+            {periods.map((item) => (
+              <NativeSelectOption key={item.value} value={item.value}>
+                {item.label}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <span aria-hidden="true" className="mx-1 hidden h-5 w-px bg-border sm:block" />
+          <div role="group" aria-label="证据类型" className="flex flex-wrap items-center gap-1.5">
             {evidenceTypes.map((entry) => (
-              <label
-                key={entry.type}
-                className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-700 dark:border-border dark:text-muted-foreground"
-              >
-                <input
-                  type="checkbox"
-                  checked={nodeTypes.includes(entry.type)}
-                  onChange={() => toggleNodeType(entry.type)}
-                  className="size-3.5"
-                />
-                <span className="truncate">{entry.label}</span>
-              </label>
+              <FilterChip key={entry.type} active={nodeTypes.includes(entry.type)} onClick={() => toggleNodeType(entry.type)}>
+                {entry.label}
+              </FilterChip>
             ))}
           </div>
         </form>
-      </section>
+      </div>
 
       {data.notices.length ? (
-        <section className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+        <section className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-body2 text-foreground">
           {data.notices.slice(0, 3).join(" ")}
         </section>
       ) : null}
 
       <GraphSummary data={data} />
 
-      <section className="grid gap-6 xl:grid-cols-[16rem_minmax(0,1fr)_20rem]">
-        <aside className="space-y-4">
-          <PanelTitle title="Topic / Entity" />
-          <div className="rounded-md border border-slate-200 bg-white p-4 dark:border-border dark:bg-card">
-            <p className="break-words text-lg font-semibold text-slate-900 dark:text-foreground">{data.summary.topicName}</p>
-            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-muted-foreground">{trajectoryLabel(data.summary.trajectory)}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {(topicNode?.tags ?? []).slice(0, 12).map((tag) => (
+      <section className="grid gap-4 xl:grid-cols-[16rem_minmax(0,1fr)_20rem]">
+        <aside className="min-w-0 space-y-4">
+          <SectionPanel title="Topic / Entity">
+            <p className="break-words text-[16px] font-semibold text-foreground">{data.summary.topicName}</p>
+            <p className="mt-1 text-label text-muted-foreground">{trajectoryLabel(data.summary.trajectory)}</p>
+            {topicNode?.tags?.length ? (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {topicNode.tags.slice(0, 12).map((tag) => (
+                  <Button
+                    key={tag}
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    className="rounded-full text-muted-foreground"
+                    onClick={() => {
+                      setTopic(tag)
+                      router.push(`/topics?view=evidence-graph&topic=${encodeURIComponent(tag)}`)
+                    }}
+                  >
+                    {tag}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
+          </SectionPanel>
+          <nav aria-label="证据分区" className={listFrameClass}>
+            {sections.map((section) => {
+              const active = section.nodes.some((node) => node.id === selectedNode?.id)
+              return (
                 <button
-                  key={tag}
+                  key={section.type}
                   type="button"
-                  onClick={() => {
-                    setTopic(tag)
-                    router.push(`/topics?view=evidence-graph&topic=${encodeURIComponent(tag)}`)
-                  }}
-                  className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 transition-colors hover:border-emerald-400 hover:text-emerald-700 dark:border-border dark:text-muted-foreground"
+                  className={cn(rowClass(active), "flex items-center justify-between gap-3 text-body2")}
+                  onClick={() => section.nodes[0] && setSelectedNodeId(section.nodes[0].id)}
                 >
-                  {tag}
+                  <span className="flex min-w-0 items-center gap-2.5 text-foreground">
+                    <NodeKindIcon type={section.type} />
+                    <span className="truncate">{section.label}</span>
+                  </span>
+                  <span className="text-label tabular-nums text-muted-foreground">{section.nodes.length}</span>
                 </button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2">
-            {sections.map((section) => (
-              <button
-                key={section.type}
-                type="button"
-                className="flex w-full items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-border dark:bg-card dark:text-foreground"
-                onClick={() => section.nodes[0] && setSelectedNodeId(section.nodes[0].id)}
-              >
-                <span>{section.label}</span>
-                <span>{section.nodes.length}</span>
-              </button>
-            ))}
-          </div>
+              )
+            })}
+          </nav>
         </aside>
 
-        <main className="min-w-0 space-y-6">
+        <div className="min-w-0 space-y-4">
           <EvidenceChain nodes={data.nodes} edges={data.edges} selectedNodeId={selectedNode?.id} onSelect={setSelectedNodeId} />
           <TimelinePanel items={data.timeline} onSelect={setSelectedNodeId} />
-        </main>
+        </div>
 
         <EvidenceInspector node={selectedNode} edges={selectedEdges} nodeById={nodeById} />
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {sections.map((section) => (
-          <EvidenceColumn key={section.type} title={section.label} nodes={section.nodes} selectedNodeId={selectedNode?.id} onSelect={setSelectedNodeId} />
+          <EvidenceColumn
+            key={section.type}
+            type={section.type}
+            title={section.label}
+            nodes={section.nodes}
+            selectedNodeId={selectedNode?.id}
+            onSelect={setSelectedNodeId}
+          />
         ))}
       </section>
 
-      <section className="border-t border-slate-200 pt-8 dark:border-border">
-        <PanelTitle title="Related Reports" />
+      <SectionPanel title="Related Reports" framed={false} className="border-t border-border pt-6">
         {data.relatedReports.length ? (
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {data.relatedReports.map((report) => (
               <Link
                 key={report.id}
                 href={report.href}
-                className="rounded-md border border-slate-200 bg-white p-4 transition-colors hover:border-emerald-400 dark:border-border dark:bg-card"
+                className="group rounded-2xl border border-border bg-card p-4 outline-none transition-colors hover:bg-accent/40 focus-visible:ring-3 focus-visible:ring-ring/50"
               >
-                <p className="text-sm font-semibold text-slate-900 dark:text-foreground">{report.title}</p>
-                <p className="mt-2 text-xs text-slate-500">{[report.status, formatDate(report.createdAt)].filter(Boolean).join(" / ")}</p>
-                <p className="mt-3 text-sm text-slate-600 dark:text-muted-foreground">{report.evidenceNodeIds.length} 个证据节点关联</p>
+                <span className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 text-body1 font-medium text-foreground">{report.title}</span>
+                  <ArrowUpRight size={15} strokeWidth={1.8} aria-hidden="true" className="mt-0.5 shrink-0 text-muted-foreground group-hover:text-foreground" />
+                </span>
+                <span className="mt-1 block text-label text-muted-foreground">{[report.status, formatDate(report.createdAt)].filter(Boolean).join(" / ")}</span>
+                <span className="mt-3 block text-body2 text-muted-foreground">{report.evidenceNodeIds.length} 个证据节点关联</span>
               </Link>
             ))}
           </div>
         ) : (
           <EmptyGraphState title="暂无相关报告" description="当前真实报告数据未返回与该主题匹配的报告引用。" />
         )}
-      </section>
+      </SectionPanel>
     </div>
   )
 }
 
 function GraphSummary({ data }: { data: EvidenceGraphResponse }) {
   const metrics = [
-    { label: "Trend Score", value: data.summary.trendScore, color: "text-emerald-700" },
-    { label: "Evidence Score", value: data.summary.evidenceScore, color: "text-sky-700" },
-    { label: "Confidence", value: data.summary.confidenceScore, color: "text-violet-700" },
+    { label: "Trend Score", value: data.summary.trendScore, tone: "text-success" },
+    { label: "Evidence Score", value: data.summary.evidenceScore, tone: "text-link" },
+    { label: "Confidence", value: data.summary.confidenceScore, tone: "text-status-working" },
   ]
   const mix = [
-    { label: "Papers", value: data.summary.paperCount },
-    { label: "Projects", value: data.summary.projectCount },
-    { label: "News", value: data.summary.newsCount },
-    { label: "Community", value: data.summary.communitySignalCount },
+    { type: "paper" as const, label: "Papers", value: data.summary.paperCount },
+    { type: "project" as const, label: "Projects", value: data.summary.projectCount },
+    { type: "news" as const, label: "News", value: data.summary.newsCount },
+    { type: "community_signal" as const, label: "Community", value: data.summary.communitySignalCount },
   ]
 
   return (
     <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
-      <div className="rounded-md border border-slate-200 bg-white p-5 dark:border-border dark:bg-card">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-normal text-slate-500">Graph Summary</p>
-            <h2 className="mt-1 break-words text-2xl font-semibold text-slate-900 dark:text-foreground">{data.summary.topicName}</h2>
-            <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600 dark:text-muted-foreground">{data.summary.summary}</p>
+            <SectionCaption>Graph Summary</SectionCaption>
+            <h2 className="mt-0.5 break-words text-heading3 font-semibold text-foreground">{data.summary.topicName}</h2>
+            <p className="mt-1.5 max-w-4xl text-body2 text-muted-foreground">{data.summary.summary}</p>
           </div>
-          <span className="rounded-md border border-slate-200 px-3 py-1 text-sm text-slate-700 dark:border-border dark:text-muted-foreground">
-            {trajectoryLabel(data.summary.trajectory)}
-          </span>
+          <Badge variant={trajectoryBadgeVariant(data.summary.trajectory)}>{trajectoryLabel(data.summary.trajectory)}</Badge>
         </div>
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
           {metrics.map((metric) => (
-            <div key={metric.label} className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 dark:border-border dark:bg-background">
-              <p className="text-xs text-slate-500">{metric.label}</p>
-              <p className={cn("mt-2 text-3xl font-semibold", metric.color)}>{metric.value}</p>
+            <div key={metric.label} className="rounded-xl border border-border px-4 py-3">
+              <p className="text-label text-muted-foreground">{metric.label}</p>
+              <p className={cn("mt-1 text-heading1 font-semibold tabular-nums", metric.tone)}>{metric.value}</p>
             </div>
           ))}
         </div>
       </div>
-      <div className="rounded-md border border-slate-200 bg-white p-5 dark:border-border dark:bg-card">
-        <p className="text-xs font-semibold uppercase tracking-normal text-slate-500">Signal Mix</p>
-        <div className="mt-4 grid gap-2">
+      <SectionPanel title="Signal Mix">
+        <div className={listFrameClass}>
           {mix.map((item) => (
-            <div key={item.label} className="flex items-center justify-between rounded-md border border-slate-200 px-3 py-2 dark:border-border">
-              <span className="text-sm text-slate-600 dark:text-muted-foreground">{item.label}</span>
-              <span className="text-sm font-semibold text-slate-900 dark:text-foreground">{item.value}</span>
+            <div key={item.label} className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <span className="flex min-w-0 items-center gap-2.5 text-body2 text-muted-foreground">
+                <NodeKindIcon type={item.type} />
+                <span className="truncate">{item.label}</span>
+              </span>
+              <span className="text-body2 font-semibold tabular-nums text-foreground">{item.value}</span>
             </div>
           ))}
         </div>
-      </div>
+      </SectionPanel>
     </section>
   )
 }
@@ -323,33 +319,29 @@ function EvidenceChain({
   const evidenceNodes = nodes.filter((node) => node.type !== "topic")
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-5 dark:border-border dark:bg-card">
-      <PanelTitle title="Evidence Chain" />
+    <SectionPanel title="Evidence Chain" description={evidenceNodes.length ? `${Math.min(evidenceNodes.length, 14)} / ${evidenceNodes.length}` : undefined}>
       {evidenceNodes.length ? (
-        <div className="mt-4 grid gap-3">
+        <div className={listFrameClass}>
           {evidenceNodes.slice(0, 14).map((node) => {
             const relation = edges.find((edge) => edge.targetNodeId === node.id || edge.sourceNodeId === node.id)
+            const selected = selectedNodeId === node.id
             return (
               <button
                 key={node.id}
                 type="button"
+                aria-pressed={selected}
                 onClick={() => onSelect(node.id)}
-                className={cn(
-                  "grid gap-3 rounded-md border p-3 text-left transition-colors md:grid-cols-[9rem_minmax(0,1fr)_auto] md:items-center",
-                  selectedNodeId === node.id
-                    ? "border-emerald-400 bg-emerald-50"
-                    : "border-slate-200 bg-white hover:border-emerald-300 dark:border-border dark:bg-background"
-                )}
+                className={cn(rowClass(selected), "grid gap-3 md:grid-cols-[8.5rem_minmax(0,1fr)_auto] md:items-center")}
               >
-                <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-normal text-slate-500">
-                  {iconForNode(node.type)}
-                  {nodeTypeLabels[node.type]}
+                <span className="flex items-center gap-2.5">
+                  <NodeKindMarker type={node.type} />
+                  <span className="text-label font-medium text-muted-foreground">{nodeTypeLabels[node.type]}</span>
                 </span>
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold text-slate-900 dark:text-foreground">{node.title}</span>
-                  <span className="mt-1 line-clamp-1 text-xs text-slate-500">{relation?.evidenceText ?? topicNode?.title}</span>
+                  <span className="block truncate text-body2 font-medium text-foreground">{node.title}</span>
+                  <span className="mt-0.5 line-clamp-1 text-label text-muted-foreground">{relation?.evidenceText ?? topicNode?.title}</span>
                 </span>
-                <span className="text-xs text-slate-500">{formatScore(node.confidence)}</span>
+                <span className="text-label tabular-nums text-muted-foreground">{formatScore(node.confidence)}</span>
               </button>
             )
           })}
@@ -357,36 +349,36 @@ function EvidenceChain({
       ) : (
         <EmptyGraphState title="暂无证据链" description="当前筛选条件下没有真实跨板块证据节点。" />
       )}
-    </section>
+    </SectionPanel>
   )
 }
 
 function TimelinePanel({ items, onSelect }: { items: EvidenceGraphTimelineItem[]; onSelect: (nodeId: string) => void }) {
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-5 dark:border-border dark:bg-card">
-      <PanelTitle title="Timeline" />
+    <SectionPanel title="Timeline">
       {items.length ? (
-        <div className="mt-4 space-y-3">
+        <ol className={listFrameClass}>
           {items.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => item.nodeIds[0] && onSelect(item.nodeIds[0])}
-              className="grid w-full gap-3 rounded-md border border-slate-200 bg-white p-3 text-left transition-colors hover:border-emerald-300 md:grid-cols-[8rem_minmax(0,1fr)_5rem] md:items-center dark:border-border dark:bg-background"
-            >
-              <span className="text-xs text-slate-500">{formatDate(item.occurredAt)}</span>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-slate-900 dark:text-foreground">{item.title}</span>
-                <span className="mt-1 line-clamp-1 text-xs text-slate-500">{item.summary}</span>
-              </span>
-              <span className="text-xs text-slate-500">{item.sourceCount} links</span>
-            </button>
+            <li key={item.id}>
+              <button
+                type="button"
+                onClick={() => item.nodeIds[0] && onSelect(item.nodeIds[0])}
+                className={cn(rowClass(false), "grid gap-3 md:grid-cols-[7.5rem_minmax(0,1fr)_5rem] md:items-center")}
+              >
+                <span className="text-label tabular-nums text-muted-foreground">{formatDate(item.occurredAt)}</span>
+                <span className="min-w-0">
+                  <span className="block truncate text-body2 font-medium text-foreground">{item.title}</span>
+                  <span className="mt-0.5 line-clamp-1 text-label text-muted-foreground">{item.summary}</span>
+                </span>
+                <span className="text-label tabular-nums text-muted-foreground md:text-right">{item.sourceCount} links</span>
+              </button>
+            </li>
           ))}
-        </div>
+        </ol>
       ) : (
         <EmptyGraphState title="暂无时间线" description="当前证据没有可用时间戳。" />
       )}
-    </section>
+    </SectionPanel>
   )
 }
 
@@ -401,7 +393,7 @@ function EvidenceInspector({
 }) {
   if (!node) {
     return (
-      <aside className="rounded-md border border-slate-200 bg-white p-5 dark:border-border dark:bg-card">
+      <aside className="min-w-0 rounded-2xl border border-border bg-card p-4">
         <EmptyGraphState title="未选择节点" description="选择一个证据节点查看详情。" />
       </aside>
     )
@@ -409,147 +401,131 @@ function EvidenceInspector({
 
   const href = hrefForNode(node)
   return (
-    <aside className="space-y-4">
-      <PanelTitle title="Evidence Inspector" />
-      <div className="rounded-md border border-slate-200 bg-white p-5 dark:border-border dark:bg-card">
-        <div className="flex items-start justify-between gap-3">
-          <span className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 dark:border-border dark:text-muted-foreground">
-            {iconForNode(node.type)}
-            {nodeTypeLabels[node.type]}
-          </span>
-          <span className="text-xs text-slate-500">{formatScore(node.confidence)}</span>
+    <aside className="min-w-0 space-y-4" aria-label="Evidence Inspector">
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <h2 className="text-[15px] font-semibold text-foreground">Evidence Inspector</h2>
+          <span className="text-label tabular-nums text-muted-foreground">{formatScore(node.confidence)}</span>
         </div>
-        <h2 className="mt-4 break-words text-lg font-semibold text-slate-900 dark:text-foreground">{node.title}</h2>
-        {node.summary ? <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-muted-foreground">{node.summary}</p> : null}
-        <dl className="mt-4 grid gap-3 text-sm">
-          <InfoRow label="来源" value={node.source ?? "Agora Hub"} />
-          <InfoRow label="创建" value={formatDate(node.createdAt)} />
-          <InfoRow label="更新" value={formatDate(node.updatedAt)} />
-          <InfoRow label="分数" value={formatScore(node.score)} />
-        </dl>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {(node.tags ?? []).slice(0, 8).map((tag) => (
-            <span key={tag} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-500 dark:border-border">
-              {tag}
-            </span>
-          ))}
-        </div>
-        <div className="mt-5 flex flex-wrap gap-2">
-          {href ? (
-            <Link href={href} className="inline-flex items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm font-semibold text-white">
-              打开来源
-              <ArrowRight className="size-4" />
-            </Link>
+        <div className="p-4">
+          <NodeKindPill type={node.type} />
+          <h3 className="mt-3 break-words text-[16px] font-semibold text-foreground">{node.title}</h3>
+          {node.summary ? <p className="mt-1.5 text-body2 text-muted-foreground">{node.summary}</p> : null}
+          <dl className="mt-4 divide-y divide-border rounded-xl border border-border text-body2">
+            <InfoRow label="来源" value={node.source ?? "Agora Hub"} />
+            <InfoRow label="创建" value={formatDate(node.createdAt)} />
+            <InfoRow label="更新" value={formatDate(node.updatedAt)} />
+            <InfoRow label="分数" value={formatScore(node.score)} />
+          </dl>
+          {node.tags?.length ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {node.tags.slice(0, 8).map((tag) => (
+                <Badge key={tag} variant="outline" className="font-normal text-muted-foreground">
+                  {tag}
+                </Badge>
+              ))}
+            </div>
           ) : null}
-          {node.url ? (
-            <a
-              href={node.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 dark:border-border dark:text-muted-foreground"
-            >
-              原文链接
-              <ArrowRight className="size-4" />
-            </a>
+          {href || node.url ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {href ? (
+                <Button asChild size="sm">
+                  <Link href={href}>
+                    打开来源
+                    <ArrowRight size={15} strokeWidth={1.8} />
+                  </Link>
+                </Button>
+              ) : null}
+              {node.url ? (
+                <Button asChild size="sm" variant="outline">
+                  <a href={node.url} target="_blank" rel="noreferrer">
+                    原文链接
+                    <ArrowUpRight size={15} strokeWidth={1.8} />
+                  </a>
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
-      <div className="rounded-md border border-slate-200 bg-white p-5 dark:border-border dark:bg-card">
-        <p className="text-xs font-semibold uppercase tracking-normal text-slate-500">相关边</p>
+      <SectionPanel title="相关边" headingLevel={3}>
         {edges.length ? (
-          <div className="mt-3 space-y-2">
+          <ul className={listFrameClass}>
             {edges.slice(0, 8).map((edge) => {
               const otherNode = nodeById.get(edge.sourceNodeId === node.id ? edge.targetNodeId : edge.sourceNodeId)
               return (
-                <div key={edge.id} className="rounded-md border border-slate-200 px-3 py-2 dark:border-border">
-                  <p className="text-xs font-semibold text-slate-600 dark:text-muted-foreground">{edgeLabels[edge.type] ?? edge.type}</p>
-                  <p className="mt-1 line-clamp-1 text-sm text-slate-900 dark:text-foreground">{otherNode?.title ?? "Graph node"}</p>
-                  {edge.evidenceText ? <p className="mt-1 text-xs leading-5 text-slate-500">{edge.evidenceText}</p> : null}
-                </div>
+                <li key={edge.id} className="px-4 py-3">
+                  <p className="text-label font-medium text-link">{edgeLabels[edge.type] ?? edge.type}</p>
+                  <p className="mt-0.5 line-clamp-1 text-body2 text-foreground">{otherNode?.title ?? "Graph node"}</p>
+                  {edge.evidenceText ? <p className="mt-0.5 text-label text-muted-foreground">{edge.evidenceText}</p> : null}
+                </li>
               )
             })}
-          </div>
+          </ul>
         ) : (
-          <p className="mt-3 text-sm text-slate-500">暂无相关边。</p>
+          <p className="text-body2 text-muted-foreground">暂无相关边。</p>
         )}
-      </div>
+      </SectionPanel>
     </aside>
   )
 }
 
 function EvidenceColumn({
+  type,
   title,
   nodes,
   selectedNodeId,
   onSelect,
 }: {
+  type: EvidenceNodeType
   title: string
   nodes: EvidenceNode[]
   selectedNodeId?: string
   onSelect: (nodeId: string) => void
 }) {
   return (
-    <article className="rounded-md border border-slate-200 bg-white p-4 dark:border-border dark:bg-card">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-slate-900 dark:text-foreground">{title}</h2>
-        <span className="text-sm text-slate-500">{nodes.length}</span>
+    <article className="min-w-0 rounded-2xl border border-border bg-card p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="flex min-w-0 items-center gap-2 text-[15px] font-semibold text-foreground">
+          <NodeKindIcon type={type} />
+          <span className="truncate">{title}</span>
+        </h2>
+        <span className="text-label tabular-nums text-muted-foreground">{nodes.length}</span>
       </div>
-      <div className="mt-3 space-y-2">
-        {nodes.length ? (
-          nodes.slice(0, 5).map((node) => (
-            <button
-              key={node.id}
-              type="button"
-              onClick={() => onSelect(node.id)}
-              className={cn(
-                "w-full rounded-md border px-3 py-2 text-left transition-colors",
-                selectedNodeId === node.id
-                  ? "border-emerald-400 bg-emerald-50"
-                  : "border-slate-200 hover:border-emerald-300 dark:border-border"
-              )}
-            >
-              <span className="line-clamp-2 text-sm font-medium text-slate-900 dark:text-foreground">{node.title}</span>
-              <span className="mt-1 block text-xs text-slate-500">{node.source ?? formatDate(node.updatedAt ?? node.createdAt)}</span>
-            </button>
-          ))
-        ) : (
-          <p className="rounded-md border border-dashed border-slate-200 px-3 py-3 text-sm text-slate-500 dark:border-border">暂无真实证据。</p>
-        )}
-      </div>
+      {nodes.length ? (
+        <div className={listFrameClass}>
+          {nodes.slice(0, 5).map((node) => {
+            const selected = selectedNodeId === node.id
+            return (
+              <button key={node.id} type="button" aria-pressed={selected} onClick={() => onSelect(node.id)} className={rowClass(selected)}>
+                <span className="line-clamp-2 text-body2 font-medium text-foreground">{node.title}</span>
+                <span className="mt-0.5 block truncate text-label text-muted-foreground">{node.source ?? formatDate(node.updatedAt ?? node.createdAt)}</span>
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="rounded-xl border border-dashed border-border px-4 py-3 text-body2 text-muted-foreground">暂无真实证据。</p>
+      )}
     </article>
   )
 }
 
 function EmptyGraphState({ title, description }: { title: string; description: string }) {
   return (
-    <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600 dark:border-border dark:bg-background dark:text-muted-foreground">
-      <p className="font-semibold text-slate-800 dark:text-foreground">{title}</p>
-      <p className="mt-1 leading-6">{description}</p>
+    <div className="rounded-xl border border-dashed border-border">
+      <EmptyState title={title} description={description} />
     </div>
   )
-}
-
-function PanelTitle({ title }: { title: string }) {
-  return <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{title}</p>
 }
 
 function InfoRow({ label, value }: { label: string; value?: string }) {
   return (
-    <div className="grid grid-cols-[4rem_minmax(0,1fr)] gap-2">
-      <dt className="text-slate-500">{label}</dt>
-      <dd className="min-w-0 break-words text-slate-800 dark:text-foreground">{value || "暂无"}</dd>
+    <div className="grid grid-cols-[4rem_minmax(0,1fr)] gap-2 px-4 py-2.5">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words text-foreground">{value || "暂无"}</dd>
     </div>
   )
-}
-
-function iconForNode(type: EvidenceNodeType) {
-  const className = "size-4"
-  if (type === "paper" || type === "method" || type === "task") return <BookOpen className={className} />
-  if (type === "project") return <GitBranch className={className} />
-  if (type === "news") return <Newspaper className={className} />
-  if (type === "community_signal") return <MessageSquareText className={className} />
-  if (type === "report") return <FileText className={className} />
-  return <Check className={className} />
 }
 
 function hrefForNode(node: EvidenceNode) {
@@ -568,8 +544,10 @@ function formatDate(value?: string) {
   return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", year: "numeric" }).format(date)
 }
 
-function trajectoryLabel(value: EvidenceGraphResponse["summary"]["trajectory"]) {
-  const labels: Record<EvidenceGraphResponse["summary"]["trajectory"], string> = {
+type Trajectory = EvidenceGraphResponse["summary"]["trajectory"]
+
+function trajectoryLabel(value: Trajectory) {
+  const labels: Record<Trajectory, string> = {
     rising: "趋势升温",
     stable: "趋势稳定",
     declining: "趋势退潮",
@@ -577,4 +555,15 @@ function trajectoryLabel(value: EvidenceGraphResponse["summary"]["trajectory"]) 
     uncertain: "证据不足",
   }
   return labels[value]
+}
+
+function trajectoryBadgeVariant(value: Trajectory) {
+  const variants: Record<Trajectory, "success" | "info" | "danger" | "warning" | "muted"> = {
+    rising: "success",
+    stable: "info",
+    declining: "danger",
+    noisy: "warning",
+    uncertain: "muted",
+  }
+  return variants[value]
 }
