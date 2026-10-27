@@ -1,3 +1,5 @@
+import { NativeSelect, NativeSelectOption } from "@/components/common/native-select"
+import { Button } from "@/components/ui/button"
 import {
   COMMUNITY_SENTIMENTS,
   COMMUNITY_SORTS,
@@ -23,11 +25,14 @@ export function CommunityFilterPanel({
   onChange: (patch: Partial<CommunityListParams>) => void
 }) {
   return (
-    <aside className="rounded-md border border-border bg-card p-4">
+    <aside aria-label="Community filters" className="rounded-2xl border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-foreground">Filters</h2>
-        <button
+        <h2 className="text-[15px] font-semibold text-foreground">Filters</h2>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-[12px]"
           onClick={() =>
             onChange({
               source: undefined,
@@ -36,13 +41,12 @@ export function CommunityFilterPanel({
               sort: "trending"
             })
           }
-          className="text-xs text-link hover:text-foreground"
         >
           Reset
-        </button>
+        </Button>
       </div>
 
-      <div className="mt-4 space-y-5">
+      <div className="mt-3 space-y-4">
         <SelectBlock
           label="Source"
           value={filters.source ?? ""}
@@ -88,18 +92,14 @@ function SelectBlock({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-medium uppercase text-muted-foreground">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none"
-      >
+      <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">{label}</span>
+      <NativeSelect className="w-full" value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map(([optionValue, labelText]) => (
-          <option key={optionValue} value={optionValue}>
+          <NativeSelectOption key={optionValue} value={optionValue}>
             {labelText}
-          </option>
+          </NativeSelectOption>
         ))}
-      </select>
+      </NativeSelect>
     </label>
   )
 }

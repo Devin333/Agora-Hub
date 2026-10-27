@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils"
 import { communitySourceLabel, communityTopicLabel } from "@/lib/community/community-filters"
 import type { CommunityFilterOptions, CommunityListParams, CommunitySourceType, CommunityTopicKey } from "@/types/community"
 
@@ -11,7 +12,7 @@ export function CommunitySourceList({
   onChange: (patch: Partial<CommunityListParams>) => void
 }) {
   return (
-    <aside className="hidden space-y-8 xl:block">
+    <aside aria-label="Community sources" className="hidden space-y-5 xl:block">
       <SourceBlock
         title="Sources"
         items={options.sources}
@@ -44,24 +45,26 @@ function SourceBlock<T extends CommunitySourceType | CommunityTopicKey>({
   onSelect: (value: T) => void
 }) {
   return (
-    <section className="space-y-3">
-      <h2 className="font-mono text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">{title}</h2>
-      <div className="space-y-2">
+    <section>
+      <h2 className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">{title}</h2>
+      <div className="mt-0.5 space-y-0.5">
         {items.map((item) => {
           const value = ("sourceType" in item ? item.sourceType : item.topic) as T
           return (
             <button
               key={value}
               type="button"
+              aria-pressed={active === value}
               onClick={() => onSelect(value)}
-              className={
+              className={`${cn(
+                "flex w-full items-baseline justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
                 active === value
-                  ? "flex w-full items-baseline justify-between gap-3 text-left text-sm font-medium text-foreground"
-                  : "flex w-full items-baseline justify-between gap-3 text-left text-sm text-muted-foreground hover:text-foreground"
-              }
+                  ? "bg-accent font-medium text-accent-foreground"
+                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+              )} text-body2`}
             >
               <span className="truncate">{label(value)}</span>
-              <span className="font-mono text-[11px]">{item.count}</span>
+              <span className="text-label tabular-nums text-faint-foreground">{item.count}</span>
             </button>
           )
         })}

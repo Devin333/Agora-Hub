@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
-import { Badge } from "@/components/common/badges"
+import { buttonVariants } from "@/components/ui/button"
 import { PageHeader } from "@/components/layout/page-header"
 import { TechFilterToolbar } from "@/features/tech/components/tech-filter-toolbar"
 import { TechRadarGrid } from "@/features/tech/components/tech-radar-grid"
@@ -17,16 +17,16 @@ export function TechPageClient({ fixedType }: { fixedType?: TechItemType }) {
   const title = fixedType ? t("portal.tech.typeTitle", { type: techTypeLabel(fixedType, t) }) : t("portal.tech.title")
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         eyebrow={t("portal.tech.eyebrow")}
         title={title}
         description={t("portal.tech.description")}
         actions={
           <>
-            <Link href="/tech/papers"><Badge tone="accent">{t("portal.tech.paper")}</Badge></Link>
-            <Link href="/tech/repos"><Badge tone="accent">{t("portal.tech.repo")}</Badge></Link>
-            <Link href="/tech/frameworks"><Badge tone="accent">{t("portal.tech.framework")}</Badge></Link>
+            <Link href="/tech/papers" className={buttonVariants({ variant: "outline", size: "sm" })}>{t("portal.tech.paper")}</Link>
+            <Link href="/tech/repos" className={buttonVariants({ variant: "outline", size: "sm" })}>{t("portal.tech.repo")}</Link>
+            <Link href="/tech/frameworks" className={buttonVariants({ variant: "outline", size: "sm" })}>{t("portal.tech.framework")}</Link>
           </>
         }
       />
@@ -46,11 +46,11 @@ function RadarOverview() {
     [t("portal.tech.section.emerging"), t("portal.tech.section.emergingSummary")]
   ]
   return (
-    <section className="grid gap-3 md:grid-cols-4">
+    <section aria-label={t("portal.tech.title")} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {sections.map(([title, summary]) => (
-        <div key={title} className="rounded-lg border border-border bg-card p-4">
-          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">{summary}</p>
+        <div key={title} className="rounded-2xl border border-border bg-card p-4">
+          <h2 className="text-[15px] font-semibold text-foreground">{title}</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{summary}</p>
         </div>
       ))}
     </section>

@@ -1,17 +1,21 @@
+import { SectionPanel } from "@/components/common/section-panel";
 import type { AgentAnalysis } from "@/types/topic";
 
 export function AgentAnalysisPanel({ analyses }: { analyses: AgentAnalysis[] }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <h2 className="text-base font-semibold text-foreground">智能体分析</h2>
-      <div className="mt-4 space-y-3">
-        {analyses.map((analysis) => (
-          <div key={analysis.agent} className="rounded-md border border-border bg-background/50 p-3">
-            <p className="text-sm font-medium text-foreground">{analysis.agent}</p>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">{analysis.summary}</p>
-          </div>
-        ))}
-      </div>
-    </section>
+    <SectionPanel title="智能体分析" framed={false}>
+      {analyses.length ? (
+        <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+          {analyses.map((analysis) => (
+            <li key={analysis.agent} className="px-4 py-3">
+              <p className="text-body2 font-medium text-foreground">{analysis.agent}</p>
+              <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">{analysis.summary}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="py-6 text-center text-body2 text-muted-foreground">暂无智能体分析。</p>
+      )}
+    </SectionPanel>
   );
 }

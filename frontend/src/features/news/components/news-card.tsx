@@ -5,44 +5,42 @@ import { CredibilityBadge } from "@/components/common/credibility-badge"
 import { HeatScoreBadge } from "@/components/common/heat-score-badge"
 import { QualityBadge } from "@/components/common/quality-badge"
 import { SourceBadge } from "@/components/common/source-badge"
+import { Button } from "@/components/ui/button"
 import { formatDateTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { NewsItem } from "@/types/news"
 
+/** News stream row: lives inside the `divide-y rounded-xl border` list from NewsList. */
 export function NewsCard({ news, compact = false }: { news: NewsItem; compact?: boolean }) {
   return (
     <article
       className={cn(
-        "group grid gap-5 border-b border-[#d7dfd8] py-6 transition hover:bg-white/55 md:grid-cols-[minmax(0,1fr)_9rem] dark:border-border dark:hover:bg-secondary/20",
-        compact && "py-4"
+        "group grid gap-4 px-4 transition-colors hover:bg-accent/40 md:grid-cols-[minmax(0,1fr)_7.5rem]",
+        compact ? "py-3" : "py-4"
       )}
     >
       <div className="min-w-0">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <Link href={`/news/${news.id}`} className="block min-w-0">
-            <h3 className={cn("font-semibold leading-tight text-[#334155] group-hover:text-emerald-700 dark:text-foreground", compact ? "text-lg" : "text-xl")}>
+        <div className="flex items-start justify-between gap-3">
+          <Link href={`/news/${news.id}`} className="block min-w-0 rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+            <h3 className={cn("font-semibold leading-snug text-foreground group-hover:underline", compact ? "text-[14px]" : "text-[15px]")}>
               {news.title}
             </h3>
-            <p className="mt-2 text-xs text-[#334155]/55 dark:text-muted-foreground">
+            <p className="mt-1 text-label text-muted-foreground">
               {news.sourceName} · Published {formatDateTime(news.publishedAt)}
               {news.topicName ? ` · ${news.topicName}` : ""}
             </p>
-            <p className={cn("mt-3 line-clamp-3 text-sm leading-6 text-[#334155]/68 dark:text-muted-foreground", compact && "line-clamp-2")}>
+            <p className={cn("mt-2 text-[13px] leading-relaxed text-muted-foreground", compact ? "line-clamp-2" : "line-clamp-3")}>
               {news.summary}
             </p>
           </Link>
-          <a
-            href={news.sourceUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#dbe3dc] bg-white text-[#334155]/60 hover:bg-[#f7f9f6] hover:text-[#334155] dark:border-border dark:bg-card dark:text-muted-foreground"
-            aria-label="Open original source"
-          >
-            <ExternalLink className="h-4 w-4" />
-          </a>
+          <Button asChild variant="ghost" size="icon-sm" className="shrink-0 text-muted-foreground">
+            <a href={news.sourceUrl} target="_blank" rel="noreferrer" aria-label="Open original source">
+              <ExternalLink size={15} strokeWidth={1.8} />
+            </a>
+          </Button>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <Badge tone="accent">{news.category}</Badge>
           <SourceBadge name={news.sourceName} type={news.sourceType} />
           <CredibilityBadge value={news.credibility} />
@@ -51,21 +49,25 @@ export function NewsCard({ news, compact = false }: { news: NewsItem; compact?: 
           <RelationBadge label="community" value={news.relatedCommunityTopics?.length ?? 0} />
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          {news.tags.slice(0, compact ? 4 : 8).map((tag) => (
-            <span key={tag} className="rounded-sm bg-[#ccfbf1] px-2 py-1 font-mono text-[11px] text-teal-800 dark:bg-teal-400/15 dark:text-teal-200">
-              {tag}
-            </span>
-          ))}
-        </div>
+        {news.tags.length ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {news.tags.slice(0, compact ? 4 : 8).map((tag) => (
+              <span key={tag} className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                {tag}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
-      <aside className="hidden border-l border-[#d7dfd8] pl-5 md:block dark:border-border">
-        <div className="space-y-4 pt-2 text-center">
+      <aside className="hidden border-l border-border pl-4 md:block" aria-label="Scores">
+        <div className="space-y-3 pt-0.5">
           <Metric value={news.heatScore} label="heat" />
           <Metric value={news.qualityScore} label="quality" />
-          {typeof news.heatScore === "number" ? <HeatScoreBadge value={news.heatScore} /> : <Badge tone="neutral">Heat N/A</Badge>}
-          {typeof news.qualityScore === "number" ? <QualityBadge value={news.qualityScore} /> : <Badge tone="neutral">Quality N/A</Badge>}
+          <div className="flex flex-col items-start gap-1.5">
+            {typeof news.heatScore === "number" ? <HeatScoreBadge value={news.heatScore} /> : <Badge tone="neutral">Heat N/A</Badge>}
+            {typeof news.qualityScore === "number" ? <QualityBadge value={news.qualityScore} /> : <Badge tone="neutral">Quality N/A</Badge>}
+          </div>
         </div>
       </aside>
     </article>
@@ -74,7 +76,7 @@ export function NewsCard({ news, compact = false }: { news: NewsItem; compact?: 
 
 function RelationBadge({ label, value }: { label: string; value: number }) {
   return (
-    <span className="rounded-sm border border-[#dbe3dc] bg-white px-2 py-1 font-mono text-[11px] text-[#334155]/60 dark:border-border dark:bg-card dark:text-muted-foreground">
+    <span className="inline-flex h-5 items-center rounded-full border border-border px-2 text-[11px] tabular-nums text-muted-foreground">
       {value} {label}
     </span>
   )
@@ -83,8 +85,8 @@ function RelationBadge({ label, value }: { label: string; value: number }) {
 function Metric({ value, label }: { value?: number; label: string }) {
   return (
     <div>
-      <p className="font-mono text-lg font-semibold text-[#334155] dark:text-foreground">{typeof value === "number" ? value : "N/A"}</p>
-      <p className="mt-1 font-mono text-[10px] uppercase tracking-normal text-[#334155]/55 dark:text-muted-foreground">{label}</p>
+      <p className="text-heading3 font-semibold tabular-nums text-foreground">{typeof value === "number" ? value : "N/A"}</p>
+      <p className="text-caption uppercase tracking-wider text-faint-foreground">{label}</p>
     </div>
   )
 }

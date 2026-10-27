@@ -14,7 +14,7 @@ export function TopicsPageClient() {
   const topics = useTopicList(filters)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         eyebrow={t("portal.topics.eyebrow")}
         title={t("portal.topics.title")}

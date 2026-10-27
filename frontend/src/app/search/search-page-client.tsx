@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Badge } from "@/components/common/badges"
+import { FilterChip } from "@/components/common/filter-chip"
 import { PageHeader } from "@/components/layout/page-header"
 import { GlobalSearchBox } from "@/features/search/components/global-search-box"
 import { SearchResultList } from "@/features/search/components/search-result-list"
@@ -39,14 +39,14 @@ export function SearchPageClient() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader eyebrow={t("portal.search.eyebrow")} title={t("portal.search.title")} description={t("portal.search.description")} />
       <GlobalSearchBox value={query} onChange={(value) => updateUrl(value, types)} />
-      <div className="flex flex-wrap gap-2">
+      <div role="group" aria-label={t("portal.search.title")} className="flex flex-wrap gap-1.5">
         {searchObjectTypes.map((type) => (
-          <button key={type} onClick={() => toggle(type)} className="text-left">
-            <Badge tone={activeTypes.includes(type) ? "accent" : "neutral"}>{titleCase(type)}</Badge>
-          </button>
+          <FilterChip key={type} active={activeTypes.includes(type)} onClick={() => toggle(type)}>
+            {titleCase(type)}
+          </FilterChip>
         ))}
       </div>
       <SearchResultList results={search.data} />

@@ -1,59 +1,68 @@
-import { ExternalLink } from "lucide-react"
+import { ChevronLeft, ExternalLink } from "lucide-react"
 import Link from "next/link"
 import { Badge } from "@/components/common/badge"
 import { CredibilityBadge } from "@/components/common/credibility-badge"
 import { HeatScoreBadge } from "@/components/common/heat-score-badge"
 import { QualityBadge } from "@/components/common/quality-badge"
 import { SourceBadge } from "@/components/common/source-badge"
+import { Button } from "@/components/ui/button"
 import { formatDateTime } from "@/lib/format"
 import type { NewsItem } from "@/types/news"
 
+/** Full-page detail header in the rakazo idiom: back link, heading2 title, hairline bottom. */
 export function NewsDetailHeader({ news }: { news: NewsItem }) {
   return (
-    <header className="rounded-md border border-[#dbe3dc] bg-white/90 p-5 dark:border-border dark:bg-card">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <header className="border-b border-border pb-5">
+      <Link
+        href="/news"
+        className="-ml-1 inline-flex items-center gap-0.5 rounded-lg py-1 pe-1.5 text-[13px] font-medium text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        <ChevronLeft size={16} strokeWidth={1.9} aria-hidden="true" />
+        AI News
+      </Link>
+
+      <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <SourceBadge name={news.sourceName} type={news.sourceType} />
             <Badge tone="neutral">{news.category}</Badge>
             <CredibilityBadge value={news.credibility} />
           </div>
-          <h1 className="mt-4 max-w-5xl text-2xl font-semibold tracking-normal text-[#334155] sm:text-3xl dark:text-foreground">{news.title}</h1>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-[#334155]/68 dark:text-muted-foreground">{news.summary}</p>
+          <h1 className="mt-3 max-w-5xl text-heading2 font-semibold text-foreground">{news.title}</h1>
+          <p className="mt-2 max-w-4xl text-body2 leading-relaxed text-muted-foreground">{news.summary}</p>
         </div>
-        <a
-          href={news.sourceUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex shrink-0 items-center gap-2 rounded-md border border-[#dbe3dc] px-3 py-2 text-sm text-[#334155] hover:bg-[#f7f9f6] dark:border-border dark:text-foreground dark:hover:bg-secondary"
-        >
-          Open source
-          <ExternalLink className="h-4 w-4" />
-        </a>
+        <Button asChild variant="outline" size="sm" className="shrink-0">
+          <a href={news.sourceUrl} target="_blank" rel="noreferrer">
+            Open source
+            <ExternalLink strokeWidth={1.8} aria-hidden="true" />
+          </a>
+        </Button>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-1.5">
         {typeof news.heatScore === "number" ? <HeatScoreBadge value={news.heatScore} /> : <Badge tone="neutral">Heat N/A</Badge>}
         {typeof news.qualityScore === "number" ? <QualityBadge value={news.qualityScore} /> : <Badge tone="neutral">Quality N/A</Badge>}
         <Badge tone="neutral">Published {formatDateTime(news.publishedAt)}</Badge>
         <Badge tone="neutral">Collected {formatDateTime(news.collectedAt)}</Badge>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {news.tags.map((tag) => (
-          <span key={tag} className="rounded-md bg-[#eef3ef] px-2 py-1 text-xs text-[#334155]/65 dark:bg-secondary dark:text-muted-foreground">
-            {tag}
-          </span>
-        ))}
-      </div>
+      {news.tags.length ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {news.tags.map((tag) => (
+            <span key={tag} className="rounded-md bg-muted px-2 py-1 text-[11px] font-semibold text-muted-foreground">
+              {tag}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       {news.topicId && news.topicName ? (
-        <div className="mt-4 text-sm text-[#334155]/68 dark:text-muted-foreground">
+        <p className="mt-3 text-body2 text-muted-foreground">
           Related topic{" "}
-          <Link href={`/topics/${news.topicId}`} className="text-emerald-700 hover:text-[#334155] dark:text-link dark:hover:text-foreground">
+          <Link href={`/topics/${news.topicId}`} className="font-medium text-link hover:underline">
             {news.topicName}
           </Link>
-        </div>
+        </p>
       ) : null}
     </header>
   )

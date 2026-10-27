@@ -1,5 +1,7 @@
 "use client";
 
+import { NativeSelect, NativeSelectOption } from "@/components/common/native-select";
+import { SearchField } from "@/components/common/search-field";
 import type { TechFilters } from "@/features/tech/hooks/use-tech-items";
 import type { TechItemType, TechMaturity } from "@/types/tech";
 
@@ -19,24 +21,42 @@ const maturityLabels: Record<TechMaturity, string> = {
   mature: "成熟",
 };
 
+/** Rakazo page filter row: search box on the left, compact selects on the right. */
 export function TechFilterToolbar({ filters, onChange }: { filters: TechFilters; onChange: (filters: TechFilters) => void }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <div className="grid gap-3 md:grid-cols-[1fr_0.5fr_0.5fr]">
-        <input
-          className="rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-          placeholder="搜索技术、主题、标签..."
-          value={filters.keyword ?? ""}
-          onChange={(event) => onChange({ ...filters, keyword: event.target.value })}
-        />
-        <select className="rounded-md border border-input bg-background px-3 py-2 text-sm" value={filters.type ?? ""} onChange={(event) => onChange({ ...filters, type: (event.target.value || undefined) as TechItemType | undefined })}>
-          <option value="">全部类型</option>
-          {types.map((type) => <option key={type} value={type}>{typeLabels[type]}</option>)}
-        </select>
-        <select className="rounded-md border border-input bg-background px-3 py-2 text-sm" value={filters.maturity ?? ""} onChange={(event) => onChange({ ...filters, maturity: (event.target.value || undefined) as TechMaturity | undefined })}>
-          <option value="">全部成熟度</option>
-          {maturities.map((maturity) => <option key={maturity} value={maturity}>{maturityLabels[maturity]}</option>)}
-        </select>
+    <div className="flex flex-wrap items-center gap-2">
+      <SearchField
+        className="min-w-[14rem] flex-1 md:max-w-[360px]"
+        placeholder="搜索技术、主题、标签..."
+        aria-label="搜索技术、主题、标签"
+        value={filters.keyword ?? ""}
+        onChange={(event) => onChange({ ...filters, keyword: event.target.value })}
+      />
+      <div className="flex flex-wrap items-center gap-2 md:ml-auto">
+        <NativeSelect
+          aria-label="技术类型"
+          value={filters.type ?? ""}
+          onChange={(event) => onChange({ ...filters, type: (event.target.value || undefined) as TechItemType | undefined })}
+        >
+          <NativeSelectOption value="">全部类型</NativeSelectOption>
+          {types.map((type) => (
+            <NativeSelectOption key={type} value={type}>
+              {typeLabels[type]}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <NativeSelect
+          aria-label="成熟度"
+          value={filters.maturity ?? ""}
+          onChange={(event) => onChange({ ...filters, maturity: (event.target.value || undefined) as TechMaturity | undefined })}
+        >
+          <NativeSelectOption value="">全部成熟度</NativeSelectOption>
+          {maturities.map((maturity) => (
+            <NativeSelectOption key={maturity} value={maturity}>
+              {maturityLabels[maturity]}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
       </div>
     </div>
   );

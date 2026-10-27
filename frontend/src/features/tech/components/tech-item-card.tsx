@@ -1,38 +1,41 @@
 import { ExternalTextLink, MaturityBadge, TechTypeBadge } from "@/components/common/badges";
-import { cn } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { TechItem } from "@/types/tech";
 
+/** Rakazo card for a technology radar item; `compact` drops the evaluation lines for nested lists. */
 export function TechItemCard({ item, compact = false }: { item: TechItem; compact?: boolean }) {
   return (
-    <article className={cn("rounded-lg border border-border bg-card p-4", compact && "bg-background/50")}>
+    <article className={cn("flex flex-col rounded-2xl border border-border p-4", compact ? "bg-background" : "bg-card")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">{item.name}</h3>
-          {item.problem && !compact ? <p className="mt-1 text-xs text-muted-foreground">问题：{item.problem}</p> : null}
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold text-foreground">{item.name}</h3>
+          {item.problem && !compact ? <p className="mt-0.5 text-label text-muted-foreground">问题：{item.problem}</p> : null}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5">
           <TechTypeBadge type={item.type} />
           <MaturityBadge maturity={item.maturity} />
         </div>
       </div>
-      <p className="mt-3 line-clamp-3 text-sm leading-6 text-muted-foreground">{item.summary}</p>
+      <p className="mt-2 line-clamp-3 text-[13px] leading-relaxed text-muted-foreground">{item.summary}</p>
       {!compact ? (
-        <div className="mt-3 grid gap-2 text-xs text-muted-foreground">
+        <div className="mt-2 grid gap-1 text-label text-muted-foreground">
           {item.agentEvaluation ? <p>智能体评估：{item.agentEvaluation}</p> : null}
           {item.referenceValue ? <p>引用价值：{item.referenceValue}</p> : null}
         </div>
       ) : null}
-      <div className="mt-4 flex flex-wrap gap-1">
-        {item.tags.map((tag) => (
-          <span key={tag} className="rounded bg-secondary px-2 py-1 text-xs text-muted-foreground">
-            #{tag}
-          </span>
-        ))}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-1">
+      {item.tags.length ? (
+        <div className="mt-3 flex flex-wrap gap-1">
+          {item.tags.map((tag) => (
+            <span key={tag} className="rounded-md bg-muted px-2 py-0.5 text-label text-muted-foreground">
+              #{tag}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-auto flex flex-wrap items-center justify-between gap-3 pt-3">
+        <div className="flex flex-wrap gap-x-2 gap-y-1">
           {item.relatedTopicNames?.map((topic) => (
-            <span key={topic} className="text-xs text-primary">
+            <span key={topic} className="text-label text-link">
               {topic}
             </span>
           ))}

@@ -18,7 +18,7 @@ export function NewsList({ items, viewMode }: { items: NewsItem[]; viewMode: New
   }
 
   return (
-    <div className="border-t border-[#d7dfd8] dark:border-border">
+    <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
       {items.map((item) => (
         <NewsCard key={item.id} news={item} compact={viewMode === "dense"} />
       ))}

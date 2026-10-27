@@ -56,7 +56,7 @@ describe("Community Pulse UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "Positive" }))
     expect(onChange).toHaveBeenCalledWith({ sentiment: "positive", cursor: undefined })
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Search community signals" }), {
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search community signals" }), {
       target: { value: "latency" }
     })
     fireEvent.click(screen.getByRole("button", { name: "Search" }))

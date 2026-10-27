@@ -2,11 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { ArrowDownUp, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/common/badges";
 import { EmptyState } from "@/components/common/empty-state";
+import { SectionPanel } from "@/components/common/section-panel";
+import { Button } from "@/components/ui/button";
 import { evidences } from "@/lib/mock-data";
 import { formatDateTime } from "@/lib/format";
 import type { TopicTimelineItem } from "@/types/topic";
+
+const importanceTone = { high: "good", medium: "info", low: "neutral" } as const;
 
 export function TopicTimeline({ items }: { items: TopicTimelineItem[] }) {
   const [expanded, setExpanded] = useState<string>();
@@ -21,44 +26,73 @@ export function TopicTimeline({ items }: { items: TopicTimelineItem[] }) {
   }
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-foreground">时间线</h2>
-        <button className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground" onClick={() => setOrder(order === "asc" ? "desc" : "asc")}>
+    <SectionPanel
+      title="时间线"
+      framed={false}
+      actions={
+        <Button variant="outline" size="sm" onClick={() => setOrder(order === "asc" ? "desc" : "asc")}>
+          <ArrowDownUp size={15} strokeWidth={1.8} aria-hidden="true" />
           {order === "asc" ? "最早优先" : "最新优先"}
-        </button>
-      </div>
-      <div className="mt-4 space-y-3">
+        </Button>
+      }
+    >
+      <ol className="divide-y divide-border overflow-hidden rounded-xl border border-border">
         {sorted.map((item) => {
           const open = expanded === item.id;
+          const panelId = `timeline-${item.id}-details`;
           const relatedEvidence = evidences.filter((evidence) => item.evidenceIds.includes(evidence.id));
           return (
-            <div key={item.id} className="rounded-lg border border-border bg-background/50 p-4">
-              <button className="w-full text-left" onClick={() => setExpanded(open ? undefined : item.id)}>
+            <li key={item.id}>
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-controls={panelId}
+                className="block w-full px-4 py-3 text-left outline-none transition-colors hover:bg-accent/40 focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
+                onClick={() => setExpanded(open ? undefined : item.id)}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(item.occurredAt)} · {item.sourceCount} 个来源</p>
+                  <div className="flex min-w-0 items-start gap-2">
+                    <ChevronDown
+                      size={15}
+                      strokeWidth={1.8}
+                      aria-hidden="true"
+                      className={`mt-0.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-body2 font-semibold text-foreground">{item.title}</p>
+                      <p className="mt-0.5 text-label tabular-nums text-muted-foreground">
+                        {formatDateTime(item.occurredAt)} · {item.sourceCount} 个来源
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Badge tone={item.importance === "high" ? "good" : item.importance === "medium" ? "info" : "neutral"}>{item.importance}</Badge>
+                  <div className="flex gap-1.5">
+                    <Badge tone={importanceTone[item.importance] ?? "neutral"}>{item.importance}</Badge>
                     <Badge>{item.type}</Badge>
                   </div>
                 </div>
-                <p className="mt-3 text-sm leading-6 text-muted-foreground">{item.summary}</p>
+                <p className="mt-2 pl-6 text-[13px] leading-relaxed text-muted-foreground">{item.summary}</p>
               </button>
               {open ? (
-                <div className="mt-3 space-y-2 border-t border-border pt-3">
+                <div id={panelId} className="space-y-2 px-4 pb-3 pl-10">
                   {relatedEvidence.map((evidence) => (
-                    <p key={evidence.id} className="rounded-md bg-secondary p-3 text-xs text-muted-foreground">{evidence.title}: {evidence.summary}</p>
+                    <p key={evidence.id} className="rounded-lg bg-muted px-3 py-2 text-label text-muted-foreground">
+                      <span className="font-medium text-foreground">{evidence.title}</span>: {evidence.summary}
+                    </p>
                   ))}
-                  {item.relatedNewsId ? <Link className="text-sm text-primary hover:underline" href={`/search?type=news&q=${item.relatedNewsId}`}>打开相关新闻</Link> : null}
+                  {item.relatedNewsId ? (
+                    <Link
+                      className="inline-block rounded-sm text-body2 font-medium text-link outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+                      href={`/search?type=news&q=${encodeURIComponent(item.relatedNewsId)}`}
+                    >
+                      打开相关新闻
+                    </Link>
+                  ) : null}
                 </div>
               ) : null}
-            </div>
+            </li>
           );
         })}
-      </div>
-    </section>
+      </ol>
+    </SectionPanel>
   );
 }
