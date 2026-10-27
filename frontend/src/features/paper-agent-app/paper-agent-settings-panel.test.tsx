@@ -72,6 +72,14 @@ describe("PaperAgentSettingsPanel CSS", () => {
     for (const match of css.matchAll(/color-mix\([^,]*,[^,)]*\)/g)) expect(match[0]).toMatch(/^color-mix\(in srgb, var\(--[a-z-]+\)/)
   })
 
+  it("fills recessed wells with the ink-alpha secondary fill, since --card equals --dialog in dark", () => {
+    expect(css).toMatch(/\.panel \{[^}]*--settings-well: var\(--secondary\)/)
+    expect(css).not.toMatch(/background: var\(--(?:card|muted)\)/)
+    for (const selector of ["summaryCard", "notice", "credentialBox", "clearStatus", "dataTableHeader"]) {
+      expect(css).toMatch(new RegExp(String.raw`\.${selector} \{[^}]*background: var\(--settings-well\)`))
+    }
+  })
+
   it("keeps real status colors for badges, policy notices and the destructive clear flow", () => {
     expect(css).toMatch(/\.badgeSuccess \{[^}]*color: var\(--success-text\)/)
     expect(css).toMatch(/\.badgeWarning \{[^}]*color: var\(--warning-text\)/)

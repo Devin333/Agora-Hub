@@ -8,6 +8,9 @@
   --tone-warning: var(--warning);
   --tone-danger: var(--destructive);
   --tone-neutral: var(--muted-foreground);
+  /* Recessed fills inside the dialog. In the dark palette --card equals --dialog, so
+     wells use the ink-alpha secondary fill, which stays visible on any surface. */
+  --settings-well: var(--secondary);
   height: 100%;
   min-height: 0;
   overflow: auto;
@@ -52,7 +55,7 @@
 .danger { --tone: var(--tone-danger); }
 .neutral { --tone: var(--tone-neutral); }
 .summaryGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
-.summaryCard { display: flex; min-height: 72px; align-items: center; gap: 12px; padding: 14px 16px; background: var(--card); border-radius: 16px; }
+.summaryCard { display: flex; min-height: 72px; align-items: center; gap: 12px; padding: 14px 16px; background: var(--settings-well); border-radius: 16px; }
 .summaryCard > svg { flex: 0 0 auto; color: var(--tone, var(--muted-foreground)); }
 .summaryCard div { display: grid; min-width: 0; gap: 3px; }
 .summaryCard span { color: var(--muted-foreground); font-size: 12px; }
@@ -77,7 +80,7 @@
 .definitionList code, .hostFacts code, .events code { font-family: theme("fontFamily.mono"); font-size: 12px; overflow-wrap: anywhere; white-space: normal; }
 
 .notice, .gapNotice, .browserNotice, .policyState { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 12px; }
-.notice { color: var(--foreground); background: var(--card); }
+.notice { color: var(--foreground); background: var(--settings-well); }
 .notice svg { color: var(--muted-foreground); }
 .gapNotice, .browserNotice, .policyWarning { color: var(--foreground); background: color-mix(in srgb, var(--warning) 12%, transparent); }
 .gapNotice svg, .browserNotice svg, .policyWarning svg { color: var(--warning); }
@@ -95,11 +98,11 @@
 .capabilityMain { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .capabilityName { margin-right: auto; font-size: 13.5px; font-weight: 600; }
 .badge, .requirement { padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 500; line-height: 18px; white-space: nowrap; }
-.requirement { color: var(--muted-foreground); background: var(--muted); }
+.requirement { color: var(--muted-foreground); background: var(--settings-well); }
 .badgeSuccess { color: var(--success-text); background: color-mix(in srgb, var(--success) 15%, transparent); }
 .badgeWarning { color: var(--warning-text); background: color-mix(in srgb, var(--warning) 15%, transparent); }
 .badgeDanger { color: var(--destructive-text); background: color-mix(in srgb, var(--destructive) 15%, transparent); }
-.badgeNeutral { color: var(--muted-foreground); background: var(--muted); }
+.badgeNeutral { color: var(--muted-foreground); background: var(--settings-well); }
 
 .inlineError, .loadingLine { display: flex; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }
 .inlineError { padding: 9px 12px; color: var(--destructive-text); background: color-mix(in srgb, var(--destructive) 10%, transparent); border-radius: 12px; font-weight: 500; }
@@ -108,7 +111,7 @@
 .dataTable { display: grid; margin-top: 14px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; font-size: 12.5px; }
 .dataTable > div { display: grid; grid-template-columns: .8fr 1fr 1.5fr; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
 .dataTable > div:last-child { border-bottom: 0; }
-.dataTableHeader { color: var(--muted-foreground); background: var(--card); font-weight: 500; }
+.dataTableHeader { color: var(--muted-foreground); background: var(--settings-well); font-weight: 500; }
 .dataTable strong { font-weight: 600; }
 .dataTable span { color: var(--muted-foreground); line-height: 1.45; }
 
@@ -117,13 +120,13 @@
 .hostStatus strong { font-size: 13.5px; font-weight: 600; }
 .hostStatus p { margin: 3px 0 0; color: var(--muted-foreground); font-size: 12px; }
 .hostFacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
-.hostFacts div { min-width: 0; padding: 10px 12px; background: var(--card); border-radius: 12px; }
+.hostFacts div { min-width: 0; padding: 10px 12px; background: var(--settings-well); border-radius: 12px; }
 .hostFacts dt { color: var(--muted-foreground); font-size: 11.5px; }
 .hostFacts dd { margin: 4px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 .events > strong { font-size: 13px; font-weight: 600; }
 .events > p { color: var(--muted-foreground); font-size: 12px; }
 .events ul { display: grid; gap: 4px; margin: 7px 0 0; padding: 0; list-style: none; }
-.events li { display: grid; grid-template-columns: minmax(115px, auto) auto 1fr auto; align-items: center; gap: 7px; padding: 7px 10px; background: var(--card); border-radius: 10px; font-size: 11.5px; }
+.events li { display: grid; grid-template-columns: minmax(115px, auto) auto 1fr auto; align-items: center; gap: 7px; padding: 7px 10px; background: var(--settings-well); border-radius: 10px; font-size: 11.5px; }
 .events time { color: var(--muted-foreground); }
 .spinner { animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -152,13 +155,13 @@
 :global([data-theme="dark"]) .formGrid input, :global([data-theme="dark"]) .clearConfirmationField input { background: var(--input); }
 .formGrid input:focus-visible, .clearConfirmationField input:focus-visible { border-color: var(--ring); outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent); }
 .formGrid input[aria-invalid="true"] { border-color: var(--destructive); }
-.formGrid input:disabled, .clearConfirmationField input:disabled { color: var(--faint-foreground); background: var(--muted); cursor: not-allowed; }
+.formGrid input:disabled, .clearConfirmationField input:disabled { color: var(--faint-foreground); background: var(--settings-well); cursor: not-allowed; }
 .formGrid small { color: var(--destructive-text); font-size: 12px; font-weight: 500; line-height: 1.4; }
 .wideField { grid-column: 1 / -1; }
-.credentialBox { padding: 12px 16px; background: var(--card); border-radius: 12px; }
+.credentialBox { padding: 12px 16px; background: var(--settings-well); border-radius: 12px; }
 .configActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .configPreview, .configResult { display: grid; gap: 7px; padding: 12px 14px; border-radius: 12px; font-size: 12px; line-height: 1.5; }
-.configPreview { color: var(--foreground); background: var(--card); border: 1px solid var(--border); }
+.configPreview { color: var(--foreground); background: var(--settings-well); border: 1px solid var(--border); }
 .configPreview .primaryButton { justify-self: start; margin-top: 3px; }
 .configResult { margin-top: 0; }
 .draftWarning { color: var(--warning-text); font-weight: 500; }
@@ -168,13 +171,13 @@
 .clearCard .sectionHeading svg { color: var(--destructive); }
 .clearPanel { display: grid; gap: 13px; }
 .clearIntro, .clearUnavailable, .clearBlocked, .clearPrepared, .clearResult, .clearError { display: flex; align-items: flex-start; gap: 10px; }
-.clearIntro { padding: 12px 14px; background: var(--card); border-radius: 12px; }
+.clearIntro { padding: 12px 14px; background: var(--settings-well); border-radius: 12px; }
 .clearIntro > div, .clearUnavailable > div, .clearPrepared > div, .clearResult > div { display: grid; gap: 4px; }
 .clearIntro p, .clearUnavailable p, .clearPrepared p, .clearResult p, .clearStatus p, .clearFinal p { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.55; }
 .clearIntro svg, .clearUnavailable svg, .clearBlocked svg, .clearPrepared svg, .clearResult svg, .clearError svg { flex: 0 0 auto; margin-top: 1px; }
 .clearDisclosure { display: grid; gap: 7px; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
 .clearDisclosure p { margin: 0; }
-.clearUnavailable { padding: 12px 14px; background: var(--card); border-radius: 12px; }
+.clearUnavailable { padding: 12px 14px; background: var(--settings-well); border-radius: 12px; }
 .clearBlocked { padding: 10px 14px; color: var(--foreground); background: color-mix(in srgb, var(--warning) 12%, transparent); border-radius: 12px; font-size: 12px; line-height: 1.5; }
 .clearBlocked svg { color: var(--warning); }
 .clearActions, .clearConfirmActions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -201,7 +204,7 @@
 .clearPrepared, .clearResult, .clearStatus, .clearFinal { padding: 12px 14px; border-radius: 12px; font-size: 12px; line-height: 1.5; }
 .clearPrepared, .clearResult { background: color-mix(in srgb, var(--warning) 12%, transparent); }
 .clearPrepared svg, .clearResult svg { color: var(--warning); }
-.clearStatus { background: var(--card); }
+.clearStatus { background: var(--settings-well); }
 .clearFinal { background: color-mix(in srgb, var(--success) 12%, transparent); }
 .clearError { margin: 0; padding: 9px 12px; color: var(--destructive-text); background: color-mix(in srgb, var(--destructive) 10%, transparent); border-radius: 12px; font-size: 12px; font-weight: 500; line-height: 1.45; }
 
