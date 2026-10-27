@@ -17,6 +17,9 @@ class ToolCall:
     requested_by: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     graph_identity: GraphExecutionIdentity | None = None
+    # Runtime-owned redemption handle for a human approval. It is set only by
+    # trusted replay paths, never parsed from model-generated tool arguments.
+    approval_id: str | None = None
 
     def __post_init__(self) -> None:
         requested_by = self.requested_by
@@ -31,6 +34,11 @@ class ToolCall:
         if identity is not None and not isinstance(identity, GraphExecutionIdentity):
             identity = GraphExecutionIdentity.from_dict(identity)
         object.__setattr__(self, "graph_identity", identity)
+        if self.approval_id is not None:
+            approval_id = str(self.approval_id).strip()
+            if not approval_id:
+                raise ValueError("approval_id must be a non-empty string when provided")
+            object.__setattr__(self, "approval_id", approval_id)
 
     @classmethod
     def new(
@@ -63,4 +71,5 @@ class ToolCall:
                 if self.graph_identity is not None
                 else None
             ),
+            "approval_id": self.approval_id,
         }

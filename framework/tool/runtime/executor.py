@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone as _tz
 UTC = _tz.utc
 from hashlib import sha256
@@ -48,7 +48,13 @@ from framework.events.propagation import (
 )
 from framework.events.trace import TraceContext
 from framework.governance import CompositeAndGate, GateCheckResult
-from framework.tool.governance.approval import ToolApprovalRequest
+from framework.tool.governance.approval import (
+    ToolApprovalAuthority,
+    ToolApprovalBinding,
+    ToolApprovalRequest,
+    ToolApprovalResolution,
+    ToolApprovalVerdict,
+)
 from framework.tool.governance.boundary import is_external_fetch_tool, is_restricted_agent_id
 from framework.tool.governance.redaction import (
     contains_redacted_value,
@@ -216,6 +222,9 @@ class ToolExecutor:
         self._graph_identity = graph_identity
         self._run_id = graph_identity.run_id if graph_identity is not None else run_id
         self._approval_store = approval_store
+        self._approval_authority = (
+            ToolApprovalAuthority(approval_store) if approval_store is not None else None
+        )
         self._secret_provider = secret_provider
         self._trace_context = trace_context
         if not isinstance(defer_result_persistence, bool):
@@ -472,20 +481,31 @@ class ToolExecutor:
             self._emit("tool_args_validated", call)
             policy_trace.add("tool.arguments", "compatibility", True, "arguments validated")
 
-            approval_result = self._approval_gate(call, registered.definition, policy)
-            if approval_result is not None:
+            approval = self._approval_gate(call, registered.definition, policy, arguments)
+            if approval.blocked is not None:
                 policy_trace.approval_granted = False
+                pending = approval.blocked.status == ToolStatus.APPROVAL_REQUIRED
                 policy_trace.add(
                     "tool.approval",
                     "safety",
                     False,
-                    approval_result.output_summary or "tool approval required",
-                    severity="warning",
+                    approval.blocked.output_summary
+                    or approval.blocked.error_message
+                    or "tool approval required",
+                    severity="warning" if pending else "error",
+                    metadata=approval.trace_metadata,
                 )
-                return approval_result
+                return approval.blocked
+            arguments = approval.arguments
             if policy_trace.requires_approval:
                 policy_trace.approval_granted = True
-            policy_trace.add("tool.approval", "safety", True, "approval gate passed")
+            policy_trace.add(
+                "tool.approval",
+                "safety",
+                True,
+                approval.reason,
+                metadata=approval.trace_metadata,
+            )
 
             max_attempts = _max_attempts(registered.definition, policy)
             execution_receipt_metadata.clear()
@@ -1334,16 +1354,118 @@ class ToolExecutor:
             # supplied; make failures visible instead of silently losing facts.
             raise
 
-    def _approval_gate(self, call: ToolCall, definition: Any, policy: ToolPolicy) -> ToolResult | None:
-        if not policy.requires_approval(definition):
-            return None
+    def _approval_gate(
+        self,
+        call: ToolCall,
+        definition: Any,
+        policy: ToolPolicy,
+        arguments: dict[str, Any],
+    ) -> "_ApprovalGateOutcome":
+        """Require, verify and redeem human approval for a normalized call.
 
+        A call without ``approval_id`` creates a bound approval request and is
+        held. A call presenting ``approval_id`` executes only after the grant
+        is verified against the exact tool, arguments and execution scope and
+        then atomically consumed, so one approval releases at most one call.
+        """
+
+        if not policy.requires_approval(definition):
+            return _ApprovalGateOutcome(arguments=arguments, reason="approval not required")
+
+        if not _is_redaction_invariant(arguments):
+            return _approval_denied(
+                call,
+                "approval_arguments_sensitive",
+                "approval-gated tools must not receive secret-bearing arguments; "
+                "use declared secret handles instead",
+                approval_id=call.approval_id,
+            )
+        if call.approval_id is None:
+            return self._request_approval(call, definition, policy, arguments)
+        if self._approval_authority is None:
+            return _approval_denied(
+                call,
+                "approval_unverifiable",
+                "approval_id was presented but no approval store is configured",
+                approval_id=call.approval_id,
+            )
+
+        binding = ToolApprovalBinding.for_call(
+            call,
+            tool_version=definition.version,
+            arguments=arguments,
+            run_id=self._run_id,
+        )
+        resolution = self._approval_authority.resolve(call.approval_id, binding)
+        if resolution.verdict == ToolApprovalVerdict.PENDING:
+            return _ApprovalGateOutcome(
+                blocked=ToolResult(
+                    status=ToolStatus.APPROVAL_REQUIRED,
+                    output_summary=f"Tool approval is still pending: {definition.name}",
+                    approval_id=resolution.approval_id,
+                    call_id=call.call_id,
+                    tool_name=call.tool_name,
+                    metadata={"reason_code": resolution.verdict.reason_code},
+                ),
+                resolution=resolution,
+            )
+        if not resolution.granted:
+            return _approval_denied_by_resolution(call, resolution)
+
+        try:
+            effective_arguments = normalize_tool_arguments(
+                definition, resolution.effective_arguments or {}
+            )
+        except (ToolRuntimeError, TypeError, ValueError) as exc:
+            # Schema violations raise ToolRuntimeError; a reviewer edit that
+            # breaks the contract is a refused grant, not a tool failure.
+            return _approval_denied(
+                call,
+                "approval_arguments_invalid",
+                f"reviewer-modified arguments are invalid: {exc}",
+                approval_id=resolution.approval_id,
+            )
+        if not _is_redaction_invariant(effective_arguments):
+            return _approval_denied(
+                call,
+                "approval_arguments_sensitive",
+                "reviewer-modified arguments must not carry secret values",
+                approval_id=resolution.approval_id,
+            )
+        redeemed = self._approval_authority.consume(resolution, consumed_by=call.call_id)
+        if not redeemed.granted:
+            return _approval_denied_by_resolution(call, redeemed)
+        self._emit(
+            "tool_approval_decided",
+            call,
+            {
+                "status": "redeemed",
+                "reason_code": redeemed.verdict.reason_code,
+                "approval_id": redeemed.approval_id,
+                "decision_type": redeemed.decision_type,
+                "arguments_modified": effective_arguments != arguments,
+            },
+        )
+        return _ApprovalGateOutcome(
+            arguments=effective_arguments,
+            resolution=redeemed,
+            reason=f"approval redeemed: {redeemed.approval_id}",
+        )
+
+    def _request_approval(
+        self,
+        call: ToolCall,
+        definition: Any,
+        policy: ToolPolicy,
+        arguments: dict[str, Any],
+    ) -> "_ApprovalGateOutcome":
         reason = f"Tool requires approval before execution: {definition.name}"
         approval_id = None
-        if self._approval_store is not None:
+        if self._approval_authority is not None:
             request = ToolApprovalRequest(
-                tool_call=call,
+                tool_call=replace(call, arguments=dict(arguments)),
                 tool_name=definition.name,
+                tool_version=definition.version,
                 side_effect=_side_effect_value(definition),
                 reason=reason,
                 risk_level=_risk_level(definition),
@@ -1351,16 +1473,79 @@ class ToolExecutor:
                 graph_identity=call.graph_identity,
                 agent_id=call.requested_by_agent_id or None,
             )
-            stored = self._approval_store.upsert_approval(request.to_worker_approval_request())
-            approval_id = getattr(stored, "approval_id", None)
+            stored = self._approval_authority.request(
+                request,
+                ttl_seconds=policy.approval_ttl_seconds,
+            )
+            approval_id = stored.approval_id
+        return _ApprovalGateOutcome(
+            blocked=ToolResult(
+                status=ToolStatus.APPROVAL_REQUIRED,
+                output_summary=reason,
+                approval_id=approval_id,
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                metadata={"reason_code": "approval_required"},
+            )
+        )
 
-        return ToolResult(
-            status=ToolStatus.APPROVAL_REQUIRED,
-            output_summary=reason,
+
+@dataclass(frozen=True)
+class _ApprovalGateOutcome:
+    """Approval gate decision: either a blocking result or the arguments to run."""
+
+    blocked: ToolResult | None = None
+    arguments: dict[str, Any] = field(default_factory=dict)
+    resolution: ToolApprovalResolution | None = None
+    reason: str = "approval gate passed"
+
+    @property
+    def trace_metadata(self) -> dict[str, Any]:
+        if self.resolution is not None:
+            return self.resolution.to_dict()
+        if self.blocked is not None:
+            metadata = {"reason_code": self.blocked.metadata.get("reason_code")}
+            if self.blocked.approval_id is not None:
+                metadata["approval_id"] = self.blocked.approval_id
+            return metadata
+        return {}
+
+
+def _approval_denied(
+    call: ToolCall,
+    reason_code: str,
+    message: str,
+    *,
+    approval_id: str | None = None,
+) -> _ApprovalGateOutcome:
+    return _ApprovalGateOutcome(
+        blocked=ToolResult(
+            status=ToolStatus.DENIED,
+            error_type="ToolApprovalDenied",
+            error_message=message,
             approval_id=approval_id,
             call_id=call.call_id,
             tool_name=call.tool_name,
+            metadata={"reason_code": reason_code},
         )
+    )
+
+
+def _approval_denied_by_resolution(
+    call: ToolCall,
+    resolution: ToolApprovalResolution,
+) -> _ApprovalGateOutcome:
+    outcome = _approval_denied(
+        call,
+        resolution.verdict.reason_code,
+        resolution.message,
+        approval_id=resolution.approval_id,
+    )
+    return replace(outcome, resolution=resolution)
+
+
+def _is_redaction_invariant(arguments: Mapping[str, Any]) -> bool:
+    return redact_sensitive_values(dict(arguments)) == dict(arguments)
 
 
 def _result_event_payload(observation: ToolObservation) -> dict[str, Any]:
@@ -2001,16 +2186,23 @@ def _invoke_with_timeout(
 
 
 def _tool_idempotency_key(call: ToolCall) -> str:
+    # An approval authorises exactly one side effect, so its id is the natural
+    # operation key: every replay presenting that approval dedupes downstream.
+    approval_id = call.approval_id
+    configured = call.metadata.get("idempotency_key")
     parent_context = current_attempt_context()
     if parent_context is not None:
-        child_id = str(call.metadata.get("idempotency_key") or call.call_id)
+        child_id = str(configured or (f"approval:{approval_id}" if approval_id else call.call_id))
         return derive_idempotency_key(
             parent_context.idempotency_key,
             "tool",
             child_id,
         )
-    configured = call.metadata.get("idempotency_key")
-    return str(configured or f"tool:{call.call_id}")
+    if configured:
+        return str(configured)
+    if approval_id:
+        return f"tool:approval:{approval_id}"
+    return f"tool:{call.call_id}"
 
 
 def _required_evidence_write(

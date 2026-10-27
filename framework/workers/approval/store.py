@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from datetime import datetime, timezone as _tz
 UTC = _tz.utc
@@ -27,6 +28,20 @@ class ApprovalStore(Protocol):
         decision: ApprovalDecision,
     ) -> ApprovalRequest: ...
 
+    def consume_approval(
+        self,
+        approval_id: str,
+        *,
+        consumed_by: str,
+        consumed_at: datetime | None = None,
+    ) -> ApprovalRequest:
+        """Atomically redeem an approved request as a single-use execution grant.
+
+        Raises ApprovalNotConsumableError (or ApprovalExpiredError) when the
+        request is not in a consumable state at the moment of redemption.
+        """
+        ...
+
 
 class InMemoryApprovalStore:
     def __init__(
@@ -37,6 +52,7 @@ class InMemoryApprovalStore:
     ) -> None:
         self._requests = {request.approval_id: request for request in requests or []}
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
+        self._lock = threading.RLock()
 
     def create(self, request: ApprovalRequest) -> ApprovalRequest:
         return self.upsert_approval(request)
@@ -61,7 +77,8 @@ class InMemoryApprovalStore:
             raise ApprovalNotFoundError(approval_id) from exc
 
     def upsert_approval(self, request: ApprovalRequest) -> ApprovalRequest:
-        self._requests[request.approval_id] = request
+        with self._lock:
+            self._requests[request.approval_id] = request
         return request
 
     def record_decision(
@@ -70,7 +87,24 @@ class InMemoryApprovalStore:
         *,
         decision: ApprovalDecision,
     ) -> ApprovalRequest:
-        request = self.get_approval(approval_id)
-        decided = request.with_decision(decision)
-        self.upsert_approval(decided)
+        with self._lock:
+            request = self.get_approval(approval_id)
+            decided = request.with_decision(decision)
+            self._requests[approval_id] = decided
         return decided
+
+    def consume_approval(
+        self,
+        approval_id: str,
+        *,
+        consumed_by: str,
+        consumed_at: datetime | None = None,
+    ) -> ApprovalRequest:
+        with self._lock:
+            request = self.get_approval(approval_id)
+            consumed = request.with_consumption(
+                consumed_by=consumed_by,
+                consumed_at=consumed_at or self.now_fn(),
+            )
+            self._requests[approval_id] = consumed
+        return consumed

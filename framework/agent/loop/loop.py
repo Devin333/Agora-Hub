@@ -192,6 +192,7 @@ class AgentLoop:
         graph_checkpoint_ref: str | None = None,
         standalone: bool = False,
         prepared_input_projection: PreparedInputProjection | None = None,
+        approval_replay: ToolCall | None = None,
     ) -> AgentLoopResult:
         if not isinstance(standalone, bool):
             raise TypeError("standalone must be boolean")
@@ -199,6 +200,12 @@ class AgentLoop:
             prepared_input_projection, PreparedInputProjection
         ):
             raise TypeError("prepared_input_projection must be PreparedInputProjection")
+        if approval_replay is not None:
+            _validate_approval_replay(
+                approval_replay,
+                agent=agent,
+                execution_identity=execution_identity,
+            )
         if execution_identity is not None and not isinstance(
             execution_identity,
             GraphExecutionIdentity,
@@ -267,8 +274,47 @@ class AgentLoop:
         judge_retries = 0
         parser_errors = 0
         empty_output_retries = 0
+        first_llm_iteration = 1
 
-        for iteration in range(1, agent.loop_policy.max_iterations + 1):
+        if approval_replay is not None:
+            # The approved call was chosen by the model in an earlier turn and
+            # bound by a human decision; replay it verbatim without asking the
+            # model again, then let the model continue from its observation.
+            metrics.iterations = 1
+            iteration_trace = trace.start_iteration(
+                1,
+                feedback=None,
+                tool_observation_count_before=0,
+                tools_available=_tool_names(tools),
+            )
+            events.iteration_started(
+                iteration=1,
+                feedback=None,
+                tool_observation_count=0,
+                tools_available=_tool_names(tools),
+            )
+            replay_result = self._process_tool_call(
+                agent=agent,
+                inputs=inputs,
+                tool_call=approval_replay,
+                run_id=effective_run_id,
+                metrics=metrics,
+                events=events,
+                trace=trace,
+                diagnostics=diagnostics,
+                stall_detector=stall_detector,
+                iteration_trace=iteration_trace,
+                tool_observations=tool_observations,
+                called_tools=called_tools,
+                llm_call_artifacts=llm_call_artifacts,
+            )
+            if isinstance(replay_result, AgentLoopResult):
+                return replay_result
+            feedback = replay_result
+            trace.finish_iteration(iteration_trace)
+            first_llm_iteration = 2
+
+        for iteration in range(first_llm_iteration, agent.loop_policy.max_iterations + 1):
             metrics.iterations = iteration
             iteration_trace = trace.start_iteration(
                 iteration,
@@ -795,11 +841,8 @@ class AgentLoop:
         llm_call_artifacts: list[LLMCallArtifact],
     ) -> str | AgentLoopResult | None:
         iteration = iteration_trace.iteration
-        tool_policy = agent.resolved_tool_policy()
-        if not agent.memory_enabled:
-            tool_policy = replace(tool_policy, blocked_tools=[
-                *tool_policy.blocked_tools, "memory.recall", "memory.explain",
-            ])
+        # Model-produced calls never carry approval_id: approval redemption is
+        # reserved for the trusted replay path in ``run``.
         tool_call = ToolCall(
             tool_name=action.tool_name or "",
             arguments=action.tool_args,
@@ -818,6 +861,45 @@ class AgentLoop:
                 ),
             },
         )
+        return self._process_tool_call(
+            agent=agent,
+            inputs=inputs,
+            tool_call=tool_call,
+            run_id=run_id,
+            metrics=metrics,
+            events=events,
+            trace=trace,
+            diagnostics=diagnostics,
+            stall_detector=stall_detector,
+            iteration_trace=iteration_trace,
+            tool_observations=tool_observations,
+            called_tools=called_tools,
+            llm_call_artifacts=llm_call_artifacts,
+        )
+
+    def _process_tool_call(
+        self,
+        *,
+        agent: AgentSpec,
+        inputs: dict[str, Any],
+        tool_call: ToolCall,
+        run_id: str | None,
+        metrics: AgentLoopMetrics,
+        events: AgentLoopEventRecorder,
+        trace: AgentLoopTrace,
+        diagnostics: AgentLoopDiagnosticsBuilder,
+        stall_detector: AgentLoopStallDetector,
+        iteration_trace: IterationTrace,
+        tool_observations: list[ToolObservation],
+        called_tools: list[str],
+        llm_call_artifacts: list[LLMCallArtifact],
+    ) -> str | AgentLoopResult | None:
+        iteration = iteration_trace.iteration
+        tool_policy = agent.resolved_tool_policy()
+        if not agent.memory_enabled:
+            tool_policy = replace(tool_policy, blocked_tools=[
+                *tool_policy.blocked_tools, "memory.recall", "memory.explain",
+            ])
         budget_blocked = metrics.tool_calls >= _max_tool_calls_per_agent(tool_policy)
         if budget_blocked:
             observation = _blocked_tool_budget_observation(tool_call, tool_policy)
@@ -1006,6 +1088,8 @@ class AgentLoop:
 
         if observation.status == ToolStatus.BLOCKED:
             return observation.result.error_message or "tool call blocked"
+        if observation.status == ToolStatus.DENIED:
+            return observation.result.error_message or "tool call denied"
         if observation.status == ToolStatus.FAILED:
             return observation.result.error_message or "tool call failed"
         if observation.status == ToolStatus.TIMEOUT:
@@ -2423,6 +2507,22 @@ def _llm_call_artifact(
             "streamed": metadata.get("llm_streamed"),
         },
     )
+
+
+def _validate_approval_replay(
+    call: ToolCall,
+    *,
+    agent: AgentSpec,
+    execution_identity: GraphExecutionIdentity | None,
+) -> None:
+    if not isinstance(call, ToolCall):
+        raise TypeError("approval_replay must be a ToolCall")
+    if not call.approval_id:
+        raise ValueError("approval_replay must present an approval_id")
+    if call.requested_by_agent_id != agent.agent_id:
+        raise ValueError("approval_replay was requested by a different agent")
+    if call.graph_identity != execution_identity:
+        raise ValueError("approval_replay must carry the current execution identity")
 
 
 def _runner_turn_metadata(

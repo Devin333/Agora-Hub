@@ -20,6 +20,12 @@ from framework.llm.budget import GlobalBudgetTracker
 from framework.llm.models import LLMClient
 from framework.memory import MemoryPolicy, MemoryRuntime
 from framework.memory.recall_port import ExecutionMemoryRecallPort
+from framework.tool.governance.approval import (
+    ToolApprovalStore,
+    is_tool_approval,
+    tool_call_from_approval,
+)
+from framework.tool.models.call import ToolCall
 from framework.tool.runtime.executor import ToolExecutor
 from framework.tool.runtime.evidence import ToolExecutionEvidencePort
 from framework.tool.registry.registry import ToolRegistry
@@ -57,6 +63,7 @@ class AgentRunner:
         runtime_event_sink: Any | None = None,
         execution_environment: Any | None = None,
         require_explicit_execution_profile: bool = False,
+        approval_store: ToolApprovalStore | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._tool_registry = tool_registry
@@ -80,12 +87,19 @@ class AgentRunner:
         self._runtime_event_sink = runtime_event_sink
         self._execution_environment = execution_environment
         self._require_explicit_execution_profile = require_explicit_execution_profile
+        self._approval_store = approval_store
 
     @property
     def execution_environment(self) -> Any | None:
         """Return the provider registry bound to this runner, if any."""
 
         return self._execution_environment
+
+    @property
+    def approval_store(self) -> ToolApprovalStore | None:
+        """Return the store holding tool approvals requested by this runner."""
+
+        return self._approval_store
 
     @property
     def runtime_event_sink(self) -> Any | None:
@@ -198,6 +212,7 @@ class AgentRunner:
         memory_recall: ExecutionMemoryRecallPort | None = None,
         tool_execution_evidence: ToolExecutionEvidencePort | None = None,
         prepared_input_projection: PreparedInputProjection | None = None,
+        resume_approval_id: str | None = None,
     ) -> AgentLoopResult:
         if not isinstance(standalone, bool):
             raise TypeError("standalone must be boolean")
@@ -206,6 +221,11 @@ class AgentRunner:
         ):
             raise TypeError(
                 "prepared_input_projection must be PreparedInputProjection"
+            )
+        if resume_approval_id is not None and tool_execution_evidence is not None:
+            raise ValueError(
+                "approval replay is not supported with durable tool execution "
+                "evidence: replayed calls have no model turn to attribute"
             )
         _validate_graph_identity_arguments(
             run_id=run_id,
@@ -334,6 +354,8 @@ class AgentRunner:
             llm_client=self._llm_client,
             tool_executor=ToolExecutor(
                 execution_tool_registry,
+                run_id=run_id if graph_identity is None else None,
+                approval_store=self._approval_store,
                 graph_identity=graph_identity,
                 execution_environment=self._execution_environment,
                 runtime_event_sink=self._runtime_event_sink,
@@ -362,6 +384,12 @@ class AgentRunner:
         }
         if prepared_input_projection is not None:
             loop_run_options["prepared_input_projection"] = prepared_input_projection
+        if resume_approval_id is not None:
+            loop_run_options["approval_replay"] = self._approval_replay_call(
+                resume_approval_id,
+                agent=agent,
+                graph_identity=graph_identity,
+            )
         result = loop.run(
             agent,
             loop_inputs,
@@ -442,6 +470,32 @@ class AgentRunner:
                 graph_checkpoint_ref=graph_checkpoint_ref,
             )
         return result
+
+    def _approval_replay_call(
+        self,
+        approval_id: str,
+        *,
+        agent: AgentSpec,
+        graph_identity: GraphExecutionIdentity | None,
+    ) -> ToolCall:
+        """Rebuild the approved tool call for a resumed run.
+
+        The record is only a lookup here; authority is re-verified and the
+        grant redeemed by ToolExecutor when the replayed call executes.
+        """
+
+        if not isinstance(approval_id, str) or not approval_id.strip():
+            raise ValueError("resume_approval_id must be a non-empty string")
+        if self._approval_store is None:
+            raise ValueError("approval replay requires an approval_store")
+        record = self._approval_store.get_approval(approval_id.strip())
+        if not is_tool_approval(record):
+            raise ValueError(f"approval is not a tool execution approval: {approval_id}")
+        if record.requested_by != agent.agent_id:
+            raise ValueError(
+                f"approval {approval_id} was requested by a different agent"
+            )
+        return tool_call_from_approval(record, graph_identity=graph_identity)
 
     def _resume_pending_orchestration(
         self,

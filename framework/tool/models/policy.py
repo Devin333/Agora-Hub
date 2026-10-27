@@ -31,6 +31,7 @@ class ToolPolicy:
     cancellation_grace_seconds: float = 0.1
     completion_reserve_seconds: float = 0.0
     max_total_retries: int | None = None
+    approval_ttl_seconds: float | None = None
 
     def __post_init__(self) -> None:
         blocked = sorted({*self.blocked_tools, *self.denied_tools})
@@ -74,6 +75,13 @@ class ToolPolicy:
             or self.max_total_retries < 0
         ):
             raise ValueError("max_total_retries must be a non-negative integer")
+        if self.approval_ttl_seconds is not None and (
+            isinstance(self.approval_ttl_seconds, bool)
+            or not isinstance(self.approval_ttl_seconds, (int, float))
+            or not math.isfinite(float(self.approval_ttl_seconds))
+            or self.approval_ttl_seconds <= 0
+        ):
+            raise ValueError("approval_ttl_seconds must be finite and positive")
 
     def allows(self, tool_name: str) -> bool:
         if tool_name in self.blocked_tools:
@@ -152,6 +160,7 @@ class ToolPolicy:
             "cancellation_grace_seconds": self.cancellation_grace_seconds,
             "completion_reserve_seconds": self.completion_reserve_seconds,
             "max_total_retries": self.max_total_retries,
+            "approval_ttl_seconds": self.approval_ttl_seconds,
         }
 
     @classmethod
@@ -199,6 +208,11 @@ class ToolPolicy:
             max_total_retries=(
                 int(getattr(value, "max_total_retries"))
                 if getattr(value, "max_total_retries", None) is not None
+                else None
+            ),
+            approval_ttl_seconds=(
+                float(getattr(value, "approval_ttl_seconds"))
+                if getattr(value, "approval_ttl_seconds", None) is not None
                 else None
             ),
         )
