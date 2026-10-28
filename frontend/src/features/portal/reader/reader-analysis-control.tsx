@@ -9,10 +9,10 @@ import { ReaderTaskCard, ReaderTaskStatus } from "./reader-task-card"
 import {
   DesktopResearchError,
   fetchDesktopIdentity,
-  fetchResearchOperation,
   submitResearchAnalyze,
 } from "@/lib/research/desktop/client"
 import type { ResearchOperation } from "@/lib/research/desktop/contracts"
+import { followResearchOperation, operationInProgress } from "@/lib/research/desktop/operation-polling"
 import type { ResearchPersonalMemorySelection } from "@/lib/research/workspace-items"
 import { buildAnalyzeRequest, normalizeAnalyzeTransportUrl } from "@/lib/research/desktop/request-contracts"
 import {
@@ -76,6 +76,7 @@ export function ReaderAnalysisControl({
   const [errorCode, setErrorCode] = useState<string | null>(null)
   const clearError = () => { setError(""); setErrorCode(null) }
   const active = useRef<AbortController | null>(null)
+  const resumeRef = useRef<typeof resume | null>(null)
 
   useEffect(() => {
     active.current?.abort()
@@ -92,7 +93,7 @@ export function ReaderAnalysisControl({
     if (saved?.semantic.kind === "analyze") {
       operationPersonalMemoryRef.current = saved.semantic.personalMemory
     }
-    setOperation(
+    const restored: ResearchOperation | null =
       saved
         ? {
             requestId: saved.requestId,
@@ -113,8 +114,13 @@ export function ReaderAnalysisControl({
             recoverable: true,
             automaticRetryAllowed: false,
           }
-        : null,
-    )
+        : null
+    setOperation(restored)
+    // A request the server is still executing keeps being followed after a
+    // reload or navigation; following only reads the durable operation record.
+    if (owner && restored && operationInProgress(restored.status)) {
+      resumeRef.current?.(owner, scopeRef.current, restored, operationPersonalMemoryRef.current)
+    }
     return () => active.current?.abort()
   }, [owner, paper.id, sourceFingerprint, sourceRevision])
 
@@ -124,8 +130,8 @@ export function ReaderAnalysisControl({
     expectedScope: string,
     expectedOperation: OperationReceiptIdentity,
     expectedPersonalMemory?: ResearchPersonalMemorySelection,
-  ) {
-    if (ownerRef.current !== expectedOwner || scopeRef.current !== expectedScope) return
+  ): Promise<boolean> {
+    if (ownerRef.current !== expectedOwner || scopeRef.current !== expectedScope) return false
     if (!operationReceiptMatches(next, expectedOperation)) {
       updateResearchOperation(expectedOperation.requestId, { status: "unknown" })
       setOperation({
@@ -139,7 +145,7 @@ export function ReaderAnalysisControl({
         automaticRetryAllowed: false,
       })
       setError("分析回执与已保存的请求身份不一致，请检查原请求，不能采用该结果。")
-      return
+      return false
     }
     const memoryDisclosureMatches = next.status === "passed"
       ? usedPersonalMemoryMatches(expectedPersonalMemory, next.result)
@@ -159,7 +165,7 @@ export function ReaderAnalysisControl({
         status: "unknown",
         usedPersonalMemory: [],
       })
-      return
+      return false
     }
     if (
       next.status === "passed" &&
@@ -179,7 +185,7 @@ export function ReaderAnalysisControl({
         status: "unknown",
         usedPersonalMemory: [],
       })
-      return
+      return false
     }
     setOperation(next)
     updateResearchOperation(next.requestId, {
@@ -198,7 +204,99 @@ export function ReaderAnalysisControl({
     if (["failed", "rejected", "needs_action"].includes(next.status)) {
       setError(next.message || "分析结果需要核对，不能作为已接受报告。")
     }
+    return true
   }
+
+  function follow(
+    controller: AbortController,
+    expectedOwner: string,
+    expectedScope: string,
+    expectedOperation: OperationReceiptIdentity,
+    expectedPersonalMemory: ResearchPersonalMemorySelection | undefined,
+    options: { knownStatus?: ResearchOperation["status"]; immediate?: boolean } = {},
+  ) {
+    return followResearchOperation({
+      requestId: expectedOperation.requestId,
+      generation: expectedOperation.generation,
+      signal: controller.signal,
+      ...options,
+      onUpdate: async next => {
+        const adopted = await apply(
+          next,
+          expectedOwner,
+          expectedScope,
+          expectedOperation,
+          expectedPersonalMemory,
+        )
+        return adopted && operationInProgress(next.status)
+      },
+    })
+  }
+
+  function reportFollowFailure(
+    controller: AbortController,
+    expectedOperation: ResearchOperation,
+    cause: unknown,
+  ) {
+    if (active.current !== controller) return
+    if (controller.signal.aborted) {
+      if (controller.signal.reason === "user") {
+        setError("已停止自动刷新；分析仍在后台运行，可随时检查已有请求。")
+      }
+      return
+    }
+    if (cause instanceof DesktopResearchError && cause.code === "desktop_request_not_found") {
+      // The service has no admission for this identity, so it never ran;
+      // only a new request identity can start the analysis.
+      const missing = {
+        ...expectedOperation,
+        status: "failed" as const,
+        errorCode: cause.code,
+        updatedAt: new Date().toISOString(),
+      }
+      setOperation(missing)
+      updateResearchOperation(expectedOperation.requestId, { status: "failed", errorCode: cause.code })
+      setError("服务端没有这条分析请求，可能没有提交成功；请使用新请求身份重试。")
+      return
+    }
+    setErrorCode(cause instanceof DesktopResearchError ? cause.code : null)
+    setError(cause instanceof Error ? cause.message : "分析状态暂时无法确认。")
+  }
+
+  async function resume(
+    expectedOwner: string,
+    expectedScope: string,
+    expectedOperation: ResearchOperation,
+    expectedPersonalMemory: ResearchPersonalMemorySelection | undefined,
+  ) {
+    active.current?.abort()
+    const controller = new AbortController()
+    active.current = controller
+    setBusy(true)
+    clearError()
+    try {
+      await follow(
+        controller,
+        expectedOwner,
+        expectedScope,
+        expectedOperation,
+        expectedPersonalMemory,
+        { immediate: true },
+      )
+    } catch (cause) {
+      if (ownerRef.current === expectedOwner && scopeRef.current === expectedScope) {
+        reportFollowFailure(controller, expectedOperation, cause)
+      }
+    } finally {
+      if (active.current === controller) {
+        active.current = null
+        if (ownerRef.current === expectedOwner && scopeRef.current === expectedScope) {
+          setBusy(false)
+        }
+      }
+    }
+  }
+  resumeRef.current = resume
 
   async function start() {
     const expectedOwner = owner
@@ -219,6 +317,7 @@ export function ReaderAnalysisControl({
     setBusy(true)
     clearError()
     let preparedView: ResearchOperation | null = null
+    let submitted: ResearchOperation | null = null
     try {
       const identity = await fetchDesktopIdentity(controller.signal)
       if (
@@ -290,19 +389,29 @@ export function ReaderAnalysisControl({
         buildAnalyzeRequest(prepared, semantic),
         controller.signal,
       )
-      await apply(
+      submitted = response
+      const adopted = await apply(
         response,
         expectedOwner,
         expectedScope,
         prepared,
         memorySelection,
       )
+      // The service accepts the request and runs it in the background; keep
+      // reading its durable status until it reaches a terminal state.
+      if (adopted && operationInProgress(response.status)) {
+        await follow(controller, expectedOwner, expectedScope, prepared, memorySelection, {
+          knownStatus: response.status,
+        })
+      }
     } catch (cause) {
-      if (
-        ownerRef.current !== expectedOwner ||
-        scopeRef.current !== expectedScope ||
-        memoryControlChanged()
-      ) return
+      if (ownerRef.current !== expectedOwner || scopeRef.current !== expectedScope) return
+      if (submitted) {
+        // The server holds this request; a polling failure leaves its last known status.
+        reportFollowFailure(controller, submitted, cause)
+        return
+      }
+      if (memoryControlChanged()) return
       if (preparedView) {
         const uncertain = { ...preparedView, status: "unknown" as const }
         setOperation(uncertain)
@@ -326,47 +435,14 @@ export function ReaderAnalysisControl({
     }
   }
 
-  async function check() {
-    const expectedOwner = owner
-    const expectedScope = scopeRef.current
-    if (!expectedOwner || !operation || busy) return
-    const controller = new AbortController()
-    active.current = controller
-    setBusy(true)
-    clearError()
-    try {
-      const response = await fetchResearchOperation(
-        operation.requestId,
-        operation.generation,
-        controller.signal,
-      )
-      await apply(
-        response,
-        expectedOwner,
-        expectedScope,
-        operation,
-        operationPersonalMemoryRef.current,
-      )
-    } catch (cause) {
-      if (
-        ownerRef.current === expectedOwner &&
-        scopeRef.current === expectedScope &&
-        !controller.signal.aborted
-      ) {
-        setError(cause instanceof Error ? cause.message : "分析状态暂时无法确认。")
-      }
-    } finally {
-      if (active.current === controller) {
-        active.current = null
-        if (ownerRef.current === expectedOwner && scopeRef.current === expectedScope) {
-          setBusy(false)
-        }
-      }
-    }
+  function check() {
+    if (!owner || !operation || busy) return
+    void resume(owner, scopeRef.current, operation, operationPersonalMemoryRef.current)
   }
 
   const exactSource = hasExactSourceIdentity(sourceRevision, sourceFingerprint)
   const runId = initialRunId || (operation?.status === "passed" ? operation.runId : undefined)
+  const following = busy && operation !== null && operationInProgress(operation.status)
   const terminal = operation && ["failed", "rejected", "needs_action"].includes(operation.status)
   const failureCode = errorCode ?? (terminal ? operation.errorCode : null)
 
@@ -404,9 +480,9 @@ export function ReaderAnalysisControl({
               使用新请求身份重试
             </Button>
           ) : (
-            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void check()}>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={check}>
               {busy ? <LoaderCircle size={14} strokeWidth={1.8} className="animate-spin" /> : <RefreshCw size={14} strokeWidth={1.8} />}
-              检查已有请求
+              {following ? "正在自动刷新" : "检查已有请求"}
             </Button>
           )}
         </>
@@ -425,7 +501,7 @@ export function ReaderAnalysisControl({
           variant="outline"
           size="icon-sm"
           className="rounded-full bg-muted text-foreground/80 hover:bg-accent"
-          aria-label="停止等待分析"
+          aria-label={following ? "停止自动刷新分析状态" : "停止等待分析"}
           onClick={() => active.current?.abort("user")}
         >
           <Square size={10} strokeWidth={0} fill="currentColor" />
@@ -473,6 +549,6 @@ function analysisStatus(status: ResearchOperation["status"]) {
   if (status === "needs_action") return "分析需要人工核对"
   if (status === "interrupted") return "分析运行已中断，需要按原身份核对"
   if (status === "unknown") return "请求结果未知，需要按原身份查询"
-  if (status === "running") return "分析正在运行"
-  return "分析已接收，等待真实运行结果"
+  if (status === "running") return "分析正在后台运行，完成后自动显示结果"
+  return "分析已排队，等待后台开始运行"
 }

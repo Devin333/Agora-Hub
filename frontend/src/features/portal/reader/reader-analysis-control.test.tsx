@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Paper } from "@/lib/papers/types"
 import { ReaderAnalysisControl } from "./reader-analysis-control"
 
@@ -25,7 +25,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/research/use-research-history", () => ({
   useOwnedResearchWorkspace: () => ({ owner: "alice", ready: true, workspace: {} }),
 }))
-vi.mock("@/lib/research/desktop/client", () => ({
+vi.mock("@/lib/research/desktop/client", async importOriginal => ({
+  ...(await importOriginal<typeof import("@/lib/research/desktop/client")>()),
   fetchDesktopIdentity: mocks.fetchDesktopIdentity,
   fetchResearchOperation: mocks.fetchResearchOperation,
   submitResearchAnalyze: mocks.submitResearchAnalyze,
@@ -81,6 +82,37 @@ function passedOperation() {
       artifactStatus: "valid",
       usedPersonalMemory: [{ memoryId, revision: 3 }],
     },
+  }
+}
+
+function inProgressOperation(status: "waiting" | "running") {
+  const operation: Partial<ReturnType<typeof passedOperation>> = passedOperation()
+  delete operation.result
+  return { ...operation, status, runId: "run-analysis-1" }
+}
+
+function recoverableAnalysis(status: string) {
+  return {
+    requestId: "request-analysis-1",
+    generation,
+    fingerprint,
+    kind: "analyze",
+    semantic: {
+      kind: "analyze",
+      paperId: paper.id,
+      sourceRevision: "revision-1",
+      sourceFingerprint,
+      sourceUrl: "https://example.test/paper",
+      pdfUrl: "https://example.test/paper.pdf",
+      objective: "Analyze paper 2601.01234",
+      constraints: [],
+      personalMemory: selection,
+    },
+    status,
+    paperId: paper.id,
+    sourceRevision: "revision-1",
+    createdAt: 1,
+    updatedAt: 1,
   }
 }
 
@@ -177,28 +209,7 @@ describe("ReaderAnalysisControl personal memory", () => {
   })
 
   it("recovers with the original memory snapshot without recalling or resubmitting", async () => {
-    mocks.recoverable = [{
-      requestId: "request-analysis-1",
-      generation,
-      fingerprint,
-      kind: "analyze",
-      semantic: {
-        kind: "analyze",
-        paperId: paper.id,
-        sourceRevision: "revision-1",
-        sourceFingerprint,
-        sourceUrl: "https://example.test/paper",
-        pdfUrl: "https://example.test/paper.pdf",
-        objective: "Analyze paper 2601.01234",
-        constraints: [],
-        personalMemory: selection,
-      },
-      status: "unknown",
-      paperId: paper.id,
-      sourceRevision: "revision-1",
-      createdAt: 1,
-      updatedAt: 1,
-    }]
+    mocks.recoverable = [recoverableAnalysis("unknown")]
     mocks.fetchResearchOperation.mockResolvedValue(passedOperation())
     const { onRun } = renderControl()
 
@@ -211,5 +222,116 @@ describe("ReaderAnalysisControl personal memory", () => {
     )
     expect(mocks.previewPersonalMemoryTask).not.toHaveBeenCalled()
     expect(mocks.submitResearchAnalyze).not.toHaveBeenCalled()
+  })
+})
+
+describe("ReaderAnalysisControl background analysis", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    mocks.recoverable = []
+    mocks.fetchDesktopIdentity.mockResolvedValue({ generation })
+    mocks.previewPersonalMemoryTask.mockResolvedValue({
+      policy: {
+        policy: {
+          allow_remote_processing: true,
+          revision: 2,
+          created_at: "2026-10-14T00:00:00+00:00",
+          updated_at: "2026-10-14T00:00:00+00:00",
+        },
+      },
+      recall: null,
+      reason: "matched",
+      selection,
+    })
+    mocks.prepareResearchOperation.mockResolvedValue({
+      requestId: "request-analysis-1",
+      generation,
+      fingerprint,
+      kind: "analyze",
+      semantic: {},
+      status: "prepared",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("follows a waiting submission until the background run passes", async () => {
+    mocks.submitResearchAnalyze.mockResolvedValue(inProgressOperation("waiting"))
+    mocks.fetchResearchOperation
+      .mockResolvedValueOnce(inProgressOperation("running"))
+      .mockResolvedValueOnce(inProgressOperation("running"))
+      .mockResolvedValueOnce(passedOperation())
+    const { onRun } = renderControl()
+
+    fireEvent.click(screen.getByRole("button", { name: "开始真实分析" }))
+    expect(await screen.findByText("分析已排队，等待后台开始运行")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /正在自动刷新/ })).toBeDisabled()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await screen.findByText("分析正在后台运行，完成后自动显示结果")).toBeInTheDocument()
+    expect(onRun).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(3_000)
+    await vi.advanceTimersByTimeAsync(4_500)
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith("run-analysis-1"))
+    expect(mocks.submitResearchAnalyze).toHaveBeenCalledTimes(1)
+    expect(mocks.fetchResearchOperation).toHaveBeenCalledTimes(3)
+    expect(mocks.updateResearchOperation).toHaveBeenLastCalledWith(
+      "request-analysis-1",
+      { status: "passed", runId: "run-analysis-1" },
+    )
+  })
+
+  it("resumes following a saved running request after the reader remounts", async () => {
+    mocks.recoverable = [recoverableAnalysis("running")]
+    mocks.fetchResearchOperation.mockResolvedValue(passedOperation())
+    const { onRun } = renderControl()
+
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith("run-analysis-1"))
+    expect(mocks.fetchResearchOperation).toHaveBeenCalledWith(
+      "request-analysis-1",
+      generation,
+      expect.any(AbortSignal),
+    )
+    expect(mocks.submitResearchAnalyze).not.toHaveBeenCalled()
+  })
+
+  it("stops refreshing on request without marking the background run unknown", async () => {
+    mocks.submitResearchAnalyze.mockResolvedValue(inProgressOperation("waiting"))
+    renderControl()
+
+    fireEvent.click(screen.getByRole("button", { name: "开始真实分析" }))
+    fireEvent.click(await screen.findByRole("button", { name: "停止自动刷新分析状态" }))
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("分析仍在后台运行")
+    expect(screen.getByText("分析已排队，等待后台开始运行")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /检查已有请求/ })).toBeEnabled()
+    expect(mocks.updateResearchOperation).not.toHaveBeenCalledWith(
+      "request-analysis-1",
+      { status: "unknown" },
+    )
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(mocks.fetchResearchOperation).not.toHaveBeenCalled()
+  })
+
+  it("marks a saved request the service never admitted as failed so a new identity can retry", async () => {
+    const { DesktopResearchError } = await import("@/lib/research/desktop/client")
+    mocks.recoverable = [recoverableAnalysis("waiting")]
+    mocks.fetchResearchOperation.mockRejectedValue(
+      new DesktopResearchError("desktop_request_not_found", "Desktop request was not found", 404),
+    )
+    renderControl()
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("服务端没有这条分析请求")
+    expect(screen.getByRole("button", { name: "使用新请求身份重试" })).toBeInTheDocument()
+    expect(mocks.updateResearchOperation).toHaveBeenCalledWith(
+      "request-analysis-1",
+      { status: "failed", errorCode: "desktop_request_not_found" },
+    )
   })
 })
