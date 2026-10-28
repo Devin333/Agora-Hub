@@ -10,7 +10,7 @@ from framework.harness.runtime import GraphArtifactRolloutMode
 from framework.llm.clients.config import load_openai_compatible_deployment
 from framework.llm.clients.openai_compatible import LLMProviderError
 from framework.llm.models.request import LLMRequest
-from interfaces.composition.research import _resolve_research_llm_deployment
+from interfaces.composition.research_llm_deployment import resolve_research_llm_deployment
 from interfaces.composition.research_errors import (
     ResearchConfigurationError,
     ResearchRuntimeUnavailableError,
@@ -45,7 +45,7 @@ def test_repo_dev_research_uses_dedicated_gpt_56_sol_route_without_changing_writ
         cwd=repository_root,
     )
 
-    research_deployment = _resolve_research_llm_deployment(settings)
+    research_deployment = resolve_research_llm_deployment(settings)
     writer_deployment = load_openai_compatible_deployment(
         models_config,
         route_id="writer-primary",

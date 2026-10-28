@@ -273,7 +273,11 @@ def test_answer_context_runtime_persists_events_and_run_binding(
     )
     monkeypatch.setattr(
         "interfaces.composition.research_settings.ResearchRuntimeSettings.from_env",
-        lambda: SimpleNamespace(llm=llm),
+        lambda: "env-settings",
+    )
+    monkeypatch.setattr(
+        "interfaces.composition.research_llm_deployment.resolve_research_llm_runtime",
+        lambda settings: (None, SimpleNamespace(llm=llm)) if settings == "env-settings" else None,
     )
     output = (tmp_path / "answer-run").resolve()
     runtime = _reader_answer_context_runtime(output)

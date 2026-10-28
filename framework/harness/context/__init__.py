@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from framework.harness.context.assembler import ContextAssembler
+from framework.harness.context.assembler import ContextAdmissionRejectedError, ContextAssembler
 from framework.harness.context.budget import ContextBudgetEstimator, ContextBudgetUsage
 from framework.harness.context.cache import ContextCachePolicyBuilder
 from framework.harness.context.compression import ContextCompressor
@@ -135,6 +135,7 @@ __all__ = [
     "CONTROL_PLANE_PRESERVED_FIELDS",
     "CompressionRecord",
     "REVERSIBLE_CONTEXT_ACTIONS",
+    "ContextAdmissionRejectedError",
     "ContextAssembler",
     "ContextAggregateGateResult",
     "ContextAggregateVerificationResult",

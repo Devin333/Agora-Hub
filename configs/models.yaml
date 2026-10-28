@@ -9,6 +9,10 @@ model_groups:
         api_key_env: OPENAI_API_KEY
         timeout_seconds: 90
         max_retries: 1
+        # The gateway does not publish model windows; 128k is the operator-confirmed
+        # window (inputs above 200k tokens were accepted in a 2026-10-27 probe).
+        capabilities:
+          context_window_tokens: 128000
 
   writer-primary:
     deployments:

@@ -438,3 +438,20 @@ def test_paper_rag_session_rejects_invalid_context_window():
         paper_rag_session.ContextWindowLimits(max_input_tokens=0, max_output_tokens=1)
     with pytest.raises(TypeError, match="context_window"):
         PaperRAGSession(object(), context_window={"max_input_tokens": 1})
+
+
+def test_paper_rag_session_rejects_a_context_budget_larger_than_the_model_window():
+    import pytest
+    from dataclasses import replace
+
+    window = paper_rag_session.ContextWindowLimits(max_input_tokens=8192, max_output_tokens=2048)
+
+    with pytest.raises(ValueError, match="16384 > 8192"):
+        PaperRAGSession(
+            object(),
+            budget=replace(RAGBudget.safe_default(), max_context_tokens=16_384),
+            context_window=window,
+        )
+    # A budget that fits, and no window at all, are both accepted.
+    PaperRAGSession(object(), budget=replace(RAGBudget.safe_default(), max_context_tokens=8_192), context_window=window)
+    PaperRAGSession(object(), budget=replace(RAGBudget.safe_default(), max_context_tokens=16_384))

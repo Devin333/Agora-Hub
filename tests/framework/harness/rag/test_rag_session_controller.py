@@ -452,3 +452,30 @@ def _content_resolved_method_pack() -> EvidencePack:
         pack,
         metadata={**pack.metadata, "evidence_type": "method", "evidence_type_source": "content_resolved"},
     )
+
+
+def test_controller_fails_the_session_when_the_context_window_rejects_the_pack() -> None:
+    from framework.harness import ContextAdmissionRejectedError
+
+    class _RejectingAssembler:
+        def assemble(self, request):
+            raise ContextAdmissionRejectedError(
+                "verified context runtime did not authorize provider dispatch",
+                details={"status": "no_allowed_compaction"},
+            )
+
+    controller = FakeRAGSessionController()
+    controller.context_pack_assembler.context_assembler = _RejectingAssembler()
+
+    result = controller.run_fake_session()
+
+    assert result.status == RAGSessionStatus.FAILED
+    assert result.context_pack is None
+    assert result.decision.decision_type == RAGDecisionType.FAILED
+    failure = result.decision.metadata["context_admission_error"]
+    assert failure["code"] == "context_admission_rejected"
+    assert failure["retryable"] is False
+    assert failure["details"] == {"status": "no_allowed_compaction"}
+    event_types = [event["event_type"] for event in result.transcript.events]
+    assert "rag_context_admission_rejected" in event_types
+    assert result.metrics is not None

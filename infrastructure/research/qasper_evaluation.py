@@ -217,3 +217,66 @@ class FilesystemQasperArtifacts:
             finally:
                 if staging is not None:
                     staging.unlink(missing_ok=True)
+
+
+class FilesystemQasperRunCheckpoints:
+    """``<output>.checkpoint.jsonl`` beside the output directory, one fsynced line per append.
+
+    A crash can leave at most one partial trailing line (no newline); readers drop
+    it and the next append truncates it, so every returned line was completely written.
+    """
+
+    @staticmethod
+    def _path(directory: str) -> Path:
+        if not str(directory).strip():
+            raise ValueError("an explicit artifact output directory is required")
+        root = Path(directory).resolve()
+        path = root.parent / f"{root.name}.checkpoint.jsonl"
+        if path.is_symlink():
+            raise ValueError(f"run checkpoint is a symbolic link: {path}")
+        return path
+
+    def read_lines(self, directory: str) -> tuple[bytes, ...]:
+        try:
+            data = self._path(directory).read_bytes()
+        except FileNotFoundError:
+            return ()
+        lines = data.split(b"\n")
+        # The last element is empty after a complete final line, or a torn write.
+        return tuple(line for line in lines[:-1] if line)
+
+    def append_line(self, directory: str, line: bytes) -> None:
+        if type(line) is not bytes or b"\n" in line or not line:
+            raise ValueError("checkpoint lines must be non-empty bytes without newlines")
+        path = self._path(directory)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+        with path.open("r+b") as stream:
+            _truncate_torn_tail(stream)
+            stream.seek(0, os.SEEK_END)
+            stream.write(line + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def discard(self, directory: str) -> None:
+        self._path(directory).unlink(missing_ok=True)
+
+
+def _truncate_torn_tail(stream: BinaryIO) -> None:
+    """Drop an unterminated final line left by an interrupted append."""
+    size = stream.seek(0, os.SEEK_END)
+    if size == 0:
+        return
+    stream.seek(size - 1)
+    if stream.read(1) == b"\n":
+        return
+    position = size
+    while position > 0:
+        start = max(0, position - 4096)
+        stream.seek(start)
+        newline = stream.read(position - start).rfind(b"\n")
+        if newline != -1:
+            stream.truncate(start + newline + 1)
+            return
+        position = start
+    stream.truncate(0)

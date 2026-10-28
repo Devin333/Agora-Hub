@@ -105,6 +105,16 @@ class PaperRAGSession:
         self._chunk_store = chunk_store
         self._policy_builder = ResearchRAGPolicyBuilder()
         self._budget = budget or RAGBudget.safe_default()
+        if (
+            context_window is not None
+            and self._budget.max_context_tokens > context_window.max_input_tokens
+        ):
+            # The context admission gate measures against the model window; a larger
+            # evidence budget would only be discovered per question, as a rejected call.
+            raise ValueError(
+                "RAG max_context_tokens exceeds the answer model input window "
+                f"({self._budget.max_context_tokens} > {context_window.max_input_tokens})"
+            )
         self._reranker = reranker
         self._field_index = field_index
         self._field_reranker = field_reranker

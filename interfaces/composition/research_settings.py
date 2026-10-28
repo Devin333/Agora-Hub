@@ -4,7 +4,7 @@ import math
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlsplit, urlunsplit
@@ -48,6 +48,11 @@ _NAVIGATION_TUNING_MAX = 8
 _DEFAULT_ARXIV_API_URL = "https://export.arxiv.org/api/query"
 _DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DEFAULT_LLM_MODEL = "deepseek-v4-flash"
+# Input window used when neither the environment nor the selected deployment
+# declares one; the ceiling bounds both explicit and derived windows.
+_DEFAULT_LLM_MAX_INPUT_TOKENS = 8_192
+_LLM_MIN_INPUT_TOKENS = 512
+_LLM_MAX_INPUT_TOKENS = 262_144
 _DEFAULT_SOURCE_MAX_BYTES = 120_000_000
 _DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]*$")
@@ -103,7 +108,9 @@ class ResearchLLMSettings:
     api_key_env: str
     timeout_seconds: float
     max_attempts: int
-    max_input_tokens: int
+    # ``None`` until the selected deployment is known: the input window is then
+    # derived from the deployment's context window (see ``with_deployment_window``).
+    max_input_tokens: int | None
     max_output_tokens: int
 
     def __post_init__(self) -> None:
@@ -138,18 +145,45 @@ class ResearchLLMSettings:
         object.__setattr__(self, "api_key_env", api_key_env)
         _bounded_float(self.timeout_seconds, "research.llm.timeout", 1.0, 300.0)
         _bounded_int(self.max_attempts, "research.llm.max_attempts", 1, 5)
-        _bounded_int(
-            self.max_input_tokens,
-            "research.llm.max_input_tokens",
-            512,
-            262_144,
-        )
+        if self.max_input_tokens is not None:
+            _bounded_int(
+                self.max_input_tokens,
+                "research.llm.max_input_tokens",
+                _LLM_MIN_INPUT_TOKENS,
+                _LLM_MAX_INPUT_TOKENS,
+            )
         _bounded_int(
             self.max_output_tokens,
             "research.llm.max_output_tokens",
             128,
             32_768,
         )
+
+    def with_deployment_window(self, context_window_tokens: int | None) -> "ResearchLLMSettings":
+        """Resolve the input window against the selected deployment's context window.
+
+        An explicitly configured input window wins but must leave room for the
+        output reservation; otherwise the window is the deployment's context window
+        minus that reservation. A deployment that declares no window keeps the
+        conservative default, so an unknown model is never assumed to be large.
+        """
+        if context_window_tokens is not None and (
+            type(context_window_tokens) is not int or context_window_tokens < 1
+        ):
+            _invalid("research.llm.route")
+        if self.max_input_tokens is not None:
+            if (
+                context_window_tokens is not None
+                and self.max_input_tokens + self.max_output_tokens > context_window_tokens
+            ):
+                _invalid("research.llm.max_input_tokens")
+            return self
+        if context_window_tokens is None:
+            return replace(self, max_input_tokens=_DEFAULT_LLM_MAX_INPUT_TOKENS)
+        derived = min(context_window_tokens - self.max_output_tokens, _LLM_MAX_INPUT_TOKENS)
+        if derived < _LLM_MIN_INPUT_TOKENS:
+            _invalid("research.llm.max_output_tokens")
+        return replace(self, max_input_tokens=derived)
 
 
 
@@ -667,10 +701,9 @@ class ResearchRuntimeSettings:
                 2,
                 capability="research.llm.max_attempts",
             ),
-            max_input_tokens=_env_int(
+            max_input_tokens=_optional_env_int(
                 values,
                 "NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS",
-                8_192,
                 capability="research.llm.max_input_tokens",
             ),
             max_output_tokens=_env_int(

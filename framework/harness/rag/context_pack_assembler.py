@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from framework.harness.context.assembler import ContextAssembler
@@ -46,17 +47,31 @@ class RAGContextPackAssembler:
             *_artifact_refs(accepted_evidence, rejected_evidence, conflicting_evidence),
             *tuple(str(ref) for ref in artifact_refs if str(ref).strip()),
         )))
-        retained_memory_context = tuple(_trim_memory_hit(item) for item in memory_context[: policy.budget.max_memory_hits])
-        retained_evidence = accepted_evidence[: policy.budget.max_context_items]
+        # Evidence is the answer basis, so it claims the token budget in rank order
+        # before memory hits; whatever does not fit is dropped and traced, never
+        # silently counted as within budget.
+        token_budget = policy.budget.max_context_tokens
+        retained_evidence, over_budget_evidence, evidence_tokens = _within_token_budget(
+            accepted_evidence[: policy.budget.max_context_items],
+            _evidence_tokens,
+            token_budget,
+        )
+        budget_dropped_evidence = (
+            *over_budget_evidence,
+            *accepted_evidence[policy.budget.max_context_items:],
+        )
+        retained_memory_context, _over_budget_memory, memory_tokens = _within_token_budget(
+            tuple(_trim_memory_hit(item) for item in memory_context[: policy.budget.max_memory_hits]),
+            _memory_tokens,
+            token_budget - evidence_tokens,
+        )
         evidence_trace = _evidence_trace(
             accepted=retained_evidence,
             rejected=rejected_evidence,
             conflicting=conflicting_evidence,
+            budget_dropped=budget_dropped_evidence,
         )
-        context_tokens = min(
-            _estimate_context_tokens(accepted_evidence, rejected_evidence, conflicting_evidence, memory_context),
-            policy.budget.max_context_tokens,
-        )
+        context_tokens = evidence_tokens + memory_tokens
         context_items = len(retained_evidence) + len(retained_memory_context)
         snapshot = RAGBudgetSnapshot(
             rounds_used=snapshot.rounds_used,
@@ -83,8 +98,20 @@ class RAGContextPackAssembler:
             evidence_trace=evidence_trace,
             gap_report=dict(gap_report or {}),
             budget_snapshot=snapshot,
-            assembly_summary=_assembly_summary(accepted_evidence, rejected_evidence, conflicting_evidence, memory_context),
+            assembly_summary=_assembly_summary(
+                retained_evidence,
+                rejected_evidence,
+                conflicting_evidence,
+                retained_memory_context,
+                budget_dropped=len(budget_dropped_evidence),
+            ),
             metadata={
+                "context_budget_dropped_evidence_ids": [
+                    item.evidence_id for item in budget_dropped_evidence
+                ],
+                "context_budget_dropped_memory_hits": (
+                    len(memory_context) - len(retained_memory_context)
+                ),
                 "context_assembly_required": True,
                 "stable_prefix_contains_dynamic_rag": False,
                 "context_policy": to_jsonable(policy.context_policy),
@@ -252,12 +279,14 @@ def _evidence_trace(
     accepted: tuple[EvidenceCandidate, ...],
     rejected: tuple[EvidenceCandidate, ...],
     conflicting: tuple[EvidenceCandidate, ...],
+    budget_dropped: tuple[EvidenceCandidate, ...] = (),
 ) -> tuple[dict[str, Any], ...]:
     rows: list[dict[str, Any]] = []
     for status, group in (
         ("accepted", accepted),
         ("rejected", rejected),
         ("conflicting", conflicting),
+        ("budget_dropped", budget_dropped),
     ):
         for candidate in group:
             rows.append({
@@ -274,18 +303,36 @@ def _evidence_trace(
     return tuple(rows)
 
 
-def _estimate_context_tokens(
-    accepted: tuple[EvidenceCandidate, ...],
-    rejected: tuple[EvidenceCandidate, ...],
-    conflicting: tuple[EvidenceCandidate, ...],
-    memory_context: tuple[dict[str, Any], ...],
-) -> int:
-    text_parts: list[str] = []
-    for item in accepted + rejected + conflicting:
-        text_parts.extend([item.title, item.summary])
-    for item in memory_context:
-        text_parts.append(str(item.get("summary", item.get("content", ""))))
-    return max(sum(max(len(part.split()), 1) for part in text_parts), 1)
+def _within_token_budget(
+    items: tuple[Any, ...],
+    estimate: Callable[[Any], int],
+    budget: int,
+) -> tuple[tuple[Any, ...], tuple[Any, ...], int]:
+    """Keep the longest rank-ordered prefix whose estimated tokens fit ``budget``.
+
+    Returns the kept items, the dropped tail and the kept token total. The prefix
+    stops at the first item that does not fit, so a lower-ranked short item never
+    displaces a higher-ranked long one.
+    """
+    used = 0
+    for index, item in enumerate(items):
+        cost = estimate(item)
+        if used + cost > budget:
+            return items[:index], items[index:], used
+        used += cost
+    return items, (), used
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(len(str(text or "").split()), 1)
+
+
+def _evidence_tokens(item: EvidenceCandidate) -> int:
+    return _estimate_tokens(item.title) + _estimate_tokens(item.summary)
+
+
+def _memory_tokens(item: dict[str, Any]) -> int:
+    return _estimate_tokens(str(item.get("summary", item.get("content", ""))))
 
 
 def _assembly_summary(
@@ -293,10 +340,13 @@ def _assembly_summary(
     rejected: tuple[EvidenceCandidate, ...],
     conflicting: tuple[EvidenceCandidate, ...],
     memory_context: tuple[dict[str, Any], ...],
+    *,
+    budget_dropped: int = 0,
 ) -> str:
     return (
         f"Accepted {len(accepted)} evidence candidates, rejected {len(rejected)}, "
-        f"flagged {len(conflicting)} conflicts, retained {len(memory_context)} memory hits."
+        f"flagged {len(conflicting)} conflicts, dropped {budget_dropped} over the context budget, "
+        f"retained {len(memory_context)} memory hits."
     )
 
 

@@ -13,7 +13,11 @@ from backend.research.application.qasper_evaluation import (
 from backend.research.application.qasper_answer_evaluation import (
     QasperAnswerRetrievalProfile,
 )
-from infrastructure.research.qasper_evaluation import FilesystemQasperAssets, FilesystemQasperArtifacts
+from infrastructure.research.qasper_evaluation import (
+    FilesystemQasperArtifacts,
+    FilesystemQasperAssets,
+    FilesystemQasperRunCheckpoints,
+)
 
 
 @dataclass(frozen=True)
@@ -210,6 +214,8 @@ def build_qasper_answer_evaluation_service(
         progress=progress,
         case_started=case_started,
         recovery_source=recovery_source,
+        # Re-running the same command with the same output directory resumes it.
+        checkpoints=FilesystemQasperRunCheckpoints(),
         answer_model_identity=getattr(answer_model, "measurement_identity", None),
         judge_model_identity=getattr(judge_call, "measurement_identity", None),
         config=QasperAnswerEvaluationConfig(
@@ -290,9 +296,12 @@ def _reader_answer_context_runtime(output_directory: Path):
     from backend.research.application.qasper_answer_evaluation import AnswerContextRuntime
     from infrastructure.research.artifact_port import FilesystemHarnessArtifactPort
     from infrastructure.research.context_runtime import build_research_context_assembler
+    from interfaces.composition.research_llm_deployment import resolve_research_llm_runtime
     from interfaces.composition.research_settings import ResearchRuntimeSettings
 
-    llm = ResearchRuntimeSettings.from_env().llm
+    # The same deployment-derived window as the desktop reader, not a bare default.
+    _deployment, settings = resolve_research_llm_runtime(ResearchRuntimeSettings.from_env())
+    llm = settings.llm
     context_root = output_directory.parent / f"{output_directory.name}.context"
     snapshots = FilesystemHarnessArtifactPort(context_root)
     events = _durable_context_event_port(context_root)

@@ -19,7 +19,6 @@ from backend.research.ports.paper_answer_model import PaperAnswerModelResponse
 from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.evaluation.qasper_retrieval import CachedFixtureChunkStore, OfflineEmbeddingCache
 from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
-from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.harness import InMemoryHarnessEventPort
 from infrastructure.research.artifact_port import ArtifactRunBindingError, FilesystemHarnessArtifactPort
 from infrastructure.research.context_runtime import build_research_context_assembler
@@ -125,7 +124,12 @@ def test_reader_ask_without_run_binding_cannot_persist_context_snapshots(tmp_pat
 def test_reader_ask_against_the_rag_item_budget_is_refused_by_the_runtime(tmp_path: Path) -> None:
     artifacts = FilesystemHarnessArtifactPort(tmp_path / "context")
 
-    with pytest.raises(HarnessValidationError) as excinfo:
-        _ask(_session(artifacts, window=False, scoped=True))
+    result = _ask(_session(artifacts, window=False, scoped=True))
 
-    assert excinfo.value.details["status"] == "protected_context_exceeds_window"
+    # The refusal fails this session before any model call instead of raising out of it.
+    assert result.status.value == "failed"
+    assert result.answer is None
+    failure = result.decision.metadata["context_admission_error"]
+    assert failure["code"] == "context_admission_rejected"
+    assert failure["retryable"] is False
+    assert failure["details"]["status"] == "protected_context_exceeds_window"

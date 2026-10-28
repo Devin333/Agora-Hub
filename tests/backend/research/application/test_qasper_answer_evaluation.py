@@ -32,7 +32,11 @@ from backend.research.rag.retrieval.paper_answer_generator import (
 )
 from backend.research.rag.retrieval.policies import RetrievalPolicy, build_retrieval_policy
 from backend.research.rag.retrieval.rerank import RerankCascade
-from infrastructure.research.qasper_evaluation import FilesystemQasperArtifacts, FilesystemQasperAssets
+from infrastructure.research.qasper_evaluation import (
+    FilesystemQasperArtifacts,
+    FilesystemQasperAssets,
+    FilesystemQasperRunCheckpoints,
+)
 from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 
 PAPER = "1900.00001"
@@ -121,6 +125,7 @@ def _service(
     judge_model_identity=None,
     recovery_source=None,
     case_ids=None,
+    checkpoints=None,
 ):
     dataset_path = tmp_path / "dataset.json"
     dataset_path.write_text(json.dumps(_dataset()), encoding="utf-8")
@@ -183,6 +188,7 @@ def _service(
         answer_model_identity=answer_model_identity,
         judge_model_identity=judge_model_identity,
         recovery_source=recovery_source,
+        checkpoints=checkpoints,
         config=QasperAnswerEvaluationConfig(
             output_directory=str(tmp_path / output), per_type=5, case_ids=case_ids,
         ),
@@ -1040,3 +1046,109 @@ def test_answer_run_assembles_context_through_the_production_reader_runtime(
     }
     assert report["metrics"]["system_failure"]["numerator"] == 0
     assert (tmp_path / "context" / "qasper-answer-eval").is_dir()
+
+
+def _counting_reply_model():
+    calls: list[str] = []
+
+    def reply(request) -> str:
+        calls.append(request.user_prompt)
+        if "GPU" in request.user_prompt:
+            return f"{ABSTENTION_TOKEN}: the paper does not report hardware"
+        if "Do they train" in request.user_prompt:
+            return "Yes, they train an encoder [1]."
+        return "The BERT encoder [1]."
+
+    return FakePaperAnswerModel(reply), calls
+
+
+def test_interrupted_run_resumes_from_its_checkpoint_without_regenerating(
+    tmp_path: Path, repository: Path,
+) -> None:
+    class _Interrupt(Exception):
+        pass
+
+    def interrupt_after_first(done, total, record):
+        if done == 1:
+            raise _Interrupt
+
+    checkpoints = FilesystemQasperRunCheckpoints()
+    first_model, first_calls = _counting_reply_model()
+    interrupted, _, store = _service(
+        tmp_path, repository, judge_call=None, answer_model=first_model,
+        checkpoints=checkpoints, progress=interrupt_after_first,
+    )
+    with pytest.raises(_Interrupt):
+        interrupted.run()
+    assert not (tmp_path / "out").exists()
+    assert len(checkpoints.read_lines(str(tmp_path / "out"))) == 2  # header + one case
+
+    resumed_model, resumed_calls = _counting_reply_model()
+    resumed, _, _ = _service(
+        tmp_path, repository, judge_call=None, answer_model=resumed_model,
+        checkpoints=checkpoints, store=store,
+    )
+    report = resumed.run()
+
+    assert report["evaluated_cases"] == 3
+    assert report["resumed_cases"] == 1
+    assert len(first_calls) == 1
+    # Only the two unfinished cases reach the model on resume.
+    assert len(resumed_calls) == 2
+    assert not set(first_calls) & set(resumed_calls)
+    assert checkpoints.read_lines(str(tmp_path / "out")) == ()
+    rows = (tmp_path / "out" / "answers.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 3
+
+
+def test_checkpoint_from_a_different_setup_is_rejected_before_any_case(
+    tmp_path: Path, repository: Path,
+) -> None:
+    from backend.research.application.qasper_answer_checkpoint import QasperAnswerCheckpointError
+
+    checkpoints = FilesystemQasperRunCheckpoints()
+    checkpoints.append_line(str(tmp_path / "out"), b'{"kind":"header","protocol":"other"}')
+    model, calls = _counting_reply_model()
+    service, _, _ = _service(
+        tmp_path, repository, judge_call=None, answer_model=model, checkpoints=checkpoints,
+    )
+
+    with pytest.raises(QasperAnswerCheckpointError, match="different run setup"):
+        service.run()
+    assert calls == []
+
+
+def test_context_admission_rejection_fails_only_that_case(tmp_path: Path, repository: Path) -> None:
+    from backend.research.application.paper_rag_session import ContextWindowLimits
+    from backend.research.application.qasper_answer_evaluation import AnswerContextRuntime
+    from framework.harness import ContextAdmissionRejectedError, ContextAssembler
+
+    class _RejectingAssembler(ContextAssembler):
+        def assemble(self, request):
+            if "GPU" in str(request.get("current_instruction", "")):
+                raise ContextAdmissionRejectedError(
+                    "verified context runtime did not authorize provider dispatch",
+                    details={"status": "no_allowed_compaction"},
+                )
+            return super().assemble(request)
+
+    runtime = AnswerContextRuntime(
+        assembler_factory=lambda _spec: _RejectingAssembler(),
+        window=ContextWindowLimits(8192, 2048),
+        run_scope=lambda _run_id: __import__("contextlib").nullcontext(),
+    )
+    model, calls = _counting_reply_model()
+    service, _, _ = _service(
+        tmp_path, repository, judge_call=None, answer_model=model, context_runtime=runtime,
+    )
+
+    report = service.run()
+
+    assert report["evaluated_cases"] == 3
+    rows = [json.loads(line) for line in (tmp_path / "out" / "answers.jsonl").read_text(encoding="utf-8").splitlines()]
+    rejected = next(row for row in rows if "GPU" in row["question"])
+    assert rejected["outcome"] == "failed"
+    assert rejected["generation_error"] == "context_admission_rejected"
+    assert rejected["generation_error_detail"]["retryable"] is False
+    assert all(row["outcome"] != "failed" for row in rows if row is not rejected)
+    assert not any("GPU" in prompt for prompt in calls)

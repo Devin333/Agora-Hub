@@ -21,7 +21,8 @@ from backend.research.application.qasper_assets import QasperAssetService
 from backend.research.document.models import PaperChunk
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from backend.research.ports.paper_answer_model import PaperAnswerModelPort
-from backend.research.ports.qasper_evaluation import QasperArtifactStore
+from backend.research.application.qasper_answer_checkpoint import QasperAnswerCheckpoint
+from backend.research.ports.qasper_evaluation import QasperArtifactStore, QasperRunCheckpointStore
 from backend.research.ports.qasper_query_embedding import QueryEmbeddingPort, QueryVectorStorePort
 from backend.research.ports.field_embedding_index import FieldEmbeddingSearchPort
 from backend.research.ports.reranker import RerankerPort
@@ -218,6 +219,7 @@ class QasperAnswerEvaluationService:
         progress: Callable[[int, int, QasperAnswerCase], None] | None = None,
         case_started: Callable[[int, int, str], None] | None = None,
         recovery_source: Mapping[str, Any] | None = None,
+        checkpoints: QasperRunCheckpointStore | None = None,
         answer_model_identity: Mapping[str, Any] | None = None,
         judge_model_identity: Mapping[str, Any] | None = None,
         clock: Callable[[], float] = time.perf_counter,
@@ -275,6 +277,7 @@ class QasperAnswerEvaluationService:
         self._progress = progress
         self._case_started = case_started
         self._recovery_source = dict(recovery_source) if recovery_source is not None else None
+        self._checkpoints = checkpoints
         self._answer_model_identity = _measurement_identity(
             answer_model_identity or getattr(answer_model, "measurement_identity", None)
         )
@@ -430,20 +433,37 @@ class QasperAnswerEvaluationService:
             # the first answer or judge provider call.
             require_same_measurement(source_identity, report_identity)
 
+        checkpoint = (
+            QasperAnswerCheckpoint(
+                self._checkpoints,
+                self._config.output_directory,
+                identity=report_identity,
+                sample=sample.manifest(),
+                case_ids=[question.case_id for _, question in positioned],
+            )
+            if self._checkpoints is not None
+            else None
+        )
+        # Cases finished by an interrupted run of this exact setup are kept as recorded.
+        resumed = checkpoint.resume() if checkpoint is not None else {}
         records: list[QasperAnswerCase] = []
         try:
             for done, (index, question) in enumerate(positioned, start=1):
                 frozen_case = frozen_by_id.get(question.case_id)
                 if frozen_case is None:
                     raise ValueError(f"sampled case {question.case_id} is absent from the frozen mapping")
-                if self._case_started is not None:
-                    self._case_started(done, len(positioned), question.case_id)
-                record = self._evaluate_case(
-                    question, frozen_case, qas_by_id[question.case_id],
-                    session=session, ask_use_case=ask_use_case, chunks_by_id=chunks_by_id, index=index,
-                )
+                record = resumed.get(question.case_id)
+                if record is None:
+                    if self._case_started is not None:
+                        self._case_started(done, len(positioned), question.case_id)
+                    record = self._evaluate_case(
+                        question, frozen_case, qas_by_id[question.case_id],
+                        session=session, ask_use_case=ask_use_case, chunks_by_id=chunks_by_id, index=index,
+                    )
+                    if checkpoint is not None:
+                        checkpoint.record(record)
+                    resolver.flush()
                 records.append(record)
-                resolver.flush()
                 if self._progress is not None:
                     self._progress(done, len(positioned), record)
         finally:
@@ -481,12 +501,16 @@ class QasperAnswerEvaluationService:
         }
         if self._recovery_source is not None:
             report["recovery_source"] = dict(self._recovery_source)
+        if resumed:
+            report["resumed_cases"] = len(resumed)
         answers = "".join(json.dumps(case.to_dict(), ensure_ascii=False) + "\n" for case in records)
         self._artifacts.publish(self._config.output_directory, {
             "sample.json": _json_bytes(sample.manifest()),
             "answers.jsonl": answers.encode("utf-8"),
             "report.json": _json_bytes(report),
         })
+        if checkpoint is not None:
+            checkpoint.discard()
         return report
 
     def _evaluate_case(
@@ -518,7 +542,14 @@ class QasperAnswerEvaluationService:
         candidate = result.answer
         metadata = dict(candidate.metadata) if candidate is not None else {}
         generated = dict(metadata.get("generated_answer_metadata") or {})
-        failure = (result.decision.metadata or {}).get("generation_error") or {}
+        decision_metadata = result.decision.metadata or {}
+        # A context the model window cannot admit fails before generation; both are
+        # recorded as this case's generation failure.
+        failure = (
+            decision_metadata.get("generation_error")
+            or decision_metadata.get("context_admission_error")
+            or {}
+        )
         # Prefer the passages exactly as sent to the model; the pack order is only a
         # fallback for failures that happened before context selection.
         context_ids = tuple(

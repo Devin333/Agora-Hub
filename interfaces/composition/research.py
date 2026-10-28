@@ -92,14 +92,9 @@ from backend.research.ports.artifact_publication import (
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.ports.artifact_store import ResearchArtifactStorePort
 from framework.llm.clients.openai_compatible import (
-    LLMConfigurationError,
     LLMRetryPolicy,
     OpenAICompatibleClient,
     OpenAICompatibleConfig,
-)
-from framework.llm.clients.config import (
-    OpenAICompatibleDeploymentConfig,
-    load_openai_compatible_deployment,
 )
 from framework.events.canonical import checksum_for
 from framework.events.application import DurableGraphEventProjectionAdapter
@@ -256,6 +251,7 @@ from interfaces.composition.research_reader_answer import (
     reader_rag_budget,
     reader_section_navigation,
 )
+from interfaces.composition.research_llm_deployment import resolve_research_llm_runtime
 from interfaces.composition.research_settings import (
     ResearchLocalRuntimeSettings,
     ResearchParserSettings,
@@ -1822,24 +1818,6 @@ def _research_service_error(error: ResearchCompositionError) -> ResearchServiceE
     )
 
 
-def _resolve_research_llm_deployment(
-    settings: ResearchRuntimeSettings,
-) -> OpenAICompatibleDeploymentConfig:
-    try:
-        deployment = load_openai_compatible_deployment(
-            settings.llm.models_config_path,
-            route_id=settings.llm.route_id,
-            apply_environment_overrides=False,
-        )
-    except LLMConfigurationError as exc:
-        raise ResearchConfigurationError((ResearchCapability.LLM_ROUTE,)) from exc
-    if deployment.config.model != settings.llm.model:
-        raise ResearchConfigurationError((ResearchCapability.LLM_MODEL,))
-    if deployment.config.base_url.rstrip("/") != settings.llm.base_url.rstrip("/"):
-        raise ResearchConfigurationError((ResearchCapability.LLM_BASE_URL,))
-    return deployment
-
-
 def _build_research_chunk_store(
     settings: ResearchRAGSettings,
     *,
@@ -1971,17 +1949,21 @@ def _build_configured_composition(
             ),
         )
 
-        llm_deployment = _resolve_research_llm_deployment(settings)
+        # The composition keeps the configured settings as its identity; components
+        # receive the LLM settings whose input window was resolved against the
+        # selected deployment.
+        llm_deployment, runtime_settings = resolve_research_llm_runtime(settings)
+        llm_settings = runtime_settings.llm
         llm_client = OpenAICompatibleClient(
             OpenAICompatibleConfig(
                 provider=llm_deployment.config.provider,
-                base_url=settings.llm.base_url,
-                model=settings.llm.model,
-                api_key_env=settings.llm.api_key_env,
-                timeout_seconds=settings.llm.timeout_seconds,
+                base_url=llm_settings.base_url,
+                model=llm_settings.model,
+                api_key_env=llm_settings.api_key_env,
+                timeout_seconds=llm_settings.timeout_seconds,
             ),
             retry_policy=LLMRetryPolicy(
-                max_attempts=settings.llm.max_attempts,
+                max_attempts=llm_settings.max_attempts,
             ),
             structured_output_capability=(
                 llm_deployment.structured_output_capability
@@ -1991,8 +1973,8 @@ def _build_configured_composition(
             ResearchCapability.CANDIDATE_WORKER,
             lambda: StructuredResearchCandidateWorker(
                 llm_client,
-                max_input_tokens=settings.llm.max_input_tokens,
-                max_output_tokens=settings.llm.max_output_tokens,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
             ),
         )
         github_repository = GithubResearchRepositoryAdapter(
@@ -2516,10 +2498,10 @@ def _build_configured_composition(
             return build_research_context_assembler(
                 artifact_port=artifact_port,
                 event_port=event_port,
-                provider=settings.llm.provider,
-                model=settings.llm.model,
-                max_input_tokens=settings.llm.max_input_tokens,
-                max_output_tokens=settings.llm.max_output_tokens,
+                provider=llm_settings.provider,
+                model=llm_settings.model,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
                 artifact_context_provider=artifact_context_provider,
             )
 
@@ -2532,10 +2514,10 @@ def _build_configured_composition(
             return build_research_context_assembler(
                 artifact_port=artifact_port,
                 event_port=scoped_event_port_factory(spec.run_id, actor_metadata),
-                provider=settings.llm.provider,
-                model=settings.llm.model,
-                max_input_tokens=settings.llm.max_input_tokens,
-                max_output_tokens=settings.llm.max_output_tokens,
+                provider=llm_settings.provider,
+                model=llm_settings.model,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
             )
 
         rag_runtime = BoundedDocumentRAGRuntime(
@@ -2605,8 +2587,8 @@ def _build_configured_composition(
             event_port_factory=event_port_factory,
             scoped_event_port_factory=scoped_event_port_factory,
             context_assembler_factory=context_assembler_factory,
-            context_max_input_tokens=settings.llm.max_input_tokens,
-            context_max_output_tokens=settings.llm.max_output_tokens,
+            context_max_input_tokens=llm_settings.max_input_tokens,
+            context_max_output_tokens=llm_settings.max_output_tokens,
             side_effect_store=side_effect_store,
             artifact_handler_factory=ResearchArtifactBundleHandler,
             dynamic_task_plan_runner_factory=dynamic_task_plan_runner_factory,
@@ -2620,7 +2602,7 @@ def _build_configured_composition(
         paper_answer_worker_factory = reader_answer_worker_factory(
             llm_client,
             settings.rag,
-            max_output_tokens=min(settings.llm.max_output_tokens, 900),
+            max_output_tokens=min(llm_settings.max_output_tokens, 900),
         )
         reader_navigator, reader_navigation = reader_section_navigation(llm_client, settings.rag)
         # Reader Q&A is asked against a terminal Research run whose artifact manifest
@@ -2640,10 +2622,10 @@ def _build_configured_composition(
             return build_research_context_assembler(
                 artifact_port=reader_context_artifacts,
                 event_port=scoped_event_port_factory(spec.run_id, actor_metadata),
-                provider=settings.llm.provider,
-                model=settings.llm.model,
-                max_input_tokens=settings.llm.max_input_tokens,
-                max_output_tokens=settings.llm.max_output_tokens,
+                provider=llm_settings.provider,
+                model=llm_settings.model,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
             )
 
         rag_ask_provider = _PaperRagUseCaseProvider(
@@ -2655,8 +2637,8 @@ def _build_configured_composition(
                 budget=reader_rag_budget(settings.rag),
                 context_assembler_factory=reader_rag_context_assembler_factory,
                 context_window=ContextWindowLimits(
-                    max_input_tokens=settings.llm.max_input_tokens,
-                    max_output_tokens=settings.llm.max_output_tokens,
+                    max_input_tokens=llm_settings.max_input_tokens,
+                    max_output_tokens=llm_settings.max_output_tokens,
                 ),
                 run_scope=reader_context_artifacts.bind_run,
                 transcript_root=settings.rag.transcript_root,

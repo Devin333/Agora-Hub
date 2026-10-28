@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
+from framework.harness.context.assembler import ContextAdmissionRejectedError
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.memory.ports import ExecutionBoundMemoryPort, MemoryPort
 from framework.harness.mcp.policy import MCPToolRequest
@@ -274,18 +275,29 @@ class BoundedRAGSessionController(RAGSessionController):
             status = RAGSessionStatus.INSUFFICIENT_EVIDENCE
             break
 
+        admission_failure: RAGDecision | None = None
         if decision.decision_type == RAGDecisionType.ASSEMBLE_CONTEXT:
-            pack = self.context_pack_assembler.assemble(
-                spec=spec,
-                accepted_evidence=_context_evidence(state.accepted_evidence, spec.budget.max_context_items),
-                rejected_evidence=tuple(state.rejected_evidence),
-                conflicting_evidence=tuple(state.conflicting_evidence),
-                memory_context=tuple(state.memory_context[: spec.budget.max_memory_hits]),
-                artifact_refs=_dedupe_texts(state.artifact_refs),
-                gap_report=state.gap_report,
-                budget_snapshot=state.budget_snapshot,
-                policy=policy,
-            )
+            try:
+                pack = self.context_pack_assembler.assemble(
+                    spec=spec,
+                    accepted_evidence=_context_evidence(state.accepted_evidence, spec.budget.max_context_items),
+                    rejected_evidence=tuple(state.rejected_evidence),
+                    conflicting_evidence=tuple(state.conflicting_evidence),
+                    memory_context=tuple(state.memory_context[: spec.budget.max_memory_hits]),
+                    artifact_refs=_dedupe_texts(state.artifact_refs),
+                    gap_report=state.gap_report,
+                    budget_snapshot=state.budget_snapshot,
+                    policy=policy,
+                )
+            except ContextAdmissionRejectedError as exc:
+                admission_failure = self._context_admission_failed(state, exc)
+        if admission_failure is not None:
+            # The model was never called: this session fails, the caller decides
+            # whether the request is retried with a smaller context.
+            decision = admission_failure
+            status = RAGSessionStatus.FAILED
+            pack = None
+        elif decision.decision_type == RAGDecisionType.ASSEMBLE_CONTEXT:
             if pack.budget_snapshot is not None:
                 state.budget_snapshot = pack.budget_snapshot
             pack_results = self.gates.verify_context_pack(pack, policy=policy)
@@ -892,6 +904,27 @@ class BoundedRAGSessionController(RAGSessionController):
             state.budget_snapshot.replans_used < spec.budget.max_replans
             and state.budget_snapshot.rounds_used < spec.budget.max_rounds
         )
+
+    def _context_admission_failed(
+        self,
+        state: RAGSessionState,
+        exc: ContextAdmissionRejectedError,
+    ) -> RAGDecision:
+        failure = {
+            "code": exc.code,
+            "message": exc.message,
+            "retryable": False,
+            "details": to_jsonable(exc.details),
+        }
+        self._event(state, "rag_context_admission_rejected", failure)
+        decision = RAGDecision(
+            RAGDecisionType.FAILED,
+            "context admission rejected",
+            budget_snapshot=state.budget_snapshot,
+            metadata={"context_admission_error": failure},
+        )
+        self._event(state, "rag_halted", decision.to_dict())
+        return decision
 
     def _halt(self, state: RAGSessionState, reason: str, results: tuple[RAGGateResult, ...]) -> RAGDecision:
         decision = RAGDecision(
