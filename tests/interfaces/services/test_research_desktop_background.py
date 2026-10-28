@@ -277,3 +277,26 @@ def test_worker_count_is_configurable_and_bounded(monkeypatch: pytest.MonkeyPatc
         monkeypatch.setenv(ANALYSIS_WORKERS_ENV, invalid)
         with pytest.raises(ValueError):
             analysis_worker_count_from_env()
+
+
+def test_job_that_cannot_start_records_a_failure_instead_of_waiting(tmp_path: Path) -> None:
+    class _UnstartableStore(LocalJsonResearchDesktopRequestStore):
+        def start(self, **kwargs):
+            raise OSError("simulated control store read failure")
+
+    executor = ManualDesktopExecutor()
+    research = _RunTrackingResearch()
+    service = ResearchDesktopApplicationService(
+        research=research,
+        requests=_UnstartableStore(tmp_path / "control.json"),
+        imports=ResearchImportService(tmp_path / "imports"),
+        executor=executor,
+    )
+    generation = service.generation()
+    _submit(service, "analyze-async-9", generation)
+    executor.drain()
+
+    failed = service.get_operation(OWNER, request_id="analyze-async-9", generation=generation)
+    assert failed["status"] == "failed"
+    assert failed["errorCode"] == "research_desktop_operation_failed"
+    assert research.analysis_calls == []

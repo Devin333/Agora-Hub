@@ -677,10 +677,12 @@ class ResearchDesktopApplicationService:
                 request_id=job.request_id,
                 generation=job.generation,
             )
-        except Exception:
+        except Exception as exc:
             # A rotated generation or unreadable store means this admission
-            # can no longer be executed under its frozen identity.
+            # can no longer be executed under its frozen identity; record that
+            # where possible so the client does not wait on a job that never ran.
             logger.exception("desktop analysis %s could not start", job.request_id)
+            self._record_failure(owner, request_id=job.request_id, generation=job.generation, exc=exc)
             return
         if started.status != "running":
             return
