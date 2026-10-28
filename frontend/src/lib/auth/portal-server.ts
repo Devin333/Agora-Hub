@@ -7,7 +7,10 @@ export const AUTH_BINDING_COOKIE = "newsroom_auth_binding";
 export const AUTH_RETURN_COOKIE = "newsroom_auth_return";
 export const AUTH_CALLBACK_COOKIE = "newsroom_auth_callback";
 const privateHeaders = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
-export const bindingOptions = { httpOnly: true, secure: sessionCookieOptions().secure, sameSite: "lax" as const, path: "/", maxAge: 900 };
+// A function, so the public origin is read per request and not when the module loads during the build.
+export function bindingOptions() {
+    return { httpOnly: true, secure: sessionCookieOptions().secure, sameSite: "lax" as const, path: "/", maxAge: 900 };
+}
 export function bindingFor(request: NextRequest) {
     const existing = request.cookies.get(AUTH_BINDING_COOKIE)?.value;
     return existing && /^[A-Za-z0-9_-]{43}$/.test(existing) ? existing : randomBytes(32).toString("base64url");

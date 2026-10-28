@@ -2,51 +2,62 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from backend.research.reader_repair import ReaderRepairService
-from infrastructure.storage.postgres import PostgresReaderRepairMemoryRepository
-from infrastructure.storage.postgres.dsn import normalize_dsn
-from interfaces.services.reader_repair_memory import (
-    PostgresReaderRepairFailureDiagnosticCommitPort,
-    PostgresReaderRepairMemoryCommitPort,
-    PostgresReaderRepairMemoryPort,
-)
+
+# The Postgres-backed ports need psycopg, an optional dependency; they are
+# imported only once a database is configured.
+if TYPE_CHECKING:
+    from infrastructure.storage.postgres import PostgresReaderRepairMemoryRepository
+    from interfaces.services.reader_repair_memory import (
+        PostgresReaderRepairFailureDiagnosticCommitPort,
+        PostgresReaderRepairMemoryCommitPort,
+        PostgresReaderRepairMemoryPort,
+    )
+
+
+def _repository(values: Mapping[str, str]) -> PostgresReaderRepairMemoryRepository | None:
+    dsn = values.get("NEWS_DATABASE_DSN")
+    if not dsn:
+        return None
+    from infrastructure.storage.postgres import PostgresReaderRepairMemoryRepository
+    from infrastructure.storage.postgres.dsn import normalize_dsn
+
+    return PostgresReaderRepairMemoryRepository(normalize_dsn(dsn))
 
 
 def build_reader_repair_memory_from_env(
     env: Mapping[str, str] | None = None,
 ) -> PostgresReaderRepairMemoryPort | None:
-    values = os.environ if env is None else env
-    dsn = values.get("NEWS_DATABASE_DSN")
-    if not dsn:
+    repository = _repository(os.environ if env is None else env)
+    if repository is None:
         return None
-    return PostgresReaderRepairMemoryPort(
-        PostgresReaderRepairMemoryRepository(normalize_dsn(dsn))
-    )
+    from interfaces.services.reader_repair_memory import PostgresReaderRepairMemoryPort
+
+    return PostgresReaderRepairMemoryPort(repository)
 
 
 def build_reader_repair_memory_commit_port_from_env(
     env: Mapping[str, str] | None = None,
 ) -> PostgresReaderRepairMemoryCommitPort | None:
-    values = os.environ if env is None else env
-    dsn = values.get("NEWS_DATABASE_DSN")
-    if not dsn:
+    repository = _repository(os.environ if env is None else env)
+    if repository is None:
         return None
-    return PostgresReaderRepairMemoryCommitPort(
-        PostgresReaderRepairMemoryRepository(normalize_dsn(dsn))
-    )
+    from interfaces.services.reader_repair_memory import PostgresReaderRepairMemoryCommitPort
+
+    return PostgresReaderRepairMemoryCommitPort(repository)
 
 
 def build_reader_repair_failure_diagnostic_commit_port_from_env(
     env: Mapping[str, str] | None = None,
 ) -> PostgresReaderRepairFailureDiagnosticCommitPort | None:
-    values = os.environ if env is None else env
-    dsn = values.get("NEWS_DATABASE_DSN")
-    if not dsn:
+    repository = _repository(os.environ if env is None else env)
+    if repository is None:
         return None
-    return PostgresReaderRepairFailureDiagnosticCommitPort(
-        PostgresReaderRepairMemoryRepository(normalize_dsn(dsn))
-    )
+    from interfaces.services.reader_repair_memory import PostgresReaderRepairFailureDiagnosticCommitPort
+
+    return PostgresReaderRepairFailureDiagnosticCommitPort(repository)
 
 
 def build_reader_repair_service_from_env(

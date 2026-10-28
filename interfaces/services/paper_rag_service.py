@@ -112,10 +112,21 @@ class PaperRagApplicationService:
                 raise RuntimeError("Paper RAG service has no managed reranker")
             return self._runtime_resources.get_reranker()
 
+    @property
+    def reranks(self) -> bool:
+        """Whether answers are reranked by the managed cross-encoder."""
+
+        return self._with_reranker and self._runtime_resources is not None
+
     def preload_reranker(self) -> None:
+        """Load the reranker weights ahead of the first question.
+
+        A service that does not rerank has nothing to load.
+        """
+
         with self._operation():
-            if self._runtime_resources is None:
-                raise RuntimeError("Paper RAG service has no managed reranker")
+            if not self.reranks:
+                return
             self._runtime_resources.preload_reranker()
 
     def close(self) -> None:

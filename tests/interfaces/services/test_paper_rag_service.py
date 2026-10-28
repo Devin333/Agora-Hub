@@ -790,3 +790,19 @@ def test_replay_citation_uses_claimed_verified_spans_not_all_accepted_spans() ->
         {"evidence_ids": ["other"], "span_refs": ["page=4"]},
     ]}
     assert _unique_cited_replay_spans(answer, "ev-1", {"page=4", "page=7"}) == ["page=7"]
+
+
+def test_preload_is_a_no_op_for_a_service_that_does_not_rerank() -> None:
+    # The local reader composition retrieves without a managed reranker; its
+    # startup warm-up must not fail or load any model.
+    service = PaperRagApplicationService(
+        with_reranker=False,
+        retriever=_Retriever(),
+        session_factory=lambda **_: (_ for _ in ()).throw(AssertionError("session should not be built")),
+        transcript_store=_FailingTranscriptStore(),
+    )
+
+    assert service.reranks is False
+    service.preload_reranker()
+    with pytest.raises(RuntimeError, match="no managed reranker"):
+        service.get_reranker()

@@ -18,8 +18,8 @@ export async function POST(request: NextRequest, props: { params: Promise<{ prov
     const allowedHost = { google: "accounts.google.com", wechat: "open.weixin.qq.com", qq: "graph.qq.com" }[params.provider]
     const state = url.searchParams.get("state")
     if (!state || state.length > 512 || url.protocol !== "https:" || url.hostname !== allowedHost || url.username || url.password) return authFailure("auth_service_unavailable", 502)
-    response.cookies.set(AUTH_RETURN_COOKIE, returnTo, bindingOptions)
-    response.cookies.set(AUTH_CALLBACK_COOKIE, state, bindingOptions)
+    response.cookies.set(AUTH_RETURN_COOKIE, returnTo, bindingOptions())
+    response.cookies.set(AUTH_CALLBACK_COOKIE, state, bindingOptions())
   }
   return response
 }

@@ -727,3 +727,24 @@ def test_factory_installs_live_provider_per_session_and_does_not_authorize_early
     assert isinstance(second._answer_worker, Worker)
     assert first._answer_worker is not second._answer_worker
     resources.close()
+
+
+def test_paper_rag_factory_imports_without_the_optional_storage_drivers() -> None:
+    # The hosted image installs neither psycopg nor qdrant-client; the reader
+    # imports the RAG service, and therefore this module, on every request.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    command = (
+        "import sys; sys.modules['psycopg'] = None; sys.modules['qdrant_client'] = None; "
+        "import interfaces.services.paper_rag_service"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=Path(__file__).resolve().parents[3],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr

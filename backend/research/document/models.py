@@ -17,6 +17,9 @@ ParseSource = Literal[
     "pymupdf",
     "nougat",
     "arxiv_abstract",
+    # Readable source text kept when every structured parser failed; the
+    # document stays outside the catalog but can still be read and asked.
+    "text_fallback",
 ]
 ChunkType = Literal["abstract", "paragraph", "proposition", "formula", "figure", "table"]
 SectionRole = Literal["background", "related_work", "method", "experiment", "analysis", "conclusion"]
