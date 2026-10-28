@@ -16,13 +16,12 @@ from framework.llm.clients.openai_compatible import OpenAICompatibleConfig
 from interfaces.api.app import create_app
 import interfaces.composition.guided_research as composition
 from interfaces.composition.research_settings import DESKTOP_RESEARCH_LLM_ENABLED_ENV
-from scripts.local_desktop.runtime_config import (
-    FIXED_CREDENTIAL_ENV,
-    FIXED_CREDENTIAL_REF,
-    candidate_document,
-    models_config_payload,
-    runtime_environment_overlay,
-)
+
+# The owner-bound model route a deployment writes for the research worker.
+FIXED_CREDENTIAL_ENV = "NEWSROOM_DESKTOP_RESEARCH_API_KEY"
+OWNED_ROUTE_ID = "app-guided-route"
+OWNED_MODEL = "app-bound-model"
+OWNED_BASE_URL = "https://app-bound.example.test/v1"
 
 
 @pytest.fixture(autouse=True)
@@ -129,14 +128,32 @@ def test_disabled_intent_does_not_fabricate_search_when_public_cache_is_missing(
 
 
 def _enable_owned_model(tmp_path: Path, monkeypatch):
-    document = candidate_document({"llm": {
-        "route_id": "app-guided-route", "provider": "openai-compatible", "model": "app-bound-model",
-        "base_url": "https://app-bound.example.test/v1", "credential_ref": FIXED_CREDENTIAL_REF,
-        "credential_env": FIXED_CREDENTIAL_ENV,
-    }}, revision=1)
     models = tmp_path / "owned-models.json"
-    models.write_text(json.dumps(models_config_payload(document)), encoding="utf-8")
-    for name, value in runtime_environment_overlay(document, models_path=models).items():
+    models.write_text(json.dumps({
+        "schema_version": 1,
+        "default_route_id": OWNED_ROUTE_ID,
+        "routes": {OWNED_ROUTE_ID: {"deployment_id": "desktop-research-primary"}},
+        "deployments": [{
+            "deployment_id": "desktop-research-primary",
+            "provider": "openai-compatible",
+            "model": OWNED_MODEL,
+            "api_base": OWNED_BASE_URL,
+            "api_key_env": FIXED_CREDENTIAL_ENV,
+        }],
+    }), encoding="utf-8")
+    for name, value in {
+        DESKTOP_RESEARCH_LLM_ENABLED_ENV: "1",
+        "NEWS_RESEARCH_SOURCE_PROVIDER": "arxiv",
+        "NEWS_RESEARCH_ARXIV_API_URL": "https://export.arxiv.org/api/query",
+        "NEWS_RESEARCH_SOURCE_TIMEOUT_SECONDS": "90",
+        "NEWS_MODELS_CONFIG": str(models),
+        "NEWS_RESEARCH_MODELS_CONFIG": str(models),
+        "NEWS_RESEARCH_LLM_ROUTE_ID": OWNED_ROUTE_ID,
+        "NEWS_RESEARCH_LLM_PROVIDER": "openai-compatible",
+        "NEWS_RESEARCH_LLM_MODEL": OWNED_MODEL,
+        "NEWS_RESEARCH_LLM_BASE_URL": OWNED_BASE_URL,
+        "NEWS_RESEARCH_LLM_API_KEY_ENV": FIXED_CREDENTIAL_ENV,
+    }.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv(FIXED_CREDENTIAL_ENV, "owned-fake-key")
     # These global overrides must not replace the owner's route/deployment.
@@ -172,9 +189,9 @@ def test_enabled_intent_uses_real_owned_loader_and_fake_worker_without_network(t
 
     assert response.status_code == 200, response.text
     assert response.json()["data"]["query"] == "agent"
-    assert loads == [(models, {"route_id": "app-guided-route", "apply_environment_overrides": False})]
-    assert clients[0].config.model == "app-bound-model"
-    assert clients[0].config.base_url == "https://app-bound.example.test/v1"
+    assert loads == [(models, {"route_id": OWNED_ROUTE_ID, "apply_environment_overrides": False})]
+    assert clients[0].config.model == OWNED_MODEL
+    assert clients[0].config.base_url == OWNED_BASE_URL
     assert clients[0].config.api_key_env == FIXED_CREDENTIAL_ENV
     assert clients[0].config.timeout_seconds <= 45
 

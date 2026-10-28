@@ -89,6 +89,7 @@ from backend.research.application.research_input_contract import (
     PreparedResearchInputContext,
     ResearchInputContractError,
     RESEARCH_ELIGIBILITY_GATE_VERSION_OPTION,
+    RESEARCH_INPUT_SOURCE_REVISION_OPTION,
     ResearchInputContractService,
     research_input_quality_enabled,
 )
@@ -1979,11 +1980,18 @@ class ResearchSinglePaperRuntime:
     def _load_paper_source(self, task: dict[str, Any], workspace: "_ResearchRunWorkspace") -> HarnessWorkerResult:
         expected_revision = None
         declared_fingerprint = None
+        metadata = workspace.request.options.get("metadata")
+        if isinstance(metadata, Mapping):
+            declared_fingerprint = metadata.get("source_fingerprint")
         if workspace.input_context is not None:
             expected_revision = dict(workspace.input_context.projection.payload)["source_revision"]
-            metadata = workspace.request.options.get("metadata")
-            if isinstance(metadata, Mapping):
-                declared_fingerprint = metadata.get("source_fingerprint")
+        else:
+            # An account's imported paper has no live source to fetch; the
+            # caller names the accepted revision, and only the parsed document
+            # bound to that revision and actor may be analyzed.
+            expected_revision = _optional_source_revision(
+                workspace.request.options.get(RESEARCH_INPUT_SOURCE_REVISION_OPTION)
+            )
         bound_fetch = getattr(self.source_provider, "fetch_bound_source", None)
         bound = None
         if callable(bound_fetch) and expected_revision is not None:
@@ -1996,10 +2004,9 @@ class ResearchSinglePaperRuntime:
         if bound is not None:
             paper = bound.paper
             source_record = bound.source_record
-            workspace.document = ResearchDocument.model_validate(
-                bound.document.model_copy(
-                    update={"actor_scope": _accepted_research_actor_metadata(workspace.request)}
-                ).model_dump(mode="json")
+            workspace.document = _bound_run_document(
+                bound.document,
+                _accepted_research_actor_metadata(workspace.request),
             )
             if _normalized_source_revision(workspace.document.source_hash) != _normalized_source_revision(expected_revision):
                 raise ResearchInputContractError(
@@ -3728,6 +3735,30 @@ def _harness_result_has_execution_error(harness_result: Any) -> bool:
 
 def _normalized_source_revision(value: Any) -> str:
     return str(value or "").strip().casefold().removeprefix("sha256:")
+
+
+def _bound_run_document(document: ResearchDocument, actor_scope: Mapping[str, Any]) -> ResearchDocument:
+    """The run's copy of a document the paper catalog already parsed.
+
+    The catalog keeps the parse quality verdict that admitted the document
+    (``quality_report``: passed, quality_score). That verdict belongs to the
+    import, not to this run: every worker output that carries the document
+    would otherwise hand a quality decision to the harness, which rejects
+    worker-supplied decision fields. The run's own gates judge it afresh.
+    """
+
+    payload = document.model_copy(update={"actor_scope": dict(actor_scope)}).model_dump(mode="json")
+    payload["quality_report"] = {}
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        metadata.pop("quality_report", None)
+        metadata.pop("parse_quality", None)
+    return ResearchDocument.model_validate(payload)
+
+
+def _optional_source_revision(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 __all__ = [
     "AnalyzePaperRequest",

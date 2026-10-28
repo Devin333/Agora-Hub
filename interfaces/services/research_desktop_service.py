@@ -250,17 +250,6 @@ class ResearchDesktopApplicationService:
     def generation(self) -> str:
         return self._requests.generation()
 
-    def rotate_generation(self) -> str:
-        """Fence all pre-restore browser requests after an offline restore switch."""
-
-        return self._requests.rotate_generation()
-
-    def begin_business_operation(self, *, operation: str) -> str:
-        return self._requests.begin_untracked_execution(operation=operation)
-
-    def end_business_operation(self, lease_id: str) -> None:
-        self._requests.end_untracked_execution(lease_id)
-
     def capabilities(self, owner: ResearchDesktopOwner) -> dict[str, Any]:
         _owner(owner)
         available = self._research.capability_projection()

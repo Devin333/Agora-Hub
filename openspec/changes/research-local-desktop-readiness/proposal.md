@@ -1,3 +1,5 @@
+> **已被取代（2026-10-28）**：`hosted-paper-agent-service` 用服务器上的 `hosted` profile 取代 `local-desktop` profile。本变更的本机运行工具、loopback 认证与 cookie 策略、本机备份恢复和版本发布合同已不再适用，相关实现（`scripts/local_desktop`、`framework/shared/local_desktop.py`、`local-desktop.ps1`）已删除。Research 首页、阅读、导入、报告等功能要求由 hosted 变更承接。未完成任务不因取代而视为完成。
+
 ## Why
 
 Research 已有真实来源、解析、Harness 分析、质量门、持久化与工作台组件，但尚未完成个人 Windows 电脑上的端到端交付：正式入口、账号身份、研究报告接线、进程管理和恢复演练仍存在缺口。用户需要可以每天打开、处理真实论文、保存研究结果并在重启后继续工作的本机应用。

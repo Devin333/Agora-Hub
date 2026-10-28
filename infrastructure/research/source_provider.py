@@ -198,6 +198,14 @@ class CatalogBoundResearchSourceProvider:
         )
         record_metadata = {
             "bound_document_id": document.document_id or "",
+            # The document's lineage is the provenance this adapter verified
+            # (actor scope, revision, locator); downstream gates accept the
+            # document's references against exactly these.
+            "bound_source_refs": sorted(
+                str(value).strip()
+                for value in document.lineage.source_refs
+                if str(value or "").strip()
+            ),
             "content_revision": document.source_hash,
             "metadata_revision": str(
                 document.metadata.get("source_revision")
@@ -214,7 +222,8 @@ class CatalogBoundResearchSourceProvider:
             source_type=source_type,
             source_url=public_source_url,
             fetched_at=document.observed_at or document.created_at,
-            source_hash=source_revision,
+            # The verified content hash, spelled as the document records it.
+            source_hash=document.source_hash,
             actor_scope=dict(actor_scope),
             metadata=record_metadata,
         )

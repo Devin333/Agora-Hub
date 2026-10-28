@@ -3183,10 +3183,6 @@ def _research_runtime_config_identity(settings: ResearchRuntimeSettings) -> str:
             "ragLocalRoot": str(settings.rag.local_root),
             "ragTranscriptRoot": str(settings.rag.transcript_root),
         },
-        "desktop": {
-            "releaseId": str(os.getenv("NEWSROOM_DESKTOP_RELEASE_ID") or ""),
-            "configDigest": str(os.getenv("NEWSROOM_DESKTOP_CONFIG_DIGEST") or ""),
-        },
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"

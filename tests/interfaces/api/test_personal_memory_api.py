@@ -73,7 +73,7 @@ def _client(monkeypatch, tmp_path):
     runtime = build_personal_memory_runtime()
     app = create_app(
         hosted_runtime=_hosted_runtime(tmp_path),
-        research_desktop_service_factory=lambda: _DesktopLeaseService(),
+        research_desktop_service_factory=lambda: _UnusedDesktopService(),
         personal_memory_service_factory=lambda: runtime.service,
         audit_emitter_factory=None,
     )
@@ -362,7 +362,7 @@ def test_default_api_factory_composes_real_sqlite_runtime(monkeypatch, tmp_path)
     _hosted_memory_env(monkeypatch, tmp_path, database_path)
     app = create_app(
         hosted_runtime=_hosted_runtime(tmp_path),
-        research_desktop_service_factory=lambda: _DesktopLeaseService(),
+        research_desktop_service_factory=lambda: _UnusedDesktopService(),
         audit_emitter_factory=None,
     )
 
@@ -394,7 +394,7 @@ def test_default_factories_share_real_personal_memory_core_with_desktop_task_con
     hosted_runtime.model_credentials.save(
         "user-a",
         provider_id="deepseek",
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key="sk-personal-memory-test",
         expected_revision=None,
     )
@@ -693,12 +693,8 @@ class _AuthService:
         )
 
 
-class _DesktopLeaseService:
-    def begin_business_operation(self, *, operation: str) -> str:
-        return operation
-
-    def end_business_operation(self, lease_id: str) -> None:
-        del lease_id
+class _UnusedDesktopService:
+    """Stands in for the research desktop service, which these tests never call."""
 
 
 def test_personal_memory_confirm_and_update_normalize_source_references(

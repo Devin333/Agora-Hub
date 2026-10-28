@@ -4,12 +4,12 @@ import { isHostedProfile } from "@/lib/deployment-profile"
 import { cn } from "@/lib/utils"
 
 /**
- * `standalone` fills the viewport (desktop login runs without app chrome);
+ * `standalone` fills the viewport (hosted login runs without app chrome);
  * `embedded` leaves room for the portal header above it.
  */
 export type AuthFrameLayout = "standalone" | "embedded"
 
-/** The local desktop app renders login without app chrome, so the frame fills the viewport. */
+/** The hosted workspace renders login without app chrome, so the frame fills the viewport. */
 export function authFrameLayout(): AuthFrameLayout {
   return isHostedProfile() ? "standalone" : "embedded"
 }

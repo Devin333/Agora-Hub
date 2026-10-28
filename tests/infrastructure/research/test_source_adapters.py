@@ -785,11 +785,50 @@ def test_catalog_bound_source_uses_exact_actor_visible_parsed_document() -> None
     assert bound.paper.source_url is not None
     assert bound.paper.source_url.startswith("source://local/")
     assert bound.paper.metadata["source_locator"] == locator
-    assert bound.source_record.source_hash == "sha256:" + "a" * 64
+    # The record carries the verified content hash exactly as the document
+    # records it, so the document schema gate compares like with like.
+    assert bound.source_record.source_hash == document.source_hash
+    assert bound.source_record.metadata["bound_source_refs"] == [locator]
     assert bound.source_record.source_type == "local"
     assert bound.source_record.source_url.startswith("source://local/")
     assert bound.source_record.metadata["source_locator"] == locator
     assert repository.scopes == [("paper-private", {"user_id": "alice"})]
+
+
+def test_bound_imported_document_satisfies_the_document_source_checks() -> None:
+    # An imported paper's lineage holds both the parser's paper:// reference
+    # and the import's own local locator; both were verified when it was bound.
+    from backend.research.graphs.gates import _document_source_refs, _source_ref_matches_record
+
+    import_locator = "source://local/imp_" + "c" * 64 + ".pdf"
+    document = ResearchDocument(
+        paper_id="paper-imported",
+        source_hash="c" * 64,
+        title="Imported paper",
+        sections=[],
+        lineage=SourceLineage(
+            source_refs=["paper://paper-imported/pdf", import_locator],
+            source_hash="c" * 64,
+        ),
+        source_locators=["paper://paper-imported/pdf#page=1"],
+        actor_scope={"user_id": "alice"},
+    )
+    provider = CatalogBoundResearchSourceProvider(
+        ArxivResearchSourceProvider(_RecordedArxivConnector([])),
+        _DocumentRepository(document),
+    )
+
+    bound = provider.fetch_bound_source(
+        source_ref="paper://paper-imported/pdf#page=1",
+        paper_id="paper-imported",
+        source_revision="sha256:" + "c" * 64,
+        actor_scope={"user_id": "alice"},
+    )
+
+    assert bound is not None
+    record = bound.source_record
+    assert record.source_hash == document.source_hash == document.lineage.source_hash
+    assert all(_source_ref_matches_record(ref, record) for ref in _document_source_refs(document))
 
 
 def test_catalog_bound_source_rejects_wrong_revision_or_locator() -> None:

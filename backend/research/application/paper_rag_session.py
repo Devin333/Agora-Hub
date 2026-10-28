@@ -13,11 +13,13 @@ from framework.harness.rag.session import (
     RAGSessionResult,
 )
 from framework.harness.rag.models import RAGBudget, RAGSessionSpec
+from framework.harness.rag.planner import RAGPlanner
 from framework.harness.rag.relevance import RelevanceScorerPort
 from framework.harness.rag.source_verifier import SourceVerifier
 
 from backend.research.rag.models import ResearchRetrievalGoal
 from backend.research.rag.adapters import ResearchRAGPlanWorker
+from backend.research.rag.coverage_planner import ResearchEvidenceCoveragePlanner
 from backend.research.rag.retrieval_port import PaperChunkRetrievalPort
 from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
 from backend.research.rag.retrieval.candidate_experiment import (
@@ -129,11 +131,12 @@ class PaperRAGSession:
         retrieval_port = PaperChunkRetrievalPort(
             retriever, default_section_index=current_section_index
         )
-        planner = None
+        planner: RAGPlanner = ResearchEvidenceCoveragePlanner()
         if self._candidate_experiment.enabled:
             planner = ResearchCandidatePlanner(
                 ResearchRAGPlanWorker(self._plan_worker) if self._plan_worker is not None else None,
                 config=self._candidate_experiment,
+                fallback=planner,
                 min_round_index=self._worker_planner_min_round_index,
             )
         controller_kwargs = {

@@ -157,11 +157,12 @@ def test_business_completion_is_reconciled_after_terminal_receipt_write_interrup
         )
     assert foreign.value.code == "desktop_request_not_found"
 
-    fresh_generation = store.rotate_generation()
-    assert fresh_generation != generation
+    # A request carrying another control state's generation is fenced.
+    foreign_generation = "gen_" + "f" * 32
+    assert foreign_generation != generation
     with pytest.raises(ResearchDesktopControlError) as stale:
         rebuilt_again.get_operation(
-            OWNER, request_id="prepare-contract-1", generation=generation
+            OWNER, request_id="prepare-contract-1", generation=foreign_generation
         )
     assert stale.value.code == "desktop_generation_stale"
 

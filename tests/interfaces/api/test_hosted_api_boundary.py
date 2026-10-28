@@ -34,12 +34,6 @@ class _EndpointProbeDesktopService:
             bound = {"keyTail": endpoint.api_key[-4:], "model": endpoint.model}
         return {"owner": {"userId": owner.user_id}, "endpoint": bound}
 
-    def begin_business_operation(self, *, operation: str) -> str:
-        return operation
-
-    def end_business_operation(self, lease_id: str) -> None:
-        del lease_id
-
 
 def _client(monkeypatch, tmp_path, **env_overrides: str):
     configure_hosted_env(monkeypatch, tmp_path, **env_overrides)
@@ -117,7 +111,7 @@ def test_mutations_from_another_origin_are_refused(monkeypatch, tmp_path) -> Non
         response = client.put(
             "/api/v1/account/model-credential",
             headers={**headers, **extra},
-            json={"providerId": "deepseek", "model": "deepseek-v4-flash", "apiKey": KEY_A},
+            json={"providerId": "deepseek", "model": "deepseek-flash", "apiKey": KEY_A},
         )
         assert response.status_code == 403, origin
         assert response.json()["error"]["code"] == "origin_forbidden"

@@ -77,7 +77,7 @@ def test_catalog_rejects_unknown_provider_or_model(tmp_path) -> None:
 def test_stale_revision_is_a_conflict_and_model_switch_keeps_key(tmp_path) -> None:
     service = _service(tmp_path)
     first = service.save(
-        "user-a", provider_id="deepseek", model="deepseek-v4-flash", api_key=KEY_A, expected_revision=None
+        "user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=None
     )
 
     with pytest.raises(ModelCredentialError) as conflict:
@@ -100,8 +100,8 @@ def test_stale_revision_is_a_conflict_and_model_switch_keeps_key(tmp_path) -> No
 
 def test_ciphertext_moved_to_another_account_does_not_open(tmp_path) -> None:
     service = _service(tmp_path)
-    service.save("user-a", provider_id="deepseek", model="deepseek-v4-flash", api_key=KEY_A, expected_revision=None)
-    service.save("user-b", provider_id="deepseek", model="deepseek-v4-flash", api_key=KEY_B, expected_revision=None)
+    service.save("user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=None)
+    service.save("user-b", provider_id="deepseek", model="deepseek-flash", api_key=KEY_B, expected_revision=None)
     path = tmp_path / "model-credentials.json"
     document = json.loads(path.read_text(encoding="utf-8"))
     records = {item["userId"]: item for item in document["credentials"]}
@@ -117,7 +117,7 @@ def test_ciphertext_moved_to_another_account_does_not_open(tmp_path) -> None:
 
 def test_master_key_change_reports_rotation_and_requires_new_key(tmp_path) -> None:
     _service(tmp_path, master=_master(1)).save(
-        "user-a", provider_id="deepseek", model="deepseek-v4-flash", api_key=KEY_A, expected_revision=None
+        "user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=None
     )
     rotated = _service(tmp_path, master=_master(2))
 
@@ -129,7 +129,7 @@ def test_master_key_change_reports_rotation_and_requires_new_key(tmp_path) -> No
     assert raised.value.code == "model_credential_key_rotated"
 
     renewed = rotated.save(
-        "user-a", provider_id="deepseek", model="deepseek-v4-flash", api_key=KEY_A, expected_revision=view.revision
+        "user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=view.revision
     )
     assert renewed.status == "unverified"
     assert rotated.endpoint_for("user-a").api_key == KEY_A
@@ -153,7 +153,7 @@ def test_verify_sends_exactly_one_minimal_request_and_records_result(tmp_path) -
         ).encode("utf-8")
 
     service = _service(tmp_path, transport=transport)
-    service.save("user-a", provider_id="dashscope", model="deepseek-v4-flash", api_key=KEY_A, expected_revision=None)
+    service.save("user-a", provider_id="dashscope", model="deepseek-v4.1-flash", api_key=KEY_A, expected_revision=None)
 
     view = service.verify("user-a")
 
@@ -163,7 +163,7 @@ def test_verify_sends_exactly_one_minimal_request_and_records_result(tmp_path) -
     assert url == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     assert authorization == f"Bearer {KEY_A}"
     assert body["max_tokens"] == 1
-    assert body["model"] == "deepseek-v4-flash"
+    assert body["model"] == "deepseek-v4.1-flash"
 
 
 @pytest.mark.parametrize(("status", "code"), ((401, "model_credential_rejected"), (503, "model_provider_unreachable")))
@@ -175,7 +175,7 @@ def test_verify_failure_is_not_retried(tmp_path, status: int, code: str) -> None
         raise HTTPError(request.full_url, status, "failed", {}, BytesIO(b"{}"))
 
     service = _service(tmp_path, transport=transport)
-    service.save("user-a", provider_id="deepseek", model="deepseek-v4-flash", api_key=KEY_A, expected_revision=None)
+    service.save("user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=None)
 
     with pytest.raises(ModelCredentialError) as raised:
         service.verify("user-a")
@@ -187,8 +187,8 @@ def test_verify_failure_is_not_retried(tmp_path, status: int, code: str) -> None
 
 def test_concurrent_requests_of_two_accounts_each_use_their_own_key(tmp_path) -> None:
     service = _service(tmp_path)
-    service.save("user-a", provider_id="deepseek", model="deepseek-v4-flash", api_key=KEY_A, expected_revision=None)
-    service.save("user-b", provider_id="dashscope", model="deepseek-v4-flash", api_key=KEY_B, expected_revision=None)
+    service.save("user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=None)
+    service.save("user-b", provider_id="dashscope", model="deepseek-v4.1-flash", api_key=KEY_B, expected_revision=None)
     barrier = Barrier(2)
     seen: dict[str, list[tuple[str, str]]] = {"user-a": [], "user-b": []}
 
@@ -205,7 +205,7 @@ def test_concurrent_requests_of_two_accounts_each_use_their_own_key(tmp_path) ->
         OpenAICompatibleConfig(
             provider="hosted",
             base_url="https://api.deepseek.com",
-            model="deepseek-v4-flash",
+            model="deepseek-flash",
             api_key_env="NEWSROOM_TEST_KEY_THAT_MUST_NOT_BE_READ",
         ),
         transport=transport,

@@ -10,7 +10,13 @@ from typing import Any, Mapping, Sequence
 from backend.foundation import build_stable_id
 from backend.research.document.docker_pdf_parser import page_rects
 from backend.research.document.latex_compiler import LatexSourceParser
+from backend.research.document.pdf_heading_sections import (
+    HeadingSection,
+    heading_sections,
+    read_pdf_lines,
+)
 from backend.research.document.pymupdf_loader import load_pymupdf
+from backend.research.document.section_detector import is_boilerplate_section
 from backend.research.document.recovery_policy import (
     DocumentRecoveryPolicy,
     RecoveryCandidateRecord,
@@ -220,8 +226,6 @@ class PyMuPDFTextDocumentParser:
     def parse(self, paper_id: str, source_bytes: bytes) -> ResearchDocument:
         source_ref = f"paper://{paper_id}/pdf"
         source_hash = sha256(source_bytes).hexdigest()
-        sections: list[ResearchSection] = []
-        extracted_chars = 0
         # Resolved outside the open guard: a missing PyMuPDF is an install error, not a bad PDF.
         pymupdf = load_pymupdf()
         try:
@@ -236,33 +240,23 @@ class PyMuPDFTextDocumentParser:
                     "pdf_page_limit_exceeded",
                     metrics={"pages": doc.page_count, "max_pages": self._max_pages},
                 )
-            for page_index, page in enumerate(doc, start=1):
-                text = page.get_text("text", sort=True).strip()
-                if not text:
-                    continue
-                extracted_chars += len(text)
-                if extracted_chars > self._max_text_chars:
-                    raise PdfTextExtractionError(
-                        "pdf_text_limit_exceeded",
-                        metrics={
-                            "text_chars": extracted_chars,
-                            "max_text_chars": self._max_text_chars,
-                        },
-                    )
-                locator = f"{source_ref}#page={page_index}"
-                sections.append(ResearchSection(
-                    section_id=build_stable_id("sec", paper_id, "pymupdf", str(page_index)),
-                    title=f"PDF Text Page {page_index}",
-                    level=1,
-                    text=text,
-                    page_start=page_index,
-                    page_end=page_index,
-                    source_ref=locator,
-                    metadata={
-                        "parse_source": "pymupdf",
-                        "source_locator": locator,
+            page_texts = [page.get_text("text", sort=True).strip() for page in doc]
+            extracted_chars = sum(len(text) for text in page_texts)
+            if extracted_chars > self._max_text_chars:
+                raise PdfTextExtractionError(
+                    "pdf_text_limit_exceeded",
+                    metrics={
+                        "text_chars": extracted_chars,
+                        "max_text_chars": self._max_text_chars,
                     },
-                ))
+                )
+            styled = heading_sections(read_pdf_lines(doc, max_pages=self._max_pages))
+            sections = (
+                _heading_research_sections(paper_id, source_ref, styled)
+                if styled is not None
+                else _page_research_sections(paper_id, source_ref, page_texts)
+            )
+            structure = "headings" if styled is not None else "pages"
         except PdfTextExtractionError:
             raise
         except Exception as exc:
@@ -279,6 +273,7 @@ class PyMuPDFTextDocumentParser:
             metadata={
                 "parse_source": "pymupdf",
                 "parser_backend": "pymupdf",
+                "section_structure": structure,
                 "parse_quality": {
                     "sections": {
                         "total": len(sections),
@@ -291,6 +286,58 @@ class PyMuPDFTextDocumentParser:
                 },
             },
         )
+
+
+def _heading_research_sections(
+    paper_id: str,
+    source_ref: str,
+    sections: list[HeadingSection],
+) -> list[ResearchSection]:
+    result: list[ResearchSection] = []
+    for index, section in enumerate(sections, start=1):
+        if is_boilerplate_section(section.title):
+            # References, acknowledgements and appendices are not retrieval
+            # content, as in the LaTeX compiler.
+            continue
+        # Several sections can start on one page; the section ordinal keeps
+        # each locator distinct while readers still take the page from it.
+        locator = f"{source_ref}#page={section.page_start}&section={index}"
+        result.append(ResearchSection(
+            section_id=build_stable_id("sec", paper_id, "pymupdf", "heading", str(index)),
+            title=section.title,
+            level=section.level,
+            text=section.text,
+            page_start=section.page_start,
+            page_end=section.page_end,
+            source_ref=locator,
+            metadata={"parse_source": "pymupdf", "source_locator": locator},
+        ))
+    return result
+
+
+def _page_research_sections(
+    paper_id: str,
+    source_ref: str,
+    page_texts: list[str],
+) -> list[ResearchSection]:
+    """One section per page, for PDFs whose styling shows no headings."""
+
+    result: list[ResearchSection] = []
+    for page_index, text in enumerate(page_texts, start=1):
+        if not text:
+            continue
+        locator = f"{source_ref}#page={page_index}"
+        result.append(ResearchSection(
+            section_id=build_stable_id("sec", paper_id, "pymupdf", str(page_index)),
+            title=f"PDF Text Page {page_index}",
+            level=1,
+            text=text,
+            page_start=page_index,
+            page_end=page_index,
+            source_ref=locator,
+            metadata={"parse_source": "pymupdf", "source_locator": locator},
+        ))
+    return result
 
 
 class SelectableTextPdfDocumentParser:

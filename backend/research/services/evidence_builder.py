@@ -31,6 +31,9 @@ class ResearchEvidenceBuilder:
                 lineage=SourceLineage(source_refs=[section.source_ref], source_hash=document.source_hash),
             )
             for section in document.sections
+            # A heading with no body of its own ("6 Results" above "6.1 ...")
+            # structures the document but is not evidence.
+            if section.text.strip()
         ]
         tables = document.tables if include_numeric_comparison_tables else ()
         for table in tables:

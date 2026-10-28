@@ -47,14 +47,16 @@ def test_admission_is_owner_scoped_idempotent_and_generation_fenced(tmp_path: Pa
             semantic={**semantic, "paperId": "other"},
         )
     assert conflict.value.code == "desktop_request_conflict"
-    rotated = store.rotate_generation()
-    assert rotated != generation
+    # A request issued against another control state (for example one restored
+    # from a backup) is refused rather than matched to this store's records.
+    foreign = LocalJsonResearchDesktopRequestStore(tmp_path / "other.json").generation()
+    assert foreign != generation
     with pytest.raises(ResearchDesktopControlError) as stale:
-        store.get(owner_id="alice", request_id="request-0001", generation=generation)
+        store.get(owner_id="alice", request_id="request-0001", generation=foreign)
     assert stale.value.code == "desktop_generation_stale"
 
 
-def test_drain_blocks_all_business_admission_and_capability_receipts_are_runtime_and_generation_scoped(
+def test_capability_receipts_are_shared_and_scoped_to_the_runtime_identity(
     tmp_path: Path,
 ) -> None:
     store = LocalJsonResearchDesktopRequestStore(tmp_path / "control.json")
@@ -71,33 +73,6 @@ def test_drain_blocks_all_business_admission_and_capability_receipts_are_runtime
     # Verifications are shared by every account and name no owner's records.
     assert visible["pdf-import"]["provenance"] == {"verificationKind": "business_operation", "operation": "import"}
     assert store.capability_verifications(runtime_identity=changed_release_identity) == {}
-
-    assert store.begin_drain(timeout_seconds=0.01)["status"] == "drained"
-    with pytest.raises(ResearchDesktopControlError) as draining:
-        store.begin_untracked_execution(operation="POST /api/v1/research/papers/analyze")
-    assert draining.value.code == "desktop_admission_draining"
-    store.rotate_generation()
-    assert store.capability_verifications(runtime_identity=runtime_identity) == {}
-    assert store.resume_admission()["status"] == "accepting"
-
-
-
-@pytest.mark.parametrize(
-    "timeout_seconds",
-    [float("nan"), float("inf"), float("-inf"), 0, -1, True, False, 300.01],
-)
-def test_begin_drain_rejects_invalid_timeout_before_creating_control_state(
-    tmp_path: Path,
-    timeout_seconds: object,
-) -> None:
-    path = tmp_path / "control.json"
-    store = LocalJsonResearchDesktopRequestStore(path)
-
-    with pytest.raises(ResearchDesktopControlError) as invalid:
-        store.begin_drain(timeout_seconds=timeout_seconds)  # type: ignore[arg-type]
-
-    assert invalid.value.code == "desktop_drain_timeout_invalid"
-    assert not path.exists()
 
 
 def test_concurrent_admission_executes_same_owner_request_once(tmp_path: Path) -> None:
