@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
 import { authFailure, isSameOrigin } from "@/lib/auth/portal-server"
 import { apiBaseUrl } from "@/lib/deployment-profile"
+import { currentForwardedClientHeaders } from "@/lib/api/forwarded-client"
 
 export const dynamic = "force-dynamic"
 
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ im
 }
 
 async function forward(url: string, method: "GET" | "POST", token: string) {
-  const response = await fetch(url, { method, headers: { "X-Newsroom-Session": token }, cache: "no-store", signal: AbortSignal.timeout(120000) }).catch(() => null)
+  const response = await fetch(url, { method, headers: { "X-Newsroom-Session": token, ...(await currentForwardedClientHeaders()) }, cache: "no-store", signal: AbortSignal.timeout(120000) }).catch(() => null)
   if (!response) return NextResponse.json({ success: false, error: { code: "research_service_unavailable", message: "转换尚未确认完成，请检查进度。" } }, { status: 503, headers: { "Cache-Control": "no-store" } })
   return new NextResponse(response.body, { status: response.status, headers: { "Content-Type": response.headers.get("content-type") || "application/json", "Cache-Control": "no-store" } })
 }

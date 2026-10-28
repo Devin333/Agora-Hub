@@ -143,6 +143,13 @@ class _ActivityCipher:
         return payload
 
 
+
+def validate_activity_encryption_key(key: str | bytes) -> None:
+    """Raise ``ValueError`` unless ``key`` is a key the activity stores accept."""
+
+    _ActivityCipher(key)
+
+
 class SQLiteRecordedActivityStore:
     """Tenant-scoped encrypted activity history for local single-host runs."""
 
@@ -1558,4 +1565,8 @@ def _reraise_postgres_activity_exception(exc: BaseException) -> NoReturn:
     ) from exc
 
 
-__all__ = ["PostgresRecordedActivityStore", "SQLiteRecordedActivityStore"]
+__all__ = [
+    "PostgresRecordedActivityStore",
+    "SQLiteRecordedActivityStore",
+    "validate_activity_encryption_key",
+]

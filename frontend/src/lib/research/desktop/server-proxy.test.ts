@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { desktopPost, safeDesktopId } from "@/lib/research/desktop/server-proxy";
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: "session-token" }) }) }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: "session-token" }) }), headers: async () => new Headers({ "x-forwarded-for": "203.0.113.7" }) }));
 describe("desktop BFF proxy", () => {
     const originalProfile = process.env.NEWSROOM_DEPLOYMENT_PROFILE;
     const originalOrigin = process.env.NEWSROOM_PUBLIC_ORIGIN;
@@ -36,6 +36,7 @@ describe("desktop BFF proxy", () => {
         expect(response.status).toBe(200);
         const init = backend.mock.calls[0][1] as RequestInit;
         expect(new Headers(init.headers).get("Origin")).toBe("http://127.0.0.1:4317");
+        expect(new Headers(init.headers).get("X-Forwarded-For")).toBe("203.0.113.7");
         expect(JSON.parse(String(init.body))).toEqual({ value: "kept" });
     });
 });

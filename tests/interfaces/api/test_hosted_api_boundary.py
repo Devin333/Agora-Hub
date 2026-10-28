@@ -250,6 +250,14 @@ def test_hosted_startup_refuses_unsafe_configuration(tmp_path) -> None:
         )
     assert missing_key.value.variable == "NEWSROOM_CREDENTIAL_ENCRYPTION_KEY"
 
+    for activity_key in ("", "not-a-fernet-key"):
+        with pytest.raises(DeploymentConfigurationError) as activity:
+            build_hosted_runtime(
+                hosted_env(tmp_path, NEWS_ACTIVITY_ENCRYPTION_KEY=activity_key),
+                research_request_tokens=1000,
+            )
+        assert activity.value.variable == "NEWS_ACTIVITY_ENCRYPTION_KEY"
+
     with pytest.raises(DeploymentConfigurationError) as environment_mode:
         build_hosted_runtime(
             hosted_env(tmp_path, NEWSROOM_LLM_CREDENTIAL_MODE="environment"), research_request_tokens=1000
@@ -267,6 +275,14 @@ def test_hosted_startup_refuses_unsafe_configuration(tmp_path) -> None:
             hosted_env(tmp_path, NEWS_VISUAL_DESCRIPTION_ENABLED="1"), research_request_tokens=1000
         )
     assert process_key_feature.value.variable == "NEWS_VISUAL_DESCRIPTION_ENABLED"
+
+    for variable in ("NEWS_RESEARCH_PARSER_BACKENDS", "NEWSROOM_PDF_PARSER_CASCADE"):
+        for backends in ("", "marker", "pymupdf,marker"):
+            with pytest.raises(DeploymentConfigurationError) as docker_parser:
+                build_hosted_runtime(
+                    hosted_env(tmp_path, **{variable: backends}), research_request_tokens=1000
+                )
+            assert docker_parser.value.variable == variable
 
     with pytest.raises(DeploymentConfigurationError) as too_large:
         build_hosted_runtime(hosted_env(tmp_path), research_request_tokens=5_000_000)

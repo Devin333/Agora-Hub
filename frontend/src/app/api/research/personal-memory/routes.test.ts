@@ -6,6 +6,7 @@ import { sanitizePersonalMemoryIndexRebuild } from "@/lib/research/personal-memo
 const session = vi.hoisted(() => ({ token: "owner-a-session" as string | undefined }))
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => session.token ? { value: session.token } : undefined }),
+  headers: async () => new Headers(),
 }))
 
 const proxy = vi.hoisted(() => ({

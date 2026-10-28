@@ -5,6 +5,7 @@ import { sanitizePersonalMemoryUpdate } from "@/lib/research/personal-memory-con
 const state = vi.hoisted(() => ({ token: "session-token" as string | undefined }))
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => state.token ? { value: state.token } : undefined }),
+  headers: async () => new Headers(),
 }))
 
 import { personalMemoryPatch } from "./_server"

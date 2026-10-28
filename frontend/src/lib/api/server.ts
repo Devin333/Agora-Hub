@@ -1,5 +1,6 @@
 import type { ApiError } from "@/types/common"
 import { apiBaseUrl } from "@/lib/deployment-profile"
+import { currentForwardedClientHeaders } from "@/lib/api/forwarded-client"
 
 type ApiEnvelope<T> = {
   success?: boolean
@@ -143,7 +144,7 @@ async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), {
     ...init,
     method: "GET",
-    headers: requestHeaders(init?.headers),
+    headers: await requestHeaders(init?.headers),
     cache: "no-store"
   })
 
@@ -198,7 +199,7 @@ async function apiPost<T>(path: string, body?: unknown, init?: RequestInit): Pro
     ...init,
     method: "POST",
     headers: {
-      ...requestHeaders(init?.headers),
+      ...(await requestHeaders(init?.headers)),
       "Content-Type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -256,7 +257,7 @@ async function apiPut<T>(path: string, body?: unknown, init?: RequestInit): Prom
     ...init,
     method: "PUT",
     headers: {
-      ...requestHeaders(init?.headers),
+      ...(await requestHeaders(init?.headers)),
       "Content-Type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -314,7 +315,7 @@ async function apiPatch<T>(path: string, body?: unknown, init?: RequestInit): Pr
     ...init,
     method: "PATCH",
     headers: {
-      ...requestHeaders(init?.headers),
+      ...(await requestHeaders(init?.headers)),
       "Content-Type": "application/json",
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -371,7 +372,7 @@ async function apiDelete<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), {
     ...init,
     method: "DELETE",
-    headers: requestHeaders(init?.headers),
+    headers: await requestHeaders(init?.headers),
     cache: "no-store"
   })
 
@@ -439,9 +440,10 @@ function apiUrl(path: string): string {
   return `${apiBaseUrl()}${suffix}`
 }
 
-function requestHeaders(extra?: HeadersInit): HeadersInit {
+async function requestHeaders(extra?: HeadersInit): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
-    Accept: "application/json"
+    Accept: "application/json",
+    ...(await currentForwardedClientHeaders())
   }
   if (extra instanceof Headers) {
     extra.forEach((value, key) => {

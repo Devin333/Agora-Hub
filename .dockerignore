@@ -24,3 +24,12 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 ocr_result.txt
+desktop/
+docs/
+openspec/
+tests/
+frontend/test-results/
+frontend/playwright-report/
+frontend/tsconfig.tsbuildinfo
+deploy/hosted/.env
+.tmp*

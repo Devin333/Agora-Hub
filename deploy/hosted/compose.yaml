@@ -1,0 +1,96 @@
+# Hosted Agora paper agent: Caddy (HTTPS) -> web (Next BFF) -> api (FastAPI).
+# Run from this directory after copying .env.example to .env:
+#   docker compose up -d --build
+name: agora
+
+x-api-environment: &api-environment
+  NEWSROOM_DEPLOYMENT_PROFILE: hosted
+  NEWSROOM_PUBLIC_ORIGIN: https://${NEWSROOM_DOMAIN:?set NEWSROOM_DOMAIN in .env}
+  # Only the web container talks to the API; its forwarded address chain is
+  # trusted, nothing else's.
+  NEWSROOM_TRUSTED_PROXY_CIDRS: 172.30.10.20/32
+  NEWSROOM_LLM_CREDENTIAL_MODE: invocation
+  NEWSROOM_CREDENTIAL_ENCRYPTION_KEY: ${NEWSROOM_CREDENTIAL_ENCRYPTION_KEY:?set NEWSROOM_CREDENTIAL_ENCRYPTION_KEY in .env}
+  NEWS_ACTIVITY_ENCRYPTION_KEY: ${NEWS_ACTIVITY_ENCRYPTION_KEY:?set NEWS_ACTIVITY_ENCRYPTION_KEY in .env}
+  NEWSROOM_HOSTED_LOGIN_RATE_LIMIT_PER_MINUTE: ${NEWSROOM_HOSTED_LOGIN_RATE_LIMIT_PER_MINUTE:-10}
+  NEWSROOM_HOSTED_RESEARCH_RATE_LIMIT_PER_MINUTE: ${NEWSROOM_HOSTED_RESEARCH_RATE_LIMIT_PER_MINUTE:-30}
+  # Marker needs a Docker daemon; the API container parses PDFs in process.
+  NEWS_RESEARCH_PARSER_BACKENDS: pymupdf
+  NEWSROOM_PDF_PARSER_CASCADE: pymupdf
+  NEWS_RERANKER_DEVICE: cpu
+  HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/hosted/api.Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    image: agora-api:${AGORA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment: *api-environment
+    volumes:
+      - newsroom-data:/app/.newsroom
+      - hf-cache:/home/agora/.cache/huggingface
+    networks:
+      app:
+        ipv4_address: 172.30.10.10
+    # Lets in-flight research requests finish before the process is stopped.
+    stop_grace_period: 60s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/hosted/web.Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+    image: agora-web:${AGORA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      NEWSROOM_PUBLIC_ORIGIN: https://${NEWSROOM_DOMAIN:?set NEWSROOM_DOMAIN in .env}
+      NEWSROOM_API_BASE_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      app:
+        ipv4_address: 172.30.10.20
+      edge: {}
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      NEWSROOM_DOMAIN: ${NEWSROOM_DOMAIN:?set NEWSROOM_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - edge
+
+networks:
+  # api and web only. Nothing here is published, so the API is never reachable
+  # from outside; the web address is the trusted proxy above.
+  app:
+    ipam:
+      config:
+        - subnet: 172.30.10.0/24
+  # web and caddy only, so the web server is reachable solely through Caddy.
+  edge: {}
+
+volumes:
+  newsroom-data:
+  hf-cache:
+  caddy-data:
+  caddy-config:

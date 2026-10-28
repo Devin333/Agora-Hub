@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from framework.llm.clients import CREDENTIAL_MODE_ENV, LLMCredentialMode, llm_credential_mode
+from infrastructure.storage.events.activity_store import validate_activity_encryption_key
+from infrastructure.storage.events.factory import ACTIVITY_ENCRYPTION_KEY_ENV
 from interfaces.services.account_administration import AccountAdministrationService
 from interfaces.services.auth_service import AuthApplicationService
 from interfaces.services.deployment_profile import (
@@ -90,6 +92,8 @@ def build_hosted_runtime(
             CREDENTIAL_MODE_ENV, "must be invocation in the hosted profile"
         )
     _reject_process_key_features(values)
+    _require_in_process_parsers(values)
+    _require_activity_encryption_key(values)
     try:
         cipher = CredentialCipher.from_env(values)
     except ModelCredentialConfigurationError as exc:
@@ -129,6 +133,39 @@ def _reject_process_key_features(values: Mapping[str, str]) -> None:
             raise DeploymentConfigurationError(
                 name, "uses the process model key and must stay off in the hosted profile"
             )
+
+
+# The marker parser runs in a Docker sandbox. Giving the API container the
+# Docker socket would hand it root on the host, so hosted parses PDFs with the
+# in-process text parser only. Both variables are read by different parser
+# entry points and both default to marker, so each must say pymupdf.
+HOSTED_PARSER_BACKENDS = frozenset({"pymupdf"})
+PARSER_BACKEND_ENVS = ("NEWS_RESEARCH_PARSER_BACKENDS", "NEWSROOM_PDF_PARSER_CASCADE")
+
+
+def _require_in_process_parsers(values: Mapping[str, str]) -> None:
+    for name in PARSER_BACKEND_ENVS:
+        raw = str(values.get(name) or "marker")
+        backends = {part.strip().lower() for part in raw.split(",") if part.strip()}
+        if not backends or not backends <= HOSTED_PARSER_BACKENDS:
+            raise DeploymentConfigurationError(
+                name, "must be pymupdf in the hosted profile; the marker parser needs a Docker daemon"
+            )
+
+
+# Research runs record their activity inputs and results encrypted; without the
+# key the research runtime composes as unavailable and every research request
+# fails. Hosted refuses to start instead.
+def _require_activity_encryption_key(values: Mapping[str, str]) -> None:
+    raw = str(values.get(ACTIVITY_ENCRYPTION_KEY_ENV) or "").strip()
+    if not raw:
+        raise DeploymentConfigurationError(
+            ACTIVITY_ENCRYPTION_KEY_ENV, "is required in the hosted profile"
+        )
+    try:
+        validate_activity_encryption_key(raw)
+    except ValueError as exc:
+        raise DeploymentConfigurationError(ACTIVITY_ENCRYPTION_KEY_ENV, str(exc)) from exc
 
 
 def _catalog(values: Mapping[str, str]) -> ModelProviderCatalog:

@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 HOSTED_ORIGIN = "http://127.0.0.1:3000"
 # A fixed, test-only master key; real deployments generate their own.
 TEST_ENCRYPTION_KEY = base64.b64encode(bytes(range(32))).decode("ascii")
+TEST_ACTIVITY_ENCRYPTION_KEY = base64.urlsafe_b64encode(bytes(range(32, 64))).decode("ascii")
 TEST_RESEARCH_REQUEST_TOKENS = 64_000
 
 
@@ -24,7 +25,10 @@ def hosted_env(data_root: Path, **overrides: str) -> dict[str, str]:
         "NEWSROOM_ALLOW_INSECURE_ORIGIN": "1",
         "NEWSROOM_ACCOUNT_DATA_ROOT": str(data_root / "accounts"),
         "NEWSROOM_CREDENTIAL_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+        "NEWS_ACTIVITY_ENCRYPTION_KEY": TEST_ACTIVITY_ENCRYPTION_KEY,
         "NEWSROOM_LLM_CREDENTIAL_MODE": "invocation",
+        "NEWS_RESEARCH_PARSER_BACKENDS": "pymupdf",
+        "NEWSROOM_PDF_PARSER_CASCADE": "pymupdf",
         "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH": str(REPO_ROOT / "configs" / "hosted-llm-providers.yaml"),
     }
     values.update(overrides)

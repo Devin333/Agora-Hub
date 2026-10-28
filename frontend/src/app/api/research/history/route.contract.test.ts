@@ -3,6 +3,7 @@ import { NextRequest } from "next/server"
 
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => ({ value: "session-token" }) }),
+  headers: async () => new Headers(),
 }))
 
 import { PUT } from "@/app/api/research/history/route"

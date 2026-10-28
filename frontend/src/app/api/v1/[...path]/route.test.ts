@@ -90,6 +90,7 @@ describe("hosted raw API server route", () => {
         Origin: "http://127.0.0.1:3124",
         "Sec-Fetch-Site": "same-origin",
         "X-Api-Client-Id": "forged-client",
+        "X-Forwarded-For": "203.0.113.7",
         "X-Forwarded-Host": "foreign.example",
         "X-News-Actor": "forged-owner",
         "X-Newsroom-Request-Id": "req_123",
@@ -119,6 +120,8 @@ describe("hosted raw API server route", () => {
     expect(headers.has("host")).toBe(false)
     expect(headers.has("x-api-client-id")).toBe(false)
     expect(headers.has("x-forwarded-host")).toBe(false)
+    // The proxy's address chain reaches the API, which reads it only from the trusted BFF.
+    expect(headers.get("x-forwarded-for")).toBe("203.0.113.7")
     expect(headers.has("x-news-actor")).toBe(false)
     expect(headers.has("x-remove-me")).toBe(false)
   })

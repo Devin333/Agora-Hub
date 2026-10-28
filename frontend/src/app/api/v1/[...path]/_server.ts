@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { authFailure, isSameOrigin, requestOrigin } from "@/lib/auth/portal-server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
+import { forwardedClientHeaders } from "@/lib/api/forwarded-client"
 import { apiBaseUrl, isHostedProfile, serverOwnedMutationOriginHeaders } from "@/lib/deployment-profile"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
@@ -180,6 +181,7 @@ function upstreamRequestHeaders(request: NextRequest, method: string): Headers {
 
   const session = request.cookies.get(NEWSROOM_SESSION_COOKIE)?.value?.trim()
   if (session) headers.set("X-Newsroom-Session", session)
+  for (const [name, value] of Object.entries(forwardedClientHeaders(request.headers))) headers.set(name, value)
   if (MUTATING_METHODS.has(method)) {
     for (const [name, value] of Object.entries(serverOwnedMutationOriginHeaders())) headers.set(name, value)
   }

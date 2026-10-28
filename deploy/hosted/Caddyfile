@@ -1,0 +1,27 @@
+# Certificates for the domain are issued and renewed automatically; the
+# domain must resolve to this server and ports 80 and 443 must be reachable.
+{$NEWSROOM_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# PDF uploads are capped at 50 MB by the BFF; leave room for the envelope.
+	request_body {
+		max_size 60MB
+	}
+
+	# Caddy discards any X-Forwarded-For the client sent and sets it to the
+	# address it accepted the connection from; the BFF passes that on to the
+	# API for login throttling and session audit.
+	reverse_proxy web:3000 {
+		transport http {
+			read_timeout 180s
+		}
+	}
+}
