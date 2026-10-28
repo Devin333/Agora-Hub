@@ -41,7 +41,10 @@ from backend.research.graphs.paper_analysis import (
 from backend.research.ports.artifact_publication import (
     ResearchArtifactDiagnosticReader,
 )
-from backend.research.ports.artifact_store import ResearchArtifactReadPort
+from backend.research.ports.artifact_store import (
+    ResearchArtifactReadPort,
+    ResearchRunArtifactReadPort,
+)
 from backend.research.ports.run_store import (
     ResearchRunDiagnosticStore,
     ResearchRunDisposition,
@@ -279,6 +282,7 @@ class ResearchApplicationService:
         run_reconciler: ResearchRunDispositionReconciler | None = None,
         diagnostic_artifact_reader: ResearchArtifactDiagnosticReader | None = None,
         artifact_reader: ResearchArtifactReadPort | None = None,
+        run_artifact_reader: ResearchRunArtifactReadPort | None = None,
         parse_use_case: ParsePaperUseCase | None = None,
         catalog_service: ResearchPaperCatalogService | None = None,
         runtime_config_identity: str | None = None,
@@ -300,6 +304,11 @@ class ResearchApplicationService:
         if artifact_reader is not None and not isinstance(artifact_reader, ResearchArtifactReadPort):
             raise TypeError("artifact_reader must implement ResearchArtifactReadPort")
         self._artifact_reader = artifact_reader
+        if run_artifact_reader is not None and not isinstance(
+            run_artifact_reader, ResearchRunArtifactReadPort
+        ):
+            raise TypeError("run_artifact_reader must implement ResearchRunArtifactReadPort")
+        self._run_artifact_reader = run_artifact_reader
         self._parse_use_case = parse_use_case
         self._catalog_service = catalog_service
         self._runtime_config_identity = str(runtime_config_identity or "unconfigured").strip()
@@ -324,6 +333,7 @@ class ResearchApplicationService:
             "parse": _qualified_type(self._parse_use_case),
             "catalog": _qualified_type(self._catalog_service),
             "artifactRead": _qualified_type(self._artifact_reader),
+            "runArtifactRead": _qualified_type(self._run_artifact_reader),
             "runtimeConfigIdentity": self._runtime_config_identity,
         }
         encoded = json.dumps(components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1041,24 +1051,24 @@ class ResearchApplicationService:
         )
         if any(ref is None for _, ref, _ in required):
             return "missing", "required_report_artifact_missing"
-        reader = self._artifact_reader
+        # Analysis and quality artifacts are published by the run into the run
+        # artifact store under ``artifact://<run_id>/<type>``; the paper
+        # catalog holds parse artifacts only. The caller already checked the
+        # record against the actor, and the store serves accepted runs only.
+        del actor_scope
+        reader = self._run_artifact_reader
         if reader is None:
             return "missing", "research_artifact_reader_unavailable"
         for expected_type, ref, expected_payload in required:
             try:
-                envelope = reader.read(
-                    str(ref),
-                    actor_scope=actor_scope.to_metadata(),
-                    include_payload=True,
-                    max_chars=1_000_000,
-                )
+                envelope = reader.read_artifact(str(ref))
             except FileNotFoundError:
                 return "missing", "artifact_not_found"
             except PermissionError:
                 return "unauthorized", "artifact_forbidden"
             except Exception:
                 return "corrupt", "artifact_corrupt"
-            artifact_type = str(envelope.get("artifactType") or "") if isinstance(envelope, Mapping) else ""
+            artifact_type = str(envelope.get("artifact_type") or "") if isinstance(envelope, Mapping) else ""
             metadata = envelope.get("metadata") if isinstance(envelope, Mapping) else None
             payload = envelope.get("payload") if isinstance(envelope, Mapping) else None
             if (

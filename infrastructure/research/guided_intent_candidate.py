@@ -150,7 +150,10 @@ class StructuredGuidedIntentCandidateWorker:
             output_schema=deepcopy(GUIDED_INTENT_SCHEMA) if self.managed_output else None,
             output_schema_name="guided_research_intent",
             structured_output_policy=(
-                ProviderStructuredOutputPolicy(graph_scope="research.guided_intent_candidate")
+                ProviderStructuredOutputPolicy(
+                    allow_json_object_local_gate=True,
+                    graph_scope="research.guided_intent_candidate",
+                )
                 if self.managed_output
                 else None
             ),

@@ -1740,21 +1740,29 @@ def _document_source_revision(document: Mapping[str, Any]) -> str | None:
     for key in ("source_revision", "sourceRevision", "source_hash", "sourceHash"):
         value = document.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()[:512]
+            return _canonical_source_revision(value.strip()[:512])
     metadata = document.get("metadata")
     if isinstance(metadata, Mapping):
         return _document_source_revision(metadata)
     return None
 
 
+def _canonical_source_revision(revision: str) -> str:
+    # A content hash is always reported as ``sha256:<hex>``: imports, run
+    # projections and document identities use that form, and the client
+    # sends the reader's revision back verbatim when it starts an analysis.
+    digest = revision.lower().removeprefix("sha256:")
+    if re.fullmatch(r"[0-9a-f]{64}", digest):
+        return f"sha256:{digest}"
+    return revision
+
+
 def _document_source_fingerprint(document: Mapping[str, Any]) -> str | None:
     revision = _document_source_revision(document)
     if revision is None:
         return None
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", revision.lower()):
-        return revision.lower()
-    if re.fullmatch(r"[0-9a-f]{64}", revision.lower()):
-        return f"sha256:{revision.lower()}"
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", revision):
+        return revision
     return f"sha256:{hashlib.sha256(revision.encode('utf-8')).hexdigest()}"
 
 

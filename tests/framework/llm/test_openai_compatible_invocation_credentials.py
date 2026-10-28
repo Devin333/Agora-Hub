@@ -87,6 +87,26 @@ def test_invocation_mode_uses_bound_endpoint_and_ignores_request_model(monkeypat
     assert client.config == _config()
 
 
+def test_list_models_reads_the_bound_endpoint_model_list_with_its_key():
+    seen = []
+
+    def transport(request, _timeout):
+        seen.append((request.get_method(), request.full_url, request.get_header("Authorization")))
+        return json.dumps(
+            {"object": "list", "data": [{"id": "alice-model"}, {"id": "other"}, {"object": "model"}]}
+        ).encode("utf-8")
+
+    client = OpenAICompatibleClient(
+        _config(), transport=transport, credential_mode=LLMCredentialMode.INVOCATION
+    )
+
+    with bind_llm_endpoint_source(lambda: _endpoint("alice")):
+        models = client.list_models()
+
+    assert models == ("alice-model", "other")
+    assert seen == [("GET", "https://alice.example/v1/models", "Bearer sk-alice-secret")]
+
+
 def test_invocation_mode_without_binding_fails_closed_and_never_reads_env(monkeypatch):
     monkeypatch.setenv("TEST_OPERATOR_API_KEY", "sk-operator")
     transport = _RecordingTransport()

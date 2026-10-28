@@ -573,12 +573,17 @@ def test_exact_run_report_projection_rejects_wrong_artifact_identity() -> None:
         )
     )
 
-    class ArtifactReader:
+    class RunArtifactReader:
+        """Shaped like the run artifact store's ``read_artifact`` envelope."""
+
         def __init__(self, *, mode: str = "valid") -> None:
             self.mode = mode
+            self.refs: list[str] = []
 
-        def read(self, ref, *, actor_scope, include_payload=False, max_chars=200_000):
-            del actor_scope, max_chars
+        def read_artifact(self, ref):
+            self.refs.append(ref)
+            if self.mode == "missing":
+                raise FileNotFoundError(ref)
             expected_type = (
                 "research-analysis"
                 if str(ref).endswith("/analysis")
@@ -598,32 +603,45 @@ def test_exact_run_report_projection_rejects_wrong_artifact_identity() -> None:
             if self.mode == "wrong-paper" and expected_type == "research-analysis":
                 payload = {**payload, "paper_id": paper_id}
             return {
-                "artifactRef": ref,
-                "artifactType": artifact_type,
-                "contentChecksum": "sha256:" + "a" * 64,
+                "artifact_type": artifact_type,
+                "media_type": "application/json",
                 "metadata": {
                     "run_id": "report-run-1",
                     "paper_id": paper_id,
                     "artifact_type": artifact_type,
-                    "actor_scope": result.actor_scope,
                 },
-                **({"payload": payload} if include_payload else {}),
+                "payload": payload,
             }
 
+    class CatalogReader:
+        """A paper-catalog reader must not be asked for run artifacts."""
+
+        def read(self, ref, *, actor_scope, include_payload=False, max_chars=200_000):
+            raise AssertionError(f"run artifact {ref} was read from the catalog")
+
+    reader = RunArtifactReader()
     valid = ResearchApplicationService(
-        run_store=store, artifact_reader=ArtifactReader()
+        run_store=store, artifact_reader=CatalogReader(), run_artifact_reader=reader
     ).get_run_projection("report-run-1")
     assert valid["artifactStatus"] == "valid"
     assert valid["eligibleForAcceptedExport"] is True
+    assert reader.refs == ["artifact://report-run-1/analysis", "artifact://report-run-1/quality"]
 
     for mode in ("wrong-type", "same-kind", "wrong-paper"):
         mismatched = ResearchApplicationService(
             run_store=store,
-            artifact_reader=ArtifactReader(mode=mode),
+            run_artifact_reader=RunArtifactReader(mode=mode),
         ).get_run_projection("report-run-1")
         assert mismatched["artifactStatus"] == "corrupt"
         assert mismatched["artifactReason"] == "artifact_identity_mismatch"
         assert mismatched["eligibleForAcceptedExport"] is False
+
+    missing = ResearchApplicationService(
+        run_store=store, run_artifact_reader=RunArtifactReader(mode="missing")
+    ).get_run_projection("report-run-1")
+    assert missing["artifactStatus"] == "missing"
+    assert missing["artifactReason"] == "artifact_not_found"
+    assert missing["eligibleForAcceptedExport"] is False
 
 def test_research_service_standardizes_missing_and_quality_errors() -> None:
     service = ResearchApplicationService(

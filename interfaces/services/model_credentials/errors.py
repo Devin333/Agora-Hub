@@ -54,6 +54,14 @@ def credential_rejected() -> ModelCredentialError:
     )
 
 
+def model_unavailable() -> ModelCredentialError:
+    return ModelCredentialError(
+        "model_credential_model_unavailable",
+        "The model provider accepted this API key but does not offer it the selected model",
+        status_code=400,
+    )
+
+
 def provider_unreachable() -> ModelCredentialError:
     return ModelCredentialError(
         "model_provider_unreachable",

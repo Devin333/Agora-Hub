@@ -9,6 +9,8 @@ from enum import StrEnum
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
+from framework.llm.structured_output.projection import ProviderStructuredOutputCapability
+
 CREDENTIAL_MODE_ENV = "NEWSROOM_LLM_CREDENTIAL_MODE"
 
 
@@ -42,6 +44,13 @@ class LLMEndpoint:
     base_url: str
     model: str
     api_key: str = field(repr=False)
+    # Catalog provider id; when set it replaces the operator deployment's
+    # provider name so diagnostics and capability identity name the provider
+    # that actually serves the call.
+    provider: str | None = None
+    # What this provider/model can enforce for structured output. ``None``
+    # means nothing is declared and structured requests are refused.
+    structured_output_capability: ProviderStructuredOutputCapability | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", validate_endpoint_base_url(self.base_url))
@@ -53,6 +62,21 @@ class LLMEndpoint:
         if not api_key or len(api_key) > 512 or any(ord(char) < 0x21 or ord(char) > 0x7E for char in api_key):
             raise ValueError("api_key must be 1-512 visible ASCII characters")
         object.__setattr__(self, "api_key", api_key)
+        if self.provider is not None:
+            provider = str(self.provider).strip()
+            if not provider:
+                raise ValueError("provider must be non-empty when set")
+            object.__setattr__(self, "provider", provider)
+        capability = self.structured_output_capability
+        if capability is not None:
+            if not isinstance(capability, ProviderStructuredOutputCapability):
+                raise TypeError(
+                    "structured_output_capability must be ProviderStructuredOutputCapability"
+                )
+            if self.provider is None or capability.provider != self.provider:
+                raise ValueError(
+                    "structured_output_capability must belong to the endpoint provider"
+                )
 
 
 LLMEndpointSource = Callable[[], LLMEndpoint]

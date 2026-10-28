@@ -12,6 +12,28 @@
 #   DeepSeek: https://api-docs.deepseek.com/quick_start/pricing names the
 #   models deepseek-flash (DeepSeek-V4.1-Flash-1017) and deepseek-v4-pro, both
 #   with a 1M-token context; deepseek-v4-flash is a retired legacy alias.
+#
+# structured_output declares what each model's API can enforce. Only
+# json_object and none are accepted here: native schema enforcement needs a
+# reviewed release record. With json_object the schema is sent as an
+# instruction and every reply is validated locally against the contract.
+#   DashScope: https://help.aliyun.com/zh/model-studio/json-mode lists
+#   deepseek-v4-pro and deepseek-v4.1-flash under JSON Object and not under
+#   JSON Schema. Live probes (2026-10-28) confirmed json_schema strict is not
+#   enforced for deepseek-v4.1-flash (missing and extra fields came back).
+#   DeepSeek: https://api-docs.deepseek.com/guides/json_mode documents
+#   response_format json_object; json_schema is not offered.
+#   deedee: the relay's live model list (GET /v1/models) serves gpt-5.6-sol.
+#   Live probes (2026-10-28) of its json_schema strict mode: schemas with an
+#   optional property, without additionalProperties or with oneOf answer
+#   HTTP 400, and accepted schemas are not enforced (two concatenated objects
+#   came back). json_object returns a single valid object, and every research
+#   candidate schema passed through the JSON-object adapter and local gate.
+#   OpenAI publishes a 1.1M-token context for gpt-5.6-sol; the relay does not
+#   document its own limit, so the catalog declares a 1M lower bound.
+#
+# Key verification calls GET {base_url}/models, so every provider listed here
+# must serve an OpenAI-style model list that names its catalog models.
 schema_version: hosted-llm-providers.v1
 providers:
   - id: dashscope
@@ -22,9 +44,17 @@ providers:
       - id: deepseek-v4.1-flash
         label: DeepSeek V4.1 Flash
         context_window_tokens: 1000000
+        structured_output:
+          mode: json_object
+          revision: dashscope-deepseek-v4.1-flash-json-object-2026-10-28
+          source: https://help.aliyun.com/zh/model-studio/json-mode
       - id: deepseek-v4-pro
         label: DeepSeek V4 Pro
         context_window_tokens: 1000000
+        structured_output:
+          mode: json_object
+          revision: dashscope-deepseek-v4-pro-json-object-2026-10-28
+          source: https://help.aliyun.com/zh/model-studio/json-mode
   - id: deepseek
     label: DeepSeek 官方
     base_url: https://api.deepseek.com
@@ -33,6 +63,26 @@ providers:
       - id: deepseek-flash
         label: DeepSeek V4.1 Flash
         context_window_tokens: 1000000
+        structured_output:
+          mode: json_object
+          revision: deepseek-deepseek-flash-json-object-2026-10-28
+          source: https://api-docs.deepseek.com/guides/json_mode
       - id: deepseek-v4-pro
         label: DeepSeek V4 Pro
         context_window_tokens: 1000000
+        structured_output:
+          mode: json_object
+          revision: deepseek-deepseek-v4-pro-json-object-2026-10-28
+          source: https://api-docs.deepseek.com/guides/json_mode
+  - id: deedee
+    label: deedee（OpenAI 兼容中转）
+    base_url: https://deedee.tech/v1
+    default_model: gpt-5.6-sol
+    models:
+      - id: gpt-5.6-sol
+        label: GPT-5.6 Sol
+        context_window_tokens: 1000000
+        structured_output:
+          mode: json_object
+          revision: deedee-gpt-5.6-sol-json-object-2026-10-28
+          source: https://deedee.tech/v1/models

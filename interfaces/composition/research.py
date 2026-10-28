@@ -2649,6 +2649,7 @@ def _build_configured_composition(
             run_reconciler=run_reconciler,
             diagnostic_artifact_reader=artifact_port,
             artifact_reader=catalog_store,
+            run_artifact_reader=artifact_port,
             parse_use_case=parse_use_case,
             catalog_service=catalog_service,
             runtime_config_identity=_research_runtime_config_identity(settings),

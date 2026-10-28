@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from framework.llm.clients import validate_endpoint_base_url
+from framework.llm.structured_output import ProviderStructuredOutputCapability
 from interfaces.services.model_credentials.errors import (
     ModelCredentialConfigurationError,
     provider_unsupported,
@@ -19,6 +20,27 @@ CATALOG_SCHEMA_VERSION = "hosted-llm-providers.v1"
 DEFAULT_CATALOG_PATH = Path("configs/hosted-llm-providers.yaml")
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _MODEL_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+# Native schema modes need a reviewed release record before they may enforce
+# anything; the catalog only declares what a model's API offers without one.
+_CATALOG_STRUCTURED_OUTPUT_MODES = frozenset({"json_object", "none"})
+_STRUCTURED_OUTPUT_KEYS = frozenset({"mode", "revision", "source"})
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogStructuredOutput:
+    """What a catalog model's API can enforce for a structured-output request."""
+
+    mode: str
+    revision: str
+    source: str
+
+    def capability(self, *, provider_id: str, model_id: str) -> ProviderStructuredOutputCapability:
+        return ProviderStructuredOutputCapability(
+            provider=provider_id,
+            deployment=f"{provider_id}/{model_id}",
+            mode=self.mode,  # type: ignore[arg-type]
+            revision=self.revision,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +48,7 @@ class CatalogModel:
     id: str
     label: str
     context_window_tokens: int
+    structured_output: CatalogStructuredOutput
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +68,9 @@ class CatalogProvider:
 
     def model(self, model_id: str) -> CatalogModel | None:
         return next((item for item in self.models if item.id == model_id), None)
+
+    def structured_output_capability(self, model: CatalogModel) -> ProviderStructuredOutputCapability:
+        return model.structured_output.capability(provider_id=self.id, model_id=model.id)
 
     def to_dict(self) -> dict[str, Any]:
         # The base URL is operator configuration, not something the user
@@ -163,6 +189,30 @@ def _model(raw: Any, *, source: str) -> CatalogModel:
         id=model_id,
         label=_text(raw, "label", source=f"{source} model {model_id}"),
         context_window_tokens=window,
+        structured_output=_structured_output(raw.get("structured_output"), source=f"{source} model {model_id}"),
+    )
+
+
+def _structured_output(raw: Any, *, source: str) -> CatalogStructuredOutput:
+    # Required: a model whose structured-output support nobody checked must
+    # not silently inherit some other deployment's capability.
+    if not isinstance(raw, dict):
+        raise ModelCredentialConfigurationError(f"{source}: structured_output must be a mapping")
+    unknown = sorted(set(raw) - _STRUCTURED_OUTPUT_KEYS)
+    if unknown:
+        raise ModelCredentialConfigurationError(
+            f"{source}: structured_output has unsupported keys: {', '.join(unknown)}"
+        )
+    mode = _text(raw, "mode", source=f"{source} structured_output")
+    if mode not in _CATALOG_STRUCTURED_OUTPUT_MODES:
+        raise ModelCredentialConfigurationError(
+            f"{source}: structured_output.mode must be one of "
+            f"{', '.join(sorted(_CATALOG_STRUCTURED_OUTPUT_MODES))}"
+        )
+    return CatalogStructuredOutput(
+        mode=mode,
+        revision=_text(raw, "revision", source=f"{source} structured_output"),
+        source=_text(raw, "source", source=f"{source} structured_output"),
     )
 
 
@@ -177,6 +227,7 @@ __all__ = [
     "CATALOG_SCHEMA_VERSION",
     "CatalogModel",
     "CatalogProvider",
+    "CatalogStructuredOutput",
     "DEFAULT_CATALOG_PATH",
     "ModelProviderCatalog",
     "load_model_provider_catalog",

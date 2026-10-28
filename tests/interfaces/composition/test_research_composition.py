@@ -958,6 +958,8 @@ def test_valid_settings_compose_full_durable_production_graph(
         assert isinstance(runtime.artifact_port, FilesystemHarnessArtifactPort)
         assert runtime.artifact_port.root == settings.artifact.root
         assert service._diagnostic_artifact_reader is runtime.artifact_port
+        # Report artifacts are validated against the store the run wrote them to.
+        assert service._run_artifact_reader is runtime.artifact_port
         assert runtime.artifact_port._diagnostic_run_resolver is not None
         assert isinstance(
             runtime.event_port_factory("research-object-graph"),

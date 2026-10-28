@@ -181,6 +181,7 @@ const ACCOUNT_ERROR_MESSAGES: Record<string, string> = {
   model_credential_required: "请先在设置中填写并保存模型 API Key。",
   model_credential_key_rotated: "服务器密钥已轮换，请重新填写模型 API Key。",
   model_credential_rejected: "模型服务拒绝了这个 API Key，请检查后重试。",
+  model_credential_model_unavailable: "这个 API Key 有效，但模型服务没有向它开放所选模型，请换一个模型或检查 Key 的权限。",
   model_provider_unreachable: "暂时无法连接模型服务，请稍后重试。",
   model_credential_conflict: "配置已在其他地方被修改，已为你刷新，请确认后再保存。",
   model_provider_unsupported: "不支持所选的模型服务商或模型。",

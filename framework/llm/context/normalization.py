@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from framework.llm.models.request import LLMRequest
+from framework.llm.structured_output.request_adapters import adapt_structured_output_request
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ class CanonicalLLMRequestNormalizer:
         normalized_request = request.clone(model=model)
         payload: dict[str, Any] = {
             "model": model,
-            "messages": deepcopy(normalized_request.messages),
+            "messages": structured_output_projected_messages(normalized_request),
         }
         if normalized_request.temperature is not None:
             payload["temperature"] = normalized_request.temperature
@@ -101,21 +102,17 @@ class CanonicalLLMRequestNormalizer:
 def structured_output_projection_format(
     request: LLMRequest,
 ) -> dict[str, Any] | None:
-    projection = request.provider_schema_projection()
-    if projection is None:
-        return None
-    if projection.mode == "json_object_local_gate":
-        return {"type": "json_object"}
-    if projection.provider_schema is None:
-        raise ValueError("provider schema projection is missing its schema")
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": request.output_schema_name,
-            "schema": deepcopy(projection.provider_schema),
-            "strict": True,
-        },
-    }
+    adapted = adapt_structured_output_request(request)
+    return adapted[1] if adapted is not None else None
+
+
+def structured_output_projected_messages(request: LLMRequest) -> list[dict[str, Any]]:
+    """Messages as the provider receives them once the projection is applied."""
+
+    adapted = adapt_structured_output_request(request)
+    if adapted is None:
+        return deepcopy(request.messages)
+    return adapted[0]
 
 
 def _key_text(value: str, *, field: str) -> str:

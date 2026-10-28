@@ -143,14 +143,18 @@ def test_missing_credential_fails_closed_through_the_framework_error(tmp_path) -
     assert raised.value.code == "model_credential_required"
 
 
-def test_verify_sends_exactly_one_minimal_request_and_records_result(tmp_path) -> None:
+def _model_list(*model_ids: str) -> bytes:
+    return json.dumps(
+        {"object": "list", "data": [{"id": model_id, "object": "model"} for model_id in model_ids]}
+    ).encode("utf-8")
+
+
+def test_verify_reads_the_model_list_once_without_generating_tokens(tmp_path) -> None:
     calls = []
 
     def transport(request, timeout):
-        calls.append((request.full_url, request.get_header("Authorization"), json.loads(request.data)))
-        return json.dumps(
-            {"choices": [{"message": {"role": "assistant", "content": "p"}, "finish_reason": "length"}]}
-        ).encode("utf-8")
+        calls.append((request.get_method(), request.full_url, request.get_header("Authorization"), request.data))
+        return _model_list("deepseek-v4-pro", "deepseek-v4.1-flash")
 
     service = _service(tmp_path, transport=transport)
     service.save("user-a", provider_id="dashscope", model="deepseek-v4.1-flash", api_key=KEY_A, expected_revision=None)
@@ -158,12 +162,32 @@ def test_verify_sends_exactly_one_minimal_request_and_records_result(tmp_path) -
     view = service.verify("user-a")
 
     assert view.status == "verified"
-    assert len(calls) == 1
-    url, authorization, body = calls[0]
-    assert url == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-    assert authorization == f"Bearer {KEY_A}"
-    assert body["max_tokens"] == 1
-    assert body["model"] == "deepseek-v4.1-flash"
+    assert calls == [
+        ("GET", "https://dashscope.aliyuncs.com/compatible-mode/v1/models", f"Bearer {KEY_A}", None)
+    ]
+
+
+def test_verify_refuses_a_key_whose_model_list_lacks_the_chosen_model(tmp_path) -> None:
+    service = _service(tmp_path, transport=lambda request, timeout: _model_list("gpt-6-sol"))
+    service.save("user-a", provider_id="deedee", model="gpt-5.6-sol", api_key=KEY_A, expected_revision=None)
+
+    with pytest.raises(ModelCredentialError) as raised:
+        service.verify("user-a")
+
+    assert raised.value.code == "model_credential_model_unavailable"
+    assert service.view("user-a").status == "unverified"
+
+
+@pytest.mark.parametrize("body", [b"not json", b'{"object": "list"}', b"[]"])
+def test_verify_reports_an_unreadable_model_list_as_unreachable(tmp_path, body: bytes) -> None:
+    service = _service(tmp_path, transport=lambda request, timeout: body)
+    service.save("user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=None)
+
+    with pytest.raises(ModelCredentialError) as raised:
+        service.verify("user-a")
+
+    assert raised.value.code == "model_provider_unreachable"
+    assert service.view("user-a").status == "unverified"
 
 
 @pytest.mark.parametrize(("status", "code"), ((401, "model_credential_rejected"), (503, "model_provider_unreachable")))
@@ -254,3 +278,52 @@ def test_catalog_requires_https_and_enough_context() -> None:
     catalog.require_context_window(64_000)
     with pytest.raises(ModelCredentialConfigurationError):
         catalog.require_context_window(2_000_000)
+
+
+def test_endpoint_carries_the_catalog_model_structured_output_capability(tmp_path) -> None:
+    service = _service(tmp_path)
+    service.save(
+        "user-a", provider_id="dashscope", model="deepseek-v4.1-flash", api_key=KEY_A, expected_revision=None
+    )
+
+    endpoint = service.endpoint_for("user-a")
+
+    assert endpoint.provider == "dashscope"
+    capability = endpoint.structured_output_capability
+    assert capability is not None
+    assert capability.provider == "dashscope"
+    assert capability.deployment == "dashscope/deepseek-v4.1-flash"
+    assert capability.mode == "json_object"
+
+
+def _catalog_with_model(model: dict) -> dict:
+    return {
+        "schema_version": "hosted-llm-providers.v1",
+        "providers": [
+            {
+                "id": "p",
+                "label": "P",
+                "base_url": "https://example.com/v1",
+                "default_model": "m",
+                "models": [model],
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "structured_output",
+    [
+        None,
+        {"mode": "native_strict", "revision": "r", "source": "https://example.com"},
+        {"mode": "json_object", "revision": "r"},
+        {"mode": "json_object", "revision": "r", "source": "s", "extra": True},
+    ],
+)
+def test_catalog_requires_a_reviewed_structured_output_declaration(structured_output) -> None:
+    model = {"id": "m", "label": "M", "context_window_tokens": 1000}
+    if structured_output is not None:
+        model["structured_output"] = structured_output
+
+    with pytest.raises(ModelCredentialConfigurationError):
+        parse_model_provider_catalog(_catalog_with_model(model))

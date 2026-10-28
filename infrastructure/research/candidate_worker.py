@@ -480,8 +480,10 @@ _TASK_INSTRUCTIONS = MappingProxyType(
         ),
         "candidate_taxonomy": (
             "Propose domain, area, or task taxonomy candidates supported by the supplied "
-            "paper projection. Cite only supplied source refs. Registry acceptance is "
-            "performed by a deterministic gate."
+            "paper projection. Despite its name, each candidate's evidence_refs lists "
+            "source_ref values copied verbatim from the paper projection or the evidence "
+            "items, never evidence_id values. Registry acceptance is performed by a "
+            "deterministic gate."
         ),
         "candidate_experiment_claims": (
             "Extract experiment or method claims and reported benchmark scores from the "
@@ -702,8 +704,11 @@ class StructuredResearchCandidateWorker:
             execution_identity=execution_identity,
             output_schema=deepcopy(_SCHEMAS[task]),
             output_schema_name=f"research_{task}",
+            # Every candidate is validated locally against its contract before
+            # use, so a provider that only guarantees JSON syntax is admissible.
             structured_output_policy=ProviderStructuredOutputPolicy(
-                graph_scope="research.candidate"
+                allow_json_object_local_gate=True,
+                graph_scope="research.candidate",
             ),
         )
 

@@ -37,6 +37,10 @@ from framework.llm.structured_output import (
     structured_output_text_fingerprint,
     validate_compiled_structured_output,
 )
+from framework.llm.structured_output.request_adapters import (
+    require_structured_output_request_adapter,
+    supports_structured_output_projection as _adapter_supports_projection,
+)
 from framework.llm.clients.tool_adapters import (
     LLMToolCallParseError,
     LLMToolSchemaError,
@@ -228,7 +232,7 @@ class OpenAICompatibleClient:
     def supports_structured_output_projection(
         projection: ProviderSchemaProjection,
     ) -> bool:
-        return projection.mode in {"native_strict", "json_object_local_gate"}
+        return _adapter_supports_projection(projection)
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         return self._for_invocation()._complete(request)
@@ -237,6 +241,17 @@ class OpenAICompatibleClient:
         # Bind eagerly so the endpoint is taken from the caller's context, not
         # from whichever context first advances the returned iterator.
         return self._for_invocation()._stream(request)
+
+    def list_models(self) -> tuple[str, ...]:
+        """Return the model ids the provider lists for this credential.
+
+        ``GET /models`` authenticates the key without generating tokens, so
+        it costs nothing and its latency does not depend on how slowly the
+        model itself answers. Exactly one request is sent; failures raise
+        ``LLMProviderError`` like a completion would.
+        """
+
+        return self._for_invocation()._list_models()
 
     def _for_invocation(self) -> OpenAICompatibleClient:
         """Return the client that serves exactly one provider call.
@@ -255,9 +270,14 @@ class OpenAICompatibleClient:
         bound = copy.copy(self)
         bound.config = replace(
             self.config,
+            provider=endpoint.provider or self.config.provider,
             base_url=endpoint.base_url,
             model=endpoint.model,
         )
+        # The operator deployment's structured-output capability describes a
+        # different provider and model; the account endpoint carries its own,
+        # and an endpoint that declares none cannot serve structured output.
+        bound._structured_output_capability = endpoint.structured_output_capability
         bound._invocation_api_key = endpoint.api_key
         return bound
 
@@ -319,13 +339,18 @@ class OpenAICompatibleClient:
                 error = self._error_from_network(exc, attempts=attempt)
             else:
                 response_payload = self._parse_response_payload(raw_body, attempts=attempt)
-                return self._normalize_response(
-                    response_payload,
-                    request=execution_request,
-                    attempts=attempt,
-                    contract=contract,
-                    projection=projection,
-                )
+                try:
+                    return self._normalize_response(
+                        response_payload,
+                        request=execution_request,
+                        attempts=attempt,
+                        contract=contract,
+                        projection=projection,
+                    )
+                except LLMProviderError as exc:
+                    if exc.error_type != "structured_output_empty":
+                        raise
+                    error = exc
 
             if not error.retryable or attempt >= max_attempts:
                 raise error
@@ -578,6 +603,16 @@ class OpenAICompatibleClient:
                 "provider projection does not match client provider",
                 reason="provider_projection_identity_mismatch",
             )
+        if self._credential_mode is LLMCredentialMode.INVOCATION and not _projection_matches_capability(
+            projection, self._structured_output_capability
+        ):
+            # A projection made upstream (by a router) from the operator
+            # deployment cannot be honoured by the account's own endpoint.
+            raise self._projection_ineligible_error(
+                contract,
+                "provider projection was not made for the bound endpoint",
+                reason="provider_projection_endpoint_mismatch",
+            )
         if not self.supports_structured_output_projection(projection):
             raise self._projection_ineligible_error(
                 contract,
@@ -632,6 +667,35 @@ class OpenAICompatibleClient:
             attempts=1,
             contract=None,
             projection=None,
+        )
+
+    def _list_models(self) -> tuple[str, ...]:
+        api_key = self._resolve_api_key()
+        http_request = Request(
+            url=f"{self.config.base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            method="GET",
+        )
+        try:
+            raw_body = self._transport(http_request, self.config.timeout_seconds)
+        except HTTPError as exc:
+            raise self._error_from_http(exc, attempts=1) from exc
+        except (TimeoutError, URLError, OSError) as exc:
+            raise self._error_from_network(exc, attempts=1) from exc
+        payload = self._parse_response_payload(raw_body, attempts=1)
+        entries = payload.get("data")
+        if not isinstance(entries, list):
+            raise LLMProviderError(
+                f"{self.config.provider} model list has no data array",
+                provider=self.config.provider,
+                model=self.config.model,
+                error_type="schema_error",
+                retryable=False,
+            )
+        return tuple(
+            str(entry["id"])
+            for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
         )
 
     def _build_http_request(self, api_key: str, payload: dict[str, Any]) -> Request:
@@ -820,6 +884,20 @@ class OpenAICompatibleClient:
         attempts: int,
         contract: StructuredOutputContract | None,
     ) -> dict[str, Any]:
+        projection = request.provider_schema_projection()
+        if (
+            not content.strip()
+            and projection is not None
+            and require_structured_output_request_adapter(projection).empty_content_retryable
+        ):
+            raise LLMProviderError(
+                f"{self.config.provider} returned empty structured output content",
+                provider=self.config.provider,
+                model=self.config.model,
+                error_type="structured_output_empty",
+                retryable=True,
+                attempts=attempts,
+            )
         try:
             structured_output = decode_structured_output(
                 content,
@@ -1091,6 +1169,17 @@ def _first_bounded_token_value(
             if 0 <= value <= _MAX_PROVIDER_TOKEN_DIAGNOSTIC:
                 return value
     return None
+
+
+def _projection_matches_capability(
+    projection: ProviderSchemaProjection,
+    capability: ProviderStructuredOutputCapability | None,
+) -> bool:
+    return (
+        capability is not None
+        and projection.deployment == capability.deployment
+        and projection.provider_capability_revision == capability.revision
+    )
 
 
 def _expects_structured_output(request: LLMRequest) -> bool:

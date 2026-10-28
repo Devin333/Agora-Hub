@@ -9,7 +9,9 @@ from typing import Any
 from backend.research.application.guided_research import GuidedResearchApplication
 from backend.research.ports.guided_research import GuidedIntentCandidatePort, GuidedResearchError
 from framework.llm.clients.config import load_openai_compatible_deployment
+from framework.llm.clients.endpoint import LLMCredentialMode
 from framework.llm.clients.openai_compatible import LLMConfigurationError, LLMRetryPolicy, OpenAICompatibleClient
+from framework.llm.structured_output import ProviderStructuredOutputCapability
 from infrastructure.research.guided_intent_candidate import StructuredGuidedIntentCandidateWorker
 from infrastructure.research.github_guided_search import GithubGuidedSearch
 from infrastructure.external.sources.github import GithubConnector
@@ -91,11 +93,19 @@ def _build_intent_candidate() -> GuidedIntentCandidatePort:
     )
     return StructuredGuidedIntentCandidateWorker(
         client,
-        managed_output=bool(
-            deployment.structured_output_capability
-            and deployment.structured_output_capability.mode != "none"
-        ),
+        managed_output=_managed_output_available(client, deployment.structured_output_capability),
     )
+
+
+def _managed_output_available(
+    client: OpenAICompatibleClient,
+    capability: ProviderStructuredOutputCapability | None,
+) -> bool:
+    # In invocation mode every call carries the account endpoint's own
+    # capability, so the operator deployment's declaration does not apply.
+    if client.credential_mode is LLMCredentialMode.INVOCATION:
+        return True
+    return capability is not None and capability.mode != "none"
 
 
 @lru_cache(maxsize=1)

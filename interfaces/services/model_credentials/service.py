@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
-from framework.llm import LLMRequest
 from framework.llm.clients import (
     LLMCredentialMode,
     LLMCredentialUnavailableError,
@@ -37,6 +36,7 @@ from interfaces.services.model_credentials.errors import (
     credential_key_rotated,
     credential_rejected,
     credential_required,
+    model_unavailable,
     provider_unreachable,
     revision_conflict,
 )
@@ -186,10 +186,13 @@ class ModelCredentialService:
         return resolve
 
     def verify(self, user_id: str) -> ModelCredentialView:
-        """Send exactly one minimal request with the stored key.
+        """Check the stored key against the provider's model list.
 
-        No retry is made: a verification costs the user a provider call, and
-        a second attempt would hide whether the first one was billed.
+        ``GET /models`` authenticates the key and shows whether it may use
+        the chosen model without generating tokens: a completion would bill
+        the user and, on reasoning models that take tens of seconds to
+        answer even ``ping``, time out although the key is fine. Exactly one
+        request is sent and none is retried.
         """
 
         record = self._repository.get(user_id)
@@ -209,14 +212,9 @@ class ModelCredentialService:
             retry_policy=LLMRetryPolicy(max_attempts=1),
             credential_mode=LLMCredentialMode.INVOCATION,
         )
-        request = LLMRequest(
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=1,
-            max_transport_attempts=1,
-        )
         try:
             with bind_llm_endpoint_source(lambda: endpoint):
-                client.complete(request)
+                available = client.list_models()
         except LLMProviderError as exc:
             if exc.status_code in _REJECTED_STATUS_CODES:
                 self._record_verification(record, verified_at=None)
@@ -224,6 +222,9 @@ class ModelCredentialService:
             raise provider_unreachable() from None
         except OSError:
             raise provider_unreachable() from None
+        if endpoint.model not in available:
+            self._record_verification(record, verified_at=None)
+            raise model_unavailable() from None
         verified = self._record_verification(record, verified_at=self._clock())
         return _view(verified, key_current=True)
 
@@ -241,7 +242,13 @@ class ModelCredentialService:
             raise credential_key_rotated() from None
         except CredentialTamperedError:
             raise credential_required() from None
-        return LLMEndpoint(base_url=provider.base_url, model=model.id, api_key=secret)
+        return LLMEndpoint(
+            base_url=provider.base_url,
+            model=model.id,
+            api_key=secret,
+            provider=provider.id,
+            structured_output_capability=provider.structured_output_capability(model),
+        )
 
     def _record_verification(
         self, record: ModelCredentialRecord, *, verified_at: datetime | None

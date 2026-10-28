@@ -3,6 +3,7 @@
 from interfaces.services.model_credentials.catalog import (
     CatalogModel,
     CatalogProvider,
+    CatalogStructuredOutput,
     ModelProviderCatalog,
     load_model_provider_catalog,
     parse_model_provider_catalog,
@@ -29,6 +30,7 @@ from interfaces.services.model_credentials.store import (
 __all__ = [
     "CatalogModel",
     "CatalogProvider",
+    "CatalogStructuredOutput",
     "CredentialCipher",
     "ENCRYPTION_KEY_ENV",
     "LocalJsonModelCredentialRepository",
