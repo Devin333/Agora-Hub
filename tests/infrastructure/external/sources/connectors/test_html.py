@@ -195,6 +195,51 @@ def test_html_connector_default_fetch_rejects_unsupported_content_type(monkeypat
     assert "text/html" in errors[0].metadata["supported_content_types"]
 
 
+def test_html_connector_default_fetch_routes_robots_and_page_through_injected_open_request() -> None:
+    requested_urls = []
+
+    class Headers:
+        def __init__(self, content_type):
+            self._content_type = content_type
+
+        def get_content_type(self):
+            return self._content_type
+
+        def get(self, name, default=None):
+            return self._content_type if name.casefold() == "content-type" else default
+
+    class Response:
+        status = 200
+
+        def __init__(self, body, content_type):
+            self._body = body
+            self.headers = Headers(content_type)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, size):
+            return self._body[:size]
+
+    def fake_open_request(request, policy):
+        requested_urls.append(request.full_url)
+        if request.full_url.endswith("/robots.txt"):
+            return Response(b"User-agent: *\nAllow: /\n", "text/plain")
+        return Response(HTML_FIXTURE.encode("utf-8"), "text/html")
+
+    items, errors = HtmlConnector(open_request=fake_open_request).fetch(_source())
+
+    assert errors == []
+    assert [item.title for item in items] == ["Product Launch Notes"]
+    assert requested_urls == [
+        "https://example.com/robots.txt",
+        "https://example.com/blog/product-launch",
+    ]
+
+
 def _source(*, respect_robots: bool = True) -> SourceDefinition:
     return SourceDefinition(
         source_id="blog",

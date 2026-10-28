@@ -21,6 +21,7 @@ from infrastructure.external.sources.diagnostics import (
 )
 from infrastructure.external.sources.fetch_policy import (
     DomainRateLimiter,
+    OpenRequest,
     SourceFetchPolicy,
     effective_fetch_policy,
     ensure_supported_content_type,
@@ -56,9 +57,11 @@ class FeedConnector:
         *,
         fetch_policy: SourceFetchPolicy | None = None,
         rate_limiter: DomainRateLimiter | None = None,
+        open_request: OpenRequest | None = None,
     ) -> None:
         self.fetch_policy = fetch_policy or SourceFetchPolicy()
         self._rate_limiter = rate_limiter or DomainRateLimiter()
+        self._open_request = open_request
         self._uses_default_fetch = fetch_text is None
         self._fetch_text = fetch_text or self._default_fetch_text
         self._response_metadata_context = SourceFetchResponseMetadataContext()
@@ -230,7 +233,7 @@ class FeedConnector:
     def _default_fetch_text(self, url: str, policy: SourceFetchPolicy | None = None) -> str:
         policy = policy or self.fetch_policy
         request = Request(url, headers={"User-Agent": policy.user_agent})
-        with open_request_with_fetch_policy(request, policy) as response:
+        with self._resolved_open_request()(request, policy) as response:
             response_metadata = response_metadata_from_http_response(response, url=url)
             self._response_metadata_context.set(response_metadata)
             ensure_supported_content_type(response_metadata.content_type, FEED_CONTENT_TYPES)
@@ -241,9 +244,12 @@ class FeedConnector:
 
     def _fetch_source_text(self, url: str, policy: SourceFetchPolicy) -> str:
         if self._uses_default_fetch:
-            ensure_robots_allowed(url, policy)
+            ensure_robots_allowed(url, policy, open_request=self._resolved_open_request())
             return self._default_fetch_text(url, policy)
         return self._fetch_text(url)
+
+    def _resolved_open_request(self) -> OpenRequest:
+        return self._open_request or open_request_with_fetch_policy
 
 
 def _raw_item(

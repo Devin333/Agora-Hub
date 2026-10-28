@@ -85,7 +85,11 @@ HTML_FIXTURE = """<!doctype html>
 
 def register_test_source_tools(registry: ToolRegistry, **kwargs) -> None:
     fetch_text = kwargs.pop("fetch_text", None)
-    kwargs.setdefault("source_runtime", default_source_tool_runtime(fetch_text=fetch_text))
+    open_request = kwargs.pop("open_request", None)
+    kwargs.setdefault(
+        "source_runtime",
+        default_source_tool_runtime(fetch_text=fetch_text, open_request=open_request),
+    )
     fetch_policy = kwargs.get("fetch_policy")
     if getattr(fetch_policy, "rate_limit_per_domain_per_minute", None) is not None:
         kwargs.setdefault("rate_limiter", DomainRateLimiter())
@@ -1193,8 +1197,9 @@ def test_source_fetch_url_tool_applies_max_bytes_to_injected_fetcher() -> None:
     assert "max_bytes" in (observation.result.error_message or "")
 
 
-def test_source_fetch_url_tool_default_fetch_uses_source_fetch_policy(monkeypatch) -> None:
-    captured = {}
+def test_source_fetch_url_tool_default_fetch_uses_source_fetch_policy() -> None:
+    requests = []
+    read_sizes = []
 
     class Response:
         status = 200
@@ -1212,22 +1217,25 @@ def test_source_fetch_url_tool_default_fetch_uses_source_fetch_policy(monkeypatc
             return False
 
         def read(self, size):
-            captured["read_size"] = size
+            read_sizes.append(size)
             return b"abc"
 
     def fake_open_request(request, policy):
-        captured["user_agent"] = request.headers["User-agent"]
-        captured["timeout"] = policy.timeout_seconds
-        captured["max_redirects"] = policy.max_redirects
+        requests.append(
+            {
+                "url": request.full_url,
+                "user_agent": request.headers["User-agent"],
+                "timeout": policy.timeout_seconds,
+                "max_bytes": policy.max_bytes,
+                "max_redirects": policy.max_redirects,
+            }
+        )
         return Response()
 
-    monkeypatch.setattr(
-        "interfaces.services.source_tool_runtime.open_request_with_fetch_policy",
-        fake_open_request,
-    )
     registry = ToolRegistry()
     register_test_source_tools(
         registry,
+        open_request=fake_open_request,
         fetch_policy=SourceFetchPolicy(
             timeout_seconds=3,
             max_bytes=5,
@@ -1256,12 +1264,23 @@ def test_source_fetch_url_tool_default_fetch_uses_source_fetch_policy(monkeypatc
     assert observation.result.output["content"] == "abc"
     assert observation.result.output["status_code"] == 200
     assert observation.result.output["content_type"] == "application/rss+xml"
-    assert captured == {
-        "user_agent": "NewsRoomTest/1.0",
-        "timeout": 3,
-        "max_redirects": 2,
-        "read_size": 6,
-    }
+    assert requests == [
+        {
+            "url": "https://example.com/robots.txt",
+            "user_agent": "NewsRoomTest/1.0",
+            "timeout": 3,
+            "max_bytes": 5,
+            "max_redirects": 2,
+        },
+        {
+            "url": "https://example.com/feed.xml",
+            "user_agent": "NewsRoomTest/1.0",
+            "timeout": 3,
+            "max_bytes": 5,
+            "max_redirects": 2,
+        },
+    ]
+    assert read_sizes == [6, 6]
 
 
 def test_source_fetch_url_tool_enforces_redirect_limit() -> None:
