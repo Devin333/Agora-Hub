@@ -77,6 +77,7 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
         kind: ResearchDesktopOperationKind,
         fingerprint: str,
         semantic: Mapping[str, Any],
+        queued: bool = False,
     ) -> ResearchDesktopAdmissionDecision:
         owner = _required_text(owner_id, "owner_id", maximum=256)
         request = _request_id(request_id)
@@ -124,7 +125,7 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
                 "kind": actual_kind,
                 "fingerprint": actual_fingerprint,
                 "semantic": normalized_semantic,
-                "status": "running",
+                "status": "admitted" if queued else "running",
                 "createdAt": now,
                 "updatedAt": now,
             }
@@ -166,6 +167,42 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
             if admission.owner_id != owner or admission.generation != actual_generation:
                 return None
             return admission
+
+    def start(
+        self,
+        *,
+        owner_id: str,
+        request_id: str,
+        generation: str,
+    ) -> ResearchDesktopAdmission:
+        """Move a queued admission to ``running``; any other state is returned as is."""
+
+        owner = _required_text(owner_id, "owner_id", maximum=256)
+        request = _request_id(request_id)
+        actual_generation = _generation(generation)
+        key = _operation_key(owner, request)
+        with locked_json_file(self.path) as resolved:
+            payload = self._read_or_initialize(resolved)
+            self._require_current_generation(payload, actual_generation)
+            raw = payload.get("operations", {}).get(key)
+            if not isinstance(raw, dict) or raw.get("ownerId") != owner:
+                raise ResearchDesktopControlError(
+                    "desktop_request_not_found",
+                    "Desktop request was not found",
+                    status_code=404,
+                )
+            if raw.get("generation") != actual_generation:
+                raise ResearchDesktopControlError(
+                    "desktop_generation_stale",
+                    "Request belongs to an earlier recovery generation",
+                    status_code=409,
+                )
+            if raw.get("status") != "admitted":
+                return _admission_from_record(raw)
+            raw["status"] = "running"
+            raw["updatedAt"] = _now()
+            self._write(resolved, payload)
+            return _admission_from_record(raw)
 
     def bind_authority(
         self,
@@ -492,7 +529,7 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
             for operation_key, raw in operations.items():
                 if (
                     isinstance(raw, dict)
-                    and raw.get("status") == "running"
+                    and raw.get("status") in {"admitted", "running"}
                     and str(operation_key) not in active_operation_keys
                 ):
                     raw["status"] = "needs_review"

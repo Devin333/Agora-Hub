@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
+from functools import partial
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -32,6 +34,11 @@ from framework.llm.clients import (
     credential_unavailable_cause,
     require_invocation_credential,
 )
+from interfaces.services.research_desktop_background import (
+    ResearchDesktopExecutorUnavailableError,
+    ResearchDesktopTaskExecutor,
+    default_research_desktop_executor,
+)
 from interfaces.services.research_desktop_control import (
     ResearchDesktopControlError,
     canonical_request_fingerprint,
@@ -48,6 +55,8 @@ from interfaces.services.research_service import (
     ResearchParseInput,
     ResearchServiceError,
 )
+
+logger = logging.getLogger(__name__)
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
@@ -196,6 +205,18 @@ class _PersonalMemoryTaskContextProvider:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _AnalysisJob:
+    """An admitted analysis frozen at submission for background execution."""
+
+    owner: ResearchDesktopOwner
+    request_id: str
+    generation: str
+    run_id: str
+    semantic: Mapping[str, Any]
+    command: ResearchAnalyzeInput
+
+
 class ResearchDesktopApplicationService:
     """Authenticated desktop facade over existing Research application authorities."""
 
@@ -206,6 +227,7 @@ class ResearchDesktopApplicationService:
         imports: ResearchImportService | None = None,
         requests: ResearchDesktopRequestStore | None = None,
         personal_memory: PersonalMemoryService | None = None,
+        executor: ResearchDesktopTaskExecutor | None = None,
     ) -> None:
         if not isinstance(research, ResearchApplicationService):
             raise TypeError("research must be ResearchApplicationService")
@@ -217,6 +239,9 @@ class ResearchDesktopApplicationService:
         ):
             raise TypeError("personal_memory must be PersonalMemoryService")
         self._personal_memory = personal_memory
+        if executor is not None and not isinstance(executor, ResearchDesktopTaskExecutor):
+            raise TypeError("executor must be ResearchDesktopTaskExecutor")
+        self._executor = executor or default_research_desktop_executor()
 
     def _personal_memory_context(
         self,
@@ -587,12 +612,13 @@ class ResearchDesktopApplicationService:
             kind="analyze",
             fingerprint=request_fingerprint,
             semantic=semantic,
+            queued=True,
         )
         if not decision.execute:
             return self._operation_response(decision.admission)
         run_id = _run_id(actual.user_id, generation, request_id)
         try:
-            self._requests.bind_authority(
+            bound = self._requests.bind_authority(
                 owner_id=actual.user_id,
                 request_id=request_id,
                 generation=generation,
@@ -601,8 +627,13 @@ class ResearchDesktopApplicationService:
             memory_context = self._personal_memory_context(
                 actual, memory_request
             )
-            response = self._research.analyze_paper(
-                ResearchAnalyzeInput(
+            job = _AnalysisJob(
+                owner=actual,
+                request_id=request_id,
+                generation=generation,
+                run_id=run_id,
+                semantic=semantic,
+                command=ResearchAnalyzeInput(
                     paper_id=actual_paper,
                     source_url=source,
                     pdf_url=pdf or bound_source_locator,
@@ -623,23 +654,97 @@ class ResearchDesktopApplicationService:
                         "research_input_objective": effective_objective,
                         "research_input_constraints": actual_constraints,
                     },
-                )
+                ),
+            )
+            # The model run outlasts any HTTP request; the client polls the
+            # operation until the background job records a terminal state.
+            self._executor.submit(
+                partial(self._execute_analysis, job),
+                on_abandon=partial(self._abandon_analysis, job),
             )
         except Exception as exc:
             self._record_failure(actual, request_id=request_id, generation=generation, exc=exc)
             raise _service_error(exc) from exc
-        authority_run_id = str(response.get("runId") or run_id)
-        projection = self._research.get_run_projection(authority_run_id, actor=actual.actor())
-        result = _analysis_operation_result(projection, source_revision=revision)
+        return self._operation_response(bound)
+
+    def _execute_analysis(self, job: _AnalysisJob) -> None:
+        """Run one admitted analysis and record its terminal state."""
+
+        owner = job.owner
+        try:
+            started = self._requests.start(
+                owner_id=owner.user_id,
+                request_id=job.request_id,
+                generation=job.generation,
+            )
+        except Exception:
+            # A rotated generation or unreadable store means this admission
+            # can no longer be executed under its frozen identity.
+            logger.exception("desktop analysis %s could not start", job.request_id)
+            return
+        if started.status != "running":
+            return
+        try:
+            response = self._research.analyze_paper(job.command)
+        except Exception as exc:
+            self._record_failure(owner, request_id=job.request_id, generation=job.generation, exc=exc)
+            return
+        authority_run_id = str(response.get("runId") or job.run_id)
+        try:
+            projection = self._research.get_run_projection(authority_run_id, actor=owner.actor())
+            self._finalize_analysis(
+                owner,
+                request_id=job.request_id,
+                generation=job.generation,
+                semantic=job.semantic,
+                run_id=authority_run_id,
+                projection=projection,
+            )
+        except Exception:
+            # The run itself finished; reading the operation reconciles the
+            # admission from the run projection once the store is writable.
+            logger.exception("desktop analysis %s finished without a terminal record", job.request_id)
+
+    def _abandon_analysis(self, job: _AnalysisJob) -> None:
+        self._requests.fail(
+            owner_id=job.owner.user_id,
+            request_id=job.request_id,
+            generation=job.generation,
+            error={
+                "code": "desktop_execution_abandoned",
+                "message": "The service stopped before the queued analysis started",
+                "retryable": True,
+            },
+        )
+
+    def _finalize_analysis(
+        self,
+        owner: ResearchDesktopOwner,
+        *,
+        request_id: str,
+        generation: str,
+        semantic: Mapping[str, Any],
+        run_id: str,
+        projection: Mapping[str, Any],
+    ) -> Any:
+        """Verify a succeeded analysis run against its frozen request and record the outcome."""
+
+        source_revision = str(semantic.get("sourceRevision") or "")
+        memory_request = (
+            semantic.get("personalMemory")
+            if isinstance(semantic.get("personalMemory"), Mapping)
+            else None
+        )
+        result = _analysis_operation_result(projection, source_revision=source_revision)
         self._record_capability("single-paper-analysis", operation="analyze")
         if not _result_identity_matches(
             projection,
-            run_id=authority_run_id,
-            paper_id=actual_paper,
-            source_revision=revision,
+            run_id=run_id,
+            paper_id=str(semantic.get("paperId") or ""),
+            source_revision=source_revision,
         ):
-            failed = self._requests.fail(
-                owner_id=actual.user_id,
+            return self._requests.fail(
+                owner_id=owner.user_id,
                 request_id=request_id,
                 generation=generation,
                 error={
@@ -649,13 +754,12 @@ class ResearchDesktopApplicationService:
                 },
                 needs_review=True,
             )
-            return self._operation_response(failed)
         if not _personal_memory_disclosure_matches(
             memory_request,
             projection.get("diagnostics") if isinstance(projection.get("diagnostics"), Mapping) else {},
         ):
-            failed = self._requests.fail(
-                owner_id=actual.user_id,
+            return self._requests.fail(
+                owner_id=owner.user_id,
                 request_id=request_id,
                 generation=generation,
                 error={
@@ -665,10 +769,9 @@ class ResearchDesktopApplicationService:
                 },
                 needs_review=True,
             )
-            return self._operation_response(failed)
         if not _analysis_result_is_accepted(result):
-            rejected = self._requests.fail(
-                owner_id=actual.user_id,
+            return self._requests.fail(
+                owner_id=owner.user_id,
                 request_id=request_id,
                 generation=generation,
                 error={
@@ -677,16 +780,14 @@ class ResearchDesktopApplicationService:
                     "retryable": False,
                 },
             )
-            return self._operation_response(rejected)
         self._record_capability("accepted-report", operation="analyze")
-        completed = self._requests.complete(
-            owner_id=actual.user_id,
+        return self._requests.complete(
+            owner_id=owner.user_id,
             request_id=request_id,
             generation=generation,
-            run_id=authority_run_id,
+            run_id=run_id,
             result=result,
         )
-        return self._operation_response(completed)
 
     def submit_ask(
         self,
@@ -1018,64 +1119,13 @@ class ResearchDesktopApplicationService:
                 raise _service_error(exc) from exc
             status = str(projection.get("status") or "unknown")
             if status == "succeeded":
-                result = _analysis_operation_result(
-                    projection,
-                    source_revision=str(admission.semantic.get("sourceRevision") or ""),
-                )
-                memory_request = (
-                    admission.semantic.get("personalMemory")
-                    if isinstance(admission.semantic.get("personalMemory"), Mapping)
-                    else None
-                )
-                if not _result_identity_matches(
-                    projection,
-                    run_id=admission.run_id,
-                    paper_id=str(admission.semantic.get("paperId") or ""),
-                    source_revision=str(admission.semantic.get("sourceRevision") or ""),
-                ):
-                    return self._requests.fail(
-                        owner_id=owner.user_id,
-                        request_id=admission.request_id,
-                        generation=admission.generation,
-                        error={
-                            "code": "result_identity_mismatch",
-                            "message": "The analysis result does not match the frozen run and source identity",
-                            "retryable": False,
-                        },
-                        needs_review=True,
-                    )
-                if not _personal_memory_disclosure_matches(
-                    memory_request,
-                    projection.get("diagnostics") if isinstance(projection.get("diagnostics"), Mapping) else {},
-                ):
-                    return self._requests.fail(
-                        owner_id=owner.user_id,
-                        request_id=admission.request_id,
-                        generation=admission.generation,
-                        error={
-                            "code": "personal_memory_disclosure_mismatch",
-                            "message": "The analysis memory receipt does not match the frozen request selection",
-                            "retryable": False,
-                        },
-                        needs_review=True,
-                    )
-                if not _analysis_result_is_accepted(result):
-                    return self._requests.fail(
-                        owner_id=owner.user_id,
-                        request_id=admission.request_id,
-                        generation=admission.generation,
-                        error={
-                            "code": "quality_gate_failed",
-                            "message": "The authoritative Research quality gate did not accept the analysis",
-                            "retryable": False,
-                        },
-                    )
-                return self._requests.complete(
-                    owner_id=owner.user_id,
+                return self._finalize_analysis(
+                    owner,
                     request_id=admission.request_id,
                     generation=admission.generation,
+                    semantic=admission.semantic,
                     run_id=admission.run_id,
-                    result=result,
+                    projection=projection,
                 )
             if status in {"failed", "rejected", "cancelled"}:
                 return self._requests.fail(
@@ -2578,6 +2628,13 @@ def _service_error(exc: Exception) -> ResearchDesktopServiceError:
     credential_failure = credential_unavailable_cause(exc)
     if credential_failure is not None:
         return _service_error(model_credential_service_error(credential_failure))
+    if isinstance(exc, ResearchDesktopExecutorUnavailableError):
+        return ResearchDesktopServiceError(
+            exc.code,
+            "Research analysis is not accepting new work while the service stops",
+            status_code=503,
+            retryable=True,
+        )
     if isinstance(exc, ResearchDesktopControlError):
         return ResearchDesktopServiceError(
             exc.code,

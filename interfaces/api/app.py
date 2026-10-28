@@ -88,6 +88,7 @@ from interfaces.services.mcp_service import MCPApplicationService
 from interfaces.services.project_service import ProjectApplicationService
 from interfaces.services.personal_memory_service import PersonalMemoryApplicationService
 from interfaces.services.research_service import ResearchApplicationService
+from interfaces.services.research_desktop_background import research_desktop_executor_from_env
 from interfaces.services.research_desktop_service import ResearchDesktopApplicationService
 from interfaces.services.deployment_profile import (
     DeploymentConfigurationError,
@@ -145,6 +146,10 @@ GuidedResearchServiceFactory = Callable[[], GuidedResearchService]
 RuntimeOperatorStatusServiceFactory = Callable[[], RuntimeOperatorStatusService]
 AuditEmitterFactory = Callable[[], AuditEmitter | None]
 ApiKeyRoles = Mapping[str, str | Sequence[str]]
+
+# Seconds a running background analysis may take to record its outcome at
+# shutdown; anything still running is reconciled from its run on next read.
+RESEARCH_DESKTOP_SHUTDOWN_GRACE_SECONDS = 30.0
 
 
 def create_app(
@@ -241,6 +246,14 @@ def create_app(
 
     resolved_research_desktop_service_factory = research_desktop_service_factory
     if resolved_research_desktop_service_factory is None:
+        # Desktop services are built per request, but admitted analyses run
+        # past the request on this app-owned pool until shutdown.
+        research_desktop_executor = research_desktop_executor_from_env()
+
+        @api.on_event("shutdown")
+        def _close_research_desktop_executor() -> None:
+            research_desktop_executor.shutdown(timeout=RESEARCH_DESKTOP_SHUTDOWN_GRACE_SECONDS)
+
         if personal_memory_core_factory is not None:
             personal_memory_core_lock = Lock()
             resolved_personal_memory_core: PersonalMemoryService | None = None
@@ -256,6 +269,7 @@ def create_app(
                 return ResearchDesktopApplicationService(
                     research=research_service_factory(),
                     personal_memory=resolve_personal_memory_core(),
+                    executor=research_desktop_executor,
                 )
 
         elif default_personal_memory_runtime is not None:
@@ -264,6 +278,7 @@ def create_app(
                 return ResearchDesktopApplicationService(
                     research=research_service_factory(),
                     personal_memory=default_personal_memory_runtime.get().application,
+                    executor=research_desktop_executor,
                 )
 
         else:
@@ -271,6 +286,7 @@ def create_app(
             def resolved_research_desktop_service_factory() -> ResearchDesktopApplicationService:
                 return ResearchDesktopApplicationService(
                     research=research_service_factory(),
+                    executor=research_desktop_executor,
                 )
 
     if rate_limiter is not None:

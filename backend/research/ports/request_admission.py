@@ -98,7 +98,25 @@ class ResearchDesktopRequestStore(Protocol):
         kind: ResearchDesktopOperationKind,
         fingerprint: str,
         semantic: Mapping[str, Any],
-    ) -> ResearchDesktopAdmissionDecision: ...
+        queued: bool = False,
+    ) -> ResearchDesktopAdmissionDecision:
+        """Admit a new request, or return the existing one bound to this identity.
+
+        A ``queued`` admission starts as ``admitted`` and is executed later by
+        a background worker, which moves it to ``running`` through ``start``.
+        Either way the admitting process holds the execution lease.
+        """
+        ...
+
+    def start(
+        self,
+        *,
+        owner_id: str,
+        request_id: str,
+        generation: str,
+    ) -> ResearchDesktopAdmission:
+        """Move a queued admission to ``running``; any other state is returned unchanged."""
+        ...
 
     def get(
         self,

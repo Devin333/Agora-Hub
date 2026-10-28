@@ -13,6 +13,7 @@ from interfaces.services.research_desktop_service import (
 )
 from interfaces.services.research_import_service import ResearchImportService
 from interfaces.services.research_service import ResearchApplicationService
+from tests.fixtures.desktop_executor import ManualDesktopExecutor
 
 
 OWNER = ResearchDesktopOwner(user_id="alice")
@@ -100,6 +101,7 @@ def _service(tmp_path: Path, research: _ResearchFacade | None = None):
         research=facade,
         requests=request_store,
         imports=imports,
+        executor=ManualDesktopExecutor(),
     )
     return service, facade, request_store
 
@@ -184,9 +186,15 @@ def test_private_analysis_uses_verified_catalog_locator_and_fixture_null_semanti
         objective=None, constraints=semantic["constraints"],
     )
 
-    assert result["status"] == "passed"
-    assert result["result"]["paperId"] == "paper-1"
-    assert result["result"]["sourceRevision"] == digest
+    assert result["status"] == "waiting"
+    assert result["runId"].startswith("research-desktop-")
+    assert research.analysis_calls == []
+
+    assert service._executor.drain() == 1
+    finished = service.get_operation(OWNER, request_id="analyze-0001", generation=generation)
+    assert finished["status"] == "passed"
+    assert finished["result"]["paperId"] == "paper-1"
+    assert finished["result"]["sourceRevision"] == digest
     assert research.analysis_calls[0].pdf_url == "file:///immutable/catalog/source.pdf"
     assert (
         research.analysis_calls[0].options["research_input_objective"]
