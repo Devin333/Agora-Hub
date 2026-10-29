@@ -20,6 +20,7 @@ _SOURCE_DOMAIN_ALIASES = {
     "export.arxiv.org": "arxiv.org",
 }
 Now = Callable[[], datetime]
+OpenRequest = Callable[[Request, "SourceFetchPolicy"], Any]
 T = TypeVar("T")
 DEFAULT_RETRY_ON_STATUS_CODES = (429, 500, 502, 503, 504)
 
@@ -238,7 +239,12 @@ def effective_fetch_policy(policy: SourceFetchPolicy, source: SourceDefinition) 
     )
 
 
-def ensure_robots_allowed(url: str, policy: SourceFetchPolicy) -> None:
+def ensure_robots_allowed(
+    url: str,
+    policy: SourceFetchPolicy,
+    *,
+    open_request: OpenRequest | None = None,
+) -> None:
     if not policy.respect_robots:
         return
     robots_url = _robots_url_for(url)
@@ -249,7 +255,8 @@ def ensure_robots_allowed(url: str, policy: SourceFetchPolicy) -> None:
     try:
         request = Request(robots_url, headers={"User-Agent": policy.user_agent})
         robots_policy = replace(policy, respect_robots=False, max_bytes=min(policy.max_bytes, 128_000))
-        with open_request_with_fetch_policy(request, robots_policy) as response:
+        opener = open_request or open_request_with_fetch_policy
+        with opener(request, robots_policy) as response:
             body = response.read(robots_policy.max_bytes + 1)
     except HTTPError as exc:
         if exc.code in {401, 403}:

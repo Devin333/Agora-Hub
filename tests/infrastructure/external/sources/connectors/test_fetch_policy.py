@@ -529,6 +529,25 @@ def test_robots_transport_failure_uses_fetch_retry_policy(monkeypatch: pytest.Mo
     assert calls == 2
 
 
+def test_robots_check_uses_injected_open_request() -> None:
+    requests = []
+
+    def open_robots(request: Request, policy: SourceFetchPolicy) -> _RobotsResponse:
+        requests.append((request.full_url, request.headers["User-agent"], policy.respect_robots))
+        return _RobotsResponse(b"User-agent: *\nDisallow: /private\n")
+
+    policy = SourceFetchPolicy(user_agent="NewsRoomTest/1.0")
+
+    ensure_robots_allowed("https://example.com/public/report", policy, open_request=open_robots)
+    with pytest.raises(RobotsDisallowedError):
+        ensure_robots_allowed("https://example.com/private/report", policy, open_request=open_robots)
+
+    assert requests == [
+        ("https://example.com/robots.txt", "NewsRoomTest/1.0", False),
+        ("https://example.com/robots.txt", "NewsRoomTest/1.0", False),
+    ]
+
+
 def test_typed_rate_limit_denial_preserves_canonical_decision() -> None:
     decision = RateLimitDecision(
         allowed=False,

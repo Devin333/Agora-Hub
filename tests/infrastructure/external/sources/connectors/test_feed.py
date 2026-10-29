@@ -303,6 +303,62 @@ def test_feed_connector_default_fetch_applies_policy(monkeypatch) -> None:
     }
 
 
+def test_feed_connector_default_fetch_routes_robots_and_feed_through_injected_open_request() -> None:
+    requests = []
+
+    class Headers:
+        def __init__(self, content_type):
+            self._content_type = content_type
+
+        def get_content_type(self):
+            return self._content_type
+
+        def get(self, name, default=None):
+            return self._content_type if name.casefold() == "content-type" else default
+
+    class Response:
+        status = 200
+
+        def __init__(self, body, content_type):
+            self._body = body
+            self.headers = Headers(content_type)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, size):
+            return self._body[:size]
+
+    def fake_open_request(request, policy):
+        requests.append((request.full_url, request.headers["User-agent"], policy.max_redirects))
+        if request.full_url.endswith("/robots.txt"):
+            return Response(b"User-agent: *\nAllow: /\n", "text/plain")
+        return Response(RSS_FIXTURE.encode("utf-8"), "application/rss+xml")
+
+    source = SourceDefinition(
+        source_id="rss-source",
+        name="RSS Source",
+        source_type="rss",
+        url="https://example.com/rss.xml",
+    )
+    connector = FeedConnector(
+        fetch_policy=SourceFetchPolicy(max_redirects=2, user_agent="NewsRoomTest/1.0"),
+        open_request=fake_open_request,
+    )
+
+    items, errors = connector.fetch(source)
+
+    assert errors == []
+    assert [item.title for item in items] == ["AI chip export update"]
+    assert requests == [
+        ("https://example.com/robots.txt", "NewsRoomTest/1.0", 2),
+        ("https://example.com/rss.xml", "NewsRoomTest/1.0", 2),
+    ]
+
+
 def test_feed_connector_default_fetch_attaches_response_metadata(monkeypatch) -> None:
     class Headers:
         def get_content_type(self):

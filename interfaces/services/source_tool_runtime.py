@@ -21,6 +21,7 @@ from infrastructure.external.sources import (
     ManualConnector,
 )
 from infrastructure.external.sources.fetch_policy import (
+    OpenRequest,
     SourceFetchPolicy as InfraSourceFetchPolicy,
     ensure_robots_allowed,
     open_request_with_fetch_policy,
@@ -43,9 +44,11 @@ class InfrastructureSourceToolRuntime:
         self,
         *,
         fetch_text: FetchText | None = None,
+        open_request: OpenRequest | None = None,
         rate_limiter: DomainRateLimiter | None = None,
     ) -> None:
         self._fetch_text = fetch_text
+        self._open_request = open_request
         self._rate_limiter = rate_limiter or DomainRateLimiter()
 
     def fetch_text(
@@ -60,7 +63,11 @@ class InfrastructureSourceToolRuntime:
                 lambda: _fetch_with_callable(self._fetch_text, url, infra_policy),
                 infra_policy,
             )
-        return run_with_fetch_retries(lambda: _default_fetch_text(url, infra_policy), infra_policy)
+        open_request = self._resolved_open_request()
+        return run_with_fetch_retries(
+            lambda: _default_fetch_text(url, infra_policy, open_request),
+            infra_policy,
+        )
 
     def parse_feed(
         self,
@@ -111,6 +118,7 @@ class InfrastructureSourceToolRuntime:
         connector = _official_blog_connector(
             infra_source,
             fetch_text=self._fetch_text,
+            open_request=self._resolved_open_request(),
             policy=infra_policy,
             rate_limiter=self._rate_limiter,
         )
@@ -120,14 +128,19 @@ class InfrastructureSourceToolRuntime:
             [_business_source_error(error) for error in errors],
         )
 
+    def _resolved_open_request(self) -> OpenRequest:
+        return self._open_request or open_request_with_fetch_policy
+
 
 def default_source_tool_runtime(
     *,
     fetch_text: FetchText | None = None,
+    open_request: OpenRequest | None = None,
     rate_limiter: DomainRateLimiter | None = None,
 ) -> InfrastructureSourceToolRuntime:
     return InfrastructureSourceToolRuntime(
         fetch_text=fetch_text,
+        open_request=open_request,
         rate_limiter=rate_limiter,
     )
 
@@ -143,10 +156,14 @@ def _fetch_with_callable(
     return SourceTextFetchResult(content=content)
 
 
-def _default_fetch_text(url: str, policy: InfraSourceFetchPolicy) -> SourceTextFetchResult:
-    ensure_robots_allowed(url, policy)
+def _default_fetch_text(
+    url: str,
+    policy: InfraSourceFetchPolicy,
+    open_request: OpenRequest,
+) -> SourceTextFetchResult:
+    ensure_robots_allowed(url, policy, open_request=open_request)
     request = Request(url, headers={"User-Agent": policy.user_agent})
-    with open_request_with_fetch_policy(request, policy) as response:
+    with open_request(request, policy) as response:
         body = response.read(policy.max_bytes + 1)
         status_code = getattr(response, "status", None)
         headers = getattr(response, "headers", None)
@@ -164,19 +181,16 @@ def _official_blog_connector(
     source: InfraSourceDefinition,
     *,
     fetch_text: FetchText | None,
+    open_request: OpenRequest,
     policy: InfraSourceFetchPolicy,
     rate_limiter: DomainRateLimiter,
 ) -> FeedConnector | HtmlConnector:
-    if _is_html_backed_source_type(source.source_type):
-        return HtmlConnector(
-            fetch_text=_policy_fetch_text(fetch_text, policy),
-            fetch_policy=policy,
-            rate_limiter=rate_limiter,
-        )
-    return FeedConnector(
+    connector_type = HtmlConnector if _is_html_backed_source_type(source.source_type) else FeedConnector
+    return connector_type(
         fetch_text=_policy_fetch_text(fetch_text, policy),
         fetch_policy=policy,
         rate_limiter=rate_limiter,
+        open_request=open_request,
     )
 
 
