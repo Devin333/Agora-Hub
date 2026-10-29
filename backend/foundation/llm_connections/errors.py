@@ -68,6 +68,8 @@ class ModelConnectionUnavailableReason(StrEnum):
     NO_CALLER = "no_caller"
     NOT_ASSIGNED = "not_assigned"
     CREDENTIAL_UNREADABLE = "credential_unreadable"
+    # A stored row no longer passes validation; it has to be edited or recreated.
+    CONNECTION_INVALID = "connection_invalid"
     STORE_UNAVAILABLE = "store_unavailable"
 
 

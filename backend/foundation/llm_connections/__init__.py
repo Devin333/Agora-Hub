@@ -19,6 +19,18 @@ from backend.foundation.llm_connections.models import (
     ModelConnection,
     PurposeAssignment,
 )
+from backend.foundation.llm_connections.routing import (
+    ModelCallWindow,
+    ModelConnectionResolver,
+    PurposeRoutedLLMClient,
+    ResolvedModelConnection,
+    connection_call_window,
+)
+from backend.foundation.llm_connections.scope import (
+    current_llm_owner,
+    llm_call_scope,
+    owner_from_actor_metadata,
+)
 from backend.foundation.llm_connections.ports import (
     CredentialBinding,
     CredentialCipher,
@@ -45,6 +57,14 @@ __all__ = [
     "ModelConnectionStoreUnavailableError",
     "ModelConnectionUnavailable",
     "ModelConnectionUnavailableReason",
+    "ModelCallWindow",
+    "ModelConnectionResolver",
     "PurposeAssignment",
+    "PurposeRoutedLLMClient",
+    "ResolvedModelConnection",
     "StoredConnection",
+    "connection_call_window",
+    "current_llm_owner",
+    "llm_call_scope",
+    "owner_from_actor_metadata",
 ]
