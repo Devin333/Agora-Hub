@@ -200,7 +200,9 @@ def short_desktop_data_root(request):
     if request.param == "long-import":
         # Exercise this service's real long locator without making unrelated
         # auth/memory composition responsible for the import regression.
-        import_root = import_root / ("desktop-data-" + "x" * 65) / ("owner-data-" + "y" * 65)
+        # Pad by however much this checkout's own path leaves short of MAX_PATH.
+        segment_length = max(65, (261 - len(str(import_root))) // 2 + 1)
+        import_root = import_root / ("desktop-data-" + "x" * segment_length) / ("owner-data-" + "y" * segment_length)
         assert len(str(import_root)) > 260
     print(f"IMPORT_PATH_CASE {request.param} data_root={root} import_root={import_root}")
     try:
