@@ -199,13 +199,16 @@ def _request_semantic_payload(
     semantic_metadata = {**request_metadata, **explicit_semantic}
     execution_identity = request.execution_identity
     return {
-        "canonical_schema": "newsroom.llm-cache-request.v3",
+        "canonical_schema": "newsroom.llm-cache-request.v4",
         "cache_key_version": key_version,
         "deployment": deployment,
         "messages": request.messages,
         "model": request.model,
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
+        "reasoning_effort": (
+            request.reasoning_effort.value if request.reasoning_effort is not None else None
+        ),
         "tools": request.tools,
         "response_format": request.response_format,
         "output_schema": request.output_schema,
