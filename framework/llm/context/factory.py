@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from framework.llm.context.anthropic import (
-    ANTHROPIC_MESSAGES_NORMALIZER_REVISION,
-    AnthropicMessagesRequestNormalizer,
-)
 from framework.llm.context.normalization import (
     CanonicalLLMRequestNormalizer,
     LLMRequestNormalizerRegistry,
@@ -50,8 +46,6 @@ def build_default_request_preparer(
 def _known_normalizer(revision: str):
     if revision == OPENAI_CHAT_NORMALIZER_REVISION:
         return OpenAICompatibleRequestNormalizer()
-    if revision == ANTHROPIC_MESSAGES_NORMALIZER_REVISION:
-        return AnthropicMessagesRequestNormalizer()
     if revision == CanonicalLLMRequestNormalizer().revision:
         return CanonicalLLMRequestNormalizer()
     return None

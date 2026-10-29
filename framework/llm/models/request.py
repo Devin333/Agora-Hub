@@ -6,7 +6,6 @@ from math import isfinite
 from typing import Any, cast
 
 from framework.llm.models.message import LLMMessage
-from framework.llm.models.reasoning import ReasoningEffort
 from framework.llm.redaction.redactor import redact_sensitive_values
 from framework.llm.structured_output.contracts import StructuredOutputContract
 from framework.llm.structured_output.projection import (
@@ -27,7 +26,6 @@ class LLMRequest:
     execution_identity: GraphExecutionIdentity | None = None
     timeout_seconds: float | None = None
     max_transport_attempts: int | None = None
-    reasoning_effort: ReasoningEffort | None = None
     response_format: str | dict[str, Any] | None = None
     output_schema: Any | None = None
     output_schema_name: str = "structured_output"
@@ -66,10 +64,6 @@ class LLMRequest:
             or self.max_transport_attempts <= 0
         ):
             raise ValueError("max_transport_attempts must be a positive integer")
-        if self.reasoning_effort is not None:
-            object.__setattr__(
-                self, "reasoning_effort", ReasoningEffort.parse(self.reasoning_effort)
-            )
         object.__setattr__(
             self,
             "messages",
@@ -146,7 +140,6 @@ class LLMRequest:
             "execution_identity": self.execution_identity,
             "timeout_seconds": self.timeout_seconds,
             "max_transport_attempts": self.max_transport_attempts,
-            "reasoning_effort": self.reasoning_effort,
             "response_format": deepcopy(self.response_format),
             "output_schema": self.structured_output_schema_source(),
             "output_schema_name": self.output_schema_name,
@@ -190,8 +183,6 @@ class LLMRequest:
             payload["max_transport_attempts"] = self.max_transport_attempts
         if self.model is not None:
             payload["model"] = self.model
-        if self.reasoning_effort is not None:
-            payload["reasoning_effort"] = self.reasoning_effort.value
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         if self.max_tokens is not None:
@@ -217,7 +208,6 @@ class LLMRequest:
                 float(payload["temperature"]) if payload.get("temperature") is not None else None
             ),
             max_tokens=int(payload["max_tokens"]) if payload.get("max_tokens") is not None else None,
-            reasoning_effort=payload.get("reasoning_effort"),
             tools=list(payload.get("tools") or []),
             metadata=dict(payload.get("metadata") or {}),
             execution_identity=(

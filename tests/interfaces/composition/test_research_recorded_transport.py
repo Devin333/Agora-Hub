@@ -264,7 +264,7 @@ def _install_recorded_transports(
         "open_request_with_fetch_policy",
         source_transport,
     )
-    monkeypatch.setattr(openai_transport, "urlopen_transport", llm_transport)
+    monkeypatch.setattr(openai_transport, "_urlopen_transport", llm_transport)
     return source_requests, llm_tasks
 
 

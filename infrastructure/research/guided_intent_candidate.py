@@ -7,9 +7,13 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
-from framework.llm.clients.provider_errors import LLMConfigurationError, LLMProviderError
+from framework.llm.clients.openai_compatible import (
+    LLMConfigurationError,
+    LLMProviderError,
+    OpenAICompatibleClient,
+)
 from framework.llm.context.estimator import estimate_request_tokens
-from framework.llm.models import LLMCallWindow, LLMClient, LLMRequest, LLMResponse, WindowedLLMClient
+from framework.llm.models import LLMRequest, LLMResponse
 from framework.llm.redaction import redact_sensitive_values
 from framework.llm.structured_output import (
     ManagedStructuredOutputError,
@@ -107,7 +111,7 @@ _SYSTEM_PROMPT = (
 class StructuredGuidedIntentCandidateWorker:
     def __init__(
         self,
-        client: LLMClient,
+        client: OpenAICompatibleClient,
         *,
         max_input_tokens: int = 8_192,
         max_output_tokens: int = 1_024,
@@ -125,13 +129,6 @@ class StructuredGuidedIntentCandidateWorker:
         self.managed_output = bool(managed_output)
 
     def generate_candidate(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        try:
-            window = self._call_window()
-        except (LLMConfigurationError, LLMProviderError) as exc:
-            raise GuidedIntentCandidateError(
-                "Guided intent provider is unavailable",
-                retryable=bool(getattr(exc, "retryable", False)),
-            ) from exc
         projected = _project_payload(payload)
         serialized = json.dumps(projected, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         request = LLMRequest(
@@ -148,21 +145,20 @@ class StructuredGuidedIntentCandidateWorker:
                 },
             ],
             temperature=0,
-            max_tokens=window.max_output_tokens,
+            max_tokens=self.max_output_tokens,
             metadata={"component": "guided_research_intent_candidate"},
             output_schema=deepcopy(GUIDED_INTENT_SCHEMA) if self.managed_output else None,
             output_schema_name="guided_research_intent",
             structured_output_policy=(
-                # User connections have no released native schema: JSON mode plus the local gate.
                 ProviderStructuredOutputPolicy(
-                    graph_scope="research.guided_intent_candidate",
                     allow_json_object_local_gate=True,
+                    graph_scope="research.guided_intent_candidate",
                 )
                 if self.managed_output
                 else None
             ),
         )
-        if estimate_request_tokens(request) > window.max_input_tokens:
+        if estimate_request_tokens(request) > self.max_input_tokens:
             raise GuidedIntentCandidateError("Guided intent input exceeds its token budget")
         try:
             response = LLMResponse.from_any(self._client.complete(request))
@@ -188,16 +184,6 @@ class StructuredGuidedIntentCandidateWorker:
         if not isinstance(candidate, dict):
             raise GuidedIntentCandidateError("Guided intent response is invalid")
         return deepcopy(candidate)
-
-
-    def _call_window(self) -> LLMCallWindow:
-        ceiling = LLMCallWindow(max_input_tokens=self.max_input_tokens, max_output_tokens=self.max_output_tokens)
-        if not isinstance(self._client, WindowedLLMClient):
-            return ceiling
-        return self._client.call_window(requested_output_tokens=self.max_output_tokens).capped(
-            max_input_tokens=ceiling.max_input_tokens,
-            max_output_tokens=ceiling.max_output_tokens,
-        )
 
 
 def _project_payload(payload: Mapping[str, Any]) -> dict[str, Any]:

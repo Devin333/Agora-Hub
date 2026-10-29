@@ -97,27 +97,6 @@ ALLOWED_BUSINESS_IMPORTS = {
     "infrastructure/research/document_repository.py": {"backend.research.domain.document"},
     "infrastructure/research/github_guided_search.py": {"backend.research.ports.guided_research"},
     "infrastructure/research/public_paper_cache.py": {"backend.research.ports.guided_research"},
-    "infrastructure/security/credential_cipher.py": {
-        "backend.foundation.llm_connections.errors",
-        "backend.foundation.llm_connections.ports",
-    },
-    "infrastructure/storage/postgres/model_connection_repository.py": {
-        "backend.foundation.llm_connections.errors",
-        "backend.foundation.llm_connections.models",
-        "backend.foundation.llm_connections.ports",
-    },
-}
-
-MODEL_CONNECTION_ADAPTER_BUSINESS_IMPORTS = {
-    "infrastructure/security/credential_cipher.py": {
-        "backend.foundation.llm_connections.errors",
-        "backend.foundation.llm_connections.ports",
-    },
-    "infrastructure/storage/postgres/model_connection_repository.py": {
-        "backend.foundation.llm_connections.errors",
-        "backend.foundation.llm_connections.models",
-        "backend.foundation.llm_connections.ports",
-    },
 }
 
 SOURCE_ADAPTER_BUSINESS_IMPORTS = {
@@ -240,25 +219,6 @@ def test_source_storage_business_imports_are_exact_contract_exceptions() -> None
     }
 
     assert actual == SOURCE_STORAGE_BUSINESS_IMPORTS
-
-
-def test_model_connection_adapters_consume_only_connection_contracts() -> None:
-    actual: dict[str, set[str]] = {}
-    for path in (INFRASTRUCTURE_ROOT / "security").rglob("*.py"):
-        relative_path = path.relative_to(PROJECT_ROOT).as_posix()
-        business_imports = {
-            imported for imported in _imports_for_file(path)
-            if imported == "backend" or imported.startswith("backend.")
-        }
-        if business_imports:
-            actual[relative_path] = business_imports
-    repository = "infrastructure/storage/postgres/model_connection_repository.py"
-    actual[repository] = {
-        imported for imported in _imports_for_file(PROJECT_ROOT / repository)
-        if imported.startswith("backend.")
-    }
-
-    assert actual == MODEL_CONNECTION_ADAPTER_BUSINESS_IMPORTS
 
 
 def test_research_adapter_business_imports_are_exact_contract_exceptions() -> None:

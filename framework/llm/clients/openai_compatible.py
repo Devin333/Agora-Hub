@@ -3,13 +3,14 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import time
-from collections.abc import Iterator
-from dataclasses import dataclass, field, replace
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass, replace
 from itertools import chain
-from typing import Any, get_args
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import Request
+from urllib.request import Request, urlopen
 
 from framework.llm.clients.endpoint import (
     LLMCredentialMode,
@@ -17,86 +18,167 @@ from framework.llm.clients.endpoint import (
     llm_credential_mode,
     resolve_invocation_endpoint,
 )
-from framework.llm.context.openai import (
-    OpenAIChatDialect,
-    build_openai_chat_payload,
-    openai_response_format,
-)
+from framework.llm.context.openai import build_openai_chat_payload, openai_response_format
 from framework.llm.models import LLMRequest, LLMResponse, TokenUsage
-from framework.llm.models.reasoning import ReasoningEffort
-from framework.shared.secret_text import SecretText
+from framework.llm.redaction import REDACTED_VALUE, redact_sensitive_values
 from framework.llm.models import LLMStreamEvent
 from framework.llm.structured_output import (
+    LLMStructuredOutputParseError,
     LLMStructuredOutputProjectionError,
     LLMStructuredOutputSchemaError,
+    LLMStructuredOutputValidationError,
     ProviderSchemaProjection,
     ProviderStructuredOutputCapability,
     StructuredOutputContract,
+    StructuredOutputDiagnostic,
+    compile_structured_output_contract,
+    decode_structured_output,
+    project_structured_output_contract,
+    structured_output_response_fingerprint,
+    structured_output_text_fingerprint,
+    validate_compiled_structured_output,
 )
-from framework.llm.structured_output.projection import ProviderSchemaProjectionMode
 from framework.llm.structured_output.request_adapters import (
     require_structured_output_request_adapter,
-    structured_output_request_adapter,
-)
-from framework.llm.clients.provider_errors import (
-    CONTEXT_OVERFLOW_CODES,
-    LLMConfigurationError,
-    LLMProviderContextOverflow,
-    LLMProviderError,
-    decode_provider_error_payload,
-    error_type_from_http_status,
-    network_failure_diagnostic,
-    payload_error_code,
-    provider_failure_diagnostic,
-    provider_overflow_token_diagnostics,
-    read_bounded_http_error_body,
-)
-from framework.llm.clients.structured_execution import (
-    StructuredOutputExecutor,
-    expects_structured_output,
+    supports_structured_output_projection as _adapter_supports_projection,
 )
 from framework.llm.clients.tool_adapters import (
     LLMToolCallParseError,
     LLMToolSchemaError,
     parse_openai_tool_calls,
 )
-from framework.llm.clients.transport import (
-    LLMRetryPolicy,
-    Sleep,
-    StreamTransport,
-    Transport,
-    urlopen_stream_transport,
-    urlopen_transport,
-)
+
+
+class LLMConfigurationError(RuntimeError):
+    """Raised when LLM provider configuration is incomplete."""
+
+
+class LLMProviderError(RuntimeError):
+    """Raised when an LLM provider request fails."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        deployment_id: str | None = None,
+        error_type: str = "unknown_llm_error",
+        retryable: bool = False,
+        status_code: int | None = None,
+        attempts: int = 1,
+        diagnostics: Iterable[dict[str, Any]] | None = None,
+        response_fingerprint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.deployment_id = deployment_id
+        self.error_type = error_type
+        self.retryable = retryable
+        self.status_code = status_code
+        self.attempts = attempts
+        self.diagnostics = tuple(dict(item) for item in (diagnostics or ()))
+        self.response_fingerprint = response_fingerprint
+
+    def to_dict(self, *, redact: bool = True) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "message": str(self),
+            "provider": self.provider,
+            "model": self.model,
+            "deployment_id": self.deployment_id,
+            "error_type": self.error_type,
+            "error_category": _canonical_error_category(self.error_type),
+            "retryable": self.retryable,
+            "status_code": self.status_code,
+            "attempts": self.attempts,
+        }
+        if self.diagnostics:
+            payload["diagnostics"] = [dict(item) for item in self.diagnostics]
+        if self.response_fingerprint:
+            payload["response_fingerprint"] = self.response_fingerprint
+        if redact:
+            return redact_sensitive_values(payload)
+        return payload
+
+
+class LLMProviderContextOverflow(LLMProviderError):
+    """Stable non-transient provider context-window overflow."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        deployment_id: str | None = None,
+        status_code: int | None = None,
+        attempts: int = 1,
+        provider_error_code: str | None = None,
+        provider_reported_limit_tokens: int | None = None,
+        provider_reported_usage_tokens: int | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            provider=provider,
+            model=model,
+            deployment_id=deployment_id,
+            error_type="context_length",
+            retryable=False,
+            status_code=status_code,
+            attempts=attempts,
+        )
+        self.provider_error_code = provider_error_code
+        self.provider_reported_limit_tokens = provider_reported_limit_tokens
+        self.provider_reported_usage_tokens = provider_reported_usage_tokens
+
+    def to_dict(self, *, redact: bool = True) -> dict[str, Any]:
+        payload = super().to_dict(redact=False)
+        payload.update(
+            {
+                "provider_error_code": self.provider_error_code,
+                "provider_reported_limit_tokens": self.provider_reported_limit_tokens,
+                "provider_reported_usage_tokens": self.provider_reported_usage_tokens,
+            }
+        )
+        if redact:
+            return redact_sensitive_values(payload)
+        return payload
+
+
+Transport = Callable[[Request, float], bytes]
+StreamTransport = Callable[[Request, float], Iterable[bytes | str]]
+Sleep = Callable[[float], None]
+
+
+@dataclass(frozen=True)
+class LLMRetryPolicy:
+    max_attempts: int = 1
+    retry_delay_seconds: tuple[float, ...] = (0.0,)
+    retryable_status_codes: tuple[int, ...] = (408, 409, 429, 500, 502, 503, 504)
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        object.__setattr__(self, "retry_delay_seconds", tuple(self.retry_delay_seconds))
+        object.__setattr__(self, "retryable_status_codes", tuple(self.retryable_status_codes))
+        if any(delay < 0 for delay in self.retry_delay_seconds):
+            raise ValueError("retry delays must be non-negative")
+
+    def delay_after_attempt(self, attempt: int) -> float:
+        if not self.retry_delay_seconds:
+            return 0.0
+        index = min(max(attempt - 1, 0), len(self.retry_delay_seconds) - 1)
+        return self.retry_delay_seconds[index]
 
 
 @dataclass(frozen=True)
 class OpenAICompatibleConfig:
-    """Endpoint, model and credential source of one OpenAI Chat Completions deployment.
-
-    The credential comes from exactly one place: ``api_key`` (a per-user key held
-    in memory) or ``api_key_env`` (an operator environment variable, used by
-    evaluation scripts and ``configs/models.yaml``).
-    """
-
     provider: str
     base_url: str
     model: str
-    api_key_env: str | None = None
+    api_key_env: str
     timeout_seconds: float = 90.0
-    api_key: SecretText | None = field(default=None, repr=False)
-    dialect: OpenAIChatDialect = field(default_factory=OpenAIChatDialect)
-    reasoning_effort: ReasoningEffort | None = None
-
-    def __post_init__(self) -> None:
-        if self.api_key is not None and not isinstance(self.api_key, SecretText):
-            object.__setattr__(self, "api_key", SecretText(self.api_key))
-        if (self.api_key is None) == (not self.api_key_env):
-            raise LLMConfigurationError("exactly one of api_key or api_key_env must be configured")
-        if not isinstance(self.dialect, OpenAIChatDialect):
-            raise LLMConfigurationError("dialect must be an OpenAIChatDialect")
-        if self.reasoning_effort is not None:
-            object.__setattr__(self, "reasoning_effort", ReasoningEffort.parse(self.reasoning_effort))
 
     @classmethod
     def dashscope_defaults(cls) -> OpenAICompatibleConfig:
@@ -112,20 +194,10 @@ class OpenAICompatibleConfig:
         )
 
     def resolve_api_key(self) -> str:
-        if self.api_key is not None:
-            return self.api_key.reveal()
-        api_key = os.environ.get(self.api_key_env or "")
+        api_key = os.environ.get(self.api_key_env)
         if not api_key:
             raise LLMConfigurationError(f"missing required environment variable: {self.api_key_env}")
         return api_key
-
-
-# Every projection mode an OpenAI-style request adapter can put on the wire.
-_SUPPORTED_PROJECTION_MODES = frozenset(
-    mode
-    for mode in get_args(ProviderSchemaProjectionMode)
-    if structured_output_request_adapter(mode) is not None
-)
 
 
 class OpenAICompatibleClient:
@@ -141,9 +213,10 @@ class OpenAICompatibleClient:
         credential_mode: LLMCredentialMode | None = None,
     ) -> None:
         self.config = config
-        self._transport = transport or urlopen_transport
-        self._stream_transport = stream_transport or urlopen_stream_transport
+        self._transport = transport or _urlopen_transport
+        self._stream_transport = stream_transport or _urlopen_stream_transport
         self._retry_policy = retry_policy or LLMRetryPolicy()
+        self._structured_output_capability = structured_output_capability
         self._sleep = sleep or time.sleep
         self._credential_mode = (
             LLMCredentialMode(credential_mode)
@@ -151,31 +224,16 @@ class OpenAICompatibleClient:
             else llm_credential_mode()
         )
         self._invocation_api_key: str | None = None
-        self._structured = self._structured_executor(structured_output_capability)
 
     @property
     def credential_mode(self) -> LLMCredentialMode:
         return self._credential_mode
 
-    def _structured_executor(
-        self,
-        capability: ProviderStructuredOutputCapability | None,
-    ) -> StructuredOutputExecutor:
-        return StructuredOutputExecutor(
-            provider=self.config.provider,
-            model=self.config.model,
-            capability=capability,
-            supported_projection_modes=_SUPPORTED_PROJECTION_MODES,
-            native_json_mode=_uses_provider_native_json_mode,
-            adapter_name="OpenAI-compatible",
-            require_own_capability=self._credential_mode is LLMCredentialMode.INVOCATION,
-        )
-
     @staticmethod
     def supports_structured_output_projection(
         projection: ProviderSchemaProjection,
     ) -> bool:
-        return projection.mode in _SUPPORTED_PROJECTION_MODES
+        return _adapter_supports_projection(projection)
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         return self._for_invocation()._complete(request)
@@ -220,7 +278,7 @@ class OpenAICompatibleClient:
         # The operator deployment's structured-output capability describes a
         # different provider and model; the account endpoint carries its own,
         # and an endpoint that declares none cannot serve structured output.
-        bound._structured = bound._structured_executor(endpoint.structured_output_capability)
+        bound._structured_output_capability = endpoint.structured_output_capability
         bound._invocation_api_key = endpoint.api_key
         return bound
 
@@ -237,7 +295,7 @@ class OpenAICompatibleClient:
     def _complete(self, request: LLMRequest) -> LLMResponse:
         try:
             execution_request, contract, projection = (
-                self._structured.resolve(
+                self._resolve_structured_output_execution(
                     request,
                     streaming=False,
                 )
@@ -261,7 +319,7 @@ class OpenAICompatibleClient:
                 diagnostics=(item.to_dict() for item in exc.diagnostics),
             ) from exc
         except LLMStructuredOutputProjectionError as exc:
-            raise self._structured.projection_error(exc) from exc
+            raise self._provider_projection_error(exc) from exc
 
         api_key = self._resolve_api_key()
 
@@ -316,7 +374,7 @@ class OpenAICompatibleClient:
     def _stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
         try:
             execution_request, contract, projection = (
-                self._structured.resolve(
+                self._resolve_structured_output_execution(
                     request,
                     streaming=True,
                 )
@@ -340,7 +398,7 @@ class OpenAICompatibleClient:
                 diagnostics=(item.to_dict() for item in exc.diagnostics),
             ) from exc
         except LLMStructuredOutputProjectionError as exc:
-            raise self._structured.projection_error(exc) from exc
+            raise self._provider_projection_error(exc) from exc
         payload["stream"] = True
         api_key = self._resolve_api_key()
 
@@ -356,13 +414,13 @@ class OpenAICompatibleClient:
         except (TimeoutError, URLError, OSError) as exc:
             raise self._error_from_network(exc, attempts=1) from exc
 
-        structured_requested = expects_structured_output(execution_request)
+        expects_structured_output = _expects_structured_output(execution_request)
         yield LLMStreamEvent(
             event_type="message_start",
             metadata={
                 "provider": self.config.provider,
                 "model": self.config.model,
-                "provisional": structured_requested,
+                "provisional": expects_structured_output,
             },
             execution_identity=execution_request.execution_identity,
         )
@@ -391,7 +449,7 @@ class OpenAICompatibleClient:
                     yield LLMStreamEvent(
                         event_type="usage_delta",
                         usage_delta=usage,
-                        metadata={"provisional": structured_requested},
+                        metadata={"provisional": expects_structured_output},
                         execution_identity=execution_request.execution_identity,
                     )
                 for event in _events_from_stream_chunk(
@@ -409,7 +467,7 @@ class OpenAICompatibleClient:
                         text_parts.append(event.text_delta)
                     yield _with_provisional_metadata(
                         event,
-                        provisional=structured_requested,
+                        provisional=expects_structured_output,
                     )
         except LLMToolCallParseError as exc:
             raise LLMProviderError(
@@ -444,14 +502,14 @@ class OpenAICompatibleClient:
                 attempts=1,
             )
         structured_output = None
-        if structured_requested:
+        if expects_structured_output:
             structured_output = self._parse_structured_output(
                 "".join(text_parts),
                 request=execution_request,
                 attempts=1,
                 contract=contract,
             )
-        validation_metadata = self._structured.validation_metadata(
+        validation_metadata = self._structured_output_validation_metadata(
             execution_request,
             contract=contract,
             projection=projection,
@@ -467,7 +525,7 @@ class OpenAICompatibleClient:
                 "finish_reason": last_finish_reason or "stop",
                 "attempts": 1,
                 "retry_count": 0,
-                "structured_output_requested": structured_requested,
+                "structured_output_requested": expects_structured_output,
                 "response_format_mode": (
                     projection.mode if projection is not None else None
                 ),
@@ -488,11 +546,123 @@ class OpenAICompatibleClient:
             model = self.config.model
         else:
             model = request.model or self.config.model
-        return build_openai_chat_payload(
-            request,
-            model=model,
-            dialect=self.config.dialect,
-            default_reasoning_effort=self.config.reasoning_effort,
+        return build_openai_chat_payload(request, model=model)
+
+    @staticmethod
+    def _compile_structured_output_contract(
+        request: LLMRequest,
+    ) -> StructuredOutputContract | None:
+        if request.output_schema is None:
+            return None
+        return compile_structured_output_contract(
+            request.structured_output_schema_source(),
+            schema_name=request.output_schema_name,
+        )
+
+    def _resolve_structured_output_execution(
+        self,
+        request: LLMRequest,
+        *,
+        streaming: bool,
+    ) -> tuple[
+        LLMRequest,
+        StructuredOutputContract | None,
+        ProviderSchemaProjection | None,
+    ]:
+        contract = request.structured_output_contract()
+        if contract is None:
+            contract = self._compile_structured_output_contract(request)
+        if contract is None:
+            return request, None, None
+
+        projection = request.provider_schema_projection()
+        if projection is None:
+            capability = self._structured_output_capability
+            if capability is None:
+                raise self._projection_ineligible_error(
+                    contract,
+                    "structured-output capability is not configured",
+                    reason="provider_capability_missing",
+                )
+            if capability.provider != self.config.provider:
+                raise self._projection_ineligible_error(
+                    contract,
+                    "structured-output capability provider does not match client",
+                    reason="provider_capability_identity_mismatch",
+                )
+            projection = project_structured_output_contract(
+                contract,
+                capability,
+                policy=request.structured_output_policy,
+                streaming=streaming,
+            )
+        if projection.contract_digest != contract.schema_digest:
+            raise self._projection_ineligible_error(
+                contract,
+                "provider projection does not match compiled contract",
+                reason="provider_projection_contract_mismatch",
+            )
+        if projection.provider != self.config.provider:
+            raise self._projection_ineligible_error(
+                contract,
+                "provider projection does not match client provider",
+                reason="provider_projection_identity_mismatch",
+            )
+        if self._credential_mode is LLMCredentialMode.INVOCATION and not _projection_matches_capability(
+            projection, self._structured_output_capability
+        ):
+            # A projection made upstream (by a router) from the operator
+            # deployment cannot be honoured by the account's own endpoint.
+            raise self._projection_ineligible_error(
+                contract,
+                "provider projection was not made for the bound endpoint",
+                reason="provider_projection_endpoint_mismatch",
+            )
+        if not self.supports_structured_output_projection(projection):
+            raise self._projection_ineligible_error(
+                contract,
+                "OpenAI-compatible adapter does not implement constrained decoding",
+                reason="provider_adapter_mapping_unsupported",
+            )
+        return (
+            request.with_structured_output_execution(
+                contract=contract,
+                projection=projection,
+            ),
+            contract,
+            projection,
+        )
+
+    def _provider_projection_error(
+        self,
+        error: LLMStructuredOutputProjectionError,
+    ) -> LLMProviderError:
+        return LLMProviderError(
+            f"{self.config.provider} structured output projection is ineligible",
+            provider=self.config.provider,
+            model=self.config.model,
+            error_type="provider_schema_ineligible",
+            retryable=False,
+            diagnostics=(item.to_dict() for item in error.diagnostics),
+        )
+
+    @staticmethod
+    def _projection_ineligible_error(
+        contract: StructuredOutputContract,
+        message: str,
+        *,
+        reason: str,
+    ) -> LLMStructuredOutputProjectionError:
+        return LLMStructuredOutputProjectionError(
+            message,
+            diagnostics=(
+                StructuredOutputDiagnostic(
+                    code="provider_schema_ineligible",
+                    message=message,
+                    validator=reason,
+                    contract_digest=contract.schema_digest,
+                ),
+            ),
         )
 
     def _parse_response(self, payload: dict[str, Any]) -> LLMResponse:
@@ -503,32 +673,6 @@ class OpenAICompatibleClient:
             contract=None,
             projection=None,
         )
-
-    def _parse_structured_output(
-        self,
-        content: str,
-        *,
-        request: LLMRequest,
-        attempts: int,
-        contract: StructuredOutputContract | None,
-    ) -> dict[str, Any]:
-        projection = request.provider_schema_projection()
-        if (
-            not content.strip()
-            and projection is not None
-            and require_structured_output_request_adapter(projection).empty_content_retryable
-        ):
-            # JSON-object mode can come back empty; that is a transient
-            # provider outcome, not a contract violation.
-            raise LLMProviderError(
-                f"{self.config.provider} returned empty structured output content",
-                provider=self.config.provider,
-                model=self.config.model,
-                error_type="structured_output_empty",
-                retryable=True,
-                attempts=attempts,
-            )
-        return self._structured.parse(content, attempts=attempts, contract=contract)
 
     def _list_models(self) -> tuple[str, ...]:
         api_key = self._resolve_api_key()
@@ -543,7 +687,7 @@ class OpenAICompatibleClient:
             raise self._error_from_http(exc, attempts=1) from exc
         except (TimeoutError, URLError, OSError) as exc:
             raise self._error_from_network(exc, attempts=1) from exc
-        payload, _ = self._parse_response_payload(raw_body, attempts=1)
+        payload, _raw_body = self._parse_response_payload(raw_body, attempts=1)
         entries = payload.get("data")
         if not isinstance(entries, list):
             raise LLMProviderError(
@@ -587,7 +731,7 @@ class OpenAICompatibleClient:
                 retryable=False,
                 attempts=attempts,
                 diagnostics=(
-                    provider_failure_diagnostic(
+                    _provider_failure_diagnostic(
                         raw_body=raw_body,
                         stage="response_json_decode",
                     ),
@@ -602,7 +746,7 @@ class OpenAICompatibleClient:
                 retryable=False,
                 attempts=attempts,
                 diagnostics=(
-                    provider_failure_diagnostic(
+                    _provider_failure_diagnostic(
                         payload=payload,
                         raw_body=raw_body,
                         stage="response_shape",
@@ -623,7 +767,7 @@ class OpenAICompatibleClient:
                 retryable=False,
                 attempts=1,
                 diagnostics=(
-                    provider_failure_diagnostic(
+                    _provider_failure_diagnostic(
                         raw_body=data.encode("utf-8"),
                         stage="stream_json_decode",
                     ),
@@ -638,7 +782,7 @@ class OpenAICompatibleClient:
                 retryable=False,
                 attempts=1,
                 diagnostics=(
-                    provider_failure_diagnostic(
+                    _provider_failure_diagnostic(
                         payload=payload,
                         raw_body=data.encode("utf-8"),
                         stage="stream_shape",
@@ -663,7 +807,7 @@ class OpenAICompatibleClient:
             nonlocal diagnostics
             if diagnostics is None:
                 diagnostics = (
-                    provider_failure_diagnostic(
+                    _provider_failure_diagnostic(
                         payload=payload,
                         raw_body=response_raw_body or b"",
                         stage="response_shape",
@@ -731,7 +875,7 @@ class OpenAICompatibleClient:
                 diagnostics=failure_diagnostics(),
             )
         structured_output = None
-        if expects_structured_output(request):
+        if _expects_structured_output(request):
             structured_output = self._parse_structured_output(
                 content,
                 request=request,
@@ -775,7 +919,7 @@ class OpenAICompatibleClient:
                 attempts=attempts,
                 diagnostics=failure_diagnostics(),
             ) from exc
-        validation_metadata = self._structured.validation_metadata(
+        validation_metadata = self._structured_output_validation_metadata(
             request,
             contract=contract,
             projection=projection,
@@ -799,13 +943,136 @@ class OpenAICompatibleClient:
             execution_identity=request.execution_identity,
         )
 
+    def _parse_structured_output(
+        self,
+        content: str,
+        *,
+        request: LLMRequest,
+        attempts: int,
+        contract: StructuredOutputContract | None,
+    ) -> dict[str, Any]:
+        projection = request.provider_schema_projection()
+        if (
+            not content.strip()
+            and projection is not None
+            and require_structured_output_request_adapter(projection).empty_content_retryable
+        ):
+            raise LLMProviderError(
+                f"{self.config.provider} returned empty structured output content",
+                provider=self.config.provider,
+                model=self.config.model,
+                error_type="structured_output_empty",
+                retryable=True,
+                attempts=attempts,
+            )
+        try:
+            structured_output = decode_structured_output(
+                content,
+                limits=contract.limits if contract is not None else None,
+            )
+        except LLMStructuredOutputParseError as exc:
+            raise LLMProviderError(
+                f"{self.config.provider} structured output failed strict JSON decoding",
+                provider=self.config.provider,
+                model=self.config.model,
+                error_type="structured_output_parse_error",
+                retryable=False,
+                attempts=attempts,
+                diagnostics=(item.to_dict() for item in exc.diagnostics),
+                response_fingerprint=structured_output_text_fingerprint(content),
+            ) from exc
+        if contract is not None:
+            try:
+                structured_output = validate_compiled_structured_output(
+                    structured_output,
+                    contract,
+                )
+            except LLMStructuredOutputValidationError as exc:
+                raise LLMProviderError(
+                    f"{self.config.provider} structured output failed schema validation: {exc}",
+                    provider=self.config.provider,
+                    model=self.config.model,
+                    error_type="structured_output_validation_error",
+                    retryable=False,
+                    attempts=attempts,
+                    diagnostics=(item.to_dict() for item in exc.diagnostics),
+                    response_fingerprint=structured_output_response_fingerprint(
+                        structured_output
+                    ),
+                ) from exc
+        return structured_output
+
+    @staticmethod
+    def _structured_output_validation_metadata(
+        request: LLMRequest,
+        *,
+        contract: StructuredOutputContract | None,
+        projection: ProviderSchemaProjection | None,
+        structured_output: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not _expects_structured_output(request):
+            return {}
+        return {
+            "structured_output_validation": {
+                "validated": structured_output is not None,
+                "schema_name": (
+                    request.output_schema_name
+                    if request.output_schema is not None
+                    else None
+                ),
+                "schema_digest": (
+                    contract.schema_digest if contract is not None else None
+                ),
+                "schema_revision": (
+                    contract.schema_revision if contract is not None else None
+                ),
+                "schema_dialect": contract.dialect if contract is not None else None,
+                "typed_adapter_revision": (
+                    contract.typed_adapter_revision
+                    if contract is not None
+                    else None
+                ),
+                "projection_digest": (
+                    projection.projection_digest
+                    if projection is not None
+                    else None
+                ),
+                "projection_mode": (
+                    projection.mode if projection is not None else None
+                ),
+                "provider_capability_revision": (
+                    projection.provider_capability_revision
+                    if projection is not None
+                    else None
+                ),
+                "provider_enforced_keywords": (
+                    sorted(projection.enforced_keywords)
+                    if projection is not None
+                    else []
+                ),
+                "provider_omitted_keywords": (
+                    sorted(projection.omitted_keywords)
+                    if projection is not None
+                    else []
+                ),
+                "provider_native_json_mode": _uses_provider_native_json_mode(
+                    request
+                ),
+                "response_fingerprint": (
+                    structured_output_response_fingerprint(structured_output)
+                    if structured_output is not None
+                    else None
+                ),
+            }
+        }
+
     def _error_from_http(self, exc: HTTPError, *, attempts: int) -> LLMProviderError:
         status_code = int(exc.code)
-        raw_body, raw_body_truncated = read_bounded_http_error_body(exc)
-        provider_payload = decode_provider_error_payload(raw_body, truncated=raw_body_truncated)
-        provider_error_code = payload_error_code(provider_payload)
-        if status_code == 413 or provider_error_code in CONTEXT_OVERFLOW_CODES:
-            limit_tokens, usage_tokens = provider_overflow_token_diagnostics(
+        raw_body, raw_body_truncated = _read_bounded_http_error_body(exc)
+        provider_payload = _decode_provider_error_payload(raw_body, truncated=raw_body_truncated)
+        provider_error_code = _provider_error_code(provider_payload)
+        if status_code == 413 or provider_error_code in _CONTEXT_OVERFLOW_CODES:
+            limit_tokens, usage_tokens = _provider_overflow_token_diagnostics(
                 provider_payload
             )
             return LLMProviderContextOverflow(
@@ -819,8 +1086,8 @@ class OpenAICompatibleClient:
                 provider_reported_usage_tokens=usage_tokens,
             )
         retryable = status_code in self._retry_policy.retryable_status_codes
-        error_type = error_type_from_http_status(status_code)
-        diagnostic = provider_failure_diagnostic(
+        error_type = _error_type_from_http_status(status_code)
+        diagnostic = _provider_failure_diagnostic(
             payload=provider_payload,
             raw_body=raw_body,
             raw_body_truncated=raw_body_truncated,
@@ -841,7 +1108,7 @@ class OpenAICompatibleClient:
         reason = getattr(exc, "reason", None)
         is_timeout = isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError)
         error_type = "timeout" if is_timeout else "transient_network"
-        diagnostic = network_failure_diagnostic(exc, reason=reason)
+        diagnostic = _network_failure_diagnostic(exc, reason=reason)
         return LLMProviderError(
             f"{self.config.provider} request failed: {error_type}",
             provider=self.config.provider,
@@ -851,6 +1118,299 @@ class OpenAICompatibleClient:
             attempts=attempts,
             diagnostics=(diagnostic,),
         )
+
+
+def _error_type_from_http_status(status_code: int) -> str:
+    if status_code == 400:
+        return "invalid_request"
+    if status_code in (401, 403):
+        return "auth_error"
+    if status_code == 404:
+        return "unsupported_model"
+    if status_code == 408:
+        return "timeout"
+    if status_code == 409:
+        return "transient_network"
+    if status_code == 413:
+        return "context_length"
+    if status_code == 429:
+        return "rate_limit"
+    if 500 <= status_code <= 599:
+        return "server_error"
+    if 400 <= status_code <= 499:
+        return "invalid_request"
+    return "unknown_llm_error"
+
+
+def _canonical_error_category(error_type: str) -> str:
+    aliases = {
+        "rate_limited": "rate_limit",
+        "provider_timeout": "timeout",
+        "provider_connection_error": "transient_network",
+        "temporary_provider_error": "transient_network",
+        "provider_server_error": "server_error",
+        "invalid_api_key": "auth_error",
+        "invalid_request_schema": "invalid_request",
+        "context_length_exceeded": "context_length",
+        "invalid_model": "unsupported_model",
+        "provider_response_shape_invalid": "schema_error",
+        "provider_stream_chunk_invalid": "schema_error",
+        "tool_call_parse_error": "schema_error",
+        "stream_tool_call_parse_error": "schema_error",
+        "structured_output_parse_error": "schema_error",
+        "provider_schema_ineligible": "schema_error",
+        "structured_output_schema_error": "schema_error",
+        "structured_output_validation_error": "schema_error",
+    }
+    return aliases.get(error_type, error_type)
+
+
+_MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
+_MAX_PROVIDER_DIAGNOSTIC_CHARS = 2_000
+_MAX_PROVIDER_FACT_CHARS = 512
+_DIAGNOSTIC_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b[A-Za-z0-9_.-]*(?:api[_-]?key|authorization|client[_-]?secret|cookie|"
+    r"credential|dsn|password|private[_-]?key|secret|token)[A-Za-z0-9_.-]*"
+    r"[\"']?\s*[:=]\s*[^\r\n]*"
+)
+_DIAGNOSTIC_PRIVATE_KEY = re.compile(
+    r"-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|\Z)",
+    re.DOTALL,
+)
+_MAX_PROVIDER_TOKEN_DIAGNOSTIC = 2_000_000_000
+_CONTEXT_OVERFLOW_CODES = {
+    "context_length_exceeded",
+    "context_window_exceeded",
+    "max_context_length_exceeded",
+}
+_PROVIDER_LIMIT_TOKEN_KEYS = (
+    "context_limit_tokens",
+    "context_window_tokens",
+    "limit_tokens",
+    "max_context_tokens",
+    "max_context_length",
+)
+_PROVIDER_USAGE_TOKEN_KEYS = (
+    "input_tokens",
+    "prompt_tokens",
+    "requested_tokens",
+    "total_tokens",
+)
+
+
+def _read_bounded_http_error_body(exc: HTTPError) -> tuple[bytes, bool]:
+    try:
+        raw_body = exc.read(_MAX_PROVIDER_ERROR_BODY_BYTES + 1)
+    except Exception:
+        return b"", False
+    if not isinstance(raw_body, bytes):
+        return b"", False
+    truncated = len(raw_body) > _MAX_PROVIDER_ERROR_BODY_BYTES
+    return raw_body[:_MAX_PROVIDER_ERROR_BODY_BYTES], truncated
+
+
+def _decode_provider_error_payload(
+    raw_body: bytes,
+    *,
+    truncated: bool,
+) -> dict[str, Any] | None:
+    if truncated or not raw_body:
+        return None
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _provider_failure_diagnostic(
+    *,
+    payload: Any = None,
+    raw_body: bytes = b"",
+    raw_body_truncated: bool = False,
+    stage: str,
+) -> dict[str, Any]:
+    diagnostic: dict[str, Any] = {"stage": stage}
+    source = payload.get("error") if isinstance(payload, Mapping) else None
+    if not isinstance(source, Mapping):
+        source = payload if isinstance(payload, Mapping) else None
+    if isinstance(source, Mapping):
+        for target, keys in (
+            ("provider_error_type", ("type", "error_type")),
+            ("provider_error_code", ("code", "error_code")),
+            ("provider_message", ("message", "detail", "error")),
+        ):
+            value = _first_provider_text(source, keys)
+            if value is None and source is not payload and isinstance(payload, Mapping):
+                value = _first_provider_text(payload, keys)
+            if value is not None:
+                safe, truncated = _bounded_redacted_text(value, _MAX_PROVIDER_FACT_CHARS)
+                diagnostic[target] = safe
+                diagnostic[f"{target}_truncated"] = truncated
+                diagnostic[f"{target}_limit"] = _MAX_PROVIDER_FACT_CHARS
+    elif isinstance(payload, Mapping):
+        value = payload.get("error")
+        if isinstance(value, str):
+            safe, truncated = _bounded_redacted_text(value, _MAX_PROVIDER_FACT_CHARS)
+            diagnostic["provider_message"] = safe
+            diagnostic["provider_message_truncated"] = truncated
+            diagnostic["provider_message_limit"] = _MAX_PROVIDER_FACT_CHARS
+
+    excerpt_source: Any = payload
+    excerpt_pre_redacted = False
+    if excerpt_source is None and raw_body:
+        excerpt_source = raw_body.decode("utf-8", errors="replace")
+    if excerpt_source is not None:
+        if isinstance(excerpt_source, (Mapping, list, tuple)):
+            redacted = _redact_diagnostic_value(excerpt_source)
+            excerpt_source = json.dumps(
+                redacted,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            excerpt_pre_redacted = True
+        excerpt, excerpt_truncated = _bounded_redacted_text(
+            excerpt_source,
+            _MAX_PROVIDER_DIAGNOSTIC_CHARS,
+            pre_redacted=excerpt_pre_redacted,
+        )
+        if excerpt:
+            diagnostic.update({
+                "raw_excerpt": excerpt,
+                "raw_excerpt_truncated": raw_body_truncated or excerpt_truncated,
+                "raw_excerpt_limit": _MAX_PROVIDER_DIAGNOSTIC_CHARS,
+            })
+    return diagnostic
+
+
+def _network_failure_diagnostic(
+    exc: TimeoutError | URLError | OSError,
+    *,
+    reason: Any,
+) -> dict[str, Any]:
+    source = reason if reason is not None else exc
+    safe, truncated = _bounded_redacted_text(source, _MAX_PROVIDER_DIAGNOSTIC_CHARS)
+    return {
+        "stage": "network_transport",
+        "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "network_reason": safe,
+        "raw_excerpt": safe,
+        "raw_excerpt_truncated": truncated,
+        "raw_excerpt_limit": _MAX_PROVIDER_DIAGNOSTIC_CHARS,
+    }
+
+
+def _first_provider_text(source: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                return text
+    return None
+
+
+def _bounded_redacted_text(
+    value: Any,
+    limit: int,
+    *,
+    pre_redacted: bool = False,
+) -> tuple[str, bool]:
+    safe = str(value or "") if pre_redacted else _redact_diagnostic_text(value)
+    safe = "".join(char for char in safe if char in "\n\t" or char.isprintable()).strip()
+    return safe[:limit], len(safe) > limit
+
+
+def _redact_diagnostic_value(value: Any) -> Any:
+    redacted = redact_sensitive_values(value)
+    if isinstance(redacted, Mapping):
+        return {
+            str(key): _redact_diagnostic_value(item)
+            for key, item in redacted.items()
+        }
+    if isinstance(redacted, (list, tuple)):
+        return [_redact_diagnostic_value(item) for item in redacted]
+    if isinstance(redacted, str):
+        return _redact_diagnostic_text(redacted)
+    return redacted
+
+
+def _redact_diagnostic_text(value: Any) -> str:
+    safe = str(value or "")
+    safe = _DIAGNOSTIC_PRIVATE_KEY.sub(REDACTED_VALUE, safe)
+    safe = _DIAGNOSTIC_SECRET_ASSIGNMENT.sub(REDACTED_VALUE, safe)
+    safe = str(redact_sensitive_values(safe))
+    return safe
+
+
+def _provider_error_code(payload: dict[str, Any] | None) -> str | None:
+    if payload is None:
+        return None
+    error = payload.get("error")
+    raw_code = error.get("code") if isinstance(error, dict) else payload.get("code")
+    if not isinstance(raw_code, str):
+        return None
+    code = raw_code.strip().casefold()
+    if not code or len(code) > 128:
+        return None
+    if any(character not in "abcdefghijklmnopqrstuvwxyz0123456789._-" for character in code):
+        return None
+    return code
+
+
+def _provider_overflow_token_diagnostics(
+    payload: dict[str, Any] | None,
+) -> tuple[int | None, int | None]:
+    if payload is None:
+        return None, None
+    error = payload.get("error")
+    sources: list[dict[str, Any]] = [payload]
+    if isinstance(error, dict):
+        sources.insert(0, error)
+        details = error.get("details")
+        if isinstance(details, dict):
+            sources.insert(0, details)
+    return (
+        _first_bounded_token_value(sources, _PROVIDER_LIMIT_TOKEN_KEYS),
+        _first_bounded_token_value(sources, _PROVIDER_USAGE_TOKEN_KEYS),
+    )
+
+
+def _first_bounded_token_value(
+    sources: Iterable[dict[str, Any]],
+    keys: tuple[str, ...],
+) -> int | None:
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            if 0 <= value <= _MAX_PROVIDER_TOKEN_DIAGNOSTIC:
+                return value
+    return None
+
+
+def _projection_matches_capability(
+    projection: ProviderSchemaProjection,
+    capability: ProviderStructuredOutputCapability | None,
+) -> bool:
+    return (
+        capability is not None
+        and projection.deployment == capability.deployment
+        and projection.provider_capability_revision == capability.revision
+    )
+
+
+def _expects_structured_output(request: LLMRequest) -> bool:
+    if request.output_schema is not None:
+        return True
+    response_format = request.response_format
+    if isinstance(response_format, str):
+        return response_format in {"json_object", "json_schema"}
+    if isinstance(response_format, dict):
+        return response_format.get("type") in {"json_object", "json_schema"}
+    return False
 
 
 def _uses_provider_native_json_mode(request: LLMRequest) -> bool:
@@ -1021,3 +1581,13 @@ def _optional_str(value: Any) -> str | None:
         return None
     return str(value)
 
+
+def _urlopen_transport(request: Request, timeout_seconds: float) -> bytes:
+    with urlopen(request, timeout=timeout_seconds) as response:
+        return response.read()
+
+
+def _urlopen_stream_transport(request: Request, timeout_seconds: float) -> Iterable[bytes]:
+    with urlopen(request, timeout=timeout_seconds) as response:
+        yield from response
+    project_structured_output_contract,

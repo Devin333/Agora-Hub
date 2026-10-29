@@ -8,10 +8,8 @@ from framework.llm.models.response import LLMResponse
 from framework.llm.models.stream import LLMStreamAccumulator, LLMStreamEvent
 from framework.llm.models.tool_call import LLMToolCall
 from framework.llm.models.usage import TokenUsage
-from framework.llm.models.window import LLMCallWindow, WindowedLLMClient
 
 __all__ = [
-    "LLMCallWindow",
     "LLMClient",
     "LLMMessage",
     "LLMMessageRole",
@@ -22,6 +20,5 @@ __all__ = [
     "LLMToolCall",
     "ModelCapabilities",
     "TokenUsage",
-    "WindowedLLMClient",
 ]
 

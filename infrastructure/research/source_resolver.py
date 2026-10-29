@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import mimetypes
 import os
+import socket
 import base64
 from datetime import UTC, datetime
 from collections.abc import Mapping
@@ -32,15 +34,7 @@ from infrastructure.external.sources.fetch_policy import (
 )
 from infrastructure.external.sources.html import extract_html
 from infrastructure.research.errors import ResearchSourceError
-from infrastructure.security.outbound_target import (
-    OutboundRejection,
-    OutboundTargetPolicy,
-    OutboundTargetRejected,
-)
 
-
-# Paper sources have no private-host exemptions, unlike model endpoints.
-_REMOTE_SOURCE_TARGETS = OutboundTargetPolicy()
 
 _SUPPORTED_REMOTE_CONTENT_TYPES = (
     "application/pdf",
@@ -677,14 +671,30 @@ def _remote_fetch_url(source: str, source_type: str) -> str | None:
 def _ensure_remote_target_allowed(url: str) -> None:
     """Reject non-HTTPS and non-public targets before any transport is invoked."""
 
+    parsed = urlsplit(str(url or "").strip())
+    if parsed.scheme.casefold() != "https" or not parsed.hostname:
+        raise ResearchSourceError("remote source must use HTTPS with a hostname")
+    addresses: set[str] = {parsed.hostname}
     try:
-        # An unresolved hostname is left to the fetch policy; DNS availability is
-        # not an identity or parsing failure.
-        _REMOTE_SOURCE_TARGETS.check(url, allow_unresolved=True)
-    except OutboundTargetRejected as exc:
-        if exc.reason is OutboundRejection.NON_PUBLIC_ADDRESS:
-            raise ResearchSourceError("remote source target is not publicly routable") from exc
-        raise ResearchSourceError("remote source must use HTTPS with a hostname") from exc
+        address = ipaddress.ip_address(parsed.hostname)
+        addresses = {str(address)}
+    except ValueError:
+        try:
+            addresses.update(
+                str(item[4][0])
+                for item in socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme.casefold() == "https" else 80), type=socket.SOCK_STREAM)
+            )
+        except OSError:
+            # An unresolved hostname will be handled by the fetch policy; do
+            # not turn DNS availability into an identity or parsing failure.
+            return
+    for value in addresses:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified or address.is_reserved or address.is_multicast:
+            raise ResearchSourceError("remote source target is not publicly routable")
 
 
 def _is_descendant(path: Path, root: Path) -> bool:

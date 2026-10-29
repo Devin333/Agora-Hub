@@ -22,9 +22,13 @@ from backend.research.ports.reader_repair_candidate import (
     reader_repair_candidate_task_schemas,
 )
 from framework.agent.loop.prompt import PreparedInputProjection
-from framework.llm.clients.provider_errors import LLMConfigurationError, LLMProviderError
+from framework.llm.clients.openai_compatible import (
+    LLMConfigurationError,
+    LLMProviderError,
+    OpenAICompatibleClient,
+)
 from framework.llm.context.estimator import estimate_request_tokens
-from framework.llm.models import LLMCallWindow, LLMClient, LLMRequest, LLMResponse, WindowedLLMClient
+from framework.llm.models import LLMRequest, LLMResponse
 from framework.llm.redaction import redact_sensitive_values
 from framework.llm.structured_output import (
     ManagedStructuredOutputError,
@@ -573,16 +577,11 @@ _PROJECTION_LIMITS = (
 
 
 class StructuredResearchCandidateWorker:
-    """Generate schema-bound Research candidates through any ``LLMClient``.
-
-    ``max_input_tokens`` / ``max_output_tokens`` are this worker's own ceilings.
-    When the client picks its model per call (``WindowedLLMClient``), each call
-    is further narrowed to the window of the model it will reach.
-    """
+    """Generate schema-bound Research candidates through an OpenAI-compatible client."""
 
     def __init__(
         self,
-        client: LLMClient,
+        client: OpenAICompatibleClient,
         *,
         max_input_tokens: int = 8_192,
         max_output_tokens: int = 2_048,
@@ -634,16 +633,10 @@ class StructuredResearchCandidateWorker:
             )
 
         try:
-            window = self._call_window()
-        except (LLMConfigurationError, LLMProviderError) as exc:
-            raise self._map_provider_error(exc, task=task) from exc
-
-        try:
             prepared_input = _prepared_input_projection(payload.get("prepared_input"))
             messages, projection = self._build_prompt(
                 task,
                 payload,
-                window=window,
                 execution_identity=execution_identity,
             )
         except ResearchCandidateError:
@@ -657,7 +650,6 @@ class StructuredResearchCandidateWorker:
         request = self._request(
             task=task,
             messages=messages,
-            window=window,
             execution_identity=execution_identity,
         )
         request = request.clone(
@@ -696,43 +688,27 @@ class StructuredResearchCandidateWorker:
             ) from exc
         return deepcopy(candidate)
 
-    def _call_window(self) -> LLMCallWindow:
-        ceiling = LLMCallWindow(
-            max_input_tokens=self.max_input_tokens,
-            max_output_tokens=self.max_output_tokens,
-        )
-        if not isinstance(self._client, WindowedLLMClient):
-            return ceiling
-        return self._client.call_window(
-            requested_output_tokens=self.max_output_tokens
-        ).capped(
-            max_input_tokens=ceiling.max_input_tokens,
-            max_output_tokens=ceiling.max_output_tokens,
-        )
-
     def _request(
         self,
         *,
         task: str,
         messages: list[dict[str, str]],
-        window: LLMCallWindow,
         execution_identity: GraphExecutionIdentity | None,
     ) -> LLMRequest:
         return LLMRequest(
             messages=messages,
             model=None,
             temperature=0,
-            max_tokens=window.max_output_tokens,
+            max_tokens=self.max_output_tokens,
             metadata={"component": "research_candidate_worker", "task": task},
             execution_identity=execution_identity,
             output_schema=deepcopy(_SCHEMAS[task]),
             output_schema_name=f"research_{task}",
-            # Deployments without a released native schema (every user-configured
-            # connection) are asked for plain JSON; the candidate contract is then
-            # enforced by the local validation gate before anything is admitted.
+            # Every candidate is validated locally against its contract before
+            # use, so a provider that only guarantees JSON syntax is admissible.
             structured_output_policy=ProviderStructuredOutputPolicy(
-                graph_scope="research.candidate",
                 allow_json_object_local_gate=True,
+                graph_scope="research.candidate",
             ),
         )
 
@@ -741,10 +717,9 @@ class StructuredResearchCandidateWorker:
         task: str,
         payload: dict[str, Any],
         *,
-        window: LLMCallWindow,
         execution_identity: GraphExecutionIdentity | None,
     ) -> tuple[list[dict[str, str]], _Projection]:
-        max_prompt_chars = window.max_input_tokens * 4
+        max_prompt_chars = self.max_input_tokens * 4
         for limits in _PROJECTION_LIMITS:
             projection = _project_payload(task, payload, limits)
             serialized = json.dumps(
@@ -768,12 +743,11 @@ class StructuredResearchCandidateWorker:
             request = self._request(
                 task=task,
                 messages=messages,
-                window=window,
                 execution_identity=execution_identity,
             )
             if (
                 prompt_chars <= max_prompt_chars
-                and estimate_request_tokens(request) <= window.max_input_tokens
+                and estimate_request_tokens(request) <= self.max_input_tokens
             ):
                 return messages, projection
         raise ResearchCandidateContractError(
