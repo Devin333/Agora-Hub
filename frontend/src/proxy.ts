@@ -47,8 +47,10 @@ function isTemporaryFrontendAuthDisabled() {
 }
 function isLoginPath(pathname: string) { return pathname === "/login" || pathname.startsWith("/login/") }
 function isPublicPath(pathname: string, surface: FrontendSurface, hosted: boolean) {
-  return (!hosted && surface === "portal" && (pathname === "/" || isResearchReadPath(pathname))) || isLoginPath(pathname) || pathname.startsWith("/api/") || pathname.startsWith("/_next/") || pathname === "/favicon.ico"
+  return (!hosted && surface === "portal" && (pathname === "/" || isResearchReadPath(pathname))) || isLoginPath(pathname) || isWellKnownPath(pathname) || pathname.startsWith("/api/") || pathname.startsWith("/_next/") || pathname === "/favicon.ico"
 }
+// Machine-readable discovery documents; each route decides who it answers.
+function isWellKnownPath(pathname: string) { return pathname.startsWith("/.well-known/") }
 function isResearchReadPath(pathname: string) { return pathname === "/papers" || pathname.startsWith("/papers/") }
 function isProtectedPath(pathname: string) { return pathname === "/" || isAdminPath(pathname) || isPortalPath(pathname) }
 function isPortalPath(pathname: string) { return isPaperAgentPath(pathname) || PORTAL_PREFIXES.some(prefix => pathname === prefix || pathname.startsWith(`${prefix}/`)) }

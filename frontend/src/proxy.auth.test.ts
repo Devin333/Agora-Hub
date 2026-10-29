@@ -129,6 +129,8 @@ describe("auth proxy", () => {
     expect(proxy(request("/paper-agent/", "newsroom_session=session-token")).headers.get("location")).toBeNull()
     expect(proxy(request("/login")).headers.get("location")).toBeNull()
     expect(proxy(request("/api/health")).headers.get("location")).toBeNull()
+    // The desktop stack probe answers or 404s by itself, without a session.
+    expect(proxy(request("/.well-known/agora-desktop-stack")).headers.get("location")).toBeNull()
   })
 
   it("permanently normalizes the allowed legacy desktop route and preserves its query", () => {

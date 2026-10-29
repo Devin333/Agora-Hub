@@ -1,0 +1,79 @@
+# The stack the desktop app runs on this computer in local mode: the same api
+# and web images a hosted server runs, without Caddy. The desktop app writes
+# .env next to this file (from .env.template), then runs, from this directory:
+#   docker compose --project-name agora-desktop --env-file .env -f compose.images.yml up -d --wait
+#
+# Only the web server is published, and only on 127.0.0.1, so nothing on the
+# network can reach either service. The containers keep running after the app
+# quits; the app stops them only when the user asks.
+name: agora-desktop
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  # Keeps container logs from filling the user's disk.
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "3"
+
+x-public-origin: &public-origin
+  # The exact address the app opens; both services require requests to carry it.
+  NEWSROOM_PUBLIC_ORIGIN: http://127.0.0.1:${AGORA_WEB_PORT:?set AGORA_WEB_PORT in .env}
+  # Plain http is safe here only because the origin is loopback.
+  NEWSROOM_ALLOW_INSECURE_ORIGIN: "1"
+
+services:
+  api:
+    <<: *hardening
+    image: ${AGORA_IMAGE_REGISTRY:-ghcr.io/devin333}/agora-api:${AGORA_IMAGE_TAG:?set AGORA_IMAGE_TAG in .env}
+    environment:
+      <<: *public-origin
+      NEWSROOM_DEPLOYMENT_PROFILE: hosted
+      # One person uses this stack, so there is no client address worth
+      # trusting; throttling falls back to the web container's own address.
+      NEWSROOM_TRUSTED_PROXY_CIDRS: ""
+      NEWSROOM_LLM_CREDENTIAL_MODE: invocation
+      NEWSROOM_CREDENTIAL_ENCRYPTION_KEY: ${NEWSROOM_CREDENTIAL_ENCRYPTION_KEY:?set NEWSROOM_CREDENTIAL_ENCRYPTION_KEY in .env}
+      NEWS_ACTIVITY_ENCRYPTION_KEY: ${NEWS_ACTIVITY_ENCRYPTION_KEY:?set NEWS_ACTIVITY_ENCRYPTION_KEY in .env}
+      NEWS_RESEARCH_PARSER_BACKENDS: pymupdf
+      NEWSROOM_PDF_PARSER_CASCADE: pymupdf
+      NEWS_PRELOAD_RERANKER: "0"
+    volumes:
+      - newsroom-data:/app/.newsroom
+    networks:
+      - app
+    mem_limit: 2g
+    stop_grace_period: 60s
+
+  web:
+    <<: *hardening
+    image: ${AGORA_IMAGE_REGISTRY:-ghcr.io/devin333}/agora-web:${AGORA_IMAGE_TAG:?set AGORA_IMAGE_TAG in .env}
+    environment:
+      <<: *public-origin
+      NEWSROOM_API_BASE_URL: http://api:8000
+      # Lets the desktop app tell this stack apart from any other program on
+      # the same port before it opens it. The release it reports is baked into
+      # the image, never set here.
+      AGORA_DESKTOP_STACK_TOKEN: ${AGORA_DESKTOP_STACK_TOKEN:?set AGORA_DESKTOP_STACK_TOKEN in .env}
+    ports:
+      - "127.0.0.1:${AGORA_WEB_PORT}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - app
+    mem_limit: 1g
+    stop_grace_period: 30s
+
+networks:
+  app: {}
+
+volumes:
+  # Accounts, encrypted model keys, papers, notes, memory and run records.
+  # Removing the stack keeps it; only an explicit volume removal deletes it.
+  newsroom-data:
