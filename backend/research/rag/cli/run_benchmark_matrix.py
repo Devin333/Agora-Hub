@@ -36,6 +36,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         gold_judge_sample_size=args.gold_judge_sample_size,
         gold_judge_max_evidence_chars=args.gold_judge_max_evidence_chars,
         answer_eval_enabled=args.answer_eval,
+        generation_track=args.generation_track,
         answer_eval_sample_size=args.answer_eval_sample_size,
         answer_judge_mode=args.answer_judge,
         answer_judge_sample_size=args.answer_judge_sample_size,
@@ -91,6 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gold-judge-sample-size", type=int)
     parser.add_argument("--gold-judge-max-evidence-chars", type=int, default=1600)
     parser.add_argument("--answer-eval", action="store_true")
+    parser.add_argument("--generation-track", choices=("end_to_end", "oracle_context"), default="end_to_end")
     parser.add_argument("--answer-eval-sample-size", type=int)
     parser.add_argument(
         "--answer-judge",

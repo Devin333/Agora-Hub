@@ -42,3 +42,21 @@ def test_research_resolver_uses_section_role_for_plain_paragraphs() -> None:
     resolver = build_research_evidence_type_resolver()
 
     assert resolver.resolve({"section_role": ["method"], "chunk_type": "paragraph"}) == "method"
+
+
+def test_research_resolver_keeps_every_role_with_the_primary_first() -> None:
+    resolver = build_research_evidence_type_resolver()
+    metadata = {"section_role": ["experiment", "method"], "chunk_type": "paragraph"}
+
+    assert resolver.resolve(metadata) == "experiment"
+    assert resolver.resolve_types(metadata) == ("experiment", "method")
+
+
+def test_research_resolver_types_combine_chunk_type_and_roles_without_duplicates() -> None:
+    resolver = build_research_evidence_type_resolver()
+
+    assert resolver.resolve_types({"chunk_type": "table", "section_role": ["experiment", "analysis", "method"]}) == (
+        "experiment",
+        "method",
+    )
+    assert resolver.resolve_types({"chunk_type": "paragraph", "section_role": ["unknown"]}) == ()

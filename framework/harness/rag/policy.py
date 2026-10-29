@@ -16,6 +16,11 @@ from framework.harness.rag.models import (
 from framework.shared.json import to_jsonable
 
 
+EVIDENCE_TYPE_COVERAGE_REQUIRED = "required"
+EVIDENCE_TYPE_COVERAGE_ADVISORY = "advisory"
+EVIDENCE_TYPE_COVERAGE_MODES = (EVIDENCE_TYPE_COVERAGE_REQUIRED, EVIDENCE_TYPE_COVERAGE_ADVISORY)
+
+
 class RAGDecisionType(StrEnum):
     CONTINUE_RETRIEVAL = "continue_retrieval"
     REPLAN_QUERIES = "replan_queries"
@@ -102,6 +107,17 @@ class RAGExecutionPolicy:
         return bool(self.generation_policy.get("enabled", False))
 
     @property
+    def evidence_type_coverage(self) -> str:
+        """``required`` blocks on a missing evidence type; ``advisory`` lets the answer worker judge it."""
+        mode = str(self.source_policy.get("evidence_type_coverage") or EVIDENCE_TYPE_COVERAGE_REQUIRED)
+        if mode not in EVIDENCE_TYPE_COVERAGE_MODES:
+            raise HarnessValidationError(
+                "evidence_type_coverage must be one of " + ", ".join(EVIDENCE_TYPE_COVERAGE_MODES),
+                details={"evidence_type_coverage": mode},
+            )
+        return mode
+
+    @property
     def max_generation_attempts(self) -> int:
         return max(1, int(self.generation_policy.get("max_attempts", 1)))
 
@@ -181,6 +197,9 @@ def budget_exceeded(snapshot: RAGBudgetSnapshot, budget: RAGBudget) -> dict[str,
 
 
 __all__ = [
+    "EVIDENCE_TYPE_COVERAGE_REQUIRED",
+    "EVIDENCE_TYPE_COVERAGE_MODES",
+    "EVIDENCE_TYPE_COVERAGE_ADVISORY",
     "RAGDecision",
     "RAGDecisionType",
     "RAGExecutionPolicy",

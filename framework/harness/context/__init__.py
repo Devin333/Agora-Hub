@@ -12,6 +12,7 @@ __all__ = [
     "CONTROL_PLANE_PRESERVED_FIELDS",
     "CompressionRecord",
     "REVERSIBLE_CONTEXT_ACTIONS",
+    "ContextAdmissionRejectedError",
     "ContextAssembler",
     "ContextAggregateGateResult",
     "ContextAggregateVerificationResult",
@@ -107,6 +108,7 @@ __all__ = [
 _LAZY = LazyExports(
     __name__,
     {
+        "ContextAdmissionRejectedError": ("framework.harness.context.assembler", "ContextAdmissionRejectedError"),
         "ContextAssembler": ("framework.harness.context.assembler", "ContextAssembler"),
         "ContextBudgetEstimator": ("framework.harness.context.budget", "ContextBudgetEstimator"),
         "ContextBudgetUsage": ("framework.harness.context.budget", "ContextBudgetUsage"),
@@ -218,6 +220,7 @@ def __dir__() -> list[str]:
 
 if TYPE_CHECKING:
     from framework.harness.context.assembler import (
+        ContextAdmissionRejectedError,
         ContextAssembler,
     )
     from framework.harness.context.budget import (

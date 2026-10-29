@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from data.eval.build_golden_set import build_pairs
 from backend.research.document.models import PaperChunk
+from backend.research.rag.evaluation import evidence_eval_runner
+from backend.research.rag.evaluation.golden_corpus_snapshot import load_golden_corpus_snapshot
+from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 from backend.research.rag.cli.run_evidence_eval import main
 from backend.research.rag.evaluation.evidence_eval_runner import (
     EvidenceEvalOptions,
-    _build_live_answer_samples,
+    build_live_answer_samples,
     _load_chunks_from_papers_dir,
     run_evidence_eval_core,
 )
@@ -54,6 +58,54 @@ class _FakeChunkStore:
 
     def get_parent_chunk(self, chunk: PaperChunk):
         return self.get_chunk(chunk.parent_chunk_id) if chunk.parent_chunk_id else None
+
+
+def test_live_answer_eval_reuses_run_id_for_golden_single_paper_cases() -> None:
+    snapshot = load_golden_corpus_snapshot(
+        Path("data/eval/golden_corpus_snapshot.json"),
+        golden_set_path=Path("data/eval/golden_set.json"),
+    )
+    ask = evidence_eval_runner.build_in_memory_live_answer_ask(
+        snapshot.chunks,
+        retrieval_policy="paper_blind_semantic_rag_v1",
+        visual_enabled=False,
+        image_root=None,
+        lightweight_reranker=False,
+        limit=5,
+        answer_model=FakePaperAnswerModel("Answer supported by [1]."),
+    )
+
+    results = []
+    for line in Path("data/eval/business_question_bank_v1_draft.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines():
+        case = json.loads(line)
+        gold_ids = (case.get("gold_evidence") or {}).get("gold_chunk_ids") or []
+        if case.get("category") != "single_paper" or not gold_ids:
+            continue
+        pair = EvidenceQAPair(
+            paper_id=case["source_papers"][0],
+            question=case["question"],
+            qa_type=case["category"],
+            gold_chunk_ids=gold_ids,
+        )
+        results.append((case["case_id"], ask(pair)))
+
+    assert len(results) == 29
+    assert "single_007" not in {case_id for case_id, _ in results}
+    # Every question retrieves from the run-bound corpus; an unbound run_id filters to zero.
+    assert [
+        case_id for case_id, payload in results if payload["metrics"]["accepted_evidence_count"] == 0
+    ] == []
+    # gate_failures_by_gate covers the whole transcript, including failures a replan recovered from.
+    assert [
+        case_id
+        for case_id, payload in results
+        if "rag_query_dedup" in payload["metrics"]["gate_failures_by_gate"]
+    ] == []
+    # Retrieval gaps end as insufficient evidence; nothing halts or fails.
+    assert {payload["status"] for _, payload in results} <= {"answered", "insufficient_evidence"}
+    assert any(payload["status"] == "answered" for _, payload in results)
 
 
 def test_run_evidence_eval_writes_summary_report(tmp_path) -> None:
@@ -199,7 +251,7 @@ def test_live_answer_eval_samples_preserve_gated_payload_semantics() -> None:
                 "transcript_id": "rag-transcript://p1/abstain",
             }
         return {
-            "status": "succeeded",
+            "status": "answered",
             "generation_mode": "gated_harness",
             "answer": "The visual architecture improves retrieval accuracy.",
             "answer_candidate": {"abstained": False},
@@ -215,7 +267,7 @@ def test_live_answer_eval_samples_preserve_gated_payload_semantics() -> None:
             "transcript_id": "rag-transcript://p1/answer",
         }
 
-    samples = _build_live_answer_samples([answer_pair, abstain_pair], ask=ask)
+    samples = build_live_answer_samples([answer_pair, abstain_pair], ask=ask)
     result = EvidenceAnswerEvaluator().evaluate(samples)
 
     assert [sample.metadata["answer_eval"] for sample in samples] == [
@@ -224,7 +276,9 @@ def test_live_answer_eval_samples_preserve_gated_payload_semantics() -> None:
     ]
     assert samples[0].cited_chunk_ids == ["para-1"]
     assert samples[0].context_chunk_ids == ["para-1"]
-    assert "provided context does not mention" in samples[1].answer
+    assert samples[1].answer == ""
+    assert samples[0].outcome.value == "answered"
+    assert samples[1].outcome.value == "insufficient_evidence"
     assert result.abstention_accuracy() == 1.0
     assert result.success_rate() == 1.0
 

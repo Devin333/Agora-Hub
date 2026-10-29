@@ -250,3 +250,20 @@ def _source(*, respect_robots: bool = True) -> SourceDefinition:
         authority_score=0.8,
         respect_robots=respect_robots,
     )
+
+
+def test_fallback_extractor_keeps_metadata_the_first_pass_found(monkeypatch) -> None:
+    import json
+    import sys
+    import types
+
+    fake = types.ModuleType("trafilatura")
+    fake.extract = lambda *_args, **_kwargs: json.dumps({"text": "Abstract body", "comments": ""})
+    monkeypatch.setitem(sys.modules, "trafilatura", fake)
+
+    result = extract_html("<html><title>OpenReview paper</title><p>Abstract</p></html>")
+
+    assert result.extractor_name == "trafilatura_extractor"
+    assert result.title == "OpenReview paper"
+    assert result.text == "Abstract body"
+    assert result.attempted_extractors == ("stdlib_html_extractor", "trafilatura_extractor")

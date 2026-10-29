@@ -38,6 +38,17 @@ from framework.harness.runtime.result_errors import (
 from framework.harness.runtime.result_canonical import estimated_tokens
 
 
+class ContextAdmissionRejectedError(HarnessValidationError):
+    """The context does not fit the model window and no registered compaction can make it fit.
+
+    Callers can treat this as a per-request failure: the request was never sent to
+    the provider and retrying it unchanged is rejected the same way.
+    """
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message, code="context_admission_rejected", details=details)
+
+
 @runtime_checkable
 class _ContextCompactionRuntimePort(Protocol):
     def run(self, request: Any) -> Any: ...
@@ -315,7 +326,7 @@ class ContextAssembler:
                     "source_snapshot_id": result.source_snapshot.snapshot_id,
                 },
             )
-            raise HarnessValidationError(
+            raise ContextAdmissionRejectedError(
                 "verified context runtime did not authorize provider dispatch",
                 details={
                     "status": result.status.value,
@@ -565,4 +576,4 @@ def _dynamic_tail_payload(segments: tuple[ContextSegment, ...]) -> dict[str, Any
     }
 
 
-__all__ = ["ContextAssembler"]
+__all__ = ["ContextAdmissionRejectedError", "ContextAssembler"]

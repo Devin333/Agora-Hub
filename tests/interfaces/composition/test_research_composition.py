@@ -107,6 +107,7 @@ from interfaces.composition.research import (
     reset_default_research_runtime,
 )
 from interfaces.composition.research_errors import ResearchRuntimeUnavailableError
+from interfaces.composition.research_llm_deployment import resolve_research_llm_runtime
 from interfaces.composition.research_settings import ResearchRuntimeSettings
 from interfaces.composition.research_child_runtime import LazyResearchChildRuntime
 from backend.research.graphs.task_plan import (
@@ -932,7 +933,9 @@ def test_valid_settings_compose_full_durable_production_graph(
         assert isinstance(runtime, ResearchSinglePaperRuntime)
         assert runtime.context_assembler is None
         assert runtime.context_assembler_factory is not None
-        assert runtime.context_max_input_tokens == settings.llm.max_input_tokens
+        _deployment, runtime_settings = resolve_research_llm_runtime(settings)
+        assert settings.llm.max_input_tokens is None
+        assert runtime.context_max_input_tokens == runtime_settings.llm.max_input_tokens
         assert runtime.context_max_output_tokens == settings.llm.max_output_tokens
         assert isinstance(runtime.source_provider, CatalogBoundResearchSourceProvider)
         assert isinstance(runtime.source_provider._fallback, ArxivResearchSourceProvider)

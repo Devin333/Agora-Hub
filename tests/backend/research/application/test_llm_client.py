@@ -1,12 +1,102 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from urllib.error import URLError
 
 import pytest
 
-from backend.research.application import llm_client
+from backend.research.application import llm_client, llm_selectors
+from backend.research.rag.evaluation.qasper_answer_judge import JudgeRequest, judge_answer
 from framework.llm.models import LLMResponse
 from framework.shared.graph_identity import GraphExecutionIdentity
+
+_SELECTOR_KEYS = tuple(
+    dict.fromkeys(
+        (
+            "OPENAI_MODEL",
+            *llm_selectors.RESEARCH_ANSWER_BASE_URL_KEYS,
+            *llm_selectors.RESEARCH_ANSWER_MODEL_KEYS,
+            *llm_selectors.RESEARCH_ANSWER_API_KEY_ENV_KEYS,
+            *llm_selectors.EVAL_JUDGE_BASE_URL_KEYS,
+            *llm_selectors.EVAL_JUDGE_MODEL_KEYS,
+            *llm_selectors.EVAL_JUDGE_API_KEY_ENV_KEYS,
+        )
+    )
+)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_llm_env(monkeypatch):
+    """Keep the repository .env from leaking real endpoints or models into these tests."""
+    monkeypatch.setattr(llm_client, "load_root_env", lambda: None)
+    for key in _SELECTOR_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+class _RecordingClient:
+    def __init__(self, config, **kwargs) -> None:
+        self.config = config
+
+    def complete(self, request):
+        return LLMResponse(content="ok", model=self.config.model)
+
+
+def test_paper_answer_model_uses_research_route_not_generic_model(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "generic-judge-model")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_BASE_URL", "https://research.test/v1")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_MODEL", "research-answer-model")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_API_KEY_ENV", "RESEARCH_KEY")
+
+    answer = llm_client.build_unity_paper_answer_model()._client.config
+    judge = llm_client._build_generic_unity_client().config
+
+    assert (answer.model, answer.base_url, answer.api_key_env) == (
+        "research-answer-model",
+        "https://research.test/v1",
+        "RESEARCH_KEY",
+    )
+    assert (judge.model, judge.base_url, judge.api_key_env) == (
+        "generic-judge-model",
+        "https://generic.test/v1",
+        "OPENAI_API_KEY",
+    )
+
+
+def test_paper_answer_model_falls_back_to_generic_selectors(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+    monkeypatch.setenv("NEWS_LLM_MODEL", "news-model")
+    monkeypatch.setenv("OPENAI_MODEL", "openai-model")
+
+    answer = llm_client.build_unity_paper_answer_model()._client.config
+
+    assert answer.model == "news-model"
+    assert answer.base_url == "https://generic.test/v1"
+    assert answer.api_key_env == "OPENAI_API_KEY"
+
+
+def test_paper_answer_model_requires_configured_endpoint_and_model(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+
+    with pytest.raises(ValueError, match="missing model"):
+        llm_client.build_unity_paper_answer_model()
+
+
+def test_research_settings_and_eval_builder_share_answer_selectors() -> None:
+    from backend.research.application import llm_selectors
+    from interfaces.composition import research_settings
+
+    assert research_settings.RESEARCH_ANSWER_MODEL_KEYS is llm_selectors.RESEARCH_ANSWER_MODEL_KEYS
+    assert research_settings.RESEARCH_ANSWER_BASE_URL_KEYS is llm_selectors.RESEARCH_ANSWER_BASE_URL_KEYS
+    assert (
+        research_settings.RESEARCH_ANSWER_API_KEY_ENV_KEYS
+        is llm_selectors.RESEARCH_ANSWER_API_KEY_ENV_KEYS
+    )
 
 
 def test_build_unity_llm_call_binds_graph_execution_identity(monkeypatch) -> None:
@@ -16,8 +106,8 @@ def test_build_unity_llm_call_binds_graph_execution_identity(monkeypatch) -> Non
     captured = []
 
     class _FakeClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
+        def __init__(self, config, **kwargs) -> None:
+            self.config = config
 
         def complete(self, request):
             captured.append(request)
@@ -61,6 +151,7 @@ def test_unity_transport_budget_is_request_scoped_and_default_retry_is_unchanged
 
     class Client:
         def __init__(self, config, *, transport, retry_policy):
+            self.config = config
             policies.append(retry_policy)
 
         def complete(self, request):
@@ -83,11 +174,12 @@ def test_memory_send_never_retries_inside_transport_after_permission_is_revoked(
     from backend.research.domain.personal_memory import PersonalMemorySourceRef
     from backend.research.domain.personal_memory_context import PersonalMemoryContext, PersonalMemoryContextItem
     from backend.research.rag.retrieval.contracts import RetrievalResult
+    from backend.research.ports.paper_answer_model import PaperAnswerModelError
     from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
-    from framework.llm.clients.openai_compatible import LLMProviderError
 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
     calls = []
     context = PersonalMemoryContext(policy_revision=1, items=(PersonalMemoryContextItem(
         memory_id="pmem_" + "1" * 32, revision=1, content="Prefer methods first.",
@@ -119,15 +211,15 @@ def test_memory_send_never_retries_inside_transport_after_permission_is_revoked(
 
     monkeypatch.setattr(llm_client, "OpenAICompatibleClient", client)
     monkeypatch.setattr(llm_client, "_browser_ua_transport", transport)
-    call = llm_client.build_unity_llm_call()
-    generator = AnswerGenerator(call)
+    generator = AnswerGenerator(llm_client.build_unity_paper_answer_model())
     retrieval = RetrievalResult(parent_chunks=[], child_chunks=[PaperChunk(
         chunk_id="chunk-1", paper_id="p1", parse_source="latex", chunk_type="paragraph",
         content="The method retrieves verified evidence.",
     )], ref_chunks=[], intent="general")
-    with pytest.raises(LLMProviderError):
+    with pytest.raises(PaperAnswerModelError) as raised:
         asyncio.run(generator.generate("What is the method?", retrieval,
                     personal_memory_context=context, personal_memory_context_provider=provider))
+    assert raised.value.code == "provider_unavailable"
     assert len(calls) == 1
     with pytest.raises(PermissionError):
         asyncio.run(generator.generate("What is the method?", retrieval,
@@ -135,7 +227,115 @@ def test_memory_send_never_retries_inside_transport_after_permission_is_revoked(
     assert provider.checks == 2
     assert len(calls) == 1  # No memory request is sent after revocation.
 
-    # This same application callable retains three attempts for ordinary requests.
-    with pytest.raises(LLMProviderError):
-        asyncio.run(call("No personal memory"))
+    # The same answer model retains the configured three attempts for ordinary requests.
+    with pytest.raises(PaperAnswerModelError):
+        asyncio.run(generator.generate("What is the method?", retrieval))
     assert len(calls) == 4
+
+
+def test_unity_paper_answer_model_sends_system_and_user_messages(monkeypatch) -> None:
+    from backend.research.ports.paper_answer_model import PaperAnswerModelRequest
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    captured = []
+
+    class _FakeClient:
+        def __init__(self, config, **kwargs) -> None:
+            self.config = config
+
+        def complete(self, request):
+            captured.append(request)
+            return LLMResponse(content="Answer [1].", model="test-model", usage={"input_tokens": 9, "output_tokens": 3})
+
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _FakeClient)
+    model = llm_client.build_unity_paper_answer_model(max_tokens=77)
+
+    response = asyncio.run(model.complete(PaperAnswerModelRequest(system_prompt="system", user_prompt="user")))
+
+    assert response.text == "Answer [1]."
+    assert response.model == "test-model"
+    assert response.usage.input_tokens == 9
+    assert captured[0].messages == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "user"},
+    ]
+    assert captured[0].max_tokens == 77
+    assert captured[0].temperature == 0.0
+    assert captured[0].max_transport_attempts is None
+    assert model.measurement_identity == {
+        "provider": "openai-compatible",
+        "model": "test-model",
+        "max_tokens": 77,
+        "temperature": 0.0,
+        "endpoint_sha256": hashlib.sha256(b"https://llm.test/v1").hexdigest(),
+    }
+    assert "api" not in json.dumps(model.measurement_identity).lower()
+
+
+def test_judge_uses_explicit_judge_model_and_never_falls_back(monkeypatch) -> None:
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _RecordingClient)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://generic.test/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "generic-model")
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_MODEL", "answer-model")
+
+    with pytest.raises(ValueError, match="evaluation judge is not configured; missing model"):
+        llm_client.build_unity_judge_llm_call()
+
+    captured = []
+
+    class _CapturingClient(_RecordingClient):
+        def complete(self, request):
+            captured.append((self.config.model, self.config.base_url, request.temperature))
+            return LLMResponse(content="judged")
+
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", _CapturingClient)
+    monkeypatch.setenv("NEWS_RAG_EVAL_JUDGE_MODEL", "judge-model")
+    call = llm_client.build_unity_judge_llm_call(max_tokens=50)
+
+    assert asyncio.run(call("judge this")) == "judged"
+    assert captured == [("judge-model", "https://generic.test/v1", 0.0)]
+    assert call.measurement_identity == {
+        "provider": "openai-compatible",
+        "model": "judge-model",
+        "max_tokens": 50,
+        "temperature": 0.0,
+        "endpoint_sha256": hashlib.sha256(b"https://generic.test/v1").hexdigest(),
+    }
+
+
+def test_judge_preserves_redacted_network_transport_diagnostic(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://judge.test/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("NEWS_RAG_EVAL_JUDGE_MODEL", "judge-model")
+
+    calls = 0
+
+    def transport(request, timeout_seconds):
+        nonlocal calls
+        calls += 1
+        raise URLError("password=plain-network-secret")
+
+    real_client = llm_client.OpenAICompatibleClient
+
+    def client(config, **kwargs):
+        return real_client(config, **kwargs, sleep=lambda _: None)
+
+    monkeypatch.setattr(llm_client, "OpenAICompatibleClient", client)
+    monkeypatch.setattr(llm_client, "_browser_ua_transport", transport)
+    verdict = asyncio.run(judge_answer(
+        llm_client.build_unity_judge_llm_call(max_tokens=50),
+        JudgeRequest(question="Question?", references=("Reference.",), answer="Answer.", cited_passages=()),
+    ))
+
+    assert calls == 3
+    assert verdict.error == "judge_call_failed: LLMProviderError"
+    assert verdict.error_detail is not None
+    assert verdict.error_detail["wrapper_exception_type"].endswith("LLMProviderError")
+    assert verdict.error_detail["exception_type"] == "urllib.error.URLError"
+    assert verdict.error_detail["network_reason"] == "[redacted]"
+    assert verdict.error_detail["raw_excerpt"] == "[redacted]"
+    assert verdict.error_detail["network_reason_truncated"] is False
+    assert verdict.error_detail["raw_excerpt_truncated"] is False
+    assert "plain-network-secret" not in json.dumps(verdict.error_detail)

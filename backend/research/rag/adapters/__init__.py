@@ -6,6 +6,7 @@ from framework.shared.lazy_exports import LazyExports
 
 __all__ = [
     "FIELD_NAMES",
+    "PAPER_CHUNK_METADATA_KEY",
     "PaperChunkAdapter",
     "PaperChunkFieldText",
     "PaperAnswerWorker",
@@ -13,6 +14,8 @@ __all__ = [
     "ResearchRAGMemoryPort",
     "ResearchRAGPlanWorker",
     "RerankerRelevanceScorer",
+    "paper_chunk_evidence_score",
+    "paper_chunk_from_evidence_record",
     "paper_chunk_to_evidence_metadata",
     "paper_chunk_to_context_metadata",
     "paper_chunk_to_rag_chunk",
@@ -27,7 +30,10 @@ _LAZY = LazyExports(
         "PaperAnswerWorker": ("backend.research.rag.adapters.answer_worker", "PaperAnswerWorker"),
         "LLMResearchRAGPlanCandidateWorker": ("backend.research.rag.adapters.llm_plan_worker", "LLMResearchRAGPlanCandidateWorker"),
         "ResearchRAGMemoryPort": ("backend.research.rag.adapters.memory_port", "ResearchRAGMemoryPort"),
+        "PAPER_CHUNK_METADATA_KEY": ("backend.research.rag.adapters.paper_chunk_adapter", "PAPER_CHUNK_METADATA_KEY"),
         "PaperChunkAdapter": ("backend.research.rag.adapters.paper_chunk_adapter", "PaperChunkAdapter"),
+        "paper_chunk_evidence_score": ("backend.research.rag.adapters.paper_chunk_adapter", "paper_chunk_evidence_score"),
+        "paper_chunk_from_evidence_record": ("backend.research.rag.adapters.paper_chunk_adapter", "paper_chunk_from_evidence_record"),
         "paper_chunk_to_evidence_metadata": ("backend.research.rag.adapters.paper_chunk_adapter", "paper_chunk_to_evidence_metadata"),
         "paper_chunk_to_rag_chunk": ("backend.research.rag.adapters.paper_chunk_adapter", "paper_chunk_to_rag_chunk"),
         "paper_chunk_to_rag_evidence": ("backend.research.rag.adapters.paper_chunk_adapter", "paper_chunk_to_rag_evidence"),
@@ -61,7 +67,10 @@ if TYPE_CHECKING:
         ResearchRAGMemoryPort,
     )
     from backend.research.rag.adapters.paper_chunk_adapter import (
+        PAPER_CHUNK_METADATA_KEY,
         PaperChunkAdapter,
+        paper_chunk_evidence_score,
+        paper_chunk_from_evidence_record,
         paper_chunk_to_evidence_metadata,
         paper_chunk_to_rag_chunk,
         paper_chunk_to_rag_evidence,

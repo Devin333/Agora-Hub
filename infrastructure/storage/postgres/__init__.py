@@ -14,6 +14,9 @@ if TYPE_CHECKING:
         PostgresIntelligenceMemoryRepository,
     )
     from infrastructure.storage.postgres.metrics import PostgresStorageMetricsCollector
+    from infrastructure.storage.postgres.model_connection_repository import (
+        PostgresModelConnectionRepository,
+    )
     from infrastructure.storage.postgres.repair_memory_repository import (
         PostgresReaderRepairMemoryRepository,
     )
@@ -40,6 +43,10 @@ _LAZY_ADAPTERS = {
     "PostgresStorageMetricsCollector": (
         "infrastructure.storage.postgres.metrics",
         "PostgresStorageMetricsCollector",
+    ),
+    "PostgresModelConnectionRepository": (
+        "infrastructure.storage.postgres.model_connection_repository",
+        "PostgresModelConnectionRepository",
     ),
     "PostgresReaderRepairMemoryRepository": (
         "infrastructure.storage.postgres.repair_memory_repository",
@@ -70,6 +77,7 @@ __all__ = [
     "PostgresConversationStore",
     "PostgresLineageStore",
     "PostgresIntelligenceMemoryRepository",
+    "PostgresModelConnectionRepository",
     "PostgresReaderRepairMemoryRepository",
     "PostgresStorageMetricsCollector",
     "PostgresRepository",

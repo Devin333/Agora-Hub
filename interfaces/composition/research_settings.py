@@ -4,11 +4,29 @@ import math
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlsplit, urlunsplit
 
+from backend.research.application.llm_selectors import (
+    RESEARCH_ANSWER_API_KEY_ENV_KEYS,
+    RESEARCH_ANSWER_BASE_URL_KEYS,
+    RESEARCH_ANSWER_MODEL_KEYS,
+)
+from backend.research.ports.evidence_summarizer import (
+    EVIDENCE_RELEVANCE_MAX,
+    EVIDENCE_RELEVANCE_MIN,
+)
+from backend.research.rag.retrieval.answer_evidence_selection import (
+    DEFAULT_EVIDENCE_MIN_PASSAGES,
+    DEFAULT_EVIDENCE_MIN_RELEVANCE,
+    EVIDENCE_RENDER_MODES,
+)
+from backend.research.rag.retrieval.expanders.section_navigation import (
+    DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION,
+    DEFAULT_NAVIGATION_MAX_SECTIONS,
+)
 from framework.harness.runtime.result_errors import GraphArtifactResultError
 from framework.harness.runtime.result_policy import (
     GraphArtifactPersistenceConfig,
@@ -24,10 +42,18 @@ from interfaces.composition.research_errors import (
 
 
 DESKTOP_RESEARCH_LLM_ENABLED_ENV = "NEWSROOM_DESKTOP_RESEARCH_LLM_ENABLED"
+# Navigated passages displace at most half of the ranked list, so larger
+# section or per-section caps only grow the navigator prompt.
+_NAVIGATION_TUNING_MAX = 8
 
 _DEFAULT_ARXIV_API_URL = "https://export.arxiv.org/api/query"
 _DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _DEFAULT_LLM_MODEL = "deepseek-v4-flash"
+# Input window used when neither the environment nor the selected deployment
+# declares one; the ceiling bounds both explicit and derived windows.
+_DEFAULT_LLM_MAX_INPUT_TOKENS = 8_192
+_LLM_MIN_INPUT_TOKENS = 512
+_LLM_MAX_INPUT_TOKENS = 262_144
 _DEFAULT_SOURCE_MAX_BYTES = 120_000_000
 _DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/-]*$")
@@ -83,7 +109,9 @@ class ResearchLLMSettings:
     api_key_env: str
     timeout_seconds: float
     max_attempts: int
-    max_input_tokens: int
+    # ``None`` until the selected deployment is known: the input window is then
+    # derived from the deployment's context window (see ``with_deployment_window``).
+    max_input_tokens: int | None
     max_output_tokens: int
 
     def __post_init__(self) -> None:
@@ -118,18 +146,45 @@ class ResearchLLMSettings:
         object.__setattr__(self, "api_key_env", api_key_env)
         _bounded_float(self.timeout_seconds, "research.llm.timeout", 1.0, 300.0)
         _bounded_int(self.max_attempts, "research.llm.max_attempts", 1, 5)
-        _bounded_int(
-            self.max_input_tokens,
-            "research.llm.max_input_tokens",
-            512,
-            262_144,
-        )
+        if self.max_input_tokens is not None:
+            _bounded_int(
+                self.max_input_tokens,
+                "research.llm.max_input_tokens",
+                _LLM_MIN_INPUT_TOKENS,
+                _LLM_MAX_INPUT_TOKENS,
+            )
         _bounded_int(
             self.max_output_tokens,
             "research.llm.max_output_tokens",
             128,
             32_768,
         )
+
+    def with_deployment_window(self, context_window_tokens: int | None) -> "ResearchLLMSettings":
+        """Resolve the input window against the selected deployment's context window.
+
+        An explicitly configured input window wins but must leave room for the
+        output reservation; otherwise the window is the deployment's context window
+        minus that reservation. A deployment that declares no window keeps the
+        conservative default, so an unknown model is never assumed to be large.
+        """
+        if context_window_tokens is not None and (
+            type(context_window_tokens) is not int or context_window_tokens < 1
+        ):
+            _invalid("research.llm.route")
+        if self.max_input_tokens is not None:
+            if (
+                context_window_tokens is not None
+                and self.max_input_tokens + self.max_output_tokens > context_window_tokens
+            ):
+                _invalid("research.llm.max_input_tokens")
+            return self
+        if context_window_tokens is None:
+            return replace(self, max_input_tokens=_DEFAULT_LLM_MAX_INPUT_TOKENS)
+        derived = min(context_window_tokens - self.max_output_tokens, _LLM_MAX_INPUT_TOKENS)
+        if derived < _LLM_MIN_INPUT_TOKENS:
+            _invalid("research.llm.max_output_tokens")
+        return replace(self, max_input_tokens=derived)
 
 
 
@@ -248,8 +303,33 @@ class ResearchRAGSettings:
     max_context_tokens: int
     max_worker_calls: int
     transcript_root: Path | None = None
+    context_artifact_root: Path | None = None
     memory_enabled: bool = False
     memory_namespace_refs: tuple[str, ...] = ()
+    # Reader Q&A evidence selection (RCS + Adaptive-k). 0 disables it; otherwise this
+    # many retrieved candidates are scored by the evidence summarizer and at most
+    # ``max_context_items`` of them reach the answer model. Each scoring batch is an
+    # extra model call per question, so it is opt-in.
+    evidence_pool_size: int = 0
+    evidence_min_passages: int = DEFAULT_EVIDENCE_MIN_PASSAGES
+    evidence_min_relevance: int = DEFAULT_EVIDENCE_MIN_RELEVANCE
+    evidence_render_mode: str = "summary"
+    # Reader Q&A section navigation: after ranking, a model reads the paper outline
+    # and names up to ``navigation_max_sections`` unread sections whose best
+    # passages take the tail of the ranked list. One extra model call per
+    # retrieval, so it is opt-in.
+    section_navigation_enabled: bool = False
+    navigation_max_sections: int = DEFAULT_NAVIGATION_MAX_SECTIONS
+    navigation_max_passages_per_section: int = DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION
+
+    @property
+    def evidence_selection_enabled(self) -> bool:
+        return self.evidence_pool_size > 0
+
+    @property
+    def reader_context_items(self) -> int:
+        """Context items a reader session admits: the evidence pool when selection is on."""
+        return self.evidence_pool_size if self.evidence_selection_enabled else self.max_context_items
 
     def __post_init__(self) -> None:
         backend = str(self.backend or "").strip().lower()
@@ -260,6 +340,11 @@ class ResearchRAGSettings:
         transcript_root = self.transcript_root or (self.local_root.parent / "rag" / "transcripts")
         _directory_root(transcript_root, "research.rag.transcript_root")
         object.__setattr__(self, "transcript_root", transcript_root)
+        # Reader Q&A runs against an already terminal Research run, whose artifact
+        # manifest is sealed; its context snapshots therefore live in their own store.
+        context_artifact_root = self.context_artifact_root or (self.local_root.parent / "rag" / "context")
+        _directory_root(context_artifact_root, "research.rag.context_artifact_root")
+        object.__setattr__(self, "context_artifact_root", context_artifact_root)
         if backend == "qdrant":
             if self.qdrant_url is None:
                 _invalid("research.rag.vector_backend")
@@ -288,6 +373,41 @@ class ResearchRAGSettings:
             32_768,
         )
         _bounded_int(self.max_worker_calls, "research.rag.max_worker_calls", 0, 32)
+        _bounded_int(self.evidence_pool_size, "research.rag.evidence_pool_size", 0, 64)
+        if 0 < self.evidence_pool_size < self.max_context_items:
+            _invalid("research.rag.evidence_pool_size")
+        # The selector clamps the floor to the answer context, so it is only bounded by
+        # the pool it chooses from.
+        _bounded_int(
+            self.evidence_min_passages,
+            "research.rag.evidence_min_passages",
+            1,
+            self.evidence_pool_size or 64,
+        )
+        _bounded_int(
+            self.evidence_min_relevance,
+            "research.rag.evidence_min_relevance",
+            EVIDENCE_RELEVANCE_MIN,
+            EVIDENCE_RELEVANCE_MAX,
+        )
+        render_mode = str(self.evidence_render_mode or "").strip().lower()
+        if render_mode not in EVIDENCE_RENDER_MODES:
+            _invalid("research.rag.evidence_render_mode")
+        object.__setattr__(self, "evidence_render_mode", render_mode)
+        if not isinstance(self.section_navigation_enabled, bool):
+            _invalid("research.rag.section_navigation")
+        _bounded_int(
+            self.navigation_max_sections,
+            "research.rag.navigation_max_sections",
+            1,
+            _NAVIGATION_TUNING_MAX,
+        )
+        _bounded_int(
+            self.navigation_max_passages_per_section,
+            "research.rag.navigation_max_passages_per_section",
+            1,
+            _NAVIGATION_TUNING_MAX,
+        )
         if not isinstance(self.memory_enabled, bool):
             _invalid("research.rag.memory")
         refs = tuple(str(value).strip() for value in self.memory_namespace_refs)
@@ -557,21 +677,17 @@ class ResearchRuntimeSettings:
             ),
             base_url=_first_text(
                 values,
-                (
-                    "NEWS_RESEARCH_LLM_BASE_URL",
-                    "NEWS_LLM_BASE_URL",
-                    "OPENAI_BASE_URL",
-                ),
+                RESEARCH_ANSWER_BASE_URL_KEYS,
                 _DEFAULT_LLM_BASE_URL,
             ),
             model=_first_text(
                 values,
-                ("NEWS_RESEARCH_LLM_MODEL", "NEWS_LLM_MODEL", "OPENAI_MODEL"),
+                RESEARCH_ANSWER_MODEL_KEYS,
                 _DEFAULT_LLM_MODEL,
             ),
             api_key_env=_first_text(
                 values,
-                ("NEWS_RESEARCH_LLM_API_KEY_ENV", "NEWS_LLM_API_KEY_ENV"),
+                RESEARCH_ANSWER_API_KEY_ENV_KEYS,
                 _default_api_key_env(values),
             ),
             timeout_seconds=_env_float(
@@ -586,10 +702,9 @@ class ResearchRuntimeSettings:
                 2,
                 capability="research.llm.max_attempts",
             ),
-            max_input_tokens=_env_int(
+            max_input_tokens=_optional_env_int(
                 values,
                 "NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS",
-                8_192,
                 capability="research.llm.max_input_tokens",
             ),
             max_output_tokens=_env_int(
@@ -722,6 +837,47 @@ class ResearchRuntimeSettings:
                     "NEWS_RESEARCH_RAG_MAX_WORKER_CALLS",
                     16,
                     capability="research.rag.max_worker_calls",
+                ),
+                evidence_pool_size=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_EVIDENCE_POOL_SIZE",
+                    0,
+                    capability="research.rag.evidence_pool_size",
+                ),
+                evidence_min_passages=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_EVIDENCE_MIN_PASSAGES",
+                    DEFAULT_EVIDENCE_MIN_PASSAGES,
+                    capability="research.rag.evidence_min_passages",
+                ),
+                evidence_min_relevance=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_EVIDENCE_MIN_RELEVANCE",
+                    DEFAULT_EVIDENCE_MIN_RELEVANCE,
+                    capability="research.rag.evidence_min_relevance",
+                ),
+                evidence_render_mode=_first_text(
+                    values,
+                    ("NEWS_RESEARCH_RAG_EVIDENCE_RENDER_MODE",),
+                    "summary",
+                ),
+                section_navigation_enabled=_env_bool(
+                    values,
+                    "NEWS_RESEARCH_RAG_SECTION_NAVIGATION",
+                    False,
+                    capability="research.rag.section_navigation",
+                ),
+                navigation_max_sections=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_NAVIGATION_MAX_SECTIONS",
+                    DEFAULT_NAVIGATION_MAX_SECTIONS,
+                    capability="research.rag.navigation_max_sections",
+                ),
+                navigation_max_passages_per_section=_env_int(
+                    values,
+                    "NEWS_RESEARCH_RAG_NAVIGATION_MAX_PASSAGES_PER_SECTION",
+                    DEFAULT_NAVIGATION_MAX_PASSAGES_PER_SECTION,
+                    capability="research.rag.navigation_max_passages_per_section",
                 ),
                 memory_enabled=_env_bool(
                     values,

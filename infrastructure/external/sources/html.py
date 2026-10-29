@@ -250,9 +250,46 @@ def extract_html_with_fallbacks(html_text: str) -> HtmlExtractionResult:
         return _with_attempted_extractors(stdlib_result, attempted)
     trafilatura_result = _extract_html_trafilatura(html_text)
     attempted.append(TRAFILATURA_EXTRACTOR_NAME)
-    if trafilatura_result is not None and trafilatura_result.confidence > stdlib_result.confidence:
-        return _with_attempted_extractors(trafilatura_result, attempted)
+    if trafilatura_result is not None:
+        # The fallback is stronger at body text but often misses document
+        # metadata (e.g. a bare <title>); keep what the first pass found.
+        merged = _merge_extractions(trafilatura_result, fallback=stdlib_result)
+        if merged.confidence > stdlib_result.confidence:
+            return _with_attempted_extractors(merged, attempted)
     return _with_attempted_extractors(stdlib_result, attempted)
+
+
+def _merge_extractions(
+    primary: HtmlExtractionResult,
+    *,
+    fallback: HtmlExtractionResult,
+) -> HtmlExtractionResult:
+    """Fill fields ``primary`` lacks from ``fallback`` and re-score the result."""
+    title = primary.title or fallback.title
+    text = primary.text or fallback.text
+    summary = primary.summary or fallback.summary
+    published_at = primary.published_at or fallback.published_at
+    authors = list(primary.authors or fallback.authors)
+    canonical_url = primary.canonical_url or fallback.canonical_url
+    return HtmlExtractionResult(
+        title=title,
+        text=text,
+        summary=summary,
+        published_at=published_at,
+        authors=authors,
+        canonical_url=canonical_url,
+        language=primary.language or fallback.language,
+        confidence=_confidence(
+            title=title,
+            text=text,
+            summary=summary,
+            published_at=published_at,
+            authors=authors,
+            canonical_url=canonical_url,
+        ),
+        extractor_name=primary.extractor_name,
+        attempted_extractors=primary.attempted_extractors,
+    )
 
 
 def _extract_html_stdlib(html_text: str) -> HtmlExtractionResult:

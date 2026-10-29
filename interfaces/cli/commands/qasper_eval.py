@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,140 @@ def register(operations: argparse._SubParsersAction) -> None:
     report.add_argument("--run-dir", type=Path, required=True)
     report.set_defaults(_qasper_action="report")
 
+    answer = namespaces.add_parser("answer", help="End-to-end answer evaluation with live models")
+    answer_commands = answer.add_subparsers(dest="answer_command", required=True)
+    answer_run = answer_commands.add_parser(
+        "run", help="Stratified QASPER dev run through the production gated answer path",
+    )
+    answer_run.add_argument("--output-dir", type=Path, required=True)
+    answer_run.add_argument(
+        "--query-vector-path", type=Path, required=True,
+        help="Supplementary query-vector cache; created if absent and reused on reruns",
+    )
+    answer_run.add_argument("--seed", default="qasper-answer-v1")
+    answer_run.add_argument("--per-type", type=int, default=75)
+    answer_run.add_argument("--max-cases", type=int, default=None)
+    answer_run.add_argument("--no-judge", action="store_true", help="Skip the LLM judge")
+    answer_run.add_argument(
+        "--rerun-failed-from", type=Path, default=None,
+        help="Re-run only the generation system failures of this completed run, "
+             "with its seed and stratum size",
+    )
+    answer_run.add_argument(
+        "--retrieval-profile",
+        choices=("chunk_only", "field_only", "field_lightweight"),
+        default=None,
+        help="Explicit offline retrieval profile; defaults to NEWS_QASPER_RETRIEVAL_PROFILE or chunk_only",
+    )
+    answer_run.add_argument(
+        "--retrieval-overfetch",
+        type=int,
+        default=None,
+        help="Optional positive integer retrieval overfetch multiplier",
+    )
+    answer_run.add_argument(
+        "--max-context-items", type=int, default=None,
+        help="Context passages admitted to the answer prompt (default 8)",
+    )
+    answer_run.add_argument(
+        "--max-context-tokens", type=int, default=None,
+        help="RAG context token budget; raise together with --max-context-items (default 2048)",
+    )
+    answer_run.add_argument(
+        "--evidence-pool-size", type=int, default=None,
+        help="Enable evidence selection: retrieve this many candidates, score and condense them "
+             "with the evidence model, and keep at most --max-context-items by Adaptive-k",
+    )
+    answer_run.add_argument(
+        "--evidence-min-passages", type=int, default=None,
+        help="Fewest passages evidence selection keeps (default 4)",
+    )
+    answer_run.add_argument(
+        "--evidence-min-relevance", type=int, default=None,
+        help="Lowest 0-10 relevance a passage needs to be chosen by Adaptive-k (default 4)",
+    )
+    answer_run.add_argument(
+        "--evidence-render-mode", choices=("summary", "passage"), default=None,
+        help="Send chosen passages as summary and verbatim quotes, or as original text (default summary)",
+    )
+    answer_run.add_argument(
+        "--section-navigation", action="store_true",
+        help="After ranking, let the evidence model read the paper outline and add passages "
+             "from the unread sections it picks",
+    )
+    answer_run.add_argument(
+        "--navigation-max-sections", type=int, default=None,
+        help="Most sections section navigation adds per retrieval (default 2)",
+    )
+    answer_run.add_argument(
+        "--navigation-max-passages-per-section", type=int, default=None,
+        help="Most passages section navigation takes from each chosen section (default 2)",
+    )
+    answer_run.set_defaults(_qasper_action="answer_run")
+
+    answer_replay = answer_commands.add_parser(
+        "replay", help="Replay frozen answer cases through offline retrieval/context assembly only",
+    )
+    answer_replay.add_argument("--source-run-dir", type=Path, required=True)
+    answer_replay.add_argument("--output-dir", type=Path, required=True)
+    answer_replay.add_argument("--query-vector-path", type=Path, required=True)
+    answer_replay.add_argument(
+        "--max-context-items", type=int, default=None,
+        help="Context item budget applied to every replay profile (default: answer run budget)",
+    )
+    answer_replay.add_argument(
+        "--max-context-tokens", type=int, default=None,
+        help="Context token budget applied to every replay profile (default: answer run budget)",
+    )
+    answer_replay.set_defaults(_qasper_action="answer_replay")
+
+    answer_backfill = answer_commands.add_parser(
+        "backfill-query-vectors",
+        help="Embed the query texts a blocked replay reported missing into the supplementary cache",
+    )
+    answer_backfill.add_argument("--blocked-replay-dir", type=Path, required=True)
+    answer_backfill.add_argument("--query-vector-path", type=Path, required=True)
+    answer_backfill.set_defaults(_qasper_action="answer_backfill_query_vectors")
+
+    answer_merge = answer_commands.add_parser(
+        "merge", help="Replace a run's failed cases with their re-run records and re-summarize",
+    )
+    answer_merge.add_argument("--base-run-dir", type=Path, required=True)
+    answer_merge.add_argument("--rerun-run-dir", type=Path, required=True)
+    answer_merge.add_argument("--output-dir", type=Path, required=True)
+    answer_merge.set_defaults(_qasper_action="answer_merge")
+
+    answer_rejudge = answer_commands.add_parser(
+        "rejudge", help="Re-run failed judges without regenerating answers or retrieval",
+    )
+    answer_rejudge.add_argument("--source-run-dir", type=Path, required=True)
+    answer_rejudge.add_argument("--output-dir", type=Path, required=True)
+    answer_rejudge.add_argument(
+        "--include-missing-judge", action="store_true",
+        help="Also judge answered legacy cases that have no verdict",
+    )
+    answer_rejudge.add_argument(
+        "--legacy-judge-model", default=None, metavar="NAME",
+        help="User-confirmed historical judge model for legacy runs lacking judge identity",
+    )
+    answer_rejudge.set_defaults(_qasper_action="answer_rejudge")
+
+    calibrate = answer_commands.add_parser("calibrate", help="Human calibration of the answer judge")
+    calibrate_commands = calibrate.add_subparsers(dest="calibrate_command", required=True)
+    calibrate_export = calibrate_commands.add_parser(
+        "export", help="Export a stratified calibration sheet from a completed answer run",
+    )
+    calibrate_export.add_argument("--run-dir", type=Path, required=True)
+    calibrate_export.add_argument("--output-dir", type=Path, required=True)
+    calibrate_export.add_argument("--size", type=int, default=50)
+    calibrate_export.add_argument("--seed", default="qasper-judge-calibration-v1")
+    calibrate_export.set_defaults(_qasper_action="calibrate_export")
+    calibrate_score = calibrate_commands.add_parser(
+        "score", help="Score filled labels.csv against the judge verdicts",
+    )
+    calibrate_score.add_argument("--calibration-dir", type=Path, required=True)
+    calibrate_score.set_defaults(_qasper_action="calibrate_score")
+
 
 def _add_parameters(parser: argparse.ArgumentParser, *, required: bool) -> None:
     # Values stay as text until _dispatch so every contract error is returned as
@@ -82,8 +217,230 @@ def _build_service(dataset_path: Path | None, cache_path: Path | None) -> Any:
     return build_qasper_evaluation_service(dataset_path=dataset_path, cache_path=cache_path)
 
 
+def _build_answer_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_evaluation import build_qasper_answer_evaluation_service
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("answer run requires --dataset-path and --cache-path")
+    rerun_failed_from = getattr(args, "rerun_failed_from", None)
+    if rerun_failed_from is not None and getattr(args, "max_cases", None) is not None:
+        raise ValueError("--rerun-failed-from cannot be combined with --max-cases")
+    return build_qasper_answer_evaluation_service(
+        progress=_print_progress,
+        case_started=_print_case_started,
+        rerun_failed_from=(rerun_failed_from.resolve() if rerun_failed_from is not None else None),
+        dataset_path=args.dataset_path.resolve(),
+        cache_path=args.cache_path.resolve(),
+        query_vector_path=args.query_vector_path.resolve(),
+        output_directory=args.output_dir.resolve(),
+        seed=args.seed,
+        per_type=args.per_type,
+        max_cases=args.max_cases,
+        judge=not args.no_judge,
+        retrieval_profile=args.retrieval_profile,
+        retrieval_overfetch=args.retrieval_overfetch,
+        max_context_items=getattr(args, "max_context_items", None),
+        max_context_tokens=getattr(args, "max_context_tokens", None),
+        evidence_pool_size=getattr(args, "evidence_pool_size", None),
+        evidence_min_passages=getattr(args, "evidence_min_passages", None),
+        evidence_min_relevance=getattr(args, "evidence_min_relevance", None),
+        evidence_render_mode=getattr(args, "evidence_render_mode", None),
+        section_navigation=bool(getattr(args, "section_navigation", False)),
+        navigation_max_sections=getattr(args, "navigation_max_sections", None),
+        navigation_max_passages_per_section=getattr(args, "navigation_max_passages_per_section", None),
+    )
+
+
+def _print_progress(done: int, total: int, case: Any) -> None:
+    # Progress goes to stderr so stdout stays the single JSON result.
+    detail = case.generation_error or (case.judge.error if case.judge is not None and case.judge.error else "")
+    print(
+        f"[{done}/{total}] END {case.case_id} {case.outcome.value} "
+        f"{case.end_to_end_ms:.0f}ms {detail}".rstrip(),
+        file=sys.stderr, flush=True,
+    )
+
+
+def _print_case_started(done: int, total: int, case_id: str) -> None:
+    print(f"[{done}/{total}] START {case_id}", file=sys.stderr, flush=True)
+
+
+def _dispatch_answer_merge(args: argparse.Namespace) -> int:
+    from backend.research.application.qasper_answer_merge import QasperAnswerMergeError
+    from interfaces.composition.qasper_evaluation import merge_qasper_answer_runs
+
+    try:
+        report = merge_qasper_answer_runs(
+            base_directory=args.base_run_dir.resolve(),
+            rerun_directory=args.rerun_run_dir.resolve(),
+            output_directory=args.output_dir.resolve(),
+        )
+    except QasperAnswerMergeError as exc:
+        # Merge diagnostics name identity fields only, so they are safe to show.
+        _print_json({"operation": "answer_merge", "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, KeyError) as exc:
+        _print_json({"operation": "answer_merge", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_merge", "valid": True, **report})
+    return 0
+
+
+def _build_answer_rejudge_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_evaluation import build_qasper_answer_rejudge_service
+
+    return build_qasper_answer_rejudge_service(
+        source_directory=args.source_run_dir.resolve(),
+        output_directory=args.output_dir.resolve(),
+        dataset_path=args.dataset_path.resolve() if args.dataset_path is not None else None,
+        cache_path=args.cache_path.resolve() if args.cache_path is not None else None,
+        include_missing_judge=bool(getattr(args, "include_missing_judge", False)),
+        legacy_judge_model=getattr(args, "legacy_judge_model", None),
+        progress=_print_rejudge_progress,
+    )
+
+
+def _print_rejudge_progress(progress: Any) -> None:
+    suffix = "" if progress.recovered is None else f" recovered={str(progress.recovered).lower()}"
+    print(
+        f"[{progress.index}/{progress.total}] JUDGE_{progress.phase.upper()} "
+        f"{progress.case_id}{suffix}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _dispatch_answer_rejudge(args: argparse.Namespace) -> int:
+    from backend.research.application.qasper_answer_rejudge import QasperAnswerRejudgeError
+
+    try:
+        report = _build_answer_rejudge_service(args).run()
+    except QasperAnswerRejudgeError as exc:
+        _print_json({"operation": "answer_rejudge", "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, RuntimeError) as exc:
+        _print_json({"operation": "answer_rejudge", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_rejudge", "valid": True, **report})
+    return 0
+
+
+def _dispatch_answer(args: argparse.Namespace) -> int:
+    from framework.shared.errors import FrameworkError
+
+    try:
+        report = _build_answer_service(args).run()
+    except (ValueError, OSError, RuntimeError, FrameworkError) as exc:
+        _print_json({"operation": "answer_run", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_run", "valid": True, **report})
+    return 0
+
+
+def _build_replay_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_retrieval_replay import build_qasper_retrieval_replay_service
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("answer replay requires --dataset-path and --cache-path")
+    return build_qasper_retrieval_replay_service(
+        dataset_path=args.dataset_path.resolve(),
+        cache_path=args.cache_path.resolve(),
+        query_vector_path=args.query_vector_path.resolve(),
+        source_run_directory=args.source_run_dir.resolve(),
+        output_directory=args.output_dir.resolve(),
+        max_context_items=getattr(args, "max_context_items", None),
+        max_context_tokens=getattr(args, "max_context_tokens", None),
+    )
+
+
+def _backfill_query_vectors(args: argparse.Namespace) -> dict[str, Any]:
+    from interfaces.composition.qasper_evaluation import backfill_qasper_replay_query_vectors
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("backfill-query-vectors requires --dataset-path and --cache-path")
+    return backfill_qasper_replay_query_vectors(
+        dataset_path=args.dataset_path.resolve(),
+        cache_path=args.cache_path.resolve(),
+        query_vector_path=args.query_vector_path.resolve(),
+        blocked_replay_directory=args.blocked_replay_dir.resolve(),
+    )
+
+
+def _dispatch_backfill_query_vectors(args: argparse.Namespace) -> int:
+    from backend.research.application.qasper_query_vector_backfill import QasperQueryVectorBackfillError
+
+    try:
+        result = _backfill_query_vectors(args)
+    except QasperQueryVectorBackfillError as exc:
+        # Backfill diagnostics name artifact fields only, so they are safe to show.
+        _print_json({"operation": "answer_backfill_query_vectors", "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, RuntimeError) as exc:
+        _print_json({"operation": "answer_backfill_query_vectors", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": "answer_backfill_query_vectors", "valid": True, **result})
+    return 0
+
+
+def _dispatch_replay(args: argparse.Namespace) -> int:
+    try:
+        report = _build_replay_service(args).run()
+    except (ValueError, OSError, RuntimeError) as exc:
+        _print_json({"operation": "answer_replay", "reason": _safe_reason(exc), "valid": False})
+        return 2
+    valid = report.get("status") == "completed"
+    _print_json({"operation": "answer_replay", "valid": valid, **report})
+    return 0 if valid else 1
+
+
+def _build_calibration_service(args: argparse.Namespace) -> Any:
+    from interfaces.composition.qasper_evaluation import build_qasper_answer_calibration_service
+
+    if args.dataset_path is None or args.cache_path is None:
+        raise ValueError("calibration requires --dataset-path and --cache-path")
+    return build_qasper_answer_calibration_service(
+        dataset_path=args.dataset_path.resolve(), cache_path=args.cache_path.resolve(),
+    )
+
+
+def _dispatch_calibration(args: argparse.Namespace) -> int:
+    from backend.research.rag.evaluation.qasper_answer_calibration import CalibrationLabelError
+
+    action = args._qasper_action
+    try:
+        service = _build_calibration_service(args)
+        if action == "calibrate_export":
+            result = service.export(
+                run_directory=str(args.run_dir.resolve()), output_directory=str(args.output_dir.resolve()),
+                size=args.size, seed=args.seed,
+            )
+        else:
+            result = service.score(calibration_directory=str(args.calibration_dir.resolve()))
+    except CalibrationLabelError as exc:
+        # Label diagnostics name only case ids and columns, so the reviewer can fix the sheet.
+        _print_json({"operation": action, "reason": str(exc), "valid": False})
+        return 2
+    except (ValueError, OSError, KeyError) as exc:
+        _print_json({"operation": action, "reason": _safe_reason(exc), "valid": False})
+        return 2
+    _print_json({"operation": action, "valid": True, **result})
+    return 0
+
+
 def _dispatch(args: argparse.Namespace) -> int:
     action = args._qasper_action
+    if action == "answer_run":
+        return _dispatch_answer(args)
+    if action == "answer_merge":
+        return _dispatch_answer_merge(args)
+    if action == "answer_rejudge":
+        return _dispatch_answer_rejudge(args)
+    if action == "answer_replay":
+        return _dispatch_replay(args)
+    if action == "answer_backfill_query_vectors":
+        return _dispatch_backfill_query_vectors(args)
+    if action in {"calibrate_export", "calibrate_score"}:
+        return _dispatch_calibration(args)
     parameters = None
     grid = None
     profiles: tuple[str, ...] = ()

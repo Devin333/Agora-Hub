@@ -113,6 +113,8 @@ class PaperKernelRAGRetriever:
             "ref_count": len(result.ref_chunks),
             "section_index": section_index,
         }
+        if "section_navigation" in result.metadata:
+            self.last_metadata["section_navigation"] = dict(result.metadata["section_navigation"])
         return tuple(self._chunk_adapter.to_rag_evidence(chunk) for chunk in chunks)
 
 

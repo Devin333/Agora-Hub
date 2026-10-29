@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 import re
 
@@ -9,34 +10,24 @@ from framework.rag.evaluation.failure_reason import RAGFailureReason
 from framework.rag.evaluation.report import MetricValue
 
 
-DEFAULT_ABSTAIN_MARKERS = (
-    "cannot determine",
-    "cannot answer",
-    "does not contain",
-    "does not discuss",
-    "insufficient evidence",
-    "not enough evidence",
-    "not stated",
-    "not discussed",
-    "not mentioned",
-    "does not mention",
-    "does not include",
-    "does not state",
-    "do not mention",
-    "do not discuss",
-    "do not include",
-    "do not state",
-    "not in the provided context",
-    "not available from the passages",
-    "provided context does not mention",
-    "provided passages do not mention",
-    "context does not mention",
-    "contains no mention",
-    "contain nothing about",
-    "contains nothing about",
-    "no mention of",
-    "no evidence",
-)
+class AnswerOutcome(StrEnum):
+    """What the system actually did for one evaluated question."""
+
+    ANSWERED = "answered"
+    ABSTAINED = "abstained"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    HALTED = "halted"
+    FAILED = "failed"
+
+    @property
+    def is_refusal(self) -> bool:
+        return self in {AnswerOutcome.ABSTAINED, AnswerOutcome.INSUFFICIENT_EVIDENCE}
+
+    @property
+    def is_system_failure(self) -> bool:
+        return self in {AnswerOutcome.HALTED, AnswerOutcome.FAILED}
+
+
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
 _STRUCTURAL_FACT_STOPWORDS = {
     "figure",
@@ -101,6 +92,7 @@ class AnswerMetricCase:
     case_id: str
     question: str
     answer: str
+    outcome: AnswerOutcome
     expected_facts: tuple[str, ...] = ()
     cited_evidence_ids: tuple[str, ...] = ()
     context_evidence_ids: tuple[str, ...] = ()
@@ -117,6 +109,9 @@ class AnswerMetricCase:
             raise ValueError("case_id is required")
         object.__setattr__(self, "question", str(self.question or ""))
         object.__setattr__(self, "answer", str(self.answer or ""))
+        object.__setattr__(self, "outcome", AnswerOutcome(self.outcome))
+        if self.outcome is not AnswerOutcome.ANSWERED and self.answer.strip():
+            raise ValueError("only answered cases may carry answer text")
         object.__setattr__(self, "expected_facts", _clean_tuple(self.expected_facts))
         object.__setattr__(self, "cited_evidence_ids", _clean_tuple(self.cited_evidence_ids))
         object.__setattr__(self, "context_evidence_ids", _clean_tuple(self.context_evidence_ids))
@@ -145,6 +140,8 @@ class AnswerMetricScore:
     equivalent_citation_gold_coverage: float | None = None
     equivalent_gold_supported: bool = False
     failure_reason: str = ""
+    # Why an expected abstention counted as correct: "refusal", "cited_negation", or "".
+    abstention_basis: str = ""
     matched_facts: tuple[str, ...] = ()
     missing_facts: tuple[str, ...] = ()
 
@@ -155,18 +152,54 @@ def score_answer_case(
     fact_match_threshold: float = 0.75,
     success_fact_threshold: float = 0.8,
     success_citation_threshold: float = 0.5,
-    abstain_markers: Sequence[str] = DEFAULT_ABSTAIN_MARKERS,
 ) -> AnswerMetricScore:
-    if case.expected_abstain:
-        abstention_correct = 1.0 if looks_like_abstention(case.answer, abstain_markers=abstain_markers) else 0.0
+    outcome = case.outcome
+    if outcome.is_system_failure:
+        # The system produced no answer to judge; no quality or refusal metric applies.
         return AnswerMetricScore(
             case=case,
             fact_coverage=None,
             citation_grounding=None,
             source_locator_grounding=None,
-            abstention_correct=abstention_correct,
-            answer_success=abstention_correct == 1.0,
-            failure_reason="" if abstention_correct == 1.0 else RAGFailureReason.ABSTENTION_EXPECTED.value,
+            abstention_correct=None,
+            answer_success=False,
+            failure_reason=RAGFailureReason.SYSTEM_FAILURE.value,
+        )
+
+    if case.expected_abstain:
+        basis = abstention_basis(case)
+        correct = bool(basis)
+        return AnswerMetricScore(
+            case=case,
+            fact_coverage=None,
+            citation_grounding=None,
+            source_locator_grounding=None,
+            abstention_correct=1.0 if correct else 0.0,
+            answer_success=correct,
+            failure_reason="" if correct else RAGFailureReason.ABSTENTION_WRONG.value,
+            abstention_basis=basis,
+        )
+
+    strict_retrieval_context_coverage = id_coverage(case.context_evidence_ids, case.gold_evidence_ids)
+    equivalent_retrieval_context_coverage = evidence_support_coverage(
+        case.context_evidence_ids,
+        case.gold_evidence_ids,
+        case.equivalent_gold_evidence_ids,
+    )
+    if outcome.is_refusal:
+        # Context coverage still explains why the refusal happened; the answer-level
+        # metrics have no answer to measure.
+        return AnswerMetricScore(
+            case=case,
+            fact_coverage=None,
+            citation_grounding=None,
+            source_locator_grounding=None,
+            abstention_correct=None,
+            answer_success=False,
+            retrieval_context_coverage=equivalent_retrieval_context_coverage,
+            strict_retrieval_context_coverage=strict_retrieval_context_coverage,
+            equivalent_retrieval_context_coverage=equivalent_retrieval_context_coverage,
+            failure_reason=RAGFailureReason.ABSTAINED_OVER_CONSERVATIVE.value,
         )
 
     fact_score, matched, missing = fact_coverage_details(
@@ -174,13 +207,7 @@ def score_answer_case(
         case.expected_facts,
         threshold=fact_match_threshold,
     )
-    strict_retrieval_context_coverage = id_coverage(case.context_evidence_ids, case.gold_evidence_ids)
     strict_citation_gold_coverage = id_coverage(case.cited_evidence_ids, case.gold_evidence_ids)
-    equivalent_retrieval_context_coverage = evidence_support_coverage(
-        case.context_evidence_ids,
-        case.gold_evidence_ids,
-        case.equivalent_gold_evidence_ids,
-    )
     equivalent_citation_gold_coverage = evidence_support_coverage(
         case.cited_evidence_ids,
         case.gold_evidence_ids,
@@ -196,9 +223,7 @@ def score_answer_case(
         and citation_gold_coverage >= success_citation_threshold
     )
     fact_passed = fact_score is None or fact_score >= success_fact_threshold
-    abstained = looks_like_abstention(case.answer, abstain_markers=abstain_markers)
-    substantive_answer = not abstained or fact_score is not None and fact_passed
-    answer_success = fact_passed and citation_passed and substantive_answer
+    answer_success = fact_passed and citation_passed
     failure_reason = _answer_failure_reason(
         case,
         fact_coverage=fact_score,
@@ -208,7 +233,6 @@ def score_answer_case(
         citation_passed=citation_passed,
         answer_success=answer_success,
         success_fact_threshold=success_fact_threshold,
-        abstain_markers=abstain_markers,
     )
     return AnswerMetricScore(
         case=case,
@@ -319,14 +343,44 @@ def answer_relevance(case: AnswerMetricCase) -> float:
 
 
 def faithfulness_proxy(case: AnswerMetricCase) -> float:
-    if looks_like_abstention(case.answer):
-        return 1.0 if case.expected_abstain else 0.0
+    if case.expected_abstain:
+        return 1.0 if abstention_basis(case) else 0.0
+    if case.outcome is not AnswerOutcome.ANSWERED:
+        return 0.0
     return fact_coverage(case) * citation_grounding(case)
 
 
 def abstention_accuracy(case: AnswerMetricCase) -> float:
-    abstained = looks_like_abstention(case.answer)
-    return 1.0 if abstained == case.expected_abstain else 0.0
+    if case.expected_abstain:
+        return 1.0 if abstention_basis(case) else 0.0
+    return 0.0 if case.outcome.is_refusal else 1.0
+
+
+_POLAR_QUESTION_RE = re.compile(
+    r"^\s*(?:does|do|did|is|are|was|were|has|have|had|can|could|will|would|should)\b",
+    re.IGNORECASE,
+)
+_NEGATION_ANSWER_RE = re.compile(r"^\W*no\b", re.IGNORECASE)
+
+
+def abstention_basis(case: AnswerMetricCase) -> str:
+    """Why a case satisfies an expected abstention, or "" when it does not.
+
+    ``refusal``: the system declined (model abstention or insufficient evidence).
+    ``cited_negation``: a yes/no question answered with an explicit "No" that cites
+    retrieved context. For "Does the paper report X?" that is the correct answer, and
+    the citation shows it is grounded rather than asserted from outside knowledge.
+    """
+    if case.outcome.is_refusal:
+        return "refusal"
+    if (
+        case.outcome is AnswerOutcome.ANSWERED
+        and case.cited_evidence_ids
+        and _POLAR_QUESTION_RE.match(case.question)
+        and _NEGATION_ANSWER_RE.match(case.answer)
+    ):
+        return "cited_negation"
+    return ""
 
 
 def evaluate_answer_case(case: AnswerMetricCase) -> tuple[MetricValue, ...]:
@@ -339,15 +393,6 @@ def evaluate_answer_case(case: AnswerMetricCase) -> tuple[MetricValue, ...]:
     )
 
 
-def looks_like_abstention(
-    answer: str,
-    *,
-    abstain_markers: Sequence[str] = DEFAULT_ABSTAIN_MARKERS,
-) -> bool:
-    normalized = _normalize(answer)
-    return any(_normalize(marker) in normalized for marker in abstain_markers if str(marker).strip())
-
-
 def _answer_failure_reason(
     case: AnswerMetricCase,
     *,
@@ -358,7 +403,6 @@ def _answer_failure_reason(
     citation_passed: bool,
     answer_success: bool,
     success_fact_threshold: float,
-    abstain_markers: Sequence[str],
 ) -> str:
     if answer_success:
         return ""
@@ -380,8 +424,6 @@ def _answer_failure_reason(
         return RAGFailureReason.FACT_MATCH_LOW.value
     if not citation_passed:
         return RAGFailureReason.CITATION_MISSING_SOURCE.value
-    if looks_like_abstention(case.answer, abstain_markers=abstain_markers):
-        return RAGFailureReason.ABSTENTION_EXPECTED.value
     return RAGFailureReason.ANSWER_NOT_GROUNDED.value
 
 
@@ -559,7 +601,8 @@ def _clean_tuple(values: Iterable[Any]) -> tuple[str, ...]:
 __all__ = [
     "AnswerMetricCase",
     "AnswerMetricScore",
-    "DEFAULT_ABSTAIN_MARKERS",
+    "AnswerOutcome",
+    "abstention_basis",
     "abstention_accuracy",
     "answer_relevance",
     "citation_grounding",
@@ -570,6 +613,5 @@ __all__ = [
     "faithfulness_proxy",
     "id_coverage",
     "locator_coverage",
-    "looks_like_abstention",
     "score_answer_case",
 ]

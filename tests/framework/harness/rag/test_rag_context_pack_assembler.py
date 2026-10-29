@@ -111,3 +111,67 @@ def test_context_pack_assembler_rejects_invalid_model_input_limit(
             accepted_evidence=(),
             policy=RAGExecutionPolicy.from_session_spec(spec),
         )
+
+
+def _candidate(index: int, words: int) -> EvidenceCandidate:
+    return EvidenceCandidate(
+        evidence_id=f"evidence:{index}",
+        title=f"Passage {index}",
+        summary=" ".join(f"w{index}" for _ in range(words)),
+        source_ref=f"source://paper#p{index}",
+        span_refs=(f"source://paper#p{index}:s1",),
+        evidence_type="method",
+        confidence=0.9,
+        freshness="static-fixture",
+        lineage=("retrieval.fake",),
+    )
+
+
+def test_context_pack_keeps_the_rank_ordered_prefix_that_fits_the_token_budget() -> None:
+    original_spec = fake_rag_session_spec()
+    spec = replace(
+        original_spec,
+        budget=replace(original_spec.budget, max_context_items=8, max_context_tokens=100),
+        context_policy={**original_spec.context_policy, "max_input_tokens": 8_192},
+    )
+    assembler = RAGContextPackAssembler(FakeContextAssembler())
+    # Each candidate costs its summary words plus two title words.
+    evidence = (_candidate(1, 40), _candidate(2, 40), _candidate(3, 40), _candidate(4, 5))
+
+    pack = assembler.assemble(
+        spec=spec,
+        accepted_evidence=evidence,
+        memory_context=({"memory_ref": "memory://hit", "summary": "a b c d e f g h i j k l m n o p q r s t"},),
+        policy=RAGExecutionPolicy.from_session_spec(spec),
+    )
+
+    # The short fourth passage does not jump the queue past the third, which no longer fits.
+    assert [item.evidence_id for item in pack.accepted_evidence] == ["evidence:1", "evidence:2"]
+    assert pack.metadata["context_budget_dropped_evidence_ids"] == ["evidence:3", "evidence:4"]
+    assert [row["status"] for row in pack.evidence_trace] == [
+        "accepted", "accepted", "budget_dropped", "budget_dropped",
+    ]
+    # Memory only gets what evidence left (16 tokens), so the 20-token hit is dropped.
+    assert pack.memory_context == ()
+    assert pack.metadata["context_budget_dropped_memory_hits"] == 1
+    assert pack.budget_snapshot.context_tokens_used == 84
+    assert pack.budget_snapshot.context_items_used == 2
+    assert assembler.envelopes[0].metadata["accepted_evidence"] == [
+        item.to_dict() for item in pack.accepted_evidence
+    ]
+    assert "dropped 2 over the context budget" in pack.assembly_summary
+
+
+def test_context_pack_reports_items_beyond_the_item_budget_as_dropped() -> None:
+    original_spec = fake_rag_session_spec()
+    spec = replace(original_spec, budget=replace(original_spec.budget, max_context_items=2, max_context_tokens=1024))
+
+    pack = RAGContextPackAssembler(FakeContextAssembler()).assemble(
+        spec=spec,
+        accepted_evidence=(_candidate(1, 3), _candidate(2, 3), _candidate(3, 3)),
+        policy=RAGExecutionPolicy.from_session_spec(spec),
+    )
+
+    assert [item.evidence_id for item in pack.accepted_evidence] == ["evidence:1", "evidence:2"]
+    assert pack.metadata["context_budget_dropped_evidence_ids"] == ["evidence:3"]
+    assert pack.budget_snapshot.context_tokens_used == 10

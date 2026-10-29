@@ -1,0 +1,1190 @@
+{
+  "protocol": "business_question_bank_duplicate_equivalence_offline_replay_v1",
+  "date": "2026-10-23",
+  "new_model_calls": 0,
+  "source_answers": ".newsroom/eval/business_question_bank_v1_live_20261022T202201Z/answers.jsonl",
+  "source_answers_sha256": "9d639cc43a93c999fb05395c63b9a90fe858749301e370b062b2faa932db4d54",
+  "source_saved_rows": 42,
+  "removed_case_ids": [
+    "single_007"
+  ],
+  "snapshot_path": "data/eval/golden_corpus_snapshot.json",
+  "snapshot_file_sha256": "b7d562a8cd5ffe64ee84b9c921c5010d6766385d0e50120678f7748d4e1331d5",
+  "question_bank_path": "data/eval/business_question_bank_v1_draft.jsonl",
+  "question_bank_sha256": "6052ab17ac1bc09c3f3dbd27e044c70105bdf3c2561b1e8bbadb7f9ea989365e",
+  "question_bank_coverage": {
+    "total_rows": 89,
+    "scored": 41,
+    "skipped": 48,
+    "scored_by_category": {
+      "insufficient_evidence": 12,
+      "single_paper": 29
+    },
+    "skipped_by_reason": {
+      "needs_annotation": 48
+    }
+  },
+  "comparison": "两组均使用当前 scorer 和同一批保留的 41 条历史模型回答；唯一差异是是否启用 corpus 派生的等价关系。明确否定加引用的拒答规则在两组中均已启用。",
+  "limits": [
+    "本次为确定性离线重评分，不是重新调用真实模型。",
+    "原始检索使用 fixture 哈希索引，不代表生产 embedding 检索质量。",
+    "这些业务题未标注 answer_facts；此处成功率不等于事实正确率。"
+  ],
+  "without_corpus_equivalence": {
+    "total": 41,
+    "successful": 36,
+    "success_rate": 0.8780487804878049,
+    "citation_gold_coverage": 0.8928571428571429,
+    "citation_gold_coverage_denominator": 28,
+    "strict_citation_gold_coverage": 0.8928571428571429,
+    "abstention_accuracy": 1.0,
+    "abstention_accuracy_denominator": 11,
+    "abstention_basis_counts": {
+      "cited_negation": 2,
+      "refusal": 9
+    },
+    "system_failure_rate": 0.024390243902439025,
+    "over_abstention_rate": 0.034482758620689655,
+    "outcome_counts": {
+      "answered": 30,
+      "abstained": 10,
+      "halted": 1
+    },
+    "failure_reasons": {
+      "abstained_over_conservative": 1,
+      "citation_missing_source": 3,
+      "system_failure": 1
+    }
+  },
+  "with_corpus_equivalence": {
+    "total": 41,
+    "successful": 39,
+    "success_rate": 0.9512195121951219,
+    "citation_gold_coverage": 1.0,
+    "citation_gold_coverage_denominator": 28,
+    "strict_citation_gold_coverage": 0.8928571428571429,
+    "abstention_accuracy": 1.0,
+    "abstention_accuracy_denominator": 11,
+    "abstention_basis_counts": {
+      "cited_negation": 2,
+      "refusal": 9
+    },
+    "system_failure_rate": 0.024390243902439025,
+    "over_abstention_rate": 0.034482758620689655,
+    "outcome_counts": {
+      "answered": 30,
+      "abstained": 10,
+      "halted": 1
+    },
+    "failure_reasons": {
+      "abstained_over_conservative": 1,
+      "system_failure": 1
+    }
+  },
+  "changed_case_ids": [
+    "single_001",
+    "single_002",
+    "single_008"
+  ],
+  "cases": [
+    {
+      "case_id": "single_001",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_80edd06882c4"
+      ],
+      "gold_chunk_ids": [
+        "chunk_eb320183e948"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_eb320183e948",
+        "chunk_80edd06882c4"
+      ],
+      "before_answer_success": false,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 0.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 0.0,
+      "after_failure_reason": "",
+      "question": "What does the text say is shown in Table `tab:num_instances` regarding the datasets?",
+      "paper_id": "2005.11401",
+      "expected_behavior": "answer",
+      "answer": "Table `tab:num_instances` shows the number of training, development, and test datapoints in each dataset. [1]",
+      "context_chunk_ids": [
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948",
+        "chunk_880f55a0dead"
+      ]
+    },
+    {
+      "case_id": "single_002",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_80edd06882c4"
+      ],
+      "gold_chunk_ids": [
+        "chunk_eb320183e948"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_eb320183e948",
+        "chunk_80edd06882c4"
+      ],
+      "before_answer_success": false,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 0.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 0.0,
+      "after_failure_reason": "",
+      "question": "Which dataset splits are explicitly mentioned as having their numbers of datapoints shown in Table `tab:num_instances`?",
+      "paper_id": "2005.11401",
+      "expected_behavior": "answer",
+      "answer": "Training, development, and test splits [1].",
+      "context_chunk_ids": [
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948",
+        "chunk_880f55a0dead"
+      ]
+    },
+    {
+      "case_id": "single_003",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_80edd06882c4"
+      ],
+      "gold_chunk_ids": [
+        "chunk_80edd06882c4"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What does the text state is shown in Table `tab:num_instances`?",
+      "paper_id": "2005.11401",
+      "expected_behavior": "answer",
+      "answer": "Table `tab:num_instances` shows the number of training, development, and test datapoints in each dataset. [1]",
+      "context_chunk_ids": [
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948",
+        "chunk_880f55a0dead"
+      ]
+    },
+    {
+      "case_id": "single_004",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_80edd06882c4"
+      ],
+      "gold_chunk_ids": [
+        "chunk_80edd06882c4"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "Which dataset split counts are reported in the text as being included for each dataset?",
+      "paper_id": "2005.11401",
+      "expected_behavior": "answer",
+      "answer": "The text reports the number of training, development, and test datapoints for each dataset [2].",
+      "context_chunk_ids": [
+        "chunk_880f55a0dead",
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948"
+      ]
+    },
+    {
+      "case_id": "single_005",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_880f55a0dead"
+      ],
+      "gold_chunk_ids": [
+        "chunk_880f55a0dead"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_880f55a0dead"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "Why were some gold sentences included in the human evaluation, and what action was taken based on annotator performance on those examples?",
+      "paper_id": "2005.11401",
+      "expected_behavior": "answer",
+      "answer": "Gold sentences were included to assess annotator accuracy. The annotations from two annotators who performed poorly on them were removed from the results. [1]",
+      "context_chunk_ids": [
+        "chunk_880f55a0dead",
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948"
+      ]
+    },
+    {
+      "case_id": "single_006",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_880f55a0dead"
+      ],
+      "gold_chunk_ids": [
+        "chunk_880f55a0dead"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_880f55a0dead"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "How did the evaluation setup reduce screen-position bias when presenting sentence A and sentence B to annotators?",
+      "paper_id": "2005.11401",
+      "expected_behavior": "answer",
+      "answer": "The correspondence of each model to sentence A or B was randomized for every example [1].",
+      "context_chunk_ids": [
+        "chunk_880f55a0dead",
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948"
+      ]
+    },
+    {
+      "case_id": "single_008",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_2b509ff3c83d"
+      ],
+      "gold_chunk_ids": [
+        "chunk_34a0b45c1acd"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_34a0b45c1acd",
+        "chunk_2b509ff3c83d"
+      ],
+      "before_answer_success": false,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 0.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 0.0,
+      "after_failure_reason": "",
+      "question": "What does the experiments text say will be described in detail in the section, besides the benchmarks used?",
+      "paper_id": "2002.08909",
+      "expected_behavior": "answer",
+      "answer": "The section will also describe the different approaches compared empirically [1].",
+      "context_chunk_ids": [
+        "chunk_2b509ff3c83d",
+        "chunk_34a0b45c1acd"
+      ]
+    },
+    {
+      "case_id": "single_009",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [
+        "chunk_2b509ff3c83d"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_2b509ff3c83d",
+        "chunk_34a0b45c1acd"
+      ],
+      "before_answer_success": false,
+      "after_answer_success": false,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "abstained_over_conservative",
+      "question": "What task is the approach evaluated on in the experiments section?",
+      "paper_id": "2002.08909",
+      "expected_behavior": "answer",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_2b509ff3c83d",
+        "chunk_34a0b45c1acd"
+      ]
+    },
+    {
+      "case_id": "single_010",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_2b509ff3c83d"
+      ],
+      "gold_chunk_ids": [
+        "chunk_2b509ff3c83d"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_2b509ff3c83d",
+        "chunk_34a0b45c1acd"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What does the experiments section describe in detail besides the benchmarks used?",
+      "paper_id": "2002.08909",
+      "expected_behavior": "answer",
+      "answer": "The experiments section also describes the different approaches compared empirically [1].",
+      "context_chunk_ids": [
+        "chunk_2b509ff3c83d",
+        "chunk_34a0b45c1acd"
+      ]
+    },
+    {
+      "case_id": "single_011",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_53a347483adf"
+      ],
+      "gold_chunk_ids": [
+        "chunk_53a347483adf"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_53a347483adf"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "How many times was the 5-shot experiment run to assess the effect of noise and variance?",
+      "paper_id": "2208.03299",
+      "expected_behavior": "answer",
+      "answer": "The 5-shot experiment was run **5 times** [1].",
+      "context_chunk_ids": [
+        "chunk_53a347483adf",
+        "chunk_ec090122b110"
+      ]
+    },
+    {
+      "case_id": "single_012",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_53a347483adf"
+      ],
+      "gold_chunk_ids": [
+        "chunk_53a347483adf"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_53a347483adf"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What standard deviation on the aggregated metrics was observed across the repeated MMLU runs when using the same hyperparameters?",
+      "paper_id": "2208.03299",
+      "expected_behavior": "answer",
+      "answer": "The standard deviation was 0.5 on the aggregated metrics [1].",
+      "context_chunk_ids": [
+        "chunk_53a347483adf",
+        "chunk_ec090122b110"
+      ]
+    },
+    {
+      "case_id": "single_013",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_ec090122b110"
+      ],
+      "gold_chunk_ids": [
+        "chunk_ec090122b110"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_ec090122b110"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What problem in few-shot learning is described as being well-known in the text?",
+      "paper_id": "2208.03299",
+      "expected_behavior": "answer",
+      "answer": "Few-shot learning is well-known to suffer from high inter-run variance [1].",
+      "context_chunk_ids": [
+        "chunk_ec090122b110",
+        "chunk_53a347483adf"
+      ]
+    },
+    {
+      "case_id": "single_014",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_53a347483adf",
+        "chunk_ec090122b110"
+      ],
+      "gold_chunk_ids": [
+        "chunk_ec090122b110"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_ec090122b110"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "Which result does the text say was quoted in the main paper?",
+      "paper_id": "2208.03299",
+      "expected_behavior": "answer",
+      "answer": "The main paper quoted the result obtained from the first run of the 5-shot experiment. [1][2]",
+      "context_chunk_ids": [
+        "chunk_53a347483adf",
+        "chunk_ec090122b110"
+      ]
+    },
+    {
+      "case_id": "single_015",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_6b083d67da2b"
+      ],
+      "gold_chunk_ids": [
+        "chunk_6b083d67da2b"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_6b083d67da2b"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What are the false positive test execution rates reported for MBPP Python and HumanEval Python?",
+      "paper_id": "2303.11366",
+      "expected_behavior": "answer",
+      "answer": "MBPP Python: 16.3%; HumanEval Python: 1.4% [1]",
+      "context_chunk_ids": [
+        "chunk_6b083d67da2b",
+        "chunk_0ba27e6ebafb",
+        "chunk_8653977437ce"
+      ]
+    },
+    {
+      "case_id": "single_016",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_6b083d67da2b"
+      ],
+      "gold_chunk_ids": [
+        "chunk_6b083d67da2b"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_6b083d67da2b"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "How do the baseline pass@1 accuracies compare between HumanEval Python and MBPP Python?",
+      "paper_id": "2303.11366",
+      "expected_behavior": "answer",
+      "answer": "The baseline pass@1 accuracies are relatively similar for HumanEval and MBPP Python. [1]",
+      "context_chunk_ids": [
+        "chunk_6b083d67da2b",
+        "chunk_0ba27e6ebafb",
+        "chunk_8653977437ce"
+      ]
+    },
+    {
+      "case_id": "single_017",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_8653977437ce"
+      ],
+      "gold_chunk_ids": [
+        "chunk_8653977437ce"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_8653977437ce"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What memory size of experiences is used in the self-reflection loop for the decision-making setup in AlfWorld?",
+      "paper_id": "2303.11366",
+      "expected_behavior": "answer",
+      "answer": "3 experiences [1]",
+      "context_chunk_ids": [
+        "chunk_8653977437ce",
+        "chunk_0ba27e6ebafb",
+        "chunk_6b083d67da2b"
+      ]
+    },
+    {
+      "case_id": "single_018",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_8653977437ce"
+      ],
+      "gold_chunk_ids": [
+        "chunk_8653977437ce"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_8653977437ce"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "How is the self-reflection loop described as affecting the binary signal after each trial?",
+      "paper_id": "2303.11366",
+      "expected_behavior": "answer",
+      "answer": "After each trial, the self-reflection loop is used to amplify the binary signal, similarly to the AlfWorld decision-making setup [1].",
+      "context_chunk_ids": [
+        "chunk_8653977437ce",
+        "chunk_0ba27e6ebafb",
+        "chunk_6b083d67da2b"
+      ]
+    },
+    {
+      "case_id": "single_019",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_0ba27e6ebafb"
+      ],
+      "gold_chunk_ids": [
+        "chunk_0ba27e6ebafb"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_0ba27e6ebafb"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What stopping condition was used in the Reflexion runs when allowing the agent to gather experience and retry failed tasks?",
+      "paper_id": "2303.11366",
+      "expected_behavior": "answer",
+      "answer": "The agent retried failed tasks until it produced 3 consecutive failed attempts on that task. [2]",
+      "context_chunk_ids": [
+        "chunk_8653977437ce",
+        "chunk_0ba27e6ebafb",
+        "chunk_6b083d67da2b"
+      ]
+    },
+    {
+      "case_id": "single_020",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_0ba27e6ebafb"
+      ],
+      "gold_chunk_ids": [
+        "chunk_0ba27e6ebafb"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_0ba27e6ebafb"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What was observed about the ability of ReAct-only, CoT-only, and CoT (GT)-only implementations to solve tasks that had failed on the first trial when using a temperature of 0.7?",
+      "paper_id": "2303.11366",
+      "expected_behavior": "answer",
+      "answer": "At a temperature of 0.7, none of the ReAct-only, CoT-only, or CoT (GT)-only implementations solved any tasks that had failed on the first trial in subsequent attempts [1].",
+      "context_chunk_ids": [
+        "chunk_0ba27e6ebafb",
+        "chunk_8653977437ce",
+        "chunk_6b083d67da2b"
+      ]
+    },
+    {
+      "case_id": "single_021",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_13b6277eb040"
+      ],
+      "gold_chunk_ids": [
+        "chunk_13b6277eb040"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_13b6277eb040"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "How many participants took part in the within-subjects study that compared interview responses generated by four agent architectures and a human-authored condition for the same agent?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "100 participants [1]",
+      "context_chunk_ids": [
+        "chunk_13b6277eb040",
+        "chunk_1e81450a626e",
+        "chunk_348a2df26104",
+        "chunk_71b2d2c01b25"
+      ]
+    },
+    {
+      "case_id": "single_022",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_13b6277eb040"
+      ],
+      "gold_chunk_ids": [
+        "chunk_13b6277eb040"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_13b6277eb040"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What were evaluators asked to rank from most to least believable in the experiment where one randomly chosen question from each of five question categories was shown with responses from all conditions?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "Evaluators ranked the five conditions—the responses generated by four different agent architectures and the human-authored condition for the same agent—from most to least believable. [1]",
+      "context_chunk_ids": [
+        "chunk_13b6277eb040",
+        "chunk_348a2df26104",
+        "chunk_1e81450a626e",
+        "chunk_71b2d2c01b25"
+      ]
+    },
+    {
+      "case_id": "single_023",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_348a2df26104"
+      ],
+      "gold_chunk_ids": [
+        "chunk_348a2df26104"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_348a2df26104"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What rating outputs does TrueSkill provide for each condition when given a set of ranked outcomes?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "TrueSkill provides a mean rating value (μ) and standard deviation (σ) for each condition [1].",
+      "context_chunk_ids": [
+        "chunk_348a2df26104",
+        "chunk_71b2d2c01b25",
+        "chunk_1e81450a626e",
+        "chunk_13b6277eb040"
+      ]
+    },
+    {
+      "case_id": "single_024",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_348a2df26104"
+      ],
+      "gold_chunk_ids": [
+        "chunk_348a2df26104"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_348a2df26104"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "How did the experiment convert participants’ rankings of five conditions into interval data for interpretable comparison?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "The experiment used participants’ rankings to calculate a TrueSkill rating for each condition. TrueSkill assigns each condition a mean rating and standard deviation; higher ratings indicate conditions that tended to beat lower-ranked conditions [1].",
+      "context_chunk_ids": [
+        "chunk_348a2df26104",
+        "chunk_13b6277eb040",
+        "chunk_1e81450a626e",
+        "chunk_71b2d2c01b25"
+      ]
+    },
+    {
+      "case_id": "single_025",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_1e81450a626e"
+      ],
+      "gold_chunk_ids": [
+        "chunk_1e81450a626e"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_1e81450a626e"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "Why did the researchers avoid re-simulating the experiment separately for each architecture when comparing architectures?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "They avoided re-simulating because each architecture’s simulation would diverge into a different state, making comparisons challenging [2].",
+      "context_chunk_ids": [
+        "chunk_348a2df26104",
+        "chunk_1e81450a626e",
+        "chunk_71b2d2c01b25",
+        "chunk_13b6277eb040"
+      ]
+    },
+    {
+      "case_id": "single_026",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_1e81450a626e"
+      ],
+      "gold_chunk_ids": [
+        "chunk_1e81450a626e"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_1e81450a626e"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What was the purpose of adding a human crowdworker-authored behavior condition, and what level of human performance was it intended to represent?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "The human crowdworker-authored condition provided a behavioral baseline, so the ablations could be judged against basic competency rather than only against one another. It was intended to represent a basic level of human performance, not maximal human expert performance. [1]",
+      "context_chunk_ids": [
+        "chunk_1e81450a626e",
+        "chunk_348a2df26104",
+        "chunk_71b2d2c01b25",
+        "chunk_13b6277eb040"
+      ]
+    },
+    {
+      "case_id": "single_027",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_71b2d2c01b25"
+      ],
+      "gold_chunk_ids": [
+        "chunk_71b2d2c01b25"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_71b2d2c01b25"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What integer value does the poignancy-rating prompt return for the memory “cleaning up the room,” and what value does it return for “asking your crush out on a date”?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "The prompt returns 2 for “cleaning up the room” and 8 for “asking your crush out on a date.” [1]",
+      "context_chunk_ids": [
+        "chunk_71b2d2c01b25",
+        "chunk_348a2df26104",
+        "chunk_13b6277eb040",
+        "chunk_1e81450a626e"
+      ]
+    },
+    {
+      "case_id": "single_028",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_71b2d2c01b25"
+      ],
+      "gold_chunk_ids": [
+        "chunk_71b2d2c01b25"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_71b2d2c01b25"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "When is the importance score for a memory object generated?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "answer",
+      "answer": "The importance score is generated when the memory object is created. [1]",
+      "context_chunk_ids": [
+        "chunk_71b2d2c01b25",
+        "chunk_348a2df26104",
+        "chunk_13b6277eb040",
+        "chunk_1e81450a626e"
+      ]
+    },
+    {
+      "case_id": "single_029",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ],
+      "gold_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What was the stated reason that the final answer was incorrect in the other two trials?",
+      "paper_id": "2308.08155",
+      "expected_behavior": "answer",
+      "answer": "The final answer was incorrect due to code execution errors. [1]",
+      "context_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ]
+    },
+    {
+      "case_id": "single_030",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ],
+      "gold_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ],
+      "equivalent_gold_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": 1.0,
+      "after_citation_gold_coverage": 1.0,
+      "strict_citation_gold_coverage": 1.0,
+      "after_failure_reason": "",
+      "question": "What is the title of Scenario 3 mentioned in the text?",
+      "paper_id": "2308.08155",
+      "expected_behavior": "answer",
+      "answer": "The title of Scenario 3 is “Multi-User Problem Solving” [1].",
+      "context_chunk_ids": [
+        "chunk_84200e63e3f1"
+      ]
+    },
+    {
+      "case_id": "abstain_001",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper report GPT-5 training data collection details?",
+      "paper_id": "1706.03762",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_52b2285cebe5"
+      ]
+    },
+    {
+      "case_id": "abstain_002",
+      "outcome": "halted",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": false,
+      "after_answer_success": false,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "system_failure",
+      "question": "Does this paper provide clinical trial outcomes for a cancer therapy?",
+      "paper_id": "1910.10683",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_aef079e4c85b"
+      ]
+    },
+    {
+      "case_id": "abstain_003",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper specify the launch date of a commercial smartphone product?",
+      "paper_id": "2010.11929",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_1d66a944e3b4"
+      ]
+    },
+    {
+      "case_id": "abstain_004",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper report carbon emissions from a national power grid?",
+      "paper_id": "2103.00020",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_afbb6884c406",
+        "chunk_8a5fca87dfa4",
+        "chunk_de422246c6ea",
+        "chunk_4e980a552c08"
+      ]
+    },
+    {
+      "case_id": "abstain_005",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper include a proof of the Riemann hypothesis?",
+      "paper_id": "2006.11239",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_966d58d27ed6"
+      ]
+    },
+    {
+      "case_id": "abstain_006",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper identify the winner of the 2026 FIFA World Cup?",
+      "paper_id": "2112.10752",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_d1d5933ef2f0",
+        "chunk_f6a8eee4a2c6",
+        "chunk_5d42f8378652"
+      ]
+    },
+    {
+      "case_id": "abstain_007",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper provide operating instructions for a microwave oven?",
+      "paper_id": "2005.11401",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_880f55a0dead",
+        "chunk_80edd06882c4",
+        "chunk_eb320183e948"
+      ]
+    },
+    {
+      "case_id": "abstain_008",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper report weather measurements from Shanghai on July 6, 2026?",
+      "paper_id": "2208.03299",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_ec090122b110",
+        "chunk_53a347483adf"
+      ]
+    },
+    {
+      "case_id": "abstain_009",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_3e1eafad17a1"
+      ],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper disclose a private API key used by the authors?",
+      "paper_id": "2302.13971",
+      "expected_behavior": "abstain",
+      "answer": "No. The provided passage contains only generic JavaScript HTTP request examples and does not disclose a private API key. [1]",
+      "context_chunk_ids": [
+        "chunk_3e1eafad17a1"
+      ]
+    },
+    {
+      "case_id": "abstain_010",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper provide audited financial statements for OpenAI in 2030?",
+      "paper_id": "2305.18290",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_bca7c0706d26"
+      ]
+    },
+    {
+      "case_id": "abstain_011",
+      "outcome": "answered",
+      "cited_chunk_ids": [
+        "chunk_8653977437ce",
+        "chunk_0ba27e6ebafb",
+        "chunk_6b083d67da2b"
+      ],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper describe the nutritional content of a restaurant menu?",
+      "paper_id": "2303.11366",
+      "expected_behavior": "abstain",
+      "answer": "No. The passages discuss reasoning benchmarks and programming tasks, not restaurant menus or nutritional content.[1][2][3]",
+      "context_chunk_ids": [
+        "chunk_8653977437ce",
+        "chunk_0ba27e6ebafb",
+        "chunk_6b083d67da2b"
+      ]
+    },
+    {
+      "case_id": "abstain_012",
+      "outcome": "abstained",
+      "cited_chunk_ids": [],
+      "gold_chunk_ids": [],
+      "equivalent_gold_chunk_ids": [],
+      "before_answer_success": true,
+      "after_answer_success": true,
+      "before_citation_gold_coverage": null,
+      "after_citation_gold_coverage": null,
+      "strict_citation_gold_coverage": null,
+      "after_failure_reason": "",
+      "question": "Does this paper prove that all household robots are legally liable for contracts?",
+      "paper_id": "2304.03442",
+      "expected_behavior": "abstain",
+      "answer": "",
+      "context_chunk_ids": [
+        "chunk_71b2d2c01b25",
+        "chunk_1e81450a626e",
+        "chunk_348a2df26104",
+        "chunk_13b6277eb040"
+      ]
+    }
+  ],
+  "verification": {
+    "command": ".venv/Scripts/python.exe -m scripts.dev smoke",
+    "exit_code": 0,
+    "completed_at": "2026-10-23T10:54:26.970158+08:00",
+    "pytest": {
+      "passed": 5284,
+      "skipped": 1,
+      "deselected": 23,
+      "warnings": 61,
+      "elapsed_seconds": 1943.75
+    },
+    "agent_loop": {
+      "status": "succeeded",
+      "network_calls": 0,
+      "run_id": "test-agent-loop-c9ac748b2dbc473991c6e39787fd98e5"
+    },
+    "sources_validation": {
+      "is_valid": true,
+      "error_count": 0,
+      "warning_count": 0
+    },
+    "smoke_log_path": ".tmp/business-qb-equivalence-smoke-20261023-3d91f630/smoke.log",
+    "smoke_log_sha256": "c8145359d39878339d521656e7ea6b9b31e9ededecd3457d036638bd79178191",
+    "independent_replay_case_arm_scores": 82
+  }
+}

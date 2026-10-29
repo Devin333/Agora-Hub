@@ -39,3 +39,16 @@ class QasperAssetReader(Protocol):
 class QasperArtifactStore(Protocol):
     def read(self, directory: str, name: str) -> bytes: ...
     def publish(self, directory: str, objects: Mapping[str, bytes]) -> None: ...
+
+
+class QasperRunCheckpointStore(Protocol):
+    """Append-only, durable progress log for one in-flight run.
+
+    It lives beside, never inside, the immutable output directory: the output is
+    published only once the run completes, the checkpoint only lets an
+    interrupted run resume without repeating finished cases.
+    """
+
+    def read_lines(self, directory: str) -> tuple[bytes, ...]: ...
+    def append_line(self, directory: str, line: bytes) -> None: ...
+    def discard(self, directory: str) -> None: ...

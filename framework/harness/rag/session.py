@@ -4,14 +4,15 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
+from framework.harness.context.assembler import ContextAdmissionRejectedError
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.memory.ports import ExecutionBoundMemoryPort, MemoryPort
 from framework.harness.mcp.policy import MCPToolRequest
 from framework.harness.mcp.ports import MCPToolPort
 from framework.harness.rag.answer_gate import RAGAnswerGate, unsupported_claims_from_answer_gate
-from framework.harness.rag.answer_worker import AnswerWorkerPort
+from framework.harness.rag.answer_worker import AnswerWorkerError, AnswerWorkerPort
 from framework.harness.rag.context_pack_assembler import RAGContextPackAssembler
-from framework.harness.rag.gates import RAGGateSuite, RAGGateResult, failed_gate_dicts
+from framework.harness.rag.gates import RAGEvidenceCoverageGate, RAGGateSuite, RAGGateResult, failed_gate_dicts
 from framework.harness.rag.models import (
     EvidenceCandidate,
     GroundedAnswerCandidate,
@@ -24,10 +25,17 @@ from framework.harness.rag.models import (
     RetrievalPlanCandidate,
     RetrievalStepResult,
     RetrievalStepSpec,
+    present_evidence_types,
 )
 from framework.harness.rag.metrics import RAGSessionMetrics, build_rag_session_metrics
 from framework.harness.rag.planner import DeterministicRAGPlanner, RAGPlanner
-from framework.harness.rag.policy import RAGDecision, RAGDecisionType, RAGExecutionPolicy, normalize_query
+from framework.harness.rag.policy import (
+    EVIDENCE_TYPE_COVERAGE_ADVISORY,
+    RAGDecision,
+    RAGDecisionType,
+    RAGExecutionPolicy,
+    normalize_query,
+)
 from framework.harness.rag.source_verifier import SourceVerifier
 from framework.harness.rag.telemetry import RAGTelemetry, RAGTelemetrySpan
 from framework.harness.rag.visibility import evidence_visible_to_tenant
@@ -156,7 +164,7 @@ class BoundedRAGSessionController(RAGSessionController):
     ) -> RAGSessionResult:
         state = RAGSessionState(
             spec=spec,
-            gap_report={"missing_evidence_types": list(spec.goal.required_evidence_types)},
+            gap_report=initial_gap_report(spec),
             telemetry=telemetry,
         )
         self._event(
@@ -197,10 +205,16 @@ class BoundedRAGSessionController(RAGSessionController):
             )
             self._event(state, "rag_plan_verified", {"round_index": round_index, "gate_results": _results(plan_results)})
             if any(result.passed is False for result in plan_results):
-                decision = self._handle_plan_failure(state, plan_results)
+                decision = self._handle_plan_failure(state, plan_results, policy)
                 if decision.decision_type == RAGDecisionType.REPLAN_QUERIES:
                     continue
-                status = RAGSessionStatus.HALTED
+                if decision.decision_type == RAGDecisionType.ASSEMBLE_CONTEXT:
+                    break
+                status = (
+                    RAGSessionStatus.INSUFFICIENT_EVIDENCE
+                    if decision.decision_type == RAGDecisionType.INSUFFICIENT_EVIDENCE
+                    else RAGSessionStatus.HALTED
+                )
                 break
 
             step_results = self._execute_plan(plan, state, policy)
@@ -247,6 +261,10 @@ class BoundedRAGSessionController(RAGSessionController):
                 )
                 self._event(state, "rag_replanned", decision.to_dict())
                 continue
+            gap_decision = self._evidence_type_gap_decision(state, policy, source_results)
+            if gap_decision is not None:
+                decision = gap_decision
+                break
             decision = RAGDecision(
                 RAGDecisionType.INSUFFICIENT_EVIDENCE,
                 "evidence coverage is incomplete and no controlled replan remains",
@@ -257,18 +275,29 @@ class BoundedRAGSessionController(RAGSessionController):
             status = RAGSessionStatus.INSUFFICIENT_EVIDENCE
             break
 
+        admission_failure: RAGDecision | None = None
         if decision.decision_type == RAGDecisionType.ASSEMBLE_CONTEXT:
-            pack = self.context_pack_assembler.assemble(
-                spec=spec,
-                accepted_evidence=tuple(state.accepted_evidence[: spec.budget.max_context_items]),
-                rejected_evidence=tuple(state.rejected_evidence),
-                conflicting_evidence=tuple(state.conflicting_evidence),
-                memory_context=tuple(state.memory_context[: spec.budget.max_memory_hits]),
-                artifact_refs=_dedupe_texts(state.artifact_refs),
-                gap_report=state.gap_report,
-                budget_snapshot=state.budget_snapshot,
-                policy=policy,
-            )
+            try:
+                pack = self.context_pack_assembler.assemble(
+                    spec=spec,
+                    accepted_evidence=_context_evidence(state.accepted_evidence, spec.budget.max_context_items),
+                    rejected_evidence=tuple(state.rejected_evidence),
+                    conflicting_evidence=tuple(state.conflicting_evidence),
+                    memory_context=tuple(state.memory_context[: spec.budget.max_memory_hits]),
+                    artifact_refs=_dedupe_texts(state.artifact_refs),
+                    gap_report=state.gap_report,
+                    budget_snapshot=state.budget_snapshot,
+                    policy=policy,
+                )
+            except ContextAdmissionRejectedError as exc:
+                admission_failure = self._context_admission_failed(state, exc)
+        if admission_failure is not None:
+            # The model was never called: this session fails, the caller decides
+            # whether the request is retried with a smaller context.
+            decision = admission_failure
+            status = RAGSessionStatus.FAILED
+            pack = None
+        elif decision.decision_type == RAGDecisionType.ASSEMBLE_CONTEXT:
             if pack.budget_snapshot is not None:
                 state.budget_snapshot = pack.budget_snapshot
             pack_results = self.gates.verify_context_pack(pack, policy=policy)
@@ -359,17 +388,33 @@ class BoundedRAGSessionController(RAGSessionController):
                     "max_generation_attempts": max_attempts,
                 },
             )
-            if execution_identity is None:
-                candidate = self.answer_worker.generate_answer(
-                    question=spec.goal.question,
-                    pack=current_pack,
+            try:
+                if execution_identity is None:
+                    candidate = self.answer_worker.generate_answer(
+                        question=spec.goal.question,
+                        pack=current_pack,
+                    )
+                else:
+                    candidate = self.answer_worker.generate_answer(
+                        question=spec.goal.question,
+                        pack=current_pack,
+                        execution_identity=execution_identity,
+                    )
+            except AnswerWorkerError as exc:
+                failure = {
+                    **exc.to_dict(),
+                    "generation_attempt": attempt_index + 1,
+                    "max_generation_attempts": max_attempts,
+                }
+                self._event(state, "rag_answer_generation_failed", failure)
+                decision = RAGDecision(
+                    RAGDecisionType.FAILED,
+                    "answer generation failed",
+                    budget_snapshot=current_pack.budget_snapshot,
+                    metadata={"context_pack_id": current_pack.pack_id, "generation_error": failure},
                 )
-            else:
-                candidate = self.answer_worker.generate_answer(
-                    question=spec.goal.question,
-                    pack=current_pack,
-                    execution_identity=execution_identity,
-                )
+                self._event(state, "rag_halted", decision.to_dict())
+                return None, decision, RAGSessionStatus.FAILED, current_pack
             self._event(
                 state,
                 "rag_answer_candidate_created",
@@ -424,8 +469,9 @@ class BoundedRAGSessionController(RAGSessionController):
                     current_pack = supplemental_pack
                     continue
 
+            # A rejected candidate is a gate failure, not a model abstention.
             decision = RAGDecision(
-                RAGDecisionType.ABSTAIN,
+                RAGDecisionType.HALTED,
                 "answer gate failed",
                 gate_results=failed_gate_dicts(answer_results),
                 budget_snapshot=state.budget_snapshot,
@@ -437,8 +483,8 @@ class BoundedRAGSessionController(RAGSessionController):
                     "unsupported_claims": list(unsupported_claims),
                 },
             )
-            self._event(state, "rag_abstained", decision.to_dict())
-            return candidate, decision, RAGSessionStatus.ABSTAINED, current_pack
+            self._event(state, "rag_halted", decision.to_dict())
+            return candidate, decision, RAGSessionStatus.HALTED, current_pack
 
         raise AssertionError("generation loop must return from an answer attempt")
 
@@ -577,7 +623,7 @@ class BoundedRAGSessionController(RAGSessionController):
 
         pack = self.context_pack_assembler.assemble(
             spec=spec,
-            accepted_evidence=tuple(state.accepted_evidence[: spec.budget.max_context_items]),
+            accepted_evidence=_context_evidence(state.accepted_evidence, spec.budget.max_context_items),
             rejected_evidence=tuple(state.rejected_evidence),
             conflicting_evidence=tuple(state.conflicting_evidence),
             memory_context=tuple(state.memory_context[: spec.budget.max_memory_hits]),
@@ -775,7 +821,12 @@ class BoundedRAGSessionController(RAGSessionController):
             metadata={"namespace": step.memory_namespace, "returned": len(hits), "accepted": len(accepted_hits)},
         )
 
-    def _handle_plan_failure(self, state: RAGSessionState, results: tuple[RAGGateResult, ...]) -> RAGDecision:
+    def _handle_plan_failure(
+        self,
+        state: RAGSessionState,
+        results: tuple[RAGGateResult, ...],
+        policy: RAGExecutionPolicy,
+    ) -> RAGDecision:
         self._record_gate_failures(state, results)
         if state.budget_snapshot.replans_used < state.spec.budget.max_replans:
             state.budget_snapshot = state.budget_snapshot.with_usage(replans=1)
@@ -787,13 +838,93 @@ class BoundedRAGSessionController(RAGSessionController):
             )
             self._event(state, "rag_replanned", decision.to_dict())
             return decision
+        if _only_query_dedup_failed(results):
+            # Retrieval exhausted its distinct queries. An advisory type gap over the
+            # evidence already accepted still goes to the answer worker.
+            if state.accepted_evidence:
+                source_results = self.gates.verify_sources(
+                    tuple(state.accepted_evidence),
+                    spec=state.spec,
+                    policy=policy,
+                    memory_context=tuple(state.memory_context),
+                )
+                gap_decision = self._evidence_type_gap_decision(state, policy, source_results)
+                if gap_decision is not None:
+                    return gap_decision
+            # Otherwise the evidence is insufficient, a normal outcome rather than a policy violation.
+            return RAGDecision(
+                RAGDecisionType.INSUFFICIENT_EVIDENCE,
+                "retrieval queries exhausted before required evidence coverage",
+                gate_results=failed_gate_dicts(results),
+                budget_snapshot=state.budget_snapshot,
+                metadata={"gap_report": to_jsonable(state.gap_report)},
+            )
         return self._halt(state, "plan gate failed and no replan budget remains", results)
+
+    def _evidence_type_gap_decision(
+        self,
+        state: RAGSessionState,
+        policy: RAGExecutionPolicy,
+        source_results: tuple[RAGGateResult, ...],
+    ) -> RAGDecision | None:
+        """Hand an evidence-type-only gap to the answer worker under the advisory policy.
+
+        Only the type requirement is relaxed: lineage, source quality and memory gates
+        must still pass, evidence must have been accepted, and a worker must be able to
+        judge it (it abstains through its own protocol when the evidence is insufficient).
+        """
+        if policy.evidence_type_coverage != EVIDENCE_TYPE_COVERAGE_ADVISORY:
+            return None
+        if not policy.generation_enabled or self.answer_worker is None or not state.accepted_evidence:
+            return None
+        blocking = [
+            result.gate_name
+            for result in source_results
+            if result.gate_name in _SOURCE_COVERAGE_GATES and not result.passed
+        ]
+        if blocking != [RAGEvidenceCoverageGate.gate_name]:
+            return None
+        gap = {
+            "missing_evidence_types": list(state.gap_report.get("missing_evidence_types") or []),
+            "present_evidence_types": sorted(present_evidence_types(state.accepted_evidence)),
+            "accepted_evidence_ids": [item.evidence_id for item in state.accepted_evidence],
+            "evidence_type_coverage": policy.evidence_type_coverage,
+        }
+        self._event(state, "rag_evidence_type_gap_accepted", gap)
+        return RAGDecision(
+            RAGDecisionType.ASSEMBLE_CONTEXT,
+            "evidence type gap accepted; the answer worker judges sufficiency",
+            gate_results=_results(source_results),
+            budget_snapshot=state.budget_snapshot,
+            metadata={"evidence_type_gap": gap},
+        )
 
     def _can_replan(self, state: RAGSessionState, spec: RAGSessionSpec) -> bool:
         return (
             state.budget_snapshot.replans_used < spec.budget.max_replans
             and state.budget_snapshot.rounds_used < spec.budget.max_rounds
         )
+
+    def _context_admission_failed(
+        self,
+        state: RAGSessionState,
+        exc: ContextAdmissionRejectedError,
+    ) -> RAGDecision:
+        failure = {
+            "code": exc.code,
+            "message": exc.message,
+            "retryable": False,
+            "details": to_jsonable(exc.details),
+        }
+        self._event(state, "rag_context_admission_rejected", failure)
+        decision = RAGDecision(
+            RAGDecisionType.FAILED,
+            "context admission rejected",
+            budget_snapshot=state.budget_snapshot,
+            metadata={"context_admission_error": failure},
+        )
+        self._event(state, "rag_halted", decision.to_dict())
+        return decision
 
     def _halt(self, state: RAGSessionState, reason: str, results: tuple[RAGGateResult, ...]) -> RAGDecision:
         decision = RAGDecision(
@@ -847,6 +978,20 @@ def _result_evidence(results: tuple[RetrievalStepResult, ...]) -> tuple[Evidence
     return tuple(evidence)
 
 
+def _context_evidence(
+    evidence: list[EvidenceCandidate],
+    limit: int,
+) -> tuple[EvidenceCandidate, ...]:
+    """Most relevant accepted evidence for the context window.
+
+    Evidence accumulates round by round, so its order reflects which query found it
+    first, not how relevant it is; truncating that order lets an early, weaker query
+    crowd out stronger later evidence. Ties keep their accumulation order.
+    """
+    ranked = sorted(enumerate(evidence), key=lambda pair: (-pair[1].confidence, pair[0]))
+    return tuple(item for _, item in ranked[:limit])
+
+
 def _dedupe_evidence(
     candidates: tuple[EvidenceCandidate, ...],
     existing: list[EvidenceCandidate],
@@ -873,8 +1018,22 @@ def _dedupe_texts(values: Any) -> tuple[str, ...]:
     return tuple(out)
 
 
+_SOURCE_COVERAGE_GATES = frozenset({
+    "rag_evidence_coverage",
+    "rag_lineage",
+    "rag_source_quality",
+    "rag_memory_relevance",
+})
+
+
 def _coverage_passed(results: tuple[RAGGateResult, ...]) -> bool:
-    return all(result.passed for result in results if result.gate_name in {"rag_evidence_coverage", "rag_lineage", "rag_source_quality", "rag_memory_relevance"})
+    return all(result.passed for result in results if result.gate_name in _SOURCE_COVERAGE_GATES)
+
+
+def initial_gap_report(spec: RAGSessionSpec) -> dict[str, Any]:
+    """The gap the first round is planned against: every required evidence type."""
+
+    return {"missing_evidence_types": list(spec.goal.required_evidence_types)}
 
 
 def _gap_report(
@@ -883,7 +1042,7 @@ def _gap_report(
     results: tuple[RAGGateResult, ...],
     rejected: tuple[EvidenceCandidate, ...] = (),
 ) -> dict[str, Any]:
-    present = {item.evidence_type for item in accepted}
+    present = present_evidence_types(accepted)
     missing = [item for item in spec.goal.required_evidence_types if item not in present]
     return {
         "missing_evidence_types": missing,
@@ -938,6 +1097,11 @@ def _default_evidence_type(spec: RAGSessionSpec) -> str:
     return spec.goal.required_evidence_types[0]
 
 
+def _only_query_dedup_failed(results: tuple[RAGGateResult, ...]) -> bool:
+    failed = [result for result in results if not result.passed]
+    return bool(failed) and all(result.gate_name == "rag_query_dedup" for result in failed)
+
+
 def _session_scope_metadata(spec: RAGSessionSpec) -> dict[str, str]:
     values: dict[str, str] = {"run_id": spec.run_id}
     paper_id = spec.metadata.get("paper_id") or spec.goal.metadata.get("paper_id")
@@ -968,4 +1132,5 @@ __all__ = [
     "RAGSessionController",
     "RAGSessionResult",
     "RAGSessionState",
+    "initial_gap_report",
 ]

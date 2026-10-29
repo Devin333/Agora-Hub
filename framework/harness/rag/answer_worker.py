@@ -1,9 +1,52 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
+from framework.harness.control_plane.errors import HarnessValidationError
+from framework.shared.redaction import redact_sensitive_values
 from framework.harness.rag.models import GroundedAnswerCandidate, RAGContextPack
 from framework.shared.graph_identity import GraphExecutionIdentity
+
+
+class AnswerWorkerError(RuntimeError):
+    """The worker could not produce a candidate; the controller records a failed run.
+
+    Raised for model/provider failures and worker contract violations. It is never a
+    model abstention: abstentions are returned as candidates with ``abstained=True``.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        details: Mapping[str, object] | None = None,
+        context_chunk_ids: Sequence[str] = (),
+    ) -> None:
+        normalized = str(code or "").strip()
+        if not normalized:
+            raise HarnessValidationError("answer worker error code is required")
+        super().__init__(message)
+        self.code = normalized
+        self.retryable = bool(retryable)
+        self.details = (
+            dict(redact_sensitive_values(dict(details)))
+            if isinstance(details, Mapping)
+            else {}
+        )
+        # Passages the failed generation carried, in prompt order, so a failure
+        # can be attributed to exactly what was sent.
+        self.context_chunk_ids = tuple(str(chunk_id) for chunk_id in context_chunk_ids)
+
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {"code": self.code, "message": str(self), "retryable": self.retryable}
+        if self.details:
+            payload["details"] = dict(self.details)
+        if self.context_chunk_ids:
+            payload["context_chunk_ids"] = list(self.context_chunk_ids)
+        return payload
 
 
 @runtime_checkable
@@ -17,8 +60,11 @@ class AnswerWorkerPort(Protocol):
         pack: RAGContextPack,
         execution_identity: GraphExecutionIdentity | None = None,
     ) -> GroundedAnswerCandidate:
-        """Return an answer candidate. Controller/gates decide acceptance."""
+        """Return an answer candidate; raise AnswerWorkerError when none can be produced.
+
+        Controller/gates decide acceptance.
+        """
         ...
 
 
-__all__ = ["AnswerWorkerPort"]
+__all__ = ["AnswerWorkerError", "AnswerWorkerPort"]

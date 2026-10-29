@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 
-from backend.research.rag.adapters.answer_worker import _run_async
-from backend.research.rag.adapters.llm_plan_worker import _run_maybe_async
 from framework.harness.subagents.supervisor import ChildAgentSupervisor
 from framework.harness.task_plan.parallel import ParallelAgentCoordinator
 from tests.framework.harness.subagents.test_child_agent_supervisor import (
     _request as _child_request,
 )
+from framework.shared.sync_bridge import resolve_maybe_awaitable, run_coroutine_sync
 from tests.framework.harness.task_plan.test_parallel_orchestration import (
     _accepted_parallel_plan,
     _request,
@@ -32,19 +31,19 @@ def _run_inside_running_loop(fn):
     return asyncio.run(outer())
 
 
-def test_answer_worker_async_bridge_keeps_caller_context() -> None:
+def test_sync_bridge_keeps_caller_context_inside_a_running_loop() -> None:
     token = _REQUEST_OWNER.set("alice")
     try:
-        assert _run_inside_running_loop(lambda: _run_async(_owner_from_coroutine())) == "alice"
+        assert _run_inside_running_loop(lambda: run_coroutine_sync(_owner_from_coroutine())) == "alice"
     finally:
         _REQUEST_OWNER.reset(token)
 
 
-def test_plan_worker_async_bridge_keeps_caller_context() -> None:
+def test_maybe_awaitable_bridge_keeps_caller_context_inside_a_running_loop() -> None:
     token = _REQUEST_OWNER.set("bob")
     try:
         assert (
-            _run_inside_running_loop(lambda: _run_maybe_async(_owner_from_coroutine()))
+            _run_inside_running_loop(lambda: resolve_maybe_awaitable(_owner_from_coroutine()))
             == "bob"
         )
     finally:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from framework.harness.context.assembler import ContextAssembler
@@ -11,9 +13,11 @@ from framework.harness.rag.session import (
     BoundedRAGSessionController,
     RAGEventRecorder,
     RAGSessionResult,
+    initial_gap_report,
 )
 from framework.harness.rag.models import RAGBudget, RAGSessionSpec
 from framework.harness.rag.planner import RAGPlanner
+from framework.harness.rag.policy import EVIDENCE_TYPE_COVERAGE_ADVISORY
 from framework.harness.rag.relevance import RelevanceScorerPort
 from framework.harness.rag.source_verifier import SourceVerifier
 
@@ -21,6 +25,7 @@ from backend.research.rag.models import ResearchRetrievalGoal
 from backend.research.rag.adapters import ResearchRAGPlanWorker
 from backend.research.rag.coverage_planner import ResearchEvidenceCoveragePlanner
 from backend.research.rag.retrieval_port import PaperChunkRetrievalPort
+from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
 from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
 from backend.research.rag.retrieval.candidate_experiment import (
     ResearchCandidatePlanner,
@@ -30,12 +35,30 @@ from backend.research.rag.retrieval.policies import RetrievalPolicy
 from backend.research.services.rag_policy import ResearchRAGPolicyBuilder
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.ports.field_embedding_index import FieldEmbeddingSearchPort
+from backend.research.ports.section_navigator import SectionNavigatorPort
 from backend.research.ports.visual_chunk_index import VisualChunkSearchPort
 
 if TYPE_CHECKING:
     from backend.research.ports.llm_worker import ResearchCandidateWorkerPort
     from backend.research.ports.reranker import RerankerPort
     from framework.harness.rag.answer_worker import AnswerWorkerPort
+
+
+@dataclass(frozen=True)
+class ContextWindowLimits:
+    """Model input/output token window the RAG context must be admitted against."""
+
+    max_input_tokens: int
+    max_output_tokens: int
+
+    def __post_init__(self) -> None:
+        for name in ("max_input_tokens", "max_output_tokens"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+
+
+RunScope = Callable[[str], AbstractContextManager[object]]
 
 
 class PaperRAGSession:
@@ -58,6 +81,8 @@ class PaperRAGSession:
         field_reranker: "RerankerPort | None" = None,
         visual_store: VisualChunkSearchPort | None = None,
         retrieval_policy: RetrievalPolicy | None = None,
+        section_navigator: SectionNavigatorPort | None = None,
+        section_navigation: SectionNavigationConfig | None = None,
         plan_worker: "ResearchCandidateWorkerPort | None" = None,
         worker_planner_min_round_index: int = 1,
         candidate_experiment: RetrievalCandidateExperimentConfig | None = None,
@@ -69,19 +94,39 @@ class PaperRAGSession:
             Callable[[RAGSessionSpec], ContextAssembler] | None
         ) = None,
         event_recorder: RAGEventRecorder | None = None,
+        context_window: ContextWindowLimits | None = None,
+        run_scope: RunScope | None = None,
     ) -> None:
         if context_assembler_factory is not None and not callable(
             context_assembler_factory
         ):
             raise TypeError("context_assembler_factory must be callable")
+        if context_window is not None and not isinstance(context_window, ContextWindowLimits):
+            raise TypeError("context_window must be ContextWindowLimits")
+        if run_scope is not None and not callable(run_scope):
+            raise TypeError("run_scope must be callable")
         self._chunk_store = chunk_store
         self._policy_builder = ResearchRAGPolicyBuilder()
         self._budget = budget or RAGBudget.safe_default()
+        if (
+            context_window is not None
+            and self._budget.max_context_tokens > context_window.max_input_tokens
+        ):
+            # The context admission gate measures against the model window; a larger
+            # evidence budget would only be discovered per question, as a rejected call.
+            raise ValueError(
+                "RAG max_context_tokens exceeds the answer model input window "
+                f"({self._budget.max_context_tokens} > {context_window.max_input_tokens})"
+            )
         self._reranker = reranker
         self._field_index = field_index
         self._field_reranker = field_reranker
         self._visual_store = visual_store
         self._retrieval_policy = retrieval_policy
+        if section_navigation is not None and section_navigator is None:
+            raise ValueError("section_navigation config requires a section_navigator")
+        self._section_navigator = section_navigator
+        self._section_navigation = section_navigation
         self._plan_worker = plan_worker
         self._candidate_experiment = candidate_experiment or RetrievalCandidateExperimentConfig()
         self._worker_planner_min_round_index = max(0, worker_planner_min_round_index)
@@ -91,6 +136,12 @@ class PaperRAGSession:
         self._memory = memory
         self._context_assembler_factory = context_assembler_factory
         self._event_recorder = event_recorder
+        # Without explicit limits the context budget falls back to the RAG item budget,
+        # which is far below the answer model's window once a compaction runtime admits it.
+        self._context_window = context_window
+        # Run-bound artifact ports (context compaction snapshots) only accept writes
+        # inside a binding to the session's run.
+        self._run_scope = run_scope or (lambda _run_id: nullcontext())
 
     def run(
         self,
@@ -100,6 +151,18 @@ class PaperRAGSession:
         session_id: str,
         current_section_index: int = 0,
     ) -> RAGSessionResult:
+        spec = self.build_spec(goal, graph_identity=graph_identity, session_id=session_id)
+        return self.run_spec(spec, current_section_index=current_section_index)
+
+    def build_spec(
+        self,
+        goal: ResearchRetrievalGoal,
+        *,
+        graph_identity: ContextGraphIdentity,
+        session_id: str,
+    ) -> RAGSessionSpec:
+        """The session spec ``run`` executes for ``goal``."""
+
         spec = self._policy_builder.build_session_spec(
             goal=goal,
             graph_identity=graph_identity,
@@ -107,8 +170,34 @@ class PaperRAGSession:
             budget=self._budget,
             generation_policy=self._generation_policy,
             candidate_experiment=self._candidate_experiment,
+            # Paper Q&A: the intent-to-type mapping is heuristic, so a type mismatch over
+            # accepted evidence is left to the answer worker's abstention protocol.
+            evidence_type_coverage=EVIDENCE_TYPE_COVERAGE_ADVISORY,
         )
-        return self.run_spec(spec, current_section_index=current_section_index)
+        if self._context_window is not None:
+            spec = replace(spec, context_policy={
+                **spec.context_policy,
+                "max_input_tokens": self._context_window.max_input_tokens,
+                "max_output_tokens": self._context_window.max_output_tokens,
+            })
+        return spec
+
+    def initial_queries(self, spec: RAGSessionSpec) -> tuple[str, ...]:
+        """The queries the first retrieval round sends for ``spec``.
+
+        They are fixed by the spec alone, so a caller can provision what they
+        need (for example cached query vectors) before running the session.
+        Later rounds depend on the evidence retrieved and are not predictable.
+        """
+
+        if (
+            self._candidate_experiment.enabled
+            and self._plan_worker is not None
+            and self._worker_planner_min_round_index == 0
+        ):
+            raise ValueError("first-round queries come from the plan worker and are not predictable")
+        plan = self._planner().plan(spec, round_index=0, gap_report=initial_gap_report(spec))
+        return tuple(step.query for step in plan.queries)
 
     def run_spec(
         self,
@@ -127,21 +216,15 @@ class PaperRAGSession:
             field_reranker=self._field_reranker,
             visual_store=self._visual_store,
             policy=self._retrieval_policy,
+            section_navigator=self._section_navigator,
+            section_navigation=self._section_navigation,
         )
         retrieval_port = PaperChunkRetrievalPort(
             retriever, default_section_index=current_section_index
         )
-        planner: RAGPlanner = ResearchEvidenceCoveragePlanner()
-        if self._candidate_experiment.enabled:
-            planner = ResearchCandidatePlanner(
-                ResearchRAGPlanWorker(self._plan_worker) if self._plan_worker is not None else None,
-                config=self._candidate_experiment,
-                fallback=planner,
-                min_round_index=self._worker_planner_min_round_index,
-            )
         controller_kwargs = {
             "retrieval": retrieval_port,
-            "planner": planner,
+            "planner": self._planner(),
             "memory": self._memory,
             "event_recorder": self._event_recorder,
         }
@@ -161,7 +244,19 @@ class PaperRAGSession:
                 context_assembler
             )
         controller = BoundedRAGSessionController(**controller_kwargs)
-        return controller.run(spec)
+        with self._run_scope(spec.run_id):
+            return controller.run(spec)
+
+    def _planner(self) -> RAGPlanner:
+        planner: RAGPlanner = ResearchEvidenceCoveragePlanner()
+        if self._candidate_experiment.enabled:
+            planner = ResearchCandidatePlanner(
+                ResearchRAGPlanWorker(self._plan_worker) if self._plan_worker is not None else None,
+                config=self._candidate_experiment,
+                fallback=planner,
+                min_round_index=self._worker_planner_min_round_index,
+            )
+        return planner
 
 
-__all__ = ["PaperRAGSession"]
+__all__ = ["ContextWindowLimits", "PaperRAGSession", "RunScope"]

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -19,7 +18,11 @@ from backend.research.application.parse_paper import ParsePaperUseCase
 from backend.research.application.bounded_document_rag import (
     BoundedDocumentRAGRuntime,
 )
-from backend.research.application.paper_rag_session import PaperRAGSession
+from backend.research.application.paper_rag_session import (
+    ContextWindowLimits,
+    PaperRAGSession,
+    RunScope,
+)
 from backend.research.application.rag_memory_admission import (
     HarnessResearchRAGMemoryAdmission,
 )
@@ -76,10 +79,10 @@ from backend.research.document.marker_pdf_parser import (
     MarkerPdfDocumentParser,
     MarkerReadingOrderProfile,
 )
-from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.adapters.memory_port import ResearchRAGMemoryPort
-from backend.research.rag.retrieval.paper_answer_generator import AnswerGenerator
 from backend.research.rag.retrieval.paper_retriever import ResearchRetriever
+from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
+from backend.research.ports.section_navigator import SectionNavigatorPort
 from backend.research.ports.artifact_publication import (
     RESEARCH_ARTIFACT_MANIFEST_VERSION,
     ResearchArtifactDiagnosticClaim,
@@ -89,14 +92,9 @@ from backend.research.ports.artifact_publication import (
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.ports.artifact_store import ResearchArtifactStorePort
 from framework.llm.clients.openai_compatible import (
-    LLMConfigurationError,
     LLMRetryPolicy,
     OpenAICompatibleClient,
     OpenAICompatibleConfig,
-)
-from framework.llm.clients.config import (
-    OpenAICompatibleDeploymentConfig,
-    load_openai_compatible_deployment,
 )
 from framework.events.canonical import checksum_for
 from framework.events.application import DurableGraphEventProjectionAdapter
@@ -117,6 +115,7 @@ from framework.harness import (
     HarnessBudgetSnapshot,
     HarnessBudget,
     ResolvedSubAgentTaskAdapter,
+    RAGBudget,
     RAGSessionSpec,
     SubAgentRuntime,
     ChildAgentSupervisor,
@@ -247,6 +246,12 @@ from interfaces.composition.research_errors import (
     ResearchConfigurationError,
     ResearchRuntimeUnavailableError,
 )
+from interfaces.composition.research_reader_answer import (
+    reader_answer_worker_factory,
+    reader_rag_budget,
+    reader_section_navigation,
+)
+from interfaces.composition.research_llm_deployment import resolve_research_llm_runtime
 from interfaces.composition.research_settings import (
     ResearchLocalRuntimeSettings,
     ResearchParserSettings,
@@ -1716,38 +1721,18 @@ class _DurableResearchRunRecoverySource:
 
 
 
-def _configured_paper_answer_worker_factory(
-    llm_client: OpenAICompatibleClient,
-    *,
-    max_output_tokens: int,
-) -> Any:
-    async def answer_llm_call(
-        prompt: str,
-        *,
-        execution_identity: GraphExecutionIdentity | None = None,
-        timeout_seconds: float | None = None,
-        max_transport_attempts: int | None = None,
-    ) -> str:
-        request = LLMRequest(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_output_tokens,
-            temperature=0.0,
-            execution_identity=execution_identity,
-            timeout_seconds=timeout_seconds,
-            max_transport_attempts=max_transport_attempts,
-        )
-        response = await asyncio.to_thread(llm_client.complete, request)
-        return response.content or ""
-
-    return lambda: PaperAnswerWorker(AnswerGenerator(answer_llm_call))
-
 def _local_reader_rag_service(
     *,
     ask_use_case: AskPaperUseCase,
     chunk_store: ChunkStorePort,
     answer_worker_factory: Callable[[], Any],
+    budget: RAGBudget,
     context_assembler_factory: Callable[[RAGSessionSpec], ContextAssembler],
+    context_window: ContextWindowLimits,
+    run_scope: RunScope,
     transcript_root: Path,
+    section_navigator: SectionNavigatorPort | None = None,
+    section_navigation: SectionNavigationConfig | None = None,
 ) -> Any:
     from interfaces.services.paper_rag_service import PaperRagApplicationService
     from interfaces.services.paper_rag_transcript_store import PaperRagTranscriptFileStore
@@ -1757,10 +1742,15 @@ def _local_reader_rag_service(
         retriever=ResearchRetriever(chunk_store),
         session_factory=lambda **_kwargs: PaperRAGSession(
             chunk_store,
+            budget=budget,
             answer_worker=answer_worker_factory(),
             generation_policy={"enabled": True, "max_attempts": 2},
             context_assembler_factory=context_assembler_factory,
+            context_window=context_window,
+            run_scope=run_scope,
             event_recorder=_kwargs.get("event_recorder"),
+            section_navigator=section_navigator,
+            section_navigation=section_navigation,
         ),
         ask_use_case=ask_use_case,
         transcript_store=PaperRagTranscriptFileStore(transcript_root),
@@ -1826,24 +1816,6 @@ def _research_service_error(error: ResearchCompositionError) -> ResearchServiceE
         retryable=bool(public["retryable"]),
         user_action_required=True,
     )
-
-
-def _resolve_research_llm_deployment(
-    settings: ResearchRuntimeSettings,
-) -> OpenAICompatibleDeploymentConfig:
-    try:
-        deployment = load_openai_compatible_deployment(
-            settings.llm.models_config_path,
-            route_id=settings.llm.route_id,
-            apply_environment_overrides=False,
-        )
-    except LLMConfigurationError as exc:
-        raise ResearchConfigurationError((ResearchCapability.LLM_ROUTE,)) from exc
-    if deployment.config.model != settings.llm.model:
-        raise ResearchConfigurationError((ResearchCapability.LLM_MODEL,))
-    if deployment.config.base_url.rstrip("/") != settings.llm.base_url.rstrip("/"):
-        raise ResearchConfigurationError((ResearchCapability.LLM_BASE_URL,))
-    return deployment
 
 
 def _build_research_chunk_store(
@@ -1977,17 +1949,21 @@ def _build_configured_composition(
             ),
         )
 
-        llm_deployment = _resolve_research_llm_deployment(settings)
+        # The composition keeps the configured settings as its identity; components
+        # receive the LLM settings whose input window was resolved against the
+        # selected deployment.
+        llm_deployment, runtime_settings = resolve_research_llm_runtime(settings)
+        llm_settings = runtime_settings.llm
         llm_client = OpenAICompatibleClient(
             OpenAICompatibleConfig(
                 provider=llm_deployment.config.provider,
-                base_url=settings.llm.base_url,
-                model=settings.llm.model,
-                api_key_env=settings.llm.api_key_env,
-                timeout_seconds=settings.llm.timeout_seconds,
+                base_url=llm_settings.base_url,
+                model=llm_settings.model,
+                api_key_env=llm_settings.api_key_env,
+                timeout_seconds=llm_settings.timeout_seconds,
             ),
             retry_policy=LLMRetryPolicy(
-                max_attempts=settings.llm.max_attempts,
+                max_attempts=llm_settings.max_attempts,
             ),
             structured_output_capability=(
                 llm_deployment.structured_output_capability
@@ -1997,8 +1973,8 @@ def _build_configured_composition(
             ResearchCapability.CANDIDATE_WORKER,
             lambda: StructuredResearchCandidateWorker(
                 llm_client,
-                max_input_tokens=settings.llm.max_input_tokens,
-                max_output_tokens=settings.llm.max_output_tokens,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
             ),
         )
         github_repository = GithubResearchRepositoryAdapter(
@@ -2522,10 +2498,10 @@ def _build_configured_composition(
             return build_research_context_assembler(
                 artifact_port=artifact_port,
                 event_port=event_port,
-                provider=settings.llm.provider,
-                model=settings.llm.model,
-                max_input_tokens=settings.llm.max_input_tokens,
-                max_output_tokens=settings.llm.max_output_tokens,
+                provider=llm_settings.provider,
+                model=llm_settings.model,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
                 artifact_context_provider=artifact_context_provider,
             )
 
@@ -2538,10 +2514,10 @@ def _build_configured_composition(
             return build_research_context_assembler(
                 artifact_port=artifact_port,
                 event_port=scoped_event_port_factory(spec.run_id, actor_metadata),
-                provider=settings.llm.provider,
-                model=settings.llm.model,
-                max_input_tokens=settings.llm.max_input_tokens,
-                max_output_tokens=settings.llm.max_output_tokens,
+                provider=llm_settings.provider,
+                model=llm_settings.model,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
             )
 
         rag_runtime = BoundedDocumentRAGRuntime(
@@ -2611,8 +2587,8 @@ def _build_configured_composition(
             event_port_factory=event_port_factory,
             scoped_event_port_factory=scoped_event_port_factory,
             context_assembler_factory=context_assembler_factory,
-            context_max_input_tokens=settings.llm.max_input_tokens,
-            context_max_output_tokens=settings.llm.max_output_tokens,
+            context_max_input_tokens=llm_settings.max_input_tokens,
+            context_max_output_tokens=llm_settings.max_output_tokens,
             side_effect_store=side_effect_store,
             artifact_handler_factory=ResearchArtifactBundleHandler,
             dynamic_task_plan_runner_factory=dynamic_task_plan_runner_factory,
@@ -2623,18 +2599,51 @@ def _build_configured_composition(
             runtime_binding_registrar=harness_wait_runtime_registry,
         )
         ask_use_case = AskPaperUseCase()
-        paper_answer_worker_factory = _configured_paper_answer_worker_factory(
+        paper_answer_worker_factory = reader_answer_worker_factory(
             llm_client,
-            max_output_tokens=min(settings.llm.max_output_tokens, 900),
+            settings.rag,
+            max_output_tokens=min(llm_settings.max_output_tokens, 900),
         )
+        reader_navigator, reader_navigation = reader_section_navigation(llm_client, settings.rag)
+        # Reader Q&A is asked against a terminal Research run whose artifact manifest
+        # is already committed, so its context snapshots go to a dedicated store that
+        # is bound to the parent run id for the duration of each session.
+        reader_context_artifacts = FilesystemHarnessArtifactPort(
+            settings.rag.context_artifact_root,
+            max_write_bytes=settings.artifact.max_bytes,
+        )
+
+        def reader_rag_context_assembler_factory(spec: RAGSessionSpec) -> ContextAssembler:
+            actor_metadata = {
+                key: spec.source_policy[key]
+                for key in ("tenant_id", "user_id", "memory_namespace")
+                if spec.source_policy.get(key)
+            }
+            return build_research_context_assembler(
+                artifact_port=reader_context_artifacts,
+                event_port=scoped_event_port_factory(spec.run_id, actor_metadata),
+                provider=llm_settings.provider,
+                model=llm_settings.model,
+                max_input_tokens=llm_settings.max_input_tokens,
+                max_output_tokens=llm_settings.max_output_tokens,
+            )
+
         rag_ask_provider = _PaperRagUseCaseProvider(
             ask_use_case,
             service_factory=lambda: _local_reader_rag_service(
                 ask_use_case=ask_use_case,
                 chunk_store=chunk_store,
                 answer_worker_factory=paper_answer_worker_factory,
-                context_assembler_factory=rag_context_assembler_factory,
+                budget=reader_rag_budget(settings.rag),
+                context_assembler_factory=reader_rag_context_assembler_factory,
+                context_window=ContextWindowLimits(
+                    max_input_tokens=llm_settings.max_input_tokens,
+                    max_output_tokens=llm_settings.max_output_tokens,
+                ),
+                run_scope=reader_context_artifacts.bind_run,
                 transcript_root=settings.rag.transcript_root,
+                section_navigator=reader_navigator,
+                section_navigation=reader_navigation,
             ),
         )
         owned_resources.append(rag_ask_provider)
@@ -3183,6 +3192,7 @@ def _research_runtime_config_identity(settings: ResearchRuntimeSettings) -> str:
             "runStoreRoot": str(settings.run_store.root),
             "ragLocalRoot": str(settings.rag.local_root),
             "ragTranscriptRoot": str(settings.rag.transcript_root),
+            "ragContextArtifactRoot": str(settings.rag.context_artifact_root),
         },
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

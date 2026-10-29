@@ -61,7 +61,11 @@ def evidence_results_to_rag_scorecard(
         "score_breakdown_summary": _score_breakdown_summary(retrieval),
         "raw_failure_reason_counts": answer.failure_reason_counts() if answer is not None else {},
         "answer_diagnostic_tag_counts": answer.diagnostic_tag_counts() if answer is not None else {},
+        "skipped_none_metrics": [],
     }
+    if answer is not None:
+        scorecard_metadata["skipped_none_metrics"] = _none_answer_metric_names(answer)
+    metrics = [metric for metric in metrics if metric.value is not None]
     return RAGScorecard(
         run_id=run_id,
         metrics=tuple(metrics),
@@ -94,22 +98,33 @@ def _retrieval_metrics(result: EvidenceEvalResult) -> list[MetricValue]:
 
 
 def _answer_metrics(result: EvidenceAnswerEvalResult) -> list[MetricValue]:
-    return [
-        MetricValue("answer.fact_coverage", result.answer_fact_coverage()),
-        MetricValue("answer.retrieval_context_coverage", result.retrieval_context_coverage_score()),
-        MetricValue("answer.citation_grounding", result.citation_grounding_score()),
-        MetricValue("answer.citation_gold_coverage", result.citation_gold_coverage_score()),
-        MetricValue("answer.strict_retrieval_context_coverage", result.strict_retrieval_context_coverage_score()),
-        MetricValue("answer.equivalent_retrieval_context_coverage", result.equivalent_retrieval_context_coverage_score()),
-        MetricValue("answer.strict_citation_gold_coverage", result.strict_citation_gold_coverage_score()),
-        MetricValue("answer.equivalent_citation_gold_coverage", result.equivalent_citation_gold_coverage_score()),
-        MetricValue("answer.equivalent_supported_rate", result.equivalent_supported_rate()),
-        MetricValue("answer.claim_support_coverage", result.claim_support_coverage_score()),
-        MetricValue("answer.true_missing_gold_rate", result.true_missing_gold_rate()),
-        MetricValue("answer.source_locator_grounding", result.source_locator_grounding_score()),
-        MetricValue("answer.abstention_accuracy", result.abstention_accuracy()),
-        MetricValue("answer.success_rate", result.success_rate()),
-    ]
+    values = _answer_metric_values(result)
+    return [MetricValue(name, value) for name, value in values.items() if value is not None]
+
+
+def _answer_metric_values(result: EvidenceAnswerEvalResult) -> dict[str, float | None]:
+    return {
+        "answer.fact_coverage": result.answer_fact_coverage(),
+        "answer.retrieval_context_coverage": result.retrieval_context_coverage_score(),
+        "answer.citation_grounding": result.citation_grounding_score(),
+        "answer.citation_gold_coverage": result.citation_gold_coverage_score(),
+        "answer.strict_retrieval_context_coverage": result.strict_retrieval_context_coverage_score(),
+        "answer.equivalent_retrieval_context_coverage": result.equivalent_retrieval_context_coverage_score(),
+        "answer.strict_citation_gold_coverage": result.strict_citation_gold_coverage_score(),
+        "answer.equivalent_citation_gold_coverage": result.equivalent_citation_gold_coverage_score(),
+        "answer.equivalent_supported_rate": result.equivalent_supported_rate(),
+        "answer.claim_support_coverage": result.claim_support_coverage_score(),
+        "answer.true_missing_gold_rate": result.true_missing_gold_rate(),
+        "answer.source_locator_grounding": result.source_locator_grounding_score(),
+        "answer.abstention_accuracy": result.abstention_accuracy(),
+        "answer.success_rate": result.success_rate(),
+        "answer.system_failure_rate": result.system_failure_rate(),
+        "answer.over_abstention_rate": result.over_abstention_rate(),
+    }
+
+
+def _none_answer_metric_names(result: EvidenceAnswerEvalResult) -> list[str]:
+    return [name for name, value in _answer_metric_values(result).items() if value is None]
 
 
 def _generation_metrics(result: GenerationEvalResult) -> list[MetricValue]:

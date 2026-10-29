@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Literal, Mapping
 
 from backend.research.rag.evaluation.paper_evaluation_compare import EvidenceABComparator
 from backend.research.rag.evaluation.protocol_comparison import PairedComparisonConfig, PairedComparisonResult
@@ -11,9 +11,11 @@ from backend.research.rag.evaluation.protocol_dataset import DatasetManifest
 from backend.research.rag.evaluation.protocol_execution import EvaluationOptions, EvaluationTrack
 from backend.research.rag.evaluation.protocol_scoring import EvaluationScore, MetricRegistry
 
+from backend.research.ports.paper_answer_model import PaperAnswerModelPort
 from backend.research.rag.evaluation.paper_benchmark_suite import (
     BenchmarkSuiteConfig,
     BenchmarkSuiteResult,
+    GenerationTrack,
     GoldEvidenceJudge,
     LLMCall,
     run_benchmark_suite,
@@ -65,13 +67,18 @@ class BenchmarkMatrixConfig:
     gold_evidence_judge: GoldEvidenceJudge | None = None
     answer_eval_enabled: bool = False
     answer_eval_sample_size: int | None = None
-    answer_llm_call: LLMCall | None = None
+    answer_model: PaperAnswerModelPort | None = None
     answer_judge_mode: str = "none"
     answer_judge_sample_size: int | None = None
     answer_judge_llm_call: LLMCall | None = None
     spot_check_sample_size: int = 0
     spot_check_annotations_path: Path | None = None
     quality_thresholds: dict[str, float] = field(default_factory=dict)
+    generation_track: GenerationTrack = "end_to_end"
+
+    def __post_init__(self) -> None:
+        if self.generation_track not in ("end_to_end", "oracle_context"):
+            raise ValueError("generation_track must be 'end_to_end' or 'oracle_context'")
 
 
 @dataclass(frozen=True)
@@ -208,7 +215,8 @@ def run_benchmark_matrix(config: BenchmarkMatrixConfig) -> BenchmarkMatrixResult
                 gold_evidence_judge=config.gold_evidence_judge,
                 answer_eval_enabled=config.answer_eval_enabled,
                 answer_eval_sample_size=config.answer_eval_sample_size,
-                answer_llm_call=config.answer_llm_call,
+                answer_model=config.answer_model,
+                generation_track=config.generation_track,
                 answer_judge_mode=config.answer_judge_mode,
                 answer_judge_sample_size=config.answer_judge_sample_size,
                 answer_judge_llm_call=config.answer_judge_llm_call,

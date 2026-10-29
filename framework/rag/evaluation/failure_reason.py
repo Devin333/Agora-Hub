@@ -10,7 +10,11 @@ class RAGFailureReason(StrEnum):
     CITATION_MISSING_SOURCE = "citation_missing_source"
     FACT_MATCH_LOW = "fact_match_low"
     ANSWER_NOT_GROUNDED = "answer_not_grounded"
+    # Legacy, direction-ambiguous abstention mismatch; scorers emit the two reasons below.
     ABSTENTION_EXPECTED = "abstention_expected"
+    ABSTAINED_OVER_CONSERVATIVE = "abstained_over_conservative"
+    ABSTENTION_WRONG = "abstention_wrong"
+    SYSTEM_FAILURE = "system_failure"
     BUDGET_EXHAUSTED = "budget_exhausted"
     RERANKER_UNAVAILABLE = "reranker_unavailable"
 

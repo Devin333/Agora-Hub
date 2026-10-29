@@ -368,3 +368,94 @@ def test_paper_rag_session_propagates_tenant_scope_to_session_spec(monkeypatch):
     assert spec.metadata["user_id"] == "user-1"
     assert spec.goal.metadata["memory_namespace"] == "research:tenant:tenant-a:user:user-1"
     assert spec.allowed_memory_namespaces == ("research:tenant:tenant-a:user:user-1",)
+
+
+def _figure_goal() -> ResearchRetrievalGoal:
+    return ResearchRetrievalGoal(
+        goal_id="g1",
+        paper_id="p1",
+        question="What does the figure show?",
+        required_evidence_types=["figure"],
+        allowed_source_refs=["paper://p1"],
+        allowed_memory_namespaces=["research"],
+    )
+
+
+def test_paper_rag_session_admits_context_against_the_model_window(monkeypatch):
+    monkeypatch.setattr(paper_rag_session, "ResearchRetriever", _FakeRetriever)
+    monkeypatch.setattr(paper_rag_session, "PaperChunkRetrievalPort", _FakeRetrievalPort)
+    monkeypatch.setattr(paper_rag_session, "BoundedRAGSessionController", _FakeController)
+    identity = build_paper_analysis_context_graph_identity(run_id="run-window", stage_id="run_research_rag")
+
+    default_spec = PaperRAGSession(object()).run(
+        _figure_goal(), graph_identity=identity, session_id="s-default",
+    )["spec"]
+    windowed_spec = PaperRAGSession(
+        object(),
+        context_window=paper_rag_session.ContextWindowLimits(max_input_tokens=8192, max_output_tokens=2048),
+    ).run(_figure_goal(), graph_identity=identity, session_id="s-window")["spec"]
+
+    assert "max_input_tokens" not in default_spec.context_policy
+    assert windowed_spec.context_policy["max_input_tokens"] == 8192
+    assert windowed_spec.context_policy["max_output_tokens"] == 2048
+    assert windowed_spec.context_policy["projection"] == default_spec.context_policy["projection"]
+
+
+def test_paper_rag_session_runs_the_controller_inside_the_run_scope(monkeypatch):
+    entered: list[str] = []
+    active: list[bool] = []
+
+    class _Scope:
+        def __init__(self, run_id: str) -> None:
+            self.run_id = run_id
+
+        def __enter__(self):
+            entered.append(self.run_id)
+            active.append(True)
+
+        def __exit__(self, *_exc):
+            active.pop()
+
+    class _ScopeCheckingController(_FakeController):
+        def run(self, spec):
+            assert active, "controller must run inside the run scope"
+            return {"spec": spec}
+
+    monkeypatch.setattr(paper_rag_session, "ResearchRetriever", _FakeRetriever)
+    monkeypatch.setattr(paper_rag_session, "PaperChunkRetrievalPort", _FakeRetrievalPort)
+    monkeypatch.setattr(paper_rag_session, "BoundedRAGSessionController", _ScopeCheckingController)
+
+    PaperRAGSession(object(), run_scope=_Scope).run(
+        _figure_goal(),
+        graph_identity=build_paper_analysis_context_graph_identity(run_id="run-scoped", stage_id="run_research_rag"),
+        session_id="s-scoped",
+    )
+
+    assert entered == ["run-scoped"]
+    assert active == []
+
+
+def test_paper_rag_session_rejects_invalid_context_window():
+    import pytest
+
+    with pytest.raises(ValueError, match="max_input_tokens"):
+        paper_rag_session.ContextWindowLimits(max_input_tokens=0, max_output_tokens=1)
+    with pytest.raises(TypeError, match="context_window"):
+        PaperRAGSession(object(), context_window={"max_input_tokens": 1})
+
+
+def test_paper_rag_session_rejects_a_context_budget_larger_than_the_model_window():
+    import pytest
+    from dataclasses import replace
+
+    window = paper_rag_session.ContextWindowLimits(max_input_tokens=8192, max_output_tokens=2048)
+
+    with pytest.raises(ValueError, match="16384 > 8192"):
+        PaperRAGSession(
+            object(),
+            budget=replace(RAGBudget.safe_default(), max_context_tokens=16_384),
+            context_window=window,
+        )
+    # A budget that fits, and no window at all, are both accepted.
+    PaperRAGSession(object(), budget=replace(RAGBudget.safe_default(), max_context_tokens=8_192), context_window=window)
+    PaperRAGSession(object(), budget=replace(RAGBudget.safe_default(), max_context_tokens=16_384))

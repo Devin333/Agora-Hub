@@ -13,7 +13,13 @@ from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlsplit
 
 from framework.llm.context.profile import ModelContextProfile
+from framework.llm.context.openai import (
+    MaxOutputTokensField,
+    OpenAIChatDialect,
+    TemperaturePolicy,
+)
 from framework.llm.models.capabilities import ModelCapabilities, _normalize_capability_name
+from framework.llm.models.reasoning import ReasoningEffort, ReasoningParameterStyle
 from framework.llm.structured_output import ProviderStructuredOutputCapability
 from framework.llm.structured_output.release import (
     ProviderStructuredOutputRelease,
@@ -73,7 +79,11 @@ _DEPLOYMENT_CONFIG_KEYS = {
     "model",
     "model_capabilities",
     "provider",
+    "max_output_tokens_field",
     "provider_name",
+    "reasoning_effort",
+    "reasoning_parameter",
+    "temperature_policy",
     "structured_output_capability",
     "timeout_seconds",
 }
@@ -678,6 +688,7 @@ def _deployment_config(
         deployment=deployment_id,
         release_records=release_records or {},
     )
+    dialect, reasoning_effort = _dialect_from_payload(payload)
     return OpenAICompatibleDeploymentConfig(
         deployment_id=deployment_id,
         route_id=route_id,
@@ -687,6 +698,8 @@ def _deployment_config(
             model=model,
             api_key_env=api_key_env,
             timeout_seconds=timeout_seconds,
+            dialect=dialect,
+            reasoning_effort=reasoning_effort,
         ),
         capabilities=capabilities,
         structured_output_capability=structured_output_capability,
@@ -698,6 +711,28 @@ def _deployment_config(
         budget_policy=budget_policy,
         context_profile=context_profile,
     )
+
+
+def _dialect_from_payload(
+    payload: dict[str, Any],
+) -> tuple[OpenAIChatDialect, ReasoningEffort | None]:
+    try:
+        dialect = OpenAIChatDialect(
+            reasoning_parameter=ReasoningParameterStyle.parse(
+                payload.get("reasoning_parameter") or "none"
+            ),
+            max_output_tokens_field=MaxOutputTokensField(
+                payload.get("max_output_tokens_field") or "max_tokens"
+            ),
+            temperature_policy=TemperaturePolicy(payload.get("temperature_policy") or "send"),
+        )
+        raw_effort = payload.get("reasoning_effort")
+        effort = ReasoningEffort.parse(raw_effort) if raw_effort is not None else None
+    except ValueError as exc:
+        raise LLMConfigurationError(str(exc)) from exc
+    if effort is not None and dialect.reasoning_parameter is ReasoningParameterStyle.NONE:
+        raise LLMConfigurationError("reasoning_effort requires a reasoning_parameter style")
+    return dialect, effort
 
 
 def _api_key_env(

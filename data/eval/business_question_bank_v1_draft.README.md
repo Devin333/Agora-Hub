@@ -8,17 +8,19 @@
 
 | 类别 | 数量 | 当前状态 |
 |---|---:|---|
-| 单篇论文题 `single_paper` | 30 | 复用当前 `golden_set.json` 中已审阅的 agent/retrieval 题 |
+| 单篇论文题 `single_paper` | 29 | 复用当前 `golden_set.json` 中已审阅的 agent/retrieval 题 |
 | 跨论文综合题 `cross_paper_synthesis` | 30 | 已生成题面，待证据映射和评分 rubric |
 | 来源冲突题 `source_conflict` | 15 | 已生成题面，待确认真实关系（兼容/条件成立/矛盾/证据不足） |
 | 证据不足、应拒答题 `insufficient_evidence` | 15 | 12 道复用已审阅题，3 道新增草稿 |
-| **合计** | **90** |  |
+| **合计** | **89** |  |
 
 文件格式是 JSONL，每行一个 case。所有来源引用使用 `arxiv://...`，不依赖本机绝对路径。
 
 ## 重要限制
 
-当前只有 30 道单篇论文题和 12 道复用拒答题带有现成的 `gold_evidence`。其余 48 道标记为 `draft_needs_annotation`，目前只能作为题面草稿，不能直接宣称为正式 benchmark 分数。
+当前只有 29 道单篇论文题和 12 道复用拒答题带有现成的 `gold_evidence`，共 41 道可评分题。其余 48 道标记为 `draft_needs_annotation`，目前只能作为题面草稿，不能直接宣称为正式 benchmark 分数。
+
+原 `single_007` 对应原文没有写明被评估的任务名，无法从对应正文得到确定答案，因此从题库删除，而不是保留为可评分题。判分时仅将同一论文中通过 `parent_chunk_id` 直接或多层相连、且正文经空白归一化后完全相同的父子重复片段视为等价证据；不同正文、无亲缘关系或跨论文的同文片段均不加入自动等价集合；原始 `gold_chunk_ids` 始终保持不变。
 
 要冻结为正式评测集，必须为每道综合题和冲突题补齐：
 
@@ -54,7 +56,7 @@
 ## 推荐冻结流程
 
 1. 固定论文版本、`source_hash` 和 corpus snapshot。
-2. 先标注 30 道单篇论文题，作为可运行的基线集。
+2. 先复核 29 道单篇论文题，作为可运行的基线集。
 3. 再给 30 道综合题和 15 道冲突题建立 evidence graph 与答案 rubric。
 4. 盲测 retrieval-only、oracle-context、agent-full 三种模式，区分检索问题和生成/编排问题。
 5. 最后用 held-out 论文家族做正式报告，并保留每题 trace 供人工抽查。

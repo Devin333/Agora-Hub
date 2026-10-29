@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from framework.rag.context.adaptive_k import (
+    ADAPTIVE_K_STRATEGY,
+    AdaptiveKDecision,
+    AdaptiveKPolicy,
+    select_adaptive_k,
+)
 from framework.rag.context.assembler import RAGContextAssembler
 from framework.rag.context.budget import ContextBudget, trim_evidence_to_budget
 from framework.rag.context.citation import CitationResolution, resolve_citation
@@ -19,6 +25,9 @@ from framework.rag.context.source_span import (
 )
 
 __all__ = [
+    "ADAPTIVE_K_STRATEGY",
+    "AdaptiveKDecision",
+    "AdaptiveKPolicy",
     "CONTENT_SPAN_UNIT",
     "CitationResolution",
     "ContextBudget",
@@ -33,5 +42,6 @@ __all__ = [
     "remap_span_origin_ids",
     "resolve_citation",
     "resolve_source_span",
+    "select_adaptive_k",
     "trim_evidence_to_budget",
 ]

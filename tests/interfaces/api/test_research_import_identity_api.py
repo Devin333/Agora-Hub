@@ -163,6 +163,9 @@ def test_pdf_import_api_uses_owner_scoped_content_identity_across_paths_and_rest
         reset_default_research_runtime()
 
 
+_WINDOWS_MAX_PATH = 260
+
+
 @pytest.fixture(params=("short", "candidate", "long-import"))
 def short_api_root(request):
     if request.param == "short":
@@ -174,8 +177,13 @@ def short_api_root(request):
     if request.param == "long-import":
         # Exercise this service's real long locator without making unrelated
         # auth/memory composition responsible for the import regression.
+        # Pad past MAX_PATH wherever the checkout lives, keeping each segment
+        # well under the 255-character component limit.
         import_root = import_root / ("desktop-data-" + "x" * 65) / ("owner-data-" + "y" * 65)
-        assert len(str(import_root)) > 260
+        shortfall = _WINDOWS_MAX_PATH + 1 - len(str(import_root))
+        if shortfall > 0:
+            import_root = import_root / ("pad-" + "z" * max(1, shortfall))
+        assert len(str(import_root)) > _WINDOWS_MAX_PATH
     print(f"IMPORT_PATH_CASE {request.param} data_root={root} import_root={import_root}")
     try:
         yield root, import_root

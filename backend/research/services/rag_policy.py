@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from framework.harness.context.models import ContextGraphIdentity
 from framework.harness.rag.models import RAGBudget, RAGSessionSpec, RetrievalGoal
+from framework.harness.rag.policy import EVIDENCE_TYPE_COVERAGE_MODES, EVIDENCE_TYPE_COVERAGE_REQUIRED
 
 from backend.research.rag.models import ResearchRetrievalGoal
 from backend.research.rag.retrieval.candidate_experiment import RetrievalCandidateExperimentConfig
@@ -39,7 +40,12 @@ class ResearchRAGPolicyBuilder:
         budget: RAGBudget | None = None,
         generation_policy: dict[str, object] | None = None,
         candidate_experiment: RetrievalCandidateExperimentConfig | None = None,
+        evidence_type_coverage: str = EVIDENCE_TYPE_COVERAGE_REQUIRED,
     ) -> RAGSessionSpec:
+        if evidence_type_coverage not in EVIDENCE_TYPE_COVERAGE_MODES:
+            raise ValueError(
+                "evidence_type_coverage must be one of " + ", ".join(EVIDENCE_TYPE_COVERAGE_MODES)
+            )
         scope_metadata = _scope_metadata(goal)
         return RAGSessionSpec(
             session_id=session_id,
@@ -66,6 +72,7 @@ class ResearchRAGPolicyBuilder:
                 "allowed_source_refs": list(goal.allowed_source_refs),
                 "min_relevance": self._min_relevance,
                 "min_relevance_by_type": dict(self._min_relevance_by_type),
+                "evidence_type_coverage": evidence_type_coverage,
                 **scope_metadata,
             },
             budget=budget or RAGBudget.safe_default(),

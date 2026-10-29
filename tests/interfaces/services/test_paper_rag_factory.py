@@ -15,6 +15,7 @@ from backend.research.domain.personal_memory_context import (
 from interfaces.services import paper_rag_factory
 from framework.harness.control_plane.errors import HarnessValidationError
 from tests.fixtures.admitted_memory import admitted_memory
+from tests.fixtures.paper_answer_model import FakePaperAnswerModel
 
 
 @pytest.fixture(autouse=True)
@@ -405,7 +406,12 @@ def test_paper_rag_session_factory_builds_optional_answer_worker(monkeypatch):
     monkeypatch.setattr(paper_rag_factory, "build_field_chunk_store", lambda: _FakeStore())
     monkeypatch.setattr(paper_rag_factory, "build_visual_chunk_store", lambda: None)
     monkeypatch.setattr(paper_rag_factory, "build_retrieval_policy_from_env", lambda: object())
-    monkeypatch.setattr(paper_rag_factory, "build_unity_llm_call", lambda max_tokens: object())
+    answer_model = FakePaperAnswerModel("Answer [1].")
+    monkeypatch.setattr(
+        paper_rag_factory,
+        "build_unity_paper_answer_model",
+        lambda max_tokens: answer_model,
+    )
 
     paper_rag_factory.build_paper_rag_session(
         with_reranker=False,

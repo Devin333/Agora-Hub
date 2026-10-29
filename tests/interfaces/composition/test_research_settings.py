@@ -7,6 +7,10 @@ from pathlib import Path
 import pytest
 
 from framework.harness.runtime import GraphArtifactRolloutMode
+from framework.llm.clients.config import load_openai_compatible_deployment
+from framework.llm.clients.openai_compatible import LLMProviderError
+from framework.llm.models.request import LLMRequest
+from interfaces.composition.research_llm_deployment import resolve_research_llm_deployment
 from interfaces.composition.research_errors import (
     ResearchConfigurationError,
     ResearchRuntimeUnavailableError,
@@ -19,6 +23,53 @@ from interfaces.composition.research_settings import (
 
 def _minimum_env(secret: str = "sk-test-research-secret") -> dict[str, str]:
     return {"DASHSCOPE_API_KEY": secret}
+
+
+def test_repo_dev_research_uses_dedicated_gpt_56_sol_route_without_changing_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    models_config = repository_root / "configs" / "models.yaml"
+    base_url = "https://research-gateway.example.test/v1"
+    monkeypatch.setenv("NEWS_RESEARCH_LLM_BASE_URL", base_url)
+    settings = ResearchRuntimeSettings.from_env(
+        {
+            "NEWS_RESEARCH_LLM_ROUTE_ID": "research-desktop-answer",
+            "NEWS_RESEARCH_LLM_PROVIDER": "openai-compatible",
+            "NEWS_RESEARCH_LLM_BASE_URL": base_url,
+            "NEWS_RESEARCH_LLM_MODEL": "gpt-5.6-sol",
+            "NEWS_RESEARCH_LLM_API_KEY_ENV": "OPENAI_API_KEY",
+            "OPENAI_API_KEY": "synthetic-research-test-key",
+            "NEWS_MODELS_CONFIG": str(models_config),
+        },
+        cwd=repository_root,
+    )
+
+    research_deployment = resolve_research_llm_deployment(settings)
+    writer_deployment = load_openai_compatible_deployment(
+        models_config,
+        route_id="writer-primary",
+        apply_environment_overrides=False,
+    )
+
+    assert research_deployment.deployment_id == "research-desktop-answer-gpt-5.6-sol"
+    assert research_deployment.config.model == "gpt-5.6-sol"
+    assert research_deployment.config.base_url == base_url
+    assert research_deployment.config.api_key_env == "OPENAI_API_KEY"
+    assert research_deployment.structured_output_capability is None
+    with pytest.raises(LLMProviderError) as exc_info:
+        research_deployment.build_client().complete(LLMRequest(
+            messages=[{"role": "user", "content": "Return the requested object."}],
+            output_schema={
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        ))
+    assert exc_info.value.error_type == "provider_schema_ineligible"
+    assert writer_deployment.config.model == "deepseek-v4-flash"
+    assert writer_deployment.config.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 def test_from_env_builds_immutable_defaults_without_creating_storage(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from framework.rag.evaluation import AnswerOutcome
+
 from backend.research.rag.evaluation.paper_answer_eval import EvidenceAnswerEvaluator, EvidenceAnswerSample
 from backend.research.rag.evaluation.paper_evidence_eval import EvidenceQAPair
 
@@ -23,6 +25,7 @@ def test_answer_evaluator_scores_fact_and_citation_grounding() -> None:
             "Table 1 reports accuracy and F1 scores, and the model improves "
             "accuracy over the baseline. [tbl-1] [para-result]"
         ),
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["tbl-1", "para-result"],
         cited_source_locators=["paper://p1/pdf#page=6&pdf_rect=1,2,3,4", "paper://p1/pdf#page=7"],
         context_chunk_ids=["tbl-1", "para-result"],
@@ -57,6 +60,7 @@ def test_answer_evaluator_marks_missing_facts_and_weak_citations() -> None:
     sample = EvidenceAnswerSample(
         pair=pair,
         answer="The equation computes attention weights. [eq-1]",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["eq-1"],
         context_chunk_ids=["eq-1"],
         metadata={"retrieved_chunk_ids": ["eq-1", "para-explain"]},
@@ -80,66 +84,30 @@ def test_answer_evaluator_scores_negative_abstention() -> None:
         question="Does the paper discuss an unrelated future model?",
         paper_id="p1",
     )
-    good = EvidenceAnswerSample(
-        pair=pair,
-        answer="The provided context does not mention any unrelated future model.",
-    )
-    good_plural = EvidenceAnswerSample(
-        pair=pair,
-        answer="The provided passages do not mention any unrelated future model.",
-    )
+    good = EvidenceAnswerSample(pair=pair, answer="", outcome=AnswerOutcome.ABSTAINED)
     bad = EvidenceAnswerSample(
         pair=pair,
         answer="Yes, it uses the unrelated future model.",
+        outcome=AnswerOutcome.ANSWERED,
     )
 
-    result = EvidenceAnswerEvaluator().evaluate([good, good_plural, bad])
+    result = EvidenceAnswerEvaluator().evaluate([good, bad])
 
-    assert [score.abstention_correct for score in result.scores] == [1.0, 1.0, 0.0]
-    assert result.abstention_accuracy() == 2 / 3
-    assert result.success_rate() == 2 / 3
+    assert [score.abstention_correct for score in result.scores] == [1.0, 0.0]
+    assert result.abstention_accuracy() == 0.5
+    assert result.success_rate() == 0.5
 
 
-def test_answer_evaluator_scores_context_absence_variants_as_negative_abstention() -> None:
+def test_answer_evaluator_scores_explicit_abstention_protocol() -> None:
     pair = EvidenceQAPair.negative(
         question="Does this paper report carbon emissions from a national power grid?",
         paper_id="p1",
     )
-    samples = [
-        EvidenceAnswerSample(
-            pair=pair,
-            answer=(
-                "The provided context does not state that the paper reports carbon emissions "
-                "from a national power grid."
-            ),
-        ),
-        EvidenceAnswerSample(
-            pair=pair,
-            answer="The provided context contains no mention of weather measurements in Shanghai.",
-        ),
-        EvidenceAnswerSample(
-            pair=pair,
-            answer=(
-                "The provided passages discuss diffusion models and reverse-process objectives; "
-                "they contain nothing about the Riemann hypothesis or a proof of it."
-            ),
-        ),
-        EvidenceAnswerSample(
-            pair=pair,
-            answer="No. The provided context contains no report of carbon emissions from a national power grid.",
-        ),
-        EvidenceAnswerSample(
-            pair=pair,
-            answer="The paper does not report weather measurements from Shanghai on July 6, 2026.",
-        ),
-    ]
-
+    samples = [EvidenceAnswerSample(pair=pair, answer="", outcome=AnswerOutcome.ABSTAINED) for _ in range(5)]
     result = EvidenceAnswerEvaluator().evaluate(samples)
-
-    assert [score.abstention_correct for score in result.scores] == [1.0, 1.0, 1.0, 1.0, 1.0]
+    assert [score.abstention_correct for score in result.scores] == [1.0] * 5
     assert result.abstention_accuracy() == 1.0
     assert result.success_rate() == 1.0
-
 
 def test_answer_evaluator_allows_no_fact_gold_but_requires_citation_when_present() -> None:
     pair = EvidenceQAPair(
@@ -152,6 +120,7 @@ def test_answer_evaluator_allows_no_fact_gold_but_requires_citation_when_present
     sample = EvidenceAnswerSample(
         pair=pair,
         answer="The claim is supported in the cited paragraph.",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=[],
         cited_source_locators=[],
     )
@@ -178,6 +147,7 @@ def test_answer_evaluator_treats_citation_qa_as_evidence_selection() -> None:
     sample = EvidenceAnswerSample(
         pair=pair,
         answer="The support is the cited introduction paragraph about language models changing NLP. [1]",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["para-1"],
         cited_source_locators=["paper://p1/latex"],
         context_chunk_ids=["para-1"],
@@ -213,6 +183,7 @@ def test_answer_evaluator_soft_matches_latex_symbol_paraphrases() -> None:
             "the positional vector p_i through W_t, and p_i is a d-dimensional vector "
             "determined by the token position. [1] [2]"
         ),
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["eq-1", "para-1"],
         context_chunk_ids=["eq-1", "para-1"],
         metadata={"retrieved_chunk_ids": ["eq-1", "para-1"]},
@@ -241,6 +212,7 @@ def test_answer_evaluator_matches_raw_formula_with_symbol_explanation() -> None:
             "evolves from A h(t) plus the input term B x(t), and the output is read out "
             "as y(t) = C h(t). [1]"
         ),
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["eq-ssm"],
         context_chunk_ids=["eq-ssm"],
         metadata={"retrieved_chunk_ids": ["eq-ssm"]},
@@ -263,6 +235,7 @@ def test_answer_evaluator_reports_missing_gold_in_retrieval() -> None:
     sample = EvidenceAnswerSample(
         pair=pair,
         answer="The context discusses attention instead. [other]",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["other"],
         context_chunk_ids=["other"],
         metadata={"retrieved_chunk_ids": ["other"]},
@@ -290,6 +263,7 @@ def test_answer_evaluator_reports_equivalent_support_diagnostics() -> None:
     sample = EvidenceAnswerSample(
         pair=pair,
         answer="The Hamiltonian ODE is dot y equals J inverse times the Hamiltonian gradient. [para-1]",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["para-1"],
         context_chunk_ids=["para-1"],
         metadata={"retrieved_chunk_ids": ["para-1"]},
@@ -315,6 +289,7 @@ def test_answer_evaluator_reports_claim_support_coverage() -> None:
     supported = EvidenceAnswerSample(
         pair=pair,
         answer="The claim is grounded in the introduction. [para-claim]",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["para-claim"],
         context_chunk_ids=["para-claim"],
         metadata={
@@ -325,6 +300,7 @@ def test_answer_evaluator_reports_claim_support_coverage() -> None:
     unsupported = EvidenceAnswerSample(
         pair=pair,
         answer="The claim is grounded in the introduction. [para-claim]",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["para-claim"],
         context_chunk_ids=["para-claim"],
         metadata={
@@ -356,6 +332,7 @@ def test_answer_evaluator_soft_matches_long_structured_facts() -> None:
     sample = EvidenceAnswerSample(
         pair=pair,
         answer="The figure shows a schematic of the baseline objective. [fig-1]",
+        outcome=AnswerOutcome.ANSWERED,
         cited_chunk_ids=["fig-1"],
         context_chunk_ids=["fig-1"],
         metadata={"retrieved_chunk_ids": ["fig-1"]},

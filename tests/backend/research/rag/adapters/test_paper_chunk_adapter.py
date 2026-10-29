@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from backend.research.document.models import PaperChunk
 from backend.research.rag.adapters import (
+    PAPER_CHUNK_METADATA_KEY,
     PaperChunkAdapter,
+    paper_chunk_from_evidence_record,
     paper_chunk_to_evidence_metadata,
     paper_chunk_to_rag_chunk,
     paper_chunk_to_rag_evidence,
@@ -135,3 +137,17 @@ def test_source_locator_uses_metadata_page_and_rect_when_raw_locator_is_less_str
     assert locator is not None
     assert locator.page == 8
     assert locator.bbox == (10.0, 20.0, 30.0, 40.0)
+
+
+def test_rag_evidence_carries_a_lossless_chunk_record():
+    chunk = _chunk()
+
+    evidence = paper_chunk_to_rag_evidence(chunk)
+    rebuilt = paper_chunk_from_evidence_record(evidence.metadata[PAPER_CHUNK_METADATA_KEY])
+
+    assert rebuilt == chunk
+
+
+def test_chunk_record_rejects_missing_or_malformed_payloads():
+    assert paper_chunk_from_evidence_record(None) is None
+    assert paper_chunk_from_evidence_record({"chunk_id": "only-an-id"}) is None

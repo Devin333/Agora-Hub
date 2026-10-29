@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.ports.field_embedding_index import FieldEmbeddingSearchPort
+from backend.research.ports.section_navigator import SectionNavigatorPort
 from backend.research.ports.visual_chunk_index import VisualChunkSearchPort
 from backend.research.rag.retrieval.channels.claim_index import ClaimIndexChannel
 from backend.research.rag.retrieval.channels.dense_text import DenseTextChannel
@@ -13,6 +14,10 @@ from backend.research.rag.retrieval.channels.visual import VisualRecallChannel
 from backend.research.rag.retrieval.contracts import RetrievalRequest, RetrievalResult
 from backend.research.rag.retrieval.expanders.cross_ref import CrossRefContextExpander
 from backend.research.rag.retrieval.expanders.parent import ParentContextExpander
+from backend.research.rag.retrieval.expanders.section_navigation import (
+    SectionNavigationConfig,
+    SectionNavigationExpander,
+)
 from backend.research.rag.retrieval.expanders.structural import StructuralContextExpander
 from backend.research.rag.retrieval.expanders.supplemental_table import SupplementalTableHitExpander
 from backend.research.rag.retrieval.expanders.table_context import TableContextExpander
@@ -38,7 +43,11 @@ def build_retrieval_pipeline(
     field_reranker: "RerankerPort | None" = None,
     visual_store: VisualChunkSearchPort | None = None,
     claim_index: PaperClaimSearchPort | None = None,
+    section_navigator: SectionNavigatorPort | None = None,
+    section_navigation: SectionNavigationConfig | None = None,
 ) -> RetrievalPipeline:
+    if section_navigation is not None and section_navigator is None:
+        raise ValueError("section_navigation config requires a section_navigator")
     dense_channel = DenseTextChannel(chunk_store)
     sparse_channel = SparseLexicalChannel(chunk_store)
     field_channel = FieldEmbeddingChannel(chunk_store, field_index)
@@ -93,6 +102,11 @@ def build_retrieval_pipeline(
         field_reranker_available=field_reranker is not None,
         visual_store_available=visual_store is not None,
         claim_index_available=claim_index is not None,
+        section_navigation_expander=(
+            SectionNavigationExpander(chunk_store, section_navigator, section_navigation)
+            if section_navigator is not None
+            else None
+        ),
     )
 
 

@@ -103,3 +103,79 @@ def test_factory_builds_pipeline_and_preserves_optional_adapter_metadata() -> No
     assert result.metadata["field_embedding_enabled"] is False
     assert result.metadata["claim_index_enabled"] is False
     assert result.child_chunks[0].metadata["visual_hit"] is True
+
+
+class _SectionNavigator:
+    def __init__(self, sections: tuple[int, ...]) -> None:
+        self._sections = sections
+        self.calls = 0
+
+    @property
+    def measurement_identity(self) -> dict[str, Any]:
+        return {"component": "fake-navigator"}
+
+    async def choose(self, request):
+        from backend.research.ports.section_navigator import SectionNavigationDecision
+
+        self.calls += 1
+        return SectionNavigationDecision(self._sections, diagnostics={"model_calls": 1})
+
+
+def _section_chunk(chunk_id: str, section_index: int, title: str, content: str) -> PaperChunk:
+    return PaperChunk(
+        chunk_id=chunk_id,
+        paper_id="p1",
+        parse_source="latex",
+        chunk_type="paragraph",
+        section_title=title,
+        section_role=["method"],  # type: ignore[arg-type]
+        section_index=section_index,
+        content=content,
+        metadata={},
+    )
+
+
+def test_factory_wires_optional_section_navigation_after_ranking() -> None:
+    from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
+
+    store = _ChunkStore([
+        _section_chunk("intro", 1, "Introduction", "We study question answering."),
+        _section_chunk("data", 2, "Datasets", "We evaluate on SQuAD."),
+    ])
+    navigator = _SectionNavigator((2,))
+    pipeline = build_retrieval_pipeline(
+        store,
+        policy=RetrievalPolicy(overfetch_multiplier=1),
+        section_navigator=navigator,
+        section_navigation=SectionNavigationConfig(max_sections=1, max_passages_per_section=1),
+    )
+
+    result = pipeline.retrieve(RetrievalRequest(paper_id="p1", question="What do they study?", limit=1))
+
+    assert navigator.calls == 1
+    assert [chunk.chunk_id for chunk in result.child_chunks] == ["intro"]
+    report = result.metadata["section_navigation"]
+    assert report["read_sections"] == [1]
+    assert report["chosen_sections"] == [2]
+
+
+def test_factory_without_section_navigation_reports_nothing() -> None:
+    pipeline = build_retrieval_pipeline(
+        _ChunkStore([_section_chunk("intro", 1, "Introduction", "Text.")]),
+        policy=RetrievalPolicy(overfetch_multiplier=1),
+    )
+
+    result = pipeline.retrieve(RetrievalRequest(paper_id="p1", question="What?", limit=1))
+
+    assert "section_navigation" not in result.metadata
+
+
+def test_factory_rejects_navigation_config_without_a_navigator() -> None:
+    import pytest
+
+    from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
+
+    with pytest.raises(ValueError):
+        build_retrieval_pipeline(
+            _ChunkStore([]), policy=RetrievalPolicy(), section_navigation=SectionNavigationConfig(),
+        )

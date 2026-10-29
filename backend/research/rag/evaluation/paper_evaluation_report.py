@@ -342,6 +342,10 @@ def _answer_result_to_dict(result: EvidenceAnswerEvalResult) -> dict[str, Any]:
         "source_locator_grounding_score": result.source_locator_grounding_score(),
         "abstention_accuracy": result.abstention_accuracy(),
         "success_rate": result.success_rate(),
+        "outcome_counts": result.outcome_counts(),
+        "abstention_basis_counts": result.abstention_basis_counts(),
+        "system_failure_rate": result.system_failure_rate(),
+        "over_abstention_rate": result.over_abstention_rate(),
         "failure_reason_counts": result.failure_reason_counts(),
         "diagnostic_tag_counts": result.diagnostic_tag_counts(),
         "by_qa_type": {
@@ -496,7 +500,7 @@ def _threshold_values(report: EvidenceRegressionReport) -> dict[str, float]:
         for delta in report.ab.deltas:
             suffix = f"@{delta.k}" if delta.k is not None else ""
             values[f"ab.{delta.metric}{suffix}.delta"] = delta.delta
-    return values
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def _code_block(text: str) -> str:

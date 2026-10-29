@@ -6,6 +6,11 @@ from typing import Any
 import pytest
 
 import infrastructure.research as research_adapters
+from backend.foundation.llm_connections import (
+    LLMPurpose,
+    ModelConnectionUnavailable,
+    ModelConnectionUnavailableReason,
+)
 from backend.research.ports.llm_worker import ResearchCandidateWorkerPort
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from backend.research.ports.reader_repair_candidate import (
@@ -21,6 +26,8 @@ from framework.llm import (
     compile_structured_output_contract,
     structured_output_enforcement_keywords,
 )
+from framework.llm.models import LLMCallWindow
+from framework.llm.providers.factory import json_object_capability
 from framework.llm.structured_output import structured_output_graph_scope
 from framework.shared.graph_identity import GraphExecutionIdentity
 from tests.framework.llm._structured_output_release import (
@@ -81,6 +88,119 @@ def test_planning_limits_reach_the_llm_request(monkeypatch):
     )
     assert result == _valid_output("candidate_task_plan")
     assert limits == [(30.0, 1)]
+
+
+class _WindowedClient:
+    """A client whose model, and so its window, is chosen per call."""
+
+    def __init__(self, inner, window: LLMCallWindow | Exception) -> None:
+        self._inner = inner
+        self._window = window
+        self.requested_output_tokens: list[int] = []
+
+    def call_window(self, *, requested_output_tokens: int) -> LLMCallWindow:
+        self.requested_output_tokens.append(requested_output_tokens)
+        if isinstance(self._window, Exception):
+            raise self._window
+        return self._window
+
+    def complete(self, request):
+        return self._inner.complete(request)
+
+    def stream(self, request):
+        return self._inner.stream(request)
+
+
+def _windowed_worker(monkeypatch, window):
+    worker, requests = _recorded_worker(monkeypatch, _valid_output("candidate_task_plan"))
+    client = _WindowedClient(worker._client, window)
+    return (
+        StructuredResearchCandidateWorker(client, max_input_tokens=8_192, max_output_tokens=2_048),
+        client,
+        requests,
+    )
+
+
+def test_per_call_window_narrows_the_output_reservation(monkeypatch) -> None:
+    worker, client, requests = _windowed_worker(
+        monkeypatch, LLMCallWindow(max_input_tokens=200_000, max_output_tokens=700)
+    )
+
+    worker.generate_candidate(task="candidate_task_plan", payload=_valid_payload("candidate_task_plan"))
+
+    assert client.requested_output_tokens == [2_048]
+    assert requests[0]["max_tokens"] == 700
+
+
+def test_per_call_window_never_widens_the_worker_ceiling(monkeypatch) -> None:
+    worker, _, requests = _windowed_worker(
+        monkeypatch, LLMCallWindow(max_input_tokens=1_000_000, max_output_tokens=128_000)
+    )
+
+    worker.generate_candidate(task="candidate_task_plan", payload=_valid_payload("candidate_task_plan"))
+
+    assert requests[0]["max_tokens"] == 2_048
+
+
+def test_prompt_that_overflows_the_connection_window_is_rejected_before_sending(monkeypatch) -> None:
+    worker, _, requests = _windowed_worker(
+        monkeypatch, LLMCallWindow(max_input_tokens=64, max_output_tokens=700)
+    )
+
+    with pytest.raises(ResearchCandidateContractError, match="input budget"):
+        worker.generate_candidate(
+            task="candidate_task_plan", payload=_valid_payload("candidate_task_plan")
+        )
+    assert requests == []
+
+
+def test_missing_model_connection_is_a_sanitized_provider_failure(monkeypatch) -> None:
+    unavailable = ModelConnectionUnavailable(
+        LLMPurpose.CANDIDATE_GENERATION, ModelConnectionUnavailableReason.NOT_ASSIGNED
+    )
+    worker, _, requests = _windowed_worker(monkeypatch, unavailable)
+
+    with pytest.raises(ResearchCandidateProviderError) as caught:
+        worker.generate_candidate(
+            task="candidate_task_plan", payload=_valid_payload("candidate_task_plan")
+        )
+
+    assert caught.value.failure_code == "worker_failed"
+    assert caught.value.retryable is False
+    assert requests == []
+
+
+def test_json_object_connection_is_validated_by_the_local_gate(monkeypatch) -> None:
+    worker, requests = _recorded_worker(
+        monkeypatch,
+        _valid_output("candidate_task_plan"),
+        structured_output_capability=json_object_capability(
+            provider="recorded", deployment_id="recorded-model"
+        ),
+    )
+
+    candidate = worker.generate_candidate(
+        task="candidate_task_plan", payload=_valid_payload("candidate_task_plan")
+    )
+
+    assert candidate == _valid_output("candidate_task_plan")
+    assert requests[0]["response_format"] == {"type": "json_object"}
+
+
+def test_json_object_connection_still_rejects_an_off_contract_candidate(monkeypatch) -> None:
+    invalid = {**_valid_output("candidate_task_plan"), "unexpected": True}
+    worker, _ = _recorded_worker(
+        monkeypatch,
+        invalid,
+        structured_output_capability=json_object_capability(
+            provider="recorded", deployment_id="recorded-model"
+        ),
+    )
+
+    with pytest.raises(ResearchCandidateOutputError):
+        worker.generate_candidate(
+            task="candidate_task_plan", payload=_valid_payload("candidate_task_plan")
+        )
 
 
 def test_every_candidate_schema_rejects_extra_fields_at_each_object_boundary() -> None:
@@ -831,6 +951,7 @@ def _recorded_worker(
     encode_json: bool = True,
     max_input_tokens: int = 8_192,
     expected_timeout: float = 10.0,
+    structured_output_capability: ProviderStructuredOutputCapability | None = None,
 ) -> tuple[StructuredResearchCandidateWorker, list[dict[str, Any]]]:
     monkeypatch.setenv("TEST_RESEARCH_LLM_KEY", "api-key-PROMPT-TOPSECRET")
     requests: list[dict[str, Any]] = []
@@ -865,7 +986,9 @@ def _recorded_worker(
             timeout_seconds=10.0,
         ),
         transport=transport,
-        structured_output_capability=_recorded_structured_output_capability(),
+        structured_output_capability=(
+            structured_output_capability or _recorded_structured_output_capability()
+        ),
     )
     return (
         StructuredResearchCandidateWorker(

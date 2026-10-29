@@ -1,93 +1,51 @@
 from __future__ import annotations
 
-import re
-
 from dataclasses import dataclass, field
 from typing import Any
 
 from backend.research.rag.evaluation.paper_evidence_eval import EvidenceQAPair
-from framework.rag.evaluation import AnswerMetricCase, evidence_support_coverage, score_answer_case
-from framework.rag.evaluation.answer_metrics import looks_like_abstention
+from framework.rag.evaluation import AnswerMetricCase, AnswerOutcome, evidence_support_coverage, score_answer_case
+from framework.rag.evaluation.failure_reason import RAGFailureReason
 
 
-_ABSTAIN_MARKERS = (
-    "cannot determine",
-    "cannot answer",
-    "does not contain",
-    "does not discuss",
-    "does not disclose",
-    "does not report",
-    "does not address",
-    "do not contain",
-    "do not report",
-    "do not address",
-    "insufficient to answer",
-    "contains no",
-    "contain no",
-    "contains nothing about",
-    "contain nothing about",
-    "insufficient evidence",
-    "not enough evidence",
-    "not stated",
-    "not discussed",
-    "not mentioned",
-    "does not mention",
-    "does not include",
-    "does not state",
-    "do not mention",
-    "do not discuss",
-    "do not include",
-    "do not state",
-    "not in the provided context",
-    "not available from the passages",
-    "provided context does not mention",
-    "context does not mention",
-    "contains no mention",
-    "contain nothing about",
-    "contains nothing about",
-    "no mention of",
-    "no evidence",
-    "无法确定",
-    "无法回答",
-    "没有足够证据",
-    "证据不足",
-    "未提到",
-    "没有提到",
-    "论文中没有",
-)
-OVERCONSERVATIVE_ABSTENTION_REASON = "abstained_over_conservative"
-WRONG_ABSTENTION_REASON = "abstention_wrong"
+OVERCONSERVATIVE_ABSTENTION_REASON = RAGFailureReason.ABSTAINED_OVER_CONSERVATIVE.value
+WRONG_ABSTENTION_REASON = RAGFailureReason.ABSTENTION_WRONG.value
+
+_OUTCOME_BY_SESSION_STATUS = {
+    "answered": AnswerOutcome.ANSWERED,
+    "abstained": AnswerOutcome.ABSTAINED,
+    "insufficient_evidence": AnswerOutcome.INSUFFICIENT_EVIDENCE,
+    "halted": AnswerOutcome.HALTED,
+    "failed": AnswerOutcome.FAILED,
+}
 
 
-def _looks_like_eval_abstention(answer: str) -> bool:
-    text = " ".join(str(answer or "").casefold().split())
-    if looks_like_abstention(text, abstain_markers=_ABSTAIN_MARKERS):
-        return True
-    has_context_anchor = any(
-        anchor in text
-        for anchor in ("provided context", "provided passage", "provided passages", "the passages")
-    )
-    return has_context_anchor and bool(re.search(r"\bnot\s+(?:a|an|the|any)\b", text))
+def outcome_for_session_status(status: str) -> AnswerOutcome:
+    """Map a gated RAG session terminal status to its evaluation outcome.
 
-
-def abstention_failure_reason(expected_behavior: str, answer: str) -> str:
-    expected = str(expected_behavior or "answer").strip().casefold()
-    abstained = _looks_like_eval_abstention(str(answer or ""))
-    if expected == "answer" and abstained:
-        return OVERCONSERVATIVE_ABSTENTION_REASON
-    if expected == "abstain" and not abstained:
-        return WRONG_ABSTENTION_REASON
-    return ""
+    A session that ends ``succeeded`` returned a context pack without generating, which
+    an answer evaluation never configures; it is rejected rather than guessed.
+    """
+    try:
+        return _OUTCOME_BY_SESSION_STATUS[str(status or "").casefold()]
+    except KeyError as exc:
+        raise ValueError(f"unsupported answer session status: {status!r}") from exc
 
 
 @dataclass
 class EvidenceAnswerSample:
     pair: EvidenceQAPair
     answer: str
+    outcome: AnswerOutcome
     cited_chunk_ids: list[str] = field(default_factory=list)
     cited_source_locators: list[str] = field(default_factory=list)
     context_chunk_ids: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.outcome = AnswerOutcome(self.outcome)
+        if self.outcome is not AnswerOutcome.ANSWERED and str(self.answer or "").strip():
+            raise ValueError("only answered samples may carry answer text")
 
 
 @dataclass(frozen=True)
@@ -108,6 +66,7 @@ class EvidenceAnswerScores:
     claim_support_coverage: float | None = None
     diagnostic_tags: tuple[str, ...] = ()
     failure_reason: str = ""
+    abstention_basis: str = ""
     matched_facts: tuple[str, ...] = ()
     missing_facts: tuple[str, ...] = ()
 
@@ -125,37 +84,37 @@ class EvidenceAnswerEvalResult:
     def total(self) -> int:
         return len(self.scores)
 
-    def answer_fact_coverage(self) -> float:
+    def answer_fact_coverage(self) -> float | None:
         return _average_optional(score.fact_coverage for score in self.scores)
 
-    def citation_grounding_score(self) -> float:
+    def citation_grounding_score(self) -> float | None:
         return _average_optional(score.citation_grounding for score in self.scores)
 
-    def source_locator_grounding_score(self) -> float:
+    def source_locator_grounding_score(self) -> float | None:
         return _average_optional(score.source_locator_grounding for score in self.scores)
 
-    def retrieval_context_coverage_score(self) -> float:
+    def retrieval_context_coverage_score(self) -> float | None:
         return _average_optional(score.retrieval_context_coverage for score in self.scores)
 
-    def citation_gold_coverage_score(self) -> float:
+    def citation_gold_coverage_score(self) -> float | None:
         return _average_optional(score.citation_gold_coverage for score in self.scores)
 
-    def strict_retrieval_context_coverage_score(self) -> float:
+    def strict_retrieval_context_coverage_score(self) -> float | None:
         return _average_optional(score.strict_retrieval_context_coverage for score in self.scores)
 
-    def equivalent_retrieval_context_coverage_score(self) -> float:
+    def equivalent_retrieval_context_coverage_score(self) -> float | None:
         return _average_optional(score.equivalent_retrieval_context_coverage for score in self.scores)
 
-    def strict_citation_gold_coverage_score(self) -> float:
+    def strict_citation_gold_coverage_score(self) -> float | None:
         return _average_optional(score.strict_citation_gold_coverage for score in self.scores)
 
-    def equivalent_citation_gold_coverage_score(self) -> float:
+    def equivalent_citation_gold_coverage_score(self) -> float | None:
         return _average_optional(score.equivalent_citation_gold_coverage for score in self.scores)
 
     def equivalent_supported_rate(self) -> float:
         return sum(1 for score in self.scores if score.equivalent_gold_supported) / self.total if self.total else 0.0
 
-    def claim_support_coverage_score(self) -> float:
+    def claim_support_coverage_score(self) -> float | None:
         return _average_optional(score.claim_support_coverage for score in self.scores)
 
     def true_missing_gold_rate(self) -> float:
@@ -172,11 +131,36 @@ class EvidenceAnswerEvalResult:
                 counts[tag] = counts.get(tag, 0) + 1
         return dict(sorted(counts.items()))
 
-    def abstention_accuracy(self) -> float:
+    def abstention_accuracy(self) -> float | None:
         return _average_optional(score.abstention_correct for score in self.scores)
 
     def success_rate(self) -> float:
         return sum(1 for score in self.scores if score.answer_success) / self.total if self.total else 0.0
+
+    def outcome_counts(self) -> dict[str, int]:
+        counts = {outcome.value: 0 for outcome in AnswerOutcome}
+        for score in self.scores:
+            counts[score.sample.outcome.value] += 1
+        return {key: value for key, value in counts.items() if value}
+
+    def abstention_basis_counts(self) -> dict[str, int]:
+        """How correct expected abstentions were reached: refusal vs cited negation."""
+        counts: dict[str, int] = {}
+        for score in self.scores:
+            if score.abstention_basis:
+                counts[score.abstention_basis] = counts.get(score.abstention_basis, 0) + 1
+        return dict(sorted(counts.items()))
+
+    def system_failure_rate(self) -> float | None:
+        if not self.total:
+            return None
+        return sum(score.sample.outcome.is_system_failure for score in self.scores) / self.total
+
+    def over_abstention_rate(self) -> float | None:
+        eligible = [score for score in self.scores if score.sample.pair.expected_behavior == "answer" and not score.sample.outcome.is_system_failure]
+        if not eligible:
+            return None
+        return sum(score.sample.outcome.is_refusal for score in eligible) / len(eligible)
 
     def failure_reason_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -187,23 +171,30 @@ class EvidenceAnswerEvalResult:
             counts[reason] = counts.get(reason, 0) + 1
         return dict(sorted(counts.items()))
 
+    def _metric_denominator(self, getter) -> int:
+        return sum(getter(score) is not None for score in self.scores)
+
     def report(self) -> str:
         lines = [
             f"=== Evidence Answer Eval (n={self.total}) ===",
-            f"  AnswerFactCoverage       = {self.answer_fact_coverage():.3f}",
-            f"  RetrievalContextCoverage = {self.retrieval_context_coverage_score():.3f}",
-            f"  CitationGroundingScore   = {self.citation_grounding_score():.3f}",
-            f"  CitationGoldCoverage     = {self.citation_gold_coverage_score():.3f}",
-            f"  StrictContextCoverage    = {self.strict_retrieval_context_coverage_score():.3f}",
-            f"  EquivalentContextCoverage = {self.equivalent_retrieval_context_coverage_score():.3f}",
-            f"  StrictCitationCoverage   = {self.strict_citation_gold_coverage_score():.3f}",
-            f"  EquivalentCitationCoverage = {self.equivalent_citation_gold_coverage_score():.3f}",
-            f"  EquivalentSupportedRate  = {self.equivalent_supported_rate():.3f}",
-            f"  ClaimSupportCoverage     = {self.claim_support_coverage_score():.3f}",
-            f"  TrueMissingGoldRate      = {self.true_missing_gold_rate():.3f}",
-            f"  SourceLocatorGrounding   = {self.source_locator_grounding_score():.3f}",
-            f"  AbstentionAccuracy       = {self.abstention_accuracy():.3f}",
-            f"  AnswerSuccessRate        = {self.success_rate():.1%}",
+            f"  AnswerFactCoverage       = {_format_metric(self.answer_fact_coverage(), self._metric_denominator(lambda score: score.fact_coverage))}",
+            f"  RetrievalContextCoverage = {_format_metric(self.retrieval_context_coverage_score(), self._metric_denominator(lambda score: score.retrieval_context_coverage))}",
+            f"  CitationGroundingScore   = {_format_metric(self.citation_grounding_score(), self._metric_denominator(lambda score: score.citation_grounding))}",
+            f"  CitationGoldCoverage     = {_format_metric(self.citation_gold_coverage_score(), self._metric_denominator(lambda score: score.citation_gold_coverage))}",
+            f"  StrictContextCoverage    = {_format_metric(self.strict_retrieval_context_coverage_score(), self._metric_denominator(lambda score: score.strict_retrieval_context_coverage))}",
+            f"  EquivalentContextCoverage = {_format_metric(self.equivalent_retrieval_context_coverage_score(), self._metric_denominator(lambda score: score.equivalent_retrieval_context_coverage))}",
+            f"  StrictCitationCoverage   = {_format_metric(self.strict_citation_gold_coverage_score(), self._metric_denominator(lambda score: score.strict_citation_gold_coverage))}",
+            f"  EquivalentCitationCoverage = {_format_metric(self.equivalent_citation_gold_coverage_score(), self._metric_denominator(lambda score: score.equivalent_citation_gold_coverage))}",
+            f"  EquivalentSupportedRate  = {_format_metric(self.equivalent_supported_rate(), self.total)}",
+            f"  ClaimSupportCoverage     = {_format_metric(self.claim_support_coverage_score(), self._metric_denominator(lambda score: score.claim_support_coverage))}",
+            f"  TrueMissingGoldRate      = {_format_metric(self.true_missing_gold_rate(), self.total)}",
+            f"  SourceLocatorGrounding   = {_format_metric(self.source_locator_grounding_score(), self._metric_denominator(lambda score: score.source_locator_grounding))}",
+            f"  AbstentionAccuracy       = {_format_metric(self.abstention_accuracy(), self._metric_denominator(lambda score: score.abstention_correct))}",
+            f"  AnswerSuccessRate        = {_format_metric(self.success_rate(), self.total, percent=True)}",
+            f"  SystemFailureRate        = {_format_metric(self.system_failure_rate(), self.total)}",
+            f"  OverAbstentionRate       = {_format_metric(self.over_abstention_rate(), sum(1 for score in self.scores if score.sample.pair.expected_behavior == 'answer' and not score.sample.outcome.is_system_failure))}",
+            f"  OutcomeCounts            = {self.outcome_counts()}",
+            f"  AbstentionBasis          = {self.abstention_basis_counts()}",
         ]
         if self.by_qa_type:
             lines.append("  -- by qa_type --")
@@ -211,10 +202,10 @@ class EvidenceAnswerEvalResult:
                 sub = self.by_qa_type[qa_type]
                 lines.append(
                     f"     {qa_type:<18} n={sub.total:<3} "
-                    f"facts={sub.answer_fact_coverage():.3f} "
-                    f"context={sub.retrieval_context_coverage_score():.3f} "
-                    f"citations={sub.citation_grounding_score():.3f} "
-                    f"success={sub.success_rate():.1%}"
+                    f"facts={_format_metric(sub.answer_fact_coverage(), sub._metric_denominator(lambda score: score.fact_coverage))} "
+                    f"context={_format_metric(sub.retrieval_context_coverage_score(), sub._metric_denominator(lambda score: score.retrieval_context_coverage))} "
+                    f"citations={_format_metric(sub.citation_grounding_score(), sub._metric_denominator(lambda score: score.citation_grounding))} "
+                    f"success={_format_metric(sub.success_rate(), sub.total, percent=True)}"
                 )
         failure_counts = self.failure_reason_counts()
         if failure_counts:
@@ -267,9 +258,8 @@ class EvidenceAnswerEvaluator:
             fact_match_threshold=thresholds["fact_match_threshold"],
             success_fact_threshold=thresholds["success_fact_threshold"],
             success_citation_threshold=self._success_citation_threshold,
-            abstain_markers=_ABSTAIN_MARKERS,
         )
-        failure_reason = abstention_failure_reason(pair.expected_behavior, sample.answer) or score.failure_reason
+        failure_reason = score.failure_reason
         claim_support_coverage = _claim_support_coverage(sample)
         diagnostic_tags = _diagnostic_tags(
             sample,
@@ -296,6 +286,7 @@ class EvidenceAnswerEvaluator:
             claim_support_coverage=claim_support_coverage,
             diagnostic_tags=diagnostic_tags,
             failure_reason=failure_reason,
+            abstention_basis=score.abstention_basis,
             matched_facts=score.matched_facts,
             missing_facts=score.missing_facts,
         )
@@ -409,6 +400,7 @@ def _metric_case_from_sample(sample: EvidenceAnswerSample) -> AnswerMetricCase:
         case_id=f"{pair.paper_id}:{pair.qa_type}:{pair.question}",
         question=pair.question,
         answer=sample.answer,
+        outcome=sample.outcome,
         expected_facts=tuple(pair.answer_facts),
         cited_evidence_ids=tuple(sample.cited_chunk_ids),
         context_evidence_ids=tuple(sample.context_chunk_ids),
@@ -461,12 +453,19 @@ def _unique_texts(values: list[Any]) -> list[str]:
     return out
 
 
-def _average_optional(values: Any) -> float:
+def _average_optional(values: Any) -> float | None:
     usable = [float(value) for value in values if value is not None]
-    return sum(usable) / len(usable) if usable else 0.0
+    return sum(usable) / len(usable) if usable else None
+
+
+def _format_metric(value: float | None, denominator: int, *, percent: bool = False) -> str:
+    if value is None:
+        return f"N/A (n={denominator})"
+    return f"{value:.1%} (n={denominator})" if percent else f"{value:.3f} (n={denominator})"
 
 
 __all__ = [
+    "outcome_for_session_status",
     "EvidenceAnswerEvalResult",
     "EvidenceAnswerEvaluator",
     "EvidenceAnswerSample",

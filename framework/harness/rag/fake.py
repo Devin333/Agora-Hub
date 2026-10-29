@@ -24,7 +24,7 @@ from framework.harness.rag.models import (
     RetrievalPlanCandidate,
     RetrievalStepSpec,
 )
-from framework.harness.rag.planner import DeterministicRAGPlanner
+from framework.harness.rag.planner import DeterministicRAGPlanner, deterministic_query_text
 from framework.harness.rag.session import BoundedRAGSessionController, RAGSessionResult
 from framework.harness.rag.source_verifier import FakeSourceVerifier
 from framework.harness.retrieval.evidence_pack import EvidencePack
@@ -52,13 +52,12 @@ class FakeRAGPlanner(DeterministicRAGPlanner):
         })
         if self.plans:
             return self.plans.pop(0) if len(self.plans) > 1 else self.plans[0]
-        query_text = spec.goal.question
+        query_text = deterministic_query_text(
+            spec,
+            gap_report=gap_report,
+            executed_queries=executed_queries,
+        )
         missing = tuple(gap_report.get("missing_evidence_types", ()))
-        if missing:
-            query_text = f"{query_text} {' '.join(missing)}"
-        unsupported_claims = _unsupported_claim_texts(gap_report)
-        if unsupported_claims:
-            query_text = f"{query_text} {' '.join(unsupported_claims)}"
         return RetrievalPlanCandidate(
             candidate_id=f"fake-plan:{spec.session_id}:{round_index + 1}",
             queries=(
@@ -273,18 +272,6 @@ def fake_reader_repair_memory() -> tuple[dict[str, Any], ...]:
 
 def _per_round_memory_limit(total: int, rounds: int) -> int:
     return max(1, min(4, total // max(rounds, 1) or total or 1))
-
-
-def _unsupported_claim_texts(gap_report: dict[str, Any]) -> tuple[str, ...]:
-    texts: list[str] = []
-    for item in gap_report.get("unsupported_claims", ()):
-        if isinstance(item, dict):
-            text = str(item.get("text", "")).strip()
-        else:
-            text = str(item).strip()
-        if text:
-            texts.append(text[:160])
-    return tuple(dict.fromkeys(texts[:3]))
 
 
 __all__ = [
