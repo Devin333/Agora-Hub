@@ -20,7 +20,6 @@ from backend.foundation.llm_connections.models import (
     PurposeAssignment,
 )
 from backend.foundation.llm_connections.routing import (
-    ModelCallWindow,
     ModelConnectionResolver,
     PurposeRoutedLLMClient,
     ResolvedModelConnection,
@@ -57,7 +56,6 @@ __all__ = [
     "ModelConnectionStoreUnavailableError",
     "ModelConnectionUnavailable",
     "ModelConnectionUnavailableReason",
-    "ModelCallWindow",
     "ModelConnectionResolver",
     "PurposeAssignment",
     "PurposeRoutedLLMClient",

@@ -11,28 +11,14 @@ from backend.foundation.llm_connections.errors import (
 )
 from backend.foundation.llm_connections.models import ConnectionOwner, LLMPurpose, ModelConnection
 from backend.foundation.llm_connections.scope import current_llm_owner
-from framework.llm.models import LLMClient, LLMRequest, LLMResponse, LLMStreamEvent
+from framework.llm.models import LLMCallWindow, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent
 
 # Input window cap and floor, matching what a context assembler can work with.
 MAX_INPUT_WINDOW_TOKENS = 1_000_000
 MIN_INPUT_WINDOW_TOKENS = 4_096
 
 
-@dataclass(frozen=True, slots=True)
-class ModelCallWindow:
-    """Token budget for one call: what may be sent and what may be generated."""
-
-    max_input_tokens: int
-    max_output_tokens: int
-
-    def __post_init__(self) -> None:
-        for name in ("max_input_tokens", "max_output_tokens"):
-            value = getattr(self, name)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-                raise ValueError(f"{name} must be a positive integer")
-
-
-def connection_call_window(connection: ModelConnection, *, requested_output_tokens: int) -> ModelCallWindow:
+def connection_call_window(connection: ModelConnection, *, requested_output_tokens: int) -> LLMCallWindow:
     """The window a call through ``connection`` gets when the caller wants ``requested_output_tokens``.
 
     The output reservation is capped by what the model can emit; the input
@@ -49,7 +35,7 @@ def connection_call_window(connection: ModelConnection, *, requested_output_toke
         # the prompt its floor and shrink the reservation instead.
         available = min(MIN_INPUT_WINDOW_TOKENS, connection.context_window_tokens - 1)
         output = connection.context_window_tokens - available
-    return ModelCallWindow(max_input_tokens=available, max_output_tokens=output)
+    return LLMCallWindow(max_input_tokens=available, max_output_tokens=output)
 
 
 @dataclass(frozen=True)
@@ -57,7 +43,7 @@ class ResolvedModelConnection:
     connection: ModelConnection
     client: LLMClient
 
-    def call_window(self, *, requested_output_tokens: int) -> ModelCallWindow:
+    def call_window(self, *, requested_output_tokens: int) -> LLMCallWindow:
         return connection_call_window(self.connection, requested_output_tokens=requested_output_tokens)
 
 
@@ -96,7 +82,7 @@ class PurposeRoutedLLMClient:
             raise ModelConnectionUnavailable(self.purpose, ModelConnectionUnavailableReason.NO_CALLER)
         return self._resolver.resolve(owner, self.purpose)
 
-    def call_window(self, *, requested_output_tokens: int) -> ModelCallWindow:
+    def call_window(self, *, requested_output_tokens: int) -> LLMCallWindow:
         return self.resolve().call_window(requested_output_tokens=requested_output_tokens)
 
     def complete(self, request: LLMRequest) -> LLMResponse:
@@ -125,7 +111,6 @@ def _for_connection(request: LLMRequest, connection: ModelConnection) -> LLMRequ
 __all__ = [
     "MAX_INPUT_WINDOW_TOKENS",
     "MIN_INPUT_WINDOW_TOKENS",
-    "ModelCallWindow",
     "ModelConnectionResolver",
     "PurposeRoutedLLMClient",
     "ResolvedModelConnection",

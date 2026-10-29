@@ -4,6 +4,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from backend.foundation.llm_connections.models import LLMPurpose
+from framework.llm.clients.provider_errors import LLMConfigurationError
 
 
 class ModelConnectionStoreReason(StrEnum):
@@ -73,8 +74,12 @@ class ModelConnectionUnavailableReason(StrEnum):
     STORE_UNAVAILABLE = "store_unavailable"
 
 
-class ModelConnectionUnavailable(RuntimeError):
-    """A model call has no usable connection for its purpose. Nothing falls back to a shared key."""
+class ModelConnectionUnavailable(LLMConfigurationError):
+    """A model call has no usable connection for its purpose. Nothing falls back to a shared key.
+
+    It is an ``LLMConfigurationError`` so every model caller already treats it as
+    "the model is not configured" rather than a transient provider failure.
+    """
 
     code = "model_connection_required"
     public_message = "Configure a model connection for this feature in settings."
