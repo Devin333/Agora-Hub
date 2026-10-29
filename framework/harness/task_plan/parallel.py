@@ -7,6 +7,7 @@ not receive routing, policy or sibling context.
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 import json
@@ -3680,7 +3681,11 @@ class ParallelAgentCoordinator:
             quarantined: set[str] = set()
             self._mark_wave_dispatched(session, wave, event_sink=event_sink)
             with ThreadPoolExecutor(max_workers=wave.effective_parallelism, thread_name_prefix="newsroom-dispatch") as pool:
-                futures = [(item, pool.submit(invoke, item)) for item in batch]
+                caller_context = copy_context()
+                futures = [
+                    (item, pool.submit(caller_context.copy().run, invoke, item))
+                    for item in batch
+                ]
                 pending = {future: item for item, future in futures}
                 while pending:
                     completed, _ = wait(

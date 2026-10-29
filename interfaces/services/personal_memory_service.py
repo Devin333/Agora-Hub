@@ -291,10 +291,9 @@ class PersonalMemoryApplicationService:
         _personal_memory_owner(owner)
         return {
             "info": {
-                "storage": "local_sqlite",
+                # Server filesystem locations stay private to the operator.
+                "storage": "server_sqlite",
                 "status": "available",
-                "data_root": str(self._database_path.parent),
-                "database_path": str(self._database_path),
                 "remote_processing_default": False,
                 "remote_processing_channel_defaults": {
                     channel.value: False for channel in PersonalMemoryRemoteChannel

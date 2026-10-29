@@ -1,11 +1,43 @@
 from __future__ import annotations
 
+import hashlib
+
+import pytest
+
 from interfaces.services.research_desktop_service import (
     _ask_selection,
+    _document_source_fingerprint,
+    _document_source_revision,
     _normalized_upload_filename,
     _report_markdown,
     _report_projection,
 )
+
+_DIGEST = "b6fd0defcff197856e97460887fefb3afaa34558c01b83aaee73b5dcf883065a"
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"source_hash": _DIGEST},
+        {"source_hash": f"sha256:{_DIGEST}"},
+        {"source_hash": _DIGEST.upper()},
+        {"metadata": {"source_revision": _DIGEST}},
+    ],
+)
+def test_document_reader_reports_a_content_hash_as_the_run_revision_form(document) -> None:
+    # Analysis runs and imports name a content revision ``sha256:<hex>``; the
+    # reader must report the same form, since the client sends it back
+    # verbatim to start an analysis of that revision.
+    assert _document_source_revision(document) == f"sha256:{_DIGEST}"
+    assert _document_source_fingerprint(document) == f"sha256:{_DIGEST}"
+
+
+def test_document_reader_keeps_an_opaque_revision_and_hashes_its_fingerprint() -> None:
+    document = {"source_revision": "rev-1"}
+
+    assert _document_source_revision(document) == "rev-1"
+    assert _document_source_fingerprint(document) == "sha256:" + hashlib.sha256(b"rev-1").hexdigest()
 
 
 def test_report_projection_is_exact_run_bound_and_does_not_expose_private_locators() -> None:

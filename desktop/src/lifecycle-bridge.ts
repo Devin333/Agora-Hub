@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { BrowserWindow } from "electron"
+import { HOST_EVENTS } from "./channels"
 import type { QuitRequest, QuitResponse, RendererLifecycleState } from "./contracts"
 
 const DEFAULT_STATE: RendererLifecycleState = { revision: 0, dirty: false, activeTaskCount: 0 }
@@ -68,7 +69,7 @@ export class RendererLifecycleBridge {
       const timer = setTimeout(() => this.resolveUnknown(request.requestId, "timeout"), timeoutMs)
       this.pending = { request, resolve, timer }
       try {
-        window.webContents.send("agora:lifecycle:quit-requested", request)
+        window.webContents.send(HOST_EVENTS.lifecycleQuitRequested, request)
       } catch {
         this.resolveUnknown(request.requestId, "send-failed")
       }
@@ -98,6 +99,15 @@ export class RendererLifecycleBridge {
 
   rendererGone(): void {
     if (this.pending) this.resolveUnknown(this.pending.request.requestId, "renderer-gone")
+  }
+
+  /**
+   * A new document replaced the page (reload, server redirect, another server):
+   * its revisions start over and nothing the old document reported still holds.
+   */
+  documentReplaced(): void {
+    this.rendererGone()
+    this.state = { ...DEFAULT_STATE }
   }
 
   cancelPending(): void {

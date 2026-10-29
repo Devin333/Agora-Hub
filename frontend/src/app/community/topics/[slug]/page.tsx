@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query"
 import { EmptyState } from "@/components/common/empty-state"
 import { ErrorState } from "@/components/common/error-state"
 import { PageSkeleton } from "@/components/common/loading-skeleton"
+import { buttonVariants } from "@/components/ui/button"
 import { CommunityTopicDetail } from "@/features/community/components/community-topic-detail"
 import { fetchCommunityTopic } from "@/lib/community/api"
 
@@ -24,7 +25,7 @@ export default function CommunityTopicPage(props: { params: Promise<{ slug: stri
         title="未找到话题"
         description="当前公开 artifact 中没有这个社区脉搏话题。"
         action={
-          <Link href="/community" className="rounded-md border border-border px-3 py-2 text-sm text-foreground hover:bg-secondary">
+          <Link href="/community" className={buttonVariants({ variant: "outline", size: "sm" })}>
             返回社区脉搏
           </Link>
         }
@@ -47,7 +48,7 @@ export default function CommunityTopicPage(props: { params: Promise<{ slug: stri
         title="未找到话题"
         description="当前公开 artifact 中没有这个社区脉搏话题。"
         action={
-          <Link href="/community" className="rounded-md border border-border px-3 py-2 text-sm text-foreground hover:bg-secondary">
+          <Link href="/community" className={buttonVariants({ variant: "outline", size: "sm" })}>
             返回社区脉搏
           </Link>
         }

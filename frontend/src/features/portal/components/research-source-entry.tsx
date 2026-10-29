@@ -6,7 +6,7 @@ import { historyState, saveResearchMaterial } from "@/lib/research/history";
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history";
 import { fetchDesktopIdentity, fetchResearchOperation, submitResearchPrepare } from "@/lib/research/desktop/client";
 import { operationSchema, type ResearchOperation } from "@/lib/research/desktop/contracts";
-import { isLocalDesktopProfile } from "@/lib/deployment-profile";
+import { isHostedProfile } from "@/lib/deployment-profile";
 import { mergeResearchOperationUpdate, operationReceiptMatches, operationReceiptUpdate, prepareResearchOperation, updateResearchOperation } from "@/lib/research/pending-operations";
 import type { ResearchMaterial, ResearchPendingOperation } from "@/lib/research/workspace-items";
 import { buildPrepareRequest, normalizeAnalyzeTransportUrl } from "@/lib/research/desktop/request-contracts";
@@ -103,7 +103,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
         if (storageKey) {
             try {
                 const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null");
-                if (validRecord(saved) && (!isLocalDesktopProfile() || !historyState().workspace.pendingOperations?.some(item => (item.kind === "import" || item.kind === "prepare")))) {
+                if (validRecord(saved) && (!isHostedProfile() || !historyState().workspace.pendingOperations?.some(item => (item.kind === "import" || item.kind === "prepare")))) {
                     setRecord(saved);
                     setFilename(saved.filename ?? "PDF");
                 }
@@ -192,7 +192,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
         try {
             const content = await file.arrayBuffer();
             if (!isCurrent() || controller.signal.aborted) return;
-            if (!isLocalDesktopProfile()) {
+            if (!isHostedProfile()) {
                 await uploadLegacy(file, content, controller);
                 return;
             }
@@ -311,7 +311,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
     async function check() {
         if (request.current || !online)
             return;
-        if (!isLocalDesktopProfile() && record?.importId) {
+        if (!isHostedProfile() && record?.importId) {
             await checkLegacy(record.importId);
             return;
         }
@@ -343,7 +343,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
         const existing = state.workspace.materials?.find(material =>
             (material.kind === "pdf" || material.kind === "paper") && material.referenceId === record.paperId);
         const now = Date.now();
-        const incomingReaderHref = isLocalDesktopProfile() ? `/papers/${encodeURIComponent(record.paperId)}/read${record.sourceRevision ? `?sourceRevision=${encodeURIComponent(record.sourceRevision)}` : ""}` : undefined;
+        const incomingReaderHref = isHostedProfile() ? `/papers/${encodeURIComponent(record.paperId)}/read${record.sourceRevision ? `?sourceRevision=${encodeURIComponent(record.sourceRevision)}` : ""}` : undefined;
         const existingRevision = existing?.readerHref
             ? new URL(existing.readerHref, "https://agora.invalid").searchParams.get("sourceRevision")
             : null;
@@ -380,9 +380,9 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
             data-research-source-entry
             data-appearance={appearance}
             data-state={busy ? "processing" : error ? "error" : completed ? "completed" : record ? record.status : "missing"}
-            className={`${styles.root} ${record || error || busy || (appearance === "paper-agent" && isLocalDesktopProfile())
+            className={record || error || busy || (appearance === "paper-agent" && isHostedProfile())
                 ? "mt-4 flex flex-wrap items-center gap-3 text-sm"
-                : "sr-only"}`}
+                : "sr-only"}
         >
             <input
                 ref={input}
@@ -396,7 +396,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                     event.target.value = "";
                 }}
             />
-            {appearance === "paper-agent" && isLocalDesktopProfile() && <section aria-label="为已识别论文准备来源">
+            {appearance === "paper-agent" && isHostedProfile() && <section aria-label="为已识别论文准备来源" data-source-preparation className={styles.sourcePreparation}>
                 <label>论文 URL / DOI<input type="text" aria-label="论文来源 URL 或 DOI" value={sourceInput} onChange={event => setSourceInput(event.target.value)} placeholder="https://… 或 10.…/…" /></label>
                 <label>目标论文<select aria-label="选择已入库的目标论文" value={selectedTarget ? sourcePaperId : ""} onChange={event => setSourcePaperId(event.target.value)} disabled={busy || targets.length === 0}><option value="">请选择当前论文库中的论文</option>{targets.map(material => <option key={material.id} value={material.referenceId}>{material.title} — {material.referenceId}</option>)}</select></label>
                 {selectedTarget && <p>已识别目标：{selectedTarget.title}（真实 ID：<code>{selectedTarget.referenceId}</code>）</p>}
@@ -407,7 +407,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
             </section>}
             {busy && (
                 <span role="status" data-slot="status" className={`${styles.status} inline-flex items-center gap-2`}>
-                    <LoaderCircle size={15} className="animate-spin" />
+                    <LoaderCircle size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                     正在核对 {filename || "PDF"} 的真实导入状态…
                 </span>
             )}
@@ -417,14 +417,14 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                     {completed ? (
                         <>
                             <span>文本已转换，可用于本次研究</span>
-                            {isLocalDesktopProfile() && readerHref && (
-                                <a className="underline" href={readerHref}>打开阅读器</a>
+                            {isHostedProfile() && readerHref && (
+                                <a className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50" href={readerHref}>打开阅读器</a>
                             )}
                             {onAttach && (
                                 <button
                                     type="button"
                                     disabled={attached}
-                                    className="underline"
+                                    className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:no-underline disabled:opacity-75"
                                     onClick={addToResearch}
                                 >
                                     {attached ? saveConfirmed ? "已加入本次研究" : "入库待保存" : "用于本次研究"}
@@ -437,7 +437,7 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                             {["failed", "rejected", "needs_action"].includes(record.status) ? (
                                 <button
                                     type="button"
-                                    className="underline"
+                                    className="rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:no-underline disabled:opacity-75"
                                     onClick={() => { if (record.kind === "prepare") { setSourceInput(record.sourceUrl ?? ""); setSourcePaperId(record.paperId ?? ""); } else input.current?.click(); }}
                                 >
                                     {record.kind === "prepare" ? "修改来源后创建新请求" : "重新选择文件并创建新请求"}
@@ -445,11 +445,11 @@ function OwnedSourceEntry({ owner, operations, materials, saveConfirmed, onAttac
                             ) : (
                                 <button
                                     type="button"
-                                    className="inline-flex items-center gap-1 underline"
+                                    className="inline-flex items-center gap-1 rounded-sm underline underline-offset-2 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                                     onClick={() => void check()}
                                 >
-                                    <RefreshCw size={14} />
-                                    {isLocalDesktopProfile() ? "检查已有请求" : "继续转换"}
+                                    <RefreshCw size={14} aria-hidden="true" />
+                                    {isHostedProfile() ? "检查已有请求" : "继续转换"}
                                 </button>
                             )}
                         </>

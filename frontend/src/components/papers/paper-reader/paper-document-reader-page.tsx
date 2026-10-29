@@ -10,6 +10,7 @@ import type { Locale } from "@/lib/papers/types"
 import { paperDocumentToOpenReader } from "@/lib/paper-reader/open-reader-adapter"
 import { fetchPaperDocument, triggerPaperCompile } from "@/lib/paper-reader/api"
 import type { PaperCompileTriggerResponse, PaperDiagnostic, PaperDocumentResponse } from "@/lib/paper-reader/types"
+import { Button, buttonVariants } from "@/components/ui/button"
 import styles from "./paper-document-reader.module.css"
 
 const DOCUMENT_POLL_INTERVAL_MS = 5000
@@ -97,8 +98,8 @@ function CompileStatusPage({ payload, locale, backHref }: { payload: PaperDocume
   return (
     <main className={styles.readerShell}>
       <header className={styles.header}>
-        <Link className={styles.backLink} href={backHref} aria-label={translate(locale, "papers.reader.backToPapers")}>
-          <ArrowLeft size={18} aria-hidden="true" />
+        <Link className={buttonVariants({ variant: "floating", size: "icon-lg" })} href={backHref} aria-label={translate(locale, "papers.reader.backToPapers")}>
+          <ArrowLeft size={16} strokeWidth={1.8} aria-hidden="true" />
         </Link>
         <div className={styles.headerText}>
           <div className={styles.kicker}>{translate(locale, "papers.reader.readerTitle")}</div>
@@ -149,7 +150,7 @@ function StatusGate({
   const visibleDiagnostics = [...new Set(diagnostics.slice(0, 8).map((item) => readerDiagnosticMessage(item, locale)))]
   return (
     <section className={styles.statusGate}>
-      <div className={styles.statusIcon}><AlertTriangle size={22} aria-hidden="true" /></div>
+      <div className={styles.statusIcon}><AlertTriangle size={16} strokeWidth={1.8} aria-hidden="true" /></div>
       <div>
         <h2>{translate(locale, "papers.reader.compileUnavailable")}</h2>
         <p>{translate(locale, "papers.reader.statusLabel")}: <strong>{formatReaderStatus(status, locale)}</strong></p>
@@ -164,12 +165,12 @@ function StatusGate({
           <ul>{visibleDiagnostics.map((message) => <li key={message}>{message}</li>)}</ul>
         ) : null}
         <div className={styles.statusActions}>
-          <button type="button" onClick={onCompile} disabled={actionsDisabled}>
-            <RefreshCw size={16} aria-hidden="true" />{pending ? translate(locale, "papers.reader.queueing") : translate(locale, "papers.reader.compile")}
-          </button>
-          <button type="button" onClick={onRecompile} disabled={actionsDisabled}>
-            <RefreshCw size={16} aria-hidden="true" />{translate(locale, "papers.reader.recompile")}
-          </button>
+          <Button type="button" onClick={onCompile} disabled={actionsDisabled}>
+            <RefreshCw size={15} strokeWidth={1.8} aria-hidden="true" />{pending ? translate(locale, "papers.reader.queueing") : translate(locale, "papers.reader.compile")}
+          </Button>
+          <Button type="button" variant="outline" onClick={onRecompile} disabled={actionsDisabled}>
+            <RefreshCw size={15} strokeWidth={1.8} aria-hidden="true" />{translate(locale, "papers.reader.recompile")}
+          </Button>
         </div>
       </div>
     </section>

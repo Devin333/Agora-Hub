@@ -188,17 +188,17 @@ function releasePdfRenderSlot() {
 
 function PdfLoading({ locale }: { locale: Locale }) {
   return (
-    <div className="flex h-full w-full flex-col justify-between bg-white p-4">
+    <div className="flex h-full w-full flex-col justify-between bg-muted p-4">
       <div className="space-y-2">
-        <span className="block h-2 w-20 rounded-full bg-slate-200" />
-        <span className="block h-1.5 w-24 rounded-full bg-slate-100" />
+        <span className="block h-2 w-20 rounded-full bg-foreground/15" />
+        <span className="block h-1.5 w-24 rounded-full bg-foreground/[0.08]" />
       </div>
       <div className="space-y-2">
-        <span className="block h-1.5 w-full rounded-full bg-slate-100" />
-        <span className="block h-1.5 w-11/12 rounded-full bg-slate-100" />
-        <span className="block h-1.5 w-9/12 rounded-full bg-slate-100" />
+        <span className="block h-1.5 w-full rounded-full bg-foreground/[0.08]" />
+        <span className="block h-1.5 w-11/12 rounded-full bg-foreground/[0.08]" />
+        <span className="block h-1.5 w-9/12 rounded-full bg-foreground/[0.08]" />
       </div>
-      <p className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-slate-300">
+      <p className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-faint-foreground">
         {locale === "zh" ? "渲染 PDF" : "Rendering PDF"}
       </p>
     </div>
@@ -207,20 +207,20 @@ function PdfLoading({ locale }: { locale: Locale }) {
 
 function PdfFallback({ locale, title }: { locale: Locale; title: string }) {
   return (
-    <div className="flex h-full w-full flex-col bg-white p-4 text-slate-500">
+    <div className="flex h-full w-full flex-col bg-muted p-4 text-muted-foreground">
       <div className="flex items-start justify-between gap-3">
-        <FileText className="size-6 text-slate-400" />
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.14em] text-slate-400">
+        <FileText className="size-6 text-faint-foreground" strokeWidth={1.8} />
+        <span className="rounded-full bg-foreground/[0.08] px-2 py-0.5 text-[0.55rem] font-bold uppercase tracking-[0.14em] text-faint-foreground">
           PDF
         </span>
       </div>
       <div className="mt-6 space-y-2">
-        <span className="block h-1.5 w-24 rounded-full bg-slate-200" />
-        <span className="block h-1.5 w-20 rounded-full bg-slate-100" />
-        <span className="block h-1.5 w-28 rounded-full bg-slate-100" />
+        <span className="block h-1.5 w-24 rounded-full bg-foreground/15" />
+        <span className="block h-1.5 w-20 rounded-full bg-foreground/[0.08]" />
+        <span className="block h-1.5 w-28 rounded-full bg-foreground/[0.08]" />
       </div>
-      <p className="mt-auto line-clamp-3 text-[0.68rem] font-semibold leading-4 text-slate-500">{title}</p>
-      <p className="mt-3 text-[0.56rem] font-semibold uppercase tracking-[0.14em] text-slate-400">
+      <p className="mt-auto line-clamp-3 text-[0.68rem] font-semibold leading-4 text-muted-foreground">{title}</p>
+      <p className="mt-3 text-[0.56rem] font-semibold uppercase tracking-[0.14em] text-faint-foreground">
         {locale === "zh" ? "PDF 首页暂不可预览" : "PDF first page unavailable"}
       </p>
     </div>

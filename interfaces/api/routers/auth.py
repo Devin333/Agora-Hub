@@ -6,11 +6,8 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Header
 
 from interfaces.api.deps import ApiRouteHelpers, ApiServices
-from interfaces.services.research_desktop_auth import (
-    ResearchDesktopAuthError,
-    local_desktop_runtime_identity,
-)
 from interfaces.services.auth_service import (
+    AuthAccountDisabledError,
     AuthAlreadyInitializedError,
     AuthInvalidCredentialsError,
     AuthSessionInvalidError,
@@ -49,8 +46,13 @@ class AuthOAuthCallbackRequest(BaseModel):
 def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
     router = APIRouter()
 
+    hosted = services.hosted_runtime is not None
+
     @router.get("/api/v1/auth/methods")
     def methods():
+        if hosted:
+            # Accounts are issued by an administrator; no public sign-up.
+            return helpers.success({"methods": {}, "termsUrl": None, "privacyUrl": None})
         return helpers.success(services.auth_service_factory().public_methods())
 
     @router.post("/api/v1/auth/otp/challenges")
@@ -155,6 +157,13 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
                 message=str(exc),
                 user_action_required=True,
             )
+        except AuthAccountDisabledError as exc:
+            return helpers.error(
+                status_code=403,
+                code=exc.code,
+                message=str(exc),
+                user_action_required=True,
+            )
         except ValueError as exc:
             return helpers.error(
                 status_code=400,
@@ -172,23 +181,23 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
 
     @router.get("/api/v1/auth/session")
     def session(x_newsroom_session: str | None = Header(default=None)):
-        try:
-            desktop_identity = local_desktop_runtime_identity()
-        except ResearchDesktopAuthError as exc:
-            return helpers.error(status_code=exc.status_code, code=exc.code, message=str(exc))
         auth_service = services.auth_service_factory()
-        if not x_newsroom_session:
-            payload = {"initialized": auth_service.is_initialized(), "session": None}
-        else:
+        initialized = auth_service.is_initialized()
+        result = None
+        if x_newsroom_session:
             try:
                 result = auth_service.get_session(x_newsroom_session)
             except AuthSessionInvalidError:
-                payload = {"initialized": auth_service.is_initialized(), "session": None}
-            else:
-                payload = {"initialized": True, "session": result.to_dict()}
-        if desktop_identity is not None:
-            payload["local_desktop"] = desktop_identity
-        return helpers.success(payload)
+                result = None
+        return helpers.success(
+            {
+                "initialized": initialized or result is not None,
+                # The hosted service creates its first administrator from the
+                # server CLI only; the browser never offers bootstrap there.
+                "bootstrapAvailable": not hosted and not initialized,
+                "session": result.to_dict() if result is not None else None,
+            }
+        )
 
     return router
 

@@ -2,6 +2,9 @@
 import { use } from "react";
 
 import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
+import { PageHeader } from "@/components/layout/page-header";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/empty-state";
 import { ErrorState } from "@/components/common/error-state";
 import { EvidenceList } from "@/components/common/evidence-list";
@@ -12,12 +15,12 @@ import { ReportMetadataPanel } from "@/features/reports/components/report-metada
 import { ReportToc } from "@/features/reports/components/report-toc";
 import { useReportDetail } from "@/features/reports/hooks/use-report-detail";
 import { TopicCard } from "@/features/topics/components/topic-card";
-import { isLocalDesktopProfile } from "@/lib/deployment-profile";
+import { isHostedProfile } from "@/lib/deployment-profile";
 import { DesktopSavedReportDetail } from "@/app/reports/desktop-report-detail";
 
 export default function ReportDetailPage(props: { params: Promise<{ id: string }> }) {
   const params = use(props.params);
-  return isLocalDesktopProfile()
+  return isHostedProfile()
     ? <DesktopSavedReportDetail reportId={params.id} />
     : <LegacyReportDetail reportId={params.id} />
 }
@@ -40,9 +43,9 @@ function LegacyReportDetail({ reportId }: { reportId: string }) {
         title="未找到报告"
         description="当前真实报告目录中没有这个报告 ID。"
         action={
-          <Link href="/reports" className="rounded-md border border-border px-3 py-2 text-sm text-foreground hover:bg-secondary">
-            返回报告
-          </Link>
+          <Button asChild variant="outline">
+            <Link href="/reports">返回报告</Link>
+          </Button>
         }
       />
     );
@@ -52,13 +55,16 @@ function LegacyReportDetail({ reportId }: { reportId: string }) {
 
   return (
     <main className="space-y-6">
-      <header className="rounded-lg border border-border bg-card p-5">
-        <p className="text-xs font-medium uppercase text-primary">生成报告</p>
-        <h1 className="mt-3 text-2xl font-semibold text-foreground">{data.report.title}</h1>
-        <p className="mt-3 max-w-4xl text-sm leading-6 text-muted-foreground">
-          Markdown 报告，包含支撑主题、相关新闻、证据引用和质量元数据。
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="生成报告"
+        title={data.report.title}
+        description="Markdown 报告，包含支撑主题、相关新闻、证据引用和质量元数据。"
+        actions={
+          <Button asChild variant="ghost">
+            <Link href="/reports"><ArrowLeft size={15} strokeWidth={1.8} />返回报告</Link>
+          </Button>
+        }
+      />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-6">
@@ -77,7 +83,7 @@ function LegacyReportDetail({ reportId }: { reportId: string }) {
             <EvidenceList evidence={data.evidence} />
           </RelatedSection>
         </div>
-        <aside className="space-y-4">
+        <aside className="space-y-6">
           <ReportToc markdown={markdown} />
           <ReportMetadataPanel report={data.report} />
         </aside>
@@ -88,13 +94,13 @@ function LegacyReportDetail({ reportId }: { reportId: string }) {
 
 function RelatedSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-5">
-      <h2 className="mb-4 text-lg font-semibold text-foreground">{title}</h2>
+    <section className="space-y-3">
+      <h2 className="text-heading3 font-semibold text-foreground">{title}</h2>
       {children}
     </section>
   );
 }
 
 function EmptyLine({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm text-muted-foreground">{children}</p>;
+  return <p className="text-body2 text-muted-foreground">{children}</p>;
 }

@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { AlertTriangle, Archive, CheckCircle2, Clock3, ShieldAlert, Workflow } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { AgentRunStatusBadge } from "@/features/studio/runs/components/agent-run-status-badge"
 import { formatDuration, shortRunId } from "@/features/studio/runs/lib/run-format"
 import { StudioMetricCard, StudioMetricGrid, StudioNotice, StudioPageHeader, StudioPanel } from "@/features/studio/shared/components/studio-dashboard"
@@ -16,16 +17,18 @@ export function StudioHomePageClient({ overview, notices = [] }: { overview: Stu
   const sourceHealth = sourceHealthPreview(overview.latestRuns, t)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.dashboard.eyebrow")}
         title={t("studio.dashboard.title")}
         description={t("studio.dashboard.description")}
         actions={
-          <Link className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-secondary" href="/studio/runs">
-            <Workflow className="size-4" />
-            {t("studio.module.runCenter.action")}
-          </Link>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/studio/runs">
+              <Workflow size={16} strokeWidth={1.8} aria-hidden="true" />
+              {t("studio.module.runCenter.action")}
+            </Link>
+          </Button>
         }
       />
 
@@ -49,7 +52,7 @@ export function StudioHomePageClient({ overview, notices = [] }: { overview: Stu
       ) : null}
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
-        <StudioPanel title={t("studio.dashboard.latestRuns")} description={t("studio.dashboard.latestRunsDetail")} contentClassName="p-0">
+        <StudioPanel title={t("studio.dashboard.latestRuns")} description={t("studio.dashboard.latestRunsDetail")} flush>
           <div className="divide-y divide-border">
             {overview.latestRuns.map((run) => (
               <LatestRunRow key={run.id} run={run} />
@@ -58,20 +61,24 @@ export function StudioHomePageClient({ overview, notices = [] }: { overview: Stu
         </StudioPanel>
         <StudioPanel title={t("studio.dashboard.errorSummary")} description={t("studio.dashboard.errorSummaryDetail")}>
           {failedRuns.length ? (
-            <div className="space-y-3">
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
               {failedRuns.slice(0, 4).map((run) => (
-                <Link key={run.id} href={`/studio/runs/${encodeURIComponent(run.id)}`} className="block rounded-md border border-border bg-secondary/30 p-3 hover:bg-secondary">
+                <Link
+                  key={run.id}
+                  href={`/studio/runs/${encodeURIComponent(run.id)}`}
+                  className="block px-4 py-3 outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
+                >
                   <div className="flex items-center justify-between gap-3">
-                    <span className="truncate font-mono text-xs text-accent">{shortRunId(run.id)}</span>
+                    <span className="truncate font-mono text-label text-link">{shortRunId(run.id)}</span>
                     <AgentRunStatusBadge status={run.status} />
                   </div>
-                  <p className="mt-2 text-sm font-medium text-foreground">{run.workflowName ?? run.agentName}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{run.errorCount} {t("studio.runs.errors")} · {run.qualityScore ?? "n/a"} {t("studio.dashboard.avgQuality")}</p>
+                  <p className="mt-1.5 text-[13.5px] font-medium text-foreground">{run.workflowName ?? run.agentName}</p>
+                  <p className="mt-0.5 text-label tabular-nums text-muted-foreground">{run.errorCount} {t("studio.runs.errors")} · {run.qualityScore ?? "n/a"} {t("studio.dashboard.avgQuality")}</p>
                 </Link>
               ))}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">{t("studio.dashboard.noErrors")}</p>
+            <p className="text-body2 text-muted-foreground">{t("studio.dashboard.noErrors")}</p>
           )}
         </StudioPanel>
       </section>
@@ -82,18 +89,18 @@ export function StudioHomePageClient({ overview, notices = [] }: { overview: Stu
 function LatestRunRow({ run }: { run: StudioRunListItem }) {
   const { t } = useI18n()
   return (
-    <Link href={`/studio/runs/${encodeURIComponent(run.id)}`} className="grid gap-3 px-4 py-3 hover:bg-secondary/40 md:grid-cols-[minmax(160px,0.7fr)_minmax(220px,1fr)_120px_120px_90px] md:items-center">
+    <Link href={`/studio/runs/${encodeURIComponent(run.id)}`} className="grid gap-3 px-4 py-3 outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 md:grid-cols-[minmax(160px,0.7fr)_minmax(220px,1fr)_120px_120px_90px] md:items-center">
       <div className="min-w-0">
-        <p className="truncate font-mono text-xs font-medium text-accent">{shortRunId(run.id)}</p>
-        <p className="mt-1 truncate text-xs text-muted-foreground">{formatDateTime(run.startedAt)}</p>
+        <p className="truncate font-mono text-label font-medium text-link">{shortRunId(run.id)}</p>
+        <p className="mt-0.5 truncate text-label text-muted-foreground">{formatDateTime(run.startedAt)}</p>
       </div>
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-foreground">{run.workflowName ?? run.agentName}</p>
-        <p className="mt-1 truncate text-xs text-muted-foreground">{run.agentName} · {run.profile}</p>
+        <p className="truncate text-[13.5px] font-medium text-foreground">{run.workflowName ?? run.agentName}</p>
+        <p className="mt-0.5 truncate text-label text-muted-foreground">{run.agentName} · {run.profile}</p>
       </div>
       <AgentRunStatusBadge status={run.status} />
-      <p className="text-sm text-muted-foreground">{formatDuration(run.durationMs)}</p>
-      <p className={run.errorCount ? "text-sm font-semibold text-danger" : "text-sm text-muted-foreground"}>{run.errorCount} {t("studio.runs.errors")}</p>
+      <p className="text-body2 tabular-nums text-muted-foreground">{formatDuration(run.durationMs)}</p>
+      <p className={run.errorCount ? "text-body2 font-semibold tabular-nums text-destructive-text" : "text-body2 tabular-nums text-muted-foreground"}>{run.errorCount} {t("studio.runs.errors")}</p>
     </Link>
   )
 }

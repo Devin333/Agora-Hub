@@ -6,6 +6,7 @@ from typing import Any
 
 from framework.llm.context.normalization import (
     NormalizedLLMRequest,
+    structured_output_projected_messages,
     structured_output_projection_format,
 )
 from framework.llm.clients.tool_adapters import to_openai_tools
@@ -44,7 +45,7 @@ def build_openai_chat_payload(
         raise ValueError("model must be a non-empty string")
     payload: dict[str, Any] = {
         "model": model.strip(),
-        "messages": deepcopy(request.messages),
+        "messages": structured_output_projected_messages(request),
     }
     if request.temperature is not None:
         payload["temperature"] = request.temperature

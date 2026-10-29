@@ -1,4 +1,4 @@
-import { isLocalDesktopProfile } from "@/lib/deployment-profile";
+import { isHostedProfile } from "@/lib/deployment-profile";
 import { validResearchConversation, type ResearchConversation } from "./conversation";
 import { researchModuleForPath, safeResearchHref, type ResearchModule } from "./entry";
 import { normalizeResearchHref } from "./routes";
@@ -49,8 +49,8 @@ export function validateVisit(value: unknown): ResearchVisit | null {
     if (!value || typeof value !== "object")
         return null;
     const visit = value as ResearchVisit;
-    const desktop = isLocalDesktopProfile();
-    const href = desktop ? normalizeResearchHref(visit.href) : safeResearchHref(visit.href);
+    const hosted = isHostedProfile();
+    const href = hosted ? normalizeResearchHref(visit.href) : safeResearchHref(visit.href);
     if (!href ||
         !validHistoryId(visit.id) ||
         typeof visit.question !== "string" ||
@@ -84,7 +84,7 @@ export function validateVisit(value: unknown): ResearchVisit | null {
         return null;
     if (visit.archivedAt != null && !validTime(visit.archivedAt))
         return null;
-    const activity = visit.activity?.kind === "reader" && desktop
+    const activity = visit.activity?.kind === "reader" && hosted
         ? {
             ...visit.activity,
             href: normalizeResearchHref(visit.activity.href) ?? visit.activity.href,
@@ -151,7 +151,7 @@ export function validateWorkspace(value: unknown): ResearchWorkspace | null {
         visits.push(visit);
     }
     const groupExists = (id: string | null | undefined) => !id || groups.some(group => group.id === id);
-    const materials = raw.materials?.map(material => material.readerHref && isLocalDesktopProfile()
+    const materials = raw.materials?.map(material => material.readerHref && isHostedProfile()
         ? {
             ...material,
             readerHref: normalizeResearchHref(material.readerHref) ?? material.readerHref,

@@ -6,10 +6,10 @@ import type { ResearchMaterial } from "@/lib/research/workspace-items"
 import { useReaderNotebook } from "@/features/portal/reader/use-reader-notebook"
 import { ResearchSourceEntry } from "../research-source-entry"
 
-const profile = vi.hoisted(() => ({ desktop: true }))
+const profile = vi.hoisted(() => ({ hosted: true }))
 vi.mock("@/lib/deployment-profile", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/deployment-profile")>(),
-  isLocalDesktopProfile: () => profile.desktop,
+  isHostedProfile: () => profile.hosted,
 }))
 const revision = `sha256:${"a".repeat(64)}`
 const original: ResearchMaterial = {
@@ -44,7 +44,7 @@ async function renderReceipt({
   return { ...view, onAttach }
 }
 beforeEach(() => {
-  profile.desktop = true
+  profile.hosted = true
   sessionStorage.clear()
   history.selectHistoryOwner("alice")
   loadLibrary()
@@ -147,7 +147,7 @@ describe("canonical PDF library attachment", () => {
     expect(view.onAttach).toHaveBeenCalledWith(original.id)
   })
   it("preserves the default portal contract without adding a desktop reader locator", async () => {
-    profile.desktop = false
+    profile.hosted = false
     loadLibrary([])
     const view = await renderReceipt()
     fireEvent.click(screen.getByRole("button", { name: "用于本次研究" }))

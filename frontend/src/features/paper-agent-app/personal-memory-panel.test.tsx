@@ -28,10 +28,8 @@ const policy = {
   updated_at: "2026-10-14T08:00:00Z",
 }
 const info = {
-  storage: "local_sqlite",
+  storage: "server_sqlite",
   status: "available",
-  data_root: "F:/private/research",
-  database_path: "F:/private/research/personal-memory.sqlite3",
 }
 const savedRecord = {
   memory_id: `pmem_${"a".repeat(32)}`,
@@ -110,6 +108,12 @@ describe("PersonalMemoryPanel dialog boundaries", () => {
     expect(opener).not.toHaveAttribute("aria-hidden")
     expect(opener).toHaveFocus()
     opener.remove()
+  })
+
+  it("describes server account storage without exposing any server path", async () => {
+    renderPanel()
+    expect(await screen.findByText("服务器账号空间（仅本账号可见）")).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/sqlite|[A-Z]:\/|\/var\//i)
   })
 
   it("restores pre-existing inert and aria-hidden values", async () => {

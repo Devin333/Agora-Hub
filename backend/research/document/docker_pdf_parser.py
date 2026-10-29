@@ -4,11 +4,13 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pymupdf
-
+from backend.research.document.pymupdf_loader import load_pymupdf
 from framework.execution_environment.errors import ExecutionEnvironmentUnavailableError
+
+if TYPE_CHECKING:
+    import pymupdf
 
 
 @dataclass(frozen=True)
@@ -166,7 +168,7 @@ def rect_to_pdf_points(
 
 
 def page_rects(pdf_bytes: bytes) -> dict[int, pymupdf.Rect]:
-    document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    document = load_pymupdf().open(stream=pdf_bytes, filetype="pdf")
     try:
         return {index: page.rect for index, page in enumerate(document, start=1)}
     finally:

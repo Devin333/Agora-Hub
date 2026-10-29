@@ -45,7 +45,7 @@ describe("LoginPage", () => {
   })
 
   it("shows first-admin bootstrap when auth is uninitialized", async () => {
-    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: false, session: null })
+    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: false, bootstrapAvailable: true, session: null })
     vi.mocked(bootstrapAccount).mockResolvedValue({
       user: { userId: "user-1", username: "admin", role: "admin" },
       sessionId: "sess-1",
@@ -54,7 +54,14 @@ describe("LoginPage", () => {
 
     render(<LoginPage />)
 
-    expect(await screen.findByRole("heading", { name: "创建第一个 Agora Hub 账号" })).toBeInTheDocument()
+    const heading = await screen.findByRole("heading", { name: "创建第一个 Agora Hub 账号" })
+    expect(heading).toHaveClass("text-4xl", "font-medium", "tracking-tight")
+    const form = heading.closest("form")!
+    expect(form).toHaveClass("max-w-[460px]")
+    expect(form.querySelector('[data-slot="brand-mark"]')).toHaveStyle({ width: "74px", height: "74px" })
+    expect(screen.getByLabelText("用户名")).toHaveAttribute("data-size", "xl")
+    expect(screen.getByLabelText("密码")).toHaveAttribute("data-size", "xl")
+    expect(screen.getByRole("button", { name: "创建账号" })).toHaveClass("w-full")
     fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "admin" } })
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "correct horse" } })
     fireEvent.submit(screen.getByRole("button", { name: "创建账号" }).closest("form")!)
@@ -68,7 +75,7 @@ describe("LoginPage", () => {
 
   it("shows login after initialization and respects safe next paths", async () => {
     navigation.searchParams = new URLSearchParams({ next: "/papers/reader-paper" })
-    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: true, session: null })
+    vi.mocked(fetchAuthSession).mockResolvedValue({ initialized: true, bootstrapAvailable: false, session: null })
     vi.mocked(login).mockResolvedValue({
       user: { userId: "user-1", username: "admin", role: "admin" },
       sessionId: "sess-1",
@@ -92,6 +99,7 @@ describe("LoginPage", () => {
     navigation.searchParams = new URLSearchParams({ next: "//evil.example" })
     vi.mocked(fetchAuthSession).mockResolvedValue({
       initialized: true,
+      bootstrapAvailable: false,
       session: {
         user: { userId: "user-1", username: "admin", role: "admin" },
         sessionId: "sess-1",
@@ -110,6 +118,7 @@ describe("LoginPage", () => {
     process.env.NEWSROOM_FRONTEND_SURFACE = "admin"
     vi.mocked(fetchAuthSession).mockResolvedValue({
       initialized: true,
+      bootstrapAvailable: false,
       session: {
         user: { userId: "user-1", username: "admin", role: "admin" },
         sessionId: "sess-1",

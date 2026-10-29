@@ -5,9 +5,8 @@ import Link from "next/link"
 import { ArrowLeft, Play } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StudioFallbackNotice } from "@/features/studio/shared/components/studio-fallback-notice"
-import { StudioPageHeader, StudioPanel } from "@/features/studio/shared/components/studio-dashboard"
+import { StudioPageHeader, StudioPanel, studioFieldClass } from "@/features/studio/shared/components/studio-dashboard"
 import { BoardCardGrid } from "@/features/studio/boards/components/board-card-grid"
 import { BoardOutputPanel } from "@/features/studio/boards/components/board-output-panel"
 import { CrossBoardInsightPanel } from "@/features/studio/boards/components/cross-board-insight-panel"
@@ -24,7 +23,7 @@ export function BoardCenterPage({ initialData }: { initialData: StudioBoardListV
   const { data } = useBoardList(initialData)
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={locale === "zh" ? "业务" : "Business"}
         title={t("studio.module.boardCenter.title")}
@@ -62,7 +61,7 @@ export function BoardDetailPage({ detail }: { detail: StudioBoardDetailViewModel
   }
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={locale === "zh" ? "业务板中心" : "Board Center"}
         title={detail.summary.title}
@@ -70,7 +69,7 @@ export function BoardDetailPage({ detail }: { detail: StudioBoardDetailViewModel
         actions={
           <Button asChild variant="outline" size="sm">
             <Link href="/studio/boards">
-              <ArrowLeft className="size-4" />
+              <ArrowLeft size={15} strokeWidth={1.8} aria-hidden="true" />
               {locale === "zh" ? "业务板" : "Boards"}
             </Link>
           </Button>
@@ -79,13 +78,13 @@ export function BoardDetailPage({ detail }: { detail: StudioBoardDetailViewModel
 
       <NoticeList notices={[...detail.notices, ...detail.summary.notices, ...output.notices]} />
 
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
+      <section className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_24rem]">
         <StudioPanel
           title={t("studio.boards.definition")}
           description={detail.summary.boardType}
           actions={<Badge variant={detail.summary.status === "ready" ? "success" : "warning"}>{detail.summary.status}</Badge>}
         >
-          <div className="grid gap-4 text-sm md:grid-cols-2">
+          <div className="grid gap-3 text-body2 md:grid-cols-2">
             <DefinitionLine label={t("studio.boards.inputObject")} value={detail.definition.inputObject} />
             <DefinitionLine label={t("studio.boards.outputObject")} value={detail.definition.outputObject} />
             <DefinitionLine label={t("studio.boards.signalTypes")} value={detail.definition.signalTypes.join(", ")} />
@@ -93,43 +92,39 @@ export function BoardDetailPage({ detail }: { detail: StudioBoardDetailViewModel
           </div>
         </StudioPanel>
 
-        <Card>
-          <CardHeader className="flex-row items-center gap-3">
-            <div>
-              <CardTitle>{t("studio.boards.buildOutput")}</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">{t("studio.boards.buildDescription")}</p>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <label className="block text-sm font-medium text-foreground" htmlFor="board-topic">
+        <StudioPanel title={t("studio.boards.buildOutput")} description={t("studio.boards.buildDescription")} contentClassName="space-y-3">
+          <div className="space-y-1.5">
+            <label className="block text-label font-medium text-muted-foreground" htmlFor="board-topic">
               {t("studio.boards.topic")}
             </label>
             <input
               id="board-topic"
               value={topic}
               onChange={(event) => setTopic(event.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className={`${studioFieldClass} h-8 text-[13px]`}
             />
-            <label className="block text-sm font-medium text-foreground" htmlFor="board-sample-items">
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-label font-medium text-muted-foreground" htmlFor="board-sample-items">
               {t("studio.boards.sampleItemsJson")}
             </label>
             <textarea
               id="board-sample-items"
               value={itemsJson}
               onChange={(event) => setItemsJson(event.target.value)}
-              className="min-h-[220px] w-full resize-y rounded-md border border-input bg-card px-3 py-2 font-mono text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className={`${studioFieldClass} rk-scroll min-h-[220px] resize-y py-2 font-mono text-label`}
             />
-            {formError ? (
-              <p role="alert" className="text-sm text-danger">
-                {formError}
-              </p>
-            ) : null}
-            <Button onClick={handleBuildOutput} disabled={isLoading}>
-              <Play className="size-4" />
-              {isLoading ? t("studio.boards.building") : t("studio.boards.buildOutput")}
-            </Button>
-          </CardContent>
-        </Card>
+          </div>
+          {formError ? (
+            <p role="alert" className="text-body2 text-destructive-text">
+              {formError}
+            </p>
+          ) : null}
+          <Button onClick={handleBuildOutput} disabled={isLoading}>
+            <Play size={15} strokeWidth={1.8} aria-hidden="true" />
+            {isLoading ? t("studio.boards.building") : t("studio.boards.buildOutput")}
+          </Button>
+        </StudioPanel>
       </section>
 
       {output.crossBoard ? <CrossBoardInsightPanel crossBoard={output.crossBoard} /> : null}
@@ -143,7 +138,7 @@ function NoticeList({ notices }: { notices: string[] }) {
   const unique = [...new Set(notices.filter(Boolean))]
   if (!unique.length) return null
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {unique.map((notice) => (
         <StudioFallbackNotice key={notice} title={t("studio.boards.dataNotice")} message={notice} />
       ))}
@@ -154,8 +149,8 @@ function NoticeList({ notices }: { notices: string[] }) {
 function DefinitionLine({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{label}</p>
-      <p className="mt-1 break-words text-foreground">{value}</p>
+      <p className="text-label text-muted-foreground">{label}</p>
+      <p className="mt-0.5 break-words text-foreground">{value}</p>
     </div>
   )
 }

@@ -67,8 +67,19 @@ test("message index previews and jumps through questions and answers without cha
   await expect(entries).toHaveCount(4)
   await expect(transcript.getByText("继续提问", { exact: true })).toHaveCount(0)
   const ragMessage = transcript.getByText("还有 RAG 相关的", { exact: true })
-  await expect(ragMessage).toHaveCSS("background-color", "rgb(124, 58, 237)")
-  await expect(ragMessage).toHaveCSS("color", "rgb(255, 255, 255)")
+  // User bubbles use the chat-user tokens, whichever theme the page resolved to.
+  const chatUser = await page.evaluate(() => {
+    const probe = document.createElement("span")
+    probe.style.backgroundColor = "var(--chat-user)"
+    probe.style.color = "var(--chat-user-foreground)"
+    document.body.append(probe)
+    const style = getComputedStyle(probe)
+    const result = { background: style.backgroundColor, color: style.color }
+    probe.remove()
+    return result
+  })
+  await expect(ragMessage).toHaveCSS("background-color", chatUser.background)
+  await expect(ragMessage).toHaveCSS("color", chatUser.color)
   await followUp.fill("继续比较这些资料")
   const sessionUrl = page.url()
   await entries.nth(2).hover()

@@ -5,7 +5,7 @@ import type { ToolCall } from "@/types/agent"
 export function ToolCallList({ calls }: { calls: ToolCall[] }) {
   if (!calls.length) return <EmptyState title="暂无工具调用" description="这次运行没有调用工具。" />
   return (
-    <div className="space-y-3">
+    <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
       {calls.map((call) => (
         <ToolCallCard key={call.id} call={call} />
       ))}

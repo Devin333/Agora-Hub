@@ -1,6 +1,7 @@
 "use client"
 
 import { X } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { methodName, taskName } from "@/lib/papers/format"
 import type { Benchmark, BenchmarkRef, Locale, Paper, PaperBenchmarkResult, PaperMethod, PaperTask } from "@/lib/papers/types"
 
@@ -30,54 +31,59 @@ export function BenchmarkEvidencePanel({
   const entryCount = matches.length
 
   return (
-    <section className="rounded-md border border-border bg-card p-4">
+    <section className="rounded-2xl border bg-card p-4">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">
             {locale === "zh" ? "评测证据" : "Benchmark Evidence"}
           </p>
-          <h2 className="mt-2 text-lg font-semibold">{benchmark.name}</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          <h2 className="mt-1 text-heading3 font-semibold text-foreground">{benchmark.name}</h2>
+          <p className="mt-1 max-w-3xl text-body2 text-muted-foreground">
             {contextDescription(context, locale)}
           </p>
         </div>
-        <button
+        <Button
           type="button"
-          className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0 rounded-full text-muted-foreground"
           aria-label={locale === "zh" ? "关闭评测证据" : "Close benchmark evidence"}
           onClick={onClose}
         >
-          <X className="size-4" />
-        </button>
+          <X className="size-4" strokeWidth={1.8} aria-hidden="true" />
+        </Button>
       </div>
-      <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+      <dl className="mt-4 grid gap-2 sm:grid-cols-3">
         <BenchmarkFact label={locale === "zh" ? "记录条目" : "Entries"} value={entryCount || matches.length || 0} />
         <BenchmarkFact label={locale === "zh" ? "指标" : "Metric"} value={metric ?? "Not recorded"} />
         <BenchmarkFact label={locale === "zh" ? "最佳值" : "Best Value"} value={bestValue ?? "Not recorded"} />
       </dl>
       {category ? (
-        <p className="mt-3 text-xs text-muted-foreground">
+        <p className="mt-3 text-label text-muted-foreground">
           {locale === "zh" ? "类别" : "Category"}: {category}
         </p>
       ) : null}
-      <div className="mt-4 space-y-3">
-        <h3 className="text-sm font-semibold">{locale === "zh" ? "相关论文" : "Relevant Papers"}</h3>
+      <div className="mt-5 space-y-2">
+        <h3 className="px-1 text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">
+          {locale === "zh" ? "相关论文" : "Relevant Papers"}
+        </h3>
         {matches.length ? (
-          <div className="grid gap-2">
+          <ul className="divide-y overflow-hidden rounded-xl border">
             {matches.map((match) => (
-              <button
-                key={match.paper.id}
-                type="button"
-                className="rounded-md border border-border bg-background/70 px-3 py-2 text-left text-sm hover:bg-secondary"
-                onClick={() => onPreviewPaper(match.paper)}
-              >
-                <span className="block font-semibold">{match.paper.title}</span>
-                <span className="mt-1 block text-xs text-muted-foreground">{match.reason}</span>
-              </button>
+              <li key={match.paper.id}>
+                <button
+                  type="button"
+                  className="block w-full px-4 py-3 text-left text-body2 text-foreground outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40"
+                  onClick={() => onPreviewPaper(match.paper)}
+                >
+                  <span className="block font-medium">{match.paper.title}</span>
+                  <span className="mt-0.5 block text-label text-muted-foreground">{match.reason}</span>
+                </button>
+              </li>
             ))}
-          </div>
+          </ul>
         ) : (
-          <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+          <p className="px-1 text-body2 text-muted-foreground">
             {emptyMessage(context, locale)}
           </p>
         )}
@@ -88,9 +94,9 @@ export function BenchmarkEvidencePanel({
 
 function BenchmarkFact({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-md border border-border bg-background/60 p-3">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-sm font-semibold">{value}</dd>
+    <div className="rounded-xl bg-muted px-3 py-2.5">
+      <dt className="text-label text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-body1 font-semibold tabular-nums text-foreground">{value}</dd>
     </div>
   )
 }

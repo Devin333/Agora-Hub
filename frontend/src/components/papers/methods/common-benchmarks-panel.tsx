@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowRight } from "lucide-react"
+import { RelatedListPanel } from "@/components/papers/shared/related-list-panel"
 import { benchmarkCategoryLabel } from "@/lib/papers/categories"
 import { papersCopy, t } from "@/lib/papers/copy"
 import type { Benchmark, BenchmarkRef, Locale } from "@/lib/papers/types"
@@ -14,30 +14,12 @@ export function CommonBenchmarksPanel({
   locale: Locale
   onSelect: (benchmark: BenchmarkRef | Benchmark) => void
 }) {
-  if (!benchmarks.length) return null
-  return (
-    <section className="rounded-md border border-border bg-card p-4">
-      <h2 className="text-sm font-semibold">{t(papersCopy.commonBenchmarks, locale)}</h2>
-      <div className="mt-3 grid gap-2">
-        {benchmarks.map((benchmark) => (
-          <button
-            key={benchmark.id}
-            type="button"
-            className="flex items-center justify-between gap-3 rounded-md border border-border bg-background/60 px-3 py-2 text-left text-sm hover:bg-secondary"
-            onClick={() => onSelect(benchmark)}
-          >
-            <span className="min-w-0">
-              <span className="block truncate font-semibold">{benchmark.name}</span>
-              {benchmark.category ? (
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  {benchmarkCategoryLabel(benchmark.category, locale) ?? benchmark.category}
-                </span>
-              ) : null}
-            </span>
-            <ArrowRight className="size-4 text-muted-foreground" />
-          </button>
-        ))}
-      </div>
-    </section>
-  )
+  const items = benchmarks.map((benchmark) => ({
+    id: benchmark.id,
+    label: benchmark.name,
+    detail: benchmark.category ? benchmarkCategoryLabel(benchmark.category, locale) ?? benchmark.category : undefined,
+    onSelect: () => onSelect(benchmark)
+  }))
+
+  return <RelatedListPanel title={t(papersCopy.commonBenchmarks, locale)} items={items} />
 }

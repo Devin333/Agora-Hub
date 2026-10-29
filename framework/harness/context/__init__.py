@@ -1,131 +1,8 @@
 from __future__ import annotations
 
-from framework.harness.context.assembler import ContextAssembler
-from framework.harness.context.budget import ContextBudgetEstimator, ContextBudgetUsage
-from framework.harness.context.cache import ContextCachePolicyBuilder
-from framework.harness.context.compression import ContextCompressor
-from framework.harness.context.compaction_models import (
-    REVERSIBLE_CONTEXT_ACTIONS,
-    ContextCompactionAction,
-    ContextCompactionActionResult,
-    ContextCompactionActionType,
-    ContextCompactionOutcome,
-    ContextCompactionPlan,
-    ContextCompactionPolicy,
-    ContextLossReport,
-    ContextLossRisk,
-)
-from framework.harness.context.execution import (
-    ContextCompactionActionExecutor,
-    ContextCompactionExecutionResult,
-    ContextCompactionExecutionStatus,
-)
-from framework.harness.context.durable_store import (
-    ContextDurableRefs,
-    ContextVerifiedArtifactStore,
-    ContextVerifiedStorePort,
-)
-from framework.harness.context.fake import (
-    FakeContextAssembler,
-    FakeContextBudgetEstimator,
-    FakeContextCachePolicyBuilder,
-    FakeContextCompressor,
-    FakeContextGateSuite,
-    FakeContextRuntime,
-    FakeContextSnapshotStore,
-)
-from framework.harness.context.gates import (
-    ContextBudgetGate,
-    ContextCacheKeyGate,
-    ContextCompressionLossGate,
-    ContextGateResult,
-    ContextPrivacyGate,
-    ContextProvenanceGate,
-    ContextReplayGate,
-    ContextSchemaPreservationGate,
-    ContextSegmentOrderGate,
-    ContextStablePrefixGate,
-)
-from framework.harness.context.models import (
-    CONTEXT_ENVELOPE_SCHEMA_V2,
-    CONTEXT_GRAPH_TASK_PLAN_STAGE_IDENTITY_SCHEMA_V2,
-    CONTEXT_SNAPSHOT_SCHEMA_V2,
-    CONTEXT_SEGMENT_ORDER,
-    CONTROL_PLANE_PRESERVED_FIELDS,
-    CompressionRecord,
-    ContextBudget,
-    ContextCachePolicy,
-    ContextCacheScope,
-    ContextCompressionLevel,
-    ContextCompressionSummary,
-    ContextEnvelope,
-    ContextGraphIdentity,
-    ContextSegment,
-    ContextSegmentType,
-    ContextSnapshot,
-    ContextTaskExecutionIdentity,
-)
-from framework.harness.context.group_models import (
-    ContextGroup,
-    ContextGroupKind,
-    ContextGroupMember,
-    ContextGroupMemberKind,
-    ContextProtectionReason,
-    ContextReconstructionPolicy,
-    ContextToolTransactionState,
-)
-from framework.harness.context.materializer import (
-    ContextGroupMaterializer,
-    ContextGroupStructureValidator,
-    ContextMaterializationRequest,
-)
-from framework.harness.context.planning import (
-    ContextCompactionActionDefinition,
-    ContextCompactionActionRegistry,
-    ContextCompactionPlanner,
-    ContextCompactionPlanningRequest,
-    ContextCompactionPlanValidator,
-    ContextCompactionPolicyResolver,
-)
-from framework.harness.context.planning_models import (
-    ContextCompactionPlanningResult,
-    ContextCompactionPlanningStatus,
-    ContextPhysicalAdmissionEvidence,
-    ContextPlanningBudgetUsage,
-)
-from framework.harness.context.snapshot import ContextSnapshotStore
-from framework.harness.context.runtime import (
-    ContextCompactionRuntime,
-    ContextCompactionRuntimeRequest,
-    ContextCompactionRuntimeResult,
-    ContextCompactionRuntimeStatus,
-    ContextPhysicalMaterializerPort,
-)
-from framework.harness.context.summary_models import (
-    ContextSummaryCandidate,
-    ContextSummaryClaim,
-)
-from framework.harness.context.summary import (
-    ContextSummaryArtifactPort,
-    ContextSummaryCandidateVerifier,
-    ContextSummaryMaterializer,
-    ContextSummaryRequest,
-    ContextSummaryVerificationResult,
-    ContextSummaryWorkerPort,
-    ContextSummaryWorkerResult,
-)
-from framework.harness.context.verified_records import (
-    ContextCompressionRecordV2,
-    ContextSemanticSnapshot,
-    ContextSemanticSnapshotKind,
-)
-from framework.harness.context.verification import (
-    ContextAggregateGateResult,
-    ContextAggregateVerificationResult,
-    ContextAggregateVerifier,
-    ContextPhysicalAdmissionVerifier,
-    ContextPhysicalMaterialization,
-)
+from typing import TYPE_CHECKING, Any
+
+from framework.shared.lazy_exports import LazyExports
 
 __all__ = [
     "CONTEXT_ENVELOPE_SCHEMA_V2",
@@ -226,3 +103,254 @@ __all__ = [
     "FakeContextRuntime",
     "FakeContextSnapshotStore",
 ]
+
+_LAZY = LazyExports(
+    __name__,
+    {
+        "ContextAssembler": ("framework.harness.context.assembler", "ContextAssembler"),
+        "ContextBudgetEstimator": ("framework.harness.context.budget", "ContextBudgetEstimator"),
+        "ContextBudgetUsage": ("framework.harness.context.budget", "ContextBudgetUsage"),
+        "ContextCachePolicyBuilder": ("framework.harness.context.cache", "ContextCachePolicyBuilder"),
+        "ContextCompressor": ("framework.harness.context.compression", "ContextCompressor"),
+        "REVERSIBLE_CONTEXT_ACTIONS": ("framework.harness.context.compaction_models", "REVERSIBLE_CONTEXT_ACTIONS"),
+        "ContextCompactionAction": ("framework.harness.context.compaction_models", "ContextCompactionAction"),
+        "ContextCompactionActionResult": ("framework.harness.context.compaction_models", "ContextCompactionActionResult"),
+        "ContextCompactionActionType": ("framework.harness.context.compaction_models", "ContextCompactionActionType"),
+        "ContextCompactionOutcome": ("framework.harness.context.compaction_models", "ContextCompactionOutcome"),
+        "ContextCompactionPlan": ("framework.harness.context.compaction_models", "ContextCompactionPlan"),
+        "ContextCompactionPolicy": ("framework.harness.context.compaction_models", "ContextCompactionPolicy"),
+        "ContextLossReport": ("framework.harness.context.compaction_models", "ContextLossReport"),
+        "ContextLossRisk": ("framework.harness.context.compaction_models", "ContextLossRisk"),
+        "ContextCompactionActionExecutor": ("framework.harness.context.execution", "ContextCompactionActionExecutor"),
+        "ContextCompactionExecutionResult": ("framework.harness.context.execution", "ContextCompactionExecutionResult"),
+        "ContextCompactionExecutionStatus": ("framework.harness.context.execution", "ContextCompactionExecutionStatus"),
+        "ContextDurableRefs": ("framework.harness.context.durable_store", "ContextDurableRefs"),
+        "ContextVerifiedArtifactStore": ("framework.harness.context.durable_store", "ContextVerifiedArtifactStore"),
+        "ContextVerifiedStorePort": ("framework.harness.context.durable_store", "ContextVerifiedStorePort"),
+        "FakeContextAssembler": ("framework.harness.context.fake", "FakeContextAssembler"),
+        "FakeContextBudgetEstimator": ("framework.harness.context.fake", "FakeContextBudgetEstimator"),
+        "FakeContextCachePolicyBuilder": ("framework.harness.context.fake", "FakeContextCachePolicyBuilder"),
+        "FakeContextCompressor": ("framework.harness.context.fake", "FakeContextCompressor"),
+        "FakeContextGateSuite": ("framework.harness.context.fake", "FakeContextGateSuite"),
+        "FakeContextRuntime": ("framework.harness.context.fake", "FakeContextRuntime"),
+        "FakeContextSnapshotStore": ("framework.harness.context.fake", "FakeContextSnapshotStore"),
+        "ContextBudgetGate": ("framework.harness.context.gates", "ContextBudgetGate"),
+        "ContextCacheKeyGate": ("framework.harness.context.gates", "ContextCacheKeyGate"),
+        "ContextCompressionLossGate": ("framework.harness.context.gates", "ContextCompressionLossGate"),
+        "ContextGateResult": ("framework.harness.context.gates", "ContextGateResult"),
+        "ContextPrivacyGate": ("framework.harness.context.gates", "ContextPrivacyGate"),
+        "ContextProvenanceGate": ("framework.harness.context.gates", "ContextProvenanceGate"),
+        "ContextReplayGate": ("framework.harness.context.gates", "ContextReplayGate"),
+        "ContextSchemaPreservationGate": ("framework.harness.context.gates", "ContextSchemaPreservationGate"),
+        "ContextSegmentOrderGate": ("framework.harness.context.gates", "ContextSegmentOrderGate"),
+        "ContextStablePrefixGate": ("framework.harness.context.gates", "ContextStablePrefixGate"),
+        "CONTEXT_ENVELOPE_SCHEMA_V2": ("framework.harness.context.models", "CONTEXT_ENVELOPE_SCHEMA_V2"),
+        "CONTEXT_GRAPH_TASK_PLAN_STAGE_IDENTITY_SCHEMA_V2": ("framework.harness.context.models", "CONTEXT_GRAPH_TASK_PLAN_STAGE_IDENTITY_SCHEMA_V2"),
+        "CONTEXT_SNAPSHOT_SCHEMA_V2": ("framework.harness.context.models", "CONTEXT_SNAPSHOT_SCHEMA_V2"),
+        "CONTEXT_SEGMENT_ORDER": ("framework.harness.context.models", "CONTEXT_SEGMENT_ORDER"),
+        "CONTROL_PLANE_PRESERVED_FIELDS": ("framework.harness.context.models", "CONTROL_PLANE_PRESERVED_FIELDS"),
+        "CompressionRecord": ("framework.harness.context.models", "CompressionRecord"),
+        "ContextBudget": ("framework.harness.context.models", "ContextBudget"),
+        "ContextCachePolicy": ("framework.harness.context.models", "ContextCachePolicy"),
+        "ContextCacheScope": ("framework.harness.context.models", "ContextCacheScope"),
+        "ContextCompressionLevel": ("framework.harness.context.models", "ContextCompressionLevel"),
+        "ContextCompressionSummary": ("framework.harness.context.models", "ContextCompressionSummary"),
+        "ContextEnvelope": ("framework.harness.context.models", "ContextEnvelope"),
+        "ContextGraphIdentity": ("framework.harness.context.models", "ContextGraphIdentity"),
+        "ContextSegment": ("framework.harness.context.models", "ContextSegment"),
+        "ContextSegmentType": ("framework.harness.context.models", "ContextSegmentType"),
+        "ContextSnapshot": ("framework.harness.context.models", "ContextSnapshot"),
+        "ContextTaskExecutionIdentity": ("framework.harness.context.models", "ContextTaskExecutionIdentity"),
+        "ContextGroup": ("framework.harness.context.group_models", "ContextGroup"),
+        "ContextGroupKind": ("framework.harness.context.group_models", "ContextGroupKind"),
+        "ContextGroupMember": ("framework.harness.context.group_models", "ContextGroupMember"),
+        "ContextGroupMemberKind": ("framework.harness.context.group_models", "ContextGroupMemberKind"),
+        "ContextProtectionReason": ("framework.harness.context.group_models", "ContextProtectionReason"),
+        "ContextReconstructionPolicy": ("framework.harness.context.group_models", "ContextReconstructionPolicy"),
+        "ContextToolTransactionState": ("framework.harness.context.group_models", "ContextToolTransactionState"),
+        "ContextGroupMaterializer": ("framework.harness.context.materializer", "ContextGroupMaterializer"),
+        "ContextGroupStructureValidator": ("framework.harness.context.materializer", "ContextGroupStructureValidator"),
+        "ContextMaterializationRequest": ("framework.harness.context.materializer", "ContextMaterializationRequest"),
+        "ContextCompactionActionDefinition": ("framework.harness.context.planning", "ContextCompactionActionDefinition"),
+        "ContextCompactionActionRegistry": ("framework.harness.context.planning", "ContextCompactionActionRegistry"),
+        "ContextCompactionPlanner": ("framework.harness.context.planning", "ContextCompactionPlanner"),
+        "ContextCompactionPlanningRequest": ("framework.harness.context.planning", "ContextCompactionPlanningRequest"),
+        "ContextCompactionPlanValidator": ("framework.harness.context.planning", "ContextCompactionPlanValidator"),
+        "ContextCompactionPolicyResolver": ("framework.harness.context.planning", "ContextCompactionPolicyResolver"),
+        "ContextCompactionPlanningResult": ("framework.harness.context.planning_models", "ContextCompactionPlanningResult"),
+        "ContextCompactionPlanningStatus": ("framework.harness.context.planning_models", "ContextCompactionPlanningStatus"),
+        "ContextPhysicalAdmissionEvidence": ("framework.harness.context.planning_models", "ContextPhysicalAdmissionEvidence"),
+        "ContextPlanningBudgetUsage": ("framework.harness.context.planning_models", "ContextPlanningBudgetUsage"),
+        "ContextSnapshotStore": ("framework.harness.context.snapshot", "ContextSnapshotStore"),
+        "ContextCompactionRuntime": ("framework.harness.context.runtime", "ContextCompactionRuntime"),
+        "ContextCompactionRuntimeRequest": ("framework.harness.context.runtime", "ContextCompactionRuntimeRequest"),
+        "ContextCompactionRuntimeResult": ("framework.harness.context.runtime", "ContextCompactionRuntimeResult"),
+        "ContextCompactionRuntimeStatus": ("framework.harness.context.runtime", "ContextCompactionRuntimeStatus"),
+        "ContextPhysicalMaterializerPort": ("framework.harness.context.runtime", "ContextPhysicalMaterializerPort"),
+        "ContextSummaryCandidate": ("framework.harness.context.summary_models", "ContextSummaryCandidate"),
+        "ContextSummaryClaim": ("framework.harness.context.summary_models", "ContextSummaryClaim"),
+        "ContextSummaryArtifactPort": ("framework.harness.context.summary", "ContextSummaryArtifactPort"),
+        "ContextSummaryCandidateVerifier": ("framework.harness.context.summary", "ContextSummaryCandidateVerifier"),
+        "ContextSummaryMaterializer": ("framework.harness.context.summary", "ContextSummaryMaterializer"),
+        "ContextSummaryRequest": ("framework.harness.context.summary", "ContextSummaryRequest"),
+        "ContextSummaryVerificationResult": ("framework.harness.context.summary", "ContextSummaryVerificationResult"),
+        "ContextSummaryWorkerPort": ("framework.harness.context.summary", "ContextSummaryWorkerPort"),
+        "ContextSummaryWorkerResult": ("framework.harness.context.summary", "ContextSummaryWorkerResult"),
+        "ContextCompressionRecordV2": ("framework.harness.context.verified_records", "ContextCompressionRecordV2"),
+        "ContextSemanticSnapshot": ("framework.harness.context.verified_records", "ContextSemanticSnapshot"),
+        "ContextSemanticSnapshotKind": ("framework.harness.context.verified_records", "ContextSemanticSnapshotKind"),
+        "ContextAggregateGateResult": ("framework.harness.context.verification", "ContextAggregateGateResult"),
+        "ContextAggregateVerificationResult": ("framework.harness.context.verification", "ContextAggregateVerificationResult"),
+        "ContextAggregateVerifier": ("framework.harness.context.verification", "ContextAggregateVerifier"),
+        "ContextPhysicalAdmissionVerifier": ("framework.harness.context.verification", "ContextPhysicalAdmissionVerifier"),
+        "ContextPhysicalMaterialization": ("framework.harness.context.verification", "ContextPhysicalMaterialization"),
+    },
+)
+
+
+def __getattr__(name: str) -> Any:
+    return _LAZY.getattr(name)
+
+
+def __dir__() -> list[str]:
+    return _LAZY.dir()
+
+
+if TYPE_CHECKING:
+    from framework.harness.context.assembler import (
+        ContextAssembler,
+    )
+    from framework.harness.context.budget import (
+        ContextBudgetEstimator,
+        ContextBudgetUsage,
+    )
+    from framework.harness.context.cache import (
+        ContextCachePolicyBuilder,
+    )
+    from framework.harness.context.compression import (
+        ContextCompressor,
+    )
+    from framework.harness.context.compaction_models import (
+        REVERSIBLE_CONTEXT_ACTIONS,
+        ContextCompactionAction,
+        ContextCompactionActionResult,
+        ContextCompactionActionType,
+        ContextCompactionOutcome,
+        ContextCompactionPlan,
+        ContextCompactionPolicy,
+        ContextLossReport,
+        ContextLossRisk,
+    )
+    from framework.harness.context.execution import (
+        ContextCompactionActionExecutor,
+        ContextCompactionExecutionResult,
+        ContextCompactionExecutionStatus,
+    )
+    from framework.harness.context.durable_store import (
+        ContextDurableRefs,
+        ContextVerifiedArtifactStore,
+        ContextVerifiedStorePort,
+    )
+    from framework.harness.context.fake import (
+        FakeContextAssembler,
+        FakeContextBudgetEstimator,
+        FakeContextCachePolicyBuilder,
+        FakeContextCompressor,
+        FakeContextGateSuite,
+        FakeContextRuntime,
+        FakeContextSnapshotStore,
+    )
+    from framework.harness.context.gates import (
+        ContextBudgetGate,
+        ContextCacheKeyGate,
+        ContextCompressionLossGate,
+        ContextGateResult,
+        ContextPrivacyGate,
+        ContextProvenanceGate,
+        ContextReplayGate,
+        ContextSchemaPreservationGate,
+        ContextSegmentOrderGate,
+        ContextStablePrefixGate,
+    )
+    from framework.harness.context.models import (
+        CONTEXT_ENVELOPE_SCHEMA_V2,
+        CONTEXT_GRAPH_TASK_PLAN_STAGE_IDENTITY_SCHEMA_V2,
+        CONTEXT_SNAPSHOT_SCHEMA_V2,
+        CONTEXT_SEGMENT_ORDER,
+        CONTROL_PLANE_PRESERVED_FIELDS,
+        CompressionRecord,
+        ContextBudget,
+        ContextCachePolicy,
+        ContextCacheScope,
+        ContextCompressionLevel,
+        ContextCompressionSummary,
+        ContextEnvelope,
+        ContextGraphIdentity,
+        ContextSegment,
+        ContextSegmentType,
+        ContextSnapshot,
+        ContextTaskExecutionIdentity,
+    )
+    from framework.harness.context.group_models import (
+        ContextGroup,
+        ContextGroupKind,
+        ContextGroupMember,
+        ContextGroupMemberKind,
+        ContextProtectionReason,
+        ContextReconstructionPolicy,
+        ContextToolTransactionState,
+    )
+    from framework.harness.context.materializer import (
+        ContextGroupMaterializer,
+        ContextGroupStructureValidator,
+        ContextMaterializationRequest,
+    )
+    from framework.harness.context.planning import (
+        ContextCompactionActionDefinition,
+        ContextCompactionActionRegistry,
+        ContextCompactionPlanner,
+        ContextCompactionPlanningRequest,
+        ContextCompactionPlanValidator,
+        ContextCompactionPolicyResolver,
+    )
+    from framework.harness.context.planning_models import (
+        ContextCompactionPlanningResult,
+        ContextCompactionPlanningStatus,
+        ContextPhysicalAdmissionEvidence,
+        ContextPlanningBudgetUsage,
+    )
+    from framework.harness.context.snapshot import (
+        ContextSnapshotStore,
+    )
+    from framework.harness.context.runtime import (
+        ContextCompactionRuntime,
+        ContextCompactionRuntimeRequest,
+        ContextCompactionRuntimeResult,
+        ContextCompactionRuntimeStatus,
+        ContextPhysicalMaterializerPort,
+    )
+    from framework.harness.context.summary_models import (
+        ContextSummaryCandidate,
+        ContextSummaryClaim,
+    )
+    from framework.harness.context.summary import (
+        ContextSummaryArtifactPort,
+        ContextSummaryCandidateVerifier,
+        ContextSummaryMaterializer,
+        ContextSummaryRequest,
+        ContextSummaryVerificationResult,
+        ContextSummaryWorkerPort,
+        ContextSummaryWorkerResult,
+    )
+    from framework.harness.context.verified_records import (
+        ContextCompressionRecordV2,
+        ContextSemanticSnapshot,
+        ContextSemanticSnapshotKind,
+    )
+    from framework.harness.context.verification import (
+        ContextAggregateGateResult,
+        ContextAggregateVerificationResult,
+        ContextAggregateVerifier,
+        ContextPhysicalAdmissionVerifier,
+        ContextPhysicalMaterialization,
+    )

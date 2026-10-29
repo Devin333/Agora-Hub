@@ -21,7 +21,7 @@ async function installFixture(page: Page, initialWorkspace: Workspace, options: 
   const operationRequests: Array<{ method: string; requestId: string; generation: string | null }> = []
   const memoryPolicyMethods: string[] = []
   const memoryMutations: Array<{ method: string; path: string; memoryId: string; body: Record<string, unknown> }> = []
-  await page.route("**/api/auth/session", route => route.fulfill({ json: { success: true, data: { session: { sessionId: "session-alice", expiresAt: "2099-12-31T00:00:00Z", user: { userId: "alice", username: "alice", role: "user" } } } } }))
+  await page.route("**/api/auth/session", route => route.fulfill({ json: { success: true, data: { initialized: true, bootstrapAvailable: false, session: { sessionId: "session-alice", expiresAt: "2099-12-31T00:00:00Z", user: { userId: "alice", username: "alice", role: "user" } } } } }))
   await page.route("**/api/research/history", async route => {
     if (route.request().method() === "PUT") {
       if (options.historyConflict) return route.fulfill({ status: 409, json: { success: false, error: { code: "revision_conflict", message: "Revision changed" } } })
@@ -54,7 +54,7 @@ async function installFixture(page: Page, initialWorkspace: Workspace, options: 
       const allowed = options.memoryRemoteAllowed === true
       return route.fulfill({ json: { policy: { allow_remote_processing: allowed, remote_processing_permissions: { model: allowed, tool: allowed, embedding: allowed }, revision: 1, created_at: "2026-10-14T00:00:00Z", updated_at: "2026-10-14T00:00:00Z" } } })
     }
-    if (url.pathname.endsWith("/info")) return route.fulfill({ json: { info: { storage: "local_sqlite", status: "available", database_path: "C:/Agora/memory.db", remote_processing_default: false, remote_processing_auto_enabled: false } } })
+    if (url.pathname.endsWith("/info")) return route.fulfill({ json: { info: { storage: "server_sqlite", status: "available", remote_processing_default: false, remote_processing_auto_enabled: false } } })
     if (url.pathname.endsWith("/export")) return route.fulfill({ json: { export: { schema_version: "1", exported_at: "2026-10-14T00:00:00Z", records: memoryRecords, policy: { allow_remote_processing: false, revision: 1 }, notices: [] } } })
     if (route.request().method() === "POST" && url.pathname.endsWith("/personal-memory")) {
       const body = JSON.parse(route.request().postData() ?? "{}")
@@ -187,8 +187,10 @@ test("真实空库、主题、键盘与离线边界", async ({ page }) => {
   await expect(page.getByTestId("paper-agent-app")).toBeVisible()
   await expect(page.getByText("真实论文库为空")).toBeVisible()
   await expect(page.getByText(/六篇样本|公共 catalog/)).toBeVisible()
-  await page.getByRole("button", { name: "使用黑色主题" }).click()
-  await expect(page.getByTestId("paper-agent-app")).toHaveAttribute("data-theme", "dark")
+  await page.getByRole("button", { name: "使用深色主题" }).click()
+  // The workbench follows the app-wide appearance, which ThemeBridge writes to the document root.
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark")
+  await expect(page.getByRole("button", { name: "使用深色主题" })).toHaveAttribute("aria-pressed", "true")
   await page.keyboard.press(process.platform === "darwin" ? "Meta+k" : "Control+k")
   await expect(page.getByRole("searchbox", { name: "筛选本地论文库" })).toBeFocused()
   await page.context().setOffline(true)
@@ -212,7 +214,7 @@ test("窄屏抽屉约束键盘焦点并在 Escape 后归还入口", async ({ pag
   const close = navigation.getByRole("button", { name: "关闭导航" })
   await expect(close).toBeFocused()
   await page.keyboard.press("Shift+Tab")
-  await expect(navigation.getByRole("button", { name: "使用黑色主题" })).toBeFocused()
+  await expect(navigation.getByRole("button", { name: "使用深色主题" })).toBeFocused()
   await page.keyboard.press("Tab")
   await expect(close).toBeFocused()
   await page.keyboard.press("Escape")
@@ -279,44 +281,44 @@ test("本地排序、仅元数据状态与重开导入 request 可核对", async
   })
 })
 
-test("真实 OpenReader 与 ReaderAssistant 在正式壳层使用双主题单色表面", async ({ page }, testInfo) => {
+test("真实 OpenReader 与 ReaderAssistant 在正式壳层跟随 Rakazo 浅色与深色表面", async ({ page }, testInfo) => {
   await installFixture(page, { visits: [], groups: [], materials: [material("paper-1", "First Paper")] }, { readerReady: true })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto("/paper-agent")
+  await page.getByRole("button", { name: "使用浅色主题" }).click()
 
   const readerRoot = page.locator('[data-workspace-appearance]')
   const readerBody = page.getByRole("region", { name: "Open reader paper body" })
   await expect(readerBody).toContainText("Source-backed structured text")
   await expect(readerRoot).toHaveAttribute("data-workspace-appearance", "monochrome-light")
   expect(await readerBody.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)")
-  expect(await readerBody.evaluate(element => getComputedStyle(element).color)).toBe("rgb(29, 29, 27)")
-  expect((await readerRoot.evaluate(element => getComputedStyle(element).getPropertyValue("--reader-accent").trim())).toLowerCase()).toBe("#2b2b28")
+  expect(await readerBody.evaluate(element => getComputedStyle(element).color)).toBe("rgb(28, 28, 28)")
 
   await page.getByRole("button", { name: "打开助手" }).click()
   const assistant = page.getByRole("complementary", { name: "阅读助手" })
   const askInput = page.getByLabel("向这篇论文提问")
   await expect(assistant).toBeVisible()
-  expect(await assistant.evaluate(element => getComputedStyle(element).color)).toBe("rgb(29, 29, 27)")
+  expect(await assistant.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)")
+  expect(await assistant.evaluate(element => getComputedStyle(element).color)).toBe("rgb(28, 28, 28)")
   expect(await askInput.locator("..").evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)")
   await assertLibraryNavigationLayout(page)
   const lightScreenshot = testInfo.outputPath("paper-agent-reader-assistant-light.png")
   await page.screenshot({ path: lightScreenshot, animations: "disabled" })
   await testInfo.attach("paper-agent-reader-assistant-light", { path: lightScreenshot, contentType: "image/png" })
 
-  await page.getByRole("button", { name: "使用黑色主题" }).click()
+  await page.getByRole("button", { name: "使用深色主题" }).click()
   await expect(readerRoot).toHaveAttribute("data-workspace-appearance", "monochrome-dark")
-  expect(await readerBody.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(25, 25, 23)")
-  expect(await readerBody.evaluate(element => getComputedStyle(element).color)).toBe("rgb(243, 243, 239)")
-  expect((await readerRoot.evaluate(element => getComputedStyle(element).getPropertyValue("--reader-accent").trim())).toLowerCase()).toBe("#e7e7e0")
-  expect(await assistant.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgba(25, 25, 23, 0.98)")
-  expect(await assistant.evaluate(element => getComputedStyle(element).color)).toBe("rgb(243, 243, 239)")
-  expect(await askInput.evaluate(element => getComputedStyle(element).color)).toBe("rgb(243, 243, 239)")
+  expect(await readerBody.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(22, 22, 22)")
+  expect(await readerBody.evaluate(element => getComputedStyle(element).color)).toBe("rgb(245, 245, 245)")
+  expect(await assistant.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(22, 22, 22)")
+  expect(await assistant.evaluate(element => getComputedStyle(element).color)).toBe("rgb(245, 245, 245)")
+  expect(await askInput.evaluate(element => getComputedStyle(element).color)).toBe("rgb(245, 245, 245)")
   await page.getByRole("button", { name: "阅读笔记" }).click()
   const noteInput = page.getByLabel("我的阅读笔记")
   await expect(noteInput).toBeVisible()
   await expect(askInput).not.toBeVisible()
-  expect(await noteInput.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe("rgb(255, 255, 255)")
-  expect(await noteInput.evaluate(element => getComputedStyle(element).color)).toBe("rgb(243, 243, 239)")
+  expect(await noteInput.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe("rgb(22, 22, 22)")
+  expect(await noteInput.evaluate(element => getComputedStyle(element).color)).toBe("rgb(245, 245, 245)")
   await assertLibraryNavigationLayout(page)
   const darkScreenshot = testInfo.outputPath("paper-agent-reader-assistant-dark.png")
   await page.screenshot({ path: darkScreenshot, animations: "disabled" })
@@ -342,7 +344,7 @@ test("导航完整标签在 1366/1440 与 125% 等效缩放下不截断且嵌套
         await page.goto("/paper-agent")
         await expect(page.getByRole("region", { name: "Open reader paper body" })).toContainText("Source-backed structured text")
         await assertLibraryNavigationLayout(page)
-        await page.getByRole("button", { name: "使用黑色主题" }).click()
+        await page.getByRole("button", { name: "使用深色主题" }).click()
         if (scale > 1) await page.getByRole("button", { name: "关闭导航", exact: true }).click()
         await page.getByRole("button", { name: "打开助手" }).click()
         const geometry = await assertLibraryNavigationLayout(page)
@@ -481,7 +483,7 @@ test("IME 确认不误发在线搜索，材料 CAS 冲突逐条显示失败并�
 test("手动确认记忆发送真实结构化 refs，默认导出排除 deleted", async ({ page }) => {
   const fixture = await installFixture(page, { visits: [], groups: [], materials: [material("paper-1", "First Paper")] })
   await page.goto("/paper-agent"); await page.getByRole("button", { name: /个人记忆/ }).click()
-  const dialog = page.getByRole("dialog", { name: "个人记忆" }); await expect(dialog).toBeVisible(); await expect(dialog.getByText("C:/Agora/memory.db")).toBeVisible()
+  const dialog = page.getByRole("dialog", { name: "个人记忆" }); await expect(dialog).toBeVisible(); await expect(dialog.getByText("服务器账号空间（仅本账号可见）")).toBeVisible()
   await dialog.getByLabel("新个人记忆").fill("优先阅读可复现实验")
   await dialog.getByRole("button", { name: "保存并确认" }).click()
   await expect.poll(() => fixture.memoryCreates.length).toBe(1)

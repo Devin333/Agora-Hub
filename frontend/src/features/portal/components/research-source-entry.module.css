@@ -1,22 +1,44 @@
-.root {
-  --research-source-status-color: #6d28d9;
-  --research-source-error-color: #a02b47;
-}
-
-.root[data-appearance="paper-agent"] {
-  --research-source-status-color: currentColor;
-  --research-source-error-color: currentColor;
-  color: inherit;
-}
-
+/*
+ * Status and error text resolve to the global theme tokens. Hosts can recolor
+ * them by setting the hooks on any ancestor (or the entry itself); the hooks are
+ * read through var() fallbacks so a host rule never has to out-rank this file.
+ *   --research-source-status-color  default: var(--muted-foreground)
+ *   --research-source-error-color   default: var(--destructive-text)
+ */
 .status {
-  color: var(--research-source-status-color);
+  color: var(--research-source-status-color, var(--muted-foreground));
 }
 
 .error {
-  color: var(--research-source-error-color);
+  color: var(--research-source-error-color, var(--destructive-text));
 }
 
 .status :is(button, a) {
   color: inherit;
+}
+
+/* Structure only: hosts paint the surface, so each appearance keeps its own palette. */
+.sourcePreparation {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sourcePreparation label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sourcePreparation :is(input, select) {
+  width: 100%;
+  min-width: 0;
+}
+
+.sourcePreparation p {
+  margin: 0;
+}
+
+.sourcePreparation button {
+  justify-self: start;
 }

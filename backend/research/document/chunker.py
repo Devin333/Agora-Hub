@@ -1178,11 +1178,21 @@ class PaperDocumentChunker:
         figure_lookup = _visual_lookup("figure", elements.figures)
         table_lookup = _visual_lookup("table", elements.tables)
         formula_lookup = _formula_lookup(elements.equations)
+        # Roles of the enclosing headings, by level. A subsection belongs to
+        # its parent's part of the paper first ("6.1 Machine Translation"
+        # under "6 Results" is experimental evidence), then to what its own
+        # title and opening say.
+        enclosing_roles: list[tuple[int, list[SectionRole]]] = []
         for idx, section in enumerate(sections):
-            if not section.text.strip():
-                continue  # skip blank sections — no chunk to emit
             snippet = " ".join(section.text.split()[:60])
-            roles: list[SectionRole] = classify_section_role(section.title, snippet)
+            own_roles = classify_section_role(section.title, snippet)
+            while enclosing_roles and enclosing_roles[-1][0] >= section.level:
+                enclosing_roles.pop()
+            inherited = enclosing_roles[-1][1] if enclosing_roles else []
+            roles: list[SectionRole] = list(dict.fromkeys([*inherited, *own_roles]))[:2]
+            enclosing_roles.append((section.level, roles))
+            if not section.text.strip():
+                continue  # a blank heading still scopes its subsections, but emits no chunk
             cross_refs = elements.section_cross_refs.get(section.section_id, [])
             need_propositions = any(r in _PROPOSITION_ROLES for r in roles)
 

@@ -1,9 +1,10 @@
 import type { TopicFilters } from "@/types/topic";
 
 export function TopicFilterPanel({ filters }: { filters: TopicFilters }) {
+  const activeCount = Object.values(filters).filter(Boolean).length;
   return (
-    <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-      Active filters: {Object.values(filters).filter(Boolean).length || "none"}
-    </div>
+    <p className="text-label text-muted-foreground" role="status">
+      Active filters: <span className="tabular-nums text-foreground">{activeCount || "none"}</span>
+    </p>
   );
 }

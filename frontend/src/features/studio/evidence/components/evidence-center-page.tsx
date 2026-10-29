@@ -16,7 +16,7 @@ import type { StudioEvidenceOverview, StudioEvidenceRunSummary } from "@/types/e
 export function EvidenceCenterPage({ overview }: { overview: StudioEvidenceOverview }) {
   const { t } = useI18n()
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.nav.business")}
         title={t("studio.module.evidenceCenter.title")}
@@ -32,22 +32,32 @@ export function EvidenceCenterPage({ overview }: { overview: StudioEvidenceOverv
       </StudioMetricGrid>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <StudioPanel title={t("studio.evidence.recentHealth")} description={t("studio.evidence.recentHealthDescription")} contentClassName="space-y-3">
-          {overview.runs.length ? overview.runs.map((run) => <RunSummaryRow key={run.runId} run={run} />) : <p className="text-sm text-muted-foreground">{t("studio.evidence.noRecentRuns")}</p>}
-        </StudioPanel>
-        <StudioPanel title={t("studio.evidence.citationFailures")} description={t("studio.evidence.citationFailuresDescription")} contentClassName="space-y-3">
-          {overview.citationFailureCategories.length ? (
-            overview.citationFailureCategories.map((category) => (
-              <div key={category.code} className="rounded-md border border-border bg-background p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-medium text-foreground">{category.label ?? category.code}</p>
-                  <Badge tone="warning">{category.count}</Badge>
-                </div>
-                {category.items.length ? <p className="mt-2 text-xs leading-5 text-muted-foreground">{category.items.slice(0, 2).join("; ")}</p> : null}
-              </div>
-            ))
+        <StudioPanel title={t("studio.evidence.recentHealth")} description={t("studio.evidence.recentHealthDescription")}>
+          {overview.runs.length ? (
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+              {overview.runs.map((run) => (
+                <RunSummaryRow key={run.runId} run={run} />
+              ))}
+            </div>
           ) : (
-            <p className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">{t("studio.evidence.noCitationFailures")}</p>
+            <p className="text-body2 text-muted-foreground">{t("studio.evidence.noRecentRuns")}</p>
+          )}
+        </StudioPanel>
+        <StudioPanel title={t("studio.evidence.citationFailures")} description={t("studio.evidence.citationFailuresDescription")}>
+          {overview.citationFailureCategories.length ? (
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+              {overview.citationFailureCategories.map((category) => (
+                <div key={category.code} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[13.5px] font-medium text-foreground">{category.label ?? category.code}</p>
+                    <Badge tone="warning">{category.count}</Badge>
+                  </div>
+                  {category.items.length ? <p className="mt-1 text-label text-muted-foreground">{category.items.slice(0, 2).join("; ")}</p> : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-dashed border-border p-4 text-body2 text-muted-foreground">{t("studio.evidence.noCitationFailures")}</p>
           )}
         </StudioPanel>
       </section>
@@ -59,19 +69,22 @@ function RunSummaryRow({ run }: { run: StudioEvidenceRunSummary }) {
   const { t, dataState, status } = useI18n()
   const href = `/studio/evidence/runs/${encodeURIComponent(run.runId)}${run.reportId ? `?reportId=${encodeURIComponent(run.reportId)}` : ""}`
   return (
-    <Link href={href} className="block rounded-md border border-border bg-background p-4 transition-colors hover:bg-secondary/40">
+    <Link
+      href={href}
+      className="block px-4 py-3 outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="break-words font-medium text-foreground">{run.workflowName ?? run.runId}</p>
-          <p className="mt-1 break-words font-mono text-xs text-muted-foreground">{run.runId}</p>
-          {run.reportId ? <p className="mt-1 break-words text-xs text-muted-foreground">{t("studio.evidence.report")} {run.reportId}</p> : null}
+          <p className="break-words text-[13.5px] font-medium text-foreground">{run.workflowName ?? run.runId}</p>
+          <p className="mt-0.5 break-words font-mono text-label text-muted-foreground">{run.runId}</p>
+          {run.reportId ? <p className="mt-0.5 break-words text-label text-muted-foreground">{t("studio.evidence.report")} {run.reportId}</p> : null}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5">
           <Badge tone={run.dataState === "ready" ? "success" : run.dataState === "fallback" ? "info" : "warning"}>{dataState(run.dataState)}</Badge>
           {run.qualityDecision ? <Badge tone={run.qualityDecision === "blocked" ? "danger" : "neutral"}>{status(run.qualityDecision)}</Badge> : null}
         </div>
       </div>
-      <div className="mt-4 grid gap-2 text-xs sm:grid-cols-4">
+      <div className="mt-3 grid gap-2 text-label sm:grid-cols-4">
         <CountPill label={t("studio.evidence.accepted")} value={run.counts.accepted} />
         <CountPill label={t("studio.evidence.rejected")} value={run.counts.rejected} />
         <CountPill label={t("studio.evidence.uncertain")} value={run.counts.uncertain} />
@@ -83,8 +96,8 @@ function RunSummaryRow({ run }: { run: StudioEvidenceRunSummary }) {
 
 function CountPill({ label, value }: { label: string; value: number }) {
   return (
-    <span className="rounded-md border border-border bg-secondary/30 px-2 py-1 text-muted-foreground">
-      {label}: <span className="font-semibold text-foreground">{value}</span>
+    <span className="rounded-lg bg-muted px-2 py-1 text-muted-foreground">
+      {label}: <span className="font-semibold tabular-nums text-foreground">{value}</span>
     </span>
   )
 }
@@ -94,9 +107,11 @@ export function NoticeList({ notices, tone = "warning" }: { notices: string[]; t
   if (!notices.length) return null
   return (
     <StudioNotice tone={tone} title={t("studio.evidence.dataNotice")}>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         {notices.map((notice) => (
-          <Badge key={notice} tone={tone}>{notice}</Badge>
+          <Badge key={notice} tone={tone}>
+            {notice}
+          </Badge>
         ))}
       </div>
     </StudioNotice>

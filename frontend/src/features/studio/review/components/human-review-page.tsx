@@ -1,9 +1,8 @@
 "use client"
 
-import { AlertTriangle, History, Search, ShieldCheck } from "lucide-react"
+import { AlertTriangle, History, ShieldCheck } from "lucide-react"
 import { EmptyState } from "@/components/common/empty-state"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { SearchField } from "@/components/common/search-field"
 import { ReviewHistoryPanel } from "@/features/studio/review/components/review-history-panel"
 import { ReviewQueueTable } from "@/features/studio/review/components/review-queue-table"
 import { useReviewQueue, type ReviewQueueFilter } from "@/features/studio/review/hooks/use-review-queue"
@@ -11,9 +10,9 @@ import {
   StudioMetricCard,
   StudioMetricGrid,
   StudioNotice,
-  StudioPageHeader,
-  StudioToolbar
+  StudioPageHeader
 } from "@/features/studio/shared/components/studio-dashboard"
+import { StudioFilterRow, StudioSegmentTabs } from "@/features/studio/shared/components/studio-filters"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type { StudioReviewItem, StudioReviewQueue } from "@/types/review"
 
@@ -30,7 +29,7 @@ export function HumanReviewPage({ queue }: { queue: StudioReviewQueue }) {
   const { filter, setFilter, query, setQuery, metrics, filteredItems } = useReviewQueue(queue.items)
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.nav.governance")}
         title={t("studio.module.humanReview.title")}
@@ -47,33 +46,21 @@ export function HumanReviewPage({ queue }: { queue: StudioReviewQueue }) {
 
       <ReviewMetrics items={queue.items} pending={metrics.pending} highRisk={metrics.highRisk} blocked={metrics.blocked} history={metrics.history} />
 
-      <StudioToolbar>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-2">
-            {filters.map((item) => (
-              <Button
-                key={item.value}
-                onClick={() => setFilter(item.value)}
-                size="sm"
-                type="button"
-                variant={filter === item.value ? "default" : "outline"}
-              >
-                {t(item.labelKey)}
-              </Button>
-            ))}
-          </div>
-          <label className="relative lg:w-96">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              aria-label={t("studio.review.searchLabel")}
-              className="pl-9"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t("studio.review.searchPlaceholder")}
-              value={query}
-            />
-          </label>
-        </div>
-      </StudioToolbar>
+      <StudioFilterRow className="justify-between">
+        <StudioSegmentTabs
+          className="w-fit max-w-full"
+          tabs={filters.map((item) => ({ id: item.value, label: t(item.labelKey) }))}
+          active={filter}
+          onChange={setFilter}
+        />
+        <SearchField
+          className="lg:w-96"
+          aria-label={t("studio.review.searchLabel")}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={t("studio.review.searchPlaceholder")}
+          value={query}
+        />
+      </StudioFilterRow>
 
       {queue.items.length ? <ReviewQueueTable items={filteredItems} /> : <EmptyState title={t("studio.review.noQueue")} description={t("studio.review.noQueueDescription")} />}
 

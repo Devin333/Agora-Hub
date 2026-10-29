@@ -1,4 +1,4 @@
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 
 const LEGACY_PREFIX = "/design-demo"
 const SAFE_PATHS = ["/", "/papers", "/projects", "/community", "/reports", "/research/groups"]
@@ -43,7 +43,7 @@ export function normalizeResearchHref(value: string): string | null {
   return `${url.pathname}${url.search}${url.hash}`
 }
 
-export function researchHomeHref() { return isLocalDesktopProfile() ? "/" : "/design-demo" }
-export function researchPapersHref() { return isLocalDesktopProfile() ? "/papers" : "/design-demo/papers" }
+export function researchHomeHref() { return isHostedProfile() ? "/" : "/design-demo" }
+export function researchPapersHref() { return isHostedProfile() ? "/papers" : "/design-demo/papers" }
 export function researchReaderHref(slug: string) { return `${researchPapersHref()}/${encodeURIComponent(slug)}/read` }
-export function researchGroupHref(groupId: string | null) { return `${isLocalDesktopProfile() ? "/research/groups" : "/design-demo/groups"}/${encodeURIComponent(groupId ?? "ungrouped")}` }
+export function researchGroupHref(groupId: string | null) { return `${isHostedProfile() ? "/research/groups" : "/design-demo/groups"}/${encodeURIComponent(groupId ?? "ungrouped")}` }

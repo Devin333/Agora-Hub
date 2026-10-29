@@ -1,3 +1,5 @@
+> **已被部分取代（2026-10-28）**：`hosted-paper-agent-service` 把后端与前端部署到服务器，桌面端改为连接服务器的瘦客户端。本变更中的离线自包含安装（`paper-agent-lightweight-delivery`）、本机运行时与 Windows 凭据槽位要求已被取代，相关实现（`scripts/desktop_app`、`scripts/local_desktop`）已删除；阅读、资料库、笔记、问答与个人记忆的产品要求继续有效。未完成任务不因取代而视为完成。
+
 ## Why
 
 用户已确认以「Linear 的桌面框架 + Bear 的文字排版 + Paperlib / Zotero 的论文结构」构建论文专用 personal agent。现有 `/paper-agent-lab` 只是隔离的界面预览；下一步需要把已选定的阅读体验变成可安装、能连接真实 Research 能力、个人资料与长期记忆保存在用户电脑上的桌面 App。

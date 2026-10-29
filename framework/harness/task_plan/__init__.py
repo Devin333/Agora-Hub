@@ -1,219 +1,8 @@
-from framework.harness.task_plan.capability import (
-    ResolvedCapabilityBinding,
-    ResolvedSubAgentTaskAdapter,
-    TaskCapabilityRegistration,
-    TaskCapabilityRegistry,
-    task_plan_context_identities,
-)
-from framework.harness.task_plan.canonical import (
-    canonical_json,
-    canonical_payload_checksum,
-)
-from framework.harness.task_plan.attempt_history import (
-    TASK_ATTEMPT_HISTORY_SCHEMA,
-    TaskAttemptHistoryRecord,
-    TaskAttemptOutcome,
-)
-from framework.harness.task_plan.forbidden import (
-    FORBIDDEN_CANDIDATE_FIELDS,
-    ensure_candidate_only,
-    forbidden_candidate_paths,
-)
-from framework.harness.task_plan.models import (
-    TASK_PLAN_SCHEMA,
-    TASK_RESULT_SCHEMA,
-    TASK_SPEC_SCHEMA,
-    PlanBuildBudget,
-    PlanCandidate,
-    PlanPatch,
-    PlanPatchOperation,
-    PlanPatchOperationType,
-    ResolvedTaskSpec,
-    TaskAdmissionOwner,
-    TaskAcceptanceCriteria,
-    TaskBudget,
-    TaskInstance,
-    TaskLifecycle,
-    TaskOutputContract,
-    TaskPlanLimits,
-    TaskPlanProjection,
-    TaskProjection,
-    TaskResultReference,
-    TaskRetryPolicy,
-    TaskSpec,
-    TaskPlanBudget,
-    TaskStatus,
-    ValidatedTaskPlan,
-)
-from framework.harness.task_plan.identity import TaskPlanStageIdentity
-from framework.harness.task_plan.policy import TaskPlanPolicy, TaskPlanPolicyRegistry
-from framework.harness.task_plan.schema import (
-    DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
-    GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA,
-    GRAPH_ONLY_TASK_INSTANCE_SCHEMA,
-    GRAPH_ONLY_TASK_PLAN_PATCH_SCHEMA,
-    GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA,
-    GRAPH_ONLY_TASK_PROJECTION_SCHEMA,
-    GRAPH_ONLY_TASK_PLAN_STAGE_BINDING_SCHEMA,
-    GRAPH_ONLY_TASK_PLAN_STAGE_IDENTITY_SCHEMA,
-    GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
-    RESOLVED_TASK_DEFINITION_SCHEMA,
-    TASK_CAPABILITY_BINDING_SCHEMA,
-    TASK_DEFINITION_SCHEMA,
-    TASK_PLAN_POLICY_SCHEMA,
-    TASK_PLAN_RUNTIME_VERSION,
-    TASK_RESULT_REFERENCE_SCHEMA,
-    TaskPlanContractKind,
-    TaskPlanSchemaRegistration,
-    TaskPlanSchemaRegistry,
-)
-from framework.harness.task_plan.stage_binding import TaskPlanStageBinding
-from framework.harness.task_plan.validation import (
-    TASK_PLAN_VALIDATOR_VERSION,
-    TaskPlanDiagnostic,
-    TaskPlanValidationContext,
-    TaskPlanValidationResult,
-    TaskPlanValidator,
-)
-from framework.harness.task_plan.aggregator import (
-    TaskPlanAggregateResult,
-    TaskPlanAggregator,
-    TaskPlanAggregatorRegistry,
-)
-from framework.harness.task_plan.binding import TaskPlanCapabilityRegistry, TaskPlanWorkerBinding
-from framework.harness.task_plan.patches import TaskPlanPatchValidator
-from framework.harness.task_plan.ports import (
-    FakePlanCandidateBuilder,
-    HarnessPlanCandidateBuilder,
-    PlanBuildRequest,
-    PlanCandidateBuilderPort,
-    TaskPlanResultVerifierPort,
-    TaskPlanStageRequest,
-    TaskPlanStageRunnerPort,
-)
-from framework.harness.task_plan.scheduler import (
-    TaskPlanReadyDecision,
-    TaskPlanScheduler,
-    materialize_queue_task,
-    task_instance_for_attempt,
-)
-from framework.harness.task_plan.stage import TaskPlanStageRunner
-from framework.harness.task_plan.store import (
-    InMemoryTaskPlanStore,
-    TASK_PLAN_EVENT_SCHEMA,
-    TASK_PLAN_EVENT_SCHEMA_V3,
-    TASK_PLAN_EVENT_SCHEMAS,
-    TASK_PLAN_EVENT_TYPES,
-    TASK_PLAN_RESULT_SCHEMA,
-    TASK_PLAN_RESULT_SCHEMA_V3,
-    TASK_PLAN_RESULT_SCHEMA_V4,
-    LOGICAL_TASK_READINESS_SCHEMA,
-    TASK_QUEUE_ADMISSION_SCHEMA,
-    LogicalTaskReadiness,
-    TaskQueueAdmissionEvidence,
-    TaskPlanEvent,
-    TaskPlanStorePort,
-    TaskResultRecord,
-)
-from framework.harness.task_plan.durable_store import (
-    DurableTaskPlanStore,
-    TaskPlanArtifactStorePort,
-    TASK_PLAN_STORAGE_EXTENSION,
-    TASK_PLAN_STORAGE_SCHEMA,
-)
-from framework.harness.task_plan.gate_evidence import (
-    TaskPlanGateArtifactOwnerPort,
-    TaskPlanGateArtifactRefs,
-    TaskPlanGateArtifactWriterPort,
-    TaskPlanGateEvidence,
-    TaskPlanGateEvidenceReaderPort,
-    TaskPlanGateVerificationArtifacts,
-    TaskPlanWorkerResultInputArtifacts,
-    TASK_PLAN_GATE_EVIDENCE_SCHEMA,
-    TASK_PLAN_GATE_INPUT_SCHEMA,
-)
-from framework.harness.task_plan.replay import (
-    TASK_PLAN_REPLAY_REDUCER_VERSION,
-    TASK_PLAN_REPLAY_REDUCER_VERSION_V4,
-    TASK_PLAN_REPLAY_REDUCER_VERSIONS,
-    TaskPlanReplayReducer,
-    TaskPlanReplayReport,
-)
-from framework.harness.task_plan.checkpoint import (
-    InMemoryTaskPlanCheckpointStore,
-    JsonlTaskPlanCheckpointStore,
-    TASK_PLAN_CHECKPOINT_SCHEMA,
-    TASK_PLAN_CHECKPOINT_SCHEMA_V4,
-    TASK_PLAN_CHECKPOINT_SCHEMAS,
-    TaskPlanCheckpoint,
-    TaskPlanCheckpointStorePort,
-)
-from framework.harness.task_plan.recovery import TaskPlanRecovery, TaskPlanRecoveryService
-from framework.harness.task_plan.continuation import (
-    PARENT_CONTINUATION_EVENT,
-    PARENT_CONTINUATION_SCHEMA,
-    ParentContinuation,
-    continuation_from_event,
-    validate_continuation_append,
-    validate_parent_continuation_append,
-)
-from framework.harness.task_plan.queue import (
-    TASK_PLAN_QUEUE_METADATA_KEY,
-    TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2,
-    TASK_PLAN_QUEUE_READBACK_SCHEMA_V2,
-    TASK_PLAN_QUEUE_RECLAIM_SCHEMA_V2,
-    TASK_PLAN_QUEUE_TASK_TYPE,
-    TaskPlanQueueProjection,
-    TaskPlanQueueReclaimContinuation,
-    TaskPlanQueueReadPort,
-    TaskPlanQueueReadback,
-)
-from framework.harness.task_plan.verification import (
-    TaskPlanGateCallable,
-    TaskPlanGateEvaluatorPort,
-    TaskPlanGateRegistry,
-    TaskPlanGateRequest,
-    TaskPlanResultVerificationRequest,
-    TaskPlanResultVerifier,
-    subagent_attempt_evidence,
-    task_plan_subagent_attempt_identity,
-)
-from framework.harness.task_plan.planning_observation import (
-    PLANNING_OBSERVATION_RECEIPT_SCHEMA,
-    PLANNING_OBSERVATION_REQUEST_SCHEMA,
-    HarnessPlanningObservationService,
-    InMemoryPlanningObservationStore,
-    JsonlPlanningObservationStore,
-    PlanningObservationPolicy,
-    PlanningObservationPort,
-    PlanningObservationReceipt,
-    PlanningObservationRequest,
-    PlanningObservationStorePort,
-)
-from framework.harness.task_plan.parallel import (
-    SerialTaskExecutorAdapter,
-    SerialTaskExecutorPort,
-    DispatchWaveTerminalOutcome,
-)
-from framework.harness.task_plan.capacity import (
-    CapacityPool,
-    CapacityScopeSnapshot,
-    FirstFitPacking,
-    PoolReservation,
-    TaskCapacityDemand,
-    pack_first_fit,
-)
-from framework.harness.task_plan.capacity_policy import TaskCapacityPolicy
-from framework.harness.control_plane.budget_reservation import BudgetReservation
-from framework.harness.task_plan.budget_settlement import BudgetSettlementReadPort, BudgetSettlementReceipt
-from framework.harness.task_plan.mutation_fence import MutationFence, MutationFenceState
-from framework.harness.task_plan.observability import (
-    TaskPlanMetricSample,
-    TaskPlanTraceEvent,
-    task_plan_metric_samples,
-    task_plan_trace_events,
-)
+from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+from framework.shared.lazy_exports import LazyExports
 
 __all__ = [
     "DEFAULT_TASK_PLAN_SCHEMA_REGISTRY",
@@ -393,3 +182,438 @@ __all__ = [
     "TaskAttemptHistoryRecord",
     "TaskAttemptOutcome",
 ]
+
+_LAZY = LazyExports(
+    __name__,
+    {
+        "ResolvedCapabilityBinding": ("framework.harness.task_plan.capability", "ResolvedCapabilityBinding"),
+        "ResolvedSubAgentTaskAdapter": ("framework.harness.task_plan.capability", "ResolvedSubAgentTaskAdapter"),
+        "TaskCapabilityRegistration": ("framework.harness.task_plan.capability", "TaskCapabilityRegistration"),
+        "TaskCapabilityRegistry": ("framework.harness.task_plan.capability", "TaskCapabilityRegistry"),
+        "task_plan_context_identities": ("framework.harness.task_plan.capability", "task_plan_context_identities"),
+        "canonical_json": ("framework.harness.task_plan.canonical", "canonical_json"),
+        "canonical_payload_checksum": ("framework.harness.task_plan.canonical", "canonical_payload_checksum"),
+        "TASK_ATTEMPT_HISTORY_SCHEMA": ("framework.harness.task_plan.attempt_history", "TASK_ATTEMPT_HISTORY_SCHEMA"),
+        "TaskAttemptHistoryRecord": ("framework.harness.task_plan.attempt_history", "TaskAttemptHistoryRecord"),
+        "TaskAttemptOutcome": ("framework.harness.task_plan.attempt_history", "TaskAttemptOutcome"),
+        "FORBIDDEN_CANDIDATE_FIELDS": ("framework.harness.task_plan.forbidden", "FORBIDDEN_CANDIDATE_FIELDS"),
+        "ensure_candidate_only": ("framework.harness.task_plan.forbidden", "ensure_candidate_only"),
+        "forbidden_candidate_paths": ("framework.harness.task_plan.forbidden", "forbidden_candidate_paths"),
+        "TASK_PLAN_SCHEMA": ("framework.harness.task_plan.models", "TASK_PLAN_SCHEMA"),
+        "TASK_RESULT_SCHEMA": ("framework.harness.task_plan.models", "TASK_RESULT_SCHEMA"),
+        "TASK_SPEC_SCHEMA": ("framework.harness.task_plan.models", "TASK_SPEC_SCHEMA"),
+        "PlanBuildBudget": ("framework.harness.task_plan.models", "PlanBuildBudget"),
+        "PlanCandidate": ("framework.harness.task_plan.models", "PlanCandidate"),
+        "PlanPatch": ("framework.harness.task_plan.models", "PlanPatch"),
+        "PlanPatchOperation": ("framework.harness.task_plan.models", "PlanPatchOperation"),
+        "PlanPatchOperationType": ("framework.harness.task_plan.models", "PlanPatchOperationType"),
+        "ResolvedTaskSpec": ("framework.harness.task_plan.models", "ResolvedTaskSpec"),
+        "TaskAdmissionOwner": ("framework.harness.task_plan.models", "TaskAdmissionOwner"),
+        "TaskAcceptanceCriteria": ("framework.harness.task_plan.models", "TaskAcceptanceCriteria"),
+        "TaskBudget": ("framework.harness.task_plan.models", "TaskBudget"),
+        "TaskInstance": ("framework.harness.task_plan.models", "TaskInstance"),
+        "TaskLifecycle": ("framework.harness.task_plan.models", "TaskLifecycle"),
+        "TaskOutputContract": ("framework.harness.task_plan.models", "TaskOutputContract"),
+        "TaskPlanLimits": ("framework.harness.task_plan.models", "TaskPlanLimits"),
+        "TaskPlanProjection": ("framework.harness.task_plan.models", "TaskPlanProjection"),
+        "TaskProjection": ("framework.harness.task_plan.models", "TaskProjection"),
+        "TaskResultReference": ("framework.harness.task_plan.models", "TaskResultReference"),
+        "TaskRetryPolicy": ("framework.harness.task_plan.models", "TaskRetryPolicy"),
+        "TaskSpec": ("framework.harness.task_plan.models", "TaskSpec"),
+        "TaskPlanBudget": ("framework.harness.task_plan.models", "TaskPlanBudget"),
+        "TaskStatus": ("framework.harness.task_plan.models", "TaskStatus"),
+        "ValidatedTaskPlan": ("framework.harness.task_plan.models", "ValidatedTaskPlan"),
+        "TaskPlanStageIdentity": ("framework.harness.task_plan.identity", "TaskPlanStageIdentity"),
+        "TaskPlanPolicy": ("framework.harness.task_plan.policy", "TaskPlanPolicy"),
+        "TaskPlanPolicyRegistry": ("framework.harness.task_plan.policy", "TaskPlanPolicyRegistry"),
+        "DEFAULT_TASK_PLAN_SCHEMA_REGISTRY": ("framework.harness.task_plan.schema", "DEFAULT_TASK_PLAN_SCHEMA_REGISTRY"),
+        "GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA"),
+        "GRAPH_ONLY_TASK_INSTANCE_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_TASK_INSTANCE_SCHEMA"),
+        "GRAPH_ONLY_TASK_PLAN_PATCH_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_TASK_PLAN_PATCH_SCHEMA"),
+        "GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA"),
+        "GRAPH_ONLY_TASK_PROJECTION_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_TASK_PROJECTION_SCHEMA"),
+        "GRAPH_ONLY_TASK_PLAN_STAGE_BINDING_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_TASK_PLAN_STAGE_BINDING_SCHEMA"),
+        "GRAPH_ONLY_TASK_PLAN_STAGE_IDENTITY_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_TASK_PLAN_STAGE_IDENTITY_SCHEMA"),
+        "GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA": ("framework.harness.task_plan.schema", "GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA"),
+        "RESOLVED_TASK_DEFINITION_SCHEMA": ("framework.harness.task_plan.schema", "RESOLVED_TASK_DEFINITION_SCHEMA"),
+        "TASK_CAPABILITY_BINDING_SCHEMA": ("framework.harness.task_plan.schema", "TASK_CAPABILITY_BINDING_SCHEMA"),
+        "TASK_DEFINITION_SCHEMA": ("framework.harness.task_plan.schema", "TASK_DEFINITION_SCHEMA"),
+        "TASK_PLAN_POLICY_SCHEMA": ("framework.harness.task_plan.schema", "TASK_PLAN_POLICY_SCHEMA"),
+        "TASK_PLAN_RUNTIME_VERSION": ("framework.harness.task_plan.schema", "TASK_PLAN_RUNTIME_VERSION"),
+        "TASK_RESULT_REFERENCE_SCHEMA": ("framework.harness.task_plan.schema", "TASK_RESULT_REFERENCE_SCHEMA"),
+        "TaskPlanContractKind": ("framework.harness.task_plan.schema", "TaskPlanContractKind"),
+        "TaskPlanSchemaRegistration": ("framework.harness.task_plan.schema", "TaskPlanSchemaRegistration"),
+        "TaskPlanSchemaRegistry": ("framework.harness.task_plan.schema", "TaskPlanSchemaRegistry"),
+        "TaskPlanStageBinding": ("framework.harness.task_plan.stage_binding", "TaskPlanStageBinding"),
+        "TASK_PLAN_VALIDATOR_VERSION": ("framework.harness.task_plan.validation", "TASK_PLAN_VALIDATOR_VERSION"),
+        "TaskPlanDiagnostic": ("framework.harness.task_plan.validation", "TaskPlanDiagnostic"),
+        "TaskPlanValidationContext": ("framework.harness.task_plan.validation", "TaskPlanValidationContext"),
+        "TaskPlanValidationResult": ("framework.harness.task_plan.validation", "TaskPlanValidationResult"),
+        "TaskPlanValidator": ("framework.harness.task_plan.validation", "TaskPlanValidator"),
+        "TaskPlanAggregateResult": ("framework.harness.task_plan.aggregator", "TaskPlanAggregateResult"),
+        "TaskPlanAggregator": ("framework.harness.task_plan.aggregator", "TaskPlanAggregator"),
+        "TaskPlanAggregatorRegistry": ("framework.harness.task_plan.aggregator", "TaskPlanAggregatorRegistry"),
+        "TaskPlanCapabilityRegistry": ("framework.harness.task_plan.binding", "TaskPlanCapabilityRegistry"),
+        "TaskPlanWorkerBinding": ("framework.harness.task_plan.binding", "TaskPlanWorkerBinding"),
+        "TaskPlanPatchValidator": ("framework.harness.task_plan.patches", "TaskPlanPatchValidator"),
+        "FakePlanCandidateBuilder": ("framework.harness.task_plan.ports", "FakePlanCandidateBuilder"),
+        "HarnessPlanCandidateBuilder": ("framework.harness.task_plan.ports", "HarnessPlanCandidateBuilder"),
+        "PlanBuildRequest": ("framework.harness.task_plan.ports", "PlanBuildRequest"),
+        "PlanCandidateBuilderPort": ("framework.harness.task_plan.ports", "PlanCandidateBuilderPort"),
+        "TaskPlanResultVerifierPort": ("framework.harness.task_plan.ports", "TaskPlanResultVerifierPort"),
+        "TaskPlanStageRequest": ("framework.harness.task_plan.ports", "TaskPlanStageRequest"),
+        "TaskPlanStageRunnerPort": ("framework.harness.task_plan.ports", "TaskPlanStageRunnerPort"),
+        "TaskPlanReadyDecision": ("framework.harness.task_plan.scheduler", "TaskPlanReadyDecision"),
+        "TaskPlanScheduler": ("framework.harness.task_plan.scheduler", "TaskPlanScheduler"),
+        "materialize_queue_task": ("framework.harness.task_plan.scheduler", "materialize_queue_task"),
+        "task_instance_for_attempt": ("framework.harness.task_plan.scheduler", "task_instance_for_attempt"),
+        "TaskPlanStageRunner": ("framework.harness.task_plan.stage", "TaskPlanStageRunner"),
+        "InMemoryTaskPlanStore": ("framework.harness.task_plan.store", "InMemoryTaskPlanStore"),
+        "TASK_PLAN_EVENT_SCHEMA": ("framework.harness.task_plan.store", "TASK_PLAN_EVENT_SCHEMA"),
+        "TASK_PLAN_EVENT_SCHEMA_V3": ("framework.harness.task_plan.store", "TASK_PLAN_EVENT_SCHEMA_V3"),
+        "TASK_PLAN_EVENT_SCHEMAS": ("framework.harness.task_plan.store", "TASK_PLAN_EVENT_SCHEMAS"),
+        "TASK_PLAN_EVENT_TYPES": ("framework.harness.task_plan.store", "TASK_PLAN_EVENT_TYPES"),
+        "TASK_PLAN_RESULT_SCHEMA": ("framework.harness.task_plan.store", "TASK_PLAN_RESULT_SCHEMA"),
+        "TASK_PLAN_RESULT_SCHEMA_V3": ("framework.harness.task_plan.store", "TASK_PLAN_RESULT_SCHEMA_V3"),
+        "TASK_PLAN_RESULT_SCHEMA_V4": ("framework.harness.task_plan.store", "TASK_PLAN_RESULT_SCHEMA_V4"),
+        "LOGICAL_TASK_READINESS_SCHEMA": ("framework.harness.task_plan.store", "LOGICAL_TASK_READINESS_SCHEMA"),
+        "TASK_QUEUE_ADMISSION_SCHEMA": ("framework.harness.task_plan.store", "TASK_QUEUE_ADMISSION_SCHEMA"),
+        "LogicalTaskReadiness": ("framework.harness.task_plan.store", "LogicalTaskReadiness"),
+        "TaskQueueAdmissionEvidence": ("framework.harness.task_plan.store", "TaskQueueAdmissionEvidence"),
+        "TaskPlanEvent": ("framework.harness.task_plan.store", "TaskPlanEvent"),
+        "TaskPlanStorePort": ("framework.harness.task_plan.store", "TaskPlanStorePort"),
+        "TaskResultRecord": ("framework.harness.task_plan.store", "TaskResultRecord"),
+        "DurableTaskPlanStore": ("framework.harness.task_plan.durable_store", "DurableTaskPlanStore"),
+        "TaskPlanArtifactStorePort": ("framework.harness.task_plan.durable_store", "TaskPlanArtifactStorePort"),
+        "TASK_PLAN_STORAGE_EXTENSION": ("framework.harness.task_plan.durable_store", "TASK_PLAN_STORAGE_EXTENSION"),
+        "TASK_PLAN_STORAGE_SCHEMA": ("framework.harness.task_plan.durable_store", "TASK_PLAN_STORAGE_SCHEMA"),
+        "TaskPlanGateArtifactOwnerPort": ("framework.harness.task_plan.gate_evidence", "TaskPlanGateArtifactOwnerPort"),
+        "TaskPlanGateArtifactRefs": ("framework.harness.task_plan.gate_evidence", "TaskPlanGateArtifactRefs"),
+        "TaskPlanGateArtifactWriterPort": ("framework.harness.task_plan.gate_evidence", "TaskPlanGateArtifactWriterPort"),
+        "TaskPlanGateEvidence": ("framework.harness.task_plan.gate_evidence", "TaskPlanGateEvidence"),
+        "TaskPlanGateEvidenceReaderPort": ("framework.harness.task_plan.gate_evidence", "TaskPlanGateEvidenceReaderPort"),
+        "TaskPlanGateVerificationArtifacts": ("framework.harness.task_plan.gate_evidence", "TaskPlanGateVerificationArtifacts"),
+        "TaskPlanWorkerResultInputArtifacts": ("framework.harness.task_plan.gate_evidence", "TaskPlanWorkerResultInputArtifacts"),
+        "TASK_PLAN_GATE_EVIDENCE_SCHEMA": ("framework.harness.task_plan.gate_evidence", "TASK_PLAN_GATE_EVIDENCE_SCHEMA"),
+        "TASK_PLAN_GATE_INPUT_SCHEMA": ("framework.harness.task_plan.gate_evidence", "TASK_PLAN_GATE_INPUT_SCHEMA"),
+        "TASK_PLAN_REPLAY_REDUCER_VERSION": ("framework.harness.task_plan.replay", "TASK_PLAN_REPLAY_REDUCER_VERSION"),
+        "TASK_PLAN_REPLAY_REDUCER_VERSION_V4": ("framework.harness.task_plan.replay", "TASK_PLAN_REPLAY_REDUCER_VERSION_V4"),
+        "TASK_PLAN_REPLAY_REDUCER_VERSIONS": ("framework.harness.task_plan.replay", "TASK_PLAN_REPLAY_REDUCER_VERSIONS"),
+        "TaskPlanReplayReducer": ("framework.harness.task_plan.replay", "TaskPlanReplayReducer"),
+        "TaskPlanReplayReport": ("framework.harness.task_plan.replay", "TaskPlanReplayReport"),
+        "InMemoryTaskPlanCheckpointStore": ("framework.harness.task_plan.checkpoint", "InMemoryTaskPlanCheckpointStore"),
+        "JsonlTaskPlanCheckpointStore": ("framework.harness.task_plan.checkpoint", "JsonlTaskPlanCheckpointStore"),
+        "TASK_PLAN_CHECKPOINT_SCHEMA": ("framework.harness.task_plan.checkpoint", "TASK_PLAN_CHECKPOINT_SCHEMA"),
+        "TASK_PLAN_CHECKPOINT_SCHEMA_V4": ("framework.harness.task_plan.checkpoint", "TASK_PLAN_CHECKPOINT_SCHEMA_V4"),
+        "TASK_PLAN_CHECKPOINT_SCHEMAS": ("framework.harness.task_plan.checkpoint", "TASK_PLAN_CHECKPOINT_SCHEMAS"),
+        "TaskPlanCheckpoint": ("framework.harness.task_plan.checkpoint", "TaskPlanCheckpoint"),
+        "TaskPlanCheckpointStorePort": ("framework.harness.task_plan.checkpoint", "TaskPlanCheckpointStorePort"),
+        "TaskPlanRecovery": ("framework.harness.task_plan.recovery", "TaskPlanRecovery"),
+        "TaskPlanRecoveryService": ("framework.harness.task_plan.recovery", "TaskPlanRecoveryService"),
+        "PARENT_CONTINUATION_EVENT": ("framework.harness.task_plan.continuation", "PARENT_CONTINUATION_EVENT"),
+        "PARENT_CONTINUATION_SCHEMA": ("framework.harness.task_plan.continuation", "PARENT_CONTINUATION_SCHEMA"),
+        "ParentContinuation": ("framework.harness.task_plan.continuation", "ParentContinuation"),
+        "continuation_from_event": ("framework.harness.task_plan.continuation", "continuation_from_event"),
+        "validate_continuation_append": ("framework.harness.task_plan.continuation", "validate_continuation_append"),
+        "validate_parent_continuation_append": ("framework.harness.task_plan.continuation", "validate_parent_continuation_append"),
+        "TASK_PLAN_QUEUE_METADATA_KEY": ("framework.harness.task_plan.queue", "TASK_PLAN_QUEUE_METADATA_KEY"),
+        "TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2": ("framework.harness.task_plan.queue", "TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2"),
+        "TASK_PLAN_QUEUE_READBACK_SCHEMA_V2": ("framework.harness.task_plan.queue", "TASK_PLAN_QUEUE_READBACK_SCHEMA_V2"),
+        "TASK_PLAN_QUEUE_RECLAIM_SCHEMA_V2": ("framework.harness.task_plan.queue", "TASK_PLAN_QUEUE_RECLAIM_SCHEMA_V2"),
+        "TASK_PLAN_QUEUE_TASK_TYPE": ("framework.harness.task_plan.queue", "TASK_PLAN_QUEUE_TASK_TYPE"),
+        "TaskPlanQueueProjection": ("framework.harness.task_plan.queue", "TaskPlanQueueProjection"),
+        "TaskPlanQueueReclaimContinuation": ("framework.harness.task_plan.queue", "TaskPlanQueueReclaimContinuation"),
+        "TaskPlanQueueReadPort": ("framework.harness.task_plan.queue", "TaskPlanQueueReadPort"),
+        "TaskPlanQueueReadback": ("framework.harness.task_plan.queue", "TaskPlanQueueReadback"),
+        "TaskPlanGateCallable": ("framework.harness.task_plan.verification", "TaskPlanGateCallable"),
+        "TaskPlanGateEvaluatorPort": ("framework.harness.task_plan.verification", "TaskPlanGateEvaluatorPort"),
+        "TaskPlanGateRegistry": ("framework.harness.task_plan.verification", "TaskPlanGateRegistry"),
+        "TaskPlanGateRequest": ("framework.harness.task_plan.verification", "TaskPlanGateRequest"),
+        "TaskPlanResultVerificationRequest": ("framework.harness.task_plan.verification", "TaskPlanResultVerificationRequest"),
+        "TaskPlanResultVerifier": ("framework.harness.task_plan.verification", "TaskPlanResultVerifier"),
+        "subagent_attempt_evidence": ("framework.harness.task_plan.verification", "subagent_attempt_evidence"),
+        "task_plan_subagent_attempt_identity": ("framework.harness.task_plan.verification", "task_plan_subagent_attempt_identity"),
+        "PLANNING_OBSERVATION_RECEIPT_SCHEMA": ("framework.harness.task_plan.planning_observation", "PLANNING_OBSERVATION_RECEIPT_SCHEMA"),
+        "PLANNING_OBSERVATION_REQUEST_SCHEMA": ("framework.harness.task_plan.planning_observation", "PLANNING_OBSERVATION_REQUEST_SCHEMA"),
+        "HarnessPlanningObservationService": ("framework.harness.task_plan.planning_observation", "HarnessPlanningObservationService"),
+        "InMemoryPlanningObservationStore": ("framework.harness.task_plan.planning_observation", "InMemoryPlanningObservationStore"),
+        "JsonlPlanningObservationStore": ("framework.harness.task_plan.planning_observation", "JsonlPlanningObservationStore"),
+        "PlanningObservationPolicy": ("framework.harness.task_plan.planning_observation", "PlanningObservationPolicy"),
+        "PlanningObservationPort": ("framework.harness.task_plan.planning_observation", "PlanningObservationPort"),
+        "PlanningObservationReceipt": ("framework.harness.task_plan.planning_observation", "PlanningObservationReceipt"),
+        "PlanningObservationRequest": ("framework.harness.task_plan.planning_observation", "PlanningObservationRequest"),
+        "PlanningObservationStorePort": ("framework.harness.task_plan.planning_observation", "PlanningObservationStorePort"),
+        "SerialTaskExecutorAdapter": ("framework.harness.task_plan.parallel", "SerialTaskExecutorAdapter"),
+        "SerialTaskExecutorPort": ("framework.harness.task_plan.parallel", "SerialTaskExecutorPort"),
+        "DispatchWaveTerminalOutcome": ("framework.harness.task_plan.parallel", "DispatchWaveTerminalOutcome"),
+        "CapacityPool": ("framework.harness.task_plan.capacity", "CapacityPool"),
+        "CapacityScopeSnapshot": ("framework.harness.task_plan.capacity", "CapacityScopeSnapshot"),
+        "FirstFitPacking": ("framework.harness.task_plan.capacity", "FirstFitPacking"),
+        "PoolReservation": ("framework.harness.task_plan.capacity", "PoolReservation"),
+        "TaskCapacityDemand": ("framework.harness.task_plan.capacity", "TaskCapacityDemand"),
+        "pack_first_fit": ("framework.harness.task_plan.capacity", "pack_first_fit"),
+        "TaskCapacityPolicy": ("framework.harness.task_plan.capacity_policy", "TaskCapacityPolicy"),
+        "BudgetReservation": ("framework.harness.control_plane.budget_reservation", "BudgetReservation"),
+        "BudgetSettlementReadPort": ("framework.harness.task_plan.budget_settlement", "BudgetSettlementReadPort"),
+        "BudgetSettlementReceipt": ("framework.harness.task_plan.budget_settlement", "BudgetSettlementReceipt"),
+        "MutationFence": ("framework.harness.task_plan.mutation_fence", "MutationFence"),
+        "MutationFenceState": ("framework.harness.task_plan.mutation_fence", "MutationFenceState"),
+        "TaskPlanMetricSample": ("framework.harness.task_plan.observability", "TaskPlanMetricSample"),
+        "TaskPlanTraceEvent": ("framework.harness.task_plan.observability", "TaskPlanTraceEvent"),
+        "task_plan_metric_samples": ("framework.harness.task_plan.observability", "task_plan_metric_samples"),
+        "task_plan_trace_events": ("framework.harness.task_plan.observability", "task_plan_trace_events"),
+    },
+)
+
+
+def __getattr__(name: str) -> Any:
+    return _LAZY.getattr(name)
+
+
+def __dir__() -> list[str]:
+    return _LAZY.dir()
+
+
+if TYPE_CHECKING:
+    from framework.harness.task_plan.capability import (
+        ResolvedCapabilityBinding,
+        ResolvedSubAgentTaskAdapter,
+        TaskCapabilityRegistration,
+        TaskCapabilityRegistry,
+        task_plan_context_identities,
+    )
+    from framework.harness.task_plan.canonical import (
+        canonical_json,
+        canonical_payload_checksum,
+    )
+    from framework.harness.task_plan.attempt_history import (
+        TASK_ATTEMPT_HISTORY_SCHEMA,
+        TaskAttemptHistoryRecord,
+        TaskAttemptOutcome,
+    )
+    from framework.harness.task_plan.forbidden import (
+        FORBIDDEN_CANDIDATE_FIELDS,
+        ensure_candidate_only,
+        forbidden_candidate_paths,
+    )
+    from framework.harness.task_plan.models import (
+        TASK_PLAN_SCHEMA,
+        TASK_RESULT_SCHEMA,
+        TASK_SPEC_SCHEMA,
+        PlanBuildBudget,
+        PlanCandidate,
+        PlanPatch,
+        PlanPatchOperation,
+        PlanPatchOperationType,
+        ResolvedTaskSpec,
+        TaskAdmissionOwner,
+        TaskAcceptanceCriteria,
+        TaskBudget,
+        TaskInstance,
+        TaskLifecycle,
+        TaskOutputContract,
+        TaskPlanLimits,
+        TaskPlanProjection,
+        TaskProjection,
+        TaskResultReference,
+        TaskRetryPolicy,
+        TaskSpec,
+        TaskPlanBudget,
+        TaskStatus,
+        ValidatedTaskPlan,
+    )
+    from framework.harness.task_plan.identity import (
+        TaskPlanStageIdentity,
+    )
+    from framework.harness.task_plan.policy import (
+        TaskPlanPolicy,
+        TaskPlanPolicyRegistry,
+    )
+    from framework.harness.task_plan.schema import (
+        DEFAULT_TASK_PLAN_SCHEMA_REGISTRY,
+        GRAPH_ONLY_PLAN_CANDIDATE_SCHEMA,
+        GRAPH_ONLY_TASK_INSTANCE_SCHEMA,
+        GRAPH_ONLY_TASK_PLAN_PATCH_SCHEMA,
+        GRAPH_ONLY_TASK_PLAN_PROJECTION_SCHEMA,
+        GRAPH_ONLY_TASK_PROJECTION_SCHEMA,
+        GRAPH_ONLY_TASK_PLAN_STAGE_BINDING_SCHEMA,
+        GRAPH_ONLY_TASK_PLAN_STAGE_IDENTITY_SCHEMA,
+        GRAPH_ONLY_VALIDATED_TASK_PLAN_SCHEMA,
+        RESOLVED_TASK_DEFINITION_SCHEMA,
+        TASK_CAPABILITY_BINDING_SCHEMA,
+        TASK_DEFINITION_SCHEMA,
+        TASK_PLAN_POLICY_SCHEMA,
+        TASK_PLAN_RUNTIME_VERSION,
+        TASK_RESULT_REFERENCE_SCHEMA,
+        TaskPlanContractKind,
+        TaskPlanSchemaRegistration,
+        TaskPlanSchemaRegistry,
+    )
+    from framework.harness.task_plan.stage_binding import (
+        TaskPlanStageBinding,
+    )
+    from framework.harness.task_plan.validation import (
+        TASK_PLAN_VALIDATOR_VERSION,
+        TaskPlanDiagnostic,
+        TaskPlanValidationContext,
+        TaskPlanValidationResult,
+        TaskPlanValidator,
+    )
+    from framework.harness.task_plan.aggregator import (
+        TaskPlanAggregateResult,
+        TaskPlanAggregator,
+        TaskPlanAggregatorRegistry,
+    )
+    from framework.harness.task_plan.binding import (
+        TaskPlanCapabilityRegistry,
+        TaskPlanWorkerBinding,
+    )
+    from framework.harness.task_plan.patches import (
+        TaskPlanPatchValidator,
+    )
+    from framework.harness.task_plan.ports import (
+        FakePlanCandidateBuilder,
+        HarnessPlanCandidateBuilder,
+        PlanBuildRequest,
+        PlanCandidateBuilderPort,
+        TaskPlanResultVerifierPort,
+        TaskPlanStageRequest,
+        TaskPlanStageRunnerPort,
+    )
+    from framework.harness.task_plan.scheduler import (
+        TaskPlanReadyDecision,
+        TaskPlanScheduler,
+        materialize_queue_task,
+        task_instance_for_attempt,
+    )
+    from framework.harness.task_plan.stage import (
+        TaskPlanStageRunner,
+    )
+    from framework.harness.task_plan.store import (
+        InMemoryTaskPlanStore,
+        TASK_PLAN_EVENT_SCHEMA,
+        TASK_PLAN_EVENT_SCHEMA_V3,
+        TASK_PLAN_EVENT_SCHEMAS,
+        TASK_PLAN_EVENT_TYPES,
+        TASK_PLAN_RESULT_SCHEMA,
+        TASK_PLAN_RESULT_SCHEMA_V3,
+        TASK_PLAN_RESULT_SCHEMA_V4,
+        LOGICAL_TASK_READINESS_SCHEMA,
+        TASK_QUEUE_ADMISSION_SCHEMA,
+        LogicalTaskReadiness,
+        TaskQueueAdmissionEvidence,
+        TaskPlanEvent,
+        TaskPlanStorePort,
+        TaskResultRecord,
+    )
+    from framework.harness.task_plan.durable_store import (
+        DurableTaskPlanStore,
+        TaskPlanArtifactStorePort,
+        TASK_PLAN_STORAGE_EXTENSION,
+        TASK_PLAN_STORAGE_SCHEMA,
+    )
+    from framework.harness.task_plan.gate_evidence import (
+        TaskPlanGateArtifactOwnerPort,
+        TaskPlanGateArtifactRefs,
+        TaskPlanGateArtifactWriterPort,
+        TaskPlanGateEvidence,
+        TaskPlanGateEvidenceReaderPort,
+        TaskPlanGateVerificationArtifacts,
+        TaskPlanWorkerResultInputArtifacts,
+        TASK_PLAN_GATE_EVIDENCE_SCHEMA,
+        TASK_PLAN_GATE_INPUT_SCHEMA,
+    )
+    from framework.harness.task_plan.replay import (
+        TASK_PLAN_REPLAY_REDUCER_VERSION,
+        TASK_PLAN_REPLAY_REDUCER_VERSION_V4,
+        TASK_PLAN_REPLAY_REDUCER_VERSIONS,
+        TaskPlanReplayReducer,
+        TaskPlanReplayReport,
+    )
+    from framework.harness.task_plan.checkpoint import (
+        InMemoryTaskPlanCheckpointStore,
+        JsonlTaskPlanCheckpointStore,
+        TASK_PLAN_CHECKPOINT_SCHEMA,
+        TASK_PLAN_CHECKPOINT_SCHEMA_V4,
+        TASK_PLAN_CHECKPOINT_SCHEMAS,
+        TaskPlanCheckpoint,
+        TaskPlanCheckpointStorePort,
+    )
+    from framework.harness.task_plan.recovery import (
+        TaskPlanRecovery,
+        TaskPlanRecoveryService,
+    )
+    from framework.harness.task_plan.continuation import (
+        PARENT_CONTINUATION_EVENT,
+        PARENT_CONTINUATION_SCHEMA,
+        ParentContinuation,
+        continuation_from_event,
+        validate_continuation_append,
+        validate_parent_continuation_append,
+    )
+    from framework.harness.task_plan.queue import (
+        TASK_PLAN_QUEUE_METADATA_KEY,
+        TASK_PLAN_QUEUE_PROJECTION_SCHEMA_V2,
+        TASK_PLAN_QUEUE_READBACK_SCHEMA_V2,
+        TASK_PLAN_QUEUE_RECLAIM_SCHEMA_V2,
+        TASK_PLAN_QUEUE_TASK_TYPE,
+        TaskPlanQueueProjection,
+        TaskPlanQueueReclaimContinuation,
+        TaskPlanQueueReadPort,
+        TaskPlanQueueReadback,
+    )
+    from framework.harness.task_plan.verification import (
+        TaskPlanGateCallable,
+        TaskPlanGateEvaluatorPort,
+        TaskPlanGateRegistry,
+        TaskPlanGateRequest,
+        TaskPlanResultVerificationRequest,
+        TaskPlanResultVerifier,
+        subagent_attempt_evidence,
+        task_plan_subagent_attempt_identity,
+    )
+    from framework.harness.task_plan.planning_observation import (
+        PLANNING_OBSERVATION_RECEIPT_SCHEMA,
+        PLANNING_OBSERVATION_REQUEST_SCHEMA,
+        HarnessPlanningObservationService,
+        InMemoryPlanningObservationStore,
+        JsonlPlanningObservationStore,
+        PlanningObservationPolicy,
+        PlanningObservationPort,
+        PlanningObservationReceipt,
+        PlanningObservationRequest,
+        PlanningObservationStorePort,
+    )
+    from framework.harness.task_plan.parallel import (
+        SerialTaskExecutorAdapter,
+        SerialTaskExecutorPort,
+        DispatchWaveTerminalOutcome,
+    )
+    from framework.harness.task_plan.capacity import (
+        CapacityPool,
+        CapacityScopeSnapshot,
+        FirstFitPacking,
+        PoolReservation,
+        TaskCapacityDemand,
+        pack_first_fit,
+    )
+    from framework.harness.task_plan.capacity_policy import (
+        TaskCapacityPolicy,
+    )
+    from framework.harness.control_plane.budget_reservation import (
+        BudgetReservation,
+    )
+    from framework.harness.task_plan.budget_settlement import (
+        BudgetSettlementReadPort,
+        BudgetSettlementReceipt,
+    )
+    from framework.harness.task_plan.mutation_fence import (
+        MutationFence,
+        MutationFenceState,
+    )
+    from framework.harness.task_plan.observability import (
+        TaskPlanMetricSample,
+        TaskPlanTraceEvent,
+        task_plan_metric_samples,
+        task_plan_trace_events,
+    )

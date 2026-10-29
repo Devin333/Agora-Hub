@@ -2,16 +2,17 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react"
 import { ArrowRight, BarChart3, BookMarked, BookOpen, Check, FileText, Github, GitCompareArrows, Quote, Search, X } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { TrendingPapersPage, type PapersDiscoveryViewModel } from "@/components/papers/trending-papers-page"
 import { paperFeatureFilters, type PaperFeatureFilter } from "@/lib/papers/filters"
 import { formatPaperDate } from "@/lib/papers/format"
 import type { Paper, PaperPeriod, PaperSort } from "@/lib/papers/types"
+import { cn } from "@/lib/utils"
 import { useUiStore } from "@/stores/ui-store"
 import { usePaperWorkspaceStore } from "@/stores/paper-workspace-store"
 import { PaperDiscoveryRow } from "./paper-discovery-row"
 import { PaperWorkspaceView } from "./paper-workspace-view"
-import styles from "./papers-design-demo.module.css"
-import { PaperPortalHeader } from "./paper-portal-header"
+import { filterChipClassName, nativeSelectClassName, PaperPortalShell, searchBoxClassName, sidebarRowClassName, sidebarRowMetaClassName } from "./paper-portal-shell"
 import { PaperCategorySidebar } from "./paper-category-sidebar"
 import { buildPaperCategories, type PaperCategoryDefinitions, type PaperCategoryGroups } from "@/lib/papers/discovery-categories"
 import { canonicalRefSlug } from "@/lib/papers/query"
@@ -71,36 +72,98 @@ export function PapersDiscoveryView({ model, categories }: { model: PapersDiscov
     ...(hasTime ? [{ key: "time", label: model.from || model.to ? `${model.from || "…"} – ${model.to || "…"}` : periods.find((period) => period.value === model.period)![locale], remove: () => model.onPeriodChange("all") }] : [])
   ]
 
-  return <div className={styles.page}>
-    <PaperPortalHeader locale={locale} />
-    <main className={styles.main}>
-      <section className={styles.intro} aria-labelledby="papers-title"><h1 id="papers-title">{zh ? "论文研究" : "Research papers"}<span className={styles.titleDot}>.</span></h1><span className={styles.introCaption}>{zh ? "发现论文，连接研究线索。" : "Discover papers. Connect ideas."}</span></section>
-      <div className={styles.workspace}>
-        <aside className={styles.sidebar} aria-label={zh ? "研究分类" : "Research categories"}>
-          <div className={styles.viewNav}>
-            <button type="button" aria-pressed={view === "discover"} onClick={() => model.onViewChange("discover")}><BookOpen size={18} />{zh ? "发现论文" : "Discover"}</button>
-            <button type="button" aria-pressed={view === "reading"} onClick={() => model.onViewChange("reading")}><BookMarked size={18} />{zh ? "阅读列表" : "Reading list"}<span>{savedIds.length}</span></button>
-            <button type="button" aria-pressed={view === "compare"} onClick={() => model.onViewChange("compare")}><GitCompareArrows size={18} />{zh ? "论文对比" : "Compare"}<span>{compare.length}</span></button>
+  const viewItems = [
+    { value: "discover" as const, icon: BookOpen, label: zh ? "发现论文" : "Discover" },
+    { value: "reading" as const, icon: BookMarked, label: zh ? "阅读列表" : "Reading list", count: savedIds.length },
+    { value: "compare" as const, icon: GitCompareArrows, label: zh ? "论文对比" : "Compare", count: compare.length }
+  ]
+  const sidebar = <>
+    <div className="grid gap-px">
+      {viewItems.map((item) => <button key={item.value} type="button" className={sidebarRowClassName} aria-pressed={view === item.value} onClick={() => model.onViewChange(item.value)}>
+        <item.icon size={16} strokeWidth={1.8} className="shrink-0 text-muted-foreground" />{item.label}
+        {item.count !== undefined && <span className={sidebarRowMetaClassName}>{item.count}</span>}
+      </button>)}
+    </div>
+    {view === "discover" && <PaperCategorySidebar groups={categories} locale={locale} selected={{ topic: model.topic, method: model.method, task: model.task }} onSelect={(kind, value) => ({ topic: model.onTopicChange, method: model.onMethodChange, task: model.onTaskChange })[kind](value)} />}
+  </>
+  const overlay = <>
+    {compare.length > 0 && view !== "compare" && <CompareTray count={compare.length} zh={zh} onClear={() => compare.forEach((id) => remove("compare", id))} onOpen={() => model.onViewChange("compare")} />}
+    {model.drawer}
+  </>
+  const warning = Boolean(stale || model.hasDataIssue)
+
+  return <PaperPortalShell locale={locale} sidebarLabel={zh ? "研究分类" : "Research categories"} sidebar={sidebar} overlay={overlay}>
+    <header className="border-b px-4 py-4 md:px-6" aria-labelledby="papers-title">
+      <h1 id="papers-title" className="text-heading2 font-semibold">{zh ? "论文研究" : "Research papers"}</h1>
+      <p className="mt-1 text-body2 text-muted-foreground">{zh ? "发现论文，连接研究线索。" : "Discover papers. Connect ideas."}</p>
+    </header>
+    <div className="px-4 pb-24 pt-5 md:px-6">
+      {view === "discover" ? <section className="min-w-0" aria-labelledby="paper-results-title" aria-busy={model.isLoading}>
+        <ResearchMaterialContext />
+        {model.question && <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-body2 text-muted-foreground">
+          <span className="break-words"><strong className="me-3 font-semibold text-foreground">{zh ? "研究问题" : "Research question"}</strong>{model.question}</span>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={zh ? "移除研究问题" : "Dismiss research question"} title={zh ? "移除研究问题" : "Dismiss research question"} onClick={model.onQuestionClear}><X size={15} strokeWidth={1.8} /></Button>
+        </div>}
+        <form onSubmit={search} role="search" className={searchBoxClassName}>
+          <Search size={16} strokeWidth={1.8} className="shrink-0" />
+          <span className="shrink-0 whitespace-nowrap border-e border-border pe-2 text-label">{zh ? "关键词" : "Keywords"}</span>
+          <input className="h-full min-w-0 flex-1 bg-transparent text-body1 text-foreground outline-none placeholder:text-muted-foreground" aria-label={zh ? "搜索论文" : "Search papers"} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={zh ? "论文标题、作者、研究方向..." : "Title, author, research topic..."} />
+          {draft && <Button type="button" variant="ghost" size="icon-sm" className="rounded-full text-muted-foreground" aria-label={zh ? "清空搜索" : "Clear search"} title={zh ? "清空搜索" : "Clear search"} onClick={() => { setDraft(""); model.onSearch("") }}><X size={15} strokeWidth={1.8} /></Button>}
+          <Button type="submit" size="icon" className="rounded-full" aria-label={zh ? "搜索" : "Search"} title={zh ? "搜索" : "Search"}><ArrowRight size={16} strokeWidth={1.8} /></Button>
+        </form>
+        <div className="flex flex-wrap items-center gap-2 py-3">
+          <div className="me-auto flex flex-wrap items-center gap-1.5" role="group" aria-label={zh ? "论文筛选" : "Paper filters"}>{paperFeatureFilters.map((filter) => {
+            const option = featureOptions[filter]
+            const Icon = option.icon
+            const active = filters.includes(filter)
+            return <Button type="button" variant="outline" size="sm" key={filter} className="rounded-full px-3 text-muted-foreground aria-pressed:border-transparent aria-pressed:bg-accent aria-pressed:text-foreground" aria-pressed={active} onClick={() => model.onFilterToggle(filter)}><Icon size={14} strokeWidth={1.8} />{option[locale]}{active && <Check size={13} strokeWidth={1.8} />}</Button>
+          })}</div>
+          <select className={nativeSelectClassName} aria-label={zh ? "发布时间" : "Publication period"} value={model.period} onChange={(event) => model.onPeriodChange(event.target.value as PaperPeriod)}>{periods.map((period) => <option key={period.value} value={period.value}>{period[locale]}</option>)}</select>
+          <DateRange model={model} />
+        </div>
+        {!!chips.length && <div className="mb-3 flex flex-wrap items-center gap-1.5" aria-label={zh ? "已选筛选" : "Active filters"}>
+          {chips.map((chip) => <button key={chip.key} type="button" className={filterChipClassName} onClick={chip.remove} aria-label={`${zh ? "移除筛选" : "Remove filter"} ${chip.label}`}><span>{chip.label}</span><X size={12} strokeWidth={1.8} /></button>)}
+          {hasFilters && <Button type="button" variant="text" size="xs" onClick={model.onReset}>{zh ? "重置" : "Reset"}</Button>}
+        </div>}
+        {!chips.length && hasFilters && <Button type="button" variant="text" size="xs" className="mb-3" onClick={model.onReset}>{zh ? "重置" : "Reset"}</Button>}
+        <div className={cn("flex flex-wrap items-center gap-2 pb-3 text-label", warning ? "text-warning-text" : "text-muted-foreground")} data-warning={warning} role="status">
+          <span className={cn("size-1.5 shrink-0 rounded-full", warning ? "bg-warning" : "bg-success")} />
+          <span>{model.hasDataIssue ? (zh ? "实时数据暂不可用，显示可用缓存" : "Live data unavailable; showing available cache") : model.source === "cache" ? (zh ? "缓存数据" : "Cached data") : (zh ? "已发布论文" : "Published papers")}{latest ? ` · ${zh ? "最新收录论文发表于" : "Latest publication"} ${latest}` : ""}{stale ? (zh ? " · 近期数据可能尚未收录" : " · Recent papers may not be indexed") : ""}</span>
+          {model.collectedAt && <span className="ms-auto text-faint-foreground" title={model.collectedAt}>{zh ? "数据更新" : "Updated"} {formatPaperDate(model.collectedAt, locale)}</span>}
+        </div>
+        <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h2 id="paper-results-title" className="text-heading3 font-semibold">{query || model.topic || model.method || model.task ? (zh ? "搜索结果" : "Search results") : (zh ? "发现论文" : "Discover papers")}</h2>
+            <span className="min-w-12 text-body2 text-muted-foreground" aria-live="polite">{model.isLoading ? (zh ? "更新中..." : "Updating...") : `${metrics.paperCount.toLocaleString()} ${zh ? "篇论文" : "papers"}`}</span>
           </div>
-          {view === "discover" && <PaperCategorySidebar groups={categories} locale={locale} selected={{ topic: model.topic, method: model.method, task: model.task }} onSelect={(kind, value) => ({ topic: model.onTopicChange, method: model.onMethodChange, task: model.onTaskChange })[kind](value)} />}
-        </aside>
-        {view === "discover" ? <section className={styles.results} aria-labelledby="paper-results-title" aria-busy={model.isLoading}>
-          <ResearchMaterialContext />
-          {model.question && <div className={styles.questionContext}><span><strong>{zh ? "研究问题" : "Research question"}</strong>{model.question}</span><button type="button" aria-label={zh ? "移除研究问题" : "Dismiss research question"} title={zh ? "移除研究问题" : "Dismiss research question"} onClick={model.onQuestionClear}><X size={16} /></button></div>}
-          <form onSubmit={search} role="search" className={styles.search}><Search size={20} /><span className={styles.searchMode}>{zh ? "关键词" : "Keywords"}</span><input aria-label={zh ? "搜索论文" : "Search papers"} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={zh ? "论文标题、作者、研究方向..." : "Title, author, research topic..."} />{draft && <button type="button" className={styles.clearSearch} aria-label={zh ? "清空搜索" : "Clear search"} title={zh ? "清空搜索" : "Clear search"} onClick={() => { setDraft(""); model.onSearch("") }}><X size={18} /></button>}<button className={styles.submit} type="submit" aria-label={zh ? "搜索" : "Search"} title={zh ? "搜索" : "Search"}><ArrowRight size={20} /></button></form>
-          <div className={styles.filterBar}><div className={styles.features} role="group" aria-label={zh ? "论文筛选" : "Paper filters"}>{paperFeatureFilters.map((filter) => { const option = featureOptions[filter]; const Icon = option.icon; const active = filters.includes(filter); return <button type="button" key={filter} aria-pressed={active} onClick={() => model.onFilterToggle(filter)}><Icon size={15} />{option[locale]}{active && <Check size={13} />}</button> })}</div><label className={styles.period}><select aria-label={zh ? "发布时间" : "Publication period"} value={model.period} onChange={(event) => model.onPeriodChange(event.target.value as PaperPeriod)}>{periods.map((period) => <option key={period.value} value={period.value}>{period[locale]}</option>)}</select></label><DateRange model={model} /></div>
-          {!!chips.length && <div className={styles.activeFilters} aria-label={zh ? "已选筛选" : "Active filters"}>{chips.map((chip) => <button key={chip.key} type="button" onClick={chip.remove} aria-label={`${zh ? "移除筛选" : "Remove filter"} ${chip.label}`}><span>{chip.label}</span><X size={13} /></button>)}{hasFilters && <button type="button" className={styles.reset} onClick={model.onReset}>{zh ? "重置" : "Reset"}</button>}</div>}
-          {!chips.length && hasFilters && <button type="button" className={styles.inlineReset} onClick={model.onReset}>{zh ? "重置" : "Reset"}</button>}
-          <div className={styles.dataStatus} data-warning={Boolean(stale || model.hasDataIssue)} role="status"><span className={styles.statusDot} /><span>{model.hasDataIssue ? (zh ? "实时数据暂不可用，显示可用缓存" : "Live data unavailable; showing available cache") : model.source === "cache" ? (zh ? "缓存数据" : "Cached data") : (zh ? "已发布论文" : "Published papers")}{latest ? ` · ${zh ? "最新收录论文发表于" : "Latest publication"} ${latest}` : ""}{stale ? (zh ? " · 近期数据可能尚未收录" : " · Recent papers may not be indexed") : ""}</span>{model.collectedAt && <span className={styles.collectionTime} title={model.collectedAt}>{zh ? "数据更新" : "Updated"} {formatPaperDate(model.collectedAt, locale)}</span>}</div>
-          <div className={styles.resultsHeader}><div className={styles.resultHeading}><h2 id="paper-results-title">{query || model.topic || model.method || model.task ? (zh ? "搜索结果" : "Search results") : (zh ? "发现论文" : "Discover papers")}</h2><span aria-live="polite">{model.isLoading ? (zh ? "更新中..." : "Updating...") : `${metrics.paperCount.toLocaleString()} ${zh ? "篇论文" : "papers"}`}</span></div><div className={styles.sortTabs} role="group" aria-label={zh ? "论文排序" : "Paper sort"}>{sorts.filter((sort) => sort.value !== "relevance" || query).map((sort) => <button key={sort.value} type="button" aria-pressed={model.sort === sort.value} onClick={() => model.onSortChange(sort.value)}>{sort[locale]}</button>)}</div></div>
-          <div className={styles.paperList}>{papers.map((paper, index) => <PaperDiscoveryRow key={paper.id} paper={paper} locale={locale} onPreview={model.onPreview} renderPdfPreview={index < 3} returnTo={model.returnTo} />)}</div>
-          {!papers.length && !model.isLoading && <div className={styles.empty}><Search size={32} /><h3>{zh ? "没有找到论文" : "No papers found"}</h3><p>{timeBeyondCorpus ? (zh ? `当前最新收录论文发表于 ${latest}，所选时间段暂无数据。` : `The latest available publication is ${latest}; no data covers this period.`) : model.emptyDescription}</p>{query && <p>{zh ? "当前按关键词匹配。" : "Matching keywords."}</p>}{hasTime && <button type="button" onClick={() => model.onPeriodChange("all")}>{zh ? "查看全部时间" : "Show all time"}</button>}{hasFilters && <button type="button" onClick={model.onReset}>{zh ? "清除筛选" : "Clear filters"}</button>}</div>}
-          <div className={styles.pagination}>{model.pagination}</div>
-        </section> : <PaperWorkspaceView view={view} ids={view === "reading" ? savedIds : compare} catalog={model.catalog} locale={locale} returnTo={model.returnTo} onPreview={model.onPreview} onDiscover={() => model.onViewChange("discover")} />}
-      </div>
-    </main>
-    {compare.length > 0 && view !== "compare" && <div className={styles.compareTray}><GitCompareArrows size={18} /><span>{zh ? `已选 ${compare.length} 篇论文` : `${compare.length} papers selected`}</span><button type="button" className={styles.trayClear} onClick={() => compare.forEach((id) => remove("compare", id))}>{zh ? "清空" : "Clear"}</button><button type="button" onClick={() => model.onViewChange("compare")}>{zh ? "查看对比" : "Compare"}<ArrowRight size={16} /></button></div>}
-    <div className={styles.drawer}>{model.drawer}</div>
+          <div className="inline-flex h-8 shrink-0 items-center rounded-lg bg-muted p-[3px]" role="group" aria-label={zh ? "论文排序" : "Paper sort"}>
+            {sorts.filter((sort) => sort.value !== "relevance" || query).map((sort) => <button key={sort.value} type="button" className={segmentClassName} aria-pressed={model.sort === sort.value} onClick={() => model.onSortChange(sort.value)}>{sort[locale]}</button>)}
+          </div>
+        </div>
+        {papers.length > 0 && <div className="divide-y rounded-xl border">{papers.map((paper, index) => <PaperDiscoveryRow key={paper.id} paper={paper} locale={locale} onPreview={model.onPreview} renderPdfPreview={index < 3} returnTo={model.returnTo} />)}</div>}
+        {!papers.length && !model.isLoading && <div className="py-16 text-center text-body2 text-muted-foreground">
+          <h3 className="text-body1 font-medium text-foreground">{zh ? "没有找到论文" : "No papers found"}</h3>
+          <p className="mx-auto mt-1 max-w-[30rem]">{timeBeyondCorpus ? (zh ? `当前最新收录论文发表于 ${latest}，所选时间段暂无数据。` : `The latest available publication is ${latest}; no data covers this period.`) : model.emptyDescription}</p>
+          {query && <p className="mt-1">{zh ? "当前按关键词匹配。" : "Matching keywords."}</p>}
+          <div className="mt-2 flex justify-center gap-4">
+            {hasTime && <Button type="button" variant="link" className="text-body2" onClick={() => model.onPeriodChange("all")}>{zh ? "查看全部时间" : "Show all time"}</Button>}
+            {hasFilters && <Button type="button" variant="link" className="text-body2" onClick={model.onReset}>{zh ? "清除筛选" : "Clear filters"}</Button>}
+          </div>
+        </div>}
+        <div className="mt-4">{model.pagination}</div>
+      </section> : <PaperWorkspaceView view={view} ids={view === "reading" ? savedIds : compare} catalog={model.catalog} locale={locale} returnTo={model.returnTo} onPreview={model.onPreview} onDiscover={() => model.onViewChange("discover")} />}
+    </div>
+  </PaperPortalShell>
+}
+
+const segmentClassName = "inline-flex h-full items-center rounded-md border border-transparent px-2.5 text-label font-medium text-foreground/60 outline-none transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
+
+function CompareTray({ count, zh, onClear, onOpen }: { count: number; zh: boolean; onClear: () => void; onOpen: () => void }) {
+  return <div className="absolute bottom-6 left-1/2 z-30 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-popover/95 py-1.5 pe-1.5 ps-4 text-body2 text-popover-foreground shadow-md backdrop-blur">
+    <GitCompareArrows size={16} strokeWidth={1.8} className="shrink-0 text-muted-foreground" />
+    <span className="truncate">{zh ? `已选 ${count} 篇论文` : `${count} papers selected`}</span>
+    <Button type="button" variant="text" size="sm" onClick={onClear}>{zh ? "清空" : "Clear"}</Button>
+    <Button type="button" size="sm" className="rounded-full px-3" onClick={onOpen}>{zh ? "查看对比" : "Compare"}<ArrowRight size={15} strokeWidth={1.8} /></Button>
   </div>
 }
 
@@ -110,7 +173,15 @@ function DateRange({ model }: { model: PapersDiscoveryViewModel }) {
   const [open, setOpen] = useState(false)
   const zh = model.locale === "zh"
   useEffect(() => { setFrom(model.from); setTo(model.to) }, [model.from, model.to])
-  return <div className={styles.dateRange}><button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{zh ? "日期范围" : "Date range"}</button>{open && <form className={styles.datePopover} onSubmit={(event) => { event.preventDefault(); model.onDateRangeChange(from, to); setOpen(false) }}><label>{zh ? "开始日期" : "From"}<input type="date" value={from} max={to || undefined} onChange={(event) => setFrom(event.target.value)} /></label><label>{zh ? "结束日期" : "To"}<input type="date" value={to} min={from || undefined} onChange={(event) => setTo(event.target.value)} /></label><div><button type="button" onClick={() => setOpen(false)}>{zh ? "取消" : "Cancel"}</button><button type="submit" disabled={!from && !to}>{zh ? "应用" : "Apply"}</button></div></form>}</div>
+  const dateInputClassName = "h-8 w-full min-w-0 rounded-lg border border-input bg-muted px-2 text-body2 text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+  return <div className="relative">
+    <Button type="button" variant="text" size="sm" className="text-label" aria-expanded={open} onClick={() => setOpen(!open)}>{zh ? "日期范围" : "Date range"}</Button>
+    {open && <form className="absolute end-0 top-9 z-20 grid w-[300px] gap-3 rounded-xl bg-popover p-4 text-body2 text-popover-foreground shadow-md ring-1 ring-foreground/10" onSubmit={(event) => { event.preventDefault(); model.onDateRangeChange(from, to); setOpen(false) }}>
+      <label className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-3 text-muted-foreground">{zh ? "开始日期" : "From"}<input className={dateInputClassName} type="date" value={from} max={to || undefined} onChange={(event) => setFrom(event.target.value)} /></label>
+      <label className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-3 text-muted-foreground">{zh ? "结束日期" : "To"}<input className={dateInputClassName} type="date" value={to} min={from || undefined} onChange={(event) => setTo(event.target.value)} /></label>
+      <div className="flex justify-end gap-2"><Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>{zh ? "取消" : "Cancel"}</Button><Button type="submit" size="sm" disabled={!from && !to}>{zh ? "应用" : "Apply"}</Button></div>
+    </form>}
+  </div>
 }
 
 function isTimeBeyondCorpus(model: PapersDiscoveryViewModel) {

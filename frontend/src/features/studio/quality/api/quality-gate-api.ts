@@ -1,4 +1,5 @@
 import { safeApiGet, type SafeApiResult } from "@/lib/api/server"
+import { apiBaseUrl } from "@/lib/deployment-profile"
 import {
   buildQualityDashboard,
   buildQualityDetail,
@@ -43,7 +44,6 @@ type RequestReviewApiResponse = {
 
 type SourcedResult<T> = SafeApiResult<T> & { source: string }
 
-const DEFAULT_API_BASE_URL = "http://localhost:8000"
 
 export async function getQualityDashboard(): Promise<StudioQualityDashboard> {
   const reportsResult = await safeApiGet<ApiReportList>("/api/v1/reports?limit=25")
@@ -291,9 +291,8 @@ function isEnvelope<T>(payload: unknown): payload is ApiEnvelope<T> {
 
 function apiUrl(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) return path
-  const baseUrl = process.env.NEWSROOM_API_BASE_URL ?? DEFAULT_API_BASE_URL
   const suffix = path.startsWith("/") ? path : `/${path}`
-  return `${baseUrl.replace(/\/$/, "")}${suffix}`
+  return `${apiBaseUrl()}${suffix}`
 }
 
 function requestHeaders(): HeadersInit {

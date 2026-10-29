@@ -105,33 +105,35 @@ describe("auth proxy", () => {
 
     expect(response.headers.get("location")).toBe("http://localhost/studio")
   })
-  it("requires a session for every formal local-desktop route even when the legacy auth toggle is false", () => {
+  it("requires a session for every hosted page even when the legacy auth toggle is false", () => {
     process.env.NEWSROOM_FRONTEND_SURFACE = "portal"
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     process.env.NEWSROOM_ENABLE_FRONTEND_AUTH = "false"
     expect(proxy(request("/")).headers.get("location")).toBe("http://localhost/login?next=%2F")
     expect(proxy(request("/papers/2601.01234/read?resumePage=2")).headers.get("location")).toBe("http://localhost/login?next=%2Fpapers%2F2601.01234%2Fread%3FresumePage%3D2")
     expect(proxy(request("/reports", "newsroom_session=session-token")).headers.get("location")).toBeNull()
   })
 
-  it("protects only the exact formal paper-agent route and preserves the login next target", () => {
+  it("has no anonymous hosted pages besides login, and keeps the login next target", () => {
     process.env.NEWSROOM_FRONTEND_SURFACE = "portal"
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
 
     expect(proxy(request("/paper-agent")).headers.get("location")).toBe(
       "http://localhost/login?next=%2Fpaper-agent",
     )
-    expect(proxy(request("/paper-agent?panel=memory")).headers.get("location")).toBe(
-      "http://localhost/login?next=%2Fpaper-agent%3Fpanel%3Dmemory",
+    expect(proxy(request("/paper-agent?settings=model")).headers.get("location")).toBe(
+      "http://localhost/login?next=%2Fpaper-agent%3Fsettings%3Dmodel",
     )
+    // Pages outside the formal route table still never render without a session.
+    expect(proxy(request("/paper-agent-notes")).headers.get("location")).toBe("http://localhost/login?next=%2Fpaper-agent-notes")
     expect(proxy(request("/paper-agent/", "newsroom_session=session-token")).headers.get("location")).toBeNull()
-    expect(proxy(request("/paper-agent/settings")).headers.get("location")).toBeNull()
-    expect(proxy(request("/paper-agent-notes")).headers.get("location")).toBeNull()
+    expect(proxy(request("/login")).headers.get("location")).toBeNull()
+    expect(proxy(request("/api/health")).headers.get("location")).toBeNull()
   })
 
   it("permanently normalizes the allowed legacy desktop route and preserves its query", () => {
     process.env.NEWSROOM_FRONTEND_SURFACE = "portal"
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     const response = proxy(request("/design-demo/papers/2601.01234/read?resumeSection=methods"))
     expect(response.status).toBe(308)
     expect(response.headers.get("location")).toBe("http://localhost/papers/2601.01234/read?resumeSection=methods")

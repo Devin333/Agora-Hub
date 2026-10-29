@@ -8,6 +8,7 @@ from typing import Callable
 
 
 Clock = Callable[[], float]
+_SWEEP_INTERVAL = 1024
 
 
 @dataclass(frozen=True)
@@ -34,11 +35,13 @@ class InMemoryRateLimiter:
         self.window_seconds = window_seconds
         self._clock = clock or time.monotonic
         self._requests: dict[str, deque[float]] = defaultdict(deque)
+        self._checks_since_sweep = 0
 
     def check(self, key: str) -> RateLimitDecision:
         now = self._clock()
-        requests = self._requests[key]
         cutoff = now - self.window_seconds
+        self._sweep_idle_keys(cutoff)
+        requests = self._requests[key]
         while requests and requests[0] <= cutoff:
             requests.popleft()
 
@@ -58,3 +61,13 @@ class InMemoryRateLimiter:
             remaining=max(0, self.limit - len(requests)),
             retry_after_seconds=0,
         )
+
+    def _sweep_idle_keys(self, cutoff: float) -> None:
+        # Keys are client addresses or accounts; without a sweep, every address
+        # that ever called once would stay in memory for the process lifetime.
+        self._checks_since_sweep += 1
+        if self._checks_since_sweep < _SWEEP_INTERVAL:
+            return
+        self._checks_since_sweep = 0
+        for key in [key for key, stamps in self._requests.items() if not stamps or stamps[-1] <= cutoff]:
+            del self._requests[key]

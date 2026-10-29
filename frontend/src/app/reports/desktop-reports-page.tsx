@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import { Download } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   exportResearchDraft,
   fetchSavedResearchReports,
@@ -15,7 +18,7 @@ const MAX_DRAFT_EXPORT_BYTES = 20 * 1024 * 1024
 export function DesktopReportsPage() {
   const workspace = useOwnedResearchWorkspace()
   if (!workspace.ready || !workspace.owner) {
-    return <p role="status">正在核对报告访问身份…</p>
+    return <p role="status" className="px-4 py-10 text-center text-body2 text-muted-foreground md:px-6">正在核对报告访问身份…</p>
   }
   return <OwnedReportsPage key={workspace.owner} owner={workspace.owner} />
 }
@@ -46,73 +49,74 @@ function OwnedReportsPage({ owner }: { owner: string }) {
     return () => controller.abort()
   }, [attempt, owner, workspace.owner])
 
+  const drafts = workspace.workspace.reportDrafts ?? []
+
   return (
-    <div className="space-y-8">
-      <header>
-        <p className="text-xs font-medium text-primary">RESEARCH REPORTS</p>
-        <h1 className="mt-2 text-2xl font-semibold">已保存的精确运行报告</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+    <div className="flex min-h-full flex-col">
+      <header className="border-b px-4 py-4 md:px-6">
+        <h1 className="text-heading2 font-semibold">已保存的精确运行报告</h1>
+        <p className="mt-1 max-w-3xl text-body2 text-muted-foreground">
           每份正式报告都绑定明确的运行与来源修订。多材料准备稿单独列出，不会自动成为综述。
         </p>
       </header>
-      {loading && <p role="status">正在读取报告目录…</p>}
-      {error && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 text-destructive">
-          <span>{error}</span>
-          <button
-            type="button"
-            className="underline"
-            onClick={() => setAttempt(value => value + 1)}
-          >
-            重新读取报告目录
-          </button>
-        </div>
-      )}
-      {!loading && !error && reports.length === 0 && (
-        <p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">
-          还没有保存通过质量门的 Research 报告。
-        </p>
-      )}
-      <ul className="grid gap-3">
-        {reports.map(report => (
-          <li key={report.reportId} className="rounded-xl border bg-card p-4">
-            <Link
-              className="font-medium text-primary hover:underline"
-              href={`/reports/${encodeURIComponent(report.reportId)}`}
-            >
-              {report.title}
-            </Link>
-            <p className="mt-2 text-xs text-muted-foreground">
-              论文 {report.paperId} · 保存于 {formatSavedAt(report.savedAt)}
+      <div className="mx-auto w-full max-w-[60rem] space-y-8 px-4 py-6 md:px-6">
+        <section aria-label="正式报告" className="space-y-3">
+          {loading && <p role="status" className="text-body2 text-muted-foreground">正在读取报告目录…</p>}
+          {error && (
+            <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-body2 text-destructive-text">
+              <span>{error}</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => setAttempt(value => value + 1)}>
+                重新读取报告目录
+              </Button>
+            </div>
+          )}
+          {!loading && !error && reports.length === 0 && (
+            <p className="py-10 text-center text-body2 text-muted-foreground">
+              还没有保存通过质量门的 Research 报告。
             </p>
-            <details className="mt-2 text-xs text-muted-foreground">
-              <summary className="cursor-pointer">技术信息</summary>
-              <p className="mt-1 break-all">运行：{report.runId}</p>
-              <p className="break-all">来源修订：{report.sourceRevision}</p>
-            </details>
-          </li>
-        ))}
-      </ul>
+          )}
+          {reports.length > 0 && (
+            <ul className="divide-y rounded-xl border">
+              {reports.map(report => (
+                <li key={report.reportId} className="px-4 py-3">
+                  <Link
+                    className="text-body1 font-medium text-foreground underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    href={`/reports/${encodeURIComponent(report.reportId)}`}
+                  >
+                    {report.title}
+                  </Link>
+                  <p className="mt-1 text-label text-muted-foreground">
+                    论文 {report.paperId} · 保存于 {formatSavedAt(report.savedAt)}
+                  </p>
+                  <details className="mt-1 text-label text-faint-foreground">
+                    <summary className="cursor-pointer hover:text-muted-foreground">技术信息</summary>
+                    <p className="mt-1 break-all">运行：{report.runId}</p>
+                    <p className="break-all">来源修订：{report.sourceRevision}</p>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      <section className="space-y-3">
-        <div>
-          <h2 className="text-lg font-semibold">未验证的报告准备稿</h2>
-          <p className="text-sm text-muted-foreground">
-            导出只包含你保存的题目、笔记与材料，不代表 Research 质量门已通过。
-          </p>
-        </div>
-        {(workspace.workspace.reportDrafts ?? []).length > 0 ? (
-          <ul className="grid gap-3">
-            {workspace.workspace.reportDrafts!.map(draft => (
-              <DraftRow key={draft.id} draft={draft} />
-            ))}
-          </ul>
-        ) : (
-          <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
-            没有报告准备稿。
-          </p>
-        )}
-      </section>
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-heading3 font-semibold">未验证的报告准备稿</h2>
+            <p className="mt-1 text-body2 text-muted-foreground">
+              导出只包含你保存的题目、笔记与材料，不代表 Research 质量门已通过。
+            </p>
+          </div>
+          {drafts.length > 0 ? (
+            <ul className="divide-y rounded-xl border">
+              {drafts.map(draft => (
+                <DraftRow key={draft.id} draft={draft} />
+              ))}
+            </ul>
+          ) : (
+            <p className="py-6 text-body2 text-muted-foreground">没有报告准备稿。</p>
+          )}
+        </section>
+      </div>
     </div>
   )
 }
@@ -161,31 +165,26 @@ function DraftRow({ draft }: { draft: ResearchReportDraft }) {
   }
 
   return (
-    <li className="rounded-xl border bg-amber-50/40 p-4">
-      <strong>{draft.title}</strong>
-      <p className="mt-1 text-xs text-amber-900">
-        未验证准备稿 · {draft.materials.length} 项材料
-      </p>
-      <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          className="rounded border px-3 py-1.5 text-sm"
-          onClick={() => void download("markdown")}
-        >
-          导出准备稿 Markdown
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          className="rounded border px-3 py-1.5 text-sm"
-          onClick={() => void download("json")}
-        >
-          导出准备稿 JSON
-        </button>
+    <li className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-body1 font-medium text-foreground">{draft.title}</p>
+        <p className="mt-1 flex items-center gap-2 text-label text-muted-foreground">
+          <Badge variant="warning">未验证准备稿</Badge>
+          {draft.materials.length} 项材料
+        </p>
+        {message && <p role="status" className="mt-2 text-body2 text-success-text">{message}</p>}
+        {error && <p role="alert" className="mt-2 text-body2 text-destructive-text">{error}</p>}
       </div>
-      {message && <p role="status" className="mt-2 text-sm text-emerald-700">{message}</p>}
-      {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
+      <div className="flex shrink-0 gap-2">
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void download("markdown")}>
+          <Download size={15} strokeWidth={1.8} />
+          导出准备稿 Markdown
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void download("json")}>
+          <Download size={15} strokeWidth={1.8} />
+          导出准备稿 JSON
+        </Button>
+      </div>
     </li>
   )
 }

@@ -2,13 +2,14 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
+import { StudioCodeBlock } from "@/features/studio/shared/components/studio-dashboard"
 
 export function JsonPreview({ value, label, defaultOpen = false }: { value?: unknown; label: string; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
 
   if (value === undefined) {
     return (
-      <div className="rounded-md border border-border bg-secondary/40 p-3 text-sm text-muted-foreground">
+      <div className="rounded-xl border border-border px-3 py-2.5 text-body2 text-muted-foreground">
         {label}：无
       </div>
     )
@@ -18,14 +19,14 @@ export function JsonPreview({ value, label, defaultOpen = false }: { value?: unk
   const preview = json.length > 600 && !open ? `${json.slice(0, 600)}\n...` : json
 
   return (
-    <section className="rounded-md border border-border bg-secondary/40">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-        <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</p>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setOpen((value) => !value)}>
+    <section className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-label font-medium text-muted-foreground">{label}</p>
+        <Button type="button" variant="ghost" size="xs" onClick={() => setOpen((value) => !value)}>
           {open ? "收起" : "展开"}
         </Button>
       </div>
-      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-3 text-xs leading-5 text-foreground">{preview}</pre>
+      <StudioCodeBlock className="max-h-72 leading-5">{preview}</StudioCodeBlock>
     </section>
   )
 }

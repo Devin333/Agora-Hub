@@ -7,7 +7,7 @@ export function ReportList({ reports }: { reports: Report[] }) {
     return <EmptyState title="未找到报告" description="没有生成报告匹配当前筛选条件。" />;
   }
   return (
-    <div className="space-y-3">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {reports.map((report) => (
         <ReportCard key={report.id} report={report} />
       ))}

@@ -3,7 +3,7 @@
 import { ResearchMaterialContext } from "@/components/research/research-material-context"
 
 import Link from "next/link"
-import { AlertCircle, ArrowRight, Binoculars, Boxes, Check, ChevronRight, CircleHelp, Clipboard, ExternalLink, FlaskConical, Flame, FolderKanban, GitBranch, Info, Loader2, Search, Sparkles, Star } from "lucide-react"
+import { AlertCircle, ArrowRight, Binoculars, Boxes, Check, ChevronRight, CircleHelp, Clipboard, ExternalLink, FlaskConical, Flame, FolderKanban, GitBranch, Info, Loader2, Sparkles, Star } from "lucide-react"
 import type { ComponentType } from "react"
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
@@ -11,6 +11,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { cn } from "@/lib/utils"
 import {
   addProjectWatchlistItem,
   answerProjectLabQuestion,
@@ -27,8 +28,25 @@ import { formatScore, labelize } from "@/features/projects/components/project-fo
 import { ProjectProductCard } from "@/features/projects/components/project-product-card"
 import { ProjectDegradedNotice, ProjectEmptyState, ProjectErrorState, ProjectLoadingState, ProjectSourceLine } from "@/features/projects/components/project-product-state"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { PapersHero } from "@/components/papers/papers-hero"
-import { PapersMicrobar } from "@/components/papers/papers-microbar"
+import {
+  ProjectCodeBlock,
+  ProjectEmptyText,
+  ProjectFilterChip,
+  ProjectNativeSelect,
+  ProjectNativeSelectOption,
+  ProjectPage,
+  ProjectPageBody,
+  ProjectPageHeader,
+  ProjectPanel,
+  ProjectSearchInput,
+  ProjectSectionHeading,
+  ProjectStat,
+  projectCardClassName,
+  projectCardLinkClassName,
+  projectGridClassName,
+  projectInsetClassName,
+} from "@/features/projects/components/project-page-layout"
+import { labGraphEdgeColor, labNodeColor, levelTone, toneDotClass, toneSurfaceClass, toneTextClass, workflowTone } from "@/features/projects/components/project-tone"
 import { presentLabWorkflow, labQuestionAnswered, labSolutionValue } from "@/features/projects/components/lab-workflow"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type {
@@ -108,40 +126,40 @@ export function ProjectsProductPage({ route }: ProjectsProductPageProps) {
 
   const meta = getMeta(data)
   return (
-    <main className="space-y-9 font-papers-research">
+    <ProjectPage>
       <ProjectHero section={section} route={route} data={data} query={query} onQueryChange={setQuery} onSearch={submitQuery} isFetching={isFetching} sourceQuestion={sourceQuestion} />
-      {meta ? <ProjectDegradedNotice meta={meta} /> : null}
-      <RouteContent route={route} data={data} onRefresh={() => void refetch()} />
-    </main>
+      <ProjectPageBody>
+        {meta ? <ProjectDegradedNotice meta={meta} /> : null}
+        <RouteContent route={route} data={data} onRefresh={() => void refetch()} />
+      </ProjectPageBody>
+    </ProjectPage>
   )
 }
 
 function LabRoute({ data, section, isFetching }: { data: ProductData; section: ProjectProductSection; isFetching: boolean }) {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const meta = getMeta(data)
 
   return (
-    <main className="space-y-5 font-papers-research">
-      <PapersMicrobar items={[{ label: section.title }]} meta={t("projects.lab.headerMeta")} locale={locale} />
-      <PapersHero
-        variant="editorial"
+    <ProjectPage>
+      <ProjectPageHeader
         eyebrow={t("projects.lab.headerEyebrow")}
         title={section.title}
+        icon={<FlaskConical className="size-4" strokeWidth={1.8} />}
         subtitle={t("projects.lab.headerDescription")}
-        stats={[
-          { label: t("projects.lab.statsCases"), value: caseCount(data) },
-          { label: t("projects.lab.statsProjects"), value: projectCount(data) },
-          { label: t("projects.lab.statsState"), value: meta?.data_state ?? "empty" },
-        ]}
-        aside={
-          <div className="flex min-h-9 items-center justify-between gap-3 rounded-xl border border-[#dfe5df] bg-white/80 px-3 py-2.5 shadow-sm dark:border-border dark:bg-card">
-            {meta ? <ProjectSourceLine meta={meta} /> : null}
-            {isFetching ? <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" /> {t("projects.lab.refreshing")}</span> : null}
-          </div>
-        }
-      />
-      <LabView data={data} />
-    </main>
+        actions={isFetching ? <span className="inline-flex items-center gap-1.5 text-label text-muted-foreground" role="status"><Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> {t("projects.lab.refreshing")}</span> : null}
+      >
+        <div className="flex flex-wrap items-center gap-1.5">
+          <ProjectStat label={t("projects.lab.statsCases")} value={caseCount(data)} />
+          <ProjectStat label={t("projects.lab.statsProjects")} value={projectCount(data)} />
+          <ProjectStat label={t("projects.lab.statsState")} value={meta?.data_state ?? "empty"} />
+        </div>
+        {meta ? <ProjectSourceLine meta={meta} /> : null}
+      </ProjectPageHeader>
+      <ProjectPageBody>
+        <LabView data={data} />
+      </ProjectPageBody>
+    </ProjectPage>
   )
 }
 
@@ -194,71 +212,71 @@ function ProjectHero({
   const lead = firstProject(data)
 
   return (
-    <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-end">
-      <div className="min-w-0">
-        {sourceQuestion ? <div className="mb-4 rounded-lg border border-[#e7dff1] bg-[#faf7ff] px-3 py-2 text-sm text-[#695d7d]">来自首页的问题：<span className="font-medium text-[#382758]">{sourceQuestion}</span></div> : null}
-        <ResearchMaterialContext />
-        <div className="mb-5 flex flex-wrap items-center gap-2">
+    <ProjectPageHeader
+      title={section.title}
+      icon={<Icon className="size-4" />}
+      subtitle={section.description}
+      leading={
+        <>
           <Badge variant="info">Projects API v1</Badge>
           <Badge variant="muted">Real Project Radar data</Badge>
           {isFetching ? <Badge variant="muted">Refreshing</Badge> : null}
-        </div>
-        <h1 className="max-w-5xl text-5xl font-black leading-none tracking-normal text-[#202124] sm:text-6xl lg:text-7xl dark:text-foreground">
-          {section.title}
-        </h1>
-        <p className="mt-6 max-w-3xl text-base leading-7 text-[#4b5563] dark:text-muted-foreground">{section.description}</p>
-        <div className="mt-7 flex flex-wrap gap-2">
-          <HeroPill label="Projects" value={projectCount(data)} />
-          <HeroPill label="Cases" value={caseCount(data)} />
-          <HeroPill label="Collections" value={collectionCount(data)} />
-          <HeroPill label="State" value={meta?.data_state ?? "empty"} />
-        </div>
-        <form className="mt-6 max-w-2xl" onSubmit={event => { event.preventDefault(); onSearch() }}>
-          <label className="sr-only" htmlFor="projects-product-search">
-            Search projects
-          </label>
-          <div className="relative flex items-center gap-2">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
+        </>
+      }
+    >
+      {sourceQuestion ? (
+        <p className="rounded-lg bg-muted px-3 py-2 text-body2 text-muted-foreground">
+          来自首页的问题：<span className="font-medium text-foreground">{sourceQuestion}</span>
+        </p>
+      ) : null}
+      <ResearchMaterialContext />
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
+        <div className="min-w-0 space-y-3">
+          <div className="flex flex-wrap gap-1.5">
+            <ProjectStat label="Projects" value={projectCount(data)} />
+            <ProjectStat label="Cases" value={caseCount(data)} />
+            <ProjectStat label="Collections" value={collectionCount(data)} />
+            <ProjectStat label="State" value={meta?.data_state ?? "empty"} />
+          </div>
+          <form className="flex max-w-2xl items-center gap-2" onSubmit={event => { event.preventDefault(); onSearch() }}>
+            <label className="sr-only" htmlFor="projects-product-search">
+              Search projects
+            </label>
+            <ProjectSearchInput
+              className="flex-1"
               id="projects-product-search"
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault() }}
-              className="h-11 rounded-md bg-white pl-9 dark:bg-card"
               placeholder="Search real projects, tools, cases, or module themes"
             />
-            <Button type="submit" className="h-11 shrink-0">搜索</Button>
-          </div>
-        </form>
-      </div>
+            <Button type="submit" size="lg" className="shrink-0">搜索</Button>
+          </form>
+        </div>
 
-      <aside className="rounded-md border border-[#d8dee7] bg-white p-5 shadow-sm dark:border-border dark:bg-card">
-        <div className="flex items-start gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-md bg-[#0f172a] text-white dark:bg-primary">
-            <Icon className="size-5" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase text-[#667085] dark:text-muted-foreground">Current focus</p>
-            {lead ? (
-              <>
-                <h2 className="mt-2 line-clamp-2 text-lg font-semibold text-[#202124] dark:text-foreground">{lead.name}</h2>
-                <p className="mt-2 text-sm leading-6 text-[#4b5563] dark:text-muted-foreground">
+        <aside className="min-w-0 rounded-xl border border-border bg-card p-3">
+          <p className="text-label text-muted-foreground">Current focus</p>
+          {lead ? (
+            <div className="mt-1 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="line-clamp-2 text-body1 font-semibold text-foreground">{lead.name}</h2>
+                <p className="mt-0.5 text-label text-muted-foreground">
                   Score {formatScore(lead.hot_score ?? lead.rising_score ?? undefined)} / Sources {lead.source_count}
                 </p>
-                <Button asChild className="mt-4" size="sm">
-                  <Link href={`/projects/${encodeURIComponent(lead.slug)}`}>
-                    View project
-                    <ArrowRight className="size-4" />
-                  </Link>
-                </Button>
-              </>
-            ) : (
-              <p className="mt-2 text-sm leading-6 text-[#4b5563] dark:text-muted-foreground">No real Project Radar output is available yet.</p>
-            )}
-          </div>
-        </div>
-      </aside>
-    </section>
+              </div>
+              <Button asChild size="sm" variant="outline" className="shrink-0">
+                <Link href={`/projects/${encodeURIComponent(lead.slug)}`}>
+                  View project
+                  <ArrowRight strokeWidth={1.8} />
+                </Link>
+              </Button>
+            </div>
+          ) : (
+            <p className="mt-1 text-body2 text-muted-foreground">No real Project Radar output is available yet.</p>
+          )}
+        </aside>
+      </div>
+    </ProjectPageHeader>
   )
 }
 
@@ -280,19 +298,23 @@ function ProjectsHome({ data }: { data: ProjectsApiHomeResult }) {
   const projects = uniqueProjects([...data.hot, ...data.rising, ...data.tools])
   if (!projects.length && !data.cases.length && !data.collections.length) return <ProjectEmptyState />
   return (
-    <section className="space-y-8">
-      <SectionHeader title="Hot and rising" href="/projects/hot" />
-      <ProjectGrid projects={projects.slice(0, 6)} meta={data.meta} />
-      <SectionHeader title="Cases and collections" href="/projects/cases" />
-      <div className="grid gap-4 lg:grid-cols-2">
-        {data.cases.slice(0, 4).map((item) => (
-          <SimplePanel key={item.id} title={String(item.title)} subtitle={String(item.module_type)} body={String(item.design_summary ?? item.problem ?? "")} />
-        ))}
-        {data.collections.slice(0, 4).map((item) => (
-          <SimplePanel key={item.id} title={item.title} subtitle={`${item.item_count ?? 0} items`} body={item.description} href={`/projects/collections`} />
-        ))}
-      </div>
-    </section>
+    <div className="space-y-6">
+      <section className="space-y-3">
+        <SectionHeader title="Hot and rising" href="/projects/hot" />
+        <ProjectGrid projects={projects.slice(0, 6)} meta={data.meta} />
+      </section>
+      <section className="space-y-3">
+        <SectionHeader title="Cases and collections" href="/projects/cases" />
+        <div className={projectGridClassName}>
+          {data.cases.slice(0, 4).map((item) => (
+            <SimplePanel key={item.id} title={String(item.title)} subtitle={String(item.module_type)} body={String(item.design_summary ?? item.problem ?? "")} />
+          ))}
+          {data.collections.slice(0, 4).map((item) => (
+            <SimplePanel key={item.id} title={item.title} subtitle={`${item.item_count ?? 0} items`} body={item.description} href={`/projects/collections`} />
+          ))}
+        </div>
+      </section>
+    </div>
   )
 }
 
@@ -314,52 +336,32 @@ function ToolsView({ data }: { data: ProjectsApiToolResult }) {
 
   if (!data.tools.length) return <ProjectEmptyState title="No Real-Derived Tools" />
   return (
-    <section className="grid gap-4 lg:grid-cols-[minmax(0,16rem)_1fr]">
-      <div className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card h-fit">
-        <h3 className="text-sm font-semibold text-[#202124] dark:text-foreground mb-3">Filters</h3>
-        <div className="space-y-3">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={hasApi} onChange={(e) => setHasApi(e.target.checked)} className="rounded" />
-            <span className="text-sm text-[#4b5563] dark:text-muted-foreground">Has API</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={hasCli} onChange={(e) => setHasCli(e.target.checked)} className="rounded" />
-            <span className="text-sm text-[#4b5563] dark:text-muted-foreground">Has CLI</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={hasPython} onChange={(e) => setHasPython(e.target.checked)} className="rounded" />
-            <span className="text-sm text-[#4b5563] dark:text-muted-foreground">Python SDK</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={hasDocker} onChange={(e) => setHasDocker(e.target.checked)} className="rounded" />
-            <span className="text-sm text-[#4b5563] dark:text-muted-foreground">Docker</span>
-          </label>
-          <div className="pt-2 border-t border-[#e5e7eb] dark:border-border">
-            <label className="text-xs font-semibold text-[#667085] dark:text-muted-foreground block mb-2">Difficulty</label>
-            <select
-              value={difficulty}
-              onChange={(e) => setDifficulty(e.target.value)}
-              className="w-full rounded-md border border-input bg-card px-2 py-1 text-sm"
-            >
-              <option value="">All</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-          </div>
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
+        <ProjectFilterChip active={hasApi} onClick={() => setHasApi((value) => !value)}>Has API</ProjectFilterChip>
+        <ProjectFilterChip active={hasCli} onClick={() => setHasCli((value) => !value)}>Has CLI</ProjectFilterChip>
+        <ProjectFilterChip active={hasPython} onClick={() => setHasPython((value) => !value)}>Python SDK</ProjectFilterChip>
+        <ProjectFilterChip active={hasDocker} onClick={() => setHasDocker((value) => !value)}>Docker</ProjectFilterChip>
+        <ProjectNativeSelect aria-label="Difficulty" value={difficulty} onChange={(e) => setDifficulty(e.target.value)} className="text-[13px]">
+          <ProjectNativeSelectOption value="">All difficulty</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="low">Low</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="medium">Medium</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="high">High</ProjectNativeSelectOption>
+        </ProjectNativeSelect>
+      </div>
+      {!filtered.length ? <ProjectEmptyText title="No matching tools" /> : (
+        <div className={projectGridClassName}>
+          {filtered.map((tool) => (
+            <SimplePanel
+              key={tool.project.id}
+              title={tool.project.name}
+              subtitle={`${labelize(tool.profile.tool_type)} / ${tool.profile.integration_difficulty}`}
+              body={tool.fit_reason ?? tool.project.description ?? ""}
+              href={`/projects/tools/${encodeURIComponent(tool.project.id)}`}
+            />
+          ))}
         </div>
-      </div>
-      <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-        {filtered.map((tool) => (
-          <SimplePanel
-            key={tool.project.id}
-            title={tool.project.name}
-            subtitle={`${labelize(tool.profile.tool_type)} / ${tool.profile.integration_difficulty}`}
-            body={tool.fit_reason ?? tool.project.description ?? ""}
-            href={`/projects/tools/${encodeURIComponent(tool.project.id)}`}
-          />
-        ))}
-      </div>
+      )}
     </section>
   )
 }
@@ -384,45 +386,38 @@ function CasesView({ data }: { data: ProjectsApiCaseResult }) {
   if (!data.cases.length) return <ProjectEmptyState title="No Real-Derived Cases" />
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap gap-3 rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-        <div className="relative flex-1 min-w-48">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} className="pl-9 h-9" placeholder="Search cases" />
-        </div>
-        <select value={domain} onChange={(e) => setDomain(e.target.value)} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
-          <option value="">All domains</option>
-          {domains.map((d) => <option key={d} value={d}>{labelize(d)}</option>)}
-        </select>
-        <select value={moduleType} onChange={(e) => setModuleType(e.target.value)} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
-          <option value="">All modules</option>
-          {moduleTypes.map((m) => <option key={m} value={m}>{labelize(m)}</option>)}
-        </select>
-        <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
-          <option value="">All difficulty</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
+      <div className="flex flex-wrap items-center gap-2">
+        <ProjectSearchInput className="w-full max-w-[260px]" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search cases" aria-label="Search cases" />
+        <ProjectNativeSelect aria-label="Domain" value={domain} onChange={(e) => setDomain(e.target.value)} className="text-[13px]">
+          <ProjectNativeSelectOption value="">All domains</ProjectNativeSelectOption>
+          {domains.map((d) => <ProjectNativeSelectOption key={d} value={d}>{labelize(d)}</ProjectNativeSelectOption>)}
+        </ProjectNativeSelect>
+        <ProjectNativeSelect aria-label="Module" value={moduleType} onChange={(e) => setModuleType(e.target.value)} className="text-[13px]">
+          <ProjectNativeSelectOption value="">All modules</ProjectNativeSelectOption>
+          {moduleTypes.map((m) => <ProjectNativeSelectOption key={m} value={m}>{labelize(m)}</ProjectNativeSelectOption>)}
+        </ProjectNativeSelect>
+        <ProjectNativeSelect aria-label="Difficulty" value={difficulty} onChange={(e) => setDifficulty(e.target.value)} className="text-[13px]">
+          <ProjectNativeSelectOption value="">All difficulty</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="low">Low</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="medium">Medium</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="high">High</ProjectNativeSelectOption>
+        </ProjectNativeSelect>
       </div>
-      {!filtered.length ? <ProjectEmptyState title="No matching cases" /> : (
-        <div className="grid gap-4 lg:grid-cols-2">
+      {!filtered.length ? <ProjectEmptyText title="No matching cases" /> : (
+        <div className={projectGridClassName}>
           {filtered.map((item) => (
-            <Link key={item.id} href={`/projects/cases/${encodeURIComponent(item.id)}`}>
-              <article className="h-full rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm transition-colors hover:border-primary/40 dark:border-border dark:bg-card">
-                <div className="flex flex-wrap gap-2 mb-2">
+            <Link key={item.id} href={`/projects/cases/${encodeURIComponent(item.id)}`} className={projectCardLinkClassName}>
+              <article className={projectCardClassName}>
+                <div className="mb-2 flex flex-wrap gap-1.5">
                   <Badge variant="info">{labelize(item.module_type)}</Badge>
                   <Badge variant="muted">{labelize(item.business_domain)}</Badge>
                   {textValue(item.difficulty) ? <Badge variant="muted">{textValue(item.difficulty)}</Badge> : null}
                   {textValue(item.migration_level) ? <Badge variant="muted">reuse: {textValue(item.migration_level)}</Badge> : null}
                 </div>
-                <h3 className="text-base font-semibold text-[#202124] dark:text-foreground">{item.title}</h3>
-                <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#4b5563] dark:text-muted-foreground">
-                  {String(item.design_summary ?? item.problem ?? "")}
-                </p>
+                <h3 className="break-words text-[15px] font-semibold text-foreground">{item.title}</h3>
+                <p className="mt-1 line-clamp-3 text-body2 text-muted-foreground">{String(item.design_summary ?? item.problem ?? "")}</p>
                 {stringArray(item.suitable_for).length > 0 && (
-                  <p className="mt-2 text-xs text-[#667085] dark:text-muted-foreground">
-                    For: {stringArray(item.suitable_for).slice(0, 3).join(", ")}
-                  </p>
+                  <p className="mt-auto pt-3 text-label text-faint-foreground">For: {stringArray(item.suitable_for).slice(0, 3).join(", ")}</p>
                 )}
               </article>
             </Link>
@@ -432,7 +427,6 @@ function CasesView({ data }: { data: ProjectsApiCaseResult }) {
     </section>
   )
 }
-
 function CollectionsView({ data }: { data: ProjectsApiCollectionResult }) {
   const searchParams = useSearchParams()
   const [q, setQ] = useState("")
@@ -449,36 +443,31 @@ function CollectionsView({ data }: { data: ProjectsApiCollectionResult }) {
   if (!data.collections.length) return <ProjectEmptyState title="No Real-Derived Collections" />
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap gap-3 rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
-        <div className="relative flex-1 min-w-48">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} className="pl-9 h-9" placeholder="Search collections" />
-        </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <ProjectSearchInput className="w-full max-w-[260px]" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search collections" aria-label="Search collections" />
         {allTags.length > 0 && (
-          <select value={tag} onChange={(e) => setTag(e.target.value)} className="rounded-md border border-input bg-card px-2 py-1 text-sm">
-            <option value="">All tags</option>
-            {allTags.map((t) => <option key={t} value={t}>{labelize(t)}</option>)}
-          </select>
+          <ProjectNativeSelect aria-label="Tag" value={tag} onChange={(e) => setTag(e.target.value)} className="text-[13px]">
+            <ProjectNativeSelectOption value="">All tags</ProjectNativeSelectOption>
+            {allTags.map((t) => <ProjectNativeSelectOption key={t} value={t}>{labelize(t)}</ProjectNativeSelectOption>)}
+          </ProjectNativeSelect>
         )}
       </div>
-      {!filtered.length ? <ProjectEmptyState title="No matching collections" /> : (
-        <div className="grid gap-4 lg:grid-cols-2">
+      {!filtered.length ? <ProjectEmptyText title="No matching collections" /> : (
+        <div className={projectGridClassName}>
           {filtered.map((item) => (
-            <Link key={item.id} href={`/projects/collections/${encodeURIComponent(item.slug)}`}>
-              <article className="h-full rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm transition-colors hover:border-primary/40 dark:border-border dark:bg-card">
-                <div className="flex flex-wrap gap-2 mb-2">
+            <Link key={item.id} href={`/projects/collections/${encodeURIComponent(item.slug)}`} className={projectCardLinkClassName}>
+              <article className={projectCardClassName}>
+                <div className="mb-2 flex flex-wrap gap-1.5">
                   {textValue(item.collection_type) ? <Badge variant="info">{labelize(textValue(item.collection_type))}</Badge> : null}
                   <Badge variant="muted">{item.item_count ?? 0} items</Badge>
                   {stringArray(item.tags).slice(0, 3).map((t) => (
                     <Badge key={t} variant="muted">{labelize(t)}</Badge>
                   ))}
                 </div>
-                <h3 className="text-base font-semibold text-[#202124] dark:text-foreground">{item.title}</h3>
-                <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#4b5563] dark:text-muted-foreground">{item.description}</p>
+                <h3 className="break-words text-[15px] font-semibold text-foreground">{item.title}</h3>
+                <p className="mt-1 line-clamp-3 text-body2 text-muted-foreground">{item.description}</p>
                 {stringArray(item.learning_goals).length > 0 && (
-                  <p className="mt-2 text-xs text-[#667085] dark:text-muted-foreground">
-                    Goals: {stringArray(item.learning_goals).slice(0, 2).join("; ")}
-                  </p>
+                  <p className="mt-auto pt-3 text-label text-faint-foreground">Goals: {stringArray(item.learning_goals).slice(0, 2).join("; ")}</p>
                 )}
               </article>
             </Link>
@@ -515,39 +504,41 @@ function WatchlistView({ data, onChanged }: { data: ProjectsApiWatchlistResult; 
   })
 
   return (
-    <section className="grid gap-5 lg:grid-cols-[minmax(0,24rem)_1fr]">
-      <form
-        className="space-y-3 rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card"
-        onSubmit={(event) => {
-          event.preventDefault()
-          if (!projectId.trim() || !reason.trim()) return
-          addWatch.mutate()
-        }}
-      >
-        <h2 className="text-base font-semibold text-[#202124] dark:text-foreground">Add Watchlist Item</h2>
-        <Input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="Real project id" />
-        <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Watch reason" />
-        <select
-          value={priority}
-          onChange={(event) => setPriority(event.target.value as "low" | "medium" | "high")}
-          className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm"
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] lg:items-start">
+      <ProjectPanel title="Add Watchlist Item">
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!projectId.trim() || !reason.trim()) return
+            addWatch.mutate()
+          }}
         >
-          <option value="low">Low priority</option>
-          <option value="medium">Medium priority</option>
-          <option value="high">High priority</option>
-        </select>
-        <Button type="submit" disabled={!projectId.trim() || !reason.trim() || addWatch.isPending}>
-          {addWatch.isPending ? "Saving" : "Watch Project"}
-        </Button>
-        {addWatch.isError ? <p className="text-sm text-destructive">{addWatch.error instanceof Error ? addWatch.error.message : "Watchlist update failed"}</p> : null}
-      </form>
-      <div className="grid gap-4 lg:grid-cols-2">
-        {data.items.length ? (
-          data.items.map((item) => <WatchItemCard key={item.id} item={item} />)
-        ) : (
-          <ProjectEmptyState title="No Watchlist Items" />
-        )}
-      </div>
+          <Input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="Real project id" aria-label="Project id" />
+          <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Watch reason" aria-label="Watch reason" />
+          <ProjectNativeSelect
+            aria-label="Priority"
+            value={priority}
+            onChange={(event) => setPriority(event.target.value as "low" | "medium" | "high")}
+            wrapperClassName="w-full"
+          >
+            <ProjectNativeSelectOption value="low">Low priority</ProjectNativeSelectOption>
+            <ProjectNativeSelectOption value="medium">Medium priority</ProjectNativeSelectOption>
+            <ProjectNativeSelectOption value="high">High priority</ProjectNativeSelectOption>
+          </ProjectNativeSelect>
+          <Button type="submit" disabled={!projectId.trim() || !reason.trim() || addWatch.isPending}>
+            {addWatch.isPending ? "Saving" : "Watch Project"}
+          </Button>
+          {addWatch.isError ? <p role="alert" className="text-body2 text-destructive-text">{addWatch.error instanceof Error ? addWatch.error.message : "Watchlist update failed"}</p> : null}
+        </form>
+      </ProjectPanel>
+      {data.items.length ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {data.items.map((item) => <WatchItemCard key={item.id} item={item} />)}
+        </div>
+      ) : (
+        <ProjectEmptyState title="No Watchlist Items" />
+      )}
     </section>
   )
 }
@@ -629,10 +620,10 @@ function LabView({ data }: { data: ProductData }) {
   }, [focusQuestionId, session])
 
   return (
-    <section className="space-y-6" aria-label={t("projects.lab.workspace")}>
+    <section className="space-y-4" aria-label={t("projects.lab.workspace")}>
       {meta?.data_state !== "ready" ? <ProjectDegradedNotice meta={meta ?? { source: "none", data_state: "empty", notices: [] }} /> : null}
       <form
-        className="rounded-xl border border-[#dfe5df] bg-white/70 p-5 shadow-sm dark:border-border dark:bg-card sm:p-6"
+        className="rounded-xl border border-border bg-card p-4 md:p-5"
         aria-busy={startSession.isPending}
         onSubmit={(event) => {
           event.preventDefault()
@@ -641,69 +632,72 @@ function LabView({ data }: { data: ProductData }) {
         }}
       >
         <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">{t("projects.lab.researchBrief")}</p>
-            <h2 className="mt-1 text-xl font-semibold text-[#202124] dark:text-foreground">{t("projects.lab.startSession")}</h2>
+          <div className="min-w-0">
+            <p className="text-label text-muted-foreground">{t("projects.lab.researchBrief")}</p>
+            <h2 className="mt-0.5 text-heading3 font-semibold text-foreground">{t("projects.lab.startSession")}</h2>
           </div>
-          <span className="hidden size-8 shrink-0 items-center justify-center rounded-full border border-border text-xs font-semibold text-muted-foreground sm:flex">01</span>
+          <span className="hidden size-8 shrink-0 place-items-center rounded-full bg-muted text-caption font-semibold text-muted-foreground sm:grid" aria-hidden="true">01</span>
         </div>
-        <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_16rem]">
+        <div className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
           <div className="min-w-0 space-y-3">
-            <p className="text-sm leading-6 text-muted-foreground">{t("projects.lab.describePrompt")}</p>
+            <p className="text-body2 text-muted-foreground">{t("projects.lab.describePrompt")}</p>
             <textarea
               id="lab-problem"
               value={problem}
               onChange={(event) => setProblem(event.target.value)}
               aria-describedby="lab-problem-help"
               aria-invalid={startSession.isError}
-              className="min-h-32 w-full resize-y rounded-md border border-input bg-card px-3 py-3 text-base leading-6 shadow-none outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+              className="min-h-32 w-full resize-y rounded-lg border border-input bg-transparent px-3 py-2.5 text-body1 text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive dark:bg-input/30"
               placeholder={t("projects.lab.problemPlaceholder")}
             />
-            <p id="lab-problem-help" className="text-xs text-muted-foreground">{t("projects.lab.problemRequired")}</p>
+            <p id="lab-problem-help" className="text-label text-muted-foreground">{t("projects.lab.problemRequired")}</p>
             <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" className="min-h-11" disabled={!problem.trim() || startSession.isPending}>
-                {startSession.isPending ? <><Loader2 className="size-4 animate-spin" /> {t("projects.lab.starting")}</> : <>{t("projects.lab.startButton")} <ChevronRight className="size-4" /></>}
+              <Button type="submit" size="lg" disabled={!problem.trim() || startSession.isPending}>
+                {startSession.isPending ? <><Loader2 className="animate-spin" strokeWidth={1.8} /> {t("projects.lab.starting")}</> : <>{t("projects.lab.startButton")} <ChevronRight strokeWidth={1.8} /></>}
               </Button>
-              {startSession.isPending ? <span className="text-sm text-muted-foreground" aria-live="polite">{t("projects.lab.creating")}</span> : null}
+              {startSession.isPending ? <span className="text-body2 text-muted-foreground" aria-live="polite">{t("projects.lab.creating")}</span> : null}
             </div>
           </div>
-          <aside className="border-t border-border pt-4 text-sm lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{t("projects.lab.context")}</p>
-            <p className="mt-3 text-base font-semibold text-foreground">{t("projects.lab.selectedCases", { count: selectedCaseIds.length, suffix: selectedCaseIds.length === 1 ? "" : "s" })}</p>
-            <p className="mt-2 leading-6 text-muted-foreground">{t("projects.lab.apiOnly")}</p>
+          <aside className="border-t border-border pt-4 text-body2 lg:border-s lg:border-t-0 lg:ps-5 lg:pt-0">
+            <p className="text-label text-muted-foreground">{t("projects.lab.context")}</p>
+            <p className="mt-1 text-body1 font-semibold text-foreground">{t("projects.lab.selectedCases", { count: selectedCaseIds.length, suffix: selectedCaseIds.length === 1 ? "" : "s" })}</p>
+            <p className="mt-1.5 text-muted-foreground">{t("projects.lab.apiOnly")}</p>
           </aside>
         </div>
-        {startSession.isError ? <p id="lab-problem-error" role="alert" className="text-sm text-destructive">{startSession.error instanceof Error ? startSession.error.message : t("projects.lab.sessionFailed")}</p> : null}
+        {startSession.isError ? <p id="lab-problem-error" role="alert" className="mt-3 text-body2 text-destructive-text">{startSession.error instanceof Error ? startSession.error.message : t("projects.lab.sessionFailed")}</p> : null}
       </form>
       {!session ? <ProjectEmptyState title={t("projects.lab.noActiveSession")} /> : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(13rem,0.8fr)_minmax(0,2fr)_minmax(16rem,1fr)]">
+        <div className="grid gap-4 lg:grid-cols-[minmax(13rem,0.8fr)_minmax(0,2fr)_minmax(16rem,1fr)]">
           <LabWorkflowStatus session={session} />
-          <div className="min-w-0 space-y-5">
-            <section className="rounded-md border border-[#d8dee7] bg-white p-5 shadow-sm dark:border-border dark:bg-card sm:p-6">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-[#667085] dark:text-muted-foreground">{t("projects.lab.sessionBrief")}</p>
-                  <h2 className="mt-1 text-lg font-semibold text-[#202124] dark:text-foreground">{session.user_problem}</h2>
-                </div>
-                <Button asChild variant="outline" size="sm"><Link href={`/projects/lab/${encodeURIComponent(session.id)}`}>{t("projects.lab.openDetail")} <ExternalLink className="size-3.5" /></Link></Button>
+          <section className="min-w-0 rounded-xl border border-border bg-card p-4 md:p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-label text-muted-foreground">{t("projects.lab.sessionBrief")}</p>
+                <h2 className="mt-0.5 break-words text-heading3 font-semibold text-foreground">{session.user_problem}</h2>
               </div>
-              <LabClarificationList session={session} mutation={answerQuestion} hasError={answerQuestion.isError} focusQuestionId={focusQuestionId} onAnswer={(questionId, answer) => answerQuestion.mutate({ questionId, answer })} />
-              {answerQuestion.isError ? <p role="alert" className="mt-3 text-sm text-destructive">{answerQuestion.error instanceof Error ? answerQuestion.error.message : t("projects.lab.answerFailed")}</p> : null}
-              <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-border pt-4">
-                <Button type="button" disabled={!workflow?.canGenerate || generateSolution.isPending} onClick={() => generateSolution.mutate()}>
-                  {generateSolution.isPending ? <><Loader2 className="size-4 animate-spin" /> {t("projects.lab.generating")}</> : <>{t("projects.lab.generateSolution")} <ChevronRight className="size-4" /></>}
-                </Button>
-                <span className="text-sm text-muted-foreground" aria-live="polite">{workflow?.actionLabel}</span>
-              </div>
-              {generateSolution.isError ? (
-                <p role="alert" className="mt-3 text-sm text-destructive">
-                  {generateSolution.error instanceof Error ? generateSolution.error.message : t("projects.lab.solutionFailed")}
-                  {generateSolution.error && typeof generateSolution.error === "object" && "status" in generateSolution.error && generateSolution.error.status === 409 ? ` ${t("projects.lab.returnToClarification")}` : ""}
-                </p>
-              ) : null}
-              {solution ? <LabSolutionPanel session={solution.session} solution={solution.solution} /> : session.generated_solution || session.solution_json ? <LabSolutionPanel session={session} solution={session.solution_json ?? { markdown: session.generated_solution }} /> : null}
-            </section>
-          </div>
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/projects/lab/${encodeURIComponent(session.id)}`}>
+                  {t("projects.lab.openDetail")}
+                  <ExternalLink strokeWidth={1.8} />
+                </Link>
+              </Button>
+            </div>
+            <LabClarificationList session={session} mutation={answerQuestion} hasError={answerQuestion.isError} focusQuestionId={focusQuestionId} onAnswer={(questionId, answer) => answerQuestion.mutate({ questionId, answer })} />
+            {answerQuestion.isError ? <p role="alert" className="mt-3 text-body2 text-destructive-text">{answerQuestion.error instanceof Error ? answerQuestion.error.message : t("projects.lab.answerFailed")}</p> : null}
+            <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-border pt-4">
+              <Button type="button" disabled={!workflow?.canGenerate || generateSolution.isPending} onClick={() => generateSolution.mutate()}>
+                {generateSolution.isPending ? <><Loader2 className="animate-spin" strokeWidth={1.8} /> {t("projects.lab.generating")}</> : <>{t("projects.lab.generateSolution")} <ChevronRight strokeWidth={1.8} /></>}
+              </Button>
+              <span className="text-body2 text-muted-foreground" aria-live="polite">{workflow?.actionLabel}</span>
+            </div>
+            {generateSolution.isError ? (
+              <p role="alert" className="mt-3 text-body2 text-destructive-text">
+                {generateSolution.error instanceof Error ? generateSolution.error.message : t("projects.lab.solutionFailed")}
+                {generateSolution.error && typeof generateSolution.error === "object" && "status" in generateSolution.error && generateSolution.error.status === 409 ? ` ${t("projects.lab.returnToClarification")}` : ""}
+              </p>
+            ) : null}
+            {solution ? <LabSolutionPanel session={solution.session} solution={solution.solution} /> : session.generated_solution || session.solution_json ? <LabSolutionPanel session={session} solution={session.solution_json ?? { markdown: session.generated_solution }} /> : null}
+          </section>
           <LabContextPanel session={session} />
         </div>
       )}
@@ -713,29 +707,30 @@ function LabView({ data }: { data: ProductData }) {
 
 export function LabWorkspaceSkeleton() {
   const { t } = useI18n()
+  const block = "rounded-md bg-muted"
   return (
-    <section className="space-y-5" aria-label={t("projects.lab.loadingWorkspace")} aria-busy="true">
-      <div className="animate-pulse border-y border-[#d8dee7] bg-white py-5 dark:border-border dark:bg-card lg:rounded-md lg:border lg:px-5">
-        <div className="h-3 w-24 rounded bg-secondary" />
-        <div className="mt-3 h-7 w-52 rounded bg-secondary" />
-        <div className="mt-5 h-28 w-full rounded-md bg-secondary" />
-        <div className="mt-3 h-10 w-36 rounded-md bg-secondary" />
+    <section className="space-y-4" aria-label={t("projects.lab.loadingWorkspace")} aria-busy="true">
+      <div className="animate-pulse rounded-xl border border-border bg-card p-4">
+        <div className={cn(block, "h-3 w-24")} />
+        <div className={cn(block, "mt-3 h-6 w-52")} />
+        <div className={cn(block, "mt-4 h-28 w-full rounded-lg")} />
+        <div className={cn(block, "mt-3 h-9 w-36 rounded-lg")} />
       </div>
-      <div className="grid gap-5 lg:grid-cols-[minmax(13rem,0.8fr)_minmax(0,2fr)_minmax(16rem,1fr)]">
-        <div className="animate-pulse border-y border-[#d8dee7] bg-white py-5 dark:border-border dark:bg-card lg:rounded-md lg:border lg:p-5">
-          <div className="h-4 w-20 rounded bg-secondary" />
-          <div className="mt-3 h-6 w-36 rounded bg-secondary" />
-          <div className="mt-6 h-16 rounded-md bg-secondary" />
+      <div className="grid gap-4 lg:grid-cols-[minmax(13rem,0.8fr)_minmax(0,2fr)_minmax(16rem,1fr)]">
+        <div className="animate-pulse rounded-xl border border-border bg-card p-4">
+          <div className={cn(block, "h-3 w-20")} />
+          <div className={cn(block, "mt-3 h-5 w-36")} />
+          <div className={cn(block, "mt-5 h-16 rounded-lg")} />
         </div>
-        <div className="animate-pulse space-y-5 border-y border-[#d8dee7] bg-white py-5 dark:border-border dark:bg-card lg:rounded-md lg:border lg:px-5">
-          <div className="h-5 w-2/3 rounded bg-secondary" />
-          <div className="h-28 rounded-md bg-secondary" />
-          <div className="h-28 rounded-md bg-secondary" />
+        <div className="animate-pulse space-y-4 rounded-xl border border-border bg-card p-4">
+          <div className={cn(block, "h-5 w-2/3")} />
+          <div className={cn(block, "h-28 rounded-lg")} />
+          <div className={cn(block, "h-28 rounded-lg")} />
         </div>
-        <div className="animate-pulse border-y border-[#d8dee7] bg-white py-5 dark:border-border dark:bg-card lg:rounded-md lg:border lg:p-5">
-          <div className="h-4 w-16 rounded bg-secondary" />
-          <div className="mt-3 h-6 w-44 rounded bg-secondary" />
-          <div className="mt-5 h-44 rounded-md bg-secondary" />
+        <div className="animate-pulse rounded-xl border border-border bg-card p-4">
+          <div className={cn(block, "h-3 w-16")} />
+          <div className={cn(block, "mt-3 h-5 w-44")} />
+          <div className={cn(block, "mt-5 h-44 rounded-lg")} />
         </div>
       </div>
     </section>
@@ -745,48 +740,47 @@ export function LabWorkspaceSkeleton() {
 function ProjectGrid({ projects, meta }: { projects: ProjectsApiProject[]; meta: ProjectsApiMeta }) {
   if (!projects.length) return <ProjectEmptyState />
   return (
-    <section className="space-y-4">
+    <div className="space-y-3">
       <ProjectSourceLine meta={meta} />
-      <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+      <div className={projectGridClassName}>
         {projects.map((project) => (
           <ProjectProductCard key={project.id} project={project} />
         ))}
       </div>
-    </section>
+    </div>
   )
 }
 
 function SectionHeader({ title, href }: { title: string; href: string }) {
   return (
-    <div className="flex items-center justify-between gap-4">
-      <h2 className="text-xl font-semibold text-[#202124] dark:text-foreground">{title}</h2>
-      <Button asChild variant="outline" size="sm">
-        <Link href={href}>
-          Open
-          <ArrowRight className="size-4" />
-        </Link>
-      </Button>
-    </div>
+    <ProjectSectionHeading
+      title={title}
+      action={
+        <Button asChild variant="ghost" size="sm">
+          <Link href={href}>
+            Open
+            <ArrowRight strokeWidth={1.8} />
+          </Link>
+        </Button>
+      }
+    />
   )
 }
 
 function SimplePanel({ title, subtitle, body, href }: { title: string; subtitle: string; body: string; href?: string }) {
   const content = (
-    <article className="h-full rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm transition-colors hover:border-primary/40 dark:border-border dark:bg-card">
-      <p className="text-xs font-semibold uppercase text-[#667085] dark:text-muted-foreground">{subtitle}</p>
-      <h3 className="mt-2 text-base font-semibold text-[#202124] dark:text-foreground">{title}</h3>
-      <p className="mt-2 line-clamp-3 text-sm leading-6 text-[#4b5563] dark:text-muted-foreground">{body || "No additional text was available from the real Project Radar artifact."}</p>
+    <article className={projectCardClassName}>
+      <p className="text-caption uppercase text-muted-foreground">{subtitle}</p>
+      <h3 className="mt-1 break-words text-[15px] font-semibold text-foreground">{title}</h3>
+      <p className="mt-1 line-clamp-3 text-body2 text-muted-foreground">{body || "No additional text was available from the real Project Radar artifact."}</p>
     </article>
   )
-  return href ? <Link href={href}>{content}</Link> : content
-}
-
-function HeroPill({ label, value }: { label: string; value: string | number }) {
-  return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-[#dbe5dd] bg-white/90 px-3 py-1 text-xs text-[#334155]/70 shadow-sm dark:border-border dark:bg-card dark:text-muted-foreground">
-      <span className="font-medium text-[#334155] dark:text-foreground">{label}</span>
-      {value}
-    </span>
+  return href ? (
+    <Link href={href} className={projectCardLinkClassName}>
+      {content}
+    </Link>
+  ) : (
+    content
   )
 }
 
@@ -841,68 +835,69 @@ function WatchItemCard({ item }: { item: ProjectsApiWatchlistItem }) {
   const signals = recordArray(item.signals)
   const watchTopics = stringArray(item.watch_topics)
   const lastChangeSummary = textValue(item.last_change_summary)
-  const pc = item.priority === "high" ? "text-red-600" : item.priority === "medium" ? "text-amber-600" : "text-[#667085]"
   return (
-    <article className="rounded-md border border-[#d8dee7] bg-white p-4 shadow-sm dark:border-border dark:bg-card">
+    <article className={projectCardClassName}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate font-mono text-xs text-[#667085]">{item.project_id}</p>
-          <p className="mt-1 text-sm font-semibold text-[#202124] dark:text-foreground">{item.watch_reason}</p>
+          <p className="truncate font-mono text-label text-faint-foreground">{item.project_id}</p>
+          <p className="mt-1 break-words text-body2 font-semibold text-foreground">{item.watch_reason}</p>
         </div>
-        <span className={`shrink-0 text-xs font-semibold ${pc}`}>{item.priority}</span>
+        <span className={cn("shrink-0 text-label font-semibold", toneTextClass(levelTone(item.priority)))}>{item.priority}</span>
       </div>
-      <div className="mt-2 flex flex-wrap gap-1">
+      <div className="mt-2 flex flex-wrap gap-1.5">
         <Badge variant={item.status === "active" ? "info" : "muted"}>{item.status}</Badge>
-        {watchTopics.map((t) => <Badge key={t} variant="muted">{t}</Badge>)}
+        {watchTopics.map((topic) => <Badge key={topic} variant="muted">{topic}</Badge>)}
       </div>
-      {lastChangeSummary ? (
-        <p className="mt-2 text-xs text-[#4b5563] dark:text-muted-foreground">{lastChangeSummary}</p>
-      ) : null}
+      {lastChangeSummary ? <p className="mt-2 text-label text-muted-foreground">{lastChangeSummary}</p> : null}
       {signals.length > 0 && (
-        <div className="mt-3 border-t border-[#e5e7eb] pt-3 dark:border-border">
-          <p className="mb-2 text-xs font-semibold text-[#667085]">Signals</p>
-          <div className="space-y-2">
-            {signals.map((signal, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <span className={`mt-1 size-2 shrink-0 rounded-full ${signal.severity === "high" ? "bg-red-500" : signal.severity === "medium" ? "bg-amber-400" : "bg-[#d1d5db]"}`} />
+        <div className="mt-3 border-t border-border pt-3">
+          <p className="mb-2 text-caption uppercase text-muted-foreground">Signals</p>
+          <ul className="space-y-2">
+            {signals.map((signal, index) => (
+              <li key={textValue(signal.id) || index} className="flex items-start gap-2">
+                <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", toneDotClass(levelTone(signal.severity)))} aria-hidden="true" />
                 <div className="min-w-0">
-                  <p className="text-xs font-medium text-[#202124] dark:text-foreground">{textValue(signal.title)}</p>
-                  <p className="text-xs text-[#667085]">{textValue(signal.summary)}</p>
-                  {textValue(signal.source_url) ? <a href={textValue(signal.source_url)} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">source ↗</a> : null}
+                  <p className="text-label font-medium text-foreground">{textValue(signal.title)}</p>
+                  <p className="text-label text-muted-foreground">{textValue(signal.summary)}</p>
+                  {textValue(signal.source_url) ? (
+                    <a href={textValue(signal.source_url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-sm text-label text-link outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+                      source
+                      <ExternalLink size={12} strokeWidth={1.8} aria-hidden="true" />
+                    </a>
+                  ) : null}
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
     </article>
   )
 }
 
-const NODE_COLORS: Record<string, string> = {
-  user_problem: "#0f172a", case: "#2563eb", solution: "#16a34a",
-  question: "#d97706", feedback: "#7c3aed", pattern: "#0891b2", component: "#be185d",
-}
+const labNoticeClassName = "mt-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-body2 text-warning-text"
 
 export function LabWorkflowStatus({ session }: { session: ProjectsLabSession }) {
   const { t } = useI18n()
   const workflow = presentLabWorkflow(session)
+  const tone = workflowTone(workflow.statusTone)
   const stageLabel = workflow.isUnknown ? `${t("projects.lab.unsupportedStageLabel")}: ${session.raw_current_stage ?? "unknown"}` : t(`projects.lab.stage.${session.current_stage}`)
   const actionLabel = workflow.isUnknown ? t("projects.lab.actionsDisabled") : t(`projects.lab.action.${session.next_action}`)
+  const StatusIcon = workflow.statusTone === "success" ? Check : workflow.statusTone === "warning" ? AlertCircle : CircleHelp
   return (
-    <aside className="h-fit border-y border-[#d8dee7] bg-white py-5 dark:border-border dark:bg-card lg:rounded-md lg:border lg:p-5" aria-label={t("projects.lab.workflow")}>
+    <aside className="h-fit min-w-0 rounded-xl border border-border bg-card p-4" aria-label={t("projects.lab.workflow")}>
       <div className="flex items-start gap-3">
-        <span className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full ${workflow.statusTone === "success" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300" : workflow.statusTone === "warning" ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" : "bg-secondary text-muted-foreground"}`}>
-          {workflow.statusTone === "success" ? <Check className="size-4" /> : workflow.statusTone === "warning" ? <AlertCircle className="size-4" /> : <CircleHelp className="size-4" />}
+        <span className={cn("mt-0.5 grid size-9 shrink-0 place-items-center rounded-full", toneSurfaceClass(tone))} aria-hidden="true">
+          <StatusIcon size={16} strokeWidth={1.8} />
         </span>
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#667085] dark:text-muted-foreground">{t("projects.lab.workflow")}</p>
-          <h2 className="mt-1 text-base font-semibold text-[#202124] dark:text-foreground">{stageLabel}</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground" aria-live="polite">{actionLabel}</p>
+          <p className="text-label text-muted-foreground">{t("projects.lab.workflow")}</p>
+          <h2 className="mt-0.5 text-body1 font-semibold text-foreground">{stageLabel}</h2>
+          <p className="mt-1 text-body2 text-muted-foreground" aria-live="polite">{actionLabel}</p>
         </div>
       </div>
-      {workflow.unansweredCount > 0 ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-500/10 dark:text-amber-100">{t("projects.lab.remaining", { count: workflow.unansweredCount, suffix: workflow.unansweredCount === 1 ? "" : "s" })}</p> : null}
-      {workflow.isUnknown ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-500/10 dark:text-amber-100">{t("projects.lab.actionsDisabled")}</p> : null}
+      {workflow.unansweredCount > 0 ? <p className={labNoticeClassName}>{t("projects.lab.remaining", { count: workflow.unansweredCount, suffix: workflow.unansweredCount === 1 ? "" : "s" })}</p> : null}
+      {workflow.isUnknown ? <p className={labNoticeClassName}>{t("projects.lab.actionsDisabled")}</p> : null}
       <span className="sr-only">{session.current_stage}</span>
     </aside>
   )
@@ -925,22 +920,42 @@ export function LabClarificationList({
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const unanswered = new Set(session.unanswered_question_ids)
   const firstUnansweredId = session.questions.find((question) => unanswered.has(question.id))?.id
-  if (!session.questions.length) return <p className="mt-5 text-sm text-muted-foreground">{t("projects.lab.noQuestions")}</p>
+  if (!session.questions.length) return <p className="mt-4 text-body2 text-muted-foreground">{t("projects.lab.noQuestions")}</p>
   return (
-    <div className="mt-5 space-y-3" aria-label={t("projects.lab.questions")}>
+    <div className="mt-4 space-y-2" aria-label={t("projects.lab.questions")}>
       {session.questions.map((question, index) => {
         const answered = !unanswered.has(question.id) || labQuestionAnswered(question.answered_value)
         const draft = drafts[question.id] ?? ""
         const active = !answered && question.id === firstUnansweredId
         return (
-          <div key={question.id} className={`rounded-md border p-4 ${answered ? "border-border bg-secondary/30" : "border-primary/40 bg-card"}`}>
+          <div key={question.id} className={cn("rounded-xl border p-4", answered ? "border-border bg-muted/50" : active ? "border-ring/60 bg-card" : "border-border bg-card")}>
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-muted-foreground">{index + 1}</span>
+              <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full bg-muted text-caption font-semibold text-muted-foreground">{index + 1}</span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-[#202124] dark:text-foreground">{question.question}</p>
-                {answered ? <p className="mt-2 flex items-center gap-1 text-sm text-muted-foreground"><Check className="size-3.5 text-emerald-600" /> {String(question.answered_value ?? t("projects.lab.answer"))}</p> : !active ? <p className="mt-2 text-xs text-muted-foreground">{t("projects.lab.waitingPrevious")}</p> : (
+                <p className="text-body2 font-medium text-foreground">{question.question}</p>
+                {answered ? (
+                  <p className="mt-2 flex items-center gap-1.5 text-body2 text-muted-foreground">
+                    <Check size={14} strokeWidth={1.8} className="text-success-text" aria-hidden="true" />
+                    {String(question.answered_value ?? t("projects.lab.answer"))}
+                  </p>
+                ) : !active ? (
+                  <p className="mt-2 text-label text-muted-foreground">{t("projects.lab.waitingPrevious")}</p>
+                ) : (
                   <div className="mt-3 space-y-2">
-                    {question.options?.length ? <div className="flex flex-wrap gap-2">{question.options.map((option) => <button key={option.value} type="button" className="min-h-11 rounded-md border border-border px-3 text-sm hover:bg-secondary" onClick={() => setDrafts((current) => ({ ...current, [question.id]: option.value }))}>{option.label}</button>)}</div> : null}
+                    {question.options?.length ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {question.options.map((option) => (
+                          <ProjectFilterChip
+                            key={option.value}
+                            active={draft === option.value}
+                            className="min-h-9"
+                            onClick={() => setDrafts((current) => ({ ...current, [question.id]: option.value }))}
+                          >
+                            {option.label}
+                          </ProjectFilterChip>
+                        ))}
+                      </div>
+                    ) : null}
                     <label className="sr-only" htmlFor={`lab-question-${question.id}`}>Answer: {question.question}</label>
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Input
@@ -954,11 +969,11 @@ export function LabClarificationList({
                         aria-describedby={hasError ? `lab-question-${question.id}-error` : undefined}
                         disabled={mutation.isPending}
                       />
-                      <Button type="button" variant="outline" className="min-h-11" disabled={!draft.trim() || mutation.isPending} onClick={() => onAnswer(question.id, draft.trim())}>
-                        {mutation.isPending ? <><Loader2 className="size-4 animate-spin" /> {t("projects.lab.savingAnswer")}</> : t("projects.lab.answer")}
+                      <Button type="button" variant="outline" size="lg" className="shrink-0" disabled={!draft.trim() || mutation.isPending} onClick={() => onAnswer(question.id, draft.trim())}>
+                        {mutation.isPending ? <><Loader2 className="animate-spin" strokeWidth={1.8} /> {t("projects.lab.savingAnswer")}</> : t("projects.lab.answer")}
                       </Button>
                     </div>
-                    {hasError ? <p id={`lab-question-${question.id}-error`} className="text-sm text-destructive" role="alert">{t("projects.lab.answerError")}</p> : null}
+                    {hasError ? <p id={`lab-question-${question.id}-error`} className="text-body2 text-destructive-text" role="alert">{t("projects.lab.answerError")}</p> : null}
                   </div>
                 )}
               </div>
@@ -973,13 +988,13 @@ export function LabClarificationList({
 export function LabContextPanel({ session }: { session: ProjectsLabSession }) {
   const { t } = useI18n()
   return (
-    <aside className="min-w-0 space-y-5 border-y border-[#d8dee7] bg-white py-5 dark:border-border dark:bg-card lg:rounded-md lg:border lg:p-5">
+    <aside className="h-fit min-w-0 space-y-4 rounded-xl border border-border bg-card p-4">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-[#667085] dark:text-muted-foreground">{t("projects.lab.context")}</p>
-        <h2 className="mt-1 text-lg font-semibold text-[#202124] dark:text-foreground">{t("projects.lab.references")}</h2>
+        <p className="text-label text-muted-foreground">{t("projects.lab.context")}</p>
+        <h2 className="mt-0.5 text-body1 font-semibold text-foreground">{t("projects.lab.references")}</h2>
       </div>
-      <div className="rounded-md bg-secondary/40 p-3 text-sm">
-        <p className="font-medium text-[#202124] dark:text-foreground">{t("projects.lab.selectedCases", { count: session.selected_case_ids.length, suffix: session.selected_case_ids.length === 1 ? "" : "s" })}</p>
+      <div className={cn(projectInsetClassName, "text-body2")}>
+        <p className="font-medium text-foreground">{t("projects.lab.selectedCases", { count: session.selected_case_ids.length, suffix: session.selected_case_ids.length === 1 ? "" : "s" })}</p>
         <p className="mt-1 text-muted-foreground">{t("projects.lab.apiOnly")}</p>
       </div>
       <LabGraph sessionId={session.id} graph={session.graph_state} />
@@ -1004,8 +1019,8 @@ export function LabGraph({ sessionId, graph }: { sessionId?: string; graph?: unk
     onSuccess: (result) => { setExplanation(result); setError(null) },
     onError: (cause) => setError(cause instanceof Error ? cause.message : t("projects.lab.explanationFailed")),
   })
-  if (!record) return <p className="text-sm text-muted-foreground">{t("projects.lab.graphUnavailable")}</p>
-  if (!nodes.length) return <p className="text-sm text-muted-foreground">{t("projects.lab.noGraphNodes")}</p>
+  if (!record) return <p className="text-body2 text-muted-foreground">{t("projects.lab.graphUnavailable")}</p>
+  if (!nodes.length) return <p className="text-body2 text-muted-foreground">{t("projects.lab.noGraphNodes")}</p>
   const cx = 200, cy = 120, radius = 90
   const positions: Record<string, { x: number; y: number }> = {}
   nodes.forEach((node, index) => {
@@ -1016,36 +1031,62 @@ export function LabGraph({ sessionId, graph }: { sessionId?: string; graph?: unk
   return (
     <section aria-labelledby="lab-graph-title">
       <div className="flex items-baseline justify-between gap-2">
-        <h3 id="lab-graph-title" className="text-sm font-semibold text-[#202124] dark:text-foreground">{t("projects.lab.graphContext")}</h3>
-        <span className="text-xs text-muted-foreground">{t("projects.lab.graphSummary", { nodes: nodes.length, edges: edges.length })}</span>
+        <h3 id="lab-graph-title" className="text-body2 font-semibold text-foreground">{t("projects.lab.graphContext")}</h3>
+        <span className="text-label text-muted-foreground">{t("projects.lab.graphSummary", { nodes: nodes.length, edges: edges.length })}</span>
       </div>
-      <div className="mt-3 overflow-hidden rounded-md border border-border bg-[#f8fafc] p-2 dark:bg-background">
+      <div className="mt-3 overflow-hidden rounded-lg bg-muted p-2 text-muted-foreground">
         <svg viewBox="0 0 400 240" className="w-full" role="img" aria-label={t("projects.lab.graphAria", { nodes: nodes.length, edges: edges.length })} style={{ maxHeight: 200 }}>
           {edges.map((edge, index) => {
             const source = positions[textValue(edge.source_id)]
             const target = positions[textValue(edge.target_id)]
-            return source && target ? <line key={index} x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke="#cbd5e1" strokeWidth={1.5} /> : null
+            return source && target ? <line key={index} x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={labGraphEdgeColor} strokeWidth={1.5} /> : null
           })}
           {nodes.map((node) => {
             const id = textValue(node.id)
             const position = positions[id]
             if (!position) return null
             const active = focused.includes(id) || selectedNode === id
-            const color = NODE_COLORS[textValue(node.node_type)] ?? "#6b7280"
-            return <g key={id}><circle cx={position.x} cy={position.y} r={active ? 10 : 7} fill={color} opacity={active ? 1 : 0.7} /><text x={position.x} y={position.y + 18} textAnchor="middle" fontSize={8} fill="currentColor">{textValue(node.title).slice(0, 18)}</text></g>
+            return (
+              <g key={id}>
+                <circle cx={position.x} cy={position.y} r={active ? 10 : 7} fill={labNodeColor(textValue(node.node_type))} opacity={active ? 1 : 0.7} />
+                <text x={position.x} y={position.y + 18} textAnchor="middle" fontSize={8} fill="currentColor">{textValue(node.title).slice(0, 18)}</text>
+              </g>
+            )
           })}
         </svg>
       </div>
-      <ol className="mt-3 space-y-2" aria-label={t("projects.lab.graphNodesRelationships")}>
+      <ol className="mt-3 space-y-1" aria-label={t("projects.lab.graphNodesRelationships")}>
         {nodes.map((node) => {
           const id = textValue(node.id)
           const related = edges.filter((edge) => textValue(edge.source_id) === id || textValue(edge.target_id) === id).length
-          return <li key={id} className="flex items-center gap-2 text-sm"><button type="button" className="min-h-11 min-w-0 flex-1 rounded-md border border-transparent px-2 text-left hover:border-border hover:bg-secondary" aria-pressed={selectedNode === id} onClick={() => setSelectedNode(id)}><span className="font-medium text-[#202124] dark:text-foreground">{textValue(node.title) || t("projects.lab.unnamedNode")}</span><span className="ml-2 text-xs text-muted-foreground">{textValue(node.node_type)} · {t("projects.lab.related", { count: related })}</span></button><Button type="button" variant="ghost" size="icon" aria-label={t("projects.lab.explain", { title: textValue(node.title) })} disabled={explain.isPending} onClick={() => explain.mutate(id)}><Info className="size-4" /></Button></li>
+          return (
+            <li key={id} className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-start text-body2 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-3 focus-visible:ring-ring/50 aria-pressed:bg-accent"
+                aria-pressed={selectedNode === id}
+                onClick={() => setSelectedNode(id)}
+              >
+                <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: labNodeColor(textValue(node.node_type)) }} aria-hidden="true" />
+                <span className="min-w-0 truncate font-medium text-foreground">{textValue(node.title) || t("projects.lab.unnamedNode")}</span>
+                <span className="shrink-0 text-label text-muted-foreground">{textValue(node.node_type)} · {t("projects.lab.related", { count: related })}</span>
+              </button>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label={t("projects.lab.explain", { title: textValue(node.title) })} disabled={explain.isPending} onClick={() => explain.mutate(id)}>
+                <Info strokeWidth={1.8} />
+              </Button>
+            </li>
+          )
         })}
       </ol>
-      {explain.isPending ? <p className="mt-3 text-sm text-muted-foreground" aria-live="polite">{t("projects.lab.loadingExplanation")}</p> : null}
-      {error ? <p className="mt-3 text-sm text-destructive" role="alert">{error}</p> : null}
-      {explanation ? <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-3" aria-live="polite"><p className="text-sm font-semibold text-[#202124] dark:text-foreground">{explanation.title}</p><p className="mt-1 text-sm leading-6 text-muted-foreground">{explanation.explanation}</p>{explanation.related_nodes.length ? <p className="mt-2 text-xs text-muted-foreground">{explanation.related_nodes.length} related node{explanation.related_nodes.length === 1 ? "" : "s"}</p> : null}</div> : null}
+      {explain.isPending ? <p className="mt-3 text-body2 text-muted-foreground" aria-live="polite">{t("projects.lab.loadingExplanation")}</p> : null}
+      {error ? <p className="mt-3 text-body2 text-destructive-text" role="alert">{error}</p> : null}
+      {explanation ? (
+        <div className="mt-3 rounded-lg border border-link/30 bg-link/10 p-3" aria-live="polite">
+          <p className="text-body2 font-semibold text-foreground">{explanation.title}</p>
+          <p className="mt-1 text-body2 text-muted-foreground">{explanation.explanation}</p>
+          {explanation.related_nodes.length ? <p className="mt-2 text-label text-muted-foreground">{explanation.related_nodes.length} related node{explanation.related_nodes.length === 1 ? "" : "s"}</p> : null}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -1070,11 +1111,54 @@ export function LabSolutionPanel({ session, solution }: { session: ProjectsLabSe
   const evidenceKeys = ["case_ids", "project_ids", "data_policy", "review_notes"]
   return (
     <section className="mt-5 border-t border-border pt-5" aria-labelledby="lab-solution-title">
-      <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#667085] dark:text-muted-foreground">{t("projects.lab.output")}</p><h2 id="lab-solution-title" className="mt-1 text-lg font-semibold text-[#202124] dark:text-foreground">{t("projects.lab.generatedSolution")}</h2></div><Button asChild variant="outline" size="sm"><Link href={`/projects/lab/${encodeURIComponent(session.id)}`}>{t("projects.lab.openSessionDetail")} <ExternalLink className="size-3.5" /></Link></Button></div>
-      <Tabs defaultValue="summary" className="mt-4"><TabsList className="max-w-full overflow-x-auto"><TabsTrigger value="summary">{t("projects.lab.summary")}</TabsTrigger><TabsTrigger value="structured">{t("projects.lab.structured")}</TabsTrigger><TabsTrigger value="evidence">{t("projects.lab.evidence")}</TabsTrigger></TabsList>
-        <TabsContent value="summary"><div className="rounded-md border border-border bg-secondary/30 p-4"><p className="whitespace-pre-wrap text-sm leading-7 text-[#334155] dark:text-muted-foreground">{summaryText}</p>{textValue(evidence?.module) ? <p className="mt-3 text-sm font-medium text-[#334155] dark:text-foreground">Module: {textValue(evidence?.module)}</p> : null}<p className="mt-3 text-xs text-muted-foreground">Structured fields: {structuredKeys.length ? structuredKeys.join(", ") : "Unavailable"}</p></div></TabsContent>
-        <TabsContent value="structured"><div className="relative"><pre className="max-h-80 overflow-auto rounded-md bg-[#111827] p-4 pr-14 text-xs leading-5 text-white">{JSON.stringify(structured, null, 2)}</pre><Button type="button" variant="secondary" size="icon" className="absolute right-2 top-2" aria-label={t("projects.lab.copyStructured")} title={t("projects.lab.copyStructured")} onClick={copyStructured}><Clipboard className="size-4" /></Button></div><p className="mt-2 text-xs text-muted-foreground" aria-live="polite">{copyState === "success" ? t("projects.lab.copySuccess") : copyState === "error" ? t("projects.lab.copyError") : t("projects.lab.copyHint")}</p></TabsContent>
-        <TabsContent value="evidence"><dl className="grid gap-2 sm:grid-cols-2">{evidenceKeys.map((key) => <div key={key} className="rounded-md border border-border bg-secondary/30 p-3"><dt className="text-xs font-semibold uppercase text-muted-foreground">{key.replaceAll("_", " ")}</dt><dd className="mt-1 break-words text-sm text-[#334155] dark:text-foreground">{evidence?.[key] === undefined ? "Unavailable from the API response." : Array.isArray(evidence[key]) ? evidence[key].join(", ") : String(evidence[key])}</dd></div>)}</dl></TabsContent>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-label text-muted-foreground">{t("projects.lab.output")}</p>
+          <h2 id="lab-solution-title" className="mt-0.5 text-body1 font-semibold text-foreground">{t("projects.lab.generatedSolution")}</h2>
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link href={`/projects/lab/${encodeURIComponent(session.id)}`}>
+            {t("projects.lab.openSessionDetail")}
+            <ExternalLink strokeWidth={1.8} />
+          </Link>
+        </Button>
+      </div>
+      <Tabs defaultValue="summary" className="mt-4">
+        <TabsList className="max-w-full overflow-x-auto">
+          <TabsTrigger value="summary">{t("projects.lab.summary")}</TabsTrigger>
+          <TabsTrigger value="structured">{t("projects.lab.structured")}</TabsTrigger>
+          <TabsTrigger value="evidence">{t("projects.lab.evidence")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="summary">
+          <div className="rounded-xl border border-border bg-muted/50 p-4">
+            <p className="whitespace-pre-wrap text-body2 text-foreground">{summaryText}</p>
+            {textValue(evidence?.module) ? <p className="mt-3 text-body2 font-medium text-foreground">Module: {textValue(evidence?.module)}</p> : null}
+            <p className="mt-3 text-label text-muted-foreground">Structured fields: {structuredKeys.length ? structuredKeys.join(", ") : "Unavailable"}</p>
+          </div>
+        </TabsContent>
+        <TabsContent value="structured">
+          <div className="relative">
+            <ProjectCodeBlock className="max-h-80 pe-14">{JSON.stringify(structured, null, 2)}</ProjectCodeBlock>
+            <Button type="button" variant="outline" size="icon-sm" className="absolute end-2 top-2 bg-background" aria-label={t("projects.lab.copyStructured")} title={t("projects.lab.copyStructured")} onClick={copyStructured}>
+              <Clipboard strokeWidth={1.8} />
+            </Button>
+          </div>
+          <p className="mt-2 text-label text-muted-foreground" aria-live="polite">
+            {copyState === "success" ? t("projects.lab.copySuccess") : copyState === "error" ? t("projects.lab.copyError") : t("projects.lab.copyHint")}
+          </p>
+        </TabsContent>
+        <TabsContent value="evidence">
+          <dl className="grid gap-2 sm:grid-cols-2">
+            {evidenceKeys.map((key) => (
+              <div key={key} className={projectInsetClassName}>
+                <dt className="text-caption uppercase text-muted-foreground">{key.replaceAll("_", " ")}</dt>
+                <dd className="mt-1 break-words text-body2 text-foreground">
+                  {evidence?.[key] === undefined ? "Unavailable from the API response." : Array.isArray(evidence[key]) ? evidence[key].join(", ") : String(evidence[key])}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </TabsContent>
       </Tabs>
     </section>
   )

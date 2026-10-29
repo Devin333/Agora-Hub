@@ -10,14 +10,14 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: "o
 const origin = "http://localhost:3000"
 const post = (body: unknown, requestOrigin = origin) => new NextRequest(`${origin}/api/research/search`, { method: "POST", headers: { Origin: requestOrigin }, body: JSON.stringify(body) })
 const result = { source: "papers", results: [{ id: "paper-1", kind: "papers", title: "Paper", description: "Source-backed abstract", source: "arXiv", url: "https://arxiv.org/abs/2605.22343", href: "/design-demo/papers/paper-1/read" }], total: 1, moreHref: "/design-demo/papers?q=agent&has=code" }
-const envKeys = ["NEWSROOM_DEPLOYMENT_PROFILE", "NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", "NEWSROOM_CANONICAL_ORIGIN", "NEWSROOM_DESKTOP_CANONICAL_ORIGIN"] as const
+const envKeys = ["NEWSROOM_DEPLOYMENT_PROFILE", "NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE", "NEWSROOM_PUBLIC_ORIGIN", "NEWSROOM_ALLOW_INSECURE_ORIGIN"] as const
 const originalEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]))
 beforeEach(() => {
   vi.resetAllMocks()
   process.env.NEWSROOM_DEPLOYMENT_PROFILE = "default"
   delete process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
-  delete process.env.NEWSROOM_CANONICAL_ORIGIN
-  delete process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN
+  delete process.env.NEWSROOM_PUBLIC_ORIGIN
+  delete process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN
 })
 afterEach(() => {
   for (const key of envKeys) {
@@ -33,9 +33,10 @@ it("rejects foreign origin and oversized bodies without contacting the service",
   expect(safeApiPost).not.toHaveBeenCalled()
 })
 
-it("forwards the server-owned canonical Origin for local-desktop research mutations", async () => {
-  process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-  process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
+it("forwards the configured public Origin for hosted research mutations", async () => {
+  process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
+  process.env.NEWSROOM_PUBLIC_ORIGIN = "http://127.0.0.1:3120"
+  process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN = "1"
   vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: result })
   vi.mocked(cachedReaderReady).mockReturnValue(false)
   const request = new NextRequest("http://localhost:3120/api/research/search", {

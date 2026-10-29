@@ -1,5 +1,6 @@
 import { Suspense } from "react"
 import { LoginForm } from "@/app/login/login-form"
+import { AuthFrame, authFrameLayout } from "@/components/auth/auth-frame"
 import { defaultPostLoginPath } from "@/lib/frontend-surface"
 
 export const dynamic = "force-dynamic"
@@ -16,12 +17,10 @@ export default function LoginPage() {
 
 function LoginShell() {
   return (
-    <main className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4 py-12">
-      <section className="w-full max-w-md rounded-md border border-border bg-card p-6 shadow-sm">
-        <div className="h-6 w-40 rounded-sm bg-secondary" />
-        <div className="mt-6 h-10 rounded-md bg-secondary" />
-        <div className="mt-4 h-10 rounded-md bg-secondary" />
-      </section>
-    </main>
+    <AuthFrame title={<span className="inline-block h-10 w-64 rounded-xl bg-muted" />} layout={authFrameLayout()}>
+      <div className="h-12 w-full rounded-xl bg-muted" />
+      <div className="mt-4 h-12 w-full rounded-xl bg-muted" />
+      <div className="mt-6 h-12 w-full rounded-xl bg-muted" />
+    </AuthFrame>
   )
 }

@@ -97,88 +97,88 @@ export function PaperDetailContent({
   return (
     <>
       {detailError ? (
-        <div role="alert" className="mb-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+        <div role="alert" className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-body2 text-destructive-text">
           {detailError}
         </div>
       ) : null}
       <header>
         {titleLevel === 1 ? (
-          <h1 className="max-w-5xl text-balance text-4xl font-black leading-tight text-[#334155] dark:text-foreground sm:text-5xl lg:text-6xl">
+          <h1 className="max-w-5xl text-balance text-heading1 font-semibold text-foreground sm:text-4xl sm:leading-tight">
             {title}
           </h1>
         ) : (
-          <h2 className="max-w-4xl text-3xl font-black leading-tight text-[#334155] dark:text-foreground sm:text-4xl">
+          <h2 className="max-w-4xl text-balance text-heading1 font-semibold text-foreground">
             {title}
           </h2>
         )}
-        <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-[#334155]/55 dark:text-muted-foreground">
+        <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-body2 text-muted-foreground">
           <span>{paper.venue ?? translate(locale, "papers.reader.paper")}</span>
-          <span aria-hidden="true">/</span>
+          <span aria-hidden="true" className="text-faint-foreground">/</span>
           <span>{formatPaperDate(paper.publishedAt, locale)}</span>
           {typeof citationCount === "number" ? (
             <>
-              <span aria-hidden="true">/</span>
+              <span aria-hidden="true" className="text-faint-foreground">/</span>
               <span className="inline-flex items-center gap-1">
-                <Quote className="size-4" />
+                <Quote className="size-4" strokeWidth={1.8} aria-hidden="true" />
                 {formatCompactNumber(citationCount)} {translate(locale, "papers.reader.openAlexCitations")}
               </span>
             </>
           ) : null}
         </div>
-        <p className="mt-5 border-t border-[#d8dfd8] pt-5 text-base leading-7 text-[#334155] dark:border-border dark:text-foreground">
+        <p className="mt-4 border-t pt-4 text-body1 text-foreground">
           {authors.join(", ")}
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           {paper.userState?.favorite ? (
-            <Badge variant="accent" className="rounded-sm">
-              <Heart className="mr-1 size-3 fill-current" />
+            <Badge variant="accent">
+              <Heart className="fill-current" aria-hidden="true" />
               {translate(locale, "papers.reader.favorite")}
             </Badge>
           ) : null}
           {paper.userState?.subscribed ? (
-            <Badge variant="muted" className="rounded-sm">
-              <Bell className="mr-1 size-3" />
+            <Badge variant="muted">
+              <Bell aria-hidden="true" />
               {translate(locale, "papers.reader.subscribed")}
             </Badge>
           ) : null}
           {pdfHref ? (
-            <Button asChild variant="outline" className="rounded-md bg-white dark:bg-card">
+            <Button asChild variant="outline" size="lg">
               <a href={pdfHref} target="_blank" rel="noreferrer">
-                <FileText className="size-4" />
+                <FileText className="size-4" strokeWidth={1.8} aria-hidden="true" />
                 {translate(locale, "papers.reader.viewPdf")}
               </a>
             </Button>
           ) : null}
           {arxivHref ? (
-            <Button asChild variant="outline" className="rounded-md bg-white dark:bg-card">
+            <Button asChild variant="outline" size="lg">
               <a href={arxivHref} target="_blank" rel="noreferrer">
-                <ExternalLink className="size-4" />
+                <ExternalLink className="size-4" strokeWidth={1.8} aria-hidden="true" />
                 {translate(locale, "papers.reader.arxivPage")}
               </a>
             </Button>
           ) : null}
           {repoHref ? (
-            <Button asChild variant="outline" className="rounded-md bg-white dark:bg-card">
+            <Button asChild variant="outline" size="lg">
               <a href={repoHref} target="_blank" rel="noreferrer">
-                <Github className="size-4" />
+                <Github className="size-4" strokeWidth={1.8} aria-hidden="true" />
                 {translate(locale, "papers.reader.code")}
                 {typeof paper.githubStars === "number" ? (
-                  <span className="text-[#334155]/55">/ {formatCompactNumber(paper.githubStars)} {translate(locale, "papers.reader.stars")}</span>
+                  <span className="tabular-nums text-muted-foreground">/ {formatCompactNumber(paper.githubStars)} {translate(locale, "papers.reader.stars")}</span>
                 ) : null}
               </a>
             </Button>
           ) : null}
           {projectHref ? (
-            <Button asChild variant="outline" className="rounded-md bg-white dark:bg-card">
+            <Button asChild variant="outline" size="lg">
               <a href={projectHref} target="_blank" rel="noreferrer">
-                <Globe2 className="size-4" />
+                <Globe2 className="size-4" strokeWidth={1.8} aria-hidden="true" />
                 {translate(locale, "papers.reader.projectPage")}
               </a>
             </Button>
           ) : null}
-          <Button asChild className="rounded-md">
+          <Button asChild size="lg">
             <Link href={paperReaderHref(paper.slug || paper.id, returnTo)} onClick={() => { if (returnTo) rememberPaperScroll(returnTo) }}>
-              <BookOpen className="size-4" />
+              <BookOpen className="size-4" strokeWidth={1.8} aria-hidden="true" />
               {translate(locale, "papers.reader.openReader")}
             </Link>
           </Button>
@@ -200,28 +200,28 @@ export function PaperDetailContent({
       </DetailSection>
 
       <DetailSection title={translate(locale, "papers.reader.abstract")}>
-        <p className="max-w-5xl text-base leading-8 text-[#334155]/74 dark:text-muted-foreground">
+        <p className="max-w-5xl font-serif text-body1 leading-7 text-foreground/85">
           {paperSnippet(paper, locale)}
         </p>
       </DetailSection>
 
       <DetailSection title={translate(locale, "papers.reader.implementations")} meta={translate(locale, "papers.reader.repositories", { count: implementations.length })}>
         {implementations.length ? (
-          <div className="divide-y divide-[#d8dfd8] rounded-md border border-[#d8dfd8] bg-white dark:divide-border dark:border-border dark:bg-card">
+          <div className="divide-y overflow-hidden rounded-xl border">
             {implementations.map((implementation) => (
               <a
                 key={implementation.id}
                 href={implementation.repoUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-[#334155] transition-colors hover:bg-[#eef4ef] dark:text-foreground dark:hover:bg-secondary"
+                className="flex items-center justify-between gap-4 px-4 py-3 text-body2 text-foreground outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40"
               >
                 <span className="inline-flex min-w-0 items-center gap-2">
-                  <Github className="size-4 shrink-0" />
-                  <span className="truncate font-semibold">{implementation.name}</span>
+                  <Github className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} aria-hidden="true" />
+                  <span className="truncate font-medium">{implementation.name}</span>
                 </span>
                 {typeof implementation.githubStars === "number" ? (
-                  <span className="shrink-0 text-[#334155]/58">{formatCompactNumber(implementation.githubStars)} {translate(locale, "papers.reader.stars")}</span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{formatCompactNumber(implementation.githubStars)} {translate(locale, "papers.reader.stars")}</span>
                 ) : null}
               </a>
             ))}
@@ -257,7 +257,7 @@ export function PaperDetailContent({
 
       <DetailSection title="Benchmarks / SOTA" meta={translate(locale, "papers.reader.results", { count: benchmarks.length })}>
         {benchmarks.length ? (
-          <div className="divide-y divide-[#d8dfd8] rounded-md border border-[#d8dfd8] bg-white dark:divide-border dark:border-border dark:bg-card">
+          <div className="divide-y overflow-hidden rounded-xl border">
             {benchmarks.map((benchmark, index) => (
               <BenchmarkResultRow key={benchmarkResultKey(benchmark, index)} benchmark={benchmark} locale={locale} />
             ))}
@@ -339,10 +339,10 @@ function AISummaryBlock({
 }) {
   if (summary) {
     return (
-      <div className="space-y-4 border-l-4 border-[#315d8a] bg-white px-5 py-4 text-base leading-7 text-[#334155] shadow-sm dark:bg-card dark:text-foreground">
+      <div className="space-y-4 rounded-[20px] bg-muted px-[18px] py-3 text-body1 text-foreground">
         <p>{summary.summary}</p>
         {summary.keyInsights.length ? (
-          <ul className="list-disc space-y-1 pl-5 text-sm leading-6 text-[#334155]/72 dark:text-muted-foreground">
+          <ul className="list-disc space-y-1 pl-5 text-body2 text-muted-foreground">
             {summary.keyInsights.map((insight) => (
               <li key={insight}>{insight}</li>
             ))}
@@ -350,8 +350,8 @@ function AISummaryBlock({
         ) : null}
         {summary.contributions?.length ? (
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/52">{translate(locale, "papers.reader.contributions")}</h4>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-[#334155]/72 dark:text-muted-foreground">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">{translate(locale, "papers.reader.contributions")}</h4>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-body2 text-muted-foreground">
               {summary.contributions.map((contribution) => (
                 <li key={contribution}>{contribution}</li>
               ))}
@@ -363,20 +363,20 @@ function AISummaryBlock({
   }
   if (status === "loading" || status === "idle") {
     return (
-      <div className="flex items-center gap-3 rounded-md border border-[#d8dfd8] bg-white px-4 py-4 text-sm text-[#334155]/68 dark:border-border dark:bg-card dark:text-muted-foreground">
-        <Brain className="size-4 animate-pulse" />
+      <div role="status" className="flex items-center gap-3 rounded-xl border px-4 py-3 text-body2 text-muted-foreground">
+        <Brain className="size-4 animate-pulse" strokeWidth={1.8} aria-hidden="true" />
         {translate(locale, "papers.reader.generatingSummary")}
       </div>
     )
   }
   return (
-    <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+    <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-body2 text-foreground">
       <p>{translate(locale, "papers.reader.summaryUnavailable")}</p>
-      {error ? <p className="mt-1 font-mono text-xs">{error}</p> : null}
-      <button type="button" className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white/70 px-3 py-1 text-xs font-semibold" onClick={onRetry}>
-        <RefreshCw className="size-4" />
+      {error ? <p className="mt-1 font-mono text-label text-muted-foreground">{error}</p> : null}
+      <Button type="button" variant="outline" size="sm" className="mt-3 rounded-full" onClick={onRetry}>
+        <RefreshCw className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
         {translate(locale, "common.retry")}
-      </button>
+      </Button>
     </div>
   )
 }
@@ -397,14 +397,14 @@ function BenchmarkResultRow({ benchmark, locale }: { benchmark: PaperBenchmarkRe
   const content = (
     <>
       <span className="min-w-0">
-        <span className="block truncate font-semibold">{benchmark.name}</span>
+        <span className="block truncate font-medium">{benchmark.name}</span>
         {benchmark.category ? (
-          <span className="mt-1 inline-flex rounded-sm border border-[#d8dfd8] bg-[#eef4ef] px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#334155]/64 dark:border-border dark:bg-secondary dark:text-muted-foreground">
+          <span className="mt-1 inline-flex h-5 items-center rounded-full bg-muted px-2 text-caption font-medium uppercase tracking-wider text-muted-foreground">
             {benchmarkCategoryLabel(benchmark.category, locale) ?? benchmark.category}
           </span>
         ) : null}
       </span>
-      <span className="shrink-0 text-[#334155]/58">
+      <span className="shrink-0 tabular-nums text-muted-foreground">
         {resultText}
       </span>
     </>
@@ -416,7 +416,7 @@ function BenchmarkResultRow({ benchmark, locale }: { benchmark: PaperBenchmarkRe
         href={benchmark.url}
         target="_blank"
         rel="noreferrer"
-        className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-[#334155] transition-colors hover:bg-[#eef4ef] dark:text-foreground dark:hover:bg-secondary"
+        className="flex items-center justify-between gap-4 px-4 py-3 text-body2 text-foreground outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40"
       >
         {content}
       </a>
@@ -424,7 +424,7 @@ function BenchmarkResultRow({ benchmark, locale }: { benchmark: PaperBenchmarkRe
   }
 
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-[#334155] dark:text-foreground">
+    <div className="flex items-center justify-between gap-4 px-4 py-3 text-body2 text-foreground">
       {content}
     </div>
   )
@@ -441,16 +441,16 @@ function TaxonomyLinks({
     return <EmptyState text={empty} />
   }
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1.5">
       {items.map((item) => (
         <Link
           key={item.id}
           href={item.href}
           className={cn(
-            "inline-flex items-center rounded-sm border px-2.5 py-1 text-xs font-semibold transition-colors",
+            "inline-flex h-7 items-center rounded-full px-2.5 text-label font-medium outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
             item.variant === "task"
-              ? "border-emerald-200 bg-emerald-100/80 text-emerald-800 hover:bg-emerald-100"
-              : "border-[#d8dfd8] bg-white text-[#334155] hover:bg-[#eef4ef] dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-secondary"
+              ? "bg-success/15 text-success-text hover:bg-success/25"
+              : "bg-link/15 text-link hover:bg-link/25"
           )}
         >
           {item.label}
@@ -472,15 +472,15 @@ function RelatedSourceList({
   }
 
   return (
-    <div className="divide-y divide-[#d8dfd8] rounded-md border border-[#d8dfd8] bg-white dark:divide-border dark:border-border dark:bg-card">
+    <div className="divide-y overflow-hidden rounded-xl border">
       {items.map((item) => {
         const content = (
           <>
             <span className="min-w-0">
-              <span className="block line-clamp-2 font-semibold">{item.title}</span>
-              <span className="mt-1 block truncate text-xs text-[#334155]/58 dark:text-muted-foreground">{item.meta}</span>
+              <span className="block line-clamp-2 font-medium">{item.title}</span>
+              <span className="mt-0.5 block truncate text-label text-muted-foreground">{item.meta}</span>
             </span>
-            <ExternalLink className="size-4 shrink-0 text-[#334155]/45 dark:text-muted-foreground" />
+            <ExternalLink className="size-4 shrink-0 text-faint-foreground" strokeWidth={1.8} aria-hidden="true" />
           </>
         )
 
@@ -490,12 +490,12 @@ function RelatedSourceList({
             href={item.url}
             target="_blank"
             rel="noreferrer"
-            className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-[#334155] transition-colors hover:bg-[#eef4ef] dark:text-foreground dark:hover:bg-secondary"
+            className="flex items-center justify-between gap-4 px-4 py-3 text-body2 text-foreground outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40"
           >
             {content}
           </a>
         ) : (
-          <div key={item.id} className="flex items-center justify-between gap-4 px-4 py-3 text-sm text-[#334155] dark:text-foreground">
+          <div key={item.id} className="flex items-center justify-between gap-4 px-4 py-3 text-body2 text-foreground">
             {content}
           </div>
         )
@@ -516,7 +516,7 @@ function isCommunitySourceRef(source: PaperSourceRef) {
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="rounded-md border border-dashed border-[#d8dfd8] px-4 py-5 text-sm text-[#334155]/58 dark:border-border dark:text-muted-foreground">
+    <div className="text-body2 text-muted-foreground">
       {text}
     </div>
   )
@@ -524,9 +524,9 @@ function EmptyState({ text }: { text: string }) {
 
 function MetricPill({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-[#d8dfd8] bg-white px-3 py-1.5 dark:border-border dark:bg-card">
+    <span className="inline-flex h-8 items-center gap-2 rounded-full border px-3">
       {icon}
-      <span className="font-semibold text-[#334155] dark:text-foreground">{value}</span>
+      <span className="font-semibold tabular-nums text-foreground">{value}</span>
       <span>{label}</span>
     </span>
   )
@@ -538,7 +538,7 @@ function MetricPills({ paper, citationCount, locale }: { paper: Paper; citationC
     typeof paper.newsroomHeatScore === "number"
       ? {
           key: "heat",
-          icon: <ThermometerSun className="size-4" />,
+          icon: <ThermometerSun className="size-4" strokeWidth={1.8} aria-hidden="true" />,
           label: translate(locale, "papers.reader.newsroomHeat"),
           value: paper.newsroomHeatScore.toFixed(1)
         }
@@ -546,7 +546,7 @@ function MetricPills({ paper, citationCount, locale }: { paper: Paper; citationC
     typeof paper.githubStars === "number"
       ? {
           key: "stars",
-          icon: <Github className="size-4" />,
+          icon: <Github className="size-4" strokeWidth={1.8} aria-hidden="true" />,
           label: translate(locale, "papers.reader.githubStars"),
           value: formatCompactNumber(paper.githubStars)
         }
@@ -554,7 +554,7 @@ function MetricPills({ paper, citationCount, locale }: { paper: Paper; citationC
     typeof citationCount === "number"
       ? {
           key: "citations",
-          icon: <Quote className="size-4" />,
+          icon: <Quote className="size-4" strokeWidth={1.8} aria-hidden="true" />,
           label: translate(locale, "papers.reader.openAlexCitations"),
           value: formatCompactNumber(citationCount)
         }
@@ -567,7 +567,7 @@ function MetricPills({ paper, citationCount, locale }: { paper: Paper; citationC
   }
 
   return (
-    <div className="flex flex-wrap gap-3 text-sm text-[#334155]/72 dark:text-muted-foreground">
+    <div className="flex flex-wrap gap-2 text-body2 text-muted-foreground">
       {visibleMetrics.map((metric) => (
         <MetricPill key={metric.key} icon={metric.icon} label={metric.label} value={metric.value} />
       ))}
@@ -585,10 +585,10 @@ function DetailSection({
   children: ReactNode
 }) {
   return (
-    <section className="mt-9">
-      <div className="mb-4 flex items-center justify-between border-b border-[#d8dfd8] pb-3 dark:border-border">
-        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-[#334155]/55">{title}</h3>
-        {meta ? <span className="text-xs italic text-[#334155]/52 dark:text-muted-foreground">{meta}</span> : null}
+    <section className="mt-8">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">{title}</h3>
+        {meta ? <span className="text-label text-faint-foreground">{meta}</span> : null}
       </div>
       {children}
     </section>

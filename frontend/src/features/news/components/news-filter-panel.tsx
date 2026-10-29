@@ -1,4 +1,8 @@
+import { NativeSelect, NativeSelectOption } from "@/components/common/native-select"
+import { Button } from "@/components/ui/button"
 import type { NewsFilterOptions, NewsFilters } from "@/types/news"
+
+const captionClass = "mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-faint-foreground"
 
 export function NewsFilterPanel({
   filters,
@@ -10,11 +14,14 @@ export function NewsFilterPanel({
   onChange: (patch: Partial<NewsFilters>) => void
 }) {
   return (
-    <aside className="rounded-md border border-[#dbe3dc] bg-white/85 p-4 dark:border-border dark:bg-card">
+    <aside aria-label="News filters" className="rounded-2xl border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-[#334155] dark:text-foreground">Filters</h2>
-        <button
+        <h2 className="text-[15px] font-semibold text-foreground">Filters</h2>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-[12px]"
           onClick={() =>
             onChange({
               dateRange: undefined,
@@ -27,13 +34,12 @@ export function NewsFilterPanel({
               reportStatus: "all",
             })
           }
-          className="text-xs font-medium text-emerald-700 hover:text-[#334155] dark:text-accent dark:hover:text-foreground"
         >
           Reset
-        </button>
+        </Button>
       </div>
 
-      <div className="mt-4 space-y-5">
+      <div className="mt-3 grid gap-5 sm:grid-cols-2">
         <SelectBlock
           label="Period"
           value={filters.dateRange ?? ""}
@@ -102,22 +108,22 @@ function CheckboxBlock<T extends string>({
   formatValue?: (value: T) => string
 }) {
   return (
-    <div>
-      <p className="mb-2 text-xs font-medium uppercase text-[#334155]/55 dark:text-muted-foreground">{label}</p>
-      <div className="space-y-2">
+    <fieldset>
+      <legend className={captionClass}>{label}</legend>
+      <div className="space-y-1">
         {values.map((value) => (
-          <label key={value} className="flex items-center gap-2 text-sm text-[#334155]/68 dark:text-muted-foreground">
+          <label key={value} className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1 text-body2 text-foreground/85 hover:bg-accent/40">
             <input
               type="checkbox"
               checked={selected.includes(value)}
               onChange={() => onToggle(value)}
-              className="h-4 w-4 rounded border-[#dbe3dc] bg-white accent-emerald-700 dark:border-border dark:bg-background"
+              className="size-4 rounded border-input accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
             />
             <span>{formatValue(value)}</span>
           </label>
         ))}
       </div>
-    </div>
+    </fieldset>
   )
 }
 
@@ -134,18 +140,14 @@ function SelectBlock({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-medium uppercase text-[#334155]/55 dark:text-muted-foreground">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-[#dbe3dc] bg-white px-3 text-sm text-[#334155] outline-none dark:border-border dark:bg-background dark:text-foreground"
-      >
+      <span className={captionClass}>{label}</span>
+      <NativeSelect className="w-full" value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map(([optionValue, labelText]) => (
-          <option key={optionValue} value={optionValue}>
+          <NativeSelectOption key={optionValue} value={optionValue}>
             {labelText}
-          </option>
+          </NativeSelectOption>
         ))}
-      </select>
+      </NativeSelect>
     </label>
   )
 }
@@ -163,12 +165,12 @@ function TextBlock({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-medium uppercase text-[#334155]/55 dark:text-muted-foreground">{label}</span>
+      <span className={captionClass}>{label}</span>
       <input
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-md border border-[#dbe3dc] bg-white px-3 text-sm text-[#334155] outline-none placeholder:text-[#334155]/40 dark:border-border dark:bg-background dark:text-foreground"
+        className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-[13px] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
       />
     </label>
   )

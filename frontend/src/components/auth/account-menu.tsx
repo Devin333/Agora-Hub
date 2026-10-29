@@ -48,12 +48,12 @@ export function AccountMenu() {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="hidden max-w-32 truncate text-xs font-medium text-muted-foreground sm:inline-flex">
-        <UserCircle className="mr-1 size-4" />
+      <span className="hidden max-w-32 items-center gap-1.5 truncate text-label font-medium text-muted-foreground sm:inline-flex">
+        <UserCircle size={15} strokeWidth={1.8} />
         {user.username}
       </span>
-      <Button type="button" variant="ghost" size="icon" aria-label={t("auth.signOut")} disabled={loading} onClick={signOut}>
-        <LogOut className="size-4" />
+      <Button type="button" variant="ghost" size="icon-sm" className="rounded-full" aria-label={t("auth.signOut")} disabled={loading} onClick={signOut}>
+        <LogOut size={15} strokeWidth={1.8} />
       </Button>
     </div>
   )

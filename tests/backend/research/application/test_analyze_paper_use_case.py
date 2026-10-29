@@ -233,3 +233,81 @@ def test_missing_evidence_halts_after_replan_budget_is_exhausted() -> None:
         if failure["gate"] == "ClaimEvidenceGate"
     )
     assert failure["details"]["harness_gate"]["reference"] == "ClaimEvidenceGate@1"
+
+
+class _NoLiveSource:
+    """An arXiv fallback that fails the test if an imported paper reaches it."""
+
+    def fetch_paper(self, source_url):
+        raise AssertionError(f"imported paper must not be fetched live: {source_url}")
+
+    def fetch_source_record(self, paper_id):
+        raise AssertionError(f"imported paper must not be fetched live: {paper_id}")
+
+
+class _CompilerThatMustNotRun:
+    def compile(self, source):
+        raise AssertionError("a bound parsed document must not be compiled again")
+
+
+class _ActorScopedDocuments:
+    def __init__(self, document) -> None:
+        self.document = document
+
+    def get(self, paper_id, *, actor_scope=None):
+        scope = dict(actor_scope or {})
+        if paper_id != self.document.paper_id or scope.get("user_id") != self.document.actor_scope["user_id"]:
+            return None
+        return self.document
+
+
+def test_imported_paper_is_analyzed_from_its_bound_document_without_a_live_fetch() -> None:
+    from infrastructure.research.source_provider import CatalogBoundResearchSourceProvider
+
+    # The import pipeline's parsed document: its lineage holds the parser's
+    # paper:// reference and the import's own local locator, and it keeps the
+    # parse quality report that was enforced at import time.
+    imported = FakeResearchDocumentCompiler().compile(
+        FakeResearchSourceProvider().fetch_source_record("paper-harness-001")
+    )
+    import_locator = "source://local/imp_" + "d" * 64 + ".pdf"
+    document = imported.model_copy(
+        update={
+            "source_hash": "d" * 64,
+            "lineage": imported.lineage.model_copy(
+                update={
+                    "source_refs": [*imported.lineage.source_refs, import_locator],
+                    "source_hash": "d" * 64,
+                }
+            ),
+            "quality_report": {"passed": True, "quality_score": 0.97},
+            "actor_scope": {"user_id": "user-1"},
+        }
+    )
+    runtime = ResearchSinglePaperRuntime(
+        source_provider=CatalogBoundResearchSourceProvider(_NoLiveSource(), _ActorScopedDocuments(document)),
+        document_compiler=_CompilerThatMustNotRun(),
+        llm_worker=FakeResearchLLMWorker(),
+        github_repository=FakeGithubRepositoryPort(),
+        rag_runtime=FakeResearchRAGRuntime(),
+        artifact_port=FakeArtifactPort(),
+        event_port_factory=lambda run_id: InMemoryHarnessEventPort(),
+        node_output_resource_factory=in_memory_node_output_resource_factory,
+    )
+
+    result = AnalyzePaperUseCase(runtime).analyze(
+        AnalyzePaperRequest(
+            run_id="research-run-imported",
+            paper_id="paper-harness-001",
+            source_ref="paper://paper-harness-001/sec-method",
+            user_id="user-1",
+            options={
+                "research_input_source_revision": "sha256:" + "d" * 64,
+                "metadata": {"source_fingerprint": "sha256:" + "d" * 64},
+            },
+        )
+    )
+
+    assert result.succeeded is True, result.diagnostics.get("terminal_reason")
+    assert result.quality.passed is True
+    assert "research-analysis" in result.artifact_refs

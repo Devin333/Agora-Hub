@@ -2649,6 +2649,7 @@ def _build_configured_composition(
             run_reconciler=run_reconciler,
             diagnostic_artifact_reader=artifact_port,
             artifact_reader=catalog_store,
+            run_artifact_reader=artifact_port,
             parse_use_case=parse_use_case,
             catalog_service=catalog_service,
             runtime_config_identity=_research_runtime_config_identity(settings),
@@ -3182,10 +3183,6 @@ def _research_runtime_config_identity(settings: ResearchRuntimeSettings) -> str:
             "runStoreRoot": str(settings.run_store.root),
             "ragLocalRoot": str(settings.rag.local_root),
             "ragTranscriptRoot": str(settings.rag.transcript_root),
-        },
-        "desktop": {
-            "releaseId": str(os.getenv("NEWSROOM_DESKTOP_RELEASE_ID") or ""),
-            "configDigest": str(os.getenv("NEWSROOM_DESKTOP_CONFIG_DIGEST") or ""),
         },
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

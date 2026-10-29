@@ -1,4 +1,3 @@
-export type PreviewTheme = "light" | "dark"
 export type LibraryView = "all" | "unread" | "saved"
 export type ReaderTab = "overview" | "notes" | "details"
 export type PaperSort = "default" | "year-desc" | "title"
@@ -24,7 +23,6 @@ export interface PreviewPaper {
 }
 
 export interface PreviewState {
-  theme: PreviewTheme
   paperId: string
   view: LibraryView
   tab: ReaderTab

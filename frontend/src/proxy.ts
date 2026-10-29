@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
 import { getFrontendSurface, type FrontendSurface } from "@/lib/frontend-surface"
-import { isLocalDesktopProfile } from "@/lib/deployment-profile"
+import { isHostedProfile } from "@/lib/deployment-profile"
 import { migrateLegacyResearchPath, safeLocalNavigation } from "@/lib/research/routes"
 
 const PORTAL_PREFIXES = ["/news", "/topics", "/tech", "/reports", "/search", "/papers", "/community", "/research"]
@@ -10,19 +10,20 @@ const ADMIN_PREFIXES = ["/studio", "/admin"]
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
   const surface = getFrontendSurface()
-  const desktop = isLocalDesktopProfile()
+  const hosted = isHostedProfile()
 
-  if (desktop && pathname.startsWith("/design-demo")) {
+  if (hosted && pathname.startsWith("/design-demo")) {
     const migrated = migrateLegacyResearchPath(`${pathname}${search}`)
     if (migrated) return NextResponse.redirect(new URL(migrated, request.nextUrl.origin), 308)
   }
 
   if (isTemporaryFrontendAuthDisabled() && isLoginPath(pathname)) return redirectToLoginBypassTarget(request, surface)
-  if (isPublicPath(pathname, surface, desktop)) return NextResponse.next()
+  if (isPublicPath(pathname, surface, hosted)) return NextResponse.next()
 
   const surfaceRedirect = getCrossSurfaceRedirect(request, surface)
   if (surfaceRedirect) return surfaceRedirect
-  if (!isProtectedPath(pathname)) return NextResponse.next()
+  // A hosted service has no anonymous pages: everything but login and assets needs a session.
+  if (!hosted && !isProtectedPath(pathname)) return NextResponse.next()
 
   if (isTemporaryFrontendAuthDisabled()) {
     if (surface === "admin" && pathname === "/") return redirectPath(request, "/studio")
@@ -42,11 +43,11 @@ export function proxy(request: NextRequest) {
 }
 
 function isTemporaryFrontendAuthDisabled() {
-  return !isLocalDesktopProfile() && process.env.NEWSROOM_ENABLE_FRONTEND_AUTH !== "true"
+  return !isHostedProfile() && process.env.NEWSROOM_ENABLE_FRONTEND_AUTH !== "true"
 }
 function isLoginPath(pathname: string) { return pathname === "/login" || pathname.startsWith("/login/") }
-function isPublicPath(pathname: string, surface: FrontendSurface, desktop: boolean) {
-  return (!desktop && surface === "portal" && (pathname === "/" || isResearchReadPath(pathname))) || isLoginPath(pathname) || pathname.startsWith("/api/") || pathname.startsWith("/_next/") || pathname === "/favicon.ico"
+function isPublicPath(pathname: string, surface: FrontendSurface, hosted: boolean) {
+  return (!hosted && surface === "portal" && (pathname === "/" || isResearchReadPath(pathname))) || isLoginPath(pathname) || pathname.startsWith("/api/") || pathname.startsWith("/_next/") || pathname === "/favicon.ico"
 }
 function isResearchReadPath(pathname: string) { return pathname === "/papers" || pathname.startsWith("/papers/") }
 function isProtectedPath(pathname: string) { return pathname === "/" || isAdminPath(pathname) || isPortalPath(pathname) }

@@ -89,14 +89,6 @@ class ResearchDesktopSavedReportRef:
 class ResearchDesktopRequestStore(Protocol):
     def generation(self) -> str: ...
 
-    def rotate_generation(self) -> str: ...
-
-    def admission_open(self) -> bool: ...
-
-    def begin_untracked_execution(self, *, operation: str) -> str: ...
-
-    def end_untracked_execution(self, lease_id: str) -> None: ...
-
     def admit(
         self,
         *,
@@ -106,7 +98,25 @@ class ResearchDesktopRequestStore(Protocol):
         kind: ResearchDesktopOperationKind,
         fingerprint: str,
         semantic: Mapping[str, Any],
-    ) -> ResearchDesktopAdmissionDecision: ...
+        queued: bool = False,
+    ) -> ResearchDesktopAdmissionDecision:
+        """Admit a new request, or return the existing one bound to this identity.
+
+        A ``queued`` admission starts as ``admitted`` and is executed later by
+        a background worker, which moves it to ``running`` through ``start``.
+        Either way the admitting process holds the execution lease.
+        """
+        ...
+
+    def start(
+        self,
+        *,
+        owner_id: str,
+        request_id: str,
+        generation: str,
+    ) -> ResearchDesktopAdmission:
+        """Move a queued admission to ``running``; any other state is returned unchanged."""
+        ...
 
     def get(
         self,
@@ -151,9 +161,15 @@ class ResearchDesktopRequestStore(Protocol):
         self,
         *,
         capability_id: str,
-        provenance: Mapping[str, Any],
+        operation: str,
         runtime_identity: str,
-    ) -> Mapping[str, Any]: ...
+    ) -> Mapping[str, Any]:
+        """Record that a business operation proved a capability.
+
+        The record is shared by every account, so it carries only the
+        operation kind and never an owner's run, import or transcript id.
+        """
+        ...
 
     def capability_verifications(
         self, *, runtime_identity: str

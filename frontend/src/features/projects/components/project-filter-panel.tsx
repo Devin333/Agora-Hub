@@ -1,5 +1,6 @@
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ProjectNativeSelect, ProjectNativeSelectOption } from "@/features/projects/components/project-page-layout"
+import { cn } from "@/lib/utils"
 import type { ProjectFilterOption, ProjectListOptions, ProjectListParams } from "@/types/projects"
 
 export function ProjectFilterPanel({
@@ -12,7 +13,7 @@ export function ProjectFilterPanel({
   onChange: (patch: Partial<ProjectListParams>) => void
 }) {
   return (
-    <aside className="space-y-7">
+    <aside className="space-y-5">
       <FilterGroup
         title="Topics"
         activeValue={filters.topic}
@@ -48,15 +49,25 @@ export function ProjectFilterPanel({
         onSelect={(source) => onChange({ source: source as ProjectListParams["source"], page: 1, cursor: undefined })}
         onClear={() => onChange({ source: undefined, page: 1, cursor: undefined })}
       />
-      <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#334155]/55 dark:text-muted-foreground">
-        License
-        <select className="rounded-md border border-[#dbe3dc] bg-white px-3 py-2 text-sm font-normal normal-case tracking-normal text-[#334155] dark:border-border dark:bg-card dark:text-foreground" aria-label="License" value={filters.license ?? ""} onChange={(event) => onChange({ license: (event.target.value || undefined) as ProjectListParams["license"], page: 1, cursor: undefined })}>
-          <option value="">All licenses</option><option value="MIT">MIT</option><option value="Apache-2.0">Apache-2.0</option><option value="BSD-3-Clause">BSD-3-Clause</option>
-        </select>
+      <label className="grid gap-1.5">
+        <span className={sectionTitleClassName}>License</span>
+        <ProjectNativeSelect
+          wrapperClassName="w-full"
+          aria-label="License"
+          value={filters.license ?? ""}
+          onChange={(event) => onChange({ license: (event.target.value || undefined) as ProjectListParams["license"], page: 1, cursor: undefined })}
+        >
+          <ProjectNativeSelectOption value="">All licenses</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="MIT">MIT</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="Apache-2.0">Apache-2.0</ProjectNativeSelectOption>
+          <ProjectNativeSelectOption value="BSD-3-Clause">BSD-3-Clause</ProjectNativeSelectOption>
+        </ProjectNativeSelect>
       </label>
     </aside>
   )
 }
+
+const sectionTitleClassName = "px-2.5 text-[11px] font-semibold uppercase tracking-wider text-faint-foreground"
 
 function FilterGroup({
   title,
@@ -72,37 +83,38 @@ function FilterGroup({
   onClear: () => void
 }) {
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="font-mono text-[11px] font-semibold uppercase tracking-normal text-[#334155]/55 dark:text-muted-foreground">{title}</h2>
+    <section className="space-y-1">
+      <div className="flex min-h-7 items-center justify-between gap-2">
+        <h2 className={sectionTitleClassName}>{title}</h2>
         {activeValue ? (
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={onClear}>
+          <Button type="button" variant="ghost" size="xs" onClick={onClear}>
             Clear
           </Button>
         ) : null}
       </div>
       {options.length ? (
-        <div className="space-y-2">
-          {options.slice(0, 10).map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => onSelect(option.value)}
-              className={
-                activeValue === option.value
-                  ? "flex w-full items-center justify-between gap-2 rounded-md bg-[#334155] px-3 py-2 text-left text-sm text-white"
-                  : "flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm text-[#334155]/68 hover:bg-white hover:text-[#334155] dark:text-muted-foreground dark:hover:bg-card dark:hover:text-foreground"
-              }
-            >
-              <span className="truncate">{option.label}</span>
-              <Badge variant={activeValue === option.value ? "muted" : "default"}>{option.count}</Badge>
-            </button>
-          ))}
+        <div className="space-y-0.5">
+          {options.slice(0, 10).map((option) => {
+            const active = activeValue === option.value
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onSelect(option.value)}
+                className={cn(
+                  "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-body2 outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
+                  active ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                )}
+              >
+                <span className="truncate">{option.label}</span>
+                <span className="shrink-0 text-label text-faint-foreground">{option.count}</span>
+              </button>
+            )
+          })}
         </div>
       ) : (
-        <p className="rounded-md border border-dashed border-[#dbe3dc] px-3 py-4 text-xs leading-5 text-[#334155]/55 dark:border-border dark:text-muted-foreground">
-          No available options from current project data.
-        </p>
+        <p className="px-2.5 py-1 text-label text-muted-foreground">No available options from current project data.</p>
       )}
     </section>
   )

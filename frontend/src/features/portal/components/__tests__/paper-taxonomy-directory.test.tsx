@@ -60,7 +60,7 @@ describe("PaperTaxonomyDirectory", () => {
 
   it("shows five directions first and expands the remaining direction", () => {
     render(<PaperTaxonomyDirectory kind="method" papers={papers} definitions={definitions} source="cache" />)
-    expect(screen.getByRole("heading", { name: "研究方法." })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { level: 1, name: "研究方法" })).toBeInTheDocument()
     const sidebar = screen.getByRole("complementary", { name: "方向筛选" })
     expect(within(sidebar).queryByRole("button", { name: "Transformer 架构1" })).not.toBeInTheDocument()
     fireEvent.click(within(sidebar).getByRole("button", { name: "展开更多方向 (1)" }))

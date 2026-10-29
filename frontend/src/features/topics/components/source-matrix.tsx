@@ -1,37 +1,56 @@
 import { CredibilityBadge, SourceBadge } from "@/components/common/badges";
+import { SectionPanel } from "@/components/common/section-panel";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDate } from "@/lib/format";
 import type { TopicSourceCoverage } from "@/types/topic";
 
+const columns = [
+  { label: "来源", width: "w-52" },
+  { label: "条目", width: "w-24" },
+  { label: "首次出现", width: "w-36" },
+  { label: "更新于", width: "w-36" },
+  { label: "可信度", width: "w-40" },
+  { label: "覆盖说明", width: "" },
+];
+
+const cellClass = "whitespace-normal px-4 py-2.5";
+
 export function SourceMatrix({ sources }: { sources: TopicSourceCoverage[] }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <h2 className="text-base font-semibold text-foreground">来源矩阵</h2>
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[720px] table-fixed border-collapse text-left text-sm">
-          <thead className="text-xs uppercase text-muted-foreground">
-            <tr>
-              <th className="w-52 py-2 font-medium">来源</th>
-              <th className="w-28 py-2 font-medium">条目</th>
-              <th className="w-40 py-2 font-medium">首次出现</th>
-              <th className="w-40 py-2 font-medium">更新于</th>
-              <th className="w-44 py-2 font-medium">可信度</th>
-              <th className="py-2 font-medium">覆盖说明</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sources.map((source) => (
-              <tr key={source.sourceName} className="border-t border-border">
-                <td className="py-3 pr-3"><SourceBadge sourceName={source.sourceName} sourceType={source.sourceType} /></td>
-                <td className="py-3 pr-3 text-muted-foreground">{source.itemCount}</td>
-                <td className="py-3 pr-3 text-muted-foreground">{formatDate(source.firstSeenAt)}</td>
-                <td className="py-3 pr-3 text-muted-foreground">{formatDate(source.lastSeenAt)}</td>
-                <td className="py-3 pr-3"><CredibilityBadge credibility={source.credibility} /></td>
-                <td className="py-3 text-muted-foreground">{source.coverageSummary}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <SectionPanel title="来源矩阵" framed={false}>
+      {sources.length ? (
+        <div className="rk-scroll overflow-x-auto rounded-xl border border-border">
+          <Table className="min-w-[720px] table-fixed">
+            <TableHeader className="text-label">
+              <TableRow className="hover:bg-transparent">
+                {columns.map((column) => (
+                  <TableHead key={column.label} className={`${column.width} px-4 font-medium text-muted-foreground`}>
+                    {column.label}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody className="text-body2">
+              {sources.map((source) => (
+                <TableRow key={source.sourceName} className="hover:bg-accent/40">
+                  <TableCell className={cellClass}>
+                    <SourceBadge sourceName={source.sourceName} sourceType={source.sourceType} />
+                  </TableCell>
+                  <TableCell className={`${cellClass} tabular-nums text-muted-foreground`}>{source.itemCount}</TableCell>
+                  <TableCell className={`${cellClass} tabular-nums text-muted-foreground`}>{formatDate(source.firstSeenAt)}</TableCell>
+                  <TableCell className={`${cellClass} tabular-nums text-muted-foreground`}>{formatDate(source.lastSeenAt)}</TableCell>
+                  <TableCell className={cellClass}>
+                    <CredibilityBadge credibility={source.credibility} />
+                  </TableCell>
+                  <TableCell className={`${cellClass} text-muted-foreground`}>{source.coverageSummary}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <p className="py-6 text-center text-body2 text-muted-foreground">暂无来源覆盖数据。</p>
+      )}
+    </SectionPanel>
   );
 }

@@ -18,6 +18,7 @@ from interfaces.services.research_desktop_service import (
     ResearchDesktopServiceError,
 )
 from interfaces.services.research_import_service import ResearchImportService
+from tests.fixtures.desktop_executor import ManualDesktopExecutor
 from tests.interfaces.services.test_research_desktop_operations import _ResearchFacade
 
 
@@ -34,6 +35,7 @@ def _service(root: Path, research: _ResearchFacade | None = None) -> tuple[Resea
             research=facade,
             requests=store,
             imports=ResearchImportService(root / "imports"),
+            executor=ManualDesktopExecutor(),
         ),
         facade,
         store,
@@ -106,25 +108,32 @@ def test_business_completion_is_reconciled_after_terminal_receipt_write_interrup
     assert recovered_prepare["result"]["sourceRevision"] == REVISION
     assert len(research.parse_calls) == 1
 
+    executor = ManualDesktopExecutor()
     interrupted = ResearchDesktopApplicationService(
         research=research,
         requests=store,
         imports=imports,
+        executor=executor,
     )
-    with pytest.raises(OSError, match="terminal receipt write interruption"):
-        interrupted.submit_analysis(
-            OWNER,
-            request_id="analyze-contract-1",
-            generation=generation,
-            request_fingerprint=canonical_request_fingerprint(analysis),
-            paper_id="paper-1",
-            source_revision=REVISION,
-            source_fingerprint=REVISION,
-            source_url=str(analysis["sourceUrl"]),
-            objective=None,
-            constraints=analysis["constraints"],
-        )
+    submitted = interrupted.submit_analysis(
+        OWNER,
+        request_id="analyze-contract-1",
+        generation=generation,
+        request_fingerprint=canonical_request_fingerprint(analysis),
+        paper_id="paper-1",
+        source_revision=REVISION,
+        source_fingerprint=REVISION,
+        source_url=str(analysis["sourceUrl"]),
+        objective=None,
+        constraints=analysis["constraints"],
+    )
+    assert submitted["status"] == "waiting"
+    # The background job runs the analysis but loses its terminal receipt write.
+    assert executor.drain() == 1
     assert len(research.analysis_calls) == 1
+    assert store.get(
+        owner_id="alice", request_id="analyze-contract-1", generation=generation
+    ).status == "running"
 
     rebuilt_again = ResearchDesktopApplicationService(
         research=research,
@@ -157,11 +166,12 @@ def test_business_completion_is_reconciled_after_terminal_receipt_write_interrup
         )
     assert foreign.value.code == "desktop_request_not_found"
 
-    fresh_generation = store.rotate_generation()
-    assert fresh_generation != generation
+    # A request carrying another control state's generation is fenced.
+    foreign_generation = "gen_" + "f" * 32
+    assert foreign_generation != generation
     with pytest.raises(ResearchDesktopControlError) as stale:
         rebuilt_again.get_operation(
-            OWNER, request_id="prepare-contract-1", generation=generation
+            OWNER, request_id="prepare-contract-1", generation=foreign_generation
         )
     assert stale.value.code == "desktop_generation_stale"
 
@@ -200,7 +210,10 @@ def test_private_pdf_analysis_uses_owned_bytes_and_rejects_tampering_or_caller_a
     research = _PrivateImportResearch(imports, user_id="alice", import_id=received["importId"], paper_id="paper-private")
     research.identity = {"paperId": "paper-private", "sourceRevision": digest, "sourceFingerprint": digest}
     store = LocalJsonResearchDesktopRequestStore(tmp_path / "control.json")
-    service = ResearchDesktopApplicationService(research=research, requests=store, imports=imports)
+    executor = ManualDesktopExecutor()
+    service = ResearchDesktopApplicationService(
+        research=research, requests=store, imports=imports, executor=executor,
+    )
     generation = service.generation()
     semantic = {
         "kind": "analyze", "paperId": "paper-private", "sourceRevision": digest,
@@ -208,7 +221,7 @@ def test_private_pdf_analysis_uses_owned_bytes_and_rejects_tampering_or_caller_a
         "objective": None, "constraints": ["private owner bytes only"],
     }
 
-    completed = service.submit_analysis(
+    submitted = service.submit_analysis(
         OWNER,
         request_id="private-analysis-1",
         generation=generation,
@@ -219,6 +232,9 @@ def test_private_pdf_analysis_uses_owned_bytes_and_rejects_tampering_or_caller_a
         objective=None,
         constraints=semantic["constraints"],
     )
+    assert submitted["status"] == "waiting"
+    assert executor.drain() == 1
+    completed = service.get_operation(OWNER, request_id="private-analysis-1", generation=generation)
     assert completed["status"] == "passed"
     assert completed["result"]["paperId"] == "paper-private"
     assert completed["result"]["sourceRevision"] == digest

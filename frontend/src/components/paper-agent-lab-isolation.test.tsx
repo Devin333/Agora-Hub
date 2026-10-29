@@ -62,7 +62,7 @@ vi.mock("@/lib/research/history-sync", () => ({
 }))
 
 vi.mock("@/lib/deployment-profile", () => ({
-  isLocalDesktopProfile: () => false,
+  isHostedProfile: () => false,
 }))
 
 describe("paper agent lab provider isolation", () => {
@@ -73,8 +73,7 @@ describe("paper agent lab provider isolation", () => {
     runtime.commandPalette.mockClear()
     runtime.researchHeader.mockClear()
     runtime.startHistorySync.mockClear()
-    useUiStore.setState({ theme: "dark", locale: "zh" })
-    document.documentElement.classList.remove("dark")
+    useUiStore.setState({ appearance: "dark", locale: "zh" })
     document.documentElement.dataset.theme = "untouched"
     document.documentElement.lang = "x-preview"
   })
@@ -101,7 +100,6 @@ describe("paper agent lab provider isolation", () => {
       expect(runtime.startHistorySync).not.toHaveBeenCalled()
 
       await Promise.resolve()
-      expect(document.documentElement).not.toHaveClass("dark")
       expect(document.documentElement).toHaveAttribute("data-theme", "untouched")
       expect(document.documentElement).toHaveAttribute("lang", "x-preview")
     },
@@ -122,8 +120,7 @@ describe("paper agent lab provider isolation", () => {
       expect(runtime.historyTracker).toHaveBeenCalled()
       expect(runtime.commandPalette).toHaveBeenCalled()
       await waitFor(() => expect(runtime.startHistorySync).toHaveBeenCalledWith("ordinary-user"))
-      await waitFor(() => expect(document.documentElement).toHaveClass("dark"))
-      expect(document.documentElement).toHaveAttribute("data-theme", "dark")
+      await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "dark"))
       expect(document.documentElement).toHaveAttribute("lang", "zh-CN")
     },
   )
@@ -167,8 +164,7 @@ describe("paper agent lab provider isolation", () => {
       expect(screen.getByTestId("research-history-tracker")).toBeInTheDocument()
       expect(screen.queryByTestId("global-command-palette")).not.toBeInTheDocument()
       await waitFor(() => expect(runtime.startHistorySync).toHaveBeenCalledWith("ordinary-user"))
-      await waitFor(() => expect(document.documentElement).toHaveClass("dark"))
-      expect(document.documentElement).toHaveAttribute("data-theme", "dark")
+      await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "dark"))
       expect(document.documentElement).toHaveAttribute("lang", "zh-CN")
     },
   )

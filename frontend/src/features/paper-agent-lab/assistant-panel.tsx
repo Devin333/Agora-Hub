@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { ArrowUp, Bot, FileText, Sparkles, X } from "lucide-react"
 import type { PreviewPaper, PreviewQuestion } from "./types"
 import styles from "./assistant-panel.module.css"
@@ -38,6 +38,14 @@ export function AssistantPanel({
     setDraft("")
     consumedPromptRef.current = null
   }, [paper.id])
+
+  // Auto-grow the composer with its draft; CSS caps the height and scrolls beyond it.
+  useLayoutEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.style.height = "auto"
+    input.style.height = `${input.scrollHeight}px`
+  }, [draft])
 
   useEffect(() => {
     const prompt = initialPrompt?.trim() ?? ""
@@ -90,8 +98,8 @@ export function AssistantPanel({
         <div className={styles.heading}>
           <Bot aria-hidden="true" />
           <div>
-            <span>论文助手</span>
-            <strong>阅读预览</strong>
+            <strong>论文助手</strong>
+            <span>阅读预览</span>
           </div>
         </div>
         <button aria-label="关闭论文助手" className={styles.closeButton} onClick={onClose} type="button">
@@ -126,9 +134,7 @@ export function AssistantPanel({
           <ol className={styles.thread} aria-live="polite" aria-relevant="additions" role="log">
             {visibleConversation.map((question) => (
               <li key={question.id}>
-                <div className={styles.questionMeta}>
-                  <span>你的问题</span>
-                </div>
+                <span className={styles.questionMeta}>你的问题</span>
                 <p className={styles.question}>{question.prompt}</p>
                 <div className={styles.previewNotice}>
                   <Bot aria-hidden="true" />
@@ -141,7 +147,7 @@ export function AssistantPanel({
       </div>
 
       <form className={styles.composer} onSubmit={handleSubmit}>
-        <label htmlFor={composerId}>向论文助手提问</label>
+        <label className={styles.srOnly} htmlFor={composerId}>向论文助手提问</label>
         <div className={styles.inputShell}>
           <textarea
             ref={inputRef}
@@ -149,7 +155,7 @@ export function AssistantPanel({
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleComposerKeyDown}
             placeholder="输入问题，Enter 提交，Shift + Enter 换行"
-            rows={3}
+            rows={1}
             value={draft}
           />
           <button aria-label="提交预览问题" disabled={!draft.trim()} type="submit">

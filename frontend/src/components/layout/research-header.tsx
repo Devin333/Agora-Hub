@@ -6,27 +6,23 @@ import { useRouter } from "next/navigation"
 import { ChevronDown, Menu, Search } from "lucide-react"
 import { AccountMenu } from "@/components/auth/account-menu"
 import { PapersLanguageToggle } from "@/components/papers/shared/language-toggle"
-import { PapersThemeToggle } from "@/components/papers/shared/theme-toggle"
+import { AppearanceMenu } from "@/components/theme/appearance-menu"
+import { BrandMark } from "@/components/brand/brand-mark"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { papersCopy, t } from "@/lib/papers/copy"
 import type { Locale } from "@/lib/papers/types"
 import { cn } from "@/lib/utils"
-import type { ThemeMode } from "@/stores/ui-store"
 
 export function ResearchHeader({
   locale,
   pathname = "/",
-  theme,
-  onLocaleChange,
-  onThemeChange
+  onLocaleChange
 }: {
   locale: Locale
   pathname?: string
-  theme: ThemeMode
   onLocaleChange: (locale: Locale) => void
-  onThemeChange: (theme: ThemeMode) => void
 }) {
   const router = useRouter()
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
@@ -56,17 +52,15 @@ export function ResearchHeader({
   }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[#e2e7df] bg-white/90 backdrop-blur-xl dark:border-border dark:bg-card/95">
-      <div className="mx-auto flex min-h-[60px] max-w-[1440px] items-center gap-2 px-3 py-2 sm:gap-4 sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur-xl">
+      <div className="mx-auto flex min-h-14 max-w-[1440px] items-center gap-2 px-3 py-2 sm:gap-3 sm:px-6">
         <Link href="/papers" className="flex min-w-0 items-center gap-2 sm:gap-3" aria-label="Agora Hub Research">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-[#172033] text-sm font-black text-white shadow-sm">
-            A
-          </span>
+          <BrandMark />
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold leading-5 sm:text-base">
-              Agora Hub <span className="text-emerald-600">Research</span>
+            <span className="block truncate text-body1 font-semibold">
+              Agora Hub <span className="text-muted-foreground">Research</span>
             </span>
-            <span className="hidden truncate text-xs text-[#334155]/55 dark:text-muted-foreground sm:block">{t(papersCopy.brandSubline, locale)}</span>
+            <span className="hidden truncate text-label text-faint-foreground sm:block">{t(papersCopy.brandSubline, locale)}</span>
           </span>
         </Link>
 
@@ -95,8 +89,8 @@ export function ResearchHeader({
                   <button
                     type="button"
                     className={cn(
-                      "inline-flex h-9 items-center gap-1 rounded-full px-3.5 text-sm font-medium text-[#334155]/75 transition-colors hover:bg-[#eef2ec] hover:text-[#172033] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-foreground dark:hover:bg-secondary",
-                      (active || current) && "bg-[#eef2ec] text-[#172033] dark:bg-secondary dark:text-foreground"
+                      "inline-flex h-8 items-center gap-1 rounded-full px-3 text-body2 font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+                      (active || current) && "bg-accent text-foreground"
                     )}
                     aria-expanded={active}
                     aria-controls={dropdownId}
@@ -105,7 +99,7 @@ export function ResearchHeader({
                     onFocus={() => setActiveGroupId(group.id)}
                   >
                     {t(group.label, locale)}
-                    <ChevronDown className={cn("size-4 transition-transform", active && "rotate-180")} />
+                    <ChevronDown className={cn("size-3.5 transition-transform", active && "rotate-180")} strokeWidth={1.8} />
                   </button>
                   {active ? <ResearchHeaderDropdown id={dropdownId} group={group} locale={locale} pathname={pathname} /> : null}
                 </div>
@@ -120,12 +114,12 @@ export function ResearchHeader({
             name="q"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            className="h-10 rounded-full border-[#d9e0d8] bg-[#fbfcfa] pl-9 shadow-none transition-colors focus-visible:bg-white dark:border-border dark:bg-card"
+            className="h-9 rounded-xl bg-card pl-9 dark:bg-input"
             placeholder={t(papersCopy.searchPlaceholder, locale)}
           />
         </form>
-        <div className="hidden items-center gap-2 sm:flex">
-          <PapersThemeToggle theme={theme} locale={locale} onThemeChange={onThemeChange} />
+        <div className="hidden items-center gap-1 sm:flex">
+          <AppearanceMenu />
           <PapersLanguageToggle locale={locale} onLocaleChange={onLocaleChange} />
         </div>
         <AccountMenu />
@@ -154,16 +148,16 @@ export function ResearchHeader({
               />
             </form>
             <div className="mb-4 flex flex-wrap items-center gap-2 sm:hidden">
-              <PapersThemeToggle theme={theme} locale={locale} onThemeChange={onThemeChange} />
+              <AppearanceMenu showLabel variant="outline" align="start" />
               <PapersLanguageToggle locale={locale} onLocaleChange={onLocaleChange} />
             </div>
             <nav className="space-y-4" aria-label="Research mobile navigation">
               {researchHeaderGroups.map((group) => (
                 <div key={group.id}>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  <p className="mb-1 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">
                     {t(group.label, locale)}
                   </p>
-                  <div className="space-y-2">
+                  <div className="space-y-0.5">
                     {group.items.map((item) => {
                       const current = isNavItemCurrent(pathname, item)
                       const itemId = navItemDomId("mobile", group.id, item)
@@ -175,15 +169,15 @@ export function ResearchHeader({
                           <Link
                             href={item.href}
                             className={cn(
-                              "block rounded-md border border-border bg-background/60 px-3 py-2 text-sm transition-colors hover:bg-secondary",
-                              current && "border-emerald-300 bg-emerald-50 text-emerald-950 dark:border-emerald-500/40 dark:bg-emerald-950/20"
+                              "block rounded-xl px-2.5 py-2 text-body2 transition-colors hover:bg-sidebar-accent/60",
+                              current && "bg-sidebar-accent text-sidebar-accent-foreground"
                             )}
                             aria-current={current ? "page" : undefined}
                             aria-labelledby={labelId}
                             aria-describedby={descriptionId}
                           >
                             <span id={labelId} className="font-medium">{t(item.label, locale)}</span>
-                            <span id={descriptionId} className="mt-1 block text-xs leading-5 text-muted-foreground">
+                            <span id={descriptionId} className="mt-0.5 line-clamp-2 block text-label text-muted-foreground">
                               {t(item.description, locale)}
                             </span>
                           </Link>
@@ -235,7 +229,7 @@ function ResearchHeaderDropdown({
 }) {
   return (
     <div id={id} className="absolute left-0 top-full z-50 w-[min(30rem,calc(100vw-2rem))] pt-2">
-      <div className="rounded-xl border border-[#dfe5df] bg-white p-2.5 text-popover-foreground shadow-[0_18px_50px_rgba(15,23,42,0.12)] dark:border-border dark:bg-popover">
+      <div className="rounded-xl bg-popover p-1.5 text-popover-foreground shadow-md ring-1 ring-foreground/10">
         <div className="grid gap-1">
           {group.items.map((item) => {
             const current = isNavItemCurrent(pathname, item)
@@ -248,17 +242,17 @@ function ResearchHeaderDropdown({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "group rounded-lg px-3 py-2.5 transition-colors hover:bg-[#f3f6f2] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-secondary",
-                  current && "bg-[#edf6f0] text-emerald-950 dark:bg-emerald-950/20"
+                  "group rounded-lg px-3 py-2 outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
+                  current && "bg-accent"
                 )}
                 aria-current={current ? "page" : undefined}
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
               >
-                <span id={labelId} className="flex items-center justify-between gap-3 text-sm font-semibold text-foreground">
+                <span id={labelId} className="flex items-center justify-between gap-3 text-body2 font-medium text-foreground">
                   {t(item.label, locale)}
                 </span>
-                <span id={descriptionId} className="mt-1 block text-xs leading-5 text-muted-foreground">
+                <span id={descriptionId} className="mt-0.5 block text-label text-muted-foreground">
                   {t(item.description, locale)}
                 </span>
               </Link>

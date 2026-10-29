@@ -17,14 +17,19 @@ const sessionCookie = vi.hoisted(() => ({ value: "private-session-token" as stri
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => sessionCookie.value ? { value: sessionCookie.value } : undefined }) }))
 const binding = "a".repeat(43)
 const origin = "http://localhost:3000"
-const runtimeEnvKeys = [
+const profileEnvKeys = [
   "NEWSROOM_DEPLOYMENT_PROFILE",
-  "NEWSROOM_DESKTOP_INSTANCE_KEY",
-  "NEWSROOM_DESKTOP_RELEASE_ID",
-  "NEWSROOM_DESKTOP_CONFIG_DIGEST",
-  "NEWSROOM_DESKTOP_BOOT_ID",
+  "NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE",
+  "NEWSROOM_PUBLIC_ORIGIN",
+  "NEWSROOM_ALLOW_INSECURE_ORIGIN",
 ] as const
-const originalRuntimeEnv = Object.fromEntries(runtimeEnvKeys.map(key => [key, process.env[key]]))
+const originalProfileEnv = Object.fromEntries(profileEnvKeys.map(key => [key, process.env[key]]))
+const hostedOrigin = "http://127.0.0.1:3120"
+function useHostedProfile() {
+  process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
+  process.env.NEWSROOM_PUBLIC_ORIGIN = hostedOrigin
+  process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN = "1"
+}
 function post(path: string, body: unknown, headers: Record<string, string> = {}) {
   return new NextRequest(`${origin}${path}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json", Cookie: `newsroom_auth_binding=${binding}`, ...headers }, body: JSON.stringify(body) })
 }
@@ -39,12 +44,12 @@ describe("public auth BFF", () => {
     sessionCookie.value = "private-session-token"
     process.env.NEWSROOM_DEPLOYMENT_PROFILE = "default"
     delete process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
-    delete process.env.NEWSROOM_CANONICAL_ORIGIN
-    delete process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN
+    delete process.env.NEWSROOM_PUBLIC_ORIGIN
+    delete process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN
   })
   afterEach(() => {
-    for (const key of runtimeEnvKeys) {
-      const value = originalRuntimeEnv[key]
+    for (const key of profileEnvKeys) {
+      const value = originalProfileEnv[key]
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
@@ -126,6 +131,10 @@ describe("public auth BFF", () => {
     expect(response.cookies.get("newsroom_auth_callback")?.value).toBe("")
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'self'")
     expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+    // Rakazo surfaces in both schemes, with no leftover legacy purple.
+    expect(html).toContain("--background:#ffffff")
+    expect(html).toContain("@media (prefers-color-scheme:dark){:root{--background:#161616")
+    expect(html).not.toMatch(/#7c3aed|#fbf8ff|#302640/i)
   })
   it("does not interpolate untrusted callback strings into script markup", async () => {
     const response = await callback(callbackRequest(`state=${encodeURIComponent('</script><script>alert(1)</script>')}`), { params: Promise.resolve({ provider: "google" }) })
@@ -146,66 +155,65 @@ describe("public auth BFF", () => {
     expect(completed.cookies.get("newsroom_session")?.value).toBe("verified-wechat-session")
     expect(await completed.text()).not.toContain("verified-wechat-session")
   })
-  it.each([
-    ["bootstrap", bootstrap, "/api/v1/auth/bootstrap"],
-    ["login", login, "/api/v1/auth/login"],
-  ] as const)("forwards the server-owned canonical Origin for local-desktop %s after validating the browser origin", async (_name, handler, backendPath) => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
+  it("forwards the configured public Origin for hosted login after validating the browser origin", async () => {
+    useHostedProfile()
     vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: { session: { sessionToken: "private-session-token" } } })
 
-    const request = new NextRequest(
-      "http://localhost:3120/api/auth/test",
-      {
-        method: "POST",
-        headers: {
-          Host: "127.0.0.1:3120",
-          Origin: "http://127.0.0.1:3120",
-          "Sec-Fetch-Site": "same-origin",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ username: "local-user", password: "correct horse" }),
-      },
-    )
-    const response = await handler(request)
+    const request = new NextRequest(`${hostedOrigin}/api/auth/login`, {
+      method: "POST",
+      headers: { Host: "127.0.0.1:3120", Origin: hostedOrigin, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "hosted-user", password: "correct horse" }),
+    })
+    const response = await login(request)
 
     expect(response.status).toBe(200)
     expect(safeApiPost).toHaveBeenCalledWith(
-      backendPath,
-      { username: "local-user", password: "correct horse" },
-      expect.objectContaining({ headers: { Origin: "http://127.0.0.1:3120" } }),
+      "/api/v1/auth/login",
+      { username: "hosted-user", password: "correct horse" },
+      expect.objectContaining({ headers: { Origin: hostedOrigin } }),
     )
   })
 
-  it("forwards the server-owned canonical Origin for local-desktop logout without exposing the browser Origin", async () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
-    vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: { revoked: true } })
-    const request = new NextRequest("http://localhost:3120/api/auth/logout", {
+  it("never offers browser bootstrap on a hosted service", async () => {
+    useHostedProfile()
+    const request = new NextRequest(`${hostedOrigin}/api/auth/bootstrap`, {
       method: "POST",
-      headers: { Host: "127.0.0.1:3120", Origin: "http://127.0.0.1:3120", "Sec-Fetch-Site": "same-origin" },
+      headers: { Host: "127.0.0.1:3120", Origin: hostedOrigin, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "hosted-user", password: "correct horse" }),
+    })
+
+    const response = await bootstrap(request)
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ success: false, error: { code: "auth_route_unavailable" } })
+    expect(safeApiPost).not.toHaveBeenCalled()
+  })
+
+  it("forwards the configured public Origin for hosted logout without exposing the browser Origin", async () => {
+    useHostedProfile()
+    vi.mocked(safeApiPost).mockResolvedValue({ ok: true, data: { revoked: true } })
+    const request = new NextRequest(`${hostedOrigin}/api/auth/logout`, {
+      method: "POST",
+      headers: { Host: "127.0.0.1:3120", Origin: hostedOrigin, "Sec-Fetch-Site": "same-origin" },
     })
 
     expect((await logout(request)).status).toBe(200)
     expect(safeApiPost).toHaveBeenCalledWith(
       "/api/v1/auth/logout",
       {},
-      expect.objectContaining({ headers: { "x-newsroom-session": "private-session-token", Origin: "http://127.0.0.1:3120" } }),
+      expect.objectContaining({ headers: { "x-newsroom-session": "private-session-token", Origin: hostedOrigin } }),
     )
   })
 
-  it("rejects an evil local-desktop browser Origin on bootstrap, login, and logout before forwarding", async () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
-    const evil = (path: string, body?: unknown) => new NextRequest(`http://localhost:3120${path}`, {
+  it("rejects an evil browser Origin on hosted login and logout before forwarding", async () => {
+    useHostedProfile()
+    const evil = (path: string, body?: unknown) => new NextRequest(`${hostedOrigin}${path}`, {
       method: "POST",
       headers: { Host: "127.0.0.1:3120", Origin: "https://evil.test", "Sec-Fetch-Site": "cross-site", "Content-Type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
-    const credentials = { username: "local-user", password: "correct horse" }
 
-    expect((await bootstrap(evil("/api/auth/bootstrap", credentials))).status).toBe(403)
-    expect((await login(evil("/api/auth/login", credentials))).status).toBe(403)
+    expect((await login(evil("/api/auth/login", { username: "hosted-user", password: "correct horse" }))).status).toBe(403)
     expect((await logout(evil("/api/auth/logout"))).status).toBe(403)
     expect(safeApiPost).not.toHaveBeenCalled()
   })
@@ -227,13 +235,8 @@ describe("public auth BFF", () => {
   })
 
   it("keeps session GET credential-only and does not add a synthetic Origin", async () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3120"
-    process.env.NEWSROOM_DESKTOP_INSTANCE_KEY = "local-desktop:http://127.0.0.1:3120"
-    process.env.NEWSROOM_DESKTOP_RELEASE_ID = "release-1"
-    process.env.NEWSROOM_DESKTOP_CONFIG_DIGEST = "a".repeat(64)
-    process.env.NEWSROOM_DESKTOP_BOOT_ID = "b".repeat(32)
-    vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { initialized: true, session: null } })
+    useHostedProfile()
+    vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { initialized: true, bootstrapAvailable: false, session: null } })
 
     await session()
 
@@ -260,30 +263,6 @@ describe("public auth BFF", () => {
       signal: expect.any(AbortSignal),
     })
   })
-  it("echoes the frontend server runtime identity and rejects an incomplete identity", async () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_DESKTOP_INSTANCE_KEY = "local-desktop:http://127.0.0.1:3000"
-    process.env.NEWSROOM_DESKTOP_RELEASE_ID = "release-1"
-    process.env.NEWSROOM_DESKTOP_CONFIG_DIGEST = "a".repeat(64)
-    process.env.NEWSROOM_DESKTOP_BOOT_ID = "b".repeat(32)
-    sessionCookie.value = undefined
-    vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { initialized: false, session: null, local_desktop: { boot_id: "spoofed" } } })
-    const ready = await session()
-    expect(await ready.json()).toMatchObject({ data: { initialized: false, session: null, local_desktop: {
-      deployment_profile: "local-desktop",
-      instance_key: "local-desktop:http://127.0.0.1:3000",
-      release_id: "release-1",
-      config_digest: "a".repeat(64),
-      boot_id: "b".repeat(32),
-    } } })
-
-    delete process.env.NEWSROOM_DESKTOP_BOOT_ID
-    vi.mocked(safeApiGet).mockResolvedValue({ ok: true, data: { initialized: false, session: null } })
-    const invalid = await session()
-    expect(invalid.status).toBe(503)
-    expect(await invalid.json()).toEqual({ success: false, error: { code: "desktop_runtime_identity_invalid" } })
-  })
-
   it("clears expired session cookies but retains them on a service outage", async () => {
     vi.mocked(safeApiGet).mockResolvedValueOnce({ ok: true, data: { session: null } }).mockResolvedValueOnce({ ok: false, errorCode: "request_failed", errorMessage: "private host error" })
     expect((await session()).cookies.get("newsroom_session")?.value).toBe("")

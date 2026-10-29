@@ -10,10 +10,12 @@ import type { Locale, PaperReaderAnswer, ReaderEventCreate, ReaderEventType } fr
 import { paperAssetUrl, paperSourcePreviewUrl } from "@/lib/paper-reader/api"
 import { targetForPaperBlock } from "@/lib/paper-reader/interactions"
 import type { PaperInlineSpan, PaperReference, PaperSourceRegion } from "@/lib/paper-reader/types"
-import type { DrawerState, NotePopoverState, OpenReaderPageProps, OpenReaderVisualBlock, ReaderAssistMode, ReaderParagraph, ReaderSelection, ReaderSettings, ReaderTocItem, SelectionMenuState } from "./open-reader-types"
+import type { DrawerState, NotePopoverState, OpenReaderPageProps, ReaderWorkspaceAppearance, OpenReaderVisualBlock, ReaderAssistMode, ReaderParagraph, ReaderSelection, ReaderSettings, ReaderTocItem, SelectionMenuState } from "./open-reader-types"
 import { buildReaderParagraphs, buildReaderToc, clamp, getSelectionOffsetsWithinElement, getSelectionStatus, makeMaterialSummary, safeJsonParse, storageKey } from "./open-reader-utils"
 import { useOpenReaderSelections, useOpenReaderSettings } from "./open-reader-state"
 import { EquationRenderer, InlineMathRenderer } from "./equation-renderer"
+import { buttonVariants } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import styles from "./open-reader.module.css"
 
 const INITIAL_READER_SECTION_COUNT = 6
@@ -338,21 +340,17 @@ export function OpenReaderPage({ reader, locale, backHref = "/papers", visualLay
     }).catch(() => undefined)
   }
 
-  const themeClass = settings.theme === "dark" ? styles.darkTheme : settings.theme === "light" ? styles.lightTheme : styles.warmTheme
-  const workspaceAppearanceClass = workspace?.appearance === "monochrome-dark"
-    ? styles.monochromeDarkWorkspace
-    : workspace?.appearance === "monochrome-light"
-      ? styles.monochromeLightWorkspace
-      : ""
+  const surface = readerSurface(settings.theme, workspace?.appearance, Boolean(workspace))
   const ReaderRoot = workspace ? "div" : "main"
 
   return (
     <ReaderRoot
-      className={`${styles.openReader} ${themeClass} ${workspace ? styles.workspaceReader : ""} ${workspaceAppearanceClass}`}
+      className={[styles.openReader, surface.className, workspace ? styles.workspaceReader : ""].filter(Boolean).join(" ")}
+      data-theme={surface.theme}
       data-workspace-appearance={workspace?.appearance}
       style={{ ["--reader-font-size" as string]: `${workspace?.fontSize ?? settings.fontSize}px`, ["--reader-content-width" as string]: `${settings.contentWidth}px` }}
     >
-      {!workspace && <Link className={styles.readerBackButton} href={backHref} aria-label={readerCopy(locale).backToPapers}>
+      {!workspace && <Link className={cn(buttonVariants({ variant: "floating", size: "icon-lg" }), styles.readerBackButton)} href={backHref} aria-label={readerCopy(locale).backToPapers}>
         <ArrowLeft aria-hidden="true" className={styles.readerMarkIcon} />
       </Link>}
 
@@ -1043,6 +1041,26 @@ function renderCitationLinks(span: Extract<PaperInlineSpan, { type: "citation" }
   })
 }
 
+/**
+ * Resolves which token theme the reader surface pins. Standalone reading honours the
+ * reader's own light / warm / dark choice (warm is a sepia tint on the light tokens);
+ * an embedded workspace follows its host unless the host pins a monochrome appearance.
+ */
+function readerSurface(
+  theme: ReaderSettings["theme"],
+  appearance: ReaderWorkspaceAppearance | undefined,
+  embedded: boolean,
+): { theme?: "light" | "dark"; className?: string } {
+  if (embedded) {
+    if (appearance === "monochrome-dark") return { theme: "dark", className: styles.monochromeDarkWorkspace }
+    if (appearance === "monochrome-light") return { theme: "light", className: styles.monochromeLightWorkspace }
+    return {}
+  }
+  if (theme === "dark") return { theme: "dark" }
+  if (theme === "light") return { theme: "light" }
+  return { theme: "light", className: styles.warmTheme }
+}
+
 function scrollToReaderTarget(id: string) {
   if (typeof document === "undefined") return
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
@@ -1063,6 +1081,9 @@ function ReaderSettingsDock({ settings, locale, onChange }: { settings: ReaderSe
   )
 }
 
+/** Diameter of the floating table-of-contents pill; keep in sync with `.tocOrb` in the CSS module. */
+const TOC_ORB_SIZE = 40
+
 function FloatingToc({ paperId, items, activeSectionId, materialCount, locale, onNavigate, onOpenMaterials }: { paperId: string; items: ReaderTocItem[]; activeSectionId: string | null; materialCount: number; locale: Locale; onNavigate: (id: string) => void; onOpenMaterials: () => void }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [side, setSide] = useState<"left" | "right">("left")
@@ -1077,23 +1098,23 @@ function FloatingToc({ paperId, items, activeSectionId, materialCount, locale, o
     const saved = safeJsonParse<{ x: number; y: number } | null>(window.localStorage.getItem(positionKey), null)
     if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return
     const next = {
-      x: clamp(saved.x, 8, window.innerWidth - 62),
-      y: clamp(saved.y, 58, window.innerHeight - 66),
+      x: clamp(saved.x, 8, window.innerWidth - TOC_ORB_SIZE - 8),
+      y: clamp(saved.y, 58, window.innerHeight - TOC_ORB_SIZE - 12),
     }
     positionRef.current = next
     setPosition(next)
-    setSide(next.x + 31 > window.innerWidth / 2 ? "right" : "left")
+    setSide(next.x + TOC_ORB_SIZE / 2 > window.innerWidth / 2 ? "right" : "left")
   }, [positionKey])
 
   useEffect(() => {
     function onMove(event: MouseEvent) {
       if (!dragging) return
-      const x = Math.max(8, Math.min(window.innerWidth - 62, event.clientX - offsetRef.current.x))
-      const y = Math.max(58, Math.min(window.innerHeight - 66, event.clientY - offsetRef.current.y))
+      const x = Math.max(8, Math.min(window.innerWidth - TOC_ORB_SIZE - 8, event.clientX - offsetRef.current.x))
+      const y = Math.max(58, Math.min(window.innerHeight - TOC_ORB_SIZE - 12, event.clientY - offsetRef.current.y))
       const next = { x, y }
       positionRef.current = next
       setPosition(next)
-      setSide(x + 31 > window.innerWidth / 2 ? "right" : "left")
+      setSide(x + TOC_ORB_SIZE / 2 > window.innerWidth / 2 ? "right" : "left")
     }
     function onUp() {
       setDragging(false)

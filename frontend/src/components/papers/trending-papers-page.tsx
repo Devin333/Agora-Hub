@@ -307,7 +307,7 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
   }
 
   return (
-    <div className="space-y-0">
+    <div className="min-w-0">
       <PapersMicrobar
         items={[{ label: "Trending" }]}
         meta={t(papersCopy.frontendView, locale)}
@@ -316,7 +316,6 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
       <PapersHero
         title={t(papersCopy.researchPapers, locale)}
         subtitle={t(papersCopy.researchSubtitle, locale)}
-        variant="editorial"
         stats={[
           { label: t(papersCopy.papers, locale), value: portalMetrics.paperCount },
           { label: t(papersCopy.tasks, locale), value: portalMetrics.taskCount },
@@ -324,14 +323,15 @@ export function TrendingPapersPage({ locale, papers, renderView }: {
         ]}
         aside={<PaperPeriodTabs value={period} locale={locale} hrefForPeriod={periodHref} onChange={updatePeriod} fullWidth />}
       />
-      <div className="mt-3 border-t border-[#dfe5df] dark:border-border" />
       {notices.length || hasDataIssue ? (
-        <ResearchStatusNotice notices={notices} context={dataContext} locale={locale} />
+        <div className="px-4 pt-4 md:px-6">
+          <ResearchStatusNotice notices={notices} context={dataContext} locale={locale} />
+        </div>
       ) : null}
-      <div className="mt-6 grid gap-6 xl:grid-cols-[14rem_minmax(0,1fr)] 2xl:grid-cols-[15rem_minmax(0,1fr)]">
-        <div className="space-y-3 xl:order-2">
+      <div className="grid gap-6 px-4 py-4 md:px-6 xl:grid-cols-[316px_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-3 xl:order-2">
           {isLoading ? (
-            <p className="rounded-lg border border-[#dfe5df] bg-white/60 px-4 py-3 text-sm text-[#334155]/60 dark:border-border dark:bg-card/40 dark:text-muted-foreground">
+            <p role="status" className="text-body2 text-muted-foreground">
               {t(papersCopy.updatingPapers, locale)}
             </p>
           ) : null}
@@ -492,7 +492,7 @@ function PaperFeatureFilterBar({
   onToggle: (filter: PaperFeatureFilter) => void
 }) {
   return (
-    <div className="flex gap-2 overflow-x-auto rounded-xl border border-[#dfe5df] bg-white/60 p-2 dark:border-border dark:bg-card/40" aria-label={locale === "zh" ? "论文筛选" : "Paper filters"}>
+    <div className="rk-scroll flex gap-1.5 overflow-x-auto" role="group" aria-label={locale === "zh" ? "论文筛选" : "Paper filters"}>
       {paperFeatureFilters.map((filter) => {
         const active = selected.includes(filter)
         return (
@@ -501,7 +501,7 @@ function PaperFeatureFilterBar({
             type="button"
             variant={active ? "default" : "outline"}
             size="sm"
-            className="h-8 shrink-0 rounded-full px-3 text-xs shadow-none"
+            className="shrink-0 rounded-full px-3"
             aria-pressed={active}
             onClick={() => onToggle(filter)}
           >
@@ -529,18 +529,18 @@ function ResearchStatusNotice({
   const meta = [source, updated].filter(Boolean).join(locale === "zh" ? " · " : " · ")
 
   return (
-    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm leading-6 text-amber-900">
+    <div role="status" className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-body2 text-foreground">
       <p>{message}</p>
-      {meta ? <p className="mt-1 text-xs text-amber-900/70">{meta}</p> : null}
+      {meta ? <p className="mt-1 text-label text-muted-foreground">{meta}</p> : null}
     </div>
   )
 }
 
 function filterIcon(filter: PaperFeatureFilter) {
-  if (filter === "pdf") return <FileText className="size-3.5" aria-hidden="true" />
-  if (filter === "code") return <Github className="size-3.5" aria-hidden="true" />
-  if (filter === "benchmark") return <BarChart3 className="size-3.5" aria-hidden="true" />
-  return <Quote className="size-3.5" aria-hidden="true" />
+  if (filter === "pdf") return <FileText className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
+  if (filter === "code") return <Github className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
+  if (filter === "benchmark") return <BarChart3 className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
+  return <Quote className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
 }
 
 function filterLabel(filter: PaperFeatureFilter, locale: Locale) {
@@ -621,20 +621,19 @@ function PaperPagination({
   return (
     <nav
       aria-label={locale === "zh" ? "论文分页" : "Paper pagination"}
-      className="flex flex-col gap-3 rounded-xl border border-[#dfe5df] bg-white/60 px-4 py-4 sm:flex-row sm:items-center sm:justify-between dark:border-border dark:bg-card/40"
+      className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between"
     >
-      <p className="text-xs font-medium text-[#334155]/62 dark:text-muted-foreground">{rangeLabel}</p>
+      <p className="text-label tabular-nums text-muted-foreground">{rangeLabel}</p>
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           variant="outline"
           size="icon"
-          className="size-8 rounded-lg bg-white shadow-none dark:bg-card"
           aria-label={previousLabel}
           disabled={safePage <= 1}
           onClick={() => onPageChange(safePage - 1)}
         >
-          <ChevronLeft className="size-4" aria-hidden="true" />
+          <ChevronLeft className="size-4" strokeWidth={1.8} aria-hidden="true" />
         </Button>
         {pages.map((item) =>
           typeof item === "number" ? (
@@ -642,8 +641,7 @@ function PaperPagination({
               key={item}
               type="button"
               variant={item === safePage ? "default" : "outline"}
-              size="sm"
-              className="h-8 min-w-8 rounded-lg px-2 shadow-none"
+              className="min-w-8 px-2 tabular-nums"
               aria-label={locale === "zh" ? `第 ${item} 页` : `Page ${item}`}
               aria-current={item === safePage ? "page" : undefined}
               onClick={() => onPageChange(item)}
@@ -651,7 +649,7 @@ function PaperPagination({
               {item}
             </Button>
           ) : (
-            <span key={item} className="flex h-8 min-w-8 items-center justify-center text-xs text-[#334155]/45">
+            <span key={item} className="flex h-8 min-w-8 items-center justify-center text-label text-faint-foreground">
               ...
             </span>
           )
@@ -660,12 +658,11 @@ function PaperPagination({
           type="button"
           variant="outline"
           size="icon"
-          className="size-8 rounded-lg bg-white shadow-none dark:bg-card"
           aria-label={nextLabel}
           disabled={safePage >= totalPages}
           onClick={() => onPageChange(safePage + 1)}
         >
-          <ChevronRight className="size-4" aria-hidden="true" />
+          <ChevronRight className="size-4" strokeWidth={1.8} aria-hidden="true" />
         </Button>
       </div>
     </nav>

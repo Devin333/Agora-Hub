@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeft, Menu, PanelLeftClose } from "lucide-react"
+import { BrandMark } from "@/components/brand/brand-mark"
+import { useUiStore } from "@/stores/ui-store"
 import { AssistantPanel } from "./assistant-panel"
 import { PREVIEW_PAPERS, TOPICS } from "./data"
 import { LibraryPanel } from "./library-panel"
-import { createPreviewHref, DEFAULT_PREVIEW_STATE, parsePreviewState } from "./preview-state"
+import { createPreviewHref, DEFAULT_PREVIEW_STATE, parsePreviewState, parseRequestedTheme } from "./preview-state"
 import { ReaderPanel } from "./reader-panel"
 import type { LibraryView, PaperSort, PreviewQuestion, PreviewState, ReaderTab, TopicId } from "./types"
+import { usePreviewAppearance } from "./use-preview-appearance"
 import { WorkspaceSidebar } from "./workspace-sidebar"
 import styles from "./paper-agent-lab.module.css"
 
@@ -85,6 +88,8 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
   const assistantReturnFocusRef = useRef<HTMLElement | null>(null)
   const questionSequenceRef = useRef(0)
   const isNarrow = useMediaQuery("(max-width: 1100px)")
+  const appearanceTheme = usePreviewAppearance()
+  const setTheme = useUiStore((state) => state.setTheme)
 
   const filteredPapers = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN")
@@ -122,6 +127,13 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
   }, [])
 
   useEffect(() => {
+    // `?theme=` is a one-off request for the app-wide appearance, not preview state.
+    function applyRequestedTheme() {
+      const requestedTheme = parseRequestedTheme(window.location.search)
+      if (requestedTheme) setTheme(requestedTheme)
+    }
+
+    applyRequestedTheme()
     const locationState = parsePreviewState(window.location.search)
     previewStateRef.current = locationState
     setPreviewState(locationState)
@@ -131,6 +143,7 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
     }
 
     function handlePopState() {
+      applyRequestedTheme()
       const next = parsePreviewState(window.location.search)
       previewStateRef.current = next
       setPreviewState(next)
@@ -138,7 +151,7 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
 
     window.addEventListener("popstate", handlePopState)
     return () => window.removeEventListener("popstate", handlePopState)
-  }, [])
+  }, [setTheme])
 
   useEffect(() => {
     if (selectedPaper && selectedPaper.id !== previewStateRef.current.paperId) {
@@ -306,7 +319,7 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
       data-focus={previewState.focus || undefined}
       data-mobile-reader={mobileReaderOpen || undefined}
       data-testid="paper-agent-lab"
-      data-theme={previewState.theme}
+      data-theme={appearanceTheme}
     >
       <header className={styles.topbar} inert={backgroundIsInert || undefined}>
         <div className={styles.topbarStart}>
@@ -318,17 +331,19 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
             ref={menuButtonRef}
             type="button"
           >
-            <Menu aria-hidden="true" size={16} />
+            <Menu aria-hidden="true" size={16} strokeWidth={1.8} />
           </button>
-          <span className={styles.topbarBrand}>Agora <small>Papers</small></span>
-          <span className={styles.divider} aria-hidden="true" />
+          <span className={styles.topbarBrand}>
+            <BrandMark size={22} />
+            Agora <small>Papers</small>
+          </span>
           <span className={styles.currentPaper}>{selectedPaper?.titleZh ?? "当前筛选暂无论文"}</span>
         </div>
         <div className={styles.topbarEnd}>
           <span className={styles.memoryNotice}>界面初版 · 设计预览</span>
           {previewState.focus ? (
             <button aria-label="退出专注阅读（顶栏）" className={styles.textButton} onClick={handleFocusToggle} type="button">
-              <PanelLeftClose aria-hidden="true" size={14} />
+              <PanelLeftClose aria-hidden="true" size={15} strokeWidth={1.8} />
               退出专注阅读
             </button>
           ) : null}
@@ -354,12 +369,10 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
             allCount={PREVIEW_PAPERS.length}
             closeButtonRef={sidebarCloseRef}
             onClose={() => setSidebarOpen(false)}
-            onThemeChange={(theme) => updatePreviewState({ theme })}
             onTopicChange={handleTopicChange}
             onViewChange={handleViewChange}
             ref={sidebarRef}
             savedCount={savedIds.size}
-            theme={previewState.theme}
             topic={topic}
             unreadCount={PREVIEW_PAPERS.length - readIds.size}
             view={previewState.view}
@@ -385,7 +398,7 @@ export function PaperAgentLab({ initialState = DEFAULT_PREVIEW_STATE }: PaperAge
 
         <main className={styles.readerShell} inert={backgroundIsInert || undefined}>
           <button className={styles.mobileBack} onClick={() => setMobileReaderOpen(false)} type="button">
-            <ArrowLeft aria-hidden="true" size={15} />
+            <ArrowLeft aria-hidden="true" size={15} strokeWidth={1.8} />
             返回论文列表
           </button>
           {selectedPaper ? (

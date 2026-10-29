@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process"
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
-import os from "node:os"
+import { cp, mkdir, mkdtemp, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -11,27 +10,25 @@ import {
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const sourceFrontend = path.resolve(scriptDir, "..")
-const canonicalOrigin = "http://127.0.0.1:3317"
+const publicOrigin = "http://127.0.0.1:3317"
 const apiOrigin = "http://127.0.0.1:8317"
 const frontendPort = "3317"
 const buildTimeoutMs = 12 * 60 * 1000
 const stopTimeoutMs = 4 * 1000
 const workspacePrefix = "newsroom-paper-agent-e2e-"
+// The isolated copy links back to this checkout's node_modules. Bundlers resolve that
+// link to its real path and import it relatively, which is impossible across volumes
+// (a Windows temp dir on another drive), so the workspace stays in the repository's
+// ignored .tmp directory, on the same volume and outside the frontend project.
+const workspaceParent = path.resolve(sourceFrontend, "..", ".tmp", "paper-agent-e2e")
 
 const fixedEnvironment = {
   NEXT_TELEMETRY_DISABLED: "1",
-  NEWSROOM_DEPLOYMENT_PROFILE: "local-desktop",
+  NEWSROOM_DEPLOYMENT_PROFILE: "hosted",
   NEWSROOM_FRONTEND_SURFACE: "portal",
-  NEWSROOM_CANONICAL_ORIGIN: canonicalOrigin,
-  NEWSROOM_DESKTOP_CANONICAL_ORIGIN: canonicalOrigin,
-  NEWSROOM_PORTAL_ORIGIN: canonicalOrigin,
+  NEWSROOM_PUBLIC_ORIGIN: publicOrigin,
+  NEWSROOM_ALLOW_INSECURE_ORIGIN: "1",
   NEWSROOM_API_BASE_URL: apiOrigin,
-  NEXT_PUBLIC_NEWSROOM_API_BASE_URL: apiOrigin,
-  NEXT_PUBLIC_API_BASE_URL: apiOrigin,
-  NEWSROOM_DESKTOP_INSTANCE_KEY: `local-desktop:${canonicalOrigin}`,
-  NEWSROOM_DESKTOP_RELEASE_ID: "paper-agent-e2e",
-  NEWSROOM_DESKTOP_CONFIG_DIGEST: "e".repeat(64),
-  NEWSROOM_DESKTOP_BOOT_ID: "e".repeat(32),
   TZ: "UTC",
 }
 
@@ -90,7 +87,9 @@ process.once("unhandledRejection", reason => {
 })
 
 try {
-  isolatedRoot = await mkdtemp(path.join(os.tmpdir(), workspacePrefix))
+  await mkdir(workspaceParent, { recursive: true })
+  await sweepStaleWorkspaces()
+  isolatedRoot = await mkdtemp(path.join(workspaceParent, workspacePrefix))
   assertDisposableWorkspace(isolatedRoot)
 
   const isolatedFrontend = path.join(isolatedRoot, "frontend")
@@ -212,16 +211,36 @@ async function runBuild(nextCli, isolatedFrontend, environment) {
 
 async function cleanupWorkspace() {
   if (!isolatedRoot) return
-  assertDisposableWorkspace(isolatedRoot)
-  await rm(isolatedRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+  await removeWorkspace(isolatedRoot)
   isolatedRoot = undefined
 }
 
+// Playwright stops the web server on Windows by force-killing its process tree, so the
+// shutdown cleanup above never runs there. The server owns a fixed port, which makes
+// every workspace left in the parent directory a leftover of an earlier, dead run.
+async function sweepStaleWorkspaces() {
+  const entries = await readdir(workspaceParent, { withFileTypes: true })
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith(workspacePrefix)) {
+      await removeWorkspace(path.join(workspaceParent, entry.name))
+    }
+  }
+}
+
+async function removeWorkspace(workspace) {
+  assertDisposableWorkspace(workspace)
+  // Detach the link to the real node_modules first so removal can never descend into it.
+  await unlink(path.join(workspace, "frontend", "node_modules")).catch(error => {
+    if (error?.code !== "ENOENT") throw error
+  })
+  await rm(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+}
+
 function assertDisposableWorkspace(candidate) {
-  const resolvedTemp = path.resolve(os.tmpdir())
+  const resolvedParent = path.resolve(workspaceParent)
   const resolvedCandidate = path.resolve(candidate)
   if (
-    path.dirname(resolvedCandidate) !== resolvedTemp ||
+    path.dirname(resolvedCandidate) !== resolvedParent ||
     !path.basename(resolvedCandidate).startsWith(workspacePrefix)
   ) {
     throw new Error(`Refusing to clean unexpected E2E workspace: ${resolvedCandidate}`)

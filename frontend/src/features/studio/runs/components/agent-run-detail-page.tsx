@@ -37,7 +37,7 @@ export function AgentRunDetailPage({ runId, detail }: { runId: string; detail?: 
   const selectedStep = data.steps.find((step) => step.id === selectedStepId) ?? defaultStep
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <PageHeader
         eyebrow="Studio 运行"
         title="运行可观测性"
@@ -56,7 +56,7 @@ export function AgentRunDetailPage({ runId, detail }: { runId: string; detail?: 
       {!data.steps.length ? (
         <EmptyState title="暂无步骤" description="这次运行没有步骤记录。" />
       ) : (
-        <section className="grid gap-6 2xl:grid-cols-[minmax(300px,0.9fr)_minmax(360px,1fr)_minmax(360px,1fr)]">
+        <section className="grid gap-4 2xl:grid-cols-[minmax(300px,0.9fr)_minmax(360px,1fr)_minmax(360px,1fr)]">
           <div className="hidden 2xl:block">
             <WorkflowDag nodes={data.dag.nodes} edges={data.dag.edges} />
           </div>

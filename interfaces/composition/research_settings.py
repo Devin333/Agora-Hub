@@ -15,6 +15,7 @@ from framework.harness.runtime.result_policy import (
     GraphArtifactRetentionSettings,
 )
 from framework.memory.namespace import namespace_revision
+from framework.llm.clients import LLMCredentialMode, llm_credential_mode
 from interfaces.composition.research_errors import (
     ResearchConfigurationError,
     ResearchRemediation,
@@ -748,7 +749,11 @@ class ResearchRuntimeSettings:
             run_store=_research_run_store_settings_from_env(values, run_store_root),
             graph_artifact_persistence=_graph_artifact_persistence_from_env(values),
         )
-        if not _secret_is_present(values, settings.llm.api_key_env):
+        # In invocation mode every model call carries the session account's
+        # own key, so the process environment holds no provider key at all.
+        if llm_credential_mode(values) is LLMCredentialMode.ENVIRONMENT and not _secret_is_present(
+            values, settings.llm.api_key_env
+        ):
             raise ResearchRuntimeUnavailableError(
                 ("research.llm.credential",),
                 remediation=ResearchRemediation.CONFIGURE_LLM_CREDENTIAL,

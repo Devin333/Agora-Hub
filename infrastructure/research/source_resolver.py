@@ -805,10 +805,11 @@ def _infer_source_type(source: str) -> str:
         return "doi"
     if "github.com" in value:
         return "github"
-    if value.startswith("file:") or value.lower().endswith((".pdf", ".tex", ".tar.gz")):
-        return "local"
     if value.startswith(("http://", "https://")):
+        # A remote document link is never a local path, whatever its suffix.
         return "publisher"
+    if value.startswith("file:") or value.endswith((".pdf", ".tex", ".tar.gz")):
+        return "local"
     return "manual"
 
 

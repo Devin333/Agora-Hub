@@ -7,7 +7,7 @@ import type { useReaderNotebook } from "./use-reader-notebook"
 import { ReaderAssistant, type ReaderAssistantProps } from "./reader-assistant"
 
 const mocks = vi.hoisted(() => ({
-  desktopProfile: true,
+  hostedProfile: true,
   askPaper: vi.fn(),
   fetchDesktopIdentity: vi.fn(),
   fetchResearchOperation: vi.fn(),
@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   owner: "alice" as string | null,
 }))
 
-vi.mock("@/lib/deployment-profile", () => ({ isLocalDesktopProfile: () => mocks.desktopProfile }))
+vi.mock("@/lib/deployment-profile", () => ({ isHostedProfile: () => mocks.hostedProfile }))
 vi.mock("@/lib/papers/api", () => ({ askPaper: mocks.askPaper }))
 vi.mock("@/lib/research/use-research-history", () => ({
   useOwnedResearchWorkspace: () => ({ owner: mocks.owner, ready: true, workspace: {} }),
@@ -182,7 +182,7 @@ function Harness({
 describe("ReaderAssistant grounded selection prefill", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.desktopProfile = true
+    mocks.hostedProfile = true
     mocks.owner = "alice"
     mocks.recoverable = []
     mocks.fetchDesktopIdentity.mockResolvedValue({
@@ -588,7 +588,7 @@ describe("ReaderAssistant grounded selection prefill", () => {
   })
 
   it("shows a legacy public answer without inventing a desktop execution trace", async () => {
-    mocks.desktopProfile = false
+    mocks.hostedProfile = false
     const publicAnswer = {
       paperId: paper.id,
       question: "请解释这段原文",

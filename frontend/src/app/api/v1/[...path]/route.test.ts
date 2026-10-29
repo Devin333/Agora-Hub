@@ -6,18 +6,18 @@ const ORIGINAL_FETCH = globalThis.fetch
 const ENV_KEYS = [
   "NEWSROOM_DEPLOYMENT_PROFILE",
   "NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE",
-  "NEWSROOM_CANONICAL_ORIGIN",
-  "NEWSROOM_DESKTOP_CANONICAL_ORIGIN",
+  "NEWSROOM_PUBLIC_ORIGIN",
+  "NEWSROOM_ALLOW_INSECURE_ORIGIN",
   "NEWSROOM_API_BASE_URL",
 ] as const
 const ORIGINAL_ENV = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]))
 
-describe("local-desktop raw API server route", () => {
+describe("hosted raw API server route", () => {
   beforeEach(() => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     delete process.env.NEXT_PUBLIC_NEWSROOM_DEPLOYMENT_PROFILE
-    process.env.NEWSROOM_CANONICAL_ORIGIN = "http://127.0.0.1:3124"
-    process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN = "http://127.0.0.1:3124"
+    process.env.NEWSROOM_PUBLIC_ORIGIN = "http://127.0.0.1:3124"
+    process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN = "1"
     process.env.NEWSROOM_API_BASE_URL = "http://127.0.0.1:8124"
   })
 
@@ -53,7 +53,6 @@ describe("local-desktop raw API server route", () => {
       data: {
         initialized: true,
         session: { user: { userId: "user-1" } },
-        local_desktop: { instance_key: "local-desktop:http://127.0.0.1:3124" },
       },
     }))
     vi.stubGlobal("fetch", upstream)
@@ -71,7 +70,6 @@ describe("local-desktop raw API server route", () => {
       data: {
         initialized: true,
         session: { user: { userId: "user-1" } },
-        local_desktop: { instance_key: "local-desktop:http://127.0.0.1:3124" },
       },
     })
   })
@@ -80,7 +78,7 @@ describe("local-desktop raw API server route", () => {
     const upstream = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { accepted: true } }))
     vi.stubGlobal("fetch", upstream)
     const body = JSON.stringify({ value: "kept" })
-    const request = rawRequest("/api/v1/research/items/a%20b?revision=2", {
+    const request = rawRequest("/api/v1/research/desktop/items/a%20b?revision=2", {
       method: "POST",
       body,
       headers: {
@@ -92,6 +90,7 @@ describe("local-desktop raw API server route", () => {
         Origin: "http://127.0.0.1:3124",
         "Sec-Fetch-Site": "same-origin",
         "X-Api-Client-Id": "forged-client",
+        "X-Forwarded-For": "203.0.113.7",
         "X-Forwarded-Host": "foreign.example",
         "X-News-Actor": "forged-owner",
         "X-Newsroom-Request-Id": "req_123",
@@ -100,11 +99,11 @@ describe("local-desktop raw API server route", () => {
       },
     })
 
-    const response = await POST(request, context("research", "items", "a b"))
+    const response = await POST(request, context("research", "desktop", "items", "a b"))
 
     expect(response.status).toBe(200)
     const [target, init] = upstream.mock.calls[0] as [URL, RequestInit]
-    expect(target.toString()).toBe("http://127.0.0.1:8124/api/v1/research/items/a%20b?revision=2")
+    expect(target.toString()).toBe("http://127.0.0.1:8124/api/v1/research/desktop/items/a%20b?revision=2")
     expect(init.method).toBe("POST")
     expect(init.cache).toBe("no-store")
     expect((init as RequestInit & { duplex?: string }).duplex).toBe("half")
@@ -121,6 +120,8 @@ describe("local-desktop raw API server route", () => {
     expect(headers.has("host")).toBe(false)
     expect(headers.has("x-api-client-id")).toBe(false)
     expect(headers.has("x-forwarded-host")).toBe(false)
+    // The proxy's address chain reaches the API, which reads it only from the trusted BFF.
+    expect(headers.get("x-forwarded-for")).toBe("203.0.113.7")
     expect(headers.has("x-news-actor")).toBe(false)
     expect(headers.has("x-remove-me")).toBe(false)
   })
@@ -339,6 +340,65 @@ describe("local-desktop raw API server route", () => {
     expect(upstream).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ["GET", ["account"]],
+    ["PUT", ["account", "model-credential"]],
+    ["DELETE", ["account", "model-credential"]],
+    ["POST", ["account", "model-credential", "verify"]],
+    ["GET", ["admin", "accounts"]],
+    ["POST", ["admin", "accounts"]],
+    ["POST", ["admin", "accounts", "user_0123456789abcdef", "disable"]],
+    ["POST", ["admin", "accounts", "user_0123456789abcdef", "password"]],
+    ["PUT", ["admin", "accounts", "user_0123456789abcdef", "role"]],
+  ] as const)("forwards the reviewed account route %s %j with the session and public Origin", async (method, path) => {
+    const upstream = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: {} }))
+    vi.stubGlobal("fetch", upstream)
+    const handler = { GET, POST, PUT, DELETE }[method]
+    const response = await handler(rawRequest(`/api/v1/${path.join("/")}`, {
+      method,
+      body: method === "GET" || method === "DELETE" ? undefined : "{}",
+      headers: { Cookie: "newsroom_session=session-token", Origin: "http://127.0.0.1:3124", "Sec-Fetch-Site": "same-origin" },
+    }), context(...path))
+
+    expect(response.status).toBe(200)
+    const [target, init] = upstream.mock.calls[0] as [URL, RequestInit]
+    expect(target.pathname).toBe(`/api/v1/${path.join("/")}`)
+    const headers = new Headers(init.headers)
+    expect(headers.get("x-newsroom-session")).toBe("session-token")
+    if (method !== "GET") expect(headers.get("origin")).toBe("http://127.0.0.1:3124")
+  })
+
+  it.each([
+    ["POST", ["account", "password"]],
+    ["DELETE", ["admin", "accounts", "user_0123456789abcdef"]],
+    ["POST", ["admin", "accounts", "not-an-account-id", "disable"]],
+    ["GET", ["account", "model-credential", "verify"]],
+  ] as const)("refuses the unreviewed account route %s %j", async (method, path) => {
+    const upstream = vi.fn()
+    vi.stubGlobal("fetch", upstream)
+    const handler = { GET, POST, DELETE }[method]
+    const response = await handler(rawRequest(`/api/v1/${path.join("/")}`, {
+      method,
+      body: method === "POST" ? "{}" : undefined,
+      headers: { Origin: "http://127.0.0.1:3124", "Sec-Fetch-Site": "same-origin" },
+    }), context(...path))
+
+    expect(response.status).toBe(404)
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
+  it("is unavailable outside the hosted profile", async () => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "default"
+    const upstream = vi.fn()
+    vi.stubGlobal("fetch", upstream)
+
+    const response = await GET(rawRequest("/api/v1/account"), context("account"))
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({ success: false, error: { code: "raw_api_route_unavailable" } })
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
   it("rejects an oversized target before forwarding", async () => {
     const upstream = vi.fn()
     vi.stubGlobal("fetch", upstream)
@@ -428,15 +488,26 @@ describe("local-desktop raw API server route", () => {
     expect(upstream).not.toHaveBeenCalled()
   })
 
-  it("fails closed when the runtime API origin is not a loopback origin", async () => {
-    process.env.NEWSROOM_API_BASE_URL = "https://api.example.test"
+  it("reaches a private-network API origin such as the compose service name", async () => {
+    process.env.NEWSROOM_API_BASE_URL = "http://api:8000"
+    const upstream = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { initialized: true, session: null } }))
+    vi.stubGlobal("fetch", upstream)
+
+    const response = await GET(rawRequest("/api/v1/auth/session"), context("auth", "session"))
+
+    expect(response.status).toBe(200)
+    expect((upstream.mock.calls[0] as [URL])[0].toString()).toBe("http://api:8000/api/v1/auth/session")
+  })
+
+  it("fails closed when the runtime API origin is not a pure origin", async () => {
+    process.env.NEWSROOM_API_BASE_URL = "http://api:8000/api"
     const upstream = vi.fn()
     vi.stubGlobal("fetch", upstream)
 
     const response = await GET(rawRequest("/api/v1/auth/session"), context("auth", "session"))
 
     expect(response.status).toBe(503)
-    expect(await response.json()).toEqual({ success: false, error: { code: "desktop_api_base_invalid" } })
+    expect(await response.json()).toEqual({ success: false, error: { code: "api_base_invalid" } })
     expect(upstream).not.toHaveBeenCalled()
   })
 })

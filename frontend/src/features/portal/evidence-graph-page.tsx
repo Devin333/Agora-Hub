@@ -1,90 +1,80 @@
 import Link from "next/link"
 import { ArrowRight, CircleAlert, CircleCheck, CircleDashed, Network } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { SectionPanel } from "@/components/common/section-panel"
+import { PageHeader } from "@/components/layout/page-header"
+import { Badge, type BadgeVariant } from "@/components/ui/badge"
 import type { EvidenceGraphData, EvidenceGraphSection, PortalModuleStatus } from "@/features/portal/portal-home-data"
+
+const listFrameClass = "divide-y divide-border overflow-hidden rounded-xl border border-border"
+const rowLinkClass =
+  "block px-4 py-3 outline-none transition-colors hover:bg-accent/40 focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
 
 export function EvidenceGraphPage({ data }: { data: EvidenceGraphData }) {
   const total = data.sections.reduce((count, section) => count + section.count, 0)
 
   return (
-    <div className="space-y-8 font-papers-research">
-      <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-end">
-        <div>
-          <p className="mb-5 text-xs font-medium uppercase tracking-[0.18em] text-[#334155]/55 dark:text-muted-foreground">
-            Trends / Evidence
-          </p>
-          <h1 className="max-w-5xl break-keep text-5xl font-black leading-none tracking-normal text-[#334155] sm:text-6xl lg:text-7xl dark:text-foreground">
-            Cross-board{" "}
-            <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 bg-clip-text text-transparent">
-              Evidence Graph
-            </span>
-          </h1>
-          <p className="mt-6 max-w-3xl text-base leading-7 text-[#334155]/70 dark:text-muted-foreground">{data.summary}</p>
-        </div>
-        <div className="rounded-md border border-[#dbe3dc] bg-white/90 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.10)] dark:border-border dark:bg-card">
-          <div className="flex items-center gap-3">
-            <span className="flex size-10 items-center justify-center rounded-md bg-[#0f172a] text-white">
-              <Network className="size-5" />
-            </span>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-normal text-[#334155]/55 dark:text-muted-foreground">Graph scope</p>
-              <p className="text-2xl font-semibold text-[#334155] dark:text-foreground">{total}</p>
-            </div>
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Trends / Evidence"
+        title="Cross-board Evidence Graph"
+        description={data.summary}
+        actions={
+          <div className="flex items-center gap-2.5 rounded-xl border border-border px-3 py-1.5">
+            <Network size={16} strokeWidth={1.8} aria-hidden="true" className="text-muted-foreground" />
+            <span className="text-label text-muted-foreground">Graph scope</span>
+            <span className="text-body1 font-semibold tabular-nums text-foreground">{total}</span>
           </div>
-          <p className="mt-4 text-sm leading-6 text-[#334155]/65 dark:text-muted-foreground">
-            Paper, project, news, and community evidence are shown as structured sections in this MVP view.
-          </p>
-        </div>
-      </section>
+        }
+      />
+      <p className="text-label text-muted-foreground">
+        Paper, project, news, and community evidence are shown as structured sections in this MVP view.
+      </p>
 
       {data.notices.length ? (
-        <section className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+        <section className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-body2 text-foreground">
           {data.notices.slice(0, 3).join(" ")}
         </section>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {data.sections.map((section) => (
           <EvidenceSectionCard key={section.title} section={section} />
         ))}
       </section>
 
-      <section className="grid gap-8 border-t border-[#d7dfd8] pt-8 xl:grid-cols-[16rem_minmax(0,1fr)] dark:border-border">
-        <aside>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/55 dark:text-muted-foreground">Signal mix</p>
-          <div className="mt-3 space-y-2">
+      <section className="grid gap-6 border-t border-border pt-6 xl:grid-cols-[16rem_minmax(0,1fr)]">
+        <SectionPanel title="Signal mix" framed={false}>
+          <nav aria-label="Signal mix" className={listFrameClass}>
             {data.sections.map((section) => (
-              <Link
-                key={section.title}
-                href={section.href}
-                className="flex items-center justify-between rounded-md border border-[#dbe3dc] bg-white/70 px-3 py-2 text-sm text-[#334155] transition-colors hover:bg-white dark:border-border dark:bg-card dark:text-foreground"
-              >
-                <span>{section.title}</span>
-                <span>{section.count}</span>
+              <Link key={section.title} href={section.href} className={`${rowLinkClass} flex items-center justify-between gap-3 text-body2`}>
+                <span className="truncate text-foreground">{section.title}</span>
+                <span className="text-label tabular-nums text-muted-foreground">{section.count}</span>
               </Link>
             ))}
-          </div>
-        </aside>
+          </nav>
+        </SectionPanel>
 
-        <div className="space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/55 dark:text-muted-foreground">Timeline</p>
+        <SectionPanel title="Timeline" framed={false}>
           {data.timeline.length ? (
-            data.timeline.map((item) => (
-              <Link
-                key={item.title}
-                href={item.href ?? "/topics?view=evidence-graph"}
-                className="grid gap-2 rounded-md border border-[#dbe3dc] bg-white/75 p-4 transition-colors hover:bg-white md:grid-cols-[minmax(0,1fr)_8rem] md:items-center dark:border-border dark:bg-card"
-              >
-                <span className="font-medium text-[#334155] dark:text-foreground">{item.title}</span>
-                <span className="text-xs text-[#334155]/55 dark:text-muted-foreground">{item.meta}</span>
-              </Link>
-            ))
+            <ol className={listFrameClass}>
+              {data.timeline.map((item) => (
+                <li key={item.title}>
+                  <Link
+                    href={item.href ?? "/topics?view=evidence-graph"}
+                    className={`${rowLinkClass} grid gap-1 md:grid-cols-[minmax(0,1fr)_8rem] md:items-center md:gap-3`}
+                  >
+                    <span className="min-w-0 truncate text-body2 font-medium text-foreground">{item.title}</span>
+                    <span className="text-label text-muted-foreground md:text-right">{item.meta}</span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
           ) : (
-            <div className="rounded-md border border-dashed border-[#dbe3dc] bg-white/50 p-4 text-sm text-[#334155]/60 dark:border-border dark:bg-card dark:text-muted-foreground">
+            <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-body2 text-muted-foreground">
               No evidence timeline is available from the current data sources.
-            </div>
+            </p>
           )}
-        </div>
+        </SectionPanel>
       </section>
     </div>
   )
@@ -92,53 +82,54 @@ export function EvidenceGraphPage({ data }: { data: EvidenceGraphData }) {
 
 function EvidenceSectionCard({ section }: { section: EvidenceGraphSection }) {
   return (
-    <article className="rounded-md border border-[#dbe3dc] bg-white/85 p-5 shadow-sm dark:border-border dark:bg-card">
+    <article className="flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-normal text-[#334155]/55 dark:text-muted-foreground">Evidence</p>
-          <h2 className="mt-1 text-lg font-semibold text-[#334155] dark:text-foreground">{section.title}</h2>
+        <div className="min-w-0">
+          <p className="text-label text-muted-foreground">Evidence</p>
+          <h2 className="mt-0.5 text-[15px] font-semibold text-foreground">{section.title}</h2>
         </div>
         <StatusBadge status={section.status} />
       </div>
-      <p className="mt-4 text-3xl font-semibold text-[#334155] dark:text-foreground">{section.count}</p>
-      <div className="mt-4 space-y-2">
+      <p className="mt-3 text-heading1 font-semibold tabular-nums text-foreground">{section.count}</p>
+      <div className="mt-3 flex-1">
         {section.items.length ? (
-          section.items.slice(0, 3).map((item) => (
-            <Link
-              key={item.title}
-              href={item.href ?? section.href}
-              className="block rounded-md border border-transparent px-2 py-1.5 text-sm text-[#334155] transition-colors hover:border-[#dbe3dc] hover:bg-[#f7f9f6] dark:text-foreground dark:hover:border-border dark:hover:bg-background"
-            >
-              <span className="line-clamp-1 font-medium">{item.title}</span>
-              {item.meta ? <span className="mt-1 block truncate text-xs text-[#334155]/55 dark:text-muted-foreground">{item.meta}</span> : null}
-            </Link>
-          ))
+          <div className={listFrameClass}>
+            {section.items.slice(0, 3).map((item) => (
+              <Link key={item.title} href={item.href ?? section.href} className={rowLinkClass}>
+                <span className="line-clamp-1 text-body2 font-medium text-foreground">{item.title}</span>
+                {item.meta ? <span className="mt-0.5 block truncate text-label text-muted-foreground">{item.meta}</span> : null}
+              </Link>
+            ))}
+          </div>
         ) : (
-          <p className="rounded-md border border-dashed border-[#dbe3dc] px-3 py-3 text-sm text-[#334155]/60 dark:border-border dark:text-muted-foreground">
+          <p className="rounded-xl border border-dashed border-border px-4 py-3 text-body2 text-muted-foreground">
             No {section.title.toLowerCase()} evidence is available.
           </p>
         )}
       </div>
-      <Link href={section.href} className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800">
+      <Link
+        href={section.href}
+        className="mt-4 inline-flex w-fit items-center gap-1.5 rounded-md text-body2 font-medium text-link outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
         Open source view
-        <ArrowRight className="size-4" />
+        <ArrowRight size={15} strokeWidth={1.8} aria-hidden="true" />
       </Link>
     </article>
   )
 }
 
-function StatusBadge({ status }: { status: PortalModuleStatus }) {
-  const Icon = status === "ready" ? CircleCheck : status === "empty" ? CircleDashed : CircleAlert
-  return (
-    <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-xs", statusBadgeClass(status))}>
-      <Icon className="size-3" />
-      {status}
-    </span>
-  )
+const statusAppearance: Record<PortalModuleStatus, { variant: BadgeVariant; icon: typeof CircleCheck }> = {
+  ready: { variant: "success", icon: CircleCheck },
+  empty: { variant: "muted", icon: CircleDashed },
+  degraded: { variant: "warning", icon: CircleAlert },
 }
 
-function statusBadgeClass(status: PortalModuleStatus) {
-  if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-800"
-  if (status === "empty") return "border-slate-200 bg-slate-50 text-slate-700"
-  return "border-amber-200 bg-amber-50 text-amber-800"
+function StatusBadge({ status }: { status: PortalModuleStatus }) {
+  const { variant, icon: Icon } = statusAppearance[status] ?? statusAppearance.degraded
+  return (
+    <Badge variant={variant}>
+      <Icon strokeWidth={1.8} aria-hidden="true" />
+      {status}
+    </Badge>
+  )
 }

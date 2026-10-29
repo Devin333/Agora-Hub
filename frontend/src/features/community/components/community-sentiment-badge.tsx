@@ -1,17 +1,16 @@
-import type { ComponentProps } from "react"
-import { Badge } from "@/components/common/badge"
+import { Badge, type BadgeVariant } from "@/components/ui/badge"
 import { communitySentimentLabel } from "@/lib/community/community-filters"
 import type { CommunityTopicSentiment } from "@/types/community"
 
-const sentimentTone: Record<CommunityTopicSentiment, ComponentProps<typeof Badge>["tone"]> = {
+const sentimentVariant: Record<CommunityTopicSentiment, BadgeVariant> = {
   positive: "success",
   negative: "danger",
   mixed: "warning",
   controversial: "warning",
-  neutral: "info",
-  unknown: "neutral"
+  neutral: "muted",
+  unknown: "outline"
 }
 
 export function CommunitySentimentBadge({ sentiment }: { sentiment: CommunityTopicSentiment }) {
-  return <Badge tone={sentimentTone[sentiment]}>{communitySentimentLabel(sentiment)}</Badge>
+  return <Badge variant={sentimentVariant[sentiment]}>{communitySentimentLabel(sentiment)}</Badge>
 }

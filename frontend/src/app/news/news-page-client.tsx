@@ -6,17 +6,18 @@ import { useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { EmptyState } from "@/components/common/empty-state"
 import { ErrorState } from "@/components/common/error-state"
+import { FilterChip } from "@/components/common/filter-chip"
 import { PageSkeleton } from "@/components/common/loading-skeleton"
+import { SectionCaption } from "@/components/common/section-panel"
 import { Badge } from "@/components/common/badge"
+import { PageHeader } from "@/components/layout/page-header"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { NewsFilterPanel } from "@/features/news/components/news-filter-panel"
 import { NewsList } from "@/features/news/components/news-list"
 import { NewsToolbar } from "@/features/news/components/news-toolbar"
 import { useNewsList } from "@/features/news/hooks/use-news-list"
 import { filtersFromSearchParams, filtersToSearchParams, updateFilters } from "@/features/news/lib/news-filters"
 import { formatDateTime } from "@/lib/format"
-import { cn } from "@/lib/utils"
 import type { NewsFilters, NewsItem, NewsViewMode } from "@/types/news"
 
 type FacetItem = {
@@ -72,49 +73,39 @@ export function NewsPageClient() {
   }))
 
   return (
-    <main className="space-y-8 font-papers-research">
-      <section className="grid gap-8 py-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end">
-        <div className="min-w-0">
-          <p className="mb-5 text-xs font-medium uppercase tracking-[0.18em] text-[#334155]/55 dark:text-muted-foreground">
-            Agora Hub / AI News
-          </p>
-          <h1 className="max-w-5xl break-keep text-5xl font-black leading-none tracking-normal text-[#334155] sm:text-6xl lg:text-7xl dark:text-foreground">
-            AI News{" "}
-            <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 bg-clip-text text-transparent">
-              Board
-            </span>
-          </h1>
-          <p className="mt-6 max-w-3xl text-base leading-7 text-[#334155]/70 dark:text-muted-foreground">
-            Official updates, product launches, funding, policy, open-source releases, and ecosystem signals for the AI industry.
-          </p>
-          <div className="mt-7 flex flex-wrap gap-2">
-            <HeroPill label="Visible items" value={data.allFiltered.length} />
-            <HeroPill label="Sources" value={data.options.sourceTypes.length} />
-            <HeroPill label="Categories" value={data.options.categories.length} />
-            <HeroPill label="Source state" value={data.source} />
-          </div>
-        </div>
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Agora Hub / AI News"
+        title="AI News Board"
+        description="Official updates, product launches, funding, policy, open-source releases, and ecosystem signals for the AI industry."
+        actions={
+          <dl className="flex flex-wrap gap-1.5">
+            <StatPill label="Visible items" value={data.allFiltered.length} />
+            <StatPill label="Sources" value={data.options.sourceTypes.length} />
+            <StatPill label="Categories" value={data.options.categories.length} />
+            <StatPill label="Source state" value={data.source} />
+          </dl>
+        }
+      />
 
-        <CurrentLeadCard topStory={topStory} />
-      </section>
-
-      <section className="grid gap-8 xl:grid-cols-[16rem_minmax(0,1fr)]">
-        <aside className="hidden space-y-7 xl:block">
+      <div className="grid gap-6 xl:grid-cols-[15rem_minmax(0,1fr)]">
+        <aside className="hidden space-y-5 xl:block" aria-label="News facets">
+          <CurrentLeadCard topStory={topStory} />
           <FacetList title="Topics" items={topics} onSelect={(topic) => setFilters({ topic })} />
           <FacetList title="Source types" items={sources} onSelect={(sourceType) => setFilters({ sourceType: [sourceType as NonNullable<NewsFilters["sourceType"]>[number]] })} />
           <FacetList title="Categories" items={categories} onSelect={(category) => setFilters({ category: [category] })} />
           <FacetList title="Companies" items={companies} onSelect={(company) => setFilters({ keyword: company })} />
         </aside>
 
-        <section className="min-w-0 space-y-5">
-          <FilterBar filters={filters} onChange={setFilters} />
-
+        <section className="min-w-0 space-y-4" aria-label="News stream">
           <NewsToolbar
             filters={filters}
             options={data.options}
             onChange={setFilters}
             onToggleFilters={() => setMobileFiltersOpen((value) => !value)}
           />
+
+          <FilterBar filters={filters} onChange={setFilters} />
 
           {data.dataState === "fallback" ? <DegradedBanner notices={data.notices} /> : null}
 
@@ -125,11 +116,11 @@ export function NewsPageClient() {
           {topStory ? <TopStoryCard item={topStory} /> : null}
           {clusters.length ? <ClusterRail clusters={clusters} /> : null}
 
-          <div className="flex items-center justify-between gap-3 text-xs text-[#334155]/55 dark:text-muted-foreground">
+          <div className="flex items-center justify-between gap-3 text-label text-muted-foreground">
             <span>
               Showing {page.items.length} of {page.total} matching news items
             </span>
-            <span>
+            <span className="tabular-nums">
               Page {page.page} of {totalPages}
             </span>
           </div>
@@ -145,8 +136,8 @@ export function NewsPageClient() {
             </Button>
           </div>
         </section>
-      </section>
-    </main>
+      </div>
+    </div>
   )
 }
 
@@ -164,40 +155,28 @@ function FilterBar({ filters, onChange }: { filters: NewsFilters; onChange: (pat
   ]
 
   return (
-    <div className="flex flex-col gap-4 border-y border-[#d7dfd8] py-4 md:flex-row md:items-center md:justify-between dark:border-border">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Period">
         {periods.map((period) => (
-          <button
+          <FilterChip
             key={period.label}
-            type="button"
+            active={(filters.dateRange ?? "") === (period.value ?? "")}
             onClick={() => onChange({ dateRange: period.value })}
-            className={cn(
-              "h-8 rounded-full border px-3 text-sm font-semibold transition-colors",
-              (filters.dateRange ?? "") === (period.value ?? "")
-                ? "border-[#315d8a] bg-[#315d8a] text-white"
-                : "border-[#d7dfd8] bg-white text-[#334155]/65 hover:border-[#315d8a]/40 hover:text-[#334155] dark:border-border dark:bg-card dark:text-muted-foreground"
-            )}
           >
             {period.label}
-          </button>
+          </FilterChip>
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Ranking">
         {sorts.map((sort) => (
-          <button
+          <FilterChip
             key={sort.label}
-            type="button"
+            active={(filters.sort ?? "publishedAt") === sort.value}
             onClick={() => onChange({ sort: sort.value })}
-            className={cn(
-              "h-8 rounded-full border px-3 text-sm font-semibold transition-colors",
-              (filters.sort ?? "publishedAt") === sort.value
-                ? "border-emerald-700 bg-emerald-700 text-white"
-                : "border-[#d7dfd8] bg-white text-[#334155]/65 hover:border-emerald-700/40 hover:text-[#334155] dark:border-border dark:bg-card dark:text-muted-foreground"
-            )}
           >
             {sort.label}
-          </button>
+          </FilterChip>
         ))}
       </div>
     </div>
@@ -206,57 +185,55 @@ function FilterBar({ filters, onChange }: { filters: NewsFilters; onChange: (pat
 
 function CurrentLeadCard({ topStory }: { topStory?: NewsItem }) {
   return (
-    <div className="rounded-md border border-[#dbe3dc] bg-white/90 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.10)] dark:border-border dark:bg-card">
-      <p className="text-xs font-semibold uppercase tracking-normal text-[#334155]/55 dark:text-muted-foreground">Current lead</p>
+    <section className="rounded-2xl border border-border bg-card p-4">
+      <SectionCaption>Current lead</SectionCaption>
       {topStory ? (
-        <div className="mt-4 space-y-4">
+        <div className="mt-2 space-y-3">
           <div className="flex items-start gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-[#0f172a] text-white">
-              <Newspaper className="size-5" />
+            <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent text-accent-foreground">
+              <Newspaper size={16} strokeWidth={1.8} aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <h2 className="line-clamp-2 text-lg font-semibold text-[#334155] dark:text-foreground">{topStory.title}</h2>
-              <p className="mt-1 text-sm text-[#334155]/60 dark:text-muted-foreground">{topStory.sourceName}</p>
+              <h2 className="line-clamp-3 text-body2 font-semibold text-foreground">{topStory.title}</h2>
+              <p className="mt-1 text-label text-muted-foreground">{topStory.sourceName}</p>
             </div>
           </div>
-          <Link href={`/news/${topStory.id}`} className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800">
+          <Link
+            href={`/news/${topStory.id}`}
+            className="inline-flex items-center gap-1.5 rounded-sm text-body2 font-medium text-link outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
             Read brief
-            <ArrowRight className="size-4" />
+            <ArrowRight size={15} strokeWidth={1.8} aria-hidden="true" />
           </Link>
         </div>
       ) : (
-        <p className="mt-4 text-sm leading-6 text-[#334155]/60 dark:text-muted-foreground">
+        <p className="mt-2 text-body2 text-muted-foreground">
           No real AI News output is available from backend or local artifacts yet.
         </p>
       )}
-    </div>
+    </section>
   )
 }
 
 function TopStoryCard({ item }: { item: NewsItem }) {
   return (
-    <article className="rounded-md border border-[#dbe3dc] bg-white/90 p-5 shadow-sm dark:border-border dark:bg-card">
+    <article className="rounded-2xl border border-border bg-card p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/55 dark:text-muted-foreground">Top Story</p>
-          <Link href={`/news/${item.id}`}>
-            <h2 className="mt-2 max-w-4xl text-2xl font-semibold tracking-normal text-[#334155] hover:text-emerald-700 dark:text-foreground">
-              {item.title}
-            </h2>
+          <SectionCaption>Top Story</SectionCaption>
+          <Link href={`/news/${item.id}`} className="rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+            <h2 className="mt-1 max-w-4xl text-heading3 font-semibold text-foreground hover:underline">{item.title}</h2>
           </Link>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-[#334155]/68 dark:text-muted-foreground">{item.summary}</p>
+          <p className="mt-2 max-w-4xl text-body2 leading-relaxed text-muted-foreground">{item.summary}</p>
         </div>
-        <a
-          href={item.sourceUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex shrink-0 items-center gap-2 rounded-md border border-[#dbe3dc] bg-white px-3 py-2 text-sm text-[#334155] hover:bg-[#f7f9f6] dark:border-border dark:bg-background dark:text-foreground"
-        >
-          Source
-          <ExternalLink className="size-4" />
-        </a>
+        <Button asChild variant="outline" size="sm" className="shrink-0">
+          <a href={item.sourceUrl} target="_blank" rel="noreferrer">
+            Source
+            <ExternalLink strokeWidth={1.8} aria-hidden="true" />
+          </a>
+        </Button>
       </div>
-      <div className="mt-5 flex flex-wrap items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-1.5">
         <Badge tone="accent">{item.category}</Badge>
         <Badge tone="neutral">{item.sourceName}</Badge>
         <Badge tone="neutral">Published {formatDateTime(item.publishedAt)}</Badge>
@@ -270,15 +247,19 @@ function TopStoryCard({ item }: { item: NewsItem }) {
 
 function ClusterRail({ clusters }: { clusters: NewsClusterPreview[] }) {
   return (
-    <section className="grid gap-3 lg:grid-cols-2">
+    <section className="grid gap-3 lg:grid-cols-2" aria-label="Story clusters">
       {clusters.slice(0, 2).map((cluster) => (
-        <article key={cluster.id} className="rounded-md border border-[#dbe3dc] bg-white/75 p-4 dark:border-border dark:bg-card">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#334155]/55 dark:text-muted-foreground">Cluster</p>
-          <h3 className="mt-2 text-base font-semibold text-[#334155] dark:text-foreground">{cluster.title}</h3>
-          <div className="mt-3 space-y-2">
+        <article key={cluster.id} className="rounded-2xl border border-border bg-card p-4">
+          <SectionCaption>Cluster</SectionCaption>
+          <h3 className="mt-1 text-[15px] font-semibold text-foreground">{cluster.title}</h3>
+          <div className="mt-2 divide-y divide-border">
             {cluster.items.slice(0, 3).map((item) => (
-              <Link key={item.id} href={`/news/${item.id}`} className="block text-sm text-[#334155]/70 hover:text-emerald-700 dark:text-muted-foreground">
-                {item.sourceName}: {item.title}
+              <Link
+                key={item.id}
+                href={`/news/${item.id}`}
+                className="block py-2 text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                <span className="font-medium text-foreground/80">{item.sourceName}:</span> {item.title}
               </Link>
             ))}
           </div>
@@ -290,18 +271,18 @@ function ClusterRail({ clusters }: { clusters: NewsClusterPreview[] }) {
 
 function DegradedBanner({ notices }: { notices: string[] }) {
   return (
-    <Card className="flex flex-col gap-2 border-amber-200 bg-amber-50 p-4 text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+    <div role="status" className="flex flex-col gap-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <Badge tone="warning">Degraded</Badge>
-          <p className="text-sm font-medium">No real AI News output is currently available.</p>
+          <p className="text-body2 font-medium text-warning-text">No real AI News output is currently available.</p>
         </div>
-        <p className="mt-2 text-sm leading-6">
+        <p className="mt-1.5 text-body2 text-foreground/80">
           The board is waiting for backend or local ai_news artifacts. It will not substitute bundled mock news.
         </p>
       </div>
-      {notices.length ? <p className="text-xs sm:max-w-sm">{notices[notices.length - 1]}</p> : null}
-    </Card>
+      {notices.length ? <p className="text-label text-muted-foreground sm:max-w-sm">{notices[notices.length - 1]}</p> : null}
+    </div>
   )
 }
 
@@ -310,18 +291,18 @@ function FacetList({ title, items, onSelect }: { title: string; items: FacetItem
     return null
   }
   return (
-    <section className="space-y-3">
-      <h2 className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-[#334155]/55 dark:text-muted-foreground">{title}</h2>
-      <div className="space-y-2">
+    <section>
+      <h2 className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">{title}</h2>
+      <div className="mt-0.5 space-y-0.5">
         {items.slice(0, 8).map((item) => (
           <button
             key={`${title}-${item.value ?? item.name}`}
             type="button"
             onClick={() => onSelect(item.value ?? item.name)}
-            className="flex w-full items-baseline justify-between gap-3 text-left text-sm text-[#334155]/68 hover:text-[#334155] dark:text-muted-foreground dark:hover:text-foreground"
+            className="flex w-full items-baseline justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left text-body2 text-muted-foreground outline-none transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             <span className="truncate">{item.name}</span>
-            <span className="font-mono text-[11px]">{item.count}</span>
+            <span className="text-label tabular-nums text-faint-foreground">{item.count}</span>
           </button>
         ))}
       </div>
@@ -329,12 +310,12 @@ function FacetList({ title, items, onSelect }: { title: string; items: FacetItem
   )
 }
 
-function HeroPill({ label, value }: { label: string; value: string | number }) {
+function StatPill({ label, value }: { label: string; value: string | number }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-[#dbe5dd] bg-white/90 px-3 py-1 text-xs text-[#334155]/70 shadow-sm dark:border-border dark:bg-card dark:text-muted-foreground">
-      <span className="font-medium text-[#334155] dark:text-foreground">{label}</span>
-      {value}
-    </span>
+    <div className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-label text-muted-foreground">
+      <dt className="font-medium text-foreground">{label}</dt>
+      <dd className="tabular-nums">{value}</dd>
+    </div>
   )
 }
 

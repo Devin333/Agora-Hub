@@ -87,6 +87,38 @@ describe("EvidenceGraphExplorer", () => {
     expect(push).toHaveBeenCalledWith("/topics?view=evidence-graph&topic=RAG+Evaluation")
   })
 
+  it("styles the evidence lists with rakazo tokens only", () => {
+    const { container } = render(<EvidenceGraphExplorer data={graph} />)
+
+    const selectedRows = screen.getAllByRole("button", { pressed: true }).filter((button) => button.textContent?.includes("Agent Memory Paper"))
+    expect(selectedRows.length).toBeGreaterThan(0)
+    for (const row of selectedRows) {
+      expect(row).toHaveClass("bg-accent/60", "px-4", "py-3")
+    }
+
+    const unselectedRow = screen.getAllByRole("button", { pressed: false }).find((button) => button.textContent?.includes("agent-memory"))
+    expect(unselectedRow).toHaveClass("hover:bg-accent/40")
+
+    expect(screen.getByRole("heading", { name: "Evidence Chain" })).toHaveClass("text-[15px]", "font-semibold")
+    expect(container.querySelector(".text-link")).not.toBeNull()
+    expect(container.querySelector(".text-success")).not.toBeNull()
+
+    const palette = /\b(?:bg|text|border|ring|from|via|to)-(?:emerald|slate|violet|amber|rose|sky|zinc|gray|neutral|stone|red|green|blue|indigo|purple|teal|cyan|orange|yellow|lime|pink)-\d/
+    const classNames = Array.from(container.querySelectorAll("[class]"), (element) => element.getAttribute("class") ?? "")
+    expect(classNames.filter((name) => palette.test(name) || /\bshadow\b|\[#[\da-f]{3,8}\]/i.test(name))).toEqual([])
+  })
+
+  it("toggles evidence type filter chips and forwards them to the URL", () => {
+    render(<EvidenceGraphExplorer data={graph} />)
+
+    const chip = screen.getByRole("button", { name: "Papers", pressed: false })
+    fireEvent.click(chip)
+    expect(screen.getByRole("button", { name: "Papers", pressed: true })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "搜索证据图谱" }))
+    expect(push).toHaveBeenLastCalledWith("/topics?view=evidence-graph&topic=Agent+Memory&nodeTypes=paper")
+  })
+
   it("shows empty states when evidence is missing", () => {
     render(<EvidenceGraphExplorer data={{ ...graph, nodes: [graph.nodes[0]], edges: [], timeline: [], relatedReports: [] }} />)
 

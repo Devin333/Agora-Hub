@@ -16,19 +16,19 @@ export function PaperTags({
   locale: Locale
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1.5">
       {tasks.slice(0, 2).map((task) => (
-        <Link key={task.id} href={papersRoutes.taskDetail(task.slug)}>
-          <Badge variant="accent" className="rounded-full border-emerald-300 bg-emerald-50 font-mono text-[0.68rem] text-emerald-700">{taskName(task, locale)}</Badge>
+        <Link key={task.id} href={papersRoutes.taskDetail(task.slug)} className="rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+          <Badge variant="success" className="hover:bg-success/25">{taskName(task, locale)}</Badge>
         </Link>
       ))}
       {methods.slice(0, 2).map((method) => (
-        <Link key={method.id} href={papersRoutes.methodDetail(method.slug)}>
-          <Badge variant="success" className="rounded-full border-blue-300 bg-blue-50 font-mono text-[0.68rem] text-blue-700">{methodName(method, locale)}</Badge>
+        <Link key={method.id} href={papersRoutes.methodDetail(method.slug)} className="rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+          <Badge variant="info" className="hover:bg-link/25">{methodName(method, locale)}</Badge>
         </Link>
       ))}
       {tags.slice(0, 2).map((tag) => (
-        <Badge key={tag} variant="muted" className="rounded-full font-mono text-[0.68rem]">
+        <Badge key={tag} variant="muted">
           {tag}
         </Badge>
       ))}

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { EvidenceList } from "@/components/common/evidence-list";
-import { cn } from "@/lib/format";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TechItemCard } from "@/features/tech/components/tech-item-card";
 import type { Evidence } from "@/types/evidence";
 import type { NewsItem } from "@/types/news";
 import type { TechItem } from "@/types/tech";
@@ -10,7 +10,6 @@ import type { Topic } from "@/types/topic";
 import { AgentAnalysisPanel } from "./agent-analysis-panel";
 import { SourceMatrix } from "./source-matrix";
 import { TopicTimeline } from "./topic-timeline";
-import { TechItemCard } from "@/features/tech/components/tech-item-card";
 
 const tabs = ["overview", "timeline", "evidence", "sources", "relatedNews", "agentAnalysis"] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
@@ -33,45 +32,51 @@ export function TopicDetailTabs({
   relatedNews: NewsItem[];
   relatedTech: TechItem[];
 }) {
-  const [active, setActive] = useState<(typeof tabs)[number]>("overview");
-
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
-      <div className="flex flex-wrap gap-2 border-b border-border pb-3">
+    <Tabs defaultValue="overview" className="rounded-2xl border border-border bg-card p-4">
+      <TabsList aria-label="主题详情" className="h-auto max-w-full flex-wrap justify-start">
         {tabs.map((tab) => (
-          <button
-            key={tab}
-            className={cn("rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground", active === tab && "bg-secondary text-foreground")}
-            onClick={() => setActive(tab)}
-          >
+          <TabsTrigger key={tab} value={tab}>
             {tabLabels[tab]}
-          </button>
+          </TabsTrigger>
         ))}
-      </div>
-      <div className="mt-4">
-        {active === "overview" ? (
-          <div className="space-y-4">
-            <p className="text-sm leading-7 text-muted-foreground">{topic.executiveSummary ?? topic.summary}</p>
-            <div className="grid gap-3 md:grid-cols-2">
-              {relatedTech.map((item) => <TechItemCard key={item.id} item={item} compact />)}
-            </div>
-          </div>
-        ) : null}
-        {active === "timeline" ? <TopicTimeline items={topic.timeline ?? []} /> : null}
-        {active === "evidence" ? <EvidenceList evidence={evidence} /> : null}
-        {active === "sources" ? <SourceMatrix sources={topic.sourceCoverage ?? []} /> : null}
-        {active === "relatedNews" ? (
-          <div className="space-y-3">
-            {relatedNews.map((item) => (
-              <div key={item.id} className="rounded-md border border-border bg-background/50 p-3">
-                <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{item.summary}</p>
-              </div>
+      </TabsList>
+      <TabsContent value="overview" className="mt-4 space-y-4">
+        <p className="text-body1 leading-relaxed text-muted-foreground">{topic.executiveSummary ?? topic.summary}</p>
+        {relatedTech.length ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {relatedTech.map((item) => (
+              <TechItemCard key={item.id} item={item} compact />
             ))}
           </div>
         ) : null}
-        {active === "agentAnalysis" ? <AgentAnalysisPanel analyses={topic.agentAnalysis ?? []} /> : null}
-      </div>
-    </section>
+      </TabsContent>
+      <TabsContent value="timeline" className="mt-4">
+        <TopicTimeline items={topic.timeline ?? []} />
+      </TabsContent>
+      <TabsContent value="evidence" className="mt-4">
+        <EvidenceList evidence={evidence} />
+      </TabsContent>
+      <TabsContent value="sources" className="mt-4">
+        <SourceMatrix sources={topic.sourceCoverage ?? []} />
+      </TabsContent>
+      <TabsContent value="relatedNews" className="mt-4">
+        {relatedNews.length ? (
+          <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+            {relatedNews.map((item) => (
+              <li key={item.id} className="px-4 py-3">
+                <p className="text-body2 font-semibold text-foreground">{item.title}</p>
+                <p className="mt-0.5 line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">{item.summary}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="py-6 text-center text-body2 text-muted-foreground">暂无相关新闻。</p>
+        )}
+      </TabsContent>
+      <TabsContent value="agentAnalysis" className="mt-4">
+        <AgentAnalysisPanel analyses={topic.agentAnalysis ?? []} />
+      </TabsContent>
+    </Tabs>
   );
 }

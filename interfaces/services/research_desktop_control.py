@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import time
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,7 +16,6 @@ from backend.research.ports.request_admission import (
     ResearchDesktopRequestStore,
     ResearchDesktopSavedReportRef,
 )
-from framework.shared.local_desktop import validate_lifecycle_timeout
 from framework.shared.process_identity import current_process_identity, process_matches
 from interfaces.services.json_file_store import (
     locked_json_file,
@@ -25,13 +23,12 @@ from interfaces.services.json_file_store import (
     write_json_object_unlocked,
 )
 
-DEFAULT_DESKTOP_CONTROL_PATH = ".newsroom/local-desktop/control.json"
+DEFAULT_DESKTOP_CONTROL_PATH = ".newsroom/research/desktop-control.json"
 CONTROL_SCHEMA = "newsroom.research-desktop-control/v1"
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 _FINGERPRINT_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _GENERATION_PATTERN = re.compile(r"^gen_[0-9a-f]{32}$")
 _REPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{3,127}$")
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "needs_review"})
 
 
 class ResearchDesktopControlError(RuntimeError):
@@ -52,11 +49,12 @@ class ResearchDesktopControlError(RuntimeError):
 
 
 class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
-    """Durable owner-scoped admission metadata, recovery fencing, and report refs.
+    """Durable owner-scoped admission metadata, generation fencing, and report refs.
 
     This store does not own business runs or artifacts. It only records whether a
     browser request was admitted and points back to the existing Research/import
-    authorities. The file lock makes admission atomic across API processes.
+    authorities. The file lock makes admission atomic across API processes, and
+    a request whose admitting process died is marked for review.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
@@ -70,116 +68,6 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
             self._write(resolved, payload)
             return str(payload["generation"])
 
-    def begin_drain(self, *, timeout_seconds: float) -> dict[str, Any]:
-        try:
-            timeout = validate_lifecycle_timeout(
-                timeout_seconds,
-                field_name="drain timeout",
-            )
-        except ValueError as exc:
-            raise ResearchDesktopControlError(
-                "desktop_drain_timeout_invalid",
-                "Drain timeout must be a finite number greater than 0 and at most 300 seconds",
-            ) from exc
-        deadline = time.monotonic() + timeout
-        first = True
-        while True:
-            with locked_json_file(self.path) as resolved:
-                payload = self._read_or_initialize(resolved)
-                self._prune_dead_leases(payload)
-                was_open = bool(payload.get("admissionOpen", True))
-                payload["admissionOpen"] = False
-                payload["drainStartedAt"] = payload.get("drainStartedAt") or _now()
-                leases = payload.setdefault("activeLeases", {})
-                active_count = len(leases)
-                self._write(resolved, payload)
-            if active_count == 0:
-                return {
-                    "status": "drained" if (first and was_open) else "already_drained",
-                    "active_count": 0,
-                    "generation": str(payload["generation"]),
-                }
-            if time.monotonic() >= deadline:
-                return {
-                    "status": "busy",
-                    "active_count": active_count,
-                    "generation": str(payload["generation"]),
-                }
-            first = False
-            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-
-    def resume_admission(self) -> dict[str, Any]:
-        with locked_json_file(self.path) as resolved:
-            payload = self._read_or_initialize(resolved)
-            self._prune_dead_leases(payload)
-            already_open = bool(payload.get("admissionOpen", True))
-            payload["admissionOpen"] = True
-            payload.pop("drainStartedAt", None)
-            self._write(resolved, payload)
-            return {
-                "status": "already_accepting" if already_open else "accepting",
-                "active_count": len(payload.get("activeLeases", {})),
-                "generation": str(payload["generation"]),
-            }
-
-    def admission_open(self) -> bool:
-        with locked_json_file(self.path) as resolved:
-            payload = self._read_or_initialize(resolved)
-            self._prune_dead_leases(payload)
-            self._write(resolved, payload)
-            return bool(payload.get("admissionOpen", True))
-
-    def begin_untracked_execution(self, *, operation: str) -> str:
-        actual_operation = _required_text(operation, "operation", maximum=256)
-        lease_id = f"lease_{uuid4().hex}"
-        with locked_json_file(self.path) as resolved:
-            payload = self._read_or_initialize(resolved)
-            self._prune_dead_leases(payload)
-            if not bool(payload.get("admissionOpen", True)):
-                raise ResearchDesktopControlError(
-                    "desktop_admission_draining",
-                    "Desktop is draining and is not accepting new business operations",
-                    status_code=503,
-                    retryable=True,
-                )
-            payload.setdefault("activeLeases", {})[lease_id] = {
-                "pid": os.getpid(),
-                "processIdentity": current_process_identity().creation_id,
-                "operation": actual_operation,
-                "startedAt": _now(),
-            }
-            self._write(resolved, payload)
-        return lease_id
-
-    def end_untracked_execution(self, lease_id: str) -> None:
-        actual_lease = _required_text(lease_id, "lease_id", maximum=128)
-        with locked_json_file(self.path) as resolved:
-            payload = self._read_or_initialize(resolved)
-            leases = payload.setdefault("activeLeases", {})
-            leases.pop(actual_lease, None)
-            self._write(resolved, payload)
-
-    def rotate_generation(self) -> str:
-        with locked_json_file(self.path) as resolved:
-            payload = self._read_or_initialize(resolved)
-            next_generation = _new_generation()
-            now = _now()
-            operations = payload.get("operations", {})
-            if isinstance(operations, dict):
-                for raw in operations.values():
-                    if isinstance(raw, dict) and raw.get("status") not in _TERMINAL_STATUSES:
-                        raw["status"] = "needs_review"
-                        raw["updatedAt"] = now
-                        raw["error"] = {
-                            "code": "desktop_generation_rotated",
-                            "message": "Request belongs to an earlier recovery generation",
-                        }
-            payload["generation"] = next_generation
-            payload["rotatedAt"] = now
-            payload["activeLeases"] = {}
-            self._write(resolved, payload)
-            return next_generation
-
     def admit(
         self,
         *,
@@ -189,6 +77,7 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
         kind: ResearchDesktopOperationKind,
         fingerprint: str,
         semantic: Mapping[str, Any],
+        queued: bool = False,
     ) -> ResearchDesktopAdmissionDecision:
         owner = _required_text(owner_id, "owner_id", maximum=256)
         request = _request_id(request_id)
@@ -201,13 +90,6 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
             payload = self._read_or_initialize(resolved)
             self._prune_dead_leases(payload)
             self._require_current_generation(payload, actual_generation)
-            if not bool(payload.get("admissionOpen", True)):
-                raise ResearchDesktopControlError(
-                    "desktop_admission_draining",
-                    "Desktop is draining and is not accepting new business operations",
-                    status_code=503,
-                    retryable=True,
-                )
             operations = payload.setdefault("operations", {})
             raw = operations.get(key)
             if isinstance(raw, dict):
@@ -243,7 +125,7 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
                 "kind": actual_kind,
                 "fingerprint": actual_fingerprint,
                 "semantic": normalized_semantic,
-                "status": "running",
+                "status": "admitted" if queued else "running",
                 "createdAt": now,
                 "updatedAt": now,
             }
@@ -285,6 +167,42 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
             if admission.owner_id != owner or admission.generation != actual_generation:
                 return None
             return admission
+
+    def start(
+        self,
+        *,
+        owner_id: str,
+        request_id: str,
+        generation: str,
+    ) -> ResearchDesktopAdmission:
+        """Move a queued admission to ``running``; any other state is returned as is."""
+
+        owner = _required_text(owner_id, "owner_id", maximum=256)
+        request = _request_id(request_id)
+        actual_generation = _generation(generation)
+        key = _operation_key(owner, request)
+        with locked_json_file(self.path) as resolved:
+            payload = self._read_or_initialize(resolved)
+            self._require_current_generation(payload, actual_generation)
+            raw = payload.get("operations", {}).get(key)
+            if not isinstance(raw, dict) or raw.get("ownerId") != owner:
+                raise ResearchDesktopControlError(
+                    "desktop_request_not_found",
+                    "Desktop request was not found",
+                    status_code=404,
+                )
+            if raw.get("generation") != actual_generation:
+                raise ResearchDesktopControlError(
+                    "desktop_generation_stale",
+                    "Request belongs to an earlier recovery generation",
+                    status_code=409,
+                )
+            if raw.get("status") != "admitted":
+                return _admission_from_record(raw)
+            raw["status"] = "running"
+            raw["updatedAt"] = _now()
+            self._write(resolved, payload)
+            return _admission_from_record(raw)
 
     def bind_authority(
         self,
@@ -382,11 +300,14 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
         self,
         *,
         capability_id: str,
-        provenance: Mapping[str, Any],
+        operation: str,
         runtime_identity: str,
     ) -> Mapping[str, Any]:
         capability = _required_text(capability_id, "capability_id", maximum=100)
-        details = _json_mapping(provenance, "provenance")
+        details = {
+            "verificationKind": "business_operation",
+            "operation": _required_text(operation, "operation", maximum=100),
+        }
         identity = _fingerprint(runtime_identity)
         with locked_json_file(self.path) as resolved:
             payload = self._read_or_initialize(resolved)
@@ -558,7 +479,6 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
                 "createdAt": _now(),
                 "operations": {},
                 "reports": {},
-                "admissionOpen": True,
                 "activeLeases": {},
             }
             self._write(path, payload)
@@ -576,7 +496,6 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
                 "Desktop control metadata is invalid",
                 status_code=500,
             )
-        raw.setdefault("admissionOpen", True)
         raw.setdefault("activeLeases", {})
         raw.setdefault("capabilityVerifications", {})
         return raw
@@ -610,7 +529,7 @@ class LocalJsonResearchDesktopRequestStore(ResearchDesktopRequestStore):
             for operation_key, raw in operations.items():
                 if (
                     isinstance(raw, dict)
-                    and raw.get("status") == "running"
+                    and raw.get("status") in {"admitted", "running"}
                     and str(operation_key) not in active_operation_keys
                 ):
                     raw["status"] = "needs_review"

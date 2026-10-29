@@ -274,7 +274,7 @@ describe("paper task and method detail pages", () => {
 
     const taskHero = screen.getByRole("heading", { name: "Coding Agents" }).closest("section")
     expect(taskHero).not.toBeNull()
-    expect(within(taskHero!).getAllByText("1", { selector: "strong" })).toHaveLength(3)
+    expect(within(taskHero!).getAllByText("1", { selector: "dd" })).toHaveLength(3)
     expect(screen.getByText("SWE-agent")).toBeInTheDocument()
     expect(screen.queryByText("Draft Paper")).not.toBeInTheDocument()
     unmount()

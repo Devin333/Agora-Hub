@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
@@ -10,31 +11,32 @@ from fastapi.testclient import TestClient
 
 from interfaces.api import create_app
 from interfaces.composition.personal_memory import build_personal_memory_runtime
+from interfaces.services.auth_service import AuthSessionInvalidError
 from interfaces.services.research_desktop_control import canonical_request_fingerprint
 from interfaces.services.research_service import ResearchApplicationService
+from tests.interfaces.api.hosted_support import (
+    HOSTED_ORIGIN,
+    build_test_hosted_runtime,
+    configure_hosted_env,
+)
 
 
-ORIGIN = "http://127.0.0.1:3000"
+ORIGIN = HOSTED_ORIGIN
 BASE = "/api/v1/research/desktop/memory"
 
 
-def _desktop_env(monkeypatch, database_path) -> None:
+def _hosted_memory_env(monkeypatch, tmp_path, database_path) -> None:
+    configure_hosted_env(monkeypatch, tmp_path)
     # These tests exercise the real SQLite memory runtime, not RAG startup.
     monkeypatch.setenv("NEWS_PRELOAD_RERANKER", "0")
-    monkeypatch.setenv("NEWSROOM_DEPLOYMENT_PROFILE", "local-desktop")
-    monkeypatch.setenv("NEWSROOM_DESKTOP_CANONICAL_ORIGIN", ORIGIN)
-    monkeypatch.setenv(
-        "NEWSROOM_DESKTOP_INSTANCE_KEY",
-        f"local-desktop:{ORIGIN}",
-    )
-    monkeypatch.setenv("NEWSROOM_DESKTOP_RELEASE_ID", "release-memory-test")
-    monkeypatch.setenv("NEWSROOM_DESKTOP_CONFIG_DIGEST", "a" * 64)
-    monkeypatch.setenv("NEWSROOM_DESKTOP_BOOT_ID", "b" * 32)
     monkeypatch.setenv(
         "NEWSROOM_RESEARCH_PERSONAL_MEMORY_PATH",
         str(database_path),
     )
-    monkeypatch.delenv("NEWSROOM_CANONICAL_ORIGIN", raising=False)
+
+
+def _hosted_runtime(tmp_path):
+    return build_test_hosted_runtime(tmp_path, auth=_AuthService())
 
 
 def _headers(token: str = "session-a", *, mutation: bool = False) -> dict[str, str]:
@@ -67,18 +69,18 @@ def _create_body(
 
 def _client(monkeypatch, tmp_path):
     database_path = (tmp_path / "memory" / "personal-memory.sqlite3").resolve()
-    _desktop_env(monkeypatch, database_path)
+    _hosted_memory_env(monkeypatch, tmp_path, database_path)
     runtime = build_personal_memory_runtime()
     app = create_app(
-        auth_service_factory=lambda: _AuthService(),
-        research_desktop_service_factory=lambda: _DesktopLeaseService(),
+        hosted_runtime=_hosted_runtime(tmp_path),
+        research_desktop_service_factory=lambda: _UnusedDesktopService(),
         personal_memory_service_factory=lambda: runtime.service,
         audit_emitter_factory=None,
     )
     return TestClient(app), runtime
 
 
-def test_personal_memory_requires_local_session_origin_and_rejects_owner_fields(
+def test_personal_memory_requires_account_session_origin_and_rejects_owner_fields(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -94,7 +96,7 @@ def test_personal_memory_requires_local_session_origin_and_rejects_owner_fields(
             json=_create_body(),
         )
         assert cross_origin.status_code == 403
-        assert cross_origin.json()["error"]["code"] == "desktop_origin_forbidden"
+        assert cross_origin.json()["error"]["code"] == "origin_forbidden"
 
         duplicate_status = client.get(
             BASE,
@@ -234,8 +236,9 @@ def test_personal_memory_complete_management_recall_export_and_policy_flow(
         assert not {"api_key", "token", "secret"} & set(export_data["policy"])
 
         info = client.get(f"{BASE}/info", headers=_headers()).json()["data"]["info"]
-        assert info["storage"] == "local_sqlite"
-        assert info["database_path"].endswith("personal-memory.sqlite3")
+        assert info["storage"] == "server_sqlite"
+        assert not {"data_root", "database_path"} & set(info)
+        assert "personal-memory.sqlite3" not in json.dumps(info)
         assert info["remote_processing_default"] is False
         assert info["remote_processing_channel_defaults"] == {
             "model": False,
@@ -334,7 +337,7 @@ def test_personal_memory_owner_isolation_not_found_and_write_failure_mapping(
         runtime.close()
 
 
-def test_personal_memory_routes_are_hidden_outside_local_desktop(monkeypatch, tmp_path) -> None:
+def test_personal_memory_routes_are_hidden_outside_the_hosted_profile(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("NEWSROOM_DEPLOYMENT_PROFILE", "default")
     runtime = build_personal_memory_runtime(
         env={"NEWSROOM_RESEARCH_PERSONAL_MEMORY_PATH": str((tmp_path / "memory.sqlite3").resolve())}
@@ -356,10 +359,10 @@ def test_personal_memory_routes_are_hidden_outside_local_desktop(monkeypatch, tm
 
 def test_default_api_factory_composes_real_sqlite_runtime(monkeypatch, tmp_path) -> None:
     database_path = (tmp_path / "default-runtime" / "personal-memory.sqlite3").resolve()
-    _desktop_env(monkeypatch, database_path)
+    _hosted_memory_env(monkeypatch, tmp_path, database_path)
     app = create_app(
-        auth_service_factory=lambda: _AuthService(),
-        research_desktop_service_factory=lambda: _DesktopLeaseService(),
+        hosted_runtime=_hosted_runtime(tmp_path),
+        research_desktop_service_factory=lambda: _UnusedDesktopService(),
         audit_emitter_factory=None,
     )
 
@@ -380,14 +383,23 @@ def test_default_factories_share_real_personal_memory_core_with_desktop_task_con
     tmp_path,
 ) -> None:
     database_path = (tmp_path / "shared-runtime" / "personal-memory.sqlite3").resolve()
-    _desktop_env(monkeypatch, database_path)
+    _hosted_memory_env(monkeypatch, tmp_path, database_path)
     monkeypatch.setenv(
         "NEWSROOM_DESKTOP_CONTROL_PATH",
         str((tmp_path / "desktop-control.json").resolve()),
     )
     research = _CapturingResearchService()
+    hosted_runtime = _hosted_runtime(tmp_path)
+    # Hosted research is admitted only for an account with a model key.
+    hosted_runtime.model_credentials.save(
+        "user-a",
+        provider_id="deepseek",
+        model="deepseek-flash",
+        api_key="sk-personal-memory-test",
+        expected_revision=None,
+    )
     app = create_app(
-        auth_service_factory=lambda: _AuthService(),
+        hosted_runtime=hosted_runtime,
         research_service_factory=lambda: research,
         audit_emitter_factory=None,
     )
@@ -469,7 +481,7 @@ def test_default_personal_memory_runtime_is_constructed_once_under_concurrency_a
     tmp_path,
 ) -> None:
     database_path = (tmp_path / "concurrent-runtime" / "personal-memory.sqlite3").resolve()
-    _desktop_env(monkeypatch, database_path)
+    _hosted_memory_env(monkeypatch, tmp_path, database_path)
     monkeypatch.setenv(
         "NEWSROOM_DESKTOP_CONTROL_PATH",
         str((tmp_path / "concurrent-control.json").resolve()),
@@ -487,7 +499,7 @@ def test_default_personal_memory_runtime_is_constructed_once_under_concurrency_a
 
     monkeypatch.setattr(app_module, "build_personal_memory_runtime", counted_factory)
     app = create_app(
-        auth_service_factory=lambda: _AuthService(),
+        hosted_runtime=_hosted_runtime(tmp_path),
         research_service_factory=_CapturingResearchService,
         audit_emitter_factory=None,
     )
@@ -517,7 +529,7 @@ def test_custom_personal_memory_factories_do_not_construct_a_second_default_stor
     tmp_path,
 ) -> None:
     database_path = (tmp_path / "custom-runtime" / "personal-memory.sqlite3").resolve()
-    _desktop_env(monkeypatch, database_path)
+    _hosted_memory_env(monkeypatch, tmp_path, database_path)
     monkeypatch.setenv(
         "NEWSROOM_DESKTOP_CONTROL_PATH",
         str((tmp_path / "custom-control.json").resolve()),
@@ -541,7 +553,7 @@ def test_custom_personal_memory_factories_do_not_construct_a_second_default_stor
         return runtime.application
 
     app = create_app(
-        auth_service_factory=lambda: _AuthService(),
+        hosted_runtime=_hosted_runtime(tmp_path),
         research_service_factory=_CapturingResearchService,
         personal_memory_service_factory=lambda: runtime.service,
         personal_memory_core_factory=personal_memory_core_factory,
@@ -555,6 +567,11 @@ def test_custom_personal_memory_factories_do_not_construct_a_second_default_stor
                 json=_create_body(request_id="custom-runtime-create"),
             )
             assert response.status_code == 200
+            # The desktop service is built on its first research request and
+            # must reuse the injected core instead of opening the default store.
+            identity = client.get("/api/v1/research/desktop/identity", headers=_headers())
+            assert identity.status_code == 200
+            client.get("/api/v1/research/desktop/identity", headers=_headers())
             assert core_factory_calls == 1
     finally:
         runtime.close()
@@ -667,19 +684,17 @@ class _AuthService:
             "session-a": "user-a",
             "session-b": "user-b",
         }
+        if token not in users:
+            raise AuthSessionInvalidError("unknown test session")
         user_id = users[token]
         return SimpleNamespace(
-            user=SimpleNamespace(userId=user_id, role="member"),
+            user=SimpleNamespace(userId=user_id, role="user"),
             sessionId=f"auth-{user_id}",
         )
 
 
-class _DesktopLeaseService:
-    def begin_business_operation(self, *, operation: str) -> str:
-        return operation
-
-    def end_business_operation(self, lease_id: str) -> None:
-        del lease_id
+class _UnusedDesktopService:
+    """Stands in for the research desktop service, which these tests never call."""
 
 
 def test_personal_memory_confirm_and_update_normalize_source_references(

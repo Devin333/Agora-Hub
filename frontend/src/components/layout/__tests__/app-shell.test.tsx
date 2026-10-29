@@ -116,17 +116,17 @@ describe("AppShell", () => {
     expect(mobileNavigation.queryByRole("link", { name: "Open Source" })).not.toBeInTheDocument()
   })
 
-  it.each(["/login", "/login/"])("keeps exact local-desktop login route %s outside legacy Research chrome", (pathname) => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+  it.each(["/login", "/login/"])("keeps exact hosted login route %s outside legacy Research chrome", (pathname) => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     navigationState.pathname = pathname
 
     const { container } = render(
       <AppShell>
-        <div>Desktop login</div>
+        <div>Hosted login</div>
       </AppShell>
     )
 
-    expect(screen.getByText("Desktop login")).toBeInTheDocument()
+    expect(screen.getByText("Hosted login")).toBeInTheDocument()
     expect(screen.queryByRole("link", { name: "Agora Hub Research" })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Projects" })).not.toBeInTheDocument()
     expect(container.querySelector("main")).toBeNull()
@@ -145,8 +145,8 @@ describe("AppShell", () => {
     expect(screen.getByRole("button", { name: "Projects" })).toBeInTheDocument()
   })
 
-  it("does not broaden local-desktop login isolation to similarly prefixed routes", () => {
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
+  it("does not broaden hosted login isolation to similarly prefixed routes", () => {
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
     navigationState.pathname = "/login/help"
 
     render(

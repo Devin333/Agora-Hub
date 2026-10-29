@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { authFailure, isSameOrigin, requestOrigin } from "@/lib/auth/portal-server"
 import { NEWSROOM_SESSION_COOKIE } from "@/lib/auth/session"
-import {
-  desktopCanonicalOrigin,
-  isLocalDesktopProfile,
-  validateLocalDesktopServiceOrigin,
-} from "@/lib/deployment-profile"
+import { forwardedClientHeaders } from "@/lib/api/forwarded-client"
+import { apiBaseUrl, isHostedProfile, serverOwnedMutationOriginHeaders } from "@/lib/deployment-profile"
 
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -53,11 +49,11 @@ type RawRouteContext = { params: Promise<{ path: string[] }> }
 type NodeRequestInit = RequestInit & { duplex?: "half" }
 type HeadersWithSetCookie = Headers & { getSetCookie?: () => string[] }
 
-export async function forwardLocalDesktopRawApi(
+export async function forwardHostedApi(
   request: NextRequest,
   context: RawRouteContext,
 ): Promise<Response> {
-  if (!isLocalDesktopProfile()) return rawFailure("raw_api_route_unavailable", 404)
+  if (!isHostedProfile()) return rawFailure("raw_api_route_unavailable", 404)
   if (!requestOrigin(request)) return authFailure("auth_invalid_origin", 403)
 
   const method = request.method.toUpperCase()
@@ -77,11 +73,9 @@ export async function forwardLocalDesktopRawApi(
 
   let apiOrigin: string
   try {
-    apiOrigin = validateLocalDesktopServiceOrigin(
-      process.env.NEWSROOM_API_BASE_URL ?? DEFAULT_API_BASE_URL,
-    )
+    apiOrigin = apiBaseUrl()
   } catch {
-    return rawFailure("desktop_api_base_invalid", 503)
+    return rawFailure("api_base_invalid", 503)
   }
 
   const target = new URL(normalizedPath, apiOrigin)
@@ -142,11 +136,28 @@ function safePathSegment(value: string): boolean {
   return false
 }
 
+const READ_METHODS = new Set(["GET", "HEAD"])
+const ACCOUNT_ID = "user_[0-9a-f]{16}"
+// Every route the browser may reach through this proxy. The API applies its
+// own hosted allow-list and authorization; this list keeps the BFF from ever
+// forwarding to a route it has not been reviewed for. Password changes are
+// absent on purpose: they rotate the session cookie in /api/auth/password.
+const FORWARDED_ROUTES: ReadonlyArray<{ pattern: RegExp; methods: ReadonlySet<string> }> = [
+  { pattern: /^\/api\/v1\/auth\/(?:session|methods)$/, methods: READ_METHODS },
+  { pattern: /^\/api\/v1\/research\/.+$/, methods: READ_METHODS },
+  { pattern: /^\/api\/v1\/research\/desktop\/.+$/, methods: MUTATING_METHODS },
+  { pattern: /^\/api\/v1\/research\/history$/, methods: new Set(["PUT"]) },
+  { pattern: /^\/api\/v1\/research\/guided\/(?:intent|search)$/, methods: new Set(["POST"]) },
+  { pattern: /^\/api\/v1\/account$/, methods: READ_METHODS },
+  { pattern: /^\/api\/v1\/account\/model-credential$/, methods: new Set([...READ_METHODS, "PUT", "DELETE"]) },
+  { pattern: /^\/api\/v1\/account\/model-credential\/verify$/, methods: new Set(["POST"]) },
+  { pattern: /^\/api\/v1\/admin\/accounts$/, methods: new Set([...READ_METHODS, "POST"]) },
+  { pattern: new RegExp(`^/api/v1/admin/accounts/${ACCOUNT_ID}/(?:disable|enable|password)$`), methods: new Set(["POST"]) },
+  { pattern: new RegExp(`^/api/v1/admin/accounts/${ACCOUNT_ID}/role$`), methods: new Set(["PUT"]) },
+]
+
 function supportedRawApiPath(path: string, method: string): boolean {
-  if (path === "/api/v1/auth/session" || path === "/api/v1/auth/methods") {
-    return method === "GET" || method === "HEAD"
-  }
-  return path === "/api/v1/research" || path.startsWith("/api/v1/research/")
+  return FORWARDED_ROUTES.some(route => route.pattern.test(path) && route.methods.has(method))
 }
 
 function unsafeDecodedSegment(value: string): boolean {
@@ -170,7 +181,10 @@ function upstreamRequestHeaders(request: NextRequest, method: string): Headers {
 
   const session = request.cookies.get(NEWSROOM_SESSION_COOKIE)?.value?.trim()
   if (session) headers.set("X-Newsroom-Session", session)
-  if (MUTATING_METHODS.has(method)) headers.set("Origin", desktopCanonicalOrigin())
+  for (const [name, value] of Object.entries(forwardedClientHeaders(request.headers))) headers.set(name, value)
+  if (MUTATING_METHODS.has(method)) {
+    for (const [name, value] of Object.entries(serverOwnedMutationOriginHeaders())) headers.set(name, value)
+  }
   headers.set("Accept-Encoding", "identity")
   return headers
 }

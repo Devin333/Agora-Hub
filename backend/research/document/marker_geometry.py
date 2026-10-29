@@ -6,9 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Mapping, Sequence
 
-import pymupdf
-
 from backend.research.document.docker_pdf_parser import coerce_rect
+from backend.research.document.pymupdf_loader import load_pymupdf
 
 
 class PageConvention(StrEnum):
@@ -159,7 +158,7 @@ def marker_id_page_value(value: Any) -> int | None:
 
 def pdf_page_rotations(pdf_bytes: bytes) -> dict[int, int]:
     """Read the PDF's physical page rotations; never infer them from bbox sizes."""
-    document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    document = load_pymupdf().open(stream=pdf_bytes, filetype="pdf")
     try:
         return {index: int(page.rotation) % 360 for index, page in enumerate(document, start=1)}
     finally:

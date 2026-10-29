@@ -26,10 +26,10 @@ export function hasOwnedAnalysisSource(payload: ReaderWorkspacePayload): boolean
 
 export function needsOwnedSourcePreparation(
   payload: ReaderWorkspacePayload,
-  localDesktop: boolean,
+  ownedWorkspace: boolean,
 ): boolean {
   return (
-    localDesktop &&
+    ownedWorkspace &&
     payload.capabilities === undefined &&
     !hasOwnedAnalysisSource(payload)
   )

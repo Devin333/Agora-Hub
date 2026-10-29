@@ -8,6 +8,7 @@ import { RunEventStream } from "@/features/studio/runs/components/run-event-stre
 import { RunOperationPanel } from "@/features/studio/runs/components/run-operation-panel"
 import { RunQualityPanel } from "@/features/studio/runs/components/run-quality-panel"
 import { ToolCallList } from "@/features/studio/runs/components/tool-call-list"
+import { StudioSegmentTabs } from "@/features/studio/shared/components/studio-filters"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type { AgentStep, StudioRunDetail } from "@/types/agent"
 
@@ -34,22 +35,11 @@ export function RunDetailInspector({ detail, selectedStep }: { detail: StudioRun
   })
 
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex gap-1 overflow-x-auto border-b border-border p-2">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`h-8 shrink-0 rounded-md px-3 text-sm transition-colors ${
-              activeTab === tab.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {t(tab.labelKey)}
-          </button>
-        ))}
+    <section className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="border-b border-border p-3">
+        <StudioSegmentTabs tabs={tabs.map((tab) => ({ id: tab.id, label: t(tab.labelKey) }))} active={activeTab} onChange={setActiveTab} className="w-fit max-w-full" />
       </div>
-      <div className="max-h-[760px] overflow-auto p-4">
+      <div className="rk-scroll max-h-[760px] overflow-auto p-4">
         {activeTab === "events" ? <RunEventStream events={detail.events} /> : null}
         {activeTab === "artifacts" ? <ArtifactViewer artifacts={detail.artifacts} /> : null}
         {activeTab === "quality" ? <RunQualityPanel quality={detail.quality} /> : null}

@@ -8,7 +8,7 @@ export function TechRadarGrid({ items }: { items: TechItem[] }) {
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {items.map((item) => (
         <TechItemCard key={item.id} item={item} />
       ))}

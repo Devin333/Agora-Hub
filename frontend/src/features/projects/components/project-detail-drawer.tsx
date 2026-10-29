@@ -3,12 +3,11 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { ExternalLink, X } from "lucide-react"
-import { EmptyState } from "@/components/common/empty-state"
 import { ErrorState } from "@/components/common/error-state"
 import { PageSkeleton } from "@/components/common/loading-skeleton"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ProjectDetailContent } from "@/features/projects/components/project-detail-panel"
+import { ProjectBadges, ProjectDetailContent } from "@/features/projects/components/project-detail-panel"
+import { ProjectEmptyText } from "@/features/projects/components/project-page-layout"
 import { fetchProjectDetail } from "@/lib/projects/api"
 import { cn } from "@/lib/utils"
 import type { ProjectItem } from "@/types/projects"
@@ -75,45 +74,42 @@ export function ProjectDetailDrawer({
   const isVisible = open && Boolean(projectSlug)
   const content = project ? (
     <>
-      <header className="border-b border-[#d8dfd8] px-6 py-5 dark:border-border">
+      <header className="border-b border-border px-4 py-4 md:px-6">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-[#334155]/55 dark:text-muted-foreground">
-              Project Radar / {project.fullName}
-            </p>
-            <h2 className="mt-2 text-3xl font-black leading-tight text-[#334155] dark:text-foreground">{project.name}</h2>
-            <p className="mt-3 max-w-4xl text-sm leading-6 text-[#334155]/68 dark:text-muted-foreground">{project.description}</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Badge variant={project.maturity ? "info" : "muted"}>{project.maturity ? labelize(project.maturity) : "Maturity unavailable"}</Badge>
-              {project.language ? <Badge variant="muted">{project.language}</Badge> : null}
+            <p className="truncate text-label text-muted-foreground">Project Radar / {project.fullName}</p>
+            <h2 className="mt-1 break-words text-heading2 font-semibold text-foreground">{project.name}</h2>
+            <p className="mt-1.5 max-w-4xl break-words text-body2 text-muted-foreground">{project.description}</p>
+            <div className="mt-3">
+              <ProjectBadges project={project} showLicense={false} />
             </div>
           </div>
           <Link
             href={closeHref}
             role="button"
             aria-label="Close project detail"
-            className="rounded-full p-2 text-[#334155]/55 transition-colors hover:bg-white hover:text-[#334155] dark:hover:bg-card dark:hover:text-foreground"
+            className="grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
             onClick={(event) => {
               event.preventDefault()
               onOpenChange(false)
             }}
           >
-            <X className="size-5" />
+            <X className="size-4" strokeWidth={1.8} />
           </Link>
         </div>
-        <div className="mt-5 flex flex-wrap gap-2">
-          <Button asChild>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button asChild size="sm">
             <a href={project.repoUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-4" />
+              <ExternalLink strokeWidth={1.8} />
               Open repo
             </a>
           </Button>
-          <Button asChild variant="outline">
+          <Button asChild variant="outline" size="sm">
             <Link href={`/projects/${project.slug}`}>Open full detail</Link>
           </Button>
         </div>
       </header>
-      <div className="px-6 py-6">
+      <div className="px-4 py-5 md:px-6">
         <ProjectDetailContent project={project} />
       </div>
     </>
@@ -123,7 +119,7 @@ export function ProjectDetailDrawer({
     <>
       <div
         className={cn(
-          "fixed inset-0 z-50 bg-[#0f172a]/25 backdrop-blur-sm transition-[opacity,backdrop-filter] duration-300",
+          "fixed inset-0 z-50 bg-overlay backdrop-blur-[4px] transition-[opacity,backdrop-filter] duration-300",
           isVisible ? "opacity-100" : "pointer-events-none opacity-0 backdrop-blur-0"
         )}
         aria-hidden="true"
@@ -131,23 +127,23 @@ export function ProjectDetailDrawer({
       />
       <aside
         className={cn(
-          "fixed inset-y-0 right-0 z-50 flex w-[min(58rem,96vw)] flex-col border-l border-[#d8dfd8] bg-[#f7f9f6] shadow-[-24px_0_70px_rgba(15,23,42,0.18)] transition-[transform,opacity] duration-300 dark:border-border dark:bg-background xl:w-[min(76rem,72vw)]",
+          "fixed inset-y-0 right-0 z-50 flex w-[min(58rem,96vw)] flex-col border-l border-border bg-background text-foreground shadow-lg transition-[transform,opacity] duration-300 xl:w-[min(76rem,72vw)]",
           isVisible ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-full opacity-0"
         )}
         aria-label="Project detail"
         aria-modal="true"
         role="dialog"
       >
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {isLoading ? <PageSkeleton /> : null}
+        <div className="rk-scroll min-h-0 flex-1 overflow-y-auto">
+          {isLoading ? <div className="px-4 py-5 md:px-6"><PageSkeleton /></div> : null}
           {error ? (
-            <div className="p-6">
+            <div className="px-4 py-5 md:px-6">
               <ErrorState title="Project detail failed to load" message={error} />
             </div>
           ) : null}
           {!isLoading && !error && !project ? (
-            <div className="p-6">
-              <EmptyState title="Project detail unavailable" description="No project detail was returned by the current real data source." />
+            <div className="px-4 py-5 md:px-6">
+              <ProjectEmptyText title="Project detail unavailable" description="No project detail was returned by the current real data source." />
             </div>
           ) : null}
           {!isLoading && !error ? content : null}
@@ -155,8 +151,4 @@ export function ProjectDetailDrawer({
       </aside>
     </>
   )
-}
-
-function labelize(value: string): string {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
 }

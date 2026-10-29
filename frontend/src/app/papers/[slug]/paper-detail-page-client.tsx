@@ -18,7 +18,7 @@ export function PaperDetailPageClient({ paper }: { paper: Paper }) {
         meta={locale === "zh" ? "论文详情" : "Paper detail"}
         locale={locale}
       />
-      <section className="border-b border-[#d7dfd8] pb-10 pt-1 dark:border-border">
+      <section className="border-b border-border px-4 pb-10 pt-1 md:px-6">
         <PaperDetailContent paper={paper} locale={locale} titleLevel={1} />
       </section>
     </div>

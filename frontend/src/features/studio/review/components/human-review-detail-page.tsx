@@ -12,6 +12,7 @@ import {
   type Translator
 } from "@/lib/i18n"
 import {
+  StudioCodeBlock,
   StudioField,
   StudioFieldGrid,
   StudioNotice,
@@ -26,15 +27,15 @@ export function HumanReviewDetailPage({ detail }: { detail: StudioReviewDetail }
   const { item, notices } = detail
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.module.humanReview.title")}
         title={item.approvalId}
         description={item.requestedAction}
         actions={
-          <Button asChild variant="outline">
+          <Button asChild variant="outline" size="sm">
             <Link href="/studio/review">
-              <ArrowLeft className="size-4" />
+              <ArrowLeft size={15} strokeWidth={1.8} aria-hidden="true" />
               {t("studio.review.review")}
             </Link>
           </Button>
@@ -57,7 +58,7 @@ export function HumanReviewDetailPage({ detail }: { detail: StudioReviewDetail }
       ) : null}
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="space-y-4">
+        <div className="space-y-3">
           <ReviewDetailSummary item={item} />
           <PayloadPreview payload={item.payloadPreview} />
           <ReviewHistoryPanel history={item.history} />
@@ -81,9 +82,9 @@ function ReviewDetailSummary({ item }: { item: StudioReviewItem }) {
         <StudioField label={t("studio.review.reportId")} value={item.reportId ? <ResourceLink href={`/reports/${encodeURIComponent(item.reportId)}`} label={item.reportId} /> : "n/a"} />
       </StudioFieldGrid>
       {item.reason ? (
-        <div className="mt-4 rounded-md border border-border bg-background p-3">
-          <h2 className="text-sm font-semibold text-foreground">{t("studio.review.reason")}</h2>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.reason}</p>
+        <div className="mt-3 rounded-xl border border-border px-4 py-3">
+          <h3 className="text-label font-medium text-muted-foreground">{t("studio.review.reason")}</h3>
+          <p className="mt-1 text-body2 text-foreground">{item.reason}</p>
         </div>
       ) : null}
     </StudioPanel>
@@ -94,18 +95,16 @@ function PayloadPreview({ payload }: { payload?: Record<string, unknown> }) {
   const { t } = useI18n()
   return (
     <StudioPanel title={t("studio.review.payloadPreview")}>
-      <pre className="max-h-[34rem] overflow-auto rounded-md bg-muted p-4 text-xs leading-5 text-foreground">
-        {JSON.stringify(payload ?? {}, null, 2)}
-      </pre>
+      <StudioCodeBlock className="max-h-[34rem]">{JSON.stringify(payload ?? {}, null, 2)}</StudioCodeBlock>
     </StudioPanel>
   )
 }
 
 function ResourceLink({ href, label }: { href: string; label: string }) {
   return (
-    <Link className="inline-flex max-w-full items-center gap-1 truncate text-primary hover:underline" href={href}>
+    <Link className="inline-flex max-w-full items-center gap-1 truncate rounded-md text-link outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50" href={href}>
       <span className="truncate">{label}</span>
-      <ExternalLink className="size-3.5 shrink-0" />
+      <ExternalLink size={13} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
     </Link>
   )
 }

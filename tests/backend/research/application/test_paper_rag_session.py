@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from backend.research.application import paper_rag_session
 from backend.research.application.paper_rag_session import PaperRAGSession
+from backend.research.rag.coverage_planner import ResearchEvidenceCoveragePlanner
 from backend.research.rag.retrieval.candidate_experiment import RetrievalCandidateExperimentConfig
 from backend.research.graphs import build_paper_analysis_context_graph_identity
 from backend.research.rag.models import ResearchRetrievalGoal
@@ -83,7 +84,8 @@ def test_paper_rag_session_passes_retrieval_policy_to_inner_retriever(monkeypatc
     assert _FakeRetriever.last_kwargs["policy"] is policy
     assert _FakeRetrievalPort.last_default_section_index == 3
     assert result["spec"].goal.question == "What does the figure show?"
-    assert _FakeController.last_planner is None
+    # Without the worker experiment, rounds still plan for evidence coverage.
+    assert isinstance(_FakeController.last_planner, ResearchEvidenceCoveragePlanner)
 
 
 def test_paper_rag_session_does_not_wire_worker_when_candidate_experiment_is_disabled(monkeypatch):
@@ -104,7 +106,7 @@ def test_paper_rag_session_does_not_wire_worker_when_candidate_experiment_is_dis
         session_id="session-disabled",
     )
 
-    assert _FakeController.last_planner is None
+    assert isinstance(_FakeController.last_planner, ResearchEvidenceCoveragePlanner)
 
 
 def test_paper_rag_session_wires_optional_worker_planner(monkeypatch):
@@ -143,6 +145,8 @@ def test_paper_rag_session_wires_optional_worker_planner(monkeypatch):
 
     assert _FakeController.last_planner is not None
     assert _FakeController.last_planner.min_round_index == 2
+    # A rejected worker plan falls back to the coverage plan.
+    assert isinstance(_FakeController.last_planner.fallback, ResearchEvidenceCoveragePlanner)
     assert _FakeController.last_planner.worker._worker is worker
     worker_planner = _FakeController.last_planner._worker_planner
     assert worker_planner.max_candidate_queries == 3

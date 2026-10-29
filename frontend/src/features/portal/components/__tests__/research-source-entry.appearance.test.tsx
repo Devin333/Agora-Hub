@@ -28,11 +28,7 @@ function scopedCss(filename: string, classes: Record<string, string>) {
 async function renderRecord(record: object | null, appearance: "portal" | "paper-agent" = "portal") {
   sessionStorage.clear()
   if (record) sessionStorage.setItem(storageKey, JSON.stringify(record))
-  const view = render(
-    <div className={paperStyles.onlineSearch}>
-      <ResearchSourceEntry appearance={appearance} />
-    </div>,
-  )
+  const view = render(<ResearchSourceEntry appearance={appearance} />)
   const entry = await waitFor(() => view.container.querySelector<HTMLElement>("[data-research-source-entry]")!)
   return { html: view.container.innerHTML, entry }
 }
@@ -81,72 +77,92 @@ describe("ResearchSourceEntry paper-agent appearance", () => {
     expect(rendered.entry).toHaveClass("sr-only")
   })
 
-  it("uses the real component DOM and CSS cascade for monochrome computed colors in both themes", async () => {
+  // Launches a real Chromium to resolve the cascade, so it needs a browser-scale budget.
+  it("resolves status and error text to the global theme tokens for both appearances in light and dark", { timeout: 60_000 }, async () => {
     const cases: string[] = []
     const componentClasses: Record<string, string> = {}
-    for (const [name, record] of [
-      ["failed", { ...identity, status: "failed", error: { code: "research_parse_unavailable", message: "Research operation failed (research_parse_unavailable)." } }],
-      ["running", { ...identity, status: "running" }],
-      ["completion-missing-paper", { ...identity, status: "passed" }],
-      ["completed", { ...identity, status: "passed", paperId: "paper-fixture" }],
-    ] as const) {
+    for (const appearance of ["portal", "paper-agent"] as const) {
+      for (const [name, record] of [
+        ["failed", { ...identity, status: "failed", error: { code: "research_parse_unavailable", message: "Research operation failed (research_parse_unavailable)." } }],
+        ["running", { ...identity, status: "running" }],
+        ["completion-missing-paper", { ...identity, status: "passed" }],
+        ["completed", { ...identity, status: "passed", paperId: "paper-fixture" }],
+      ] as const) {
+        cleanup()
+        const rendered = await renderRecord(record, appearance)
+        componentClasses.status = rendered.entry.querySelector<HTMLElement>('[data-slot="status"]')!.classList[0]
+        cases.push(`<section data-case="${appearance}:${name}" data-host="${appearance}">${rendered.html}</section>`)
+      }
       cleanup()
-      const rendered = await renderRecord(record)
-      componentClasses.root = rendered.entry.classList[0]
-      componentClasses.status = rendered.entry.querySelector<HTMLElement>('[data-slot="status"]')!.classList[0]
-      cases.push(`<section data-case="${name}">${rendered.html}</section>`)
+      sessionStorage.setItem(storageKey, "{")
+      const errorView = render(<ResearchSourceEntry appearance={appearance} />)
+      const alert = await screen.findByRole("alert")
+      componentClasses.error = alert.classList[0]
+      cases.push(`<section data-case="${appearance}:error" data-host="${appearance}">${errorView.container.innerHTML}</section>`)
     }
-    cleanup()
-    sessionStorage.setItem(storageKey, "{")
-    const errorView = render(<div className={paperStyles.onlineSearch}><ResearchSourceEntry /></div>)
-    const alert = await screen.findByRole("alert")
-    componentClasses.error = alert.classList[0]
-    cases.push(`<section data-case="error">${errorView.container.innerHTML}</section>`)
 
     const componentCss = scopedCss("src/features/portal/components/research-source-entry.module.css", componentClasses)
-    const appCss = scopedCss("src/features/paper-agent-app/paper-agent-app.module.css", {
-      app: paperStyles.app,
-      onlineSearch: paperStyles.onlineSearch,
-    })
+    const appCss = scopedCss("src/features/paper-agent-app/paper-agent-app.module.css", { onlineSearch: paperStyles.onlineSearch })
     const { chromium } = await import("playwright")
     const browser = await chromium.launch({ headless: true })
     try {
       const page = await browser.newPage()
-      for (const [theme, muted] of [["light", "rgb(91, 91, 87)"], ["dark", "rgb(194, 194, 186)"]] as const) {
-        await page.setContent(`<style>${componentCss}\n${appCss}</style><main class="${paperStyles.app}" data-theme="${theme}">${cases.join("")}</main>`)
-        const colors = await page.$$eval("[data-case]", nodes => nodes.map(node => ({
-          name: node.getAttribute("data-case"),
-          colors: Array.from(node.querySelectorAll<HTMLElement>('[data-slot], [data-slot] span, [data-slot] button')).map(element => getComputedStyle(element).color),
+      // The portal renders the entry straight on the page; the paper agent renders it inside its online search panel.
+      const body = cases.map(html => html.includes('data-host="paper-agent"') ? `<div class="${paperStyles.onlineSearch}">${html}</div>` : html).join("")
+      const tokenCss = readFileSync(path.join(process.cwd(), "src/styles/theme-tokens.css"), "utf8")
+      const seen: Record<string, { status: string; error: string }> = {}
+      for (const theme of ["light", "dark"] as const) {
+        await page.setContent(`<!doctype html><html data-theme="${theme}"><head><style>${tokenCss}
+${componentCss}
+${appCss}</style></head><body><span data-probe="status" style="color: var(--muted-foreground)"></span><span data-probe="error" style="color: var(--destructive-text)"></span><span data-probe="foreground" style="color: var(--foreground)"></span>${body}</body></html>`)
+        const probe = await page.$$eval("[data-probe]", nodes => Object.fromEntries(nodes.map(node => [node.getAttribute("data-probe"), getComputedStyle(node).color])))
+        expect(probe.status, `${theme} muted-foreground`).not.toBe(probe.foreground)
+        expect(probe.error, `${theme} destructive-text`).not.toBe(probe.foreground)
+        seen[theme] = { status: probe.status, error: probe.error }
+        const results = await page.$$eval("[data-case]", nodes => nodes.map(node => ({
+          name: node.getAttribute("data-case")!,
+          status: Array.from(node.querySelectorAll<HTMLElement>('[data-slot="status"], [data-slot="status"] span, [data-slot="status"] button, [data-slot="status"] a')).map(element => getComputedStyle(element).color),
+          error: Array.from(node.querySelectorAll<HTMLElement>('[data-slot="error"]')).map(element => getComputedStyle(element).color),
         })))
-        for (const result of colors) {
-          expect(result.colors, result.name ?? "unknown state").not.toHaveLength(0)
-          expect(new Set(result.colors), result.name ?? "unknown state").toEqual(new Set([muted]))
+        expect(results).toHaveLength(10)
+        for (const result of results) {
+          const label = `${theme} ${result.name}`
+          if (result.name.endsWith(":error")) {
+            expect(result.error, label).toEqual([probe.error])
+          } else {
+            expect(result.status, label).not.toHaveLength(0)
+            expect(new Set(result.status), label).toEqual(new Set([probe.status]))
+          }
         }
       }
+      // The two themes must actually paint different inks, otherwise the cascade is not following data-theme.
+      expect(seen.light.status).not.toBe(seen.dark.status)
+      expect(seen.light.error).not.toBe(seen.dark.error)
     } finally {
       await browser.close()
     }
   })
 
-  it("preserves portal defaults while explicit paper-agent appearance inherits its host color", async () => {
-    const portal = await renderRecord({ ...identity, status: "failed" })
-    const componentCss = scopedCss("src/features/portal/components/research-source-entry.module.css", {
-      root: portal.entry.classList[0],
-      status: portal.entry.querySelector<HTMLElement>('[data-slot="status"]')!.classList[0],
-    })
+  it("lets a host recolor the entry through the status and error hooks", async () => {
+    const failed = await renderRecord({ ...identity, status: "failed" }, "paper-agent")
+    const statusClass = failed.entry.querySelector<HTMLElement>('[data-slot="status"]')!.classList[0]
     cleanup()
-    const monochrome = await renderRecord({ ...identity, status: "failed" }, "paper-agent")
+    sessionStorage.setItem(storageKey, "{")
+    const errorView = render(<ResearchSourceEntry appearance="paper-agent" />)
+    const alert = await screen.findByRole("alert")
+    const componentCss = scopedCss("src/features/portal/components/research-source-entry.module.css", { status: statusClass, error: alert.classList[0] })
+    const tokenCss = readFileSync(path.join(process.cwd(), "src/styles/theme-tokens.css"), "utf8")
     const { chromium } = await import("playwright")
     const browser = await chromium.launch({ headless: true })
     try {
       const page = await browser.newPage()
-      await page.setContent(`<style>${componentCss}</style><section data-case="portal">${portal.html}</section><section data-case="paper" style="color: rgb(33, 33, 31)">${monochrome.html}</section>`)
-      expect(await page.$eval('[data-case="portal"] [data-slot="status"]', element => getComputedStyle(element).color)).toBe("rgb(109, 40, 217)")
-      expect(await page.$eval('[data-case="paper"] [data-slot="status"]', element => getComputedStyle(element).color)).toBe("rgb(33, 33, 31)")
+      await page.setContent(`<!doctype html><html data-theme="light"><head><style>${tokenCss}
+${componentCss}</style></head><body><section data-case="status" style="--research-source-status-color: rgb(33, 33, 31)">${failed.html}</section><section data-case="error" style="--research-source-error-color: rgb(12, 34, 56)">${errorView.container.innerHTML}</section></body></html>`)
+      expect(await page.$eval('[data-case="status"] [data-slot="status"]', element => getComputedStyle(element).color)).toBe("rgb(33, 33, 31)")
+      expect(await page.$eval('[data-case="status"] [data-slot="status"] button', element => getComputedStyle(element).color)).toBe("rgb(33, 33, 31)")
+      expect(await page.$eval('[data-case="error"] [data-slot="error"]', element => getComputedStyle(element).color)).toBe("rgb(12, 34, 56)")
     } finally {
       await browser.close()
     }
   })
 })
-
-

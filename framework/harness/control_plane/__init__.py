@@ -1,199 +1,8 @@
 from __future__ import annotations
 
-from framework.harness.control_plane.durable_events import (
-    DurableGraphEventContextWriter,
-    DurableHarnessEventPort,
-    DurableHarnessTransitionPort,
-    HarnessEventCanonicalAdapter,
-)
-from framework.harness.control_plane.errors import HarnessValidationError
-from framework.harness.control_plane.event import HarnessEvent, HarnessEventType
-from framework.harness.control_plane.event_log import (
-    HarnessEventLogEntry,
-    InMemoryHarnessEventLog,
-    event_log_entry_from_harness_event,
-    event_log_entry_from_stored_event,
-)
-from framework.harness.control_plane.gates import (
-    BudgetGate,
-    CumulativeLLMBudgetGate,
-    DeduplicationGate,
-    DeterministicGate,
-    GateContext,
-    HarnessGateResult,
-    OutputSchemaGate,
-    ScoreRangeGate,
-    SkillEvolutionBudgetGate,
-    ToolAllowlistGate,
-)
-from framework.harness.control_plane.cumulative_budget import (
-    HarnessCumulativeBudgetFact,
-    resolve_harness_cumulative_budget_fact,
-)
-from framework.harness.control_plane.gate_registry import (
-    DeterministicGateRegistry,
-    GateBinding,
-    GateReference,
-    GateRegistration,
-)
-from framework.harness.control_plane.graph_checkpoint import (
-    HarnessGraphCheckpoint,
-    HarnessGraphCheckpointReader,
-    HarnessGraphCheckpointReadResult,
-    HarnessGraphCheckpointStore,
-    HarnessGraphDecisionInputSnapshot,
-    HarnessGraphHistoryReducer,
-    HarnessGraphReplayReport,
-    HarnessGraphReplayReadResult,
-    HarnessGraphStateReadResult,
-    HarnessGraphStateReader,
-    HarnessPinnedDecisionKernel,
-    InMemoryHarnessGraphCheckpointStore,
-    graph_history_evidence_ref,
-    quarantine_graph_replay_failure,
-)
-from framework.harness.control_plane.graph_inspection import HarnessGraphInspection
-from framework.harness.control_plane.graph_observability import (
-    graph_health_report,
-    graph_metric_samples,
-)
-from framework.harness.control_plane.graph_evaluator import (
-    GraphEvaluation,
-    HarnessAcceptedGraphObservation,
-    HarnessGraphCandidate,
-    HarnessGraphCandidateType,
-    HarnessGraphEvaluator,
-    HarnessGraphEvaluationContext,
-    HarnessGraphObservationType,
-)
-from framework.harness.control_plane.graph_application import (
-    HarnessGraphActivityCancellationDispatcherPort,
-    HarnessGraphActivityCancellationRequest,
-    HarnessGraphConcurrentActivityDispatcherPort,
-    HarnessGraphActivityDispatcherPort,
-    HarnessGraphAppliedDecision,
-    HarnessGraphControlPlaneRuntime,
-    HarnessGraphDecisionApplier,
-)
-from framework.harness.control_plane.graph_runtime import (
-    HarnessGraphActivity,
-    HarnessGraphActivityResult,
-    HarnessGraphActivityResultCommit,
-    HarnessGraphActivityResultStatus,
-    HarnessGraphCommitKind,
-    HarnessGraphDecisionCommit,
-    HarnessGraphObservationCommit,
-    HarnessGraphProjectionCommit,
-    HarnessGraphRecovery,
-    HarnessGraphTransitionPort,
-    InMemoryHarnessGraphTransitionPort,
-)
-from framework.harness.control_plane.terminal_failure import (
-    HARNESS_GRAPH_TERMINAL_FAILURE_CONTEXT_SCHEMA,
-    HARNESS_GRAPH_TERMINAL_FAILURE_RECORD_SCHEMA,
-    HarnessGraphTerminalFailureCandidateBuilder,
-    HarnessGraphTerminalFailureContext,
-    HarnessGraphFailedNodeRecord,
-    HarnessGraphTerminalFailureRecord,
-    HarnessGraphTerminalFailureSideEffectCandidate,
-)
-from framework.harness.control_plane.node_output import (
-    HARNESS_ADMITTED_GRAPH_ACTIVITY_SCHEMA,
-    HARNESS_COMMITTED_NODE_OUTPUT_RECEIPT_SCHEMA,
-    HARNESS_NODE_OUTPUT_CANDIDATE_SCHEMA,
-    HARNESS_NODE_OUTPUT_COMMIT_SCHEMA,
-    HARNESS_NODE_OUTPUT_LEASE_SCHEMA,
-    HARNESS_NODE_OUTPUT_RESOURCE_SCHEMA,
-    HARNESS_NODE_OUTPUT_STAGED_WRITE_SCHEMA,
-    HarnessAdmittedGraphActivityAttempt,
-    HarnessCommittedNodeOutputReceipt,
-    HarnessNodeOutputAttemptStatus,
-    HarnessNodeOutputCandidate,
-    HarnessNodeOutputCommit,
-    HarnessNodeOutputCommitGuard,
-    HarnessNodeOutputCommitRejectedError,
-    HarnessNodeOutputLease,
-    HarnessNodeOutputResourceIdentity,
-    HarnessNodeOutputResourcePort,
-    HarnessNodeOutputStagedWrite,
-    HarnessNodeOutputStaleOwnerError,
-    InMemoryHarnessNodeOutputResource,
-)
-from framework.harness.control_plane.graph_state import (
-    HarnessActiveActivityState,
-    HarnessAttemptEvidenceReference,
-    HarnessBudgetCounterState,
-    HarnessBranchOutputReference,
-    HarnessCompensationEntry,
-    HarnessCompensationStatus,
-    HarnessEvidenceKind,
-    HarnessGraphBudgetState,
-    HarnessGraphState,
-    HarnessJoinKind,
-    HarnessJoinState,
-    HarnessJoinStatus,
-    HarnessLoopCounterState,
-    HarnessLoopIteration,
-    HarnessLoopStatus,
-    HarnessNodeInstanceIdentity,
-    HarnessNodeInstanceState,
-    HarnessNodeInstanceStatus,
-    HarnessPendingSideEffectScope,
-    HarnessPendingSideEffectState,
-    HarnessPendingSideEffectStatus,
-    HarnessWaitRegistration,
-    HarnessWaitStatus,
-    RunLifecycle,
-    RunOutcome,
-    project_public_graph_status,
-)
-from framework.harness.control_plane.harness import (
-    HarnessControlPlane,
-    HarnessRunResult,
-    InMemoryHarnessEventPort,
-)
-from framework.harness.control_plane.phase import (
-    HarnessPhase,
-    HarnessPhaseBoundary,
-    HarnessPhaseRecord,
-    assert_step_completion_allowed,
-)
-from framework.harness.control_plane.policy import HarnessBudget, HarnessBudgetSnapshot
-from framework.harness.control_plane.scheduler import (
-    HarnessGraphStepSchedulingInput,
-    HarnessScheduler,
-)
-from framework.harness.control_plane.replay_history import (
-    HarnessReplayActivityResolver,
-    build_harness_history_verifier,
-    harness_decision_input_snapshot,
-    harness_decision_kernel,
-)
-from framework.harness.control_plane.state import (
-    HarnessRunSpec,
-    HarnessRunStatus,
-    HarnessStepStatus,
-)
-from framework.harness.control_plane.step_lifecycle import (
-    StepGateObservation,
-    StepLifecycleBindingMode,
-    StepLifecycleBudget,
-    StepLifecycleObservations,
-    StepLifecycleState,
-    StepLifecycleStateMachine,
-    StepLifecycleTransition,
-    StepLifecycleTransitionType,
-    StepQualityObservation,
-    StepWorkerObservation,
-)
-from framework.harness.control_plane.trace import HarnessTrace
-from framework.harness.control_plane.transcript import (
-    HarnessTranscript,
-    HarnessTranscriptEntry,
-    InMemoryHarnessTranscriptStore,
-    transcript_entry_from_event,
-    transcript_entry_from_stored_event,
-)
+from typing import TYPE_CHECKING, Any
+
+from framework.shared.lazy_exports import LazyExports
 
 __all__ = [
     "HARNESS_ADMITTED_GRAPH_ACTIVITY_SCHEMA",
@@ -349,3 +158,382 @@ __all__ = [
     "transcript_entry_from_event",
     "transcript_entry_from_stored_event",
 ]
+
+_LAZY = LazyExports(
+    __name__,
+    {
+        "DurableGraphEventContextWriter": ("framework.harness.control_plane.durable_events", "DurableGraphEventContextWriter"),
+        "DurableHarnessEventPort": ("framework.harness.control_plane.durable_events", "DurableHarnessEventPort"),
+        "DurableHarnessTransitionPort": ("framework.harness.control_plane.durable_events", "DurableHarnessTransitionPort"),
+        "HarnessEventCanonicalAdapter": ("framework.harness.control_plane.durable_events", "HarnessEventCanonicalAdapter"),
+        "HarnessValidationError": ("framework.harness.control_plane.errors", "HarnessValidationError"),
+        "HarnessEvent": ("framework.harness.control_plane.event", "HarnessEvent"),
+        "HarnessEventType": ("framework.harness.control_plane.event", "HarnessEventType"),
+        "HarnessEventLogEntry": ("framework.harness.control_plane.event_log", "HarnessEventLogEntry"),
+        "InMemoryHarnessEventLog": ("framework.harness.control_plane.event_log", "InMemoryHarnessEventLog"),
+        "event_log_entry_from_harness_event": ("framework.harness.control_plane.event_log", "event_log_entry_from_harness_event"),
+        "event_log_entry_from_stored_event": ("framework.harness.control_plane.event_log", "event_log_entry_from_stored_event"),
+        "BudgetGate": ("framework.harness.control_plane.gates", "BudgetGate"),
+        "CumulativeLLMBudgetGate": ("framework.harness.control_plane.gates", "CumulativeLLMBudgetGate"),
+        "DeduplicationGate": ("framework.harness.control_plane.gates", "DeduplicationGate"),
+        "DeterministicGate": ("framework.harness.control_plane.gates", "DeterministicGate"),
+        "GateContext": ("framework.harness.control_plane.gates", "GateContext"),
+        "HarnessGateResult": ("framework.harness.control_plane.gates", "HarnessGateResult"),
+        "OutputSchemaGate": ("framework.harness.control_plane.gates", "OutputSchemaGate"),
+        "ScoreRangeGate": ("framework.harness.control_plane.gates", "ScoreRangeGate"),
+        "SkillEvolutionBudgetGate": ("framework.harness.control_plane.gates", "SkillEvolutionBudgetGate"),
+        "ToolAllowlistGate": ("framework.harness.control_plane.gates", "ToolAllowlistGate"),
+        "HarnessCumulativeBudgetFact": ("framework.harness.control_plane.cumulative_budget", "HarnessCumulativeBudgetFact"),
+        "resolve_harness_cumulative_budget_fact": ("framework.harness.control_plane.cumulative_budget", "resolve_harness_cumulative_budget_fact"),
+        "DeterministicGateRegistry": ("framework.harness.control_plane.gate_registry", "DeterministicGateRegistry"),
+        "GateBinding": ("framework.harness.control_plane.gate_registry", "GateBinding"),
+        "GateReference": ("framework.harness.control_plane.gate_registry", "GateReference"),
+        "GateRegistration": ("framework.harness.control_plane.gate_registry", "GateRegistration"),
+        "HarnessGraphCheckpoint": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphCheckpoint"),
+        "HarnessGraphCheckpointReader": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphCheckpointReader"),
+        "HarnessGraphCheckpointReadResult": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphCheckpointReadResult"),
+        "HarnessGraphCheckpointStore": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphCheckpointStore"),
+        "HarnessGraphDecisionInputSnapshot": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphDecisionInputSnapshot"),
+        "HarnessGraphHistoryReducer": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphHistoryReducer"),
+        "HarnessGraphReplayReport": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphReplayReport"),
+        "HarnessGraphReplayReadResult": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphReplayReadResult"),
+        "HarnessGraphStateReadResult": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphStateReadResult"),
+        "HarnessGraphStateReader": ("framework.harness.control_plane.graph_checkpoint", "HarnessGraphStateReader"),
+        "HarnessPinnedDecisionKernel": ("framework.harness.control_plane.graph_checkpoint", "HarnessPinnedDecisionKernel"),
+        "InMemoryHarnessGraphCheckpointStore": ("framework.harness.control_plane.graph_checkpoint", "InMemoryHarnessGraphCheckpointStore"),
+        "graph_history_evidence_ref": ("framework.harness.control_plane.graph_checkpoint", "graph_history_evidence_ref"),
+        "quarantine_graph_replay_failure": ("framework.harness.control_plane.graph_checkpoint", "quarantine_graph_replay_failure"),
+        "HarnessGraphInspection": ("framework.harness.control_plane.graph_inspection", "HarnessGraphInspection"),
+        "graph_health_report": ("framework.harness.control_plane.graph_observability", "graph_health_report"),
+        "graph_metric_samples": ("framework.harness.control_plane.graph_observability", "graph_metric_samples"),
+        "GraphEvaluation": ("framework.harness.control_plane.graph_evaluator", "GraphEvaluation"),
+        "HarnessAcceptedGraphObservation": ("framework.harness.control_plane.graph_evaluator", "HarnessAcceptedGraphObservation"),
+        "HarnessGraphCandidate": ("framework.harness.control_plane.graph_evaluator", "HarnessGraphCandidate"),
+        "HarnessGraphCandidateType": ("framework.harness.control_plane.graph_evaluator", "HarnessGraphCandidateType"),
+        "HarnessGraphEvaluator": ("framework.harness.control_plane.graph_evaluator", "HarnessGraphEvaluator"),
+        "HarnessGraphEvaluationContext": ("framework.harness.control_plane.graph_evaluator", "HarnessGraphEvaluationContext"),
+        "HarnessGraphObservationType": ("framework.harness.control_plane.graph_evaluator", "HarnessGraphObservationType"),
+        "HarnessGraphActivityCancellationDispatcherPort": ("framework.harness.control_plane.graph_application", "HarnessGraphActivityCancellationDispatcherPort"),
+        "HarnessGraphActivityCancellationRequest": ("framework.harness.control_plane.graph_application", "HarnessGraphActivityCancellationRequest"),
+        "HarnessGraphConcurrentActivityDispatcherPort": ("framework.harness.control_plane.graph_application", "HarnessGraphConcurrentActivityDispatcherPort"),
+        "HarnessGraphActivityDispatcherPort": ("framework.harness.control_plane.graph_application", "HarnessGraphActivityDispatcherPort"),
+        "HarnessGraphAppliedDecision": ("framework.harness.control_plane.graph_application", "HarnessGraphAppliedDecision"),
+        "HarnessGraphControlPlaneRuntime": ("framework.harness.control_plane.graph_application", "HarnessGraphControlPlaneRuntime"),
+        "HarnessGraphDecisionApplier": ("framework.harness.control_plane.graph_application", "HarnessGraphDecisionApplier"),
+        "HarnessGraphActivity": ("framework.harness.control_plane.graph_runtime", "HarnessGraphActivity"),
+        "HarnessGraphActivityResult": ("framework.harness.control_plane.graph_runtime", "HarnessGraphActivityResult"),
+        "HarnessGraphActivityResultCommit": ("framework.harness.control_plane.graph_runtime", "HarnessGraphActivityResultCommit"),
+        "HarnessGraphActivityResultStatus": ("framework.harness.control_plane.graph_runtime", "HarnessGraphActivityResultStatus"),
+        "HarnessGraphCommitKind": ("framework.harness.control_plane.graph_runtime", "HarnessGraphCommitKind"),
+        "HarnessGraphDecisionCommit": ("framework.harness.control_plane.graph_runtime", "HarnessGraphDecisionCommit"),
+        "HarnessGraphObservationCommit": ("framework.harness.control_plane.graph_runtime", "HarnessGraphObservationCommit"),
+        "HarnessGraphProjectionCommit": ("framework.harness.control_plane.graph_runtime", "HarnessGraphProjectionCommit"),
+        "HarnessGraphRecovery": ("framework.harness.control_plane.graph_runtime", "HarnessGraphRecovery"),
+        "HarnessGraphTransitionPort": ("framework.harness.control_plane.graph_runtime", "HarnessGraphTransitionPort"),
+        "InMemoryHarnessGraphTransitionPort": ("framework.harness.control_plane.graph_runtime", "InMemoryHarnessGraphTransitionPort"),
+        "HARNESS_GRAPH_TERMINAL_FAILURE_CONTEXT_SCHEMA": ("framework.harness.control_plane.terminal_failure", "HARNESS_GRAPH_TERMINAL_FAILURE_CONTEXT_SCHEMA"),
+        "HARNESS_GRAPH_TERMINAL_FAILURE_RECORD_SCHEMA": ("framework.harness.control_plane.terminal_failure", "HARNESS_GRAPH_TERMINAL_FAILURE_RECORD_SCHEMA"),
+        "HarnessGraphTerminalFailureCandidateBuilder": ("framework.harness.control_plane.terminal_failure", "HarnessGraphTerminalFailureCandidateBuilder"),
+        "HarnessGraphTerminalFailureContext": ("framework.harness.control_plane.terminal_failure", "HarnessGraphTerminalFailureContext"),
+        "HarnessGraphFailedNodeRecord": ("framework.harness.control_plane.terminal_failure", "HarnessGraphFailedNodeRecord"),
+        "HarnessGraphTerminalFailureRecord": ("framework.harness.control_plane.terminal_failure", "HarnessGraphTerminalFailureRecord"),
+        "HarnessGraphTerminalFailureSideEffectCandidate": ("framework.harness.control_plane.terminal_failure", "HarnessGraphTerminalFailureSideEffectCandidate"),
+        "HARNESS_ADMITTED_GRAPH_ACTIVITY_SCHEMA": ("framework.harness.control_plane.node_output", "HARNESS_ADMITTED_GRAPH_ACTIVITY_SCHEMA"),
+        "HARNESS_COMMITTED_NODE_OUTPUT_RECEIPT_SCHEMA": ("framework.harness.control_plane.node_output", "HARNESS_COMMITTED_NODE_OUTPUT_RECEIPT_SCHEMA"),
+        "HARNESS_NODE_OUTPUT_CANDIDATE_SCHEMA": ("framework.harness.control_plane.node_output", "HARNESS_NODE_OUTPUT_CANDIDATE_SCHEMA"),
+        "HARNESS_NODE_OUTPUT_COMMIT_SCHEMA": ("framework.harness.control_plane.node_output", "HARNESS_NODE_OUTPUT_COMMIT_SCHEMA"),
+        "HARNESS_NODE_OUTPUT_LEASE_SCHEMA": ("framework.harness.control_plane.node_output", "HARNESS_NODE_OUTPUT_LEASE_SCHEMA"),
+        "HARNESS_NODE_OUTPUT_RESOURCE_SCHEMA": ("framework.harness.control_plane.node_output", "HARNESS_NODE_OUTPUT_RESOURCE_SCHEMA"),
+        "HARNESS_NODE_OUTPUT_STAGED_WRITE_SCHEMA": ("framework.harness.control_plane.node_output", "HARNESS_NODE_OUTPUT_STAGED_WRITE_SCHEMA"),
+        "HarnessAdmittedGraphActivityAttempt": ("framework.harness.control_plane.node_output", "HarnessAdmittedGraphActivityAttempt"),
+        "HarnessCommittedNodeOutputReceipt": ("framework.harness.control_plane.node_output", "HarnessCommittedNodeOutputReceipt"),
+        "HarnessNodeOutputAttemptStatus": ("framework.harness.control_plane.node_output", "HarnessNodeOutputAttemptStatus"),
+        "HarnessNodeOutputCandidate": ("framework.harness.control_plane.node_output", "HarnessNodeOutputCandidate"),
+        "HarnessNodeOutputCommit": ("framework.harness.control_plane.node_output", "HarnessNodeOutputCommit"),
+        "HarnessNodeOutputCommitGuard": ("framework.harness.control_plane.node_output", "HarnessNodeOutputCommitGuard"),
+        "HarnessNodeOutputCommitRejectedError": ("framework.harness.control_plane.node_output", "HarnessNodeOutputCommitRejectedError"),
+        "HarnessNodeOutputLease": ("framework.harness.control_plane.node_output", "HarnessNodeOutputLease"),
+        "HarnessNodeOutputResourceIdentity": ("framework.harness.control_plane.node_output", "HarnessNodeOutputResourceIdentity"),
+        "HarnessNodeOutputResourcePort": ("framework.harness.control_plane.node_output", "HarnessNodeOutputResourcePort"),
+        "HarnessNodeOutputStagedWrite": ("framework.harness.control_plane.node_output", "HarnessNodeOutputStagedWrite"),
+        "HarnessNodeOutputStaleOwnerError": ("framework.harness.control_plane.node_output", "HarnessNodeOutputStaleOwnerError"),
+        "InMemoryHarnessNodeOutputResource": ("framework.harness.control_plane.node_output", "InMemoryHarnessNodeOutputResource"),
+        "HarnessActiveActivityState": ("framework.harness.control_plane.graph_state", "HarnessActiveActivityState"),
+        "HarnessAttemptEvidenceReference": ("framework.harness.control_plane.graph_state", "HarnessAttemptEvidenceReference"),
+        "HarnessBudgetCounterState": ("framework.harness.control_plane.graph_state", "HarnessBudgetCounterState"),
+        "HarnessBranchOutputReference": ("framework.harness.control_plane.graph_state", "HarnessBranchOutputReference"),
+        "HarnessCompensationEntry": ("framework.harness.control_plane.graph_state", "HarnessCompensationEntry"),
+        "HarnessCompensationStatus": ("framework.harness.control_plane.graph_state", "HarnessCompensationStatus"),
+        "HarnessEvidenceKind": ("framework.harness.control_plane.graph_state", "HarnessEvidenceKind"),
+        "HarnessGraphBudgetState": ("framework.harness.control_plane.graph_state", "HarnessGraphBudgetState"),
+        "HarnessGraphState": ("framework.harness.control_plane.graph_state", "HarnessGraphState"),
+        "HarnessJoinKind": ("framework.harness.control_plane.graph_state", "HarnessJoinKind"),
+        "HarnessJoinState": ("framework.harness.control_plane.graph_state", "HarnessJoinState"),
+        "HarnessJoinStatus": ("framework.harness.control_plane.graph_state", "HarnessJoinStatus"),
+        "HarnessLoopCounterState": ("framework.harness.control_plane.graph_state", "HarnessLoopCounterState"),
+        "HarnessLoopIteration": ("framework.harness.control_plane.graph_state", "HarnessLoopIteration"),
+        "HarnessLoopStatus": ("framework.harness.control_plane.graph_state", "HarnessLoopStatus"),
+        "HarnessNodeInstanceIdentity": ("framework.harness.control_plane.graph_state", "HarnessNodeInstanceIdentity"),
+        "HarnessNodeInstanceState": ("framework.harness.control_plane.graph_state", "HarnessNodeInstanceState"),
+        "HarnessNodeInstanceStatus": ("framework.harness.control_plane.graph_state", "HarnessNodeInstanceStatus"),
+        "HarnessPendingSideEffectScope": ("framework.harness.control_plane.graph_state", "HarnessPendingSideEffectScope"),
+        "HarnessPendingSideEffectState": ("framework.harness.control_plane.graph_state", "HarnessPendingSideEffectState"),
+        "HarnessPendingSideEffectStatus": ("framework.harness.control_plane.graph_state", "HarnessPendingSideEffectStatus"),
+        "HarnessWaitRegistration": ("framework.harness.control_plane.graph_state", "HarnessWaitRegistration"),
+        "HarnessWaitStatus": ("framework.harness.control_plane.graph_state", "HarnessWaitStatus"),
+        "RunLifecycle": ("framework.harness.control_plane.graph_state", "RunLifecycle"),
+        "RunOutcome": ("framework.harness.control_plane.graph_state", "RunOutcome"),
+        "project_public_graph_status": ("framework.harness.control_plane.graph_state", "project_public_graph_status"),
+        "HarnessControlPlane": ("framework.harness.control_plane.harness", "HarnessControlPlane"),
+        "HarnessRunResult": ("framework.harness.control_plane.harness", "HarnessRunResult"),
+        "InMemoryHarnessEventPort": ("framework.harness.control_plane.harness", "InMemoryHarnessEventPort"),
+        "HarnessPhase": ("framework.harness.control_plane.phase", "HarnessPhase"),
+        "HarnessPhaseBoundary": ("framework.harness.control_plane.phase", "HarnessPhaseBoundary"),
+        "HarnessPhaseRecord": ("framework.harness.control_plane.phase", "HarnessPhaseRecord"),
+        "assert_step_completion_allowed": ("framework.harness.control_plane.phase", "assert_step_completion_allowed"),
+        "HarnessBudget": ("framework.harness.control_plane.policy", "HarnessBudget"),
+        "HarnessBudgetSnapshot": ("framework.harness.control_plane.policy", "HarnessBudgetSnapshot"),
+        "HarnessGraphStepSchedulingInput": ("framework.harness.control_plane.scheduler", "HarnessGraphStepSchedulingInput"),
+        "HarnessScheduler": ("framework.harness.control_plane.scheduler", "HarnessScheduler"),
+        "HarnessReplayActivityResolver": ("framework.harness.control_plane.replay_history", "HarnessReplayActivityResolver"),
+        "build_harness_history_verifier": ("framework.harness.control_plane.replay_history", "build_harness_history_verifier"),
+        "harness_decision_input_snapshot": ("framework.harness.control_plane.replay_history", "harness_decision_input_snapshot"),
+        "harness_decision_kernel": ("framework.harness.control_plane.replay_history", "harness_decision_kernel"),
+        "HarnessRunSpec": ("framework.harness.control_plane.state", "HarnessRunSpec"),
+        "HarnessRunStatus": ("framework.harness.control_plane.state", "HarnessRunStatus"),
+        "HarnessStepStatus": ("framework.harness.control_plane.state", "HarnessStepStatus"),
+        "StepGateObservation": ("framework.harness.control_plane.step_lifecycle", "StepGateObservation"),
+        "StepLifecycleBindingMode": ("framework.harness.control_plane.step_lifecycle", "StepLifecycleBindingMode"),
+        "StepLifecycleBudget": ("framework.harness.control_plane.step_lifecycle", "StepLifecycleBudget"),
+        "StepLifecycleObservations": ("framework.harness.control_plane.step_lifecycle", "StepLifecycleObservations"),
+        "StepLifecycleState": ("framework.harness.control_plane.step_lifecycle", "StepLifecycleState"),
+        "StepLifecycleStateMachine": ("framework.harness.control_plane.step_lifecycle", "StepLifecycleStateMachine"),
+        "StepLifecycleTransition": ("framework.harness.control_plane.step_lifecycle", "StepLifecycleTransition"),
+        "StepLifecycleTransitionType": ("framework.harness.control_plane.step_lifecycle", "StepLifecycleTransitionType"),
+        "StepQualityObservation": ("framework.harness.control_plane.step_lifecycle", "StepQualityObservation"),
+        "StepWorkerObservation": ("framework.harness.control_plane.step_lifecycle", "StepWorkerObservation"),
+        "HarnessTrace": ("framework.harness.control_plane.trace", "HarnessTrace"),
+        "HarnessTranscript": ("framework.harness.control_plane.transcript", "HarnessTranscript"),
+        "HarnessTranscriptEntry": ("framework.harness.control_plane.transcript", "HarnessTranscriptEntry"),
+        "InMemoryHarnessTranscriptStore": ("framework.harness.control_plane.transcript", "InMemoryHarnessTranscriptStore"),
+        "transcript_entry_from_event": ("framework.harness.control_plane.transcript", "transcript_entry_from_event"),
+        "transcript_entry_from_stored_event": ("framework.harness.control_plane.transcript", "transcript_entry_from_stored_event"),
+    },
+)
+
+
+def __getattr__(name: str) -> Any:
+    return _LAZY.getattr(name)
+
+
+def __dir__() -> list[str]:
+    return _LAZY.dir()
+
+
+if TYPE_CHECKING:
+    from framework.harness.control_plane.durable_events import (
+        DurableGraphEventContextWriter,
+        DurableHarnessEventPort,
+        DurableHarnessTransitionPort,
+        HarnessEventCanonicalAdapter,
+    )
+    from framework.harness.control_plane.errors import (
+        HarnessValidationError,
+    )
+    from framework.harness.control_plane.event import (
+        HarnessEvent,
+        HarnessEventType,
+    )
+    from framework.harness.control_plane.event_log import (
+        HarnessEventLogEntry,
+        InMemoryHarnessEventLog,
+        event_log_entry_from_harness_event,
+        event_log_entry_from_stored_event,
+    )
+    from framework.harness.control_plane.gates import (
+        BudgetGate,
+        CumulativeLLMBudgetGate,
+        DeduplicationGate,
+        DeterministicGate,
+        GateContext,
+        HarnessGateResult,
+        OutputSchemaGate,
+        ScoreRangeGate,
+        SkillEvolutionBudgetGate,
+        ToolAllowlistGate,
+    )
+    from framework.harness.control_plane.cumulative_budget import (
+        HarnessCumulativeBudgetFact,
+        resolve_harness_cumulative_budget_fact,
+    )
+    from framework.harness.control_plane.gate_registry import (
+        DeterministicGateRegistry,
+        GateBinding,
+        GateReference,
+        GateRegistration,
+    )
+    from framework.harness.control_plane.graph_checkpoint import (
+        HarnessGraphCheckpoint,
+        HarnessGraphCheckpointReader,
+        HarnessGraphCheckpointReadResult,
+        HarnessGraphCheckpointStore,
+        HarnessGraphDecisionInputSnapshot,
+        HarnessGraphHistoryReducer,
+        HarnessGraphReplayReport,
+        HarnessGraphReplayReadResult,
+        HarnessGraphStateReadResult,
+        HarnessGraphStateReader,
+        HarnessPinnedDecisionKernel,
+        InMemoryHarnessGraphCheckpointStore,
+        graph_history_evidence_ref,
+        quarantine_graph_replay_failure,
+    )
+    from framework.harness.control_plane.graph_inspection import (
+        HarnessGraphInspection,
+    )
+    from framework.harness.control_plane.graph_observability import (
+        graph_health_report,
+        graph_metric_samples,
+    )
+    from framework.harness.control_plane.graph_evaluator import (
+        GraphEvaluation,
+        HarnessAcceptedGraphObservation,
+        HarnessGraphCandidate,
+        HarnessGraphCandidateType,
+        HarnessGraphEvaluator,
+        HarnessGraphEvaluationContext,
+        HarnessGraphObservationType,
+    )
+    from framework.harness.control_plane.graph_application import (
+        HarnessGraphActivityCancellationDispatcherPort,
+        HarnessGraphActivityCancellationRequest,
+        HarnessGraphConcurrentActivityDispatcherPort,
+        HarnessGraphActivityDispatcherPort,
+        HarnessGraphAppliedDecision,
+        HarnessGraphControlPlaneRuntime,
+        HarnessGraphDecisionApplier,
+    )
+    from framework.harness.control_plane.graph_runtime import (
+        HarnessGraphActivity,
+        HarnessGraphActivityResult,
+        HarnessGraphActivityResultCommit,
+        HarnessGraphActivityResultStatus,
+        HarnessGraphCommitKind,
+        HarnessGraphDecisionCommit,
+        HarnessGraphObservationCommit,
+        HarnessGraphProjectionCommit,
+        HarnessGraphRecovery,
+        HarnessGraphTransitionPort,
+        InMemoryHarnessGraphTransitionPort,
+    )
+    from framework.harness.control_plane.terminal_failure import (
+        HARNESS_GRAPH_TERMINAL_FAILURE_CONTEXT_SCHEMA,
+        HARNESS_GRAPH_TERMINAL_FAILURE_RECORD_SCHEMA,
+        HarnessGraphTerminalFailureCandidateBuilder,
+        HarnessGraphTerminalFailureContext,
+        HarnessGraphFailedNodeRecord,
+        HarnessGraphTerminalFailureRecord,
+        HarnessGraphTerminalFailureSideEffectCandidate,
+    )
+    from framework.harness.control_plane.node_output import (
+        HARNESS_ADMITTED_GRAPH_ACTIVITY_SCHEMA,
+        HARNESS_COMMITTED_NODE_OUTPUT_RECEIPT_SCHEMA,
+        HARNESS_NODE_OUTPUT_CANDIDATE_SCHEMA,
+        HARNESS_NODE_OUTPUT_COMMIT_SCHEMA,
+        HARNESS_NODE_OUTPUT_LEASE_SCHEMA,
+        HARNESS_NODE_OUTPUT_RESOURCE_SCHEMA,
+        HARNESS_NODE_OUTPUT_STAGED_WRITE_SCHEMA,
+        HarnessAdmittedGraphActivityAttempt,
+        HarnessCommittedNodeOutputReceipt,
+        HarnessNodeOutputAttemptStatus,
+        HarnessNodeOutputCandidate,
+        HarnessNodeOutputCommit,
+        HarnessNodeOutputCommitGuard,
+        HarnessNodeOutputCommitRejectedError,
+        HarnessNodeOutputLease,
+        HarnessNodeOutputResourceIdentity,
+        HarnessNodeOutputResourcePort,
+        HarnessNodeOutputStagedWrite,
+        HarnessNodeOutputStaleOwnerError,
+        InMemoryHarnessNodeOutputResource,
+    )
+    from framework.harness.control_plane.graph_state import (
+        HarnessActiveActivityState,
+        HarnessAttemptEvidenceReference,
+        HarnessBudgetCounterState,
+        HarnessBranchOutputReference,
+        HarnessCompensationEntry,
+        HarnessCompensationStatus,
+        HarnessEvidenceKind,
+        HarnessGraphBudgetState,
+        HarnessGraphState,
+        HarnessJoinKind,
+        HarnessJoinState,
+        HarnessJoinStatus,
+        HarnessLoopCounterState,
+        HarnessLoopIteration,
+        HarnessLoopStatus,
+        HarnessNodeInstanceIdentity,
+        HarnessNodeInstanceState,
+        HarnessNodeInstanceStatus,
+        HarnessPendingSideEffectScope,
+        HarnessPendingSideEffectState,
+        HarnessPendingSideEffectStatus,
+        HarnessWaitRegistration,
+        HarnessWaitStatus,
+        RunLifecycle,
+        RunOutcome,
+        project_public_graph_status,
+    )
+    from framework.harness.control_plane.harness import (
+        HarnessControlPlane,
+        HarnessRunResult,
+        InMemoryHarnessEventPort,
+    )
+    from framework.harness.control_plane.phase import (
+        HarnessPhase,
+        HarnessPhaseBoundary,
+        HarnessPhaseRecord,
+        assert_step_completion_allowed,
+    )
+    from framework.harness.control_plane.policy import (
+        HarnessBudget,
+        HarnessBudgetSnapshot,
+    )
+    from framework.harness.control_plane.scheduler import (
+        HarnessGraphStepSchedulingInput,
+        HarnessScheduler,
+    )
+    from framework.harness.control_plane.replay_history import (
+        HarnessReplayActivityResolver,
+        build_harness_history_verifier,
+        harness_decision_input_snapshot,
+        harness_decision_kernel,
+    )
+    from framework.harness.control_plane.state import (
+        HarnessRunSpec,
+        HarnessRunStatus,
+        HarnessStepStatus,
+    )
+    from framework.harness.control_plane.step_lifecycle import (
+        StepGateObservation,
+        StepLifecycleBindingMode,
+        StepLifecycleBudget,
+        StepLifecycleObservations,
+        StepLifecycleState,
+        StepLifecycleStateMachine,
+        StepLifecycleTransition,
+        StepLifecycleTransitionType,
+        StepQualityObservation,
+        StepWorkerObservation,
+    )
+    from framework.harness.control_plane.trace import (
+        HarnessTrace,
+    )
+    from framework.harness.control_plane.transcript import (
+        HarnessTranscript,
+        HarnessTranscriptEntry,
+        InMemoryHarnessTranscriptStore,
+        transcript_entry_from_event,
+        transcript_entry_from_stored_event,
+    )

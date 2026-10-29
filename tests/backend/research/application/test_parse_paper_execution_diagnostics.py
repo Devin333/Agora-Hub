@@ -213,3 +213,44 @@ def test_compiler_attempt_ledger_cannot_hide_prior_typed_parser_failure(ledger):
     for event in sink.events:
         if event.get("parser_attempts"):
             assert failures[0] in event["parser_attempts"]
+
+
+def test_readable_fallback_document_is_still_chunked(tmp_path, caplog):
+    # When every structured parser fails the residual text is kept; its chunks
+    # must project with that provenance instead of failing chunk validation.
+    from backend.research.document.chunk_manifest import ChunkManifestManager
+    from backend.research.document.chunker import PaperDocumentChunker
+    from tests.backend.research.application.test_parse_paper_catalog_contract import _Artifacts
+
+    artifacts = _Artifacts()
+    use_case = ParsePaperUseCase(
+        source_resolver=_PdfResolver(
+            source_url="https://publisher.example/broken.pdf",
+            paper_id="failed-pdf",
+            content=b"%PDF\n" + b"Readable residual PDF text, not structured evidence. " * 40,
+        ),
+        document_parser=_FailedParser(),
+        artifact_store=artifacts,
+        event_sink=InMemoryResearchEventSink(),
+        chunker=PaperDocumentChunker(),
+        chunk_manifest=ChunkManifestManager(tmp_path / "manifests"),
+    )
+
+    result = use_case.parse(
+        ParsePaperRequest(
+            source="https://publisher.example/broken.pdf",
+            run_id="fallback-chunks",
+            tenant_id="tenant",
+            user_id="reader",
+            options={"quality_profile": "reading"},
+        )
+    )
+
+    assert result.document is not None
+    assert result.document.parser_backend == "text_fallback"
+    assert result.chunk_manifest_ref is not None
+    assert "chunk manifest projection failed" not in caplog.text
+    manifests = [payload for kind, payload in artifacts.payloads if kind == "research-chunk-manifest"]
+    chunks = manifests[-1]["payload"]["chunks"]
+    assert chunks
+    assert {chunk["parse_source"] for chunk in chunks} == {"text_fallback"}

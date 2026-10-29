@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
+from functools import partial
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -27,6 +29,16 @@ from backend.research.ports.personal_memory import (
     PersonalMemoryStoreNotFoundError,
 )
 from backend.research.ports.request_admission import ResearchDesktopRequestStore
+from framework.llm.clients import (
+    LLMCredentialUnavailableError,
+    credential_unavailable_cause,
+    require_invocation_credential,
+)
+from interfaces.services.research_desktop_background import (
+    ResearchDesktopExecutorUnavailableError,
+    ResearchDesktopTaskExecutor,
+    default_research_desktop_executor,
+)
 from interfaces.services.research_desktop_control import (
     ResearchDesktopControlError,
     canonical_request_fingerprint,
@@ -35,6 +47,7 @@ from interfaces.services.research_desktop_control import (
 from interfaces.services.research_import_application import ResearchImportApplication
 from interfaces.services.research_import_service import ResearchImportError, ResearchImportService
 from interfaces.services.research_service import (
+    model_credential_service_error,
     ResearchActorInput,
     ResearchAnalyzeInput,
     ResearchApplicationService,
@@ -43,9 +56,14 @@ from interfaces.services.research_service import (
     ResearchServiceError,
 )
 
+logger = logging.getLogger(__name__)
+
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 _MISSING = object()
+# Source types the resolver fetches over the network; ``local``, ``manual``
+# and the GitHub observation path never apply to a public paper link.
+_REMOTE_SOURCE_TYPES = frozenset({"arxiv", "openreview", "doi", "crossref", "publisher"})
 
 
 class ResearchDesktopServiceError(RuntimeError):
@@ -187,6 +205,18 @@ class _PersonalMemoryTaskContextProvider:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _AnalysisJob:
+    """An admitted analysis frozen at submission for background execution."""
+
+    owner: ResearchDesktopOwner
+    request_id: str
+    generation: str
+    run_id: str
+    semantic: Mapping[str, Any]
+    command: ResearchAnalyzeInput
+
+
 class ResearchDesktopApplicationService:
     """Authenticated desktop facade over existing Research application authorities."""
 
@@ -197,6 +227,7 @@ class ResearchDesktopApplicationService:
         imports: ResearchImportService | None = None,
         requests: ResearchDesktopRequestStore | None = None,
         personal_memory: PersonalMemoryService | None = None,
+        executor: ResearchDesktopTaskExecutor | None = None,
     ) -> None:
         if not isinstance(research, ResearchApplicationService):
             raise TypeError("research must be ResearchApplicationService")
@@ -208,6 +239,9 @@ class ResearchDesktopApplicationService:
         ):
             raise TypeError("personal_memory must be PersonalMemoryService")
         self._personal_memory = personal_memory
+        if executor is not None and not isinstance(executor, ResearchDesktopTaskExecutor):
+            raise TypeError("executor must be ResearchDesktopTaskExecutor")
+        self._executor = executor or default_research_desktop_executor()
 
     def _personal_memory_context(
         self,
@@ -241,32 +275,37 @@ class ResearchDesktopApplicationService:
     def generation(self) -> str:
         return self._requests.generation()
 
-    def rotate_generation(self) -> str:
-        """Fence all pre-restore browser requests after an offline restore switch."""
-
-        return self._requests.rotate_generation()
-
-    def begin_business_operation(self, *, operation: str) -> str:
-        return self._requests.begin_untracked_execution(operation=operation)
-
-    def end_business_operation(self, lease_id: str) -> None:
-        self._requests.end_untracked_execution(lease_id)
-
     def capabilities(self, owner: ResearchDesktopOwner) -> dict[str, Any]:
         _owner(owner)
         available = self._research.capability_projection()
+        # Model-backed capabilities also depend on this account's credential.
+        credential_gap = _model_credential_gap()
         definitions = (
-            ("source", "论文来源", True, available["catalog"]),
-            ("pdf-import", "PDF 导入", True, available["parse"]),
-            ("single-paper-analysis", "单论文分析", True, available["analyze"]),
-            ("paper-question-answering", "论文问答", True, available["ask"] and available["ragAsk"]),
-            ("accepted-report", "核验报告", True, available["artifactRead"]),
-            ("rag-question-answering", "检索增强问答", False, available["ragAsk"]),
+            ("source", "论文来源", True, available["catalog"], False),
+            ("pdf-import", "PDF 导入", True, available["parse"], False),
+            ("single-paper-analysis", "单论文分析", True, available["analyze"], True),
+            ("paper-question-answering", "论文问答", True, available["ask"] and available["ragAsk"], True),
+            ("accepted-report", "核验报告", True, available["artifactRead"], False),
+            ("rag-question-answering", "检索增强问答", False, available["ragAsk"], True),
         )
         runtime_identity = self._research.capability_runtime_identity()
         verifications = self._requests.capability_verifications(runtime_identity=runtime_identity)
         capabilities = []
-        for capability_id, label, required, configured in definitions:
+        for capability_id, label, required, configured, uses_model in definitions:
+            if uses_model and credential_gap is not None and configured:
+                capabilities.append({
+                    "id": capability_id,
+                    "label": label,
+                    "required": required,
+                    "configured": False,
+                    "reachable": False,
+                    "verified": False,
+                    "verifiedAt": None,
+                    "provenance": None,
+                    "reasonCode": credential_gap.code,
+                    "message": "请先在设置中填写并保存模型 API Key。",
+                })
+                continue
             verification = verifications.get(capability_id) if isinstance(verifications, Mapping) else None
             verified = configured and isinstance(verification, Mapping)
             capabilities.append({
@@ -324,8 +363,11 @@ class ResearchDesktopApplicationService:
         except ResearchServiceError as exc:
             if exc.code not in {"paper_not_found", "analysis_not_found", "quality_gate_failed"}:
                 raise _service_error(exc) from exc
-        document_payload = self._research.get_document(paper, actor=actor)
-        catalog_payload = self._research.get_catalog(paper, actor=actor)
+        try:
+            document_payload = self._research.get_document(paper, actor=actor)
+            catalog_payload = self._research.get_catalog(paper, actor=actor)
+        except ResearchServiceError as exc:
+            raise _service_error(exc) from exc
         document = document_payload.get("document") if isinstance(document_payload.get("document"), Mapping) else {}
         revision = _document_source_revision(document)
         fingerprint = _document_source_fingerprint(document)
@@ -376,19 +418,10 @@ class ResearchDesktopApplicationService:
             ),
         }
 
-    def _record_capability(
-        self,
-        capability_id: str,
-        *,
-        operation: str,
-        authority_id: str | None = None,
-    ) -> None:
-        provenance = {"verificationKind": "business_operation", "operation": operation}
-        if authority_id is not None:
-            provenance["authorityId"] = authority_id
+    def _record_capability(self, capability_id: str, *, operation: str) -> None:
         self._requests.record_capability_verification(
             capability_id=capability_id,
-            provenance=provenance,
+            operation=operation,
             runtime_identity=self._research.capability_runtime_identity(),
         )
 
@@ -429,7 +462,7 @@ class ResearchDesktopApplicationService:
                 status_code=422,
                 user_action_required=True,
             )
-        actual_source_type = _optional_text(source_type, "sourceType", maximum=64)
+        actual_source_type = _remote_source_type(source_type)
         semantic = {
             "kind": "prepare",
             "paperId": actual_paper,
@@ -491,7 +524,7 @@ class ResearchDesktopApplicationService:
             )
             self._record_failure(actual, request_id=request_id, generation=generation, exc=error)
             raise error
-        self._record_capability("source", operation="prepare", authority_id=run_id)
+        self._record_capability("source", operation="prepare")
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -571,6 +604,7 @@ class ResearchDesktopApplicationService:
             **({"personalMemory": memory_request} if memory_request is not None else {}),
         }
         self._validate_request_fingerprint(semantic, request_fingerprint)
+        _require_model_credential()
         decision = self._requests.admit(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -578,12 +612,13 @@ class ResearchDesktopApplicationService:
             kind="analyze",
             fingerprint=request_fingerprint,
             semantic=semantic,
+            queued=True,
         )
         if not decision.execute:
             return self._operation_response(decision.admission)
         run_id = _run_id(actual.user_id, generation, request_id)
         try:
-            self._requests.bind_authority(
+            bound = self._requests.bind_authority(
                 owner_id=actual.user_id,
                 request_id=request_id,
                 generation=generation,
@@ -592,8 +627,13 @@ class ResearchDesktopApplicationService:
             memory_context = self._personal_memory_context(
                 actual, memory_request
             )
-            response = self._research.analyze_paper(
-                ResearchAnalyzeInput(
+            job = _AnalysisJob(
+                owner=actual,
+                request_id=request_id,
+                generation=generation,
+                run_id=run_id,
+                semantic=semantic,
+                command=ResearchAnalyzeInput(
                     paper_id=actual_paper,
                     source_url=source,
                     pdf_url=pdf or bound_source_locator,
@@ -614,23 +654,99 @@ class ResearchDesktopApplicationService:
                         "research_input_objective": effective_objective,
                         "research_input_constraints": actual_constraints,
                     },
-                )
+                ),
+            )
+            # The model run outlasts any HTTP request; the client polls the
+            # operation until the background job records a terminal state.
+            self._executor.submit(
+                partial(self._execute_analysis, job),
+                on_abandon=partial(self._abandon_analysis, job),
             )
         except Exception as exc:
             self._record_failure(actual, request_id=request_id, generation=generation, exc=exc)
             raise _service_error(exc) from exc
-        authority_run_id = str(response.get("runId") or run_id)
-        projection = self._research.get_run_projection(authority_run_id, actor=actual.actor())
-        result = _analysis_operation_result(projection, source_revision=revision)
-        self._record_capability("single-paper-analysis", operation="analyze", authority_id=authority_run_id)
+        return self._operation_response(bound)
+
+    def _execute_analysis(self, job: _AnalysisJob) -> None:
+        """Run one admitted analysis and record its terminal state."""
+
+        owner = job.owner
+        try:
+            started = self._requests.start(
+                owner_id=owner.user_id,
+                request_id=job.request_id,
+                generation=job.generation,
+            )
+        except Exception as exc:
+            # A rotated generation or unreadable store means this admission
+            # can no longer be executed under its frozen identity; record that
+            # where possible so the client does not wait on a job that never ran.
+            logger.exception("desktop analysis %s could not start", job.request_id)
+            self._record_failure(owner, request_id=job.request_id, generation=job.generation, exc=exc)
+            return
+        if started.status != "running":
+            return
+        try:
+            response = self._research.analyze_paper(job.command)
+        except Exception as exc:
+            self._record_failure(owner, request_id=job.request_id, generation=job.generation, exc=exc)
+            return
+        authority_run_id = str(response.get("runId") or job.run_id)
+        try:
+            projection = self._research.get_run_projection(authority_run_id, actor=owner.actor())
+            self._finalize_analysis(
+                owner,
+                request_id=job.request_id,
+                generation=job.generation,
+                semantic=job.semantic,
+                run_id=authority_run_id,
+                projection=projection,
+            )
+        except Exception:
+            # The run itself finished; reading the operation reconciles the
+            # admission from the run projection once the store is writable.
+            logger.exception("desktop analysis %s finished without a terminal record", job.request_id)
+
+    def _abandon_analysis(self, job: _AnalysisJob) -> None:
+        self._requests.fail(
+            owner_id=job.owner.user_id,
+            request_id=job.request_id,
+            generation=job.generation,
+            error={
+                "code": "desktop_execution_abandoned",
+                "message": "The service stopped before the queued analysis started",
+                "retryable": True,
+            },
+        )
+
+    def _finalize_analysis(
+        self,
+        owner: ResearchDesktopOwner,
+        *,
+        request_id: str,
+        generation: str,
+        semantic: Mapping[str, Any],
+        run_id: str,
+        projection: Mapping[str, Any],
+    ) -> Any:
+        """Verify a succeeded analysis run against its frozen request and record the outcome."""
+
+        source_revision = str(semantic.get("sourceRevision") or "")
+        memory_request = (
+            semantic.get("personalMemory")
+            if isinstance(semantic.get("personalMemory"), Mapping)
+            else None
+        )
+        result = _analysis_operation_result(projection, source_revision=source_revision)
+        self._record_capability("single-paper-analysis", operation="analyze")
         if not _result_identity_matches(
             projection,
-            run_id=authority_run_id,
-            paper_id=actual_paper,
-            source_revision=revision,
+            run_id=run_id,
+            paper_id=str(semantic.get("paperId") or ""),
+            source_revision=source_revision,
         ):
-            failed = self._requests.fail(
-                owner_id=actual.user_id,
+            return self._requests.fail(
+                owner_id=owner.user_id,
                 request_id=request_id,
                 generation=generation,
                 error={
@@ -640,13 +756,12 @@ class ResearchDesktopApplicationService:
                 },
                 needs_review=True,
             )
-            return self._operation_response(failed)
         if not _personal_memory_disclosure_matches(
             memory_request,
             projection.get("diagnostics") if isinstance(projection.get("diagnostics"), Mapping) else {},
         ):
-            failed = self._requests.fail(
-                owner_id=actual.user_id,
+            return self._requests.fail(
+                owner_id=owner.user_id,
                 request_id=request_id,
                 generation=generation,
                 error={
@@ -656,10 +771,9 @@ class ResearchDesktopApplicationService:
                 },
                 needs_review=True,
             )
-            return self._operation_response(failed)
         if not _analysis_result_is_accepted(result):
-            rejected = self._requests.fail(
-                owner_id=actual.user_id,
+            return self._requests.fail(
+                owner_id=owner.user_id,
                 request_id=request_id,
                 generation=generation,
                 error={
@@ -668,16 +782,14 @@ class ResearchDesktopApplicationService:
                     "retryable": False,
                 },
             )
-            return self._operation_response(rejected)
-        self._record_capability("accepted-report", operation="analyze", authority_id=authority_run_id)
-        completed = self._requests.complete(
-            owner_id=actual.user_id,
+        self._record_capability("accepted-report", operation="analyze")
+        return self._requests.complete(
+            owner_id=owner.user_id,
             request_id=request_id,
             generation=generation,
-            run_id=authority_run_id,
+            run_id=run_id,
             result=result,
         )
-        return self._operation_response(completed)
 
     def submit_ask(
         self,
@@ -722,6 +834,7 @@ class ResearchDesktopApplicationService:
             source_revision=revision,
             source_fingerprint=source_digest,
         )
+        _require_model_credential()
         decision = self._requests.admit(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -821,7 +934,7 @@ class ResearchDesktopApplicationService:
                 needs_review=True,
             )
             return self._operation_response(failed)
-        self._record_capability("paper-question-answering", operation="ask", authority_id=response["transcriptId"])
+        self._record_capability("paper-question-answering", operation="ask")
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -917,8 +1030,8 @@ class ResearchDesktopApplicationService:
                 },
             )
             return self._operation_response(failed)
-        self._record_capability("pdf-import", operation="import", authority_id=import_id)
-        self._record_capability("source", operation="import", authority_id=import_id)
+        self._record_capability("pdf-import", operation="import")
+        self._record_capability("source", operation="import")
         completed = self._requests.complete(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -1008,64 +1121,13 @@ class ResearchDesktopApplicationService:
                 raise _service_error(exc) from exc
             status = str(projection.get("status") or "unknown")
             if status == "succeeded":
-                result = _analysis_operation_result(
-                    projection,
-                    source_revision=str(admission.semantic.get("sourceRevision") or ""),
-                )
-                memory_request = (
-                    admission.semantic.get("personalMemory")
-                    if isinstance(admission.semantic.get("personalMemory"), Mapping)
-                    else None
-                )
-                if not _result_identity_matches(
-                    projection,
-                    run_id=admission.run_id,
-                    paper_id=str(admission.semantic.get("paperId") or ""),
-                    source_revision=str(admission.semantic.get("sourceRevision") or ""),
-                ):
-                    return self._requests.fail(
-                        owner_id=owner.user_id,
-                        request_id=admission.request_id,
-                        generation=admission.generation,
-                        error={
-                            "code": "result_identity_mismatch",
-                            "message": "The analysis result does not match the frozen run and source identity",
-                            "retryable": False,
-                        },
-                        needs_review=True,
-                    )
-                if not _personal_memory_disclosure_matches(
-                    memory_request,
-                    projection.get("diagnostics") if isinstance(projection.get("diagnostics"), Mapping) else {},
-                ):
-                    return self._requests.fail(
-                        owner_id=owner.user_id,
-                        request_id=admission.request_id,
-                        generation=admission.generation,
-                        error={
-                            "code": "personal_memory_disclosure_mismatch",
-                            "message": "The analysis memory receipt does not match the frozen request selection",
-                            "retryable": False,
-                        },
-                        needs_review=True,
-                    )
-                if not _analysis_result_is_accepted(result):
-                    return self._requests.fail(
-                        owner_id=owner.user_id,
-                        request_id=admission.request_id,
-                        generation=admission.generation,
-                        error={
-                            "code": "quality_gate_failed",
-                            "message": "The authoritative Research quality gate did not accept the analysis",
-                            "retryable": False,
-                        },
-                    )
-                return self._requests.complete(
-                    owner_id=owner.user_id,
+                return self._finalize_analysis(
+                    owner,
                     request_id=admission.request_id,
                     generation=admission.generation,
+                    semantic=admission.semantic,
                     run_id=admission.run_id,
-                    result=result,
+                    projection=projection,
                 )
             if status in {"failed", "rejected", "cancelled"}:
                 return self._requests.fail(
@@ -1379,7 +1441,10 @@ class ResearchDesktopApplicationService:
         source_revision: str,
         source_fingerprint: str | None = None,
     ) -> dict[str, Any]:
-        projection = self._research.get_run_projection(_safe_id(run_id, "runId"), actor=owner.actor())
+        try:
+            projection = self._research.get_run_projection(_safe_id(run_id, "runId"), actor=owner.actor())
+        except ResearchServiceError as exc:
+            raise _service_error(exc) from exc
         actual_revision = projection.get("sourceRevision")
         if actual_revision is None:
             raise ResearchDesktopServiceError(
@@ -1727,21 +1792,29 @@ def _document_source_revision(document: Mapping[str, Any]) -> str | None:
     for key in ("source_revision", "sourceRevision", "source_hash", "sourceHash"):
         value = document.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()[:512]
+            return _canonical_source_revision(value.strip()[:512])
     metadata = document.get("metadata")
     if isinstance(metadata, Mapping):
         return _document_source_revision(metadata)
     return None
 
 
+def _canonical_source_revision(revision: str) -> str:
+    # A content hash is always reported as ``sha256:<hex>``: imports, run
+    # projections and document identities use that form, and the client
+    # sends the reader's revision back verbatim when it starts an analysis.
+    digest = revision.lower().removeprefix("sha256:")
+    if re.fullmatch(r"[0-9a-f]{64}", digest):
+        return f"sha256:{digest}"
+    return revision
+
+
 def _document_source_fingerprint(document: Mapping[str, Any]) -> str | None:
     revision = _document_source_revision(document)
     if revision is None:
         return None
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", revision.lower()):
-        return revision.lower()
-    if re.fullmatch(r"[0-9a-f]{64}", revision.lower()):
-        return f"sha256:{revision.lower()}"
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", revision):
+        return revision
     return f"sha256:{hashlib.sha256(revision.encode('utf-8')).hexdigest()}"
 
 
@@ -2530,9 +2603,40 @@ def _citation_page(value: Any) -> int | None:
     return page if 1 <= page <= 10_000 else None
 
 
+def _model_credential_gap() -> LLMCredentialUnavailableError | None:
+    try:
+        require_invocation_credential()
+    except LLMCredentialUnavailableError as exc:
+        return exc
+    return None
+
+
+def _require_model_credential() -> None:
+    """Refuse model-backed work before admission when no credential is bound.
+
+    Checked before ``admit`` so a missing key never leaves an admitted
+    request behind that can only fail.
+    """
+
+    try:
+        require_invocation_credential()
+    except LLMCredentialUnavailableError as exc:
+        raise _service_error(model_credential_service_error(exc)) from exc
+
+
 def _service_error(exc: Exception) -> ResearchDesktopServiceError:
     if isinstance(exc, ResearchDesktopServiceError):
         return exc
+    credential_failure = credential_unavailable_cause(exc)
+    if credential_failure is not None:
+        return _service_error(model_credential_service_error(credential_failure))
+    if isinstance(exc, ResearchDesktopExecutorUnavailableError):
+        return ResearchDesktopServiceError(
+            exc.code,
+            "Research analysis is not accepting new work while the service stops",
+            status_code=503,
+            retryable=True,
+        )
     if isinstance(exc, ResearchDesktopControlError):
         return ResearchDesktopServiceError(
             exc.code,
@@ -2804,6 +2908,26 @@ def _optional_text(value: Any, field: str, *, maximum: int) -> str | None:
     if value is None:
         return None
     return _required_text(value, field, maximum=maximum)
+
+
+def _remote_source_type(value: Any) -> str | None:
+    """Accept only source types that resolve over the network.
+
+    Local paths are reached through the owner-scoped PDF import; letting a
+    caller name ``local`` here would make the server read its own files.
+    """
+
+    text = _optional_text(value, "sourceType", maximum=64)
+    if text is None:
+        return None
+    if text not in _REMOTE_SOURCE_TYPES:
+        raise ResearchDesktopServiceError(
+            "source_type_unsupported",
+            "sourceType must name a remote paper source",
+            status_code=422,
+            user_action_required=True,
+        )
+    return text
 
 
 def _optional_url(value: Any, field: str) -> str | None:

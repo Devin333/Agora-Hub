@@ -41,7 +41,10 @@ from backend.research.graphs.paper_analysis import (
 from backend.research.ports.artifact_publication import (
     ResearchArtifactDiagnosticReader,
 )
-from backend.research.ports.artifact_store import ResearchArtifactReadPort
+from backend.research.ports.artifact_store import (
+    ResearchArtifactReadPort,
+    ResearchRunArtifactReadPort,
+)
 from backend.research.ports.run_store import (
     ResearchRunDiagnosticStore,
     ResearchRunDisposition,
@@ -53,6 +56,7 @@ from backend.research.ports.run_store import (
 )
 from backend.research.rag import ResearchRetrievalGoal
 from framework.harness.context.models import ContextGraphIdentity
+from framework.llm.clients import LLMCredentialUnavailableError, credential_unavailable_cause
 from interfaces.models import ActorContext
 
 
@@ -145,7 +149,6 @@ class ResearchServiceError(Exception):
             "document_not_found": "Research document was not found",
             "catalog_not_found": "Research catalog entry was not found",
             "artifact_not_found": "Research artifact was not found",
-            "artifact_forbidden": "Research artifact is not authorized",
             "artifact_corrupt": "Research artifact integrity could not be verified",
         }
         return messages.get(self.code, "Research paper operation failed")
@@ -279,6 +282,7 @@ class ResearchApplicationService:
         run_reconciler: ResearchRunDispositionReconciler | None = None,
         diagnostic_artifact_reader: ResearchArtifactDiagnosticReader | None = None,
         artifact_reader: ResearchArtifactReadPort | None = None,
+        run_artifact_reader: ResearchRunArtifactReadPort | None = None,
         parse_use_case: ParsePaperUseCase | None = None,
         catalog_service: ResearchPaperCatalogService | None = None,
         runtime_config_identity: str | None = None,
@@ -300,6 +304,11 @@ class ResearchApplicationService:
         if artifact_reader is not None and not isinstance(artifact_reader, ResearchArtifactReadPort):
             raise TypeError("artifact_reader must implement ResearchArtifactReadPort")
         self._artifact_reader = artifact_reader
+        if run_artifact_reader is not None and not isinstance(
+            run_artifact_reader, ResearchRunArtifactReadPort
+        ):
+            raise TypeError("run_artifact_reader must implement ResearchRunArtifactReadPort")
+        self._run_artifact_reader = run_artifact_reader
         self._parse_use_case = parse_use_case
         self._catalog_service = catalog_service
         self._runtime_config_identity = str(runtime_config_identity or "unconfigured").strip()
@@ -324,6 +333,7 @@ class ResearchApplicationService:
             "parse": _qualified_type(self._parse_use_case),
             "catalog": _qualified_type(self._catalog_service),
             "artifactRead": _qualified_type(self._artifact_reader),
+            "runArtifactRead": _qualified_type(self._run_artifact_reader),
             "runtimeConfigIdentity": self._runtime_config_identity,
         }
         encoded = json.dumps(components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -380,6 +390,9 @@ class ResearchApplicationService:
         except ValueError as exc:
             raise ResearchServiceError("invalid_request", str(exc), status_code=400, user_action_required=True) from exc
         except Exception as exc:
+            credential_failure = credential_unavailable_cause(exc)
+            if credential_failure is not None:
+                raise model_credential_service_error(credential_failure) from exc
             raise ResearchServiceError(
                 "research_parse_failed",
                 "Research paper parse request failed",
@@ -630,10 +643,12 @@ class ResearchApplicationService:
                 user_action_required=True,
             ) from exc
         except PermissionError as exc:
+            # Another owner's artifact is reported exactly like a missing one
+            # so a digest never confirms that someone else's artifact exists.
             raise ResearchServiceError(
-                "artifact_forbidden",
-                "research artifact is not authorized",
-                status_code=403,
+                "artifact_not_found",
+                "research artifact was not found",
+                status_code=404,
                 user_action_required=True,
             ) from exc
         except Exception as exc:
@@ -1036,24 +1051,24 @@ class ResearchApplicationService:
         )
         if any(ref is None for _, ref, _ in required):
             return "missing", "required_report_artifact_missing"
-        reader = self._artifact_reader
+        # Analysis and quality artifacts are published by the run into the run
+        # artifact store under ``artifact://<run_id>/<type>``; the paper
+        # catalog holds parse artifacts only. The caller already checked the
+        # record against the actor, and the store serves accepted runs only.
+        del actor_scope
+        reader = self._run_artifact_reader
         if reader is None:
             return "missing", "research_artifact_reader_unavailable"
         for expected_type, ref, expected_payload in required:
             try:
-                envelope = reader.read(
-                    str(ref),
-                    actor_scope=actor_scope.to_metadata(),
-                    include_payload=True,
-                    max_chars=1_000_000,
-                )
+                envelope = reader.read_artifact(str(ref))
             except FileNotFoundError:
                 return "missing", "artifact_not_found"
             except PermissionError:
                 return "unauthorized", "artifact_forbidden"
             except Exception:
                 return "corrupt", "artifact_corrupt"
-            artifact_type = str(envelope.get("artifactType") or "") if isinstance(envelope, Mapping) else ""
+            artifact_type = str(envelope.get("artifact_type") or "") if isinstance(envelope, Mapping) else ""
             metadata = envelope.get("metadata") if isinstance(envelope, Mapping) else None
             payload = envelope.get("payload") if isinstance(envelope, Mapping) else None
             if (
@@ -1119,14 +1134,11 @@ class ResearchApplicationService:
     ) -> dict[str, Any]:
         question = _require_text(request.question, "question")
         mode = _ask_mode(request.mode)
+        _reject_identity_options(request.options)
         actor_scope = _resolve_actor_scope(
             self._ask_use_case,
             tenant_id=request.tenant_id,
-            user_id=(
-                request.user_id
-                or _optional_text(request.options.get("userId"))
-                or _optional_text(request.options.get("user_id"))
-            ),
+            user_id=request.user_id,
             memory_namespace=request.memory_namespace,
         )
         if mode == "chunk_rag":
@@ -1313,6 +1325,9 @@ class ResearchApplicationService:
                 user_action_required=True,
             ) from exc
         except Exception as exc:
+            credential_failure = credential_unavailable_cause(exc)
+            if credential_failure is not None:
+                raise model_credential_service_error(credential_failure) from exc
             raise ResearchServiceError(
                 "research_run_failed",
                 "research RAG request failed",
@@ -1637,6 +1652,25 @@ def _runtime_options(command: ResearchAnalyzeInput) -> dict[str, Any]:
     if command.metadata:
         options["metadata"] = dict(command.metadata)
     return options
+
+
+_IDENTITY_OPTION_KEYS = frozenset(
+    {"userId", "user_id", "tenantId", "tenant_id", "memoryNamespace", "memory_namespace"}
+)
+
+
+def _reject_identity_options(options: Mapping[str, Any]) -> None:
+    """Identity comes from the authenticated actor only, never from options."""
+
+    supplied = sorted(_IDENTITY_OPTION_KEYS.intersection(options))
+    if supplied:
+        raise ResearchServiceError(
+            "invalid_request",
+            "Research ask options cannot carry actor identity",
+            status_code=400,
+            details={"fields": supplied},
+            user_action_required=True,
+        )
 
 
 def _resolve_actor_scope(
@@ -2430,9 +2464,24 @@ def _run_store_service_error(
     )
 
 
+def model_credential_service_error(error: LLMCredentialUnavailableError) -> ResearchServiceError:
+    """The account's model credential is missing or unusable; the user fixes it."""
+
+    return ResearchServiceError(
+        error.code,
+        str(error),
+        status_code=409,
+        retryable=False,
+        user_action_required=True,
+    )
+
+
 def _research_runtime_service_error(error: Exception) -> ResearchServiceError:
     from interfaces.composition.research_errors import ResearchCompositionError
 
+    credential_failure = credential_unavailable_cause(error)
+    if credential_failure is not None:
+        return model_credential_service_error(credential_failure)
     if isinstance(error, ResearchCompositionError):
         public = error.to_public_dict()
         return ResearchServiceError(
@@ -2525,4 +2574,5 @@ __all__ = [
     "ResearchRunStore",
     "ResearchServiceError",
     "bind_research_actor_input",
+    "model_credential_service_error",
 ]

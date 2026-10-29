@@ -636,7 +636,9 @@ def test_explicit_low_rag_replan_budget_halts_and_persists(
                     source_url=f"https://arxiv.org/abs/{_PAPER_ID}",
                     run_id="recorded-production-low-rag-budget",
                     user_id="recorded-smoke-user",
-                    options={"max_replans": 0, "rag_max_replans": 0},
+                    # One query and no replans: the first round can only run
+                    # the generic query, which cannot cover every required type.
+                    options={"max_replans": 0, "rag_max_replans": 0, "rag_max_queries": 1},
                 )
             )
 

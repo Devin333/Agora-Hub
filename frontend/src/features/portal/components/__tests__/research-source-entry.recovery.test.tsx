@@ -6,7 +6,7 @@ import type { ResearchMaterial, ResearchPendingOperation } from "@/lib/research/
 import { normalizeDirectSource, ResearchSourceEntry } from "../research-source-entry"
 
 vi.mock("@/components/auth/portal-account-provider", () => ({ usePortalAccount: () => null }))
-vi.mock("@/lib/deployment-profile", () => ({ isLocalDesktopProfile: () => true }))
+vi.mock("@/lib/deployment-profile", () => ({ isHostedProfile: () => true }))
 const generation = `gen_${"a".repeat(32)}`
 const sourceRevision = `sha256:${"b".repeat(64)}`
 const fingerprint = `sha256:${"c".repeat(64)}`

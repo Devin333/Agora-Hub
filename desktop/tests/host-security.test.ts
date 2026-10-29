@@ -17,7 +17,7 @@ function expectInsideWorkArea(workArea: { x: number; y: number; width: number; h
 
 describe("desktop host security configuration", () => {
   it("enforces Chromium isolation and keeps native window chrome", () => {
-    const options = secureWindowOptions("C:\\host\\out", { x: 0, y: 0, width: 1920, height: 1040 })
+    const options = secureWindowOptions("C:\\host\\out", { x: 0, y: 0, width: 1920, height: 1040 }, "dark")
     expect(options.frame).not.toBe(false)
     expect(options.titleBarStyle).toBeUndefined()
     expect(options.webPreferences).toMatchObject({
@@ -28,6 +28,12 @@ describe("desktop host security configuration", () => {
       allowRunningInsecureContent: false,
       webviewTag: false
     })
+  })
+
+  it("paints the frame with the workspace background of the resolved theme before any page loads", () => {
+    const workArea = { x: 0, y: 0, width: 1920, height: 1040 }
+    expect(secureWindowOptions("C:\\host\\out", workArea, "dark").backgroundColor).toBe("#161616")
+    expect(secureWindowOptions("C:\\host\\out", workArea, "light").backgroundColor).toBe("#ffffff")
   })
 
   it("clamps a 1366x768 display at 125 percent scaling to the 1092x584 DIP work area", () => {

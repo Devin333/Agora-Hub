@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import shutil
-import socket
 import tempfile
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-import pymupdf
 import pytest
 
 from framework.shared.windows_paths import resolve_storage_path, storage_io_path
@@ -17,22 +14,28 @@ from interfaces.composition.research import (
     default_research_runtime_provider,
     reset_default_research_runtime,
 )
-from interfaces.services.auth_service import AuthApplicationService
-from interfaces.services.research_desktop_control import canonical_request_fingerprint
+from tests.interfaces.api.hosted_research_support import (
+    configure_research_without_llm,
+    content_fingerprint,
+    forbid_network,
+    import_pdf,
+    selectable_text_pdf,
+)
+from tests.interfaces.api.hosted_support import HOSTED_ORIGIN, build_test_hosted_runtime, sign_in
 
 
-_ORIGIN = "http://127.0.0.1:3000"
-_OWNER = "desktop-owner"
+_ORIGIN = HOSTED_ORIGIN
+_OWNER = "research-owner"
 _PASSWORD = "correct-horse-battery-staple"
 _MEMORY_PATH = "/api/v1/research/desktop/memory"
 
 
-def test_real_auth_session_reaches_disabled_research_desktop_and_local_stores(
+def test_real_account_session_reaches_disabled_research_and_account_stores(
     monkeypatch,
     short_desktop_data_root: tuple[Path, Path],
 ) -> None:
     data_root, import_root = short_desktop_data_root
-    _configure_disabled_desktop(monkeypatch, data_root)
+    configure_research_without_llm(monkeypatch, data_root)
     monkeypatch.setenv("NEWSROOM_RESEARCH_IMPORT_DIR", str(import_root))
 
     preload_calls: list[str] = []
@@ -45,29 +48,22 @@ def test_real_auth_session_reaches_disabled_research_desktop_and_local_stores(
         preload_reranker,
     )
 
-    auth = AuthApplicationService(
-        user_store_path=data_root / "auth" / "users.json",
-        session_store_path=data_root / "auth" / "sessions.json",
-    )
+    hosted_runtime = build_test_hosted_runtime(data_root)
+    # Accounts exist only through server-side administration; there is no
+    # browser bootstrap in the hosted profile.
+    headers = sign_in(hosted_runtime, _OWNER, _PASSWORD)
     reset_default_research_runtime()
     app = create_app(
-        auth_service_factory=lambda: auth,
+        hosted_runtime=hosted_runtime,
         audit_emitter_factory=None,
     )
 
     try:
         with TestClient(app) as client, monkeypatch.context() as network_guard:
-            _forbid_network(network_guard)
-            bootstrap = client.post(
-                "/api/v1/auth/bootstrap",
-                headers={"Origin": _ORIGIN},
-                json={"username": _OWNER, "password": _PASSWORD},
-            )
-            assert bootstrap.status_code == 200
-            session = bootstrap.json()["data"]["session"]
-            token = session["sessionToken"]
-            user_id = session["user"]["userId"]
-            headers = {"X-Newsroom-Session": token}
+            forbid_network(network_guard)
+            session = client.get("/api/v1/auth/session", headers=headers)
+            assert session.status_code == 200
+            user_id = session.json()["data"]["session"]["user"]["userId"]
 
             history = client.get("/api/v1/research/history", headers=headers)
             assert history.status_code == 200
@@ -128,34 +124,16 @@ def test_real_auth_session_reaches_disabled_research_desktop_and_local_stores(
             assert "owner" not in created_record
             assert created_record["status"] == "active"
 
-            pdf = _selectable_text_pdf()
-            source_fingerprint = f"sha256:{hashlib.sha256(pdf).hexdigest()}"
-            source_revision = source_fingerprint
-            semantic = {
-                "kind": "import",
-                "filename": "offline-paper.pdf",
-                "sizeBytes": len(pdf),
-                "sourceRevision": source_revision,
-                "sourceFingerprint": source_fingerprint,
-            }
-            imported = client.post(
-                "/api/v1/research/desktop/operations/import",
-                headers={
-                    **headers,
-                    "Origin": _ORIGIN,
-                    "X-Newsroom-Request-Id": "real-auth-pdf-import",
-                    "X-Newsroom-Generation": identity_data["generation"],
-                    "X-Newsroom-Request-Fingerprint": canonical_request_fingerprint(semantic),
-                    "X-Newsroom-Source-Revision": source_revision,
-                    "X-Newsroom-Source-Fingerprint": source_fingerprint,
-                    "X-Filename": "offline-paper.pdf",
-                    "Content-Type": "application/pdf",
-                },
+            pdf = selectable_text_pdf("offline-paper", repeat=12)
+            operation = import_pdf(
+                client,
+                headers=headers,
+                generation=identity_data["generation"],
+                request_id="real-auth-pdf-import",
+                filename="offline-paper.pdf",
+                source_revision=content_fingerprint(pdf),
                 content=pdf,
             )
-            assert imported.status_code == 200, imported.text
-            operation = imported.json()["data"]
-            assert operation["status"] == "passed"
             paper_id = operation["result"]["paperId"]
 
             document = client.get(
@@ -181,12 +159,13 @@ def test_real_auth_session_reaches_disabled_research_desktop_and_local_stores(
         assert composition.availability_error.to_public_dict()["capabilities"] == [
             "research.llm.route"
         ]
+        # The warm-up runs beside the server so it never delays the listening socket.
+        assert app.state.reranker_warmup.wait(timeout=10)
         assert preload_calls == ["preload"]
         assert storage_io_path(data_root / "desktop" / "control" / "control.json").is_file()
         assert storage_io_path(data_root / "research" / "personal-memory.sqlite3").is_file()
     finally:
         reset_default_research_runtime()
-
 
 
 @pytest.fixture(params=("short", "candidate", "long-import"))
@@ -207,68 +186,3 @@ def short_desktop_data_root(request):
         yield root, import_root
     finally:
         shutil.rmtree(storage_io_path(root))
-
-
-def _configure_disabled_desktop(monkeypatch, data_root: Path) -> None:
-    values = {
-        "NEWSROOM_DEPLOYMENT_PROFILE": "local-desktop",
-        "NEWSROOM_DESKTOP_CANONICAL_ORIGIN": _ORIGIN,
-        "NEWSROOM_DESKTOP_INSTANCE_KEY": f"local-desktop:{_ORIGIN}",
-        "NEWSROOM_DESKTOP_RELEASE_ID": "release-real-auth-test",
-        "NEWSROOM_DESKTOP_CONFIG_DIGEST": "a" * 64,
-        "NEWSROOM_DESKTOP_BOOT_ID": "b" * 32,
-        "NEWSROOM_DESKTOP_RESEARCH_LLM_ENABLED": "0",
-        "NEWS_PRELOAD_RERANKER": "1",
-        "NEWS_RESEARCH_ROOT": str(data_root / "research"),
-        "NEWS_RESEARCH_ARTIFACT_ROOT": str(data_root / "runs" / "artifacts"),
-        "NEWS_ARTIFACT_ROOT": str(data_root / "runs" / "artifacts"),
-        "NEWS_RESEARCH_RUN_STORE_ROOT": str(data_root / "runs" / "research"),
-        "NEWS_RESEARCH_RAG_LOCAL_ROOT": str(data_root / "research" / "catalog" / "chunks"),
-        "NEWS_RESEARCH_RAG_TRANSCRIPT_ROOT": str(
-            data_root / "research" / "history" / "transcripts"
-        ),
-        "NEWSROOM_RESEARCH_HISTORY_PATH": str(
-            data_root / "research" / "history" / "history.json"
-        ),
-        "NEWSROOM_RESEARCH_IMPORT_DIR": str(data_root / "research" / "imports"),
-        "NEWSROOM_DESKTOP_CONTROL_PATH": str(
-            data_root / "desktop" / "control" / "control.json"
-        ),
-        "NEWSROOM_RESEARCH_PERSONAL_MEMORY_PATH": str(
-            data_root / "research" / "personal-memory.sqlite3"
-        ),
-    }
-    for key, value in values.items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.delenv("NEWSROOM_CANONICAL_ORIGIN", raising=False)
-
-
-def _forbid_network(monkeypatch) -> None:
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("network access is forbidden in real desktop integration tests")
-
-    monkeypatch.setattr(socket, "create_connection", forbidden)
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
-    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
-
-
-def _selectable_text_pdf() -> bytes:
-    document = pymupdf.open()
-    for index, heading in enumerate(("Introduction", "Method", "Results"), start=1):
-        page = document.new_page()
-        paragraph = (
-            f"{heading}\n\n"
-            f"Section {index} validates deterministic local PDF import and reading. "
-            "All content is embedded selectable text and requires no remote model, "
-            "network source, vector database, or external parser process. "
-        )
-        page.insert_textbox(
-            pymupdf.Rect(50, 60, 545, 790),
-            paragraph * 12,
-            fontsize=10,
-            lineheight=1.25,
-        )
-    payload = document.tobytes()
-    document.close()
-    return payload
-

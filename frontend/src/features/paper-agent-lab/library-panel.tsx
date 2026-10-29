@@ -39,7 +39,7 @@ export const LibraryPanel = forwardRef<HTMLElement, LibraryPanelProps>(function 
     <section aria-label="论文列表" className={styles.panel} ref={ref}>
       <header className={styles.header}>
         <div className={styles.headingRow}>
-          <div>
+          <div className={styles.headingText}>
             <p className={styles.eyebrow}>Library</p>
             <h1>{heading}</h1>
           </div>
@@ -86,7 +86,7 @@ export const LibraryPanel = forwardRef<HTMLElement, LibraryPanelProps>(function 
               >
                 <span className={styles.paperTopline}>
                   <span className={styles.readState} data-read={read || undefined}>
-                    {read ? <Check aria-hidden="true" size={10} strokeWidth={2} /> : <span aria-hidden="true" />}
+                    {read ? <Check aria-hidden="true" size={11} strokeWidth={2} /> : <span aria-hidden="true" />}
                     {read ? "已读" : "未读"}
                   </span>
                   <span>{paper.year} · {paper.venue}</span>

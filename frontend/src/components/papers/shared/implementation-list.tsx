@@ -9,42 +9,41 @@ export function ImplementationList({ papers, locale, title }: { papers: Paper[];
   const implementations = implementationsFromPapers(papers, locale)
 
   return (
-    <section className="rounded-md border border-border bg-card p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        <span className="text-xs text-muted-foreground">
+    <section className="space-y-2">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-faint-foreground">{title}</h2>
+        <span className="text-label tabular-nums text-faint-foreground">
           {translate(locale, "papers.reader.repositories", { count: implementations.length })}
         </span>
       </div>
       {implementations.length ? (
-        <div className="mt-3 divide-y divide-border rounded-md border border-border bg-background/60">
+        <ul className="divide-y overflow-hidden rounded-xl border">
           {implementations.map((implementation) => (
-            <a
-              key={implementation.id}
-              href={implementation.repoUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-between gap-4 px-3 py-3 text-sm transition-colors hover:bg-secondary"
-            >
-              <span className="inline-flex min-w-0 items-center gap-2">
-                <Github className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0">
-                  <span className="block truncate font-semibold">{implementation.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{implementation.paperTitle}</span>
+            <li key={implementation.id}>
+              <a
+                href={implementation.repoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-between gap-4 px-4 py-3 text-body2 text-foreground outline-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40"
+              >
+                <span className="inline-flex min-w-0 items-center gap-3">
+                  <Github className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} aria-hidden="true" />
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{implementation.name}</span>
+                    <span className="mt-0.5 block truncate text-label text-muted-foreground">{implementation.paperTitle}</span>
+                  </span>
                 </span>
-              </span>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {typeof implementation.githubStars === "number"
-                  ? `${formatCompactNumber(implementation.githubStars)} ${translate(locale, "papers.reader.stars")}`
-                  : translate(locale, "papers.reader.project")}
-              </span>
-            </a>
+                <span className="shrink-0 text-label tabular-nums text-muted-foreground">
+                  {typeof implementation.githubStars === "number"
+                    ? `${formatCompactNumber(implementation.githubStars)} ${translate(locale, "papers.reader.stars")}`
+                    : translate(locale, "papers.reader.project")}
+                </span>
+              </a>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : (
-        <div className="mt-3 rounded-md border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
-          {translate(locale, "papers.reader.noImplementations")}
-        </div>
+        <p className="px-1 text-body2 text-muted-foreground">{translate(locale, "papers.reader.noImplementations")}</p>
       )}
     </section>
   )

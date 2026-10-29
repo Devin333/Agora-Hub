@@ -5,8 +5,8 @@ import type { AgentRunStatus } from "@/types/agent"
 export function AgentRunStatusBadge({ status }: { status: AgentRunStatus }) {
   const label = formatRunStatus(status)
   return (
-    <Badge tone={statusTone(status)} className={status === "running" ? "relative pl-5" : undefined}>
-      {status === "running" ? <span className="absolute left-2 size-1.5 rounded-full bg-info" /> : null}
+    <Badge tone={statusTone(status)}>
+      {status === "running" ? <span aria-hidden="true" className="size-1.5 shrink-0 animate-pulse rounded-full bg-current" /> : null}
       {label}
     </Badge>
   )

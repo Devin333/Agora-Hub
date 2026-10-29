@@ -845,6 +845,11 @@ def _source_ref_matches_record(
         str(source_record.metadata.get(key) or "").strip()
         for key in ("source_ref", "pdf_url")
     }
+    # A record bound to an already-parsed document names that document's
+    # verified lineage as its source references.
+    bound_refs = source_record.metadata.get("bound_source_refs")
+    if isinstance(bound_refs, (list, tuple)):
+        metadata_refs.update(str(ref or "").strip() for ref in bound_refs)
     prefixes = {
         source_record.source_url,
         f"paper://{source_record.paper_id}",

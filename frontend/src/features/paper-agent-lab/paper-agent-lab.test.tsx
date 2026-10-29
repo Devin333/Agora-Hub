@@ -1,6 +1,7 @@
 import { StrictMode } from "react"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { useUiStore } from "@/stores/ui-store"
 import { PREVIEW_PAPERS, TOPICS } from "./data"
 import { PaperAgentLab } from "./paper-agent-lab"
 import { DEFAULT_PREVIEW_STATE, parsePreviewState } from "./preview-state"
@@ -14,6 +15,23 @@ const attention = byId.get("attention")!
 
 function setLocation(search = "") {
   window.history.replaceState({}, "", `/paper-agent-lab${search}`)
+}
+
+function setAppearance(appearance: "system" | "light" | "dark") {
+  useUiStore.setState({ appearance, theme: appearance === "dark" ? "dark" : "light" })
+}
+
+function stubSystemScheme(prefersLight: boolean) {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+    matches: query === "(prefers-color-scheme: light)" ? prefersLight : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })))
 }
 
 function renderLab(initialState: PreviewState = DEFAULT_PREVIEW_STATE) {
@@ -33,6 +51,7 @@ function openNotes() {
 describe("PaperAgentLab", () => {
   beforeEach(() => {
     setLocation()
+    setAppearance("light")
   })
 
   afterEach(() => {
@@ -47,6 +66,8 @@ describe("PaperAgentLab", () => {
 
     const root = screen.getByTestId("paper-agent-lab")
     expect(root).toHaveAttribute("data-theme", "light")
+    expect(within(screen.getByRole("group", { name: "外观" })).getAllByRole("button")).toHaveLength(3)
+    expect(screen.getByRole("button", { name: "使用浅色主题" })).toHaveAttribute("aria-pressed", "true")
     expect(screen.getByRole("complementary", { name: "论文工作台导航" })).toBeVisible()
     expect(screen.getByRole("region", { name: "论文列表" })).toBeVisible()
     expect(screen.getByRole("region", { name: `${memgpt.title} 阅读区` })).toBeVisible()
@@ -175,8 +196,9 @@ describe("PaperAgentLab", () => {
     renderLab(parsePreviewState(window.location.search))
 
     await waitFor(() => expect(window.location.pathname + window.location.search).toBe(
-      "/paper-agent-lab?theme=light&paper=memgpt&view=all&tab=overview&focus=false&assistant=false",
+      "/paper-agent-lab?paper=memgpt&view=all&tab=overview&focus=false&assistant=false",
     ))
+    expect(useUiStore.getState().appearance).toBe("light")
     expect(screen.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "light")
     expect(screen.getByRole("heading", { name: memgpt.title })).toBeVisible()
 
@@ -186,13 +208,14 @@ describe("PaperAgentLab", () => {
     })
 
     await waitFor(() => expect(screen.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "dark"))
+    expect(useUiStore.getState().appearance).toBe("dark")
     expect(screen.getByRole("tab", { name: "详情" })).toHaveAttribute("aria-selected", "true")
     expect(screen.getByText(rag.arxivId)).toBeVisible()
     expect(screen.getByRole("button", { name: "关闭论文助手" })).toBeVisible()
   })
 
   it("performs exactly one history push for one interaction under StrictMode", async () => {
-    setLocation("?theme=light&paper=memgpt&view=all&tab=overview&focus=false&assistant=false")
+    setLocation("?paper=memgpt&view=all&tab=overview&focus=false&assistant=false")
     const pushState = vi.spyOn(window.history, "pushState")
 
     render(
@@ -203,15 +226,14 @@ describe("PaperAgentLab", () => {
     await waitFor(() => expect(screen.getByTestId("paper-agent-lab")).toBeVisible())
     pushState.mockClear()
 
-    fireEvent.click(screen.getByRole("button", { name: "使用黑色主题" }))
+    fireEvent.click(screen.getByRole("tab", { name: "详情" }))
 
     expect(pushState).toHaveBeenCalledTimes(1)
-    expect(window.location.search).toContain("theme=dark")
+    expect(window.location.search).toContain("tab=details")
   })
-  it("writes theme, paper, view, tab, focus and assistant changes to the canonical URL", async () => {
+  it("writes paper, view, tab, focus and assistant changes to the canonical URL", async () => {
     renderLab()
 
-    fireEvent.click(screen.getByRole("button", { name: "使用黑色主题" }))
     selectPaper(rag.id)
     fireEvent.click(screen.getByRole("button", { name: /^未读/ }))
     fireEvent.click(screen.getByRole("tab", { name: "笔记" }))
@@ -221,10 +243,63 @@ describe("PaperAgentLab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "打开论文助手" }))
     await waitFor(() => expect(window.location.pathname + window.location.search).toBe(
-      "/paper-agent-lab?theme=dark&paper=rag&view=unread&tab=notes&focus=false&assistant=true",
+      "/paper-agent-lab?paper=rag&view=unread&tab=notes&focus=false&assistant=true",
     ))
-    expect(screen.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "dark")
     expect(screen.getByRole("button", { name: "关闭论文助手" })).toBeVisible()
+  })
+
+  it("switches the app-wide appearance preference instead of keeping a preview theme", () => {
+    renderLab()
+    const pushState = vi.spyOn(window.history, "pushState")
+    const root = screen.getByTestId("paper-agent-lab")
+
+    fireEvent.click(screen.getByRole("button", { name: "使用深色主题" }))
+    expect(useUiStore.getState().appearance).toBe("dark")
+    expect(root).toHaveAttribute("data-theme", "dark")
+    expect(screen.getByRole("button", { name: "使用深色主题" })).toHaveAttribute("aria-pressed", "true")
+
+    fireEvent.click(screen.getByRole("button", { name: "使用浅色主题" }))
+    expect(useUiStore.getState().appearance).toBe("light")
+    expect(root).toHaveAttribute("data-theme", "light")
+
+    expect(pushState).not.toHaveBeenCalled()
+    expect(window.location.search).not.toContain("theme")
+    expect(document.documentElement).not.toHaveAttribute("data-theme", "dark")
+  })
+
+  it.each([
+    [true, "light"],
+    [false, "dark"],
+  ] as const)("follows the system scheme (prefers light: %s) while the preference is system", (prefersLight, expected) => {
+    stubSystemScheme(prefersLight)
+    setAppearance("system")
+    renderLab()
+
+    expect(screen.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", expected)
+    expect(screen.getByRole("button", { name: "跟随系统主题" })).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("applies a ?theme= request once as the app-wide preference and drops it from the canonical URL", async () => {
+    setAppearance("system")
+    setLocation("?theme=dark&paper=rag&view=all&tab=overview&focus=false&assistant=false")
+    renderLab(parsePreviewState(window.location.search))
+
+    await waitFor(() => expect(window.location.pathname + window.location.search).toBe(
+      "/paper-agent-lab?paper=rag&view=all&tab=overview&focus=false&assistant=false",
+    ))
+    expect(useUiStore.getState().appearance).toBe("dark")
+    expect(screen.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "dark")
+    expect(screen.getByRole("heading", { name: rag.title })).toBeVisible()
+  })
+
+  it("ignores an invalid ?theme= request and keeps the stored preference", async () => {
+    setAppearance("dark")
+    setLocation("?theme=sepia")
+    renderLab(parsePreviewState(window.location.search))
+
+    await waitFor(() => expect(window.location.search).not.toContain("theme"))
+    expect(useUiStore.getState().appearance).toBe("dark")
+    expect(screen.getByTestId("paper-agent-lab")).toHaveAttribute("data-theme", "dark")
   })
 
   it("keeps the desktop assistant non-modal so the reader remains operable", () => {

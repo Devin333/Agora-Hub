@@ -13,26 +13,26 @@ export function PapersMicrobar({
   locale: Locale
 }) {
   return (
-    <div className="flex flex-col gap-2 pt-5 pb-2 text-sm sm:flex-row sm:items-center sm:justify-between">
-      <nav className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.16em] text-[#334155]/55" aria-label="Research breadcrumb">
-        <Link href="/papers" className="font-medium hover:text-primary">
+    <div className="flex flex-col gap-2 px-4 pb-1 pt-4 sm:flex-row sm:items-center sm:justify-between md:px-6">
+      <nav className="flex flex-wrap items-center gap-1.5 text-label text-muted-foreground" aria-label="Research breadcrumb">
+        <Link href="/papers" className="rounded-sm font-medium outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50">
           Research
         </Link>
         {items.map((item) => (
-          <span key={`${item.label}-${item.href ?? "current"}`} className="inline-flex items-center gap-1">
-            <ChevronRight className="size-3" />
+          <span key={`${item.label}-${item.href ?? "current"}`} className="inline-flex items-center gap-1.5">
+            <ChevronRight className="size-3 text-faint-foreground" strokeWidth={1.8} aria-hidden="true" />
             {item.href ? (
-              <Link href={item.href} className="hover:text-primary">
+              <Link href={item.href} className="rounded-sm outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50">
                 {item.label}
               </Link>
             ) : (
-              <span>{item.label}</span>
+              <span className="text-foreground">{item.label}</span>
             )}
           </span>
         ))}
       </nav>
-      <span className="inline-flex w-fit items-center gap-2 rounded-full border border-[#dbe5dd] bg-white/90 px-3 py-1 text-xs text-[#334155]/70 shadow-sm dark:border-border dark:bg-card dark:text-muted-foreground">
-        <span className="size-2 rounded-full bg-emerald-500" />
+      <span className="inline-flex h-6 w-fit items-center gap-1.5 rounded-full border px-2.5 text-label text-muted-foreground">
+        <span className="size-1.5 rounded-full bg-success" aria-hidden="true" />
         {meta || t(papersCopy.frontendView, locale)}
       </span>
     </div>

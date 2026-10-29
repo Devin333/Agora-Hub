@@ -6,6 +6,6 @@ export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
   const response = authResponse(await safeApiGet("/api/v1/auth/methods", { signal: AbortSignal.timeout(10000) }))
-  response.cookies.set(AUTH_BINDING_COOKIE, bindingFor(request), bindingOptions)
+  response.cookies.set(AUTH_BINDING_COOKIE, bindingFor(request), bindingOptions())
   return response
 }

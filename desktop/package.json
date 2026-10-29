@@ -2,7 +2,7 @@
   "name": "agora-paper-agent-desktop",
   "version": "0.1.2",
   "private": true,
-  "description": "Secure Electron host for the Agora paper agent",
+  "description": "Desktop client for the hosted Agora paper agent",
   "main": "out/main.cjs",
   "license": "UNLICENSED",
   "engines": {
@@ -15,8 +15,7 @@
     "start": "npm run build && electron .",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test --config playwright.config.ts",
-    "validate:runtime": "node scripts/validate-runtime-stage.mjs",
-    "dist": "npm run typecheck && npm run test && npm run build && npm run validate:runtime && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never"
+    "dist": "npm run typecheck && npm run test && npm run build && electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

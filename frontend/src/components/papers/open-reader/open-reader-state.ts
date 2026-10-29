@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReaderEvent as BackendReaderEvent, ReaderMaterialSummary as BackendReaderMaterialSummary, ReaderSelection as BackendReaderSelection } from "@/lib/papers/types";
 import type { ReaderEvent, ReaderEventType, ReaderSelection, ReaderSettings, ReaderTheme, ReaderParagraph } from "./open-reader-types";
-import { isLocalDesktopProfile } from "@/lib/deployment-profile";
+import { isHostedProfile } from "@/lib/deployment-profile";
 import { saveReaderSelectionState } from "@/lib/research/history";
 import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history";
 import type { ResearchReaderEvent, ResearchReaderSelection } from "@/lib/research/workspace-items";
@@ -99,7 +99,7 @@ export function useOpenReaderSelections(paperId: string, sourceRevision?: string
     const selectionsKey = useMemo(() => storageKey(paperId, "selections"), [paperId]);
     const eventsKey = useMemo(() => storageKey(paperId, "events"), [paperId]);
     const workspace = useOwnedResearchWorkspace();
-    const ownedDesktop = isLocalDesktopProfile() && Boolean(sourceRevision);
+    const ownedDesktop = isHostedProfile() && Boolean(sourceRevision);
     const [state, dispatch] = useReducer(selectionReducer, EMPTY_STATE);
     const [selectionsLoaded, setSelectionsLoaded] = useState(false);
     const [storageError, setStorageError] = useState(false);

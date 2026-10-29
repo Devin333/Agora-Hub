@@ -477,6 +477,34 @@ def test_taxonomy_candidate_can_cite_a_supplied_evidence_source_ref(
     assert candidate == output
 
 
+def test_taxonomy_prompt_says_evidence_refs_hold_source_refs_not_evidence_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker, requests = _recorded_worker(monkeypatch, _valid_output("candidate_taxonomy"))
+
+    worker.generate_candidate(
+        task="candidate_taxonomy",
+        payload=_valid_payload("candidate_taxonomy"),
+    )
+
+    prompt = "\n".join(message["content"] for message in requests[0]["messages"])
+    assert "source_ref values copied verbatim" in prompt
+    assert "never evidence_id values" in prompt
+
+
+def test_taxonomy_candidate_citing_an_evidence_id_is_outside_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = _valid_output("candidate_taxonomy")
+    payload = _valid_payload("candidate_taxonomy")
+    evidence_id = payload["evidence_pack"]["items"][0]["evidence_id"]
+    output["taxonomy_candidates"][0]["evidence_refs"] = [evidence_id]
+    worker, _ = _recorded_worker(monkeypatch, output)
+
+    with pytest.raises(ResearchCandidateEvidenceScopeError):
+        worker.generate_candidate(task="candidate_taxonomy", payload=payload)
+
+
 def test_prompt_projection_excludes_secret_and_control_plane_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,9 +1,9 @@
 "use client"
 
 import { FormEvent, useEffect, useState } from "react"
-import { Filter, Search, X } from "lucide-react"
+import { Filter, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { ProjectSearchInput } from "@/features/projects/components/project-page-layout"
 import type { ProjectListParams } from "@/types/projects"
 
 export function ProjectToolbar({
@@ -42,40 +42,37 @@ export function ProjectToolbar({
   }
 
   return (
-    <div className="flex flex-col gap-3 border-b border-[#d7dfd8] pb-4 lg:flex-row lg:items-center lg:justify-between dark:border-border">
+    <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
       <form className="flex min-w-0 flex-1 gap-2" onSubmit={submitSearch}>
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search repositories, owners, tags, or engineering problems"
-            className="pl-9"
-            aria-label="Search projects"
-          />
-        </div>
+        <ProjectSearchInput
+          className="flex-1"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search repositories, owners, tags, or engineering problems"
+          aria-label="Search projects"
+        />
         {query ? (
           <Button
             type="button"
             variant="ghost"
-            size="icon"
+            size="icon-lg"
             aria-label="Clear search"
             onClick={() => {
               setQuery("")
               onChange({ q: undefined, page: 1, cursor: undefined })
             }}
           >
-            <X className="size-4" />
+            <X strokeWidth={1.8} />
           </Button>
         ) : null}
-        <Button type="submit">Search</Button>
+        <Button type="submit" size="lg">Search</Button>
       </form>
       <div className="flex items-center gap-2">
-        <Button type="button" variant="outline" className="xl:hidden" onClick={onToggleFilters}>
-          <Filter className="size-4" />
+        <Button type="button" variant="outline" size="lg" className="xl:hidden" onClick={onToggleFilters}>
+          <Filter strokeWidth={1.8} />
           Filters
         </Button>
-        <Button type="button" variant="ghost" onClick={resetFilters}>
+        <Button type="button" variant="ghost" size="lg" onClick={resetFilters}>
           Reset
         </Button>
       </div>

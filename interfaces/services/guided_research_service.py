@@ -7,6 +7,11 @@ from typing import Any, Protocol
 from urllib.parse import urlencode, urlsplit
 
 from backend.projects.dto import ProjectListQuery
+from framework.llm.clients import (
+    LLMCredentialUnavailableError,
+    credential_unavailable_cause,
+    require_invocation_credential,
+)
 from backend.research.application.guided_research import GuidedResearchApplication
 from backend.research.ports.guided_research import (
     GuidedConstraints,
@@ -37,6 +42,15 @@ class GuidedIntentRequest(Protocol):
     publicSources: Sequence[Any]
 
 
+
+def _model_credential_error(error: LLMCredentialUnavailableError) -> GuidedResearchError:
+    return GuidedResearchError(
+        error.code,
+        "请先在设置中填写可用的模型 API key，再使用问题理解。",
+        status_code=409,
+        user_action_required=True,
+    )
+
 class GuidedResearchService:
     def __init__(
         self,
@@ -60,7 +74,19 @@ class GuidedResearchService:
             requestedSources=list(request.requestedSources) if request.requestedSources else None,
             constraints=request.constraints,
         )
-        result = self._application.interpret(command)
+        # Intent interpretation always calls the model: refuse up front when
+        # the signed-in account has no usable model credential bound.
+        try:
+            require_invocation_credential()
+        except LLMCredentialUnavailableError as exc:
+            raise _model_credential_error(exc) from exc
+        try:
+            result = self._application.interpret(command)
+        except Exception as exc:
+            credential_failure = credential_unavailable_cause(exc)
+            if credential_failure is not None:
+                raise _model_credential_error(credential_failure) from exc
+            raise
         payload = result.model_dump(mode="json", exclude_none=True)
         payload["clarification"] = (
             result.clarification.model_dump(mode="json") if result.clarification is not None else None

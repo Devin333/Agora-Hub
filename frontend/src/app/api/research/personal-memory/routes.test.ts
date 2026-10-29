@@ -6,6 +6,7 @@ import { sanitizePersonalMemoryIndexRebuild } from "@/lib/research/personal-memo
 const session = vi.hoisted(() => ({ token: "owner-a-session" as string | undefined }))
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => session.token ? { value: session.token } : undefined }),
+  headers: async () => new Headers(),
 }))
 
 const proxy = vi.hoisted(() => ({
@@ -135,8 +136,9 @@ describe("personal memory index rebuild authenticated BFF boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     session.token = "owner-a-session"
-    vi.stubEnv("NEWSROOM_DEPLOYMENT_PROFILE", "local-desktop")
-    vi.stubEnv("NEWSROOM_DESKTOP_CANONICAL_ORIGIN", "http://127.0.0.1:4317")
+    vi.stubEnv("NEWSROOM_DEPLOYMENT_PROFILE", "hosted")
+    vi.stubEnv("NEWSROOM_PUBLIC_ORIGIN", "http://127.0.0.1:4317")
+    vi.stubEnv("NEWSROOM_ALLOW_INSECURE_ORIGIN", "1")
     vi.stubEnv("NEWSROOM_API_BASE_URL", "http://127.0.0.1:4318")
     proxy.desktopPost.mockImplementation(authenticatedDesktopPost)
   })

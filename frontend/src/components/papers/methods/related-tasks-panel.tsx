@@ -1,21 +1,15 @@
-import Link from "next/link"
+import { RelatedListPanel } from "@/components/papers/shared/related-list-panel"
 import { papersCopy, t } from "@/lib/papers/copy"
 import { taskName } from "@/lib/papers/format"
 import { papersRoutes } from "@/lib/papers/routes"
 import type { Locale, TaskRef } from "@/lib/papers/types"
 
 export function RelatedTasksPanel({ tasks, locale }: { tasks: TaskRef[]; locale: Locale }) {
-  if (!tasks.length) return null
-  return (
-    <section className="rounded-md border border-border bg-card p-4">
-      <h2 className="text-sm font-semibold">{t(papersCopy.relatedTasks, locale)}</h2>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {tasks.map((task) => (
-          <Link key={task.id} href={papersRoutes.taskDetail(task.slug)} className="rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-secondary">
-            {taskName(task, locale)}
-          </Link>
-        ))}
-      </div>
-    </section>
-  )
+  const items = tasks.map((task) => ({
+    id: task.id,
+    label: taskName(task, locale),
+    href: papersRoutes.taskDetail(task.slug)
+  }))
+
+  return <RelatedListPanel title={t(papersCopy.relatedTasks, locale)} items={items} />
 }

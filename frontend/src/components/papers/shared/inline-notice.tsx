@@ -17,9 +17,9 @@ export function InlineNotice({
   }
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border border-accent/30 bg-accent/10 px-4 py-3 text-sm text-foreground">
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-link/30 bg-link/10 px-4 py-3 text-body2 text-foreground">
       <span>{message}</span>
-      <button type="button" className="text-muted-foreground hover:text-foreground" onClick={onDismiss}>
+      <button type="button" className="shrink-0 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50" onClick={onDismiss}>
         {t(papersCopy.dismiss, locale)}
       </button>
     </div>

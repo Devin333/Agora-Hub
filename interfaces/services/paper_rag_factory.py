@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from threading import Condition, Lock
-from typing import Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.rag.models import GroundedAnswerCandidate, RAGContextPack
@@ -19,14 +19,14 @@ from framework.harness.rag.session import RAGEventRecorder
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.memory.recall_port import ExecutionMemoryRecallPort
 from infrastructure.external.reranker import CrossEncoderReranker
-from infrastructure.storage.postgres.paper_chunk_repository import PaperChunkRepository
-from infrastructure.storage.vector.paper_chunk_store import PaperChunkStore
-from infrastructure.storage.vector.paper_field_chunk_store import PaperFieldChunkStore
-from infrastructure.storage.vector.paper_visual_chunk_store import (
-    PaperVisualChunkStore,
-    paper_visual_chunk_store_from_env,
-)
-from infrastructure.storage.vector.qdrant_store import qdrant_store_from_env
+
+# The Postgres and Qdrant adapters need optional drivers (psycopg,
+# qdrant-client). They are imported where they are built, so deployments
+# without those backends can still import this module: the Research reader
+# path imports it through the RAG application service.
+if TYPE_CHECKING:
+    from infrastructure.storage.vector.paper_field_chunk_store import PaperFieldChunkStore
+    from infrastructure.storage.vector.paper_visual_chunk_store import PaperVisualChunkStore
 
 from backend.research.document.chunk_storage import (
     PaperChunkRepositoryAdapter,
@@ -87,6 +87,20 @@ class _RevalidatingPersonalMemoryAnswerWorker:
         if execution_identity is not None:
             kwargs["execution_identity"] = execution_identity
         return bound.generate_answer(**kwargs)
+
+
+def qdrant_store_from_env() -> Any:
+    from infrastructure.storage.vector.qdrant_store import qdrant_store_from_env as build
+
+    return build()
+
+
+def paper_visual_chunk_store_from_env() -> PaperVisualChunkStore | None:
+    from infrastructure.storage.vector.paper_visual_chunk_store import (
+        paper_visual_chunk_store_from_env as build,
+    )
+
+    return build()
 
 
 def _dsn() -> str:
@@ -328,6 +342,8 @@ class PaperRagRuntimeResources:
 
     def _chunk_store_locked(self) -> PaperChunkStoreAdapter:
         if self._chunk_store is None:
+            from infrastructure.storage.vector.paper_chunk_store import PaperChunkStore
+
             self._chunk_store = PaperChunkStoreAdapter(
                 PaperChunkStore(self._vector_store_locked())
             )
@@ -336,6 +352,8 @@ class PaperRagRuntimeResources:
 
     def _field_chunk_store_locked(self) -> PaperFieldChunkStore:
         if self._field_chunk_store is None:
+            from infrastructure.storage.vector.paper_field_chunk_store import PaperFieldChunkStore
+
             self._field_chunk_store = PaperFieldChunkStore(
                 self._vector_store_locked()
             )
@@ -350,7 +368,7 @@ class PaperRagRuntimeResources:
                 visual_store.ensure_collection()
             self._visual_chunk_store = visual_store
         value = self._visual_chunk_store
-        return cast(PaperVisualChunkStore | None, value)
+        return cast("PaperVisualChunkStore | None", value)
 
     def _reranker_locked(self) -> _SynchronizedReranker:
         if self._reranker is None:
@@ -417,6 +435,8 @@ def preload_reranker() -> None:
 
 
 def build_chunk_store(*, vector_store: Any | None = None) -> PaperChunkStoreAdapter:
+    from infrastructure.storage.vector.paper_chunk_store import PaperChunkStore
+
     store = PaperChunkStoreAdapter(
         PaperChunkStore(
             vector_store if vector_store is not None else qdrant_store_from_env()
@@ -427,10 +447,14 @@ def build_chunk_store(*, vector_store: Any | None = None) -> PaperChunkStoreAdap
 
 
 def build_chunk_repository() -> PaperChunkRepositoryAdapter:
+    from infrastructure.storage.postgres.paper_chunk_repository import PaperChunkRepository
+
     return PaperChunkRepositoryAdapter(PaperChunkRepository(_dsn()))
 
 
 def build_field_chunk_store(*, vector_store: Any | None = None) -> PaperFieldChunkStore:
+    from infrastructure.storage.vector.paper_field_chunk_store import PaperFieldChunkStore
+
     store = PaperFieldChunkStore(
         vector_store if vector_store is not None else qdrant_store_from_env()
     )

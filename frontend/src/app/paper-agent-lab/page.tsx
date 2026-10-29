@@ -13,7 +13,8 @@ export default async function PaperAgentLabPage({ searchParams }: { searchParams
   const resolvedSearchParams = await searchParams
   const query = new URLSearchParams()
 
-  for (const key of ["theme", "paper", "view", "tab", "focus", "assistant"] as const) {
+  // `?theme=` is not preview state: the client applies it to the app-wide appearance preference.
+  for (const key of ["paper", "view", "tab", "focus", "assistant"] as const) {
     const value = resolvedSearchParams[key]
     if (Array.isArray(value)) {
       for (const item of value) query.append(key, item)

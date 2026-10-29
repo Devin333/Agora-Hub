@@ -12,6 +12,33 @@ def test_evidence_builder_records_section_lineage() -> None:
     assert evidence_pack.coverage["sections"] == 1.0
 
 
+def test_body_less_parent_heading_is_structure_not_evidence() -> None:
+    from backend.research.domain import ResearchSection
+
+    document = sample_document()
+    parent = ResearchSection(
+        section_id="sec-results",
+        title="3 Results",
+        level=1,
+        text="",
+        source_ref="paper://paper-1/sec-results",
+    )
+    child = ResearchSection(
+        section_id="sec-translation",
+        title="3.1 Machine Translation",
+        level=2,
+        text="The model reaches 28.4 BLEU on the translation benchmark.",
+        source_ref="paper://paper-1/sec-translation",
+    )
+    document = document.model_copy(update={"sections": [*document.sections, parent, child]})
+
+    pack = ResearchEvidenceBuilder().build_from_document(document=document)
+
+    titles = {item.title for item in pack.items}
+    assert "3 Results" not in titles
+    assert "3.1 Machine Translation" in titles
+    assert all(item.summary for item in pack.items)
+
 
 def test_evidence_builder_materializes_typed_numeric_table_binding() -> None:
     from backend.research.domain import ResearchTable

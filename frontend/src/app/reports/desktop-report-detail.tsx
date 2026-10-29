@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
+import { ArrowLeft, Check, Download, Save } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   downloadResearchReport,
   fetchResearchReport,
@@ -18,7 +21,7 @@ import { useOwnedResearchWorkspace } from "@/lib/research/use-research-history"
 export function DesktopSavedReportDetail({ reportId }: { reportId: string }) {
   const workspace = useOwnedResearchWorkspace()
   if (!workspace.ready || !workspace.owner) {
-    return <p role="status">正在核对报告访问身份…</p>
+    return <PaneStatus>正在核对报告访问身份…</PaneStatus>
   }
   return (
     <OwnedSavedReport
@@ -71,7 +74,7 @@ export function DesktopRunReportDetail({
 }) {
   const workspace = useOwnedResearchWorkspace()
   if (!workspace.ready || !workspace.owner) {
-    return <p role="status">正在核对报告访问身份…</p>
+    return <PaneStatus>正在核对报告访问身份…</PaneStatus>
   }
   return (
     <OwnedRunReport
@@ -181,42 +184,49 @@ function ReportView({
 }) {
   if (error && !report) {
     return (
-      <div role="alert" className="flex flex-wrap items-center gap-3 text-destructive">
-        <span>{error}</span>
-        {onRetry && (
-          <button type="button" className="underline" onClick={onRetry}>
-            重新读取报告
-          </button>
-        )}
+      <div className="px-4 py-10 md:px-6">
+        <div role="alert" className="mx-auto flex max-w-[60rem] flex-wrap items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-body2 text-destructive-text">
+          <span>{error}</span>
+          {onRetry && (
+            <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+              重新读取报告
+            </Button>
+          )}
+        </div>
       </div>
     )
   }
-  if (!report) return <p role="status">正在读取精确运行报告…</p>
+  if (!report) return <PaneStatus>正在读取精确运行报告…</PaneStatus>
 
   return (
-    <main className="space-y-6">
-      <header className="rounded-xl border bg-card p-5">
-        <p className="text-xs font-medium text-primary">
-          {report.acceptedExport ? "已通过质量门，可保存与导出" : reportStatusLabel(report)}
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold">{report.title}</h1>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {save && (
-            <button
-              type="button"
-              disabled={save.busy || save.saved}
-              onClick={() => void save.run()}
-              className="rounded-lg bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50"
-            >
-              {save.saved ? "已保存" : save.busy ? "正在保存…" : "保存精确运行报告"}
-            </button>
-          )}
-          {report.acceptedExport && <ReportDownloads report={report} />}
-          <Link className="rounded-lg border px-4 py-2" href="/reports">返回报告目录</Link>
+    <main className="flex min-h-full flex-col">
+      <header className="border-b px-4 py-4 md:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <Badge variant={report.acceptedExport ? "success" : "warning"}>
+              {report.acceptedExport ? "已通过质量门，可保存与导出" : reportStatusLabel(report)}
+            </Badge>
+            <h1 className="mt-2 text-heading2 font-semibold">{report.title}</h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {save && (
+              <Button type="button" disabled={save.busy || save.saved} onClick={() => void save.run()}>
+                {save.saved ? <Check size={15} strokeWidth={1.8} /> : <Save size={15} strokeWidth={1.8} />}
+                {save.saved ? "已保存" : save.busy ? "正在保存…" : "保存精确运行报告"}
+              </Button>
+            )}
+            {report.acceptedExport && <ReportDownloads report={report} />}
+            <Button asChild variant="ghost">
+              <Link href="/reports">
+                <ArrowLeft size={15} strokeWidth={1.8} />
+                返回报告目录
+              </Link>
+            </Button>
+          </div>
         </div>
-        {error && <p role="alert" className="mt-3 text-destructive">{error}</p>}
-        <details className="mt-4 text-sm text-muted-foreground">
-          <summary className="cursor-pointer">技术信息</summary>
+        {error && <p role="alert" className="mt-3 text-body2 text-destructive-text">{error}</p>}
+        <details className="mt-3 text-label text-muted-foreground">
+          <summary className="cursor-pointer hover:text-foreground">技术信息</summary>
           <dl className="mt-2 grid gap-1 break-all">
             <div><dt className="inline font-medium">运行：</dt><dd className="inline">{report.runId}</dd></div>
             <div><dt className="inline font-medium">来源修订：</dt><dd className="inline">{report.sourceRevision}</dd></div>
@@ -226,84 +236,111 @@ function ReportView({
         </details>
       </header>
 
-      <section className="rounded-xl border bg-card p-5">
-        <h2 className="text-lg font-semibold">质量判定</h2>
-        <p className="mt-2 text-sm">{qualityLabel(report)}</p>
-        {report.quality.score != null && <p className="mt-1 text-sm">评分：{report.quality.score}</p>}
-        {report.quality.reasons.length > 0 && (
-          <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-            {report.quality.reasons.map((reason, index) => (
-              <li key={`${reason}-${index}`}>{reason}</li>
-            ))}
-          </ul>
-        )}
-        {!report.acceptedExport && report.artifactReason && (
-          <p className="mt-3 text-sm text-destructive">{report.artifactReason}</p>
-        )}
-      </section>
-
-      <section className="rounded-xl border bg-card p-5">
-        <h2 className="text-lg font-semibold">分析</h2>
-        {report.sections.length > 0 ? (
-          <div className="mt-4 space-y-6">
-            {report.sections.map(section => (
-              <section key={section.id} aria-labelledby={`report-section-${section.id}`}>
-                <h3 id={`report-section-${section.id}`} className="font-semibold">{section.title}</h3>
-                {section.paragraphs.map((paragraph, index) => (
-                  <p key={`${section.id}-paragraph-${index}`} className="mt-2 whitespace-pre-wrap text-sm leading-7">
-                    {paragraph}
-                  </p>
+      <div className="mx-auto w-full max-w-[60rem] space-y-8 px-4 py-6 md:px-6">
+        <ReportSection title="质量判定">
+          <div className="divide-y rounded-xl border">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 text-body2">
+              <span className="text-muted-foreground">判定</span>
+              <Badge variant={report.qualityPassed ? "success" : "danger"}>{qualityLabel(report)}</Badge>
+            </div>
+            {report.quality.score != null && (
+              <div className="flex items-center justify-between gap-3 px-4 py-3 text-body2">
+                <span className="text-muted-foreground">质量评分</span>
+                <span className="font-medium tabular-nums">评分：{report.quality.score}</span>
+              </div>
+            )}
+            {report.quality.reasons.length > 0 && (
+              <ul className="list-disc space-y-1 py-3 pl-9 pr-4 text-body2 text-muted-foreground">
+                {report.quality.reasons.map((reason, index) => (
+                  <li key={`${reason}-${index}`}>{reason}</li>
                 ))}
-                {section.items.length > 0 && (
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-7">
-                    {section.items.map((item, index) => (
-                      <li key={`${section.id}-item-${index}`}>{item}</li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            ))}
+              </ul>
+            )}
+            {!report.acceptedExport && report.artifactReason && (
+              <p className="px-4 py-3 text-body2 text-destructive-text">{report.artifactReason}</p>
+            )}
           </div>
-        ) : (
-          <p className="mt-3 text-sm text-muted-foreground">本次运行没有返回 ResearchAnalysis。</p>
-        )}
-        <details className="mt-6 text-sm text-muted-foreground">
-          <summary className="cursor-pointer">运行诊断 JSON</summary>
-          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted p-3 text-xs">{report.diagnosticJson}</pre>
-        </details>
-      </section>
+        </ReportSection>
 
-      <section className="rounded-xl border bg-card p-5">
-        <h2 className="text-lg font-semibold">引用</h2>
-        {report.citations.length ? (
-          <ol className="mt-3 space-y-3">
-            {report.citations.map(citation => (
-              <li key={citation.id} className="rounded-lg border p-3 text-sm">
-                <span>{citation.label}</span>
-                {citation.valid && (
-                  <Link className="ml-3 text-primary underline" href={citationLink(citation)}>
-                    回到论文定位
-                  </Link>
-                )}
-                {citation.excerpt && (
-                  <blockquote className="mt-2 border-l-2 pl-3 text-muted-foreground">
-                    {citation.excerpt}
-                  </blockquote>
-                )}
-                {!citation.valid && (
-                  <p className="mt-2 text-xs text-destructive">
-                    引用未验证：{citation.reasonCode || "来源产物未通过验证"}
-                  </p>
-                )}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="mt-3 text-sm text-muted-foreground">该报告没有可验证的引用定位。</p>
-        )}
-      </section>
+        <ReportSection title="分析">
+          {report.sections.length > 0 ? (
+            <div className="space-y-6">
+              {report.sections.map(section => (
+                <section key={section.id} aria-labelledby={`report-section-${section.id}`}>
+                  <h3 id={`report-section-${section.id}`} className="text-body1 font-semibold">{section.title}</h3>
+                  {section.paragraphs.map((paragraph, index) => (
+                    <p key={`${section.id}-paragraph-${index}`} className="mt-2 whitespace-pre-wrap text-body1 leading-7 text-foreground/90">
+                      {paragraph}
+                    </p>
+                  ))}
+                  {section.items.length > 0 && (
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-body1 leading-7 text-foreground/90">
+                      {section.items.map((item, index) => (
+                        <li key={`${section.id}-item-${index}`}>{item}</li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              ))}
+            </div>
+          ) : (
+            <p className="text-body2 text-muted-foreground">本次运行没有返回 ResearchAnalysis。</p>
+          )}
+          <details className="mt-6 text-body2 text-muted-foreground">
+            <summary className="cursor-pointer hover:text-foreground">运行诊断 JSON</summary>
+            <pre className="rk-scroll mt-2 overflow-x-auto whitespace-pre-wrap rounded-xl bg-muted p-3 font-mono text-label">{report.diagnosticJson}</pre>
+          </details>
+        </ReportSection>
+
+        <ReportSection title="引用">
+          {report.citations.length ? (
+            <ol className="divide-y rounded-xl border">
+              {report.citations.map(citation => (
+                <li key={citation.id} className="px-4 py-3 text-body2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium">{citation.label}</span>
+                    {citation.valid && (
+                      <Link
+                        className="text-link underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                        href={citationLink(citation)}
+                      >
+                        回到论文定位
+                      </Link>
+                    )}
+                  </div>
+                  {citation.excerpt && (
+                    <blockquote className="mt-2 border-l-2 border-border pl-3 text-muted-foreground">
+                      {citation.excerpt}
+                    </blockquote>
+                  )}
+                  {!citation.valid && (
+                    <p className="mt-2 text-label text-destructive-text">
+                      引用未验证：{citation.reasonCode || "来源产物未通过验证"}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-body2 text-muted-foreground">该报告没有可验证的引用定位。</p>
+          )}
+        </ReportSection>
+      </div>
     </main>
   )
+}
+
+function ReportSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <h2 className="text-heading3 font-semibold">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+function PaneStatus({ children }: { children: React.ReactNode }) {
+  return <p role="status" className="px-4 py-10 text-center text-body2 text-muted-foreground md:px-6">{children}</p>
 }
 
 function ReportDownloads({ report }: { report: ResearchReportView }) {
@@ -349,24 +386,16 @@ function ReportDownloads({ report }: { report: ResearchReportView }) {
 
   return (
     <div className="contents">
-      <button
-        type="button"
-        disabled={Boolean(busy)}
-        className="rounded-lg border px-4 py-2 disabled:opacity-50"
-        onClick={() => void download("markdown")}
-      >
+      <Button type="button" variant="outline" disabled={Boolean(busy)} onClick={() => void download("markdown")}>
+        <Download size={15} strokeWidth={1.8} />
         {busy === "markdown" ? "正在导出…" : "导出 Markdown"}
-      </button>
-      <button
-        type="button"
-        disabled={Boolean(busy)}
-        className="rounded-lg border px-4 py-2 disabled:opacity-50"
-        onClick={() => void download("json")}
-      >
+      </Button>
+      <Button type="button" variant="outline" disabled={Boolean(busy)} onClick={() => void download("json")}>
+        <Download size={15} strokeWidth={1.8} />
         {busy === "json" ? "正在导出…" : "导出 JSON"}
-      </button>
-      {message && <span role="status" className="self-center text-sm text-emerald-700">{message}</span>}
-      {error && <span role="alert" className="self-center text-sm text-destructive">{error}</span>}
+      </Button>
+      {message && <span role="status" className="self-center text-body2 text-success-text">{message}</span>}
+      {error && <span role="alert" className="self-center text-body2 text-destructive-text">{error}</span>}
     </div>
   )
 }

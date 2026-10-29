@@ -1,111 +1,8 @@
 from __future__ import annotations
 
-from framework.harness.runtime.context_replay import (
-    ContextCompactionReplayReader,
-    ContextCompactionReplayReport,
-)
-from framework.harness.runtime.artifact_context import (
-    APPROVED_ARTIFACT_LOAD_PLAN_SCHEMA,
-    ARTIFACT_CONTEXT_LOAD_RESULT_SCHEMA,
-    ARTIFACT_CONTEXT_PROJECTION_SCHEMA,
-    ApprovedArtifactLoadItem,
-    ApprovedArtifactLoadPlan,
-    ArtifactContextItem,
-    ArtifactContextLoadResult,
-    ArtifactContextLoader,
-    ArtifactContextLoadPlanner,
-    ArtifactContextProviderPort,
-)
-from framework.harness.runtime.activity_executor import (
-    HarnessGraphPhysicalActivityExecutionResult,
-    HarnessGraphPhysicalActivityExecutor,
-)
-from framework.harness.runtime.graph_dispatcher import (
-    HarnessGraphPhysicalActivityDispatcher,
-)
-from framework.harness.runtime.result_errors import (
-    GraphArtifactResultError,
-    GraphArtifactResultErrorCode,
-)
-from framework.harness.runtime.result_models import (
-    ArtifactClass,
-    ArtifactRecord,
-    BoundedSummary,
-    CacheRef,
-    ContextAssemblyRequest,
-    ContextLoadMode,
-    ContextPolicy,
-    ContextPurpose,
-    NodeResultBinding,
-    NodeResultEnvelope,
-    NodeResultStatus,
-    PersistenceDecision,
-    PersistenceMode,
-    PersistenceReason,
-    ResultMetrics,
-    ResultProvenance,
-    ResultSensitivity,
-    RetentionClass,
-)
-from framework.harness.runtime.result_policy import (
-    DEFAULT_GRAPH_ARTIFACT_POLICY_VERSION,
-    GraphArtifactDedupScope,
-    GraphArtifactPersistenceConfig,
-    GraphArtifactRetentionSettings,
-    GraphArtifactRolloutMode,
-    NodeResultRequest,
-    PersistenceBudgetSnapshot,
-    PersistenceEvaluation,
-    PersistencePolicy,
-)
-from framework.harness.runtime.materializer import (
-    MaterializationResult,
-    ResultAttemptLedgerPort,
-    ResultCachePort,
-    ResultCacheWriteRequest,
-    ResultMaterializationObservation,
-    ResultMaterializationOutcome,
-    ResultMaterializer,
-    ResultQuotaPort,
-    ResultQuotaReconciliationEvidence,
-    ResultQuotaReservation,
-)
-from framework.harness.runtime.graph_result_projection import (
-    graph_result_lineage_from_envelope,
-)
-from framework.harness.runtime.graph_result_runtime import HarnessGraphResultRuntime
-from framework.harness.runtime.node_output import (
-    HarnessAdmittedGraphActivityOutputAdapter,
-    HarnessCommittedNodeOutputInputResolver,
-    HarnessGraphActivityOutputAttemptResult,
-)
-from framework.harness.runtime.tool_result_adapter import (
-    HARNESS_BOUND_TOOL_RECEIPT_SCHEMA,
-    TOOL_NODE_RESULT_SCHEMA,
-    TOOL_RESPONSE_DOCUMENT_SCHEMA,
-    TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA,
-    HarnessBoundToolSideEffectReceipt,
-    HarnessToolActivityResult,
-    HarnessToolActivityRuntime,
-    HarnessToolResultAdapter,
-    VerifiedHarnessToolSideEffectEvidence,
-    build_harness_tool_activity_runtime,
-    verify_harness_tool_side_effect_evidence,
-)
-from framework.harness.runtime.subagent_result_adapter import (
-    SUBAGENT_HANDOFF_SCHEMA,
-    SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA,
-    SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA_V3,
-    SUBAGENT_NODE_RESULT_SCHEMA,
-    SUBAGENT_NODE_RESULT_SCHEMA_V3,
-    HarnessSubAgentActivityResult,
-    HarnessSubAgentActivityRuntime,
-    HarnessSubAgentMaterializationResult,
-    HarnessSubAgentResultAdapter,
-    VerifiedSubAgentMaterializedBundle,
-    subagent_result_attempt_id,
-    verify_subagent_materialized_bundle,
-)
+from typing import TYPE_CHECKING, Any
+
+from framework.shared.lazy_exports import LazyExports
 
 __all__ = [
     "APPROVED_ARTIFACT_LOAD_PLAN_SCHEMA",
@@ -191,3 +88,210 @@ __all__ = [
     "verify_subagent_materialized_bundle",
     "graph_result_lineage_from_envelope",
 ]
+
+_LAZY = LazyExports(
+    __name__,
+    {
+        "ContextCompactionReplayReader": ("framework.harness.runtime.context_replay", "ContextCompactionReplayReader"),
+        "ContextCompactionReplayReport": ("framework.harness.runtime.context_replay", "ContextCompactionReplayReport"),
+        "APPROVED_ARTIFACT_LOAD_PLAN_SCHEMA": ("framework.harness.runtime.artifact_context", "APPROVED_ARTIFACT_LOAD_PLAN_SCHEMA"),
+        "ARTIFACT_CONTEXT_LOAD_RESULT_SCHEMA": ("framework.harness.runtime.artifact_context", "ARTIFACT_CONTEXT_LOAD_RESULT_SCHEMA"),
+        "ARTIFACT_CONTEXT_PROJECTION_SCHEMA": ("framework.harness.runtime.artifact_context", "ARTIFACT_CONTEXT_PROJECTION_SCHEMA"),
+        "ApprovedArtifactLoadItem": ("framework.harness.runtime.artifact_context", "ApprovedArtifactLoadItem"),
+        "ApprovedArtifactLoadPlan": ("framework.harness.runtime.artifact_context", "ApprovedArtifactLoadPlan"),
+        "ArtifactContextItem": ("framework.harness.runtime.artifact_context", "ArtifactContextItem"),
+        "ArtifactContextLoadResult": ("framework.harness.runtime.artifact_context", "ArtifactContextLoadResult"),
+        "ArtifactContextLoader": ("framework.harness.runtime.artifact_context", "ArtifactContextLoader"),
+        "ArtifactContextLoadPlanner": ("framework.harness.runtime.artifact_context", "ArtifactContextLoadPlanner"),
+        "ArtifactContextProviderPort": ("framework.harness.runtime.artifact_context", "ArtifactContextProviderPort"),
+        "HarnessGraphPhysicalActivityExecutionResult": ("framework.harness.runtime.activity_executor", "HarnessGraphPhysicalActivityExecutionResult"),
+        "HarnessGraphPhysicalActivityExecutor": ("framework.harness.runtime.activity_executor", "HarnessGraphPhysicalActivityExecutor"),
+        "HarnessGraphPhysicalActivityDispatcher": ("framework.harness.runtime.graph_dispatcher", "HarnessGraphPhysicalActivityDispatcher"),
+        "GraphArtifactResultError": ("framework.harness.runtime.result_errors", "GraphArtifactResultError"),
+        "GraphArtifactResultErrorCode": ("framework.harness.runtime.result_errors", "GraphArtifactResultErrorCode"),
+        "ArtifactClass": ("framework.harness.runtime.result_models", "ArtifactClass"),
+        "ArtifactRecord": ("framework.harness.runtime.result_models", "ArtifactRecord"),
+        "BoundedSummary": ("framework.harness.runtime.result_models", "BoundedSummary"),
+        "CacheRef": ("framework.harness.runtime.result_models", "CacheRef"),
+        "ContextAssemblyRequest": ("framework.harness.runtime.result_models", "ContextAssemblyRequest"),
+        "ContextLoadMode": ("framework.harness.runtime.result_models", "ContextLoadMode"),
+        "ContextPolicy": ("framework.harness.runtime.result_models", "ContextPolicy"),
+        "ContextPurpose": ("framework.harness.runtime.result_models", "ContextPurpose"),
+        "NodeResultBinding": ("framework.harness.runtime.result_models", "NodeResultBinding"),
+        "NodeResultEnvelope": ("framework.harness.runtime.result_models", "NodeResultEnvelope"),
+        "NodeResultStatus": ("framework.harness.runtime.result_models", "NodeResultStatus"),
+        "PersistenceDecision": ("framework.harness.runtime.result_models", "PersistenceDecision"),
+        "PersistenceMode": ("framework.harness.runtime.result_models", "PersistenceMode"),
+        "PersistenceReason": ("framework.harness.runtime.result_models", "PersistenceReason"),
+        "ResultMetrics": ("framework.harness.runtime.result_models", "ResultMetrics"),
+        "ResultProvenance": ("framework.harness.runtime.result_models", "ResultProvenance"),
+        "ResultSensitivity": ("framework.harness.runtime.result_models", "ResultSensitivity"),
+        "RetentionClass": ("framework.harness.runtime.result_models", "RetentionClass"),
+        "DEFAULT_GRAPH_ARTIFACT_POLICY_VERSION": ("framework.harness.runtime.result_policy", "DEFAULT_GRAPH_ARTIFACT_POLICY_VERSION"),
+        "GraphArtifactDedupScope": ("framework.harness.runtime.result_policy", "GraphArtifactDedupScope"),
+        "GraphArtifactPersistenceConfig": ("framework.harness.runtime.result_policy", "GraphArtifactPersistenceConfig"),
+        "GraphArtifactRetentionSettings": ("framework.harness.runtime.result_policy", "GraphArtifactRetentionSettings"),
+        "GraphArtifactRolloutMode": ("framework.harness.runtime.result_policy", "GraphArtifactRolloutMode"),
+        "NodeResultRequest": ("framework.harness.runtime.result_policy", "NodeResultRequest"),
+        "PersistenceBudgetSnapshot": ("framework.harness.runtime.result_policy", "PersistenceBudgetSnapshot"),
+        "PersistenceEvaluation": ("framework.harness.runtime.result_policy", "PersistenceEvaluation"),
+        "PersistencePolicy": ("framework.harness.runtime.result_policy", "PersistencePolicy"),
+        "MaterializationResult": ("framework.harness.runtime.materializer", "MaterializationResult"),
+        "ResultAttemptLedgerPort": ("framework.harness.runtime.materializer", "ResultAttemptLedgerPort"),
+        "ResultCachePort": ("framework.harness.runtime.materializer", "ResultCachePort"),
+        "ResultCacheWriteRequest": ("framework.harness.runtime.materializer", "ResultCacheWriteRequest"),
+        "ResultMaterializationObservation": ("framework.harness.runtime.materializer", "ResultMaterializationObservation"),
+        "ResultMaterializationOutcome": ("framework.harness.runtime.materializer", "ResultMaterializationOutcome"),
+        "ResultMaterializer": ("framework.harness.runtime.materializer", "ResultMaterializer"),
+        "ResultQuotaPort": ("framework.harness.runtime.materializer", "ResultQuotaPort"),
+        "ResultQuotaReconciliationEvidence": ("framework.harness.runtime.materializer", "ResultQuotaReconciliationEvidence"),
+        "ResultQuotaReservation": ("framework.harness.runtime.materializer", "ResultQuotaReservation"),
+        "graph_result_lineage_from_envelope": ("framework.harness.runtime.graph_result_projection", "graph_result_lineage_from_envelope"),
+        "HarnessGraphResultRuntime": ("framework.harness.runtime.graph_result_runtime", "HarnessGraphResultRuntime"),
+        "HarnessAdmittedGraphActivityOutputAdapter": ("framework.harness.runtime.node_output", "HarnessAdmittedGraphActivityOutputAdapter"),
+        "HarnessCommittedNodeOutputInputResolver": ("framework.harness.runtime.node_output", "HarnessCommittedNodeOutputInputResolver"),
+        "HarnessGraphActivityOutputAttemptResult": ("framework.harness.runtime.node_output", "HarnessGraphActivityOutputAttemptResult"),
+        "HARNESS_BOUND_TOOL_RECEIPT_SCHEMA": ("framework.harness.runtime.tool_result_adapter", "HARNESS_BOUND_TOOL_RECEIPT_SCHEMA"),
+        "TOOL_NODE_RESULT_SCHEMA": ("framework.harness.runtime.tool_result_adapter", "TOOL_NODE_RESULT_SCHEMA"),
+        "TOOL_RESPONSE_DOCUMENT_SCHEMA": ("framework.harness.runtime.tool_result_adapter", "TOOL_RESPONSE_DOCUMENT_SCHEMA"),
+        "TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA": ("framework.harness.runtime.tool_result_adapter", "TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA"),
+        "HarnessBoundToolSideEffectReceipt": ("framework.harness.runtime.tool_result_adapter", "HarnessBoundToolSideEffectReceipt"),
+        "HarnessToolActivityResult": ("framework.harness.runtime.tool_result_adapter", "HarnessToolActivityResult"),
+        "HarnessToolActivityRuntime": ("framework.harness.runtime.tool_result_adapter", "HarnessToolActivityRuntime"),
+        "HarnessToolResultAdapter": ("framework.harness.runtime.tool_result_adapter", "HarnessToolResultAdapter"),
+        "VerifiedHarnessToolSideEffectEvidence": ("framework.harness.runtime.tool_result_adapter", "VerifiedHarnessToolSideEffectEvidence"),
+        "build_harness_tool_activity_runtime": ("framework.harness.runtime.tool_result_adapter", "build_harness_tool_activity_runtime"),
+        "verify_harness_tool_side_effect_evidence": ("framework.harness.runtime.tool_result_adapter", "verify_harness_tool_side_effect_evidence"),
+        "SUBAGENT_HANDOFF_SCHEMA": ("framework.harness.runtime.subagent_result_adapter", "SUBAGENT_HANDOFF_SCHEMA"),
+        "SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA": ("framework.harness.runtime.subagent_result_adapter", "SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA"),
+        "SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA_V3": ("framework.harness.runtime.subagent_result_adapter", "SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA_V3"),
+        "SUBAGENT_NODE_RESULT_SCHEMA": ("framework.harness.runtime.subagent_result_adapter", "SUBAGENT_NODE_RESULT_SCHEMA"),
+        "SUBAGENT_NODE_RESULT_SCHEMA_V3": ("framework.harness.runtime.subagent_result_adapter", "SUBAGENT_NODE_RESULT_SCHEMA_V3"),
+        "HarnessSubAgentActivityResult": ("framework.harness.runtime.subagent_result_adapter", "HarnessSubAgentActivityResult"),
+        "HarnessSubAgentActivityRuntime": ("framework.harness.runtime.subagent_result_adapter", "HarnessSubAgentActivityRuntime"),
+        "HarnessSubAgentMaterializationResult": ("framework.harness.runtime.subagent_result_adapter", "HarnessSubAgentMaterializationResult"),
+        "HarnessSubAgentResultAdapter": ("framework.harness.runtime.subagent_result_adapter", "HarnessSubAgentResultAdapter"),
+        "VerifiedSubAgentMaterializedBundle": ("framework.harness.runtime.subagent_result_adapter", "VerifiedSubAgentMaterializedBundle"),
+        "subagent_result_attempt_id": ("framework.harness.runtime.subagent_result_adapter", "subagent_result_attempt_id"),
+        "verify_subagent_materialized_bundle": ("framework.harness.runtime.subagent_result_adapter", "verify_subagent_materialized_bundle"),
+    },
+)
+
+
+def __getattr__(name: str) -> Any:
+    return _LAZY.getattr(name)
+
+
+def __dir__() -> list[str]:
+    return _LAZY.dir()
+
+
+if TYPE_CHECKING:
+    from framework.harness.runtime.context_replay import (
+        ContextCompactionReplayReader,
+        ContextCompactionReplayReport,
+    )
+    from framework.harness.runtime.artifact_context import (
+        APPROVED_ARTIFACT_LOAD_PLAN_SCHEMA,
+        ARTIFACT_CONTEXT_LOAD_RESULT_SCHEMA,
+        ARTIFACT_CONTEXT_PROJECTION_SCHEMA,
+        ApprovedArtifactLoadItem,
+        ApprovedArtifactLoadPlan,
+        ArtifactContextItem,
+        ArtifactContextLoadResult,
+        ArtifactContextLoader,
+        ArtifactContextLoadPlanner,
+        ArtifactContextProviderPort,
+    )
+    from framework.harness.runtime.activity_executor import (
+        HarnessGraphPhysicalActivityExecutionResult,
+        HarnessGraphPhysicalActivityExecutor,
+    )
+    from framework.harness.runtime.graph_dispatcher import (
+        HarnessGraphPhysicalActivityDispatcher,
+    )
+    from framework.harness.runtime.result_errors import (
+        GraphArtifactResultError,
+        GraphArtifactResultErrorCode,
+    )
+    from framework.harness.runtime.result_models import (
+        ArtifactClass,
+        ArtifactRecord,
+        BoundedSummary,
+        CacheRef,
+        ContextAssemblyRequest,
+        ContextLoadMode,
+        ContextPolicy,
+        ContextPurpose,
+        NodeResultBinding,
+        NodeResultEnvelope,
+        NodeResultStatus,
+        PersistenceDecision,
+        PersistenceMode,
+        PersistenceReason,
+        ResultMetrics,
+        ResultProvenance,
+        ResultSensitivity,
+        RetentionClass,
+    )
+    from framework.harness.runtime.result_policy import (
+        DEFAULT_GRAPH_ARTIFACT_POLICY_VERSION,
+        GraphArtifactDedupScope,
+        GraphArtifactPersistenceConfig,
+        GraphArtifactRetentionSettings,
+        GraphArtifactRolloutMode,
+        NodeResultRequest,
+        PersistenceBudgetSnapshot,
+        PersistenceEvaluation,
+        PersistencePolicy,
+    )
+    from framework.harness.runtime.materializer import (
+        MaterializationResult,
+        ResultAttemptLedgerPort,
+        ResultCachePort,
+        ResultCacheWriteRequest,
+        ResultMaterializationObservation,
+        ResultMaterializationOutcome,
+        ResultMaterializer,
+        ResultQuotaPort,
+        ResultQuotaReconciliationEvidence,
+        ResultQuotaReservation,
+    )
+    from framework.harness.runtime.graph_result_projection import (
+        graph_result_lineage_from_envelope,
+    )
+    from framework.harness.runtime.graph_result_runtime import (
+        HarnessGraphResultRuntime,
+    )
+    from framework.harness.runtime.node_output import (
+        HarnessAdmittedGraphActivityOutputAdapter,
+        HarnessCommittedNodeOutputInputResolver,
+        HarnessGraphActivityOutputAttemptResult,
+    )
+    from framework.harness.runtime.tool_result_adapter import (
+        HARNESS_BOUND_TOOL_RECEIPT_SCHEMA,
+        TOOL_NODE_RESULT_SCHEMA,
+        TOOL_RESPONSE_DOCUMENT_SCHEMA,
+        TOOL_SIDE_EFFECT_EVIDENCE_SCHEMA,
+        HarnessBoundToolSideEffectReceipt,
+        HarnessToolActivityResult,
+        HarnessToolActivityRuntime,
+        HarnessToolResultAdapter,
+        VerifiedHarnessToolSideEffectEvidence,
+        build_harness_tool_activity_runtime,
+        verify_harness_tool_side_effect_evidence,
+    )
+    from framework.harness.runtime.subagent_result_adapter import (
+        SUBAGENT_HANDOFF_SCHEMA,
+        SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA,
+        SUBAGENT_MATERIALIZED_BUNDLE_SCHEMA_V3,
+        SUBAGENT_NODE_RESULT_SCHEMA,
+        SUBAGENT_NODE_RESULT_SCHEMA_V3,
+        HarnessSubAgentActivityResult,
+        HarnessSubAgentActivityRuntime,
+        HarnessSubAgentMaterializationResult,
+        HarnessSubAgentResultAdapter,
+        VerifiedSubAgentMaterializedBundle,
+        subagent_result_attempt_id,
+        verify_subagent_materialized_bundle,
+    )

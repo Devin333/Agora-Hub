@@ -14,26 +14,26 @@ describe("desktop lifecycle quit decision", () => {
     expect(quitDecision(state({ dirty: true }), () => false)).toBe("cancel")
   })
 
-  it("allows host drain only after explicit confirmation and never requests replay", () => {
+  it("leaves only after explicit confirmation and says interrupted requests are not replayed", () => {
     let message = ""
     expect(quitDecision(state({ activeTaskCount: 2 }), value => { message = value; return true })).toBe("allow")
-    expect(message).toContain("等待当前请求安全结束")
+    expect(message).toContain("进行中的请求会被中断")
     expect(message).toContain("不会自动重放")
   })
 
-  it("uses the data-clear lifecycle reason without claiming preview or deletion completed", () => {
+  it("asks about changing the server when the host is about to leave this server", () => {
     let message = ""
-    expect(quitDecision(state({ dirty: true, activeTaskCount: 1 }), value => { message = value; return false }, "data-clear")).toBe("cancel")
-    expect(message).toContain("继续清除申请")
-    expect(message).toContain("独立原生确认")
-    expect(message).toContain("不代表数据已经清除")
-    expect(message).not.toContain("预览已")
+    expect(quitDecision(state({ dirty: true }), value => { message = value; return false }, "server-change")).toBe("cancel")
+    expect(message).toContain("未保存的草稿会丢失")
+    expect(message).toContain("仍要更换服务器地址吗")
   })
 
-  it("uses a configuration-specific stop message for config apply", () => {
+  it("words a window close as closing rather than quitting", () => {
     let message = ""
-    expect(quitDecision(state({ activeTaskCount: 1 }), value => { message = value; return true }, "config-apply")).toBe("allow")
-    expect(message).toContain("继续应用配置")
+    expect(quitDecision(state({ dirty: true, activeTaskCount: 1 }), value => { message = value; return false }, "window-close")).toBe("cancel")
+    expect(message).toContain("仍有未保存草稿")
+    expect(message).toContain("仍有 1 个活动请求")
+    expect(message).toContain("仍要关闭吗")
     expect(message).not.toContain("仍要退出吗")
   })
 })

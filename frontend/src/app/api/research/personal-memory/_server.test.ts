@@ -5,29 +5,33 @@ import { sanitizePersonalMemoryUpdate } from "@/lib/research/personal-memory-con
 const state = vi.hoisted(() => ({ token: "session-token" as string | undefined }))
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => state.token ? { value: state.token } : undefined }),
+  headers: async () => new Headers(),
 }))
 
 import { personalMemoryPatch } from "./_server"
 
 describe("personal memory BFF server boundary", () => {
   const originalProfile = process.env.NEWSROOM_DEPLOYMENT_PROFILE
-  const originalOrigin = process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN
+  const originalOrigin = process.env.NEWSROOM_PUBLIC_ORIGIN
+  const originalInsecure = process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN
   const originalApi = process.env.NEWSROOM_API_BASE_URL
 
   beforeEach(() => {
     state.token = "session-token"
-    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "local-desktop"
-    process.env.NEWSROOM_DESKTOP_CANONICAL_ORIGIN = "http://127.0.0.1:4317"
+    process.env.NEWSROOM_DEPLOYMENT_PROFILE = "hosted"
+    process.env.NEWSROOM_PUBLIC_ORIGIN = "http://127.0.0.1:4317"
+    process.env.NEWSROOM_ALLOW_INSECURE_ORIGIN = "1"
     process.env.NEWSROOM_API_BASE_URL = "http://127.0.0.1:4318"
   })
   afterEach(() => {
     restore("NEWSROOM_DEPLOYMENT_PROFILE", originalProfile)
-    restore("NEWSROOM_DESKTOP_CANONICAL_ORIGIN", originalOrigin)
+    restore("NEWSROOM_PUBLIC_ORIGIN", originalOrigin)
+    restore("NEWSROOM_ALLOW_INSECURE_ORIGIN", originalInsecure)
     restore("NEWSROOM_API_BASE_URL", originalApi)
     vi.unstubAllGlobals()
   })
 
-  it("forwards validated CAS payload with server session and canonical origin", async () => {
+  it("forwards validated CAS payload with server session and public origin", async () => {
     const backend = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       success: true,
       data: { record: { memory_id: `pmem_${"a".repeat(32)}`, revision: 2 } },

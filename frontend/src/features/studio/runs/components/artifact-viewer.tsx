@@ -19,14 +19,14 @@ export function ArtifactViewer({ artifacts }: { artifacts: Artifact[] }) {
           <ArtifactCard key={artifact.id} artifact={artifact} selected={selected?.id === artifact.id} onSelect={() => setSelectedId(artifact.id)} />
         ))}
       </div>
-      <section className="min-w-0 rounded-md border border-border bg-secondary/35">
-        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-          <p className="truncate text-sm font-medium text-foreground">{selected.filename}</p>
+      <section className="min-w-0 overflow-hidden rounded-xl border border-border">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+          <p className="truncate text-[13.5px] font-medium text-foreground">{selected.filename}</p>
           <Button type="button" variant="outline" size="sm" disabled>
             下载
           </Button>
         </div>
-        <pre className="max-h-[480px] overflow-auto whitespace-pre-wrap break-words p-3 text-xs leading-5 text-foreground">
+        <pre className="rk-scroll max-h-[480px] overflow-auto whitespace-pre-wrap break-words bg-muted p-3 font-mono text-label leading-5 text-foreground/90">
           {selected.preview ?? "暂无预览。接入产物读取 API 后会获取真实产物内容。"}
         </pre>
       </section>

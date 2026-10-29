@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { Archive, FileText, GitBranch, ShieldCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
 import { BlockedRunPanel, FailureReasonPanel, RecentFailedReports } from "@/features/studio/quality/components/quality-failure-panel"
 import { QualityCheckTable, QualityStatusBadge } from "@/features/studio/quality/components/quality-check-table"
 import { QualityMetricBoard, QualityStatusBoard } from "@/features/studio/quality/components/quality-status-board"
@@ -15,7 +16,8 @@ import {
   StudioNotice,
   StudioPageHeader,
   StudioPanel,
-  StudioTableFrame
+  StudioTableHeader,
+  studioTableCellClass
 } from "@/features/studio/shared/components/studio-dashboard"
 import { useI18n } from "@/lib/i18n/use-i18n"
 import type {
@@ -27,7 +29,7 @@ import type {
 export function QualityGatePage({ dashboard }: { dashboard: StudioQualityDashboard }) {
   const { t, dataState } = useI18n()
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.nav.governance")}
         title={t("studio.module.qualityGate.title")}
@@ -44,34 +46,31 @@ export function QualityGatePage({ dashboard }: { dashboard: StudioQualityDashboa
         <BlockedRunPanel runs={dashboard.recentBlockedRuns} />
       </section>
 
-      <StudioPanel title={t("studio.quality.reportGateCatalog")} description={t("studio.quality.reportGateCatalogDescription")} contentClassName="p-0">
-        <StudioTableFrame className="border-0 shadow-none">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-              <thead className="border-b border-border bg-secondary/80 text-xs uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3 font-medium">{t("studio.quality.report")}</th>
-                  <th className="px-4 py-3 font-medium">{t("common.status")}</th>
-                  <th className="px-4 py-3 font-medium">{t("studio.quality.qualityScore")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dashboard.reports.map((report) => (
-                  <tr key={report.reportId} className="border-b border-border/70 last:border-b-0 hover:bg-secondary/40">
-                    <td className="px-4 py-3">
-                      <Link href={`/studio/quality/reports/${encodeURIComponent(report.reportId)}`} className="block min-w-0">
-                        <p className="truncate text-sm font-medium text-foreground">{report.title}</p>
-                        <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{report.reportId}</p>
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3"><QualityStatusBadge status={report.status} /></td>
-                    <td className="px-4 py-3 text-sm text-muted-foreground">{report.qualityScore === undefined ? "n/a" : `${report.qualityScore}%`}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </StudioTableFrame>
+      <StudioPanel title={t("studio.quality.reportGateCatalog")} description={t("studio.quality.reportGateCatalogDescription")} flush>
+        <Table className="min-w-[760px]">
+          <StudioTableHeader columns={[t("studio.quality.report"), t("common.status"), t("studio.quality.qualityScore")]} />
+          <TableBody>
+            {dashboard.reports.map((report) => (
+              <TableRow key={report.reportId}>
+                <TableCell className={studioTableCellClass}>
+                  <Link
+                    href={`/studio/quality/reports/${encodeURIComponent(report.reportId)}`}
+                    className="block min-w-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
+                    <p className="truncate text-[13.5px] font-medium text-link hover:underline">{report.title}</p>
+                    <p className="mt-0.5 truncate font-mono text-label text-muted-foreground">{report.reportId}</p>
+                  </Link>
+                </TableCell>
+                <TableCell className={studioTableCellClass}>
+                  <QualityStatusBadge status={report.status} />
+                </TableCell>
+                <TableCell className={`${studioTableCellClass} tabular-nums text-muted-foreground`}>
+                  {report.qualityScore === undefined ? "n/a" : `${report.qualityScore}%`}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </StudioPanel>
     </main>
   )
@@ -86,7 +85,7 @@ export function QualityReportDetailPage({
 }) {
   const { t, dataState } = useI18n()
   return (
-    <main className="space-y-6">
+    <main className="space-y-5">
       <StudioPageHeader
         eyebrow={t("studio.quality.reportQuality")}
         title={detail.report.title}
@@ -106,13 +105,13 @@ export function QualityReportDetailPage({
       <StudioMetricGrid className="xl:grid-cols-4 2xl:grid-cols-4">
         <StudioMetricCard label={t("studio.quality.gateStatus")} value={<QualityStatusBadge status={detail.report.status} />} detail={detail.report.reportId} icon={ShieldCheck} />
         <StudioMetricCard label={t("studio.quality.qualityScore")} value={detail.report.qualityScore === undefined ? "n/a" : `${detail.report.qualityScore}%`} detail={t("studio.quality.reportScore")} icon={FileText} tone={detail.report.status === "failed" ? "danger" : "accent"} />
-        <StudioMetricCard label={t("studio.quality.linkedRun")} value={<span className="text-sm">{detail.report.runId ?? "n/a"}</span>} detail={t("studio.quality.runtimeLineage")} icon={GitBranch} />
+        <StudioMetricCard label={t("studio.quality.linkedRun")} value={<span className="block truncate font-mono text-body2">{detail.report.runId ?? "n/a"}</span>} detail={t("studio.quality.runtimeLineage")} icon={GitBranch} />
         <StudioMetricCard label={t("studio.quality.artifacts")} value={detail.artifactRefs.length} detail={detail.report.artifactPath ?? detail.artifactRefs[0]?.value ?? "n/a"} icon={Archive} />
       </StudioMetricGrid>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <QualityCheckTable checks={detail.checks} />
-        <div className="space-y-4">
+        <div className="space-y-3">
           <FailureReasonPanel reasons={detail.failureReasons} />
           <StudioPanel title={t("studio.quality.gateMetrics")}>
             <StudioFieldGrid className="xl:grid-cols-1">
@@ -122,16 +121,18 @@ export function QualityReportDetailPage({
               <StudioField label={t("studio.quality.unsupportedClaims")} value={String(detail.metrics.unsupportedClaims)} />
             </StudioFieldGrid>
           </StudioPanel>
-          <StudioPanel title={t("studio.quality.artifacts")} contentClassName="space-y-2">
+          <StudioPanel title={t("studio.quality.artifacts")}>
             {detail.artifactRefs.length ? (
-              detail.artifactRefs.map((artifact) => (
-                <div key={`${artifact.label}-${artifact.value}`} className="rounded-md border border-border bg-background p-2">
-                  <p className="text-xs text-muted-foreground">{artifact.label}</p>
-                  <p className="mt-1 truncate font-mono text-sm text-foreground">{artifact.value}</p>
-                </div>
-              ))
+              <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+                {detail.artifactRefs.map((artifact) => (
+                  <div key={`${artifact.label}-${artifact.value}`} className="px-4 py-3">
+                    <p className="text-label text-muted-foreground">{artifact.label}</p>
+                    <p className="mt-0.5 truncate font-mono text-[13px] text-foreground">{artifact.value}</p>
+                  </div>
+                ))}
+              </div>
             ) : (
-              <p className="text-sm text-muted-foreground">{t("studio.quality.noArtifactRefs")}</p>
+              <p className="text-body2 text-muted-foreground">{t("studio.quality.noArtifactRefs")}</p>
             )}
           </StudioPanel>
         </div>
