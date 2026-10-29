@@ -1,0 +1,50 @@
+"""User-configured model connections (BYOK) and per-purpose routing."""
+from __future__ import annotations
+
+from backend.foundation.llm_connections.errors import (
+    CredentialCipherError,
+    ModelConnectionConflictError,
+    ModelConnectionNotFoundError,
+    ModelConnectionStoreError,
+    ModelConnectionStoreReason,
+    ModelConnectionStoreUnavailableError,
+    ModelConnectionUnavailable,
+    ModelConnectionUnavailableReason,
+)
+from backend.foundation.llm_connections.models import (
+    MAX_CONNECTIONS_PER_OWNER,
+    ConnectionOwner,
+    LLMPurpose,
+    ModelCapabilities,
+    ModelConnection,
+    PurposeAssignment,
+)
+from backend.foundation.llm_connections.ports import (
+    CredentialBinding,
+    CredentialCipher,
+    EncryptedCredential,
+    ModelConnectionRepository,
+    StoredConnection,
+)
+
+__all__ = [
+    "MAX_CONNECTIONS_PER_OWNER",
+    "ConnectionOwner",
+    "CredentialBinding",
+    "CredentialCipher",
+    "CredentialCipherError",
+    "EncryptedCredential",
+    "LLMPurpose",
+    "ModelCapabilities",
+    "ModelConnection",
+    "ModelConnectionConflictError",
+    "ModelConnectionNotFoundError",
+    "ModelConnectionRepository",
+    "ModelConnectionStoreError",
+    "ModelConnectionStoreReason",
+    "ModelConnectionStoreUnavailableError",
+    "ModelConnectionUnavailable",
+    "ModelConnectionUnavailableReason",
+    "PurposeAssignment",
+    "StoredConnection",
+]
