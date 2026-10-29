@@ -1,7 +1,8 @@
 /**
- * The desktop client is a thin window onto the hosted service: it ships only
- * the Electron host, its preload and the connection page. Build with
- * AGORA_DESKTOP_SERVER_URL set to give the installer a default server address.
+ * The desktop client ships only the Electron host, its preload, the
+ * connection page and the local stack's compose file; every server runs from
+ * published images. Build with AGORA_DESKTOP_OFFICIAL_URL set to offer the
+ * official service.
  */
 module.exports = {
   appId: "com.agorahub.paperagent",
@@ -20,5 +21,11 @@ module.exports = {
     createStartMenuShortcut: true,
     deleteAppDataOnUninstall: false,
     shortcutName: "Agora Paper Agent"
-  }
+  },
+  mac: {
+    target: [{ target: "dmg", arch: ["arm64"] }],
+    icon: "assets/icon.png",
+    category: "public.app-category.productivity"
+  },
+  dmg: { artifactName: "Agora-Paper-Agent-${version}-${arch}.${ext}" }
 }

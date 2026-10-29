@@ -24,22 +24,33 @@ for (const file of ["connect.html", "connect.css", "connect.js"]) {
 }
 await cp(path.join(root, "assets", "icon.png"), path.join(out, "icon.png"))
 
-// The server this build opens until a user saves an address of their own. The
-// host validates it again on every launch, so a bad value only means "ask the user".
-const serverUrl = process.env.AGORA_DESKTOP_SERVER_URL?.trim() || null
-if (serverUrl) {
+// The local stack's compose file and .env template, read by the host from the
+// app bundle and copied to userData/stack before every start.
+await mkdir(path.join(out, "local-stack"), { recursive: true })
+for (const file of ["compose.images.yml", "env.template"]) {
+  await cp(path.join(root, "..", "deploy", "desktop", file), path.join(out, "local-stack", file))
+}
+
+// What this build was made for (see src/build-config.ts). The host validates it
+// again on every launch, so a bad value only disables the matching feature.
+const officialUrl = (process.env.AGORA_DESKTOP_OFFICIAL_URL ?? process.env.AGORA_DESKTOP_SERVER_URL)?.trim() || null
+let officialOrigin = null
+if (officialUrl) {
   let url
   try {
-    url = new URL(serverUrl)
+    url = new URL(officialUrl)
   } catch {
-    throw new Error("AGORA_DESKTOP_SERVER_URL must be an absolute URL such as https://agora.example.com")
+    throw new Error("AGORA_DESKTOP_OFFICIAL_URL must be an absolute URL such as https://agora.example.com")
   }
   if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-    throw new Error("AGORA_DESKTOP_SERVER_URL must be a bare https:// origin without path, query or credentials")
+    throw new Error("AGORA_DESKTOP_OFFICIAL_URL must be a bare https:// origin without path, query or credentials")
   }
+  officialOrigin = url.origin
 }
+const imageTag = process.env.AGORA_DESKTOP_IMAGE_TAG?.trim() || null
+if (imageTag && !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(imageTag)) throw new Error("AGORA_DESKTOP_IMAGE_TAG is not a valid image tag")
 await writeFile(
-  path.join(out, "server.json"),
-  `${JSON.stringify({ schema: "agora.desktop-server/v1", origin: serverUrl ? new URL(serverUrl).origin : null })}\n`,
+  path.join(out, "build.json"),
+  `${JSON.stringify({ schema: "agora.desktop-build/v1", officialOrigin, imageTag })}\n`,
   "utf8"
 )

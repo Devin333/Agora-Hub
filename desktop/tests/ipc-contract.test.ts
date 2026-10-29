@@ -13,7 +13,7 @@ describe("preload contract", () => {
   it("contains only the enumerated workspace and connection channels", () => {
     expect(Object.values(APP_CHANNELS).sort()).toEqual(["agora:appearance:set", "agora:export:save", "agora:lifecycle:respond", "agora:lifecycle:update"])
     expect(Object.values(CONNECTION_CHANNELS).sort()).toEqual([
-      "agora:connection:cancel-edit", "agora:connection:edit", "agora:connection:reset", "agora:connection:retry", "agora:connection:save", "agora:connection:status"
+      "agora:connection:cancel-edit", "agora:connection:choose", "agora:connection:edit", "agora:connection:local-cancel", "agora:connection:local-create-admin", "agora:connection:retry", "agora:connection:status"
     ])
     expect(Object.values(HOST_EVENTS).sort()).toEqual(["agora:connection:changed", "agora:lifecycle:quit-requested"])
     const all = [...Object.values(APP_CHANNELS), ...Object.values(CONNECTION_CHANNELS), ...Object.values(HOST_EVENTS)]

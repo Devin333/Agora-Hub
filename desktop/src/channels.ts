@@ -10,10 +10,11 @@ export const APP_CHANNELS = {
 export const CONNECTION_CHANNELS = {
   status: "agora:connection:status",
   retry: "agora:connection:retry",
-  save: "agora:connection:save",
-  reset: "agora:connection:reset",
+  choose: "agora:connection:choose",
   edit: "agora:connection:edit",
-  cancelEdit: "agora:connection:cancel-edit"
+  cancelEdit: "agora:connection:cancel-edit",
+  localCreateAdmin: "agora:connection:local-create-admin",
+  localCancel: "agora:connection:local-cancel"
 } as const
 
 /** Messages the host sends to a page; never handled as invokes. */

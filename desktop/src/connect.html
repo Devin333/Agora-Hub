@@ -12,24 +12,84 @@
     <section class="card" aria-labelledby="title">
       <div class="mark" aria-hidden="true"><span></span><span></span></div>
       <p class="eyebrow">Agora Paper Agent</p>
-      <h1 id="title">正在连接服务器</h1>
+      <h1 id="title">正在连接</h1>
       <p id="message" class="message">正在打开论文工作台。</p>
       <div id="status" class="status" role="status" aria-live="polite">连接中</div>
+
+      <div id="local-progress" class="local-progress" hidden>
+        <ol id="local-steps" class="steps" aria-label="本机服务启动步骤"></ol>
+        <progress id="local-bar" max="1" aria-label="下载进度"></progress>
+        <p id="local-bar-label" class="hint"></p>
+      </div>
+
       <div id="actions" class="actions">
         <button id="retry" class="primary" type="button" hidden>立即重试</button>
-        <button id="change" type="button" hidden>更换服务器地址</button>
+        <button id="local-cancel" type="button" hidden>取消</button>
+        <button id="change" type="button" hidden>切换连接方式</button>
+        <a id="docker-download" class="button" href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noreferrer" hidden>下载 Docker Desktop</a>
       </div>
-      <form id="address-form" class="address-form" novalidate hidden>
-        <label for="address">服务器地址</label>
-        <input id="address" name="address" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://agora.example.com" aria-describedby="address-hint address-error">
-        <p id="address-hint" class="hint">填写管理员提供的地址。地址只保存在这台电脑上，可随时从托盘菜单更换。</p>
-        <p id="address-error" class="error" role="alert"></p>
+
+      <form id="choice-form" class="choice-form" novalidate hidden>
+        <fieldset class="choices">
+          <legend class="visually-hidden">连接方式</legend>
+          <label id="choice-official" class="choice" hidden>
+            <input type="radio" name="mode" value="official">
+            <span class="choice-body">
+              <span class="choice-title">官方服务</span>
+              <span class="choice-text">使用 Agora 官方提供的服务，用你的账号登录即可。</span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="mode" value="server">
+            <span class="choice-body">
+              <span class="choice-title">连接已有服务器</span>
+              <span class="choice-text">连接你或团队管理员部署的 Agora 服务器。</span>
+            </span>
+          </label>
+          <div id="server-fields" class="choice-fields" hidden>
+            <label for="address">服务器地址</label>
+            <input id="address" name="address" type="text" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://agora.example.com" aria-describedby="choice-error">
+            <p class="hint">填写管理员提供的地址。账号也由管理员创建。</p>
+          </div>
+          <label class="choice">
+            <input type="radio" name="mode" value="local">
+            <span class="choice-body">
+              <span class="choice-title">在这台电脑上运行</span>
+              <span class="choice-text">用 Docker 在本机运行完整的服务，论文、笔记和模型 key 都只保存在这台电脑上。需要先安装 Docker Desktop。</span>
+            </span>
+          </label>
+          <div id="local-fields" class="choice-fields" hidden>
+            <label for="registry">镜像下载源</label>
+            <select id="registry" name="registry"></select>
+            <p class="hint">第一次运行需要下载约 500 MB 的服务镜像。中国大陆网络建议选阿里云。</p>
+          </div>
+        </fieldset>
+        <p id="choice-error" class="error" role="alert"></p>
         <div class="actions">
-          <button id="save" class="primary" type="submit">连接</button>
+          <button id="choose" class="primary" type="submit">连接</button>
           <button id="cancel" type="button" hidden>取消</button>
-          <button id="reset" class="link" type="button" hidden>恢复默认地址</button>
         </div>
       </form>
+
+      <form id="admin-form" class="admin-form" novalidate hidden>
+        <label for="admin-username">管理员用户名</label>
+        <input id="admin-username" name="username" type="text" autocomplete="username" spellcheck="false" placeholder="例如 owner">
+        <label for="admin-password">密码</label>
+        <input id="admin-password" name="password" type="password" autocomplete="new-password" placeholder="至少 8 个字符">
+        <label for="admin-confirmation">再次输入密码</label>
+        <input id="admin-confirmation" name="confirmation" type="password" autocomplete="new-password">
+        <p class="hint">这个账号只存在于本机服务里，用它登录工作台。以后可以在工作台的账号管理里再添加账号。</p>
+        <p id="admin-error" class="error" role="alert"></p>
+        <div class="actions">
+          <button id="admin-submit" class="primary" type="submit">创建并打开工作台</button>
+          <button id="admin-change" type="button">切换连接方式</button>
+        </div>
+      </form>
+
+      <details id="local-details" class="details" hidden>
+        <summary>详细输出</summary>
+        <pre id="local-output"></pre>
+      </details>
       <p id="origin" class="origin" hidden></p>
     </section>
   </main>

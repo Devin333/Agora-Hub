@@ -70,7 +70,7 @@ caddy(HTTPS) → web → api                          web(127.0.0.1:端口) → 
    - 不设固定子网，`NEWSROOM_TRUSTED_PROXY_CIDRS` 留空：本机只有一个用户，按客户端地址限流在这里没有意义。需要先核实 `load_hosted_settings` 接受空值。
    - 加 `restart: unless-stopped`，数据卷名带上 `agora-desktop` 前缀。
    - 加固：`no-new-privileges`，`cap_drop: ALL`，并设置内存上限。
-3. **环境变量模板**：新增 `deploy/desktop/.env.template`，其中密钥项留空，由桌面端生成后填入；`NEWSROOM_ALLOW_INSECURE_ORIGIN=1`，`NEWSROOM_PUBLIC_ORIGIN` 由桌面端按实际端口填写。
+3. **环境变量模板**：新增 `deploy/desktop/env.template`，其中密钥项留空，由桌面端生成后填入；`NEWSROOM_ALLOW_INSECURE_ORIGIN=1`，`NEWSROOM_PUBLIC_ORIGIN` 由桌面端按实际端口填写。
 4. **创建管理员**：沿用现有命令 `news accounts create-admin <用户名> --password-stdin`。桌面端执行 `docker compose exec -T api ...`，把密码通过标准输入传进去，不出现在命令参数里。不新增网页初始化入口，hosted 模式下没有初始化入口的规则保持不变。
 
 ### 第 3 步：桌面端三种模式

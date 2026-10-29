@@ -1,15 +1,19 @@
+import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, net, screen, session, shell, Tray, type MessageBoxOptions } from "electron"
 import { appearanceFilePath, DesktopAppearance, windowBackgroundFor } from "./appearance"
 import { AuditLogger } from "./audit-log"
 import { BackgroundTray, isBackgroundLaunch, LaunchAtLogin, trayStatusFor } from "./background-host"
+import { buildConfigFilePath, developmentImageOverride, readBuildConfig } from "./build-config"
 import { HOST_EVENTS } from "./channels"
 import type { ConnectionStatusView, QuitReason } from "./contracts"
+import { createDockerRunner, locateDocker, systemDockerEnvironment } from "./docker-cli"
 import { registerIpcHandlers } from "./ipc"
 import { RendererLifecycleBridge, requiresNativeQuitConfirmation, type RendererQuitAssessment } from "./lifecycle-bridge"
+import { abortableSleep, LocalStackController, probeLocalStackIdentity, systemPorts, testStackProjectName } from "./local-stack"
 import { decideNavigation, isConnectionPage, isWorkspaceUrl } from "./navigation-policy"
 import { redactText } from "./redaction"
-import { bundledServerFilePath, connectionFilePath, readBundledServerOrigin, ServerConnectionStore } from "./server-connection"
+import { connectionFilePath, ServerConnectionStore } from "./server-connection"
 import { probeServer } from "./server-probe"
 import { acquireSingleInstanceLock } from "./single-instance"
 import { resolveTestUserDataOverride } from "./user-data-override"
@@ -27,9 +31,12 @@ if (testUserDataPath) app.setPath("userData", testUserDataPath)
 const launchedInBackground = isBackgroundLaunch(process.argv)
 const gotSingleInstanceLock = acquireSingleInstanceLock(app)
 const CONNECTION_PAGE = path.join(__dirname, "connect.html")
+/** deploy/desktop's compose file and template, copied into the build by scripts/build.mjs. */
+const LOCAL_STACK_RESOURCES = path.join(__dirname, "local-stack")
 
 let mainWindow: BrowserWindow | null = null
 let connection: WorkspaceConnection | null = null
+let localStack: LocalStackController | null = null
 let logger: AuditLogger | null = null
 let appearance: DesktopAppearance | null = null
 let backgroundTray: BackgroundTray | null = null
@@ -146,7 +153,8 @@ function showsWorkspace(window: BrowserWindow): boolean {
 const LEAVE_TITLES: Record<QuitReason, { title: string; message: string; proceed: string }> = {
   "window-close": { title: "确认关闭 Agora Paper Agent", message: "要关闭论文工作台吗？", proceed: "仍然关闭" },
   "app-quit": { title: "确认退出 Agora Paper Agent", message: "应用正在请求退出", proceed: "仍然退出" },
-  "server-change": { title: "确认更换服务器地址", message: "更换地址会离开当前工作台", proceed: "仍然更换" }
+  "server-change": { title: "确认切换连接方式", message: "切换连接方式会离开当前工作台", proceed: "仍然切换" },
+  "local-stop": { title: "确认停止本机服务", message: "停止本机服务会关闭当前工作台", proceed: "仍然停止" }
 }
 
 async function confirmLeaveWithNativeDialog(reason: QuitReason, assessment: RendererQuitAssessment): Promise<boolean> {
@@ -202,7 +210,7 @@ async function requestClose(reason: "window-close" | "app-quit"): Promise<void> 
   }
 }
 
-async function changeServer(): Promise<void> {
+async function changeConnection(): Promise<void> {
   if (leaveInProgress || !connection) return
   leaveInProgress = true
   try {
@@ -211,6 +219,32 @@ async function changeServer(): Promise<void> {
     await connection.edit()
   } finally {
     leaveInProgress = false
+  }
+}
+
+async function stopLocalStack(): Promise<void> {
+  if (leaveInProgress || !connection) return
+  leaveInProgress = true
+  try {
+    if (!(await confirmLeavingWorkspace("local-stop"))) return
+    showMainWindow()
+    await connection.stopLocal()
+  } finally {
+    leaveInProgress = false
+  }
+}
+
+/** Writes the stack's recent logs (secrets removed) to the app's log folder and opens them. */
+async function showLocalStackLogs(): Promise<void> {
+  if (!localStack) return
+  try {
+    const file = path.join(app.getPath("userData"), "logs", "local-stack.log")
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, `${await localStack.logs()}\n`, "utf8")
+    const failure = await shell.openPath(file)
+    if (failure) log("local_stack_logs_open_failed", { error: redactText(failure, 300) })
+  } catch (error) {
+    log("local_stack_logs_failed", { error: errorText(error) })
   }
 }
 
@@ -231,7 +265,13 @@ function createBackgroundTray(): void {
       createTray: () => new Tray(trayIcon()),
       buildMenu: template => Menu.buildFromTemplate(template),
       launchAtLogin: new LaunchAtLogin(app),
-      actions: { showWindow: showMainWindow, changeServer: () => void changeServer(), quit: () => void requestClose("app-quit") },
+      actions: {
+        showWindow: showMainWindow,
+        changeConnection: () => void changeConnection(),
+        stopLocalStack: () => void stopLocalStack(),
+        showLocalStackLogs: () => void showLocalStackLogs(),
+        quit: () => void requestClose("app-quit")
+      },
       onLaunchAtLoginError: error => log("launch_at_login_update_failed", { error: errorText(error) })
     })
   } catch (error) {
@@ -243,25 +283,48 @@ function createBackgroundTray(): void {
 }
 
 function reflectConnection(status: ConnectionStatusView): void {
-  backgroundTray?.setStatus(trayStatusFor(status.phase, status.origin))
+  backgroundTray?.setStatus(trayStatusFor(status.phase, status.origin, status.mode))
+  backgroundTray?.setLocalMode(status.mode === "local")
   const window = mainWindow
   if (!window || window.isDestroyed()) return
-  // Without an address there is nothing to run in the background, so the window asks for one.
-  // A lost connection only shows in the tray: the user hid the window and decides when to look.
-  if (status.phase === "unconfigured") showMainWindow()
+  // Without a connection, or with a local stack waiting for its administrator, nothing
+  // can run in the background, so the window asks. A lost connection only shows in the
+  // tray: the user hid the window and decides when to look.
+  if (status.phase === "unconfigured" || status.phase === "local-setup") showMainWindow()
   if (isConnectionPage(window.webContents.getURL(), CONNECTION_PAGE)) window.webContents.send(HOST_EVENTS.connectionChanged, status)
 }
 
 function createConnection(window: BrowserWindow): WorkspaceConnection {
   const policy = { allowLoopbackHttp: !app.isPackaged }
+  const build = readBuildConfig(buildConfigFilePath(__dirname), policy)
+  const development = app.isPackaged ? { imageTag: null, imageRegistry: null } : developmentImageOverride(process.env)
   const store = new ServerConnectionStore({
     connectionFile: connectionFilePath(app.getPath("userData")),
-    bundledOrigin: readBundledServerOrigin(bundledServerFilePath(__dirname), policy),
+    officialOrigin: build.officialOrigin,
     policy
+  })
+  const fetch = (url: string, init: Parameters<typeof net.fetch>[1]) => net.fetch(url, init)
+  localStack = new LocalStackController({
+    directory: path.join(app.getPath("userData"), "stack"),
+    projectName: testUserDataPath ? testStackProjectName(testUserDataPath) : undefined,
+    resourceDirectory: LOCAL_STACK_RESOURCES,
+    // A release runs the server images published with it; a development build follows main.
+    imageTag: development.imageTag ?? build.imageTag ?? (app.isPackaged ? `v${app.getVersion()}` : "edge"),
+    registryOverride: development.imageRegistry,
+    docker: () => {
+      const environment = systemDockerEnvironment()
+      const executable = locateDocker(environment)
+      return executable ? createDockerRunner(executable, environment) : null
+    },
+    probeIdentity: (origin, token, timeoutMs) => probeLocalStackIdentity(fetch, origin, token, timeoutMs),
+    ports: systemPorts,
+    sleep: abortableSleep,
+    onEvent: (event, details) => log(event, details)
   })
   return new WorkspaceConnection({
     store,
-    probe: origin => probeServer((url, init) => net.fetch(url, init), origin),
+    local: localStack,
+    probe: origin => probeServer(fetch, origin),
     surface: {
       showConnectionPage: async () => {
         if (window.isDestroyed()) return
@@ -284,7 +347,11 @@ function createConnection(window: BrowserWindow): WorkspaceConnection {
 async function bootstrap(): Promise<void> {
   app.setName("Agora Paper Agent")
   app.setAppUserModelId("com.agorahub.paperagent")
-  Menu.setApplicationMenu(null)
+  // Windows needs no menu bar. macOS routes Cmd+C, Cmd+V, Cmd+Q and the window
+  // shortcuts through the application menu, so it keeps the standard roles.
+  Menu.setApplicationMenu(process.platform === "darwin"
+    ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }, { role: "windowMenu" }])
+    : null)
   logger = new AuditLogger(path.join(app.getPath("userData"), "logs"))
   log("host_start", { version: app.getVersion(), packaged: app.isPackaged })
   appearance = new DesktopAppearance(nativeTheme, appearanceFilePath(app.getPath("userData")))
@@ -314,6 +381,8 @@ async function bootstrap(): Promise<void> {
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
+  // Clicking the Dock icon of a running app brings its hidden window back.
+  app.on("activate", () => showMainWindow())
   app.on("second-instance", (_event, argv) => {
     // A login-item launch while the host already runs has nothing to reveal.
     if (isBackgroundLaunch(argv)) return
@@ -331,6 +400,9 @@ if (!gotSingleInstanceLock) {
   app.on("will-quit", () => {
     connection?.dispose()
     connection = null
+    // Interrupts a pull or start in progress; running containers keep serving.
+    localStack?.dispose()
+    localStack = null
     backgroundTray?.destroy()
     backgroundTray = null
     removeIpcHandlers?.()

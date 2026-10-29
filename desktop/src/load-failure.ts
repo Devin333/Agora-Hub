@@ -3,8 +3,10 @@
  *
  * Chromium reports a failed load as a `net::ERR_*` name (did-fail-load's
  * description, or the message of a rejected `net.fetch`); the server itself can
- * answer with an HTTP status or with something that is not this service. Each
- * maps to one fixed category; raw upstream text is never shown.
+ * answer with an HTTP status or with something that is not this service; in
+ * local mode Docker can be missing, stopped or unable to run the stack. Each
+ * maps to one fixed category; raw upstream text is never shown in the message
+ * (the local stack's own output is shown separately, on request).
  */
 export type ConnectionFailureCode =
   | "offline"
@@ -20,6 +22,16 @@ export type ConnectionFailureCode =
   | "redirected"
   | "page_crashed"
   | "unexpected"
+  | "docker_missing"
+  | "docker_not_running"
+  | "docker_permission"
+  | "local_port_in_use"
+  | "image_unavailable"
+  | "image_pull_failed"
+  | "disk_full"
+  | "local_stack_failed"
+  | "local_stack_timeout"
+  | "local_stack_stopped"
 
 export interface ConnectionFailure {
   code: ConnectionFailureCode
@@ -41,7 +53,17 @@ const FAILURES: Readonly<Record<ConnectionFailureCode, Omit<ConnectionFailure, "
   not_agora: { message: "这个地址上没有找到 Agora 服务。请确认填写的是管理员提供的服务器地址。", retryable: false },
   redirected: { message: "服务器把连接转到了另一个地址，为安全起见已停止。请确认填写的服务器地址正确。", retryable: false },
   page_crashed: { message: "工作台页面意外停止。正在重新连接。", retryable: true },
-  unexpected: { message: "连接服务器时出现问题。请稍后重试。", retryable: true }
+  unexpected: { message: "连接服务器时出现问题。请稍后重试。", retryable: true },
+  docker_missing: { message: "这台电脑上没有可用的 Docker。请先安装 Docker Desktop（Linux 上是 Docker Engine 和 Compose 插件），启动后点“立即重试”。", retryable: false },
+  docker_not_running: { message: "Docker 没有运行。请打开 Docker Desktop，等它启动完成后会自动继续。", retryable: true },
+  docker_permission: { message: "当前用户没有权限使用 Docker。请把当前用户加入 docker-users（Windows）或 docker 组（macOS、Linux），重新登录系统后重试。", retryable: false },
+  local_port_in_use: { message: "本机端口被其他程序占用，换了端口仍然无法启动。请关闭占用端口的程序后重试。", retryable: false },
+  image_unavailable: { message: "镜像仓库里没有这个版本的服务镜像，或拒绝了访问。请换一个镜像下载源后重试。", retryable: false },
+  image_pull_failed: { message: "下载服务镜像失败。请检查网络，或换一个镜像下载源。稍后会自动重试。", retryable: true },
+  disk_full: { message: "磁盘空间不足，无法下载或启动本机服务。请清理磁盘后重试。", retryable: false },
+  local_stack_failed: { message: "本机服务没有正常启动。可以展开详细输出查看原因，或在托盘菜单里查看本机服务日志。", retryable: false },
+  local_stack_timeout: { message: "本机服务启动超时。可以展开详细输出查看原因后重试。", retryable: false },
+  local_stack_stopped: { message: "本机服务已停止。点击“立即重试”重新启动。", retryable: false }
 })
 
 const NETWORK_ERRORS: ReadonlyArray<readonly [ConnectionFailureCode, readonly string[]]> = [

@@ -74,14 +74,15 @@ export function registerIpcHandlers(options: RegisterIpcOptions): () => void {
 
   handle(CONNECTION_CHANNELS.status, "connection", () => options.connection.status)
   handle(CONNECTION_CHANNELS.retry, "connection", () => options.connection.retry())
-  handle(CONNECTION_CHANNELS.save, "connection", address => options.connection.save(address))
-  handle(CONNECTION_CHANNELS.reset, "connection", () => options.connection.reset())
+  handle(CONNECTION_CHANNELS.choose, "connection", choice => options.connection.choose(choice))
   // The sender is the connection page, so no workspace with unsaved work is being left.
   handle(CONNECTION_CHANNELS.edit, "connection", async () => {
     await options.connection.edit()
     return options.connection.status
   })
   handle(CONNECTION_CHANNELS.cancelEdit, "connection", () => options.connection.cancelEdit())
+  handle(CONNECTION_CHANNELS.localCreateAdmin, "connection", request => options.connection.createLocalAdmin(request))
+  handle(CONNECTION_CHANNELS.localCancel, "connection", () => options.connection.cancelLocal())
 
   return () => {
     for (const channel of [...Object.values(APP_CHANNELS), ...Object.values(CONNECTION_CHANNELS)]) ipcMain.removeHandler(channel)

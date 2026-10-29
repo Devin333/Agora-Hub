@@ -1,99 +1,111 @@
-import { readFileSync } from "node:fs"
-import path from "node:path"
-import { hostPreferencePath, PreferenceWriteQueue, readPreferenceDocument, removePreferenceDocument, writePreferenceDocument } from "./host-preferences"
+import { hostPreferencePath, PreferenceWriteQueue, readPreferenceDocument, writePreferenceDocument } from "./host-preferences"
+import type { ConnectionMode } from "./contracts"
 import { parseServerOrigin, type ServerOriginPolicy } from "./server-origin"
 
 /**
- * Which server this client opens.
+ * Which connection this client opens: the build's official service, a server
+ * by its address, or the stack the app runs on this computer.
  *
- * The address a user saved on this computer wins; otherwise the address the
- * build was made for (`out/server.json`, written by scripts/build.mjs from
- * AGORA_DESKTOP_SERVER_URL) is used; with neither the client asks for one.
- * A stored address is re-validated on every read, so a hand-edited or older
- * file can never point the window at something the policy would refuse.
+ * The user's saved choice wins; without one, a build with an official service
+ * opens it and any other build asks. A stored address is re-validated on
+ * every read, so a hand-edited or older file can never point the window at
+ * something the policy would refuse; a saved "official" choice in a build
+ * without an official service counts as no choice. Files written by earlier
+ * versions (v1: just an address) are read as the equivalent choice and
+ * rewritten in the current format on the next save.
  */
-export type ServerOriginSource = "user" | "bundled"
-
-export interface ServerConnectionView {
-  origin: string | null
-  source: ServerOriginSource | null
-  /** The build's own address, offered back when the user resets their choice. */
-  bundledOrigin: string | null
+export interface ConnectionChoiceView {
+  mode: ConnectionMode | null
+  /** The last server address the user saved, kept while another mode is chosen. */
+  serverOrigin: string | null
+  officialOrigin: string | null
 }
 
 export const CONNECTION_FILE_NAME = "connection.json"
-export const BUNDLED_SERVER_FILE_NAME = "server.json"
-const CONNECTION_SCHEMA = "agora.desktop-connection/v1"
-export const BUNDLED_SERVER_SCHEMA = "agora.desktop-server/v1"
+export const CONNECTION_SCHEMA = "agora.desktop-connection/v2"
+const LEGACY_CONNECTION_SCHEMA = "agora.desktop-connection/v1"
+const MODES: readonly ConnectionMode[] = ["official", "server", "local"]
 
 export function connectionFilePath(userDataPath: string): string {
   return hostPreferencePath(userDataPath, CONNECTION_FILE_NAME)
 }
 
-export function bundledServerFilePath(outputDirectory: string): string {
-  return path.join(outputDirectory, BUNDLED_SERVER_FILE_NAME)
+interface StoredChoice {
+  mode: ConnectionMode | null
+  serverOrigin: string | null
 }
 
-export function readBundledServerOrigin(filePath: string, policy: ServerOriginPolicy): string | null {
-  let document: unknown
-  try {
-    document = JSON.parse(readFileSync(filePath, "utf8"))
-  } catch {
-    return null
+function validOrigin(value: unknown, policy: ServerOriginPolicy): string | null {
+  if (value === null || value === undefined) return null
+  const parsed = parseServerOrigin(value, policy)
+  return parsed.ok ? parsed.origin : null
+}
+
+function readStoredChoice(filePath: string, policy: ServerOriginPolicy, officialOrigin: string | null): StoredChoice | null {
+  const current = readPreferenceDocument(filePath, CONNECTION_SCHEMA)
+  if (current) {
+    const mode = MODES.includes(current.mode as ConnectionMode) ? current.mode as ConnectionMode : null
+    return { mode, serverOrigin: validOrigin(current.serverOrigin, policy) }
   }
-  if (!document || typeof document !== "object" || Array.isArray(document)) return null
-  const record = document as Record<string, unknown>
-  if (record.schema !== BUNDLED_SERVER_SCHEMA || record.origin === null) return null
-  const parsed = parseServerOrigin(record.origin, policy)
-  return parsed.ok ? parsed.origin : null
+  const legacy = readPreferenceDocument(filePath, LEGACY_CONNECTION_SCHEMA)
+  if (!legacy) return null
+  const origin = validOrigin(legacy.origin, policy)
+  if (!origin) return null
+  return origin === officialOrigin ? { mode: "official", serverOrigin: null } : { mode: "server", serverOrigin: origin }
 }
 
-function readUserOrigin(filePath: string, policy: ServerOriginPolicy): string | null {
-  const document = readPreferenceDocument(filePath, CONNECTION_SCHEMA)
-  if (!document) return null
-  const parsed = parseServerOrigin(document.origin, policy)
-  return parsed.ok ? parsed.origin : null
-}
-
-export interface ServerConnectionOptions {
+export interface ConnectionStoreOptions {
   connectionFile: string
-  bundledOrigin: string | null
+  officialOrigin: string | null
   policy: ServerOriginPolicy
 }
 
 export class ServerConnectionStore {
-  private userOrigin: string | null
+  private stored: StoredChoice | null
   private readonly writes = new PreferenceWriteQueue()
 
-  constructor(private readonly options: ServerConnectionOptions) {
-    this.userOrigin = readUserOrigin(options.connectionFile, options.policy)
+  constructor(private readonly options: ConnectionStoreOptions) {
+    this.stored = readStoredChoice(options.connectionFile, options.policy, options.officialOrigin)
   }
 
   get policy(): ServerOriginPolicy {
     return this.options.policy
   }
 
-  get view(): ServerConnectionView {
-    const bundledOrigin = this.options.bundledOrigin
-    if (this.userOrigin) return { origin: this.userOrigin, source: "user", bundledOrigin }
-    if (bundledOrigin) return { origin: bundledOrigin, source: "bundled", bundledOrigin }
-    return { origin: null, source: null, bundledOrigin }
+  get view(): ConnectionChoiceView {
+    const officialOrigin = this.options.officialOrigin
+    const serverOrigin = this.stored?.serverOrigin ?? null
+    return { mode: this.resolvedMode(), serverOrigin, officialOrigin }
+  }
+
+  async saveOfficial(): Promise<ConnectionChoiceView> {
+    if (!this.options.officialOrigin) throw new Error("official_service_unavailable")
+    return await this.write({ mode: "official", serverOrigin: this.stored?.serverOrigin ?? null })
   }
 
   /** Persists an origin already validated by {@link parseServerOrigin}. */
-  async save(origin: string): Promise<ServerConnectionView> {
+  async saveServer(origin: string): Promise<ConnectionChoiceView> {
     const parsed = parseServerOrigin(origin, this.options.policy)
     if (!parsed.ok) throw new Error(parsed.code)
-    // Choosing the build's own address is the same as having no choice of one's own.
-    if (parsed.origin === this.options.bundledOrigin) return await this.reset()
-    await this.writes.run(() => writePreferenceDocument(this.options.connectionFile, CONNECTION_SCHEMA, { origin: parsed.origin }))
-    this.userOrigin = parsed.origin
-    return this.view
+    return await this.write({ mode: "server", serverOrigin: parsed.origin })
   }
 
-  async reset(): Promise<ServerConnectionView> {
-    await this.writes.run(() => removePreferenceDocument(this.options.connectionFile))
-    this.userOrigin = null
+  async saveLocal(): Promise<ConnectionChoiceView> {
+    return await this.write({ mode: "local", serverOrigin: this.stored?.serverOrigin ?? null })
+  }
+
+  private resolvedMode(): ConnectionMode | null {
+    const mode = this.stored?.mode ?? null
+    if (mode === "official") return this.options.officialOrigin ? "official" : null
+    if (mode === "server") return this.stored?.serverOrigin ? "server" : null
+    if (mode === "local") return "local"
+    return this.options.officialOrigin ? "official" : null
+  }
+
+  /** The new choice takes effect only once it is on disk; a failed write leaves the previous one in place. */
+  private async write(choice: StoredChoice): Promise<ConnectionChoiceView> {
+    await this.writes.run(() => writePreferenceDocument(this.options.connectionFile, CONNECTION_SCHEMA, { mode: choice.mode, serverOrigin: choice.serverOrigin }))
+    this.stored = choice
     return this.view
   }
 }

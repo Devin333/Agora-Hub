@@ -12,7 +12,7 @@ from interfaces.services.deployment_profile import load_hosted_settings
 
 DESKTOP = Path(__file__).resolve().parents[2] / "deploy" / "desktop"
 COMPOSE = DESKTOP / "compose.images.yml"
-TEMPLATE = DESKTOP / ".env.template"
+TEMPLATE = DESKTOP / "env.template"
 VARIABLE = re.compile(r"\$\{([A-Z0-9_]+)(?::?[-?][^}]*)?\}")
 
 

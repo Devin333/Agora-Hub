@@ -1,6 +1,6 @@
 # The stack the desktop app runs on this computer in local mode: the same api
 # and web images a hosted server runs, without Caddy. The desktop app writes
-# .env next to this file (from .env.template), then runs, from this directory:
+# .env next to this file (from env.template), then runs, from this directory:
 #   docker compose --project-name agora-desktop --env-file .env -f compose.images.yml up -d --wait
 #
 # Only the web server is published, and only on 127.0.0.1, so nothing on the

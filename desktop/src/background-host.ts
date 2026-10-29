@@ -1,5 +1,5 @@
 import type { MenuItemConstructorOptions } from "electron"
-import type { ConnectionPhase } from "./contracts"
+import type { ConnectionMode, ConnectionPhase } from "./contracts"
 
 /**
  * Background residency for the desktop host.
@@ -57,7 +57,9 @@ export interface TrayLike {
 
 export interface BackgroundTrayActions {
   showWindow(): void
-  changeServer(): void
+  changeConnection(): void
+  stopLocalStack(): void
+  showLocalStackLogs(): void
   quit(): void
 }
 
@@ -67,6 +69,14 @@ export interface BackgroundTrayOptions {
   launchAtLogin: LaunchAtLogin
   actions: BackgroundTrayActions
   onLaunchAtLoginError?(error: unknown): void
+  /** Names the system in the launch-at-login item; defaults to the running one. */
+  platform?: NodeJS.Platform
+}
+
+export function launchAtLoginLabel(platform: NodeJS.Platform): string {
+  if (platform === "win32") return "登录 Windows 时在后台启动"
+  if (platform === "darwin") return "登录 Mac 时在后台启动"
+  return "登录系统时在后台启动"
 }
 
 export const TRAY_TITLE = "Agora Paper Agent"
@@ -75,6 +85,7 @@ export class BackgroundTray {
   private readonly tray: TrayLike
   private status = "正在连接服务器…"
   private quitting = false
+  private localMode = false
 
   constructor(private readonly options: BackgroundTrayOptions) {
     this.tray = options.createTray()
@@ -88,6 +99,13 @@ export class BackgroundTray {
   setStatus(status: string): void {
     if (status === this.status) return
     this.status = status
+    this.render()
+  }
+
+  /** Local mode adds the items that control the stack on this computer. */
+  setLocalMode(localMode: boolean): void {
+    if (localMode === this.localMode) return
+    this.localMode = localMode
     this.render()
   }
 
@@ -106,10 +124,17 @@ export class BackgroundTray {
     const { launchAtLogin } = this.options
     return [
       { label: "显示 Agora Paper Agent", enabled: !this.quitting, click: () => this.showWindow() },
-      { label: "更换服务器地址…", enabled: !this.quitting, click: () => this.options.actions.changeServer() },
+      { label: "切换连接方式…", enabled: !this.quitting, click: () => this.options.actions.changeConnection() },
+      ...(this.localMode
+        ? [
+          { type: "separator" },
+          { label: "停止本机服务", enabled: !this.quitting, click: () => this.options.actions.stopLocalStack() },
+          { label: "查看本机服务日志", enabled: !this.quitting, click: () => this.options.actions.showLocalStackLogs() }
+        ] satisfies MenuItemConstructorOptions[]
+        : []),
       { type: "separator" },
       {
-        label: "登录 Windows 时在后台启动",
+        label: launchAtLoginLabel(this.options.platform ?? process.platform),
         type: "checkbox",
         checked: launchAtLogin.enabled,
         enabled: launchAtLogin.available && !this.quitting,
@@ -142,13 +167,15 @@ export class BackgroundTray {
 }
 
 /** Tooltip wording for a connection phase; anything not connected never reads as healthy. */
-export function trayStatusFor(phase: ConnectionPhase, origin: string | null): string {
+export function trayStatusFor(phase: ConnectionPhase, origin: string | null, mode: ConnectionMode | null = null): string {
+  const local = mode === "local"
   const host = origin ? new URL(origin).host : null
   switch (phase) {
-    case "connected": return host ? `已连接 ${host}` : "已连接服务器"
-    case "connecting": return "正在连接服务器…"
-    case "failed": return "无法连接服务器"
-    case "editing": return "正在更换服务器地址"
-    case "unconfigured": return "尚未设置服务器地址"
+    case "connected": return local ? "已连接本机服务" : host ? `已连接 ${host}` : "已连接服务器"
+    case "connecting": return local ? "正在启动本机服务…" : "正在连接服务器…"
+    case "failed": return local ? "本机服务不可用" : "无法连接服务器"
+    case "editing": return "正在切换连接方式"
+    case "unconfigured": return "尚未选择连接方式"
+    case "local-setup": return "等待设置本机管理员"
   }
 }

@@ -1,14 +1,11 @@
-import { spawn } from "node:child_process"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import type { AddressInfo } from "node:net"
-import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
-import { expect, test, _electron as electron, type ElectronApplication, type Page } from "@playwright/test"
+import { expect, test } from "@playwright/test"
+import { bridgeShape, launch, quit, runSecondInstance } from "./harness"
 
-const desktopRoot = path.resolve(__dirname, "..")
-const environment = { ...process.env, AGORA_DESKTOP_TEST_MODE: "1" }
 
 /** A loopback stand-in for the hosted web client: its health route and the workspace pages the client may show. */
 class FakeAgoraServer {
@@ -53,41 +50,6 @@ class FakeAgoraServer {
   }
 }
 
-async function launch(userData: string): Promise<{ app: ElectronApplication; page: Page }> {
-  const app = await electron.launch({ args: [desktopRoot, `--agora-test-user-data-dir=${userData}`], env: environment, timeout: 120_000 })
-  return { app, page: await app.firstWindow() }
-}
-
-async function quit(app: ElectronApplication): Promise<void> {
-  const child = app.process()
-  if (child.exitCode !== null) return
-  const exited = new Promise<void>(resolve => child.once("exit", () => resolve()))
-  await app.evaluate(({ app: electronApp }) => { setTimeout(() => electronApp.exit(0), 0) }).catch(() => undefined)
-  await Promise.race([exited, new Promise<void>(resolve => setTimeout(resolve, 10_000))])
-  if (child.exitCode === null) child.kill()
-}
-
-function runSecondInstance(userData: string): Promise<number | null> {
-  const require = createRequire(path.join(desktopRoot, "package.json"))
-  const electronExecutable = require("electron") as string
-  return new Promise((resolve, reject) => {
-    const child = spawn(electronExecutable, [desktopRoot, `--agora-test-user-data-dir=${userData}`], { windowsHide: true, stdio: "ignore", env: environment })
-    child.once("error", reject)
-    child.once("exit", resolve)
-  })
-}
-
-const bridgeShape = (page: Page) => page.evaluate(() => {
-  const host = globalThis as unknown as { agoraDesktop?: Record<string, object>; agoraConnection?: object; process?: unknown; require?: unknown }
-  return {
-    desktop: host.agoraDesktop ? Object.keys(host.agoraDesktop).sort() : null,
-    lifecycle: host.agoraDesktop ? Object.keys(host.agoraDesktop.lifecycle).sort() : null,
-    connection: host.agoraConnection ? Object.keys(host.agoraConnection).sort() : null,
-    nodeProcess: typeof host.process,
-    nodeRequire: typeof host.require
-  }
-})
-
 test.describe("Agora Paper Agent desktop client", () => {
   let userData: string
   let server: FakeAgoraServer
@@ -103,15 +65,18 @@ test.describe("Agora Paper Agent desktop client", () => {
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   })
 
-  test("asks for a server, verifies it, opens the workspace and reconnects there on the next launch", async () => {
+  test("asks for a connection, verifies the server, opens the workspace and reconnects there on the next launch", async () => {
     const { app, page } = await launch(userData)
     try {
       await expect.poll(() => page.url(), { timeout: 60_000 }).toMatch(/^file:.*\/connect\.html$/i)
-      await expect(page.locator("#title")).toHaveText("连接到 Agora 服务器")
+      await expect(page.locator("#title")).toHaveText("选择连接方式")
+      // A build without an official service offers only a server or this computer.
+      await expect(page.locator("#choice-official")).toBeHidden()
+      await expect(page.locator("input[name=mode][value=server]")).toBeChecked()
       expect(await bridgeShape(page)).toEqual({
         desktop: null,
         lifecycle: null,
-        connection: ["cancelEdit", "edit", "onChange", "reset", "retry", "save", "status", "version"],
+        connection: ["cancelEdit", "choose", "edit", "local", "onChange", "retry", "status", "version"],
         nodeProcess: "undefined",
         nodeRequire: "undefined"
       })
@@ -137,8 +102,8 @@ test.describe("Agora Paper Agent desktop client", () => {
       expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(native.dark ? "rgb(22, 22, 22)" : "rgb(255, 255, 255)")
 
       await page.locator("#address").fill("http://agora.example.com")
-      await page.locator("#save").click()
-      await expect(page.locator("#address-error")).toHaveText("服务器必须使用 HTTPS。请让管理员为服务器配置域名和证书。")
+      await page.locator("#choose").click()
+      await expect(page.locator("#choice-error")).toHaveText("服务器必须使用 HTTPS。请让管理员为服务器配置域名和证书。")
 
       const closedPort = await (async () => {
         const probe = new FakeAgoraServer()
@@ -148,12 +113,12 @@ test.describe("Agora Paper Agent desktop client", () => {
         return origin
       })()
       await page.locator("#address").fill(closedPort)
-      await page.locator("#save").click()
-      await expect(page.locator("#address-error")).toHaveText("服务器拒绝了连接，服务可能尚未启动。请稍后重试或联系管理员。")
+      await page.locator("#choose").click()
+      await expect(page.locator("#choice-error")).toHaveText("服务器拒绝了连接，服务可能尚未启动。请稍后重试或联系管理员。")
       expect(page.url()).toMatch(/connect\.html$/)
 
       await page.locator("#address").fill(server.origin)
-      await page.locator("#save").click()
+      await page.locator("#choose").click()
       await expect.poll(() => page.url(), { timeout: 30_000 }).toBe(`${server.origin}/paper-agent`)
       await expect(page.locator("#workspace")).toHaveText("论文工作台")
       expect(await bridgeShape(page)).toEqual({
@@ -166,7 +131,7 @@ test.describe("Agora Paper Agent desktop client", () => {
       await expect(page.evaluate(() => (globalThis as unknown as { agoraDesktop: { appearance: { set(value: string): Promise<{ preference: string }> } } }).agoraDesktop.appearance.set("system")))
         .resolves.toMatchObject({ preference: "system" })
       const saved = JSON.parse(await readFile(path.join(userData, "host-preferences", "connection.json"), "utf8"))
-      expect(saved).toEqual({ schema: "agora.desktop-connection/v1", origin: server.origin })
+      expect(saved).toEqual({ schema: "agora.desktop-connection/v2", mode: "server", serverOrigin: server.origin })
 
       // Other pages of the service and new windows never open inside the client.
       const windowsBefore = app.windows().length
@@ -194,7 +159,7 @@ test.describe("Agora Paper Agent desktop client", () => {
     try {
       await expect.poll(() => first.page.url(), { timeout: 60_000 }).toMatch(/connect\.html$/i)
       await first.page.locator("#address").fill(server.origin)
-      await first.page.locator("#save").click()
+      await first.page.locator("#choose").click()
       await expect.poll(() => first.page.url(), { timeout: 30_000 }).toBe(`${server.origin}/paper-agent`)
 
       server.workspaceStatus = 503

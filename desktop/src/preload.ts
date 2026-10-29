@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { AgoraConnectionApi, AgoraDesktopApi, AppearancePreference, ConnectionStatusView, ExportRequest, QuitRequest, QuitResponse, RendererLifecycleState } from "./contracts"
+import type { AgoraConnectionApi, AgoraDesktopApi, AppearancePreference, ConnectionChoice, ConnectionStatusView, LocalAdminRequest, ExportRequest, QuitRequest, QuitResponse, RendererLifecycleState } from "./contracts"
 import { APP_CHANNELS, CONNECTION_CHANNELS, HOST_EVENTS } from "./channels"
 
 /**
@@ -16,14 +16,17 @@ function subscribe<T>(channel: string, listener: (value: T) => void): () => void
 
 if (location.protocol === "file:") {
   const connection: AgoraConnectionApi = Object.freeze({
-    version: 1 as const,
+    version: 2 as const,
     status: () => ipcRenderer.invoke(CONNECTION_CHANNELS.status),
     retry: () => ipcRenderer.invoke(CONNECTION_CHANNELS.retry),
-    save: (address: string) => ipcRenderer.invoke(CONNECTION_CHANNELS.save, address),
-    reset: () => ipcRenderer.invoke(CONNECTION_CHANNELS.reset),
+    choose: (choice: ConnectionChoice) => ipcRenderer.invoke(CONNECTION_CHANNELS.choose, choice),
     edit: () => ipcRenderer.invoke(CONNECTION_CHANNELS.edit),
     cancelEdit: () => ipcRenderer.invoke(CONNECTION_CHANNELS.cancelEdit),
-    onChange: (listener: (status: ConnectionStatusView) => void) => subscribe(HOST_EVENTS.connectionChanged, listener)
+    onChange: (listener: (status: ConnectionStatusView) => void) => subscribe(HOST_EVENTS.connectionChanged, listener),
+    local: Object.freeze({
+      createAdmin: (request: LocalAdminRequest) => ipcRenderer.invoke(CONNECTION_CHANNELS.localCreateAdmin, request),
+      cancel: () => ipcRenderer.invoke(CONNECTION_CHANNELS.localCancel)
+    })
   })
   contextBridge.exposeInMainWorld("agoraConnection", connection)
 } else if (location.protocol === "https:" || location.protocol === "http:") {

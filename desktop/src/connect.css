@@ -56,10 +56,11 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 ::selection { background: color-mix(in srgb, var(--ring) 28%, transparent); }
 body { margin: 0; min-width: 360px; min-height: 100vh; background: var(--background); }
 .shell { min-height: 100vh; display: grid; place-items: center; padding: 40px 24px; }
-.card { width: min(460px, 100%); display: flex; flex-direction: column; align-items: center; text-align: center; }
+.card { width: min(480px, 100%); display: flex; flex-direction: column; align-items: center; text-align: center; }
 
 /* Agora mark in the Rakazo auth idiom: a muted disc with two primary-ink eyes (74px). */
 .mark { display: flex; align-items: center; justify-content: center; gap: 7px; width: 74px; height: 74px; margin-bottom: 24px; border-radius: 999px; background: var(--muted); }
@@ -79,14 +80,50 @@ button.primary:hover:not(:disabled) { background: var(--primary-hover); }
 button.link { min-height: 28px; padding: 0 4px; color: var(--muted-foreground); border-color: transparent; font-size: 13px; }
 button.link:hover:not(:disabled) { color: var(--foreground); background: transparent; text-decoration: underline; }
 button:disabled { cursor: not-allowed; opacity: .5; }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 
-.address-form { width: 100%; margin-top: 24px; text-align: start; }
-.address-form label { display: block; margin: 0 0 6px; font-size: 13px; font-weight: 500; }
-input { width: 100%; min-height: 40px; padding: 0 12px; color: var(--foreground); background: transparent; border: 1px solid var(--input); border-radius: 10px; font: inherit; font-size: 14px; }
+.choice-form, .admin-form { width: 100%; margin-top: 24px; text-align: start; }
+.admin-form label, .choice-fields label { display: block; margin: 12px 0 6px; font-size: 13px; font-weight: 500; }
+.admin-form label:first-child { margin-top: 0; }
+input[type="text"], input[type="password"], select { width: 100%; min-height: 40px; padding: 0 12px; color: var(--foreground); background: transparent; border: 1px solid var(--input); border-radius: 10px; font: inherit; font-size: 14px; }
+select { appearance: auto; }
+select option { color: var(--foreground); background: var(--background); }
 input[aria-invalid="true"] { border-color: var(--destructive-fill); }
 .hint { margin: 8px 0 0; color: var(--faint-foreground); font-size: 12.5px; line-height: 1.55; }
 .error { min-height: 20px; margin: 8px 0 0; color: var(--destructive-fill); font-size: 13px; line-height: 1.55; }
-.address-form .actions { justify-content: flex-start; margin-top: 12px; }
+.choice-form .actions, .admin-form .actions { justify-content: flex-start; margin-top: 12px; }
+
+.choices { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; }
+.choice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; }
+.choice:hover { background: var(--accent); }
+.choice:has(input:checked) { border-color: var(--primary); }
+.choice:has(input:disabled) { cursor: not-allowed; opacity: .6; }
+.choice input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--primary); }
+.choice-body { display: flex; flex-direction: column; gap: 2px; }
+.choice-title { font-size: 14px; font-weight: 600; }
+.choice-text { color: var(--muted-foreground); font-size: 12.5px; line-height: 1.55; }
+.choice-fields { margin: 0 0 4px; padding: 0 2px; }
+.choice-fields label { margin-top: 4px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+a.button { display: inline-flex; align-items: center; min-height: 36px; padding: 0 16px; color: var(--foreground); border: 1px solid var(--border); border-radius: 999px; font-size: 13.5px; font-weight: 500; text-decoration: none; }
+a.button:hover { background: var(--accent); }
+a.button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+.local-progress { width: 100%; margin-top: 4px; text-align: start; }
+.steps { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13.5px; color: var(--faint-foreground); }
+.steps li { display: flex; align-items: center; gap: 10px; }
+.steps li::before { content: ""; flex: none; width: 8px; height: 8px; border: 1.5px solid currentColor; border-radius: 999px; }
+.steps li.done { color: var(--muted-foreground); }
+.steps li.done::before { background: currentColor; }
+.steps li.active { color: var(--foreground); font-weight: 500; }
+.steps li.active::before { border-color: var(--ring); background: var(--ring); }
+progress { width: 100%; height: 6px; margin-top: 16px; appearance: none; border: 0; border-radius: 999px; background: var(--secondary); overflow: hidden; }
+progress::-webkit-progress-bar { background: var(--secondary); border-radius: 999px; }
+progress::-webkit-progress-value { background: var(--ring); border-radius: 999px; transition: width 200ms ease; }
+
+.details { width: 100%; margin-top: 20px; text-align: start; }
+.details summary { color: var(--muted-foreground); font-size: 12.5px; cursor: pointer; }
+.details pre { max-height: 220px; margin: 8px 0 0; padding: 10px 12px; overflow: auto; color: var(--muted-foreground); background: var(--muted); border-radius: 10px; font: 11.5px/1.5 ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .origin { margin: 18px 0 0; color: var(--faint-foreground); font-size: 12.5px; overflow-wrap: anywhere; }
-@media (prefers-reduced-motion: reduce) { button { transition: none; } }
+@media (prefers-reduced-motion: reduce) { button, .choice, progress::-webkit-progress-value { transition: none; } }
