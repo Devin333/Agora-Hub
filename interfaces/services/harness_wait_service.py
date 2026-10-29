@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from framework.harness.control_plane.graph_state import HarnessGraphState
+from framework.harness.control_plane.graph_wait_approval import (
+    authoritative_wait_approval_id,
+)
 from framework.harness.control_plane.errors import HarnessValidationError
 from framework.harness.control_plane.harness import HarnessRunResult
 from framework.harness.control_plane.state import HarnessRunSpec
@@ -349,7 +352,13 @@ class HarnessWaitApplicationService:
                 signal_schema_ref=registration.signal_schema_ref,
                 correlation_ref=registration.correlation_ref,
             )
-            inspections.append(self._inspection_from_state(state, scope))
+            inspections.append(
+                self._inspection_from_state(
+                    state,
+                    scope,
+                    graph_inputs=binding.run_spec.inputs,
+                )
+            )
         inspections.sort(key=lambda item: (item.registered_sequence or 0, item.node_instance_id))
         return HarnessWaitInspectionListResult(
             run_id=state.run_id,
@@ -426,10 +435,10 @@ class HarnessWaitApplicationService:
         scope, actor_scope = self._authorized_scope(binding, node_instance_id)
         state = binding.control_plane.recover_graph(binding.run_spec)
         graph_ref = state.graph_ref
-        authoritative_approval_id = _approval_id_from_node(
+        authoritative_approval_id = authoritative_wait_approval_id(
             state,
             scope.node_instance_id,
-            run_spec=binding.run_spec,
+            graph_inputs=binding.run_spec.inputs,
         )
         if self._approval_resolver is None:
             raise HarnessWaitApplicationError(
@@ -469,7 +478,15 @@ class HarnessWaitApplicationService:
                 "approval evidence is outside the authorized actor scope",
                 code="wait_approval_evidence_unauthorized",
             )
+        # Fail closed: an unresolved Wait accepts a decision only for the exact
+        # grant it is parked on.  A resolved non-reentrant Wait no longer
+        # projects its correlation; for that identical retry the resolver's
+        # durable decision is the approval-id witness and the cause identity
+        # check in the control plane rejects any divergent evidence.
         if (
+            authoritative_approval_id is None
+            and _approval_wait_unresolved(state, scope.node_instance_id)
+        ) or (
             authoritative_approval_id is not None
             and approval_id != authoritative_approval_id
         ):
@@ -670,7 +687,11 @@ class HarnessWaitApplicationService:
         )
         return HarnessWaitOperationResult(
             operation=operation,
-            wait=self._inspection_from_state(state, scope),
+            wait=self._inspection_from_state(
+                state,
+                scope,
+                graph_inputs=binding.run_spec.inputs,
+            ),
         )
 
     def _emit_runtime_event(
@@ -768,12 +789,18 @@ class HarnessWaitApplicationService:
         scope: HarnessWaitScope,
     ) -> HarnessWaitInspectionResult:
         state = binding.control_plane.recover_graph(binding.run_spec)
-        return self._inspection_from_state(state, scope)
+        return self._inspection_from_state(
+            state,
+            scope,
+            graph_inputs=binding.run_spec.inputs,
+        )
 
     @staticmethod
     def _inspection_from_state(
         state: HarnessGraphState,
         scope: HarnessWaitScope,
+        *,
+        graph_inputs: Mapping[str, object],
     ) -> HarnessWaitInspectionResult:
         registrations = tuple(
             item
@@ -806,7 +833,11 @@ class HarnessWaitApplicationService:
             graph_version=state.graph_ref.identity_version,
             graph_ref=state.graph_ref.identity_ref.exact_ref,
             graph_checksum=state.graph_ref.checksum,
-            approval_id=_approval_id_from_node(state, scope.node_instance_id),
+            approval_id=authoritative_wait_approval_id(
+                state,
+                scope.node_instance_id,
+                graph_inputs=graph_inputs,
+            ),
         )
 
     def _require_permission(self, permission: str) -> None:
@@ -818,41 +849,11 @@ class HarnessWaitApplicationService:
         )
 
 
-def _approval_id_from_node(
-    state: HarnessGraphState,
-    node_instance_id: str,
-    *,
-    run_spec: HarnessRunSpec | None = None,
-) -> str | None:
-    node = next(
-        (item for item in state.node_instances if item.instance_id == node_instance_id),
-        None,
+def _approval_wait_unresolved(state: HarnessGraphState, node_instance_id: str) -> bool:
+    return any(
+        item.node_instance_id == node_instance_id and item.unresolved
+        for item in state.wait_registrations
     )
-    if node is None:
-        return None
-
-    def find(value: object) -> str | None:
-        if isinstance(value, Mapping):
-            candidate = value.get("approval_id")
-            if isinstance(candidate, str) and candidate.strip():
-                candidate = candidate.strip()
-                if candidate.startswith("graph.inputs.") and run_spec is not None:
-                    input_key = candidate.removeprefix("graph.inputs.")
-                    resolved = run_spec.inputs.get(input_key)
-                    return resolved.strip() if isinstance(resolved, str) and resolved.strip() else None
-                return candidate
-            for nested in value.values():
-                found = find(nested)
-                if found is not None:
-                    return found
-        elif isinstance(value, (tuple, list)):
-            for nested in value:
-                found = find(nested)
-                if found is not None:
-                    return found
-        return None
-
-    return find(node.metadata) or find(node.output_refs)
 
 
 def _utc_now() -> datetime:

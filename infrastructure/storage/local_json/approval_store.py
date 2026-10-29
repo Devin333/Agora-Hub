@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from datetime import datetime, timezone as _tz
 from pathlib import Path
 
 from framework.workers.approval import (
@@ -9,14 +11,22 @@ from framework.workers.approval import (
     ApprovalRequest,
     ApprovalStatus,
 )
+from infrastructure.storage.local_json.file_lock import LocalJsonFileLock
 
 
 APPROVAL_STORE_SCHEMA_VERSION = "approval_store.v1"
 
 
 class LocalJsonApprovalStore:
-    def __init__(self, path: str | Path = ".newsroom/approvals/approvals.json") -> None:
+    def __init__(
+        self,
+        path: str | Path = ".newsroom/approvals/approvals.json",
+        *,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
         self.path = Path(path)
+        self.now_fn = now_fn or (lambda: datetime.now(_tz.utc))
+        self._lock = LocalJsonFileLock(self.path)
 
     def list_approvals(self, *, status: ApprovalStatus | str | None = None) -> list[ApprovalRequest]:
         records = sorted(self._read_records().values(), key=lambda request: request.created_at)
@@ -26,16 +36,13 @@ class LocalJsonApprovalStore:
         return [request for request in records if request.status == actual_status]
 
     def get_approval(self, approval_id: str) -> ApprovalRequest:
-        records = self._read_records()
-        try:
-            return records[approval_id]
-        except KeyError as exc:
-            raise ApprovalNotFoundError(approval_id) from exc
+        return _require(self._read_records(), approval_id)
 
     def upsert_approval(self, request: ApprovalRequest) -> ApprovalRequest:
-        records = self._read_records()
-        records[request.approval_id] = request
-        self._write_records(records)
+        with self._lock.hold():
+            records = self._read_records()
+            records[request.approval_id] = request
+            self._write_records(records)
         return request
 
     def record_decision(
@@ -44,10 +51,31 @@ class LocalJsonApprovalStore:
         *,
         decision: ApprovalDecision,
     ) -> ApprovalRequest:
-        request = self.get_approval(approval_id)
-        decided = request.with_decision(decision)
-        self.upsert_approval(decided)
+        with self._lock.hold():
+            records = self._read_records()
+            request = _require(records, approval_id)
+            decided = request.with_decision(decision)
+            records[approval_id] = decided
+            self._write_records(records)
         return decided
+
+    def consume_approval(
+        self,
+        approval_id: str,
+        *,
+        consumed_by: str,
+        consumed_at: datetime | None = None,
+    ) -> ApprovalRequest:
+        with self._lock.hold():
+            records = self._read_records()
+            request = _require(records, approval_id)
+            consumed = request.with_consumption(
+                consumed_by=consumed_by,
+                consumed_at=consumed_at or self.now_fn(),
+            )
+            records[approval_id] = consumed
+            self._write_records(records)
+        return consumed
 
     def _read_records(self) -> dict[str, ApprovalRequest]:
         if not self.path.exists():
@@ -72,3 +100,10 @@ class LocalJsonApprovalStore:
             encoding="utf-8",
         )
         temp_path.replace(self.path)
+
+
+def _require(records: dict[str, ApprovalRequest], approval_id: str) -> ApprovalRequest:
+    try:
+        return records[approval_id]
+    except KeyError as exc:
+        raise ApprovalNotFoundError(approval_id) from exc

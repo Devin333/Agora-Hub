@@ -48,8 +48,20 @@ from framework.harness.graph.canonical import (
     freeze_json,
     mapping_to_dict,
 )
-from framework.harness.graph.conditions import ConditionPredicate
-from framework.harness.graph.dsl import Wait
+from framework.harness.control_plane.graph_wait_approval import (
+    APPROVAL_RESUME_TASK_KEY,
+)
+from framework.harness.graph.conditions import ConditionAny, ConditionPredicate
+from framework.harness.graph.dsl import (
+    BoundedLoop,
+    HarnessGraphExpression,
+    Choice,
+    ChoiceBranch,
+    Pass,
+    Sequence,
+    StepRef,
+    Wait,
+)
 from framework.harness.graph.model import (
     HarnessContractKind,
     HarnessContractReference,
@@ -120,6 +132,7 @@ class AgentLoopRunnerPort(Protocol):
         graph_checkpoint_ref: str | None = None,
         resume_from_cursor: bool = False,
         memory_recall: ExecutionMemoryRecallPort | None = None,
+        resume_approval_id: str | None = None,
     ) -> AgentLoopResult: ...
 
 
@@ -139,6 +152,9 @@ class AgentLoopGraphActivityTask:
     resume_from_cursor: bool
     task_context: HarnessGraphActivityTaskContext
     schema_version: str = AGENT_LOOP_GRAPH_ACTIVITY_TASK_SCHEMA
+    # Set only by Harness when this activation re-enters the node after a
+    # granted re-entrant approval Wait; the runner redeems exactly this grant.
+    resume_approval_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.inputs, Mapping):
@@ -166,6 +182,12 @@ class AgentLoopGraphActivityTask:
             raise HarnessValidationError(
                 "unsupported AgentLoop Graph activity task schema",
                 code="unsupported_agent_loop_graph_activity_schema",
+            )
+        if self.resume_approval_id is not None:
+            object.__setattr__(
+                self,
+                "resume_approval_id",
+                _required_text(self.resume_approval_id, "resume_approval_id"),
             )
 
     @classmethod
@@ -201,6 +223,8 @@ class AgentLoopGraphActivityTask:
             "metadata",
             HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY,
         }
+        if APPROVAL_RESUME_TASK_KEY in value:
+            graph_task_fields.add(APPROVAL_RESUME_TASK_KEY)
         payload = _exact_mapping(value, graph_task_fields, "Graph activity task")
         raw_context = payload[HARNESS_GRAPH_ACTIVITY_TASK_CONTEXT_KEY]
         if not isinstance(raw_context, Mapping):
@@ -226,6 +250,9 @@ class AgentLoopGraphActivityTask:
             conversation_id=exact_inputs["conversation_id"],
             resume_from_cursor=exact_inputs["resume_from_cursor"],
             task_context=context,
+            resume_approval_id=_approval_resume_id(
+                payload.get(APPROVAL_RESUME_TASK_KEY)
+            ),
         )
 
 
@@ -1113,10 +1140,12 @@ class AgentLoopGraphWorker:
                     "actual_activity_ref": activity.activity_ref.exact_ref,
                 },
             )
-        recall_options = {}
+        runner_options: dict[str, Any] = {}
         if self.input_admission is not None:
             snapshot = self.input_admission.admit_parent_inputs(task, agent=self.agent)
-            recall_options["memory_recall"] = self.input_admission.parent_memory_recall(snapshot)
+            runner_options["memory_recall"] = self.input_admission.parent_memory_recall(snapshot)
+        if parsed.resume_approval_id is not None:
+            runner_options["resume_approval_id"] = parsed.resume_approval_id
         result = self.agent_runner.run(
             self.agent,
             mapping_to_dict(parsed.inputs),
@@ -1132,7 +1161,7 @@ class AgentLoopGraphWorker:
             activity_id=activity.activity_id,
             attempt=activity.attempt,
             resume_from_cursor=parsed.resume_from_cursor,
-            **recall_options,
+            **runner_options,
         )
         if not isinstance(result, AgentLoopResult):
             raise HarnessValidationError(
@@ -1587,7 +1616,14 @@ class AgentLoopGraphApprovalWaitBinding:
     def waiting_condition(self) -> ConditionPredicate:
         return ConditionPredicate(self.waiting_condition_path, "equals", True)
 
-    def wait_expression(self) -> Wait:
+    def wait_expression(self, *, reentrant: bool = False) -> Wait:
+        """Graph Wait for the approval this AgentLoop node requested.
+
+        A ``reentrant`` Wait records the requested grant and resumes the
+        source node with it once approved; it is only valid inside a loop
+        that also encloses the source node (see ``approval_loop``).
+        """
+
         prefix = self.output_path
         return Wait(
             wait_id=self.wait_id,
@@ -1611,6 +1647,71 @@ class AgentLoopGraphApprovalWaitBinding:
             signal_version=AGENT_LOOP_GRAPH_APPROVAL_SIGNAL_VERSION,
             tenant_scope_path=f"graph.inputs.{self.tenant_scope_input_key}",
             identity_scope_path=f"graph.inputs.{self.identity_scope_input_key}",
+            resume_node_id=self.source_node_id if reentrant else None,
+        )
+
+    def approval_loop(
+        self,
+        *,
+        loop_id: str,
+        max_approval_rounds: int,
+        exit: HarnessGraphExpression | None = None,
+    ) -> BoundedLoop:
+        """Run the AgentLoop node until it finishes without pending approval.
+
+        Each iteration runs the node once.  A tool-approval request parks the
+        iteration on a re-entrant approval Wait; granting it starts the next
+        iteration, which re-enters the node and redeems exactly that grant.
+        A rejected approval cancels the run through the Wait itself.  The
+        loop continues while the node has not run yet or is still waiting,
+        bounded by ``max_approval_rounds`` approvals.
+        """
+
+        if (
+            not isinstance(max_approval_rounds, int)
+            or isinstance(max_approval_rounds, bool)
+            or max_approval_rounds < 1
+        ):
+            raise HarnessValidationError(
+                "approval loop needs at least one approval round",
+                code="agent_loop_graph_approval_loop_invalid",
+            )
+        loop_id = _required_text(loop_id, "loop_id")
+        waiting_path = f"graph.outputs.{self.result_output_key}.waiting"
+        return BoundedLoop(
+            loop_id=loop_id,
+            body=Sequence(
+                (
+                    StepRef(self.source_node_id),
+                    Choice(
+                        f"{loop_id}.approval-choice",
+                        (
+                            ChoiceBranch(
+                                "waiting",
+                                self.wait_expression(reentrant=True),
+                                priority=1,
+                                condition=self.waiting_condition(),
+                            ),
+                            ChoiceBranch(
+                                "completed",
+                                Pass(f"{loop_id}.completed"),
+                                priority=2,
+                                is_default=True,
+                            ),
+                        ),
+                    ),
+                ),
+                sequence_id=f"{loop_id}.body",
+            ),
+            condition=ConditionAny(
+                (
+                    ConditionPredicate(waiting_path, "exists", False),
+                    ConditionPredicate(waiting_path, "equals", True),
+                )
+            ),
+            # One initial run plus one re-entry per granted approval.
+            max_iterations=max_approval_rounds + 1,
+            exit=exit if exit is not None else Pass(f"{loop_id}.exit"),
         )
 
     def assert_step_contract(self, step: HarnessStepSpec) -> None:
@@ -2218,6 +2319,19 @@ def _result_error(result: AgentLoopResult) -> str | None:
     else:
         text = str(value)
     return str(redact_sensitive_values(text))
+
+
+def _approval_resume_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    resume = _exact_mapping(
+        value,
+        {"approval_id", "wait_id", "wait_node_instance_id"},
+        "approval resume",
+    )
+    for field_name in ("wait_id", "wait_node_instance_id"):
+        _required_text(resume[field_name], f"approval_resume.{field_name}")
+    return _required_text(resume["approval_id"], "approval_resume.approval_id")
 
 
 def _exact_mapping(

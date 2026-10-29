@@ -124,6 +124,10 @@ from framework.harness.control_plane.graph_state import (
     RunOutcome,
     project_public_graph_status,
 )
+from framework.harness.control_plane.graph_wait_approval import (
+    APPROVAL_RESUME_TASK_KEY,
+    approval_resume_for_node,
+)
 from framework.harness.control_plane.node_output import HarnessNodeOutputCandidate
 from framework.harness.control_plane.phase import (
     HarnessPhase,
@@ -4092,6 +4096,11 @@ class HarnessControlPlane:
             raise EventIncompleteHistoryError(
                 "graph Worker task references an unknown node instance"
             )
+        approval_resume = approval_resume_for_node(state, node)
+        if approval_resume is not None:
+            # Derived only from durable Wait state, so the activity input ref
+            # stays deterministic across recovery and pins the redeemed grant.
+            task[APPROVAL_RESUME_TASK_KEY] = dict(approval_resume)
         graph = self._prepared_graphs[run_spec.run_id]
         merge_definition = next(
             (
@@ -5188,8 +5197,13 @@ class HarnessControlPlane:
         reason: str | None = None,
         approval_ref: str,
         actor_identity_scope_ref: str,
+        approval_id: str | None = None,
     ) -> HarnessRunResult:
-        """Durably resume or cancel one approval-waiting Harness projection."""
+        """Durably resume or cancel one approval-waiting Harness projection.
+
+        ``approval_id`` targets the re-entrant Wait parked on that exact grant;
+        without it the run must have exactly one unresolved approval Wait.
+        """
 
         if not isinstance(run_spec, HarnessRunSpec):
             raise TypeError("run_spec must be HarnessRunSpec")
@@ -5213,6 +5227,7 @@ class HarnessControlPlane:
                     reason=reason,
                     approval_ref=approval_ref,
                     actor_identity_scope_ref=actor_identity_scope_ref,
+                    approval_id=approval_id,
                 )
         raise EventIncompleteHistoryError(
             "Harness approval resume requires committed Graph state"
@@ -5226,6 +5241,7 @@ class HarnessControlPlane:
         reason: str | None,
         approval_ref: str,
         actor_identity_scope_ref: str,
+        approval_id: str | None = None,
     ) -> HarnessRunResult:
         state = self.recover_graph(run_spec)
         self._hydrate_graph_execution(run_spec, state)
@@ -5233,18 +5249,21 @@ class HarnessControlPlane:
         waiting = tuple(
             (node, registration)
             for registration in state.wait_registrations
-            if registration.kind.value == "approval" and registration.unresolved
+            if registration.kind.value == "approval"
+            and registration.unresolved
+            and (approval_id is None or registration.approval_id == approval_id)
             for node in state.node_instances
             if node.instance_id == registration.node_instance_id
             and node.status is HarnessNodeInstanceStatus.WAITING
             and node.node_kind is HarnessGraphNodeKind.WAIT
         )
         if len(waiting) != 1:
-            raise HarnessValidationError("Harness run is not waiting for approval")
+            raise HarnessValidationError(
+                "Harness run is not waiting for approval",
+                code="graph_approval_wait_not_found",
+                details={"approval_id": approval_id},
+            )
         node, registration = waiting[0]
-        resolved_reason = reason or (
-            "Harness approval granted" if approved else "Harness approval was cancelled"
-        )
         cause = HarnessWaitApprovalEvidenceRecord(
             scope=HarnessWaitScope(
                 wait_id=registration.wait_id,
@@ -5259,6 +5278,7 @@ class HarnessControlPlane:
             actor_identity_scope_ref=actor_identity_scope_ref,
             approved=approved,
             recorded_sequence=0,
+            approval_id=registration.approval_id,
         )
         resumed = self.accept_graph_wait_cause(
             run_spec,

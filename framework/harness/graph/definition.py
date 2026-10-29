@@ -25,6 +25,7 @@ from framework.harness.graph.dsl import (
     HarnessGraphSpec,
     ParallelAll,
     ParallelAny,
+    Pass,
     Sequence as GraphSequence,
     StepRef,
     VerifiedAggregation,
@@ -1425,7 +1426,7 @@ def _activity_guarantees_before(
     producer_activity_id: str,
     consumer_activity_id: str,
 ) -> bool:
-    if isinstance(expression, StepRef | Wait):
+    if isinstance(expression, StepRef | Pass | Wait):
         return False
     if isinstance(expression, GraphSequence):
         producer_index = _containing_child_index(
@@ -1516,7 +1517,7 @@ def _expression_guarantees_activity(
             _expression_guarantees_activity(child, activity_id)
             for child in expression.children
         )
-    if isinstance(expression, Choice | ParallelAny | BoundedLoop | Wait):
+    if isinstance(expression, Choice | ParallelAny | BoundedLoop | Pass | Wait):
         return False
     if isinstance(expression, ParallelAll):
         if any(
@@ -1613,6 +1614,9 @@ def _root_topology_identities(
             return
         if isinstance(current, Wait):
             node_ids.append(current.wait_id)
+            return
+        if isinstance(current, Pass):
+            node_ids.append(current.pass_id)
             return
         raise AssertionError(
             f"unsupported HarnessGraphExpression: {type(current).__name__}"
@@ -1961,7 +1965,7 @@ def _first_activity_id(expression: HarnessGraphExpression) -> str | None:
         return None
     if isinstance(expression, BoundedLoop):
         return _first_activity_id(expression.body)
-    if isinstance(expression, Wait):
+    if isinstance(expression, Pass | Wait):
         return None
     return None
 
