@@ -1,0 +1,555 @@
+{
+  "arms": {
+    "bge": {
+      "cold_load": {
+        "latency_ms": 3540.4975000128616
+      },
+      "config": {
+        "batch_size": 8,
+        "device": "cpu",
+        "implementation": "infrastructure.external.reranker.CrossEncoderReranker",
+        "input_price_per_million": null,
+        "max_length": 512,
+        "model": "C:/Users/Administrator/.cache/huggingface/hub/models--BAAI--bge-reranker-v2-m3/snapshots/953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
+      },
+      "config_fingerprint": "sha256:7febc2713bcda4fba256440fa2498aafcd51de96240102dd3b6e3469d48ee214",
+      "failure_count": 0,
+      "metrics": {
+        "completion": {
+          "completed_cases": 24,
+          "completion_rate": 1.0,
+          "failed_cases": 0,
+          "total_cases": 24,
+          "unmeasured_cases": 0
+        },
+        "latency": {
+          "measured_cases": 24,
+          "p50_ms": 4372.549799998524,
+          "p95_ms": 4681.708669995714
+        },
+        "quality": {
+          "binary_ndcg_at_5": 0.9637887397321441,
+          "evaluated_cases": 24,
+          "hit_at_1": 0.9166666666666666,
+          "hit_at_3": 1.0,
+          "hit_at_5": 1.0,
+          "mrr": 0.9513888888888888
+        }
+      },
+      "status": "complete",
+      "usage": {
+        "calls": 25,
+        "currency": null,
+        "estimated_input_cost": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "pricing": "unavailable"
+      },
+      "warmup": {
+        "calls": 1,
+        "case_id": "case_7507cc0ae90c44f6",
+        "latency_ms": 5123.488300014287,
+        "status": "complete"
+      }
+    },
+    "jev": {
+      "blocked_reason": "missing_TYPESAFE_API_KEY",
+      "cold_load": {
+        "latency_ms": null,
+        "note": "hosted API"
+      },
+      "config": {
+        "batch_size": 8,
+        "endpoint": "https://api.typesafe.ai/v1/systemone",
+        "input_price_per_million": 0.042,
+        "max_calls": 100,
+        "model": "jev-1.13.0",
+        "retry_policy": "none",
+        "score_criteria": [
+          "Unrelated to the query and does not provide useful evidence.",
+          "Shares the topic or terms but does not help answer the query.",
+          "Provides partial, indirect, or incomplete evidence for the query.",
+          "Directly provides strong evidence needed to answer the query."
+        ],
+        "score_normalization": "score / 3",
+        "timeout_seconds": 30.0
+      },
+      "config_fingerprint": "sha256:10642958449c3ec9cbbd42b586de427087051fa899bab3da253f1c95a875fd90",
+      "failure_count": 0,
+      "metrics": {
+        "completion": {
+          "completed_cases": 0,
+          "completion_rate": 0.0,
+          "failed_cases": 0,
+          "total_cases": 24,
+          "unmeasured_cases": 24
+        },
+        "latency": {
+          "measured_cases": 0,
+          "p50_ms": null,
+          "p95_ms": null
+        },
+        "quality": {
+          "binary_ndcg_at_5": null,
+          "evaluated_cases": 0,
+          "hit_at_1": null,
+          "hit_at_3": null,
+          "hit_at_5": null,
+          "mrr": null
+        }
+      },
+      "status": "blocked",
+      "usage": {
+        "calls": 0,
+        "calls_with_known_usage": 0,
+        "calls_with_unknown_usage": 0,
+        "currency": "USD",
+        "estimated_input_cost": 0.0,
+        "input_tokens": 0,
+        "known_input_cost_lower_bound": null,
+        "output_tokens": 0,
+        "pricing": "explicit_cli_estimate"
+      },
+      "warmup": {
+        "reason": "missing credential",
+        "status": "not_run"
+      }
+    },
+    "lexical": {
+      "cold_load": {
+        "latency_ms": 0.0,
+        "note": "no model load"
+      },
+      "config": {
+        "batch_size": null,
+        "device": "cpu",
+        "implementation": "backend.research.rag.retrieval.paper_lightweight_reranker.LightweightLexicalReranker",
+        "input_price_per_million": null,
+        "max_length": null,
+        "model": null
+      },
+      "config_fingerprint": "sha256:c6e8de729e20f575129ab2c8273415e1409cf5e87b8a4f07c041103534e6a6cc",
+      "failure_count": 0,
+      "metrics": {
+        "completion": {
+          "completed_cases": 24,
+          "completion_rate": 1.0,
+          "failed_cases": 0,
+          "total_cases": 24,
+          "unmeasured_cases": 0
+        },
+        "latency": {
+          "measured_cases": 24,
+          "p50_ms": 1.3109499996062368,
+          "p95_ms": 1.4182350016199052
+        },
+        "quality": {
+          "binary_ndcg_at_5": 0.878307869685452,
+          "evaluated_cases": 24,
+          "hit_at_1": 0.7916666666666666,
+          "hit_at_3": 0.875,
+          "hit_at_5": 0.9583333333333334,
+          "mrr": 0.8558712121212121
+        }
+      },
+      "status": "complete",
+      "usage": {
+        "calls": 25,
+        "currency": null,
+        "estimated_input_cost": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "pricing": "unavailable"
+      },
+      "warmup": {
+        "calls": 1,
+        "case_id": "case_7507cc0ae90c44f6",
+        "latency_ms": 1.4282999909482896,
+        "status": "complete"
+      }
+    }
+  },
+  "candidate_order_fingerprint": "sha256:a39fb916811645fa6f8a9ea5b59df07645fffead44d7adba7a370a9acb58fb80",
+  "comparison_fingerprint": "sha256:868196de8086f380bc66e4b4b49171835a0d518f5b40d96cbe9e00be2dfc3d81",
+  "created_at": "2026-09-20T09:29:38.586592Z",
+  "dataset": {
+    "candidate_order_fingerprint": "sha256:a39fb916811645fa6f8a9ea5b59df07645fffead44d7adba7a370a9acb58fb80",
+    "case_ids": [
+      "case_7507cc0ae90c44f6",
+      "case_4c1c25b9ace4857b",
+      "case_594ed812a2fcd3ce",
+      "case_33894a81ac960906",
+      "case_a0ee9c3658477f79",
+      "case_10250f3ebc1bfd59",
+      "case_dfaee43efd4b345b",
+      "case_7a3880419f075c2e",
+      "case_ac2046f2f7150ffd",
+      "case_f6465283ec222122",
+      "case_f32940051d11158e",
+      "case_ce990fb6346616a4",
+      "case_cbec2a2297616e5a",
+      "case_91c7a3958091e110",
+      "case_1209e54a5c94316e",
+      "case_abbc4cd9111779d7",
+      "case_7d40feb6219f5ce2",
+      "case_822b02c500f37ccb",
+      "case_b0fb049abc38a48d",
+      "case_cdc9b9e4caae3c83",
+      "case_52c8fca648a1e6a0",
+      "case_39ea9014ff5db292",
+      "case_9f4875f34b736f07",
+      "case_ebefcbb656d55ea5"
+    ],
+    "coverage": {
+      "case_count": 24,
+      "case_recall_upper_bound": 1.0,
+      "cases_with_candidate_gold": 24,
+      "covered_gold_id_count": 24,
+      "gold_id_count": 24,
+      "gold_id_recall_upper_bound": 1.0,
+      "per_case": [
+        {
+          "id": "case_7507cc0ae90c44f6",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_1e81450a626e"
+          ]
+        },
+        {
+          "id": "case_4c1c25b9ace4857b",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_52b2285cebe5"
+          ]
+        },
+        {
+          "id": "case_594ed812a2fcd3ce",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_306a7efba57e"
+          ]
+        },
+        {
+          "id": "case_33894a81ac960906",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_53a347483adf"
+          ]
+        },
+        {
+          "id": "case_a0ee9c3658477f79",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_966d58d27ed6"
+          ]
+        },
+        {
+          "id": "case_10250f3ebc1bfd59",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_aef079e4c85b"
+          ]
+        },
+        {
+          "id": "case_dfaee43efd4b345b",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_2c1718aa26be"
+          ]
+        },
+        {
+          "id": "case_7a3880419f075c2e",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_80edd06882c4"
+          ]
+        },
+        {
+          "id": "case_ac2046f2f7150ffd",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_ec090122b110"
+          ]
+        },
+        {
+          "id": "case_f6465283ec222122",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_e7b9cc1d9a5b"
+          ]
+        },
+        {
+          "id": "case_f32940051d11158e",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_71b2d2c01b25"
+          ]
+        },
+        {
+          "id": "case_ce990fb6346616a4",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_68d569f76671"
+          ]
+        },
+        {
+          "id": "case_cbec2a2297616e5a",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_bca7c0706d26"
+          ]
+        },
+        {
+          "id": "case_91c7a3958091e110",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_6b083d67da2b"
+          ]
+        },
+        {
+          "id": "case_1209e54a5c94316e",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_5d42f8378652"
+          ]
+        },
+        {
+          "id": "case_abbc4cd9111779d7",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_e7b9cc1d9a5b"
+          ]
+        },
+        {
+          "id": "case_7d40feb6219f5ce2",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_880f55a0dead"
+          ]
+        },
+        {
+          "id": "case_822b02c500f37ccb",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_f6a8eee4a2c6"
+          ]
+        },
+        {
+          "id": "case_b0fb049abc38a48d",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_13b6277eb040"
+          ]
+        },
+        {
+          "id": "case_cdc9b9e4caae3c83",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_ec090122b110"
+          ]
+        },
+        {
+          "id": "case_52c8fca648a1e6a0",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_6b083d67da2b"
+          ]
+        },
+        {
+          "id": "case_39ea9014ff5db292",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_de422246c6ea"
+          ]
+        },
+        {
+          "id": "case_9f4875f34b736f07",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_0ba27e6ebafb"
+          ]
+        },
+        {
+          "id": "case_ebefcbb656d55ea5",
+          "missing_gold_ids": [],
+          "present_gold_ids": [
+            "chunk_880f55a0dead"
+          ]
+        }
+      ]
+    },
+    "fingerprint": "sha256:40e60d1a49a491f5c9f29ca2ac21019c8ebc21c232cfe2627103fa357589574f",
+    "metadata": {
+      "candidate_count": 12,
+      "candidate_policy": {
+        "gold_injection": false,
+        "gold_used_for_selection": false,
+        "ordering": "score_desc_then_chunk_id_asc",
+        "pool": "all_validated_snapshot_chunks",
+        "selector": "backend.research.rag.retrieval.paper_lightweight_reranker.LightweightLexicalReranker"
+      },
+      "counts": {
+        "abstain_questions_excluded": 12,
+        "answerable_questions": 67,
+        "cases_with_candidate_gold": 24,
+        "cases_without_candidate_gold": 0,
+        "golden_questions": 79,
+        "sampled_cases": 24,
+        "snapshot_chunks": 35,
+        "snapshot_papers": 20
+      },
+      "limitations": [
+        "Pilot uses a 35-chunk reviewed snapshot because the full local corpus is absent.",
+        "Candidates are selected across papers and do not model paper-scoped production recall.",
+        "Gold labels are incomplete and candidate gold coverage is only a reranking upper bound.",
+        "BGE may truncate inputs at its native 512-token limit; candidate text is preserved here."
+      ],
+      "sample_size": 24,
+      "sampling_policy": {
+        "case_id": "case_ + first_16_hex(sha256(paper_id\\0query))",
+        "population": "answerable_only",
+        "selection": "ascending_sha256(seed\\0paper_id\\0query)"
+      },
+      "seed": "jev-rerank-pilot-v1",
+      "sources": {
+        "golden_set": {
+          "path": "data/eval/golden_set.json",
+          "sha256": "083d3e9d0ab38076884a219a3d18025b47ec662bdd95152be7fbca82c3487e37"
+        },
+        "snapshot": {
+          "path": "data/eval/golden_corpus_snapshot.json",
+          "sha256": "b7d562a8cd5ffe64ee84b9c921c5010d6766385d0e50120678f7748d4e1331d5"
+        }
+      }
+    }
+  },
+  "dataset_fingerprint": "sha256:40e60d1a49a491f5c9f29ca2ac21019c8ebc21c232cfe2627103fa357589574f",
+  "limitations": [
+    "Closed-pool pilot over a checked-in 35-chunk snapshot; not production RAG evidence.",
+    "Metrics use recorded binary gold only and may penalize relevant unlabelled passages.",
+    "Hosted Jev latency includes network time; local BGE latency does not."
+  ],
+  "paired_comparisons": [
+    {
+      "left_arm": "lexical",
+      "left_quality": {
+        "binary_ndcg_at_5": 0.878307869685452,
+        "evaluated_cases": 24,
+        "hit_at_1": 0.7916666666666666,
+        "hit_at_3": 0.875,
+        "hit_at_5": 0.9583333333333334,
+        "mrr": 0.8558712121212121
+      },
+      "paired_case_count": 24,
+      "paired_case_ids": [
+        "case_7507cc0ae90c44f6",
+        "case_4c1c25b9ace4857b",
+        "case_594ed812a2fcd3ce",
+        "case_33894a81ac960906",
+        "case_a0ee9c3658477f79",
+        "case_10250f3ebc1bfd59",
+        "case_dfaee43efd4b345b",
+        "case_7a3880419f075c2e",
+        "case_ac2046f2f7150ffd",
+        "case_f6465283ec222122",
+        "case_f32940051d11158e",
+        "case_ce990fb6346616a4",
+        "case_cbec2a2297616e5a",
+        "case_91c7a3958091e110",
+        "case_1209e54a5c94316e",
+        "case_abbc4cd9111779d7",
+        "case_7d40feb6219f5ce2",
+        "case_822b02c500f37ccb",
+        "case_b0fb049abc38a48d",
+        "case_cdc9b9e4caae3c83",
+        "case_52c8fca648a1e6a0",
+        "case_39ea9014ff5db292",
+        "case_9f4875f34b736f07",
+        "case_ebefcbb656d55ea5"
+      ],
+      "right_arm": "bge",
+      "right_minus_left": {
+        "binary_ndcg_at_5": 0.08548087004669203,
+        "hit_at_1": 0.125,
+        "hit_at_3": 0.125,
+        "hit_at_5": 0.04166666666666663,
+        "mrr": 0.09551767676767675
+      },
+      "right_quality": {
+        "binary_ndcg_at_5": 0.9637887397321441,
+        "evaluated_cases": 24,
+        "hit_at_1": 0.9166666666666666,
+        "hit_at_3": 1.0,
+        "hit_at_5": 1.0,
+        "mrr": 0.9513888888888888
+      },
+      "winner": null,
+      "winner_reason": "No automatic winner is selected by this pilot."
+    },
+    {
+      "left_arm": "lexical",
+      "left_quality": {
+        "binary_ndcg_at_5": null,
+        "evaluated_cases": 0,
+        "hit_at_1": null,
+        "hit_at_3": null,
+        "hit_at_5": null,
+        "mrr": null
+      },
+      "paired_case_count": 0,
+      "paired_case_ids": [],
+      "right_arm": "jev",
+      "right_minus_left": {
+        "binary_ndcg_at_5": null,
+        "hit_at_1": null,
+        "hit_at_3": null,
+        "hit_at_5": null,
+        "mrr": null
+      },
+      "right_quality": {
+        "binary_ndcg_at_5": null,
+        "evaluated_cases": 0,
+        "hit_at_1": null,
+        "hit_at_3": null,
+        "hit_at_5": null,
+        "mrr": null
+      },
+      "winner": null,
+      "winner_reason": "No automatic winner is selected by this pilot."
+    },
+    {
+      "left_arm": "bge",
+      "left_quality": {
+        "binary_ndcg_at_5": null,
+        "evaluated_cases": 0,
+        "hit_at_1": null,
+        "hit_at_3": null,
+        "hit_at_5": null,
+        "mrr": null
+      },
+      "paired_case_count": 0,
+      "paired_case_ids": [],
+      "right_arm": "jev",
+      "right_minus_left": {
+        "binary_ndcg_at_5": null,
+        "hit_at_1": null,
+        "hit_at_3": null,
+        "hit_at_5": null,
+        "mrr": null
+      },
+      "right_quality": {
+        "binary_ndcg_at_5": null,
+        "evaluated_cases": 0,
+        "hit_at_1": null,
+        "hit_at_3": null,
+        "hit_at_5": null,
+        "mrr": null
+      },
+      "winner": null,
+      "winner_reason": "No automatic winner is selected by this pilot."
+    }
+  ],
+  "schema": "agorahub.jev-rerank-summary/v1",
+  "winner": null,
+  "winner_reason": "No winner: unmeasured or blocked arms: jev"
+}
