@@ -191,14 +191,16 @@ docker compose start api
 
 ## 桌面客户端
 
-为用户构建写入了服务器地址的安装包（在开发机上执行）：
+桌面客户端可以连接这台服务器，也可以让用户在自己的电脑上运行同样的镜像（见 `docs/local-mode.md`）。用户在客户端首次启动时选择“连接已有服务器”并填写 `NEWSROOM_PUBLIC_ORIGIN` 的地址即可。
+
+要发给用户一个默认打开这台服务器的安装包，在开发机上把它作为官方服务写入构建：
 
 ```powershell
-$env:AGORA_DESKTOP_SERVER_URL = 'https://agora.example.com'
+$env:AGORA_DESKTOP_OFFICIAL_URL = 'https://agora.example.com'
 npm --prefix desktop run dist
 ```
 
-用户安装后直接打开工作台。没有写入地址的安装包首次启动会询问地址。客户端的行为见 `desktop/README.md`。
+构建变量和打包命令见 `desktop/README.md`。
 
 ## 排查
 

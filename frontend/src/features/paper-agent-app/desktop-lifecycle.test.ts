@@ -21,11 +21,18 @@ describe("desktop lifecycle quit decision", () => {
     expect(message).toContain("不会自动重放")
   })
 
-  it("asks about changing the server when the host is about to leave this server", () => {
+  it("asks about switching the connection when the host is about to leave this server", () => {
     let message = ""
     expect(quitDecision(state({ dirty: true }), value => { message = value; return false }, "server-change")).toBe("cancel")
     expect(message).toContain("未保存的草稿会丢失")
-    expect(message).toContain("仍要更换服务器地址吗")
+    expect(message).toContain("仍要切换连接方式吗")
+  })
+
+  it("asks about stopping the local service when the host is about to stop the stack serving this page", () => {
+    let message = ""
+    expect(quitDecision(state({ activeTaskCount: 1 }), value => { message = value; return false }, "local-stop")).toBe("cancel")
+    expect(message).toContain("仍要停止本机服务吗")
+    expect(message).not.toContain("仍要退出吗")
   })
 
   it("words a window close as closing rather than quitting", () => {

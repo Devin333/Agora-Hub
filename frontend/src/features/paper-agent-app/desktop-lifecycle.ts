@@ -9,7 +9,7 @@ export type RendererLifecycleState = {
   summary?: string
 }
 
-export type RendererQuitReason = "window-close" | "app-quit" | "server-change"
+export type RendererQuitReason = "window-close" | "app-quit" | "server-change" | "local-stop"
 
 type QuitRequest = {
   requestId: string
@@ -36,7 +36,8 @@ const LEAVE_IMPACT = "离开后，未保存的草稿会丢失，进行中的请�
 const LEAVE_QUESTION: Record<RendererQuitReason, string> = {
   "window-close": "仍要关闭吗？",
   "app-quit": "仍要退出吗？",
-  "server-change": "仍要更换服务器地址吗？",
+  "server-change": "仍要切换连接方式吗？",
+  "local-stop": "仍要停止本机服务吗？",
 }
 
 export function quitDecision(
