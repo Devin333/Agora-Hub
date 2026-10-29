@@ -1,0 +1,20 @@
+# Builds the api and web images from this source checkout instead of pulling
+# the published ones. Layer it over a stack file, from this directory:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+# The built images take the stack's image names, so a later plain
+# `docker compose up -d` runs them without pulling.
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/hosted/api.Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/hosted/web.Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+        AGORA_IMAGE_TAG: ${AGORA_IMAGE_TAG:-edge}

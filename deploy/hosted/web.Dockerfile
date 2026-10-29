@@ -16,6 +16,10 @@ COPY frontend ./
 RUN NEWSROOM_DEPLOYMENT_PROFILE=hosted npm run build
 
 FROM node:24-bookworm-slim
+# The release this image was published as. The desktop app compares it with
+# the release it expects before it opens a stack it manages on this computer.
+ARG AGORA_IMAGE_TAG=dev
+ENV AGORA_IMAGE_TAG=$AGORA_IMAGE_TAG
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     NEWSROOM_DEPLOYMENT_PROFILE=hosted \

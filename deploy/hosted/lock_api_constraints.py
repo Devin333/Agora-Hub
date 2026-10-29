@@ -1,6 +1,6 @@
 """Write the API image's pip constraints from a tested environment.
 
-The hosted API image installs the project with its ``api`` and ``rerank`` extras. Its dependency ranges
+The hosted API image installs the project with its ``api`` extra. Its dependency ranges
 are open in ``pyproject.toml``; the image pins the exact versions of the whole
 closure that the project's test environment resolved, so a rebuild months later
 installs what was tested rather than whatever is newest.
@@ -28,18 +28,26 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
-ROOT_EXTRAS = ("api", "rerank")
-# The image is Linux x86_64 on CPython 3.12; markers are evaluated for it, not for the host.
-TARGET_ENVIRONMENT = {
-    **default_environment(),
-    "sys_platform": "linux",
-    "platform_system": "Linux",
-    "os_name": "posix",
-    "platform_machine": "x86_64",
-    "python_version": "3.12",
-    "implementation_name": "cpython",
-    "platform_python_implementation": "CPython",
-}
+# The hosted reader never reranks (it builds its RAG service with
+# ``with_reranker=False``), so the image carries no ``rerank`` extra and no torch.
+ROOT_EXTRAS = ("api",)
+# The image is published for Linux x86_64 and arm64 on CPython 3.12. Markers are
+# evaluated for those targets, not for the host, and a requirement is followed
+# when it applies to any of them, so one constraints file serves both builds.
+TARGET_MACHINES = ("x86_64", "aarch64")
+TARGET_ENVIRONMENTS = tuple(
+    {
+        **default_environment(),
+        "sys_platform": "linux",
+        "platform_system": "Linux",
+        "os_name": "posix",
+        "platform_machine": machine,
+        "python_version": "3.12",
+        "implementation_name": "cpython",
+        "platform_python_implementation": "CPython",
+    }
+    for machine in TARGET_MACHINES
+)
 DEFAULT_OUTPUT = Path(__file__).with_name("api-constraints.txt")
 
 
@@ -60,7 +68,8 @@ def _applies(requirement: Requirement, active_extras: frozenset[str]) -> bool:
     if requirement.marker is None:
         return True
     return any(
-        requirement.marker.evaluate({**TARGET_ENVIRONMENT, "extra": extra})
+        requirement.marker.evaluate({**environment, "extra": extra})
+        for environment in TARGET_ENVIRONMENTS
         for extra in (active_extras or {""})
     )
 
@@ -104,8 +113,8 @@ def render(pinned: dict[str, str]) -> str:
     ]
     for name in sorted(pinned):
         # A local version label ("+cpu", "+cu128") names the wheel index a build came
-        # from, not the release. The image installs torch from the CPU index first, and
-        # a public ``==`` pin matches any local label, so the label is dropped.
+        # from, not the release; a public ``==`` pin matches any local label, so the
+        # label is dropped.
         version = re.sub(r"\+.*$", "", pinned[name])
         lines.append(f"{name}=={version}")
     return "\n".join(lines) + "\n"
@@ -120,7 +129,8 @@ def main() -> int:
         raise SystemExit(
             "direct requirements are not installed in this interpreter: " + ", ".join(missing)
         )
-    args.output.write_text(render(pinned), encoding="utf-8")
+    # LF on every host, so regenerating on Windows leaves no line-ending diff.
+    args.output.write_text(render(pinned), encoding="utf-8", newline="\n")
     print(f"wrote {len(pinned)} pins to {args.output}")
     return 0
 

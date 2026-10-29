@@ -24,51 +24,83 @@
 
 ## 服务器要求
 
-- Linux x86_64，建议 4 核 CPU、8 GB 内存、40 GB 磁盘。重排模型在 CPU 上运行，不需要 GPU。
+- Linux x86_64 或 arm64，建议 2 核 CPU、4 GB 内存、20 GB 磁盘（20 到 100 人同时使用时建议 4 核、8 GB）。服务端不运行任何本地模型，不需要 GPU；api 和 web 镜像解包后各约 500 MB。
 - Docker Engine 24 或更新版本，带 `docker compose` 插件。
 - 一个指向服务器的域名，且 80 和 443 端口可以从公网访问（证书签发需要）。
   - 只有 IP 没有域名时，可以用通配 DNS 服务，例如 IP 为 `203.0.113.7` 时使用 `203-0-113-7.sslip.io`，无需注册即可解析到该 IP。
   - 必须使用 HTTPS：登录 cookie 带 `Secure` 标记，桌面客户端也只接受 HTTPS 地址。
 
+## 镜像
+
+api 和 web 镜像由 GitHub Actions（`.github/workflows/images.yml`）构建，同时提供 linux/amd64 和 linux/arm64，推送到两个镜像仓库，内容完全相同：
+
+| 仓库 | 地址 | 适用 |
+| --- | --- | --- |
+| GHCR | `ghcr.io/devin333` | 海外服务器 |
+| 阿里云 ACR | `registry.cn-hangzhou.aliyuncs.com/agora-hub` | 中国大陆服务器 |
+
+标签：
+
+- `v<x.y.z>`：正式版本，生产环境请固定使用。
+- `edge`：main 分支最新构建。
+- `sha-<提交短号>`：每次构建都有，用于精确回到某次提交。
+
+`.env` 里的 `AGORA_IMAGE_REGISTRY` 选仓库，`AGORA_IMAGE_TAG` 选标签。
+
 ## 首次部署
 
-1. 把仓库放到服务器上，进入部署目录：
+推荐用安装脚本。在服务器上新建一个目录，执行：
 
-   ```bash
-   cd deploy/hosted
-   cp .env.example .env
-   ```
+```bash
+mkdir -p agora && cd agora
+curl -fsSLO https://raw.githubusercontent.com/Devin333/Agora-Hub/main/deploy/hosted/install.sh
+bash install.sh --domain agora.example.com --tag v0.1.2
+```
 
-2. 编辑 `.env`：
-   - `NEWSROOM_DOMAIN`：用户访问的域名，不带 `https://`。
-   - `NEWSROOM_CREDENTIAL_ENCRYPTION_KEY`：用 `openssl rand -base64 32` 生成，见下文“主密钥”。
-   - `NEWS_ACTIVITY_ENCRYPTION_KEY`：用 `openssl rand -base64 32 | tr '+/' '-_'` 生成，见下文“主密钥”。
-   - 服务器在中国大陆时，把 `HF_ENDPOINT` 改为 `https://hf-mirror.com`，否则首次启动下载重排模型可能很慢或失败。
-   - 服务器访问不了 npm、PyPI 或 PyTorch 官方源时，在 `.env` 里把 `NPM_REGISTRY`、`PIP_INDEX_URL`、`TORCH_INDEX_URL` 改成可用的镜像（`.env.example` 里有示例），否则构建镜像时下载依赖会失败。
+服务器在中国大陆时加 `--mirror-cn`，从阿里云 ACR 拉取镜像。
 
-3. 构建并启动：
+脚本会：
 
-   ```bash
-   docker compose up -d --build
-   ```
+1. 下载 `compose.yaml`、`Caddyfile`、`.env.example`（只走 HTTPS）。
+2. 创建权限为 600 的 `.env`，生成两个主密钥（见下文“主密钥”），写入域名、镜像仓库和标签。已有的 `.env` 和密钥会保留，所以重复执行就是原地升级。
+3. 校验 compose 配置，拉取镜像，启动并等待三个服务都变为 `healthy`。
 
-   首次构建会下载 Python 和 Node 依赖，需要十几分钟。api 首次启动时会下载约 2 GB 的重排模型（`BAAI/bge-reranker-v2-m3`）到 `hf-cache` 卷，之后重启不再下载。
+只想先生成文件、检查 `.env` 后再启动时，加 `--prepare-only`；之后执行 `bash install.sh --local`（不再下载文件）。
 
-4. 确认三个服务都是 `healthy`：
+不用脚本时，手动操作也一样：把 `deploy/hosted` 下的 `compose.yaml`、`Caddyfile`、`.env.example` 放到服务器同一个目录，`cp .env.example .env` 后按注释填写，再执行：
 
-   ```bash
-   docker compose ps
-   ```
+```bash
+docker compose pull
+docker compose up -d --wait
+```
 
-5. 创建第一个管理员。托管版没有自助注册和网页初始化入口，第一个管理员只能在服务器上创建：
+启动后创建第一个管理员。托管版没有自助注册和网页初始化入口，第一个管理员只能在服务器上创建：
 
-   ```bash
-   docker compose exec api news accounts create-admin admin
-   ```
+```bash
+docker compose exec api news accounts create-admin admin
+```
 
-   命令会提示输入两次密码。密码不会出现在命令行参数或 shell 历史中。
+命令会提示输入两次密码。密码不会出现在命令行参数或 shell 历史中。需要用脚本创建时，用 `--password-stdin` 从标准输入读入密码：
 
-6. 用浏览器打开 `https://<你的域名>/paper-agent`，用管理员登录，在“账号设置”里填写模型 key 后即可使用。
+```bash
+printf '%s\n' "$ADMIN_PASSWORD" | docker compose exec -T api news accounts create-admin admin --password-stdin
+```
+
+最后用浏览器打开 `https://<你的域名>/paper-agent`，用管理员登录，在“账号设置”里填写模型 key 后即可使用。
+
+### 内部网络
+
+api 和 web 之间是一个固定网段的内部网络（默认 `172.30.10.0/24`），api 只信任 web 的固定地址转来的客户端地址。这个网段和服务器上已有的网络冲突时，在 `.env` 里同时修改 `AGORA_APP_SUBNET`、`AGORA_API_IP`、`AGORA_WEB_IP` 三项，两个地址必须在新网段内。
+
+### 从源码构建
+
+改了代码、需要自己构建镜像时，在仓库的 `deploy/hosted` 目录执行：
+
+```bash
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+服务器访问不了 npm 或 PyPI 官方源时，在 `.env` 里把 `NPM_REGISTRY`、`PIP_INDEX_URL` 改成可用的镜像（`.env.example` 里有示例）。构建出的镜像沿用 `AGORA_IMAGE_REGISTRY`/`AGORA_IMAGE_TAG` 组成的名字，之后普通的 `docker compose up -d` 直接使用它们，不会再拉取。
 
 ## 账号管理
 
@@ -88,7 +120,18 @@ docker compose exec api news accounts reset-password alice --generate-password
 
 - 用户只能从 `configs/hosted-llm-providers.yaml` 列出的服务商和模型中选择，不能填写自定义地址，因此 key 只会发往列表中的地址。
 - key 用主密钥加密后保存，网页和接口都不会再返回明文。
-- 修改可选模型列表后需要重新构建 api 镜像（`docker compose up -d --build api`）。每个模型的上下文长度必须能容纳一次研究请求，否则 api 拒绝启动。
+- 可选模型列表打包在 api 镜像里。要换成自己的列表，不必重新构建镜像：把修改后的文件放在 `compose.yaml` 旁边，新建 `compose.override.yaml`（compose 会自动叠加它）：
+
+  ```yaml
+  services:
+    api:
+      environment:
+        NEWSROOM_HOSTED_LLM_PROVIDERS_PATH: /etc/agora/hosted-llm-providers.yaml
+      volumes:
+        - ./hosted-llm-providers.yaml:/etc/agora/hosted-llm-providers.yaml:ro
+  ```
+
+  然后执行 `docker compose up -d api`。每个模型的上下文长度必须能容纳一次研究请求，否则 api 拒绝启动。
 
 ## 主密钥
 
@@ -106,31 +149,38 @@ docker compose exec api news accounts reset-password alice --generate-password
 
 ## 升级
 
+用安装脚本时，在部署目录重新执行，带上新的版本号：
+
 ```bash
-git pull
-cd deploy/hosted
-docker compose up -d --build
+bash install.sh --local --tag v0.1.3
 ```
 
-compose 会先构建新镜像，再逐个替换容器。api 停止时最多等待 60 秒，让进行中的请求完成。升级期间桌面客户端会显示“无法连接服务器”，并在服务恢复后自动重连；网页用户刷新即可。
+手动操作时，把 `.env` 里的 `AGORA_IMAGE_TAG` 改成新版本，然后：
 
-需要回滚时，升级前在 `.env` 里把 `AGORA_IMAGE_TAG` 设为本次版本名（例如 `2026-10-27`），旧镜像会保留在本机；回滚时改回旧的标签再执行 `docker compose up -d`（不带 `--build`）。
+```bash
+docker compose pull
+docker compose up -d --wait
+```
+
+compose 逐个替换容器。api 停止时最多等待 60 秒，让进行中的请求完成。升级期间桌面客户端会显示“无法连接服务器”，并在服务恢复后自动重连；网页用户刷新即可。
+
+回滚：把 `AGORA_IMAGE_TAG` 改回上一个版本，再执行上面两条命令。版本说明里标明数据格式不兼容时，先按“备份与恢复”恢复升级前的备份再回滚。
 
 ## 备份与恢复
 
-需要备份的是 `newsroom-data` 卷和 `.env`（两个主密钥）。`hf-cache` 和 `caddy-data` 可以重新生成，不必备份。
+需要备份的是 `newsroom-data` 卷和 `.env`（两个主密钥）。`caddy-data` 和 `caddy-config` 可以重新生成，不必备份。
 
 备份（会短暂停止 api，保证文件一致）：
 
 ```bash
-cd deploy/hosted
+cd agora   # 部署目录
 docker compose stop api
 docker run --rm -v agora_newsroom-data:/data -v "$PWD":/backup busybox \
   tar czf /backup/newsroom-data-$(date +%Y%m%d).tar.gz -C /data .
 docker compose start api
 ```
 
-恢复到新服务器：先按“首次部署”准备好同一个 `.env`（同样的两个主密钥），执行一次 `docker compose up -d` 创建卷，然后：
+恢复到新服务器：先按“首次部署”把同一个 `.env`（同样的两个主密钥）放进部署目录，执行一次 `bash install.sh --local` 或 `docker compose up -d` 创建卷，然后：
 
 ```bash
 docker compose stop api
@@ -155,4 +205,6 @@ npm --prefix desktop run dist
 - `docker compose logs -f api`、`docker compose logs -f web`、`docker compose logs -f caddy` 查看日志。
 - api 拒绝启动时，日志第一行会给出出错的变量名，例如缺少主密钥或活动加密密钥、模型列表不合法或解析器配置成了 marker。
 - 证书申请失败：确认域名已解析到服务器公网 IP、80 和 443 端口未被其他程序占用且防火墙已放行。
+- 拉取镜像很慢或超时：中国大陆服务器把 `AGORA_IMAGE_REGISTRY` 改为 `registry.cn-hangzhou.aliyuncs.com/agora-hub`（或重新执行 `bash install.sh --local --mirror-cn`）。
+- 启动时提示网段冲突（`Pool overlaps with other one on this address space`）：按“内部网络”修改三项网段配置。
 - 登录提示过于频繁：同一客户端地址每分钟最多尝试 `NEWSROOM_HOSTED_LOGIN_RATE_LIMIT_PER_MINUTE` 次，等一分钟再试。

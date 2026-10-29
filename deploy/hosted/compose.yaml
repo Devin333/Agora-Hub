@@ -1,6 +1,8 @@
 # Hosted Agora paper agent: Caddy (HTTPS) -> web (Next BFF) -> api (FastAPI).
-# Run from this directory after copying .env.example to .env:
-#   docker compose up -d --build
+# Run from this directory after creating .env (install.sh does both):
+#   docker compose pull && docker compose up -d --wait
+# To build the images from a source checkout instead of pulling them:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
 name: agora
 
 x-api-environment: &api-environment
@@ -8,7 +10,7 @@ x-api-environment: &api-environment
   NEWSROOM_PUBLIC_ORIGIN: https://${NEWSROOM_DOMAIN:?set NEWSROOM_DOMAIN in .env}
   # Only the web container talks to the API; its forwarded address chain is
   # trusted, nothing else's.
-  NEWSROOM_TRUSTED_PROXY_CIDRS: 172.30.10.20/32
+  NEWSROOM_TRUSTED_PROXY_CIDRS: ${AGORA_WEB_IP:-172.30.10.20}/32
   NEWSROOM_LLM_CREDENTIAL_MODE: invocation
   NEWSROOM_CREDENTIAL_ENCRYPTION_KEY: ${NEWSROOM_CREDENTIAL_ENCRYPTION_KEY:?set NEWSROOM_CREDENTIAL_ENCRYPTION_KEY in .env}
   NEWS_ACTIVITY_ENCRYPTION_KEY: ${NEWS_ACTIVITY_ENCRYPTION_KEY:?set NEWS_ACTIVITY_ENCRYPTION_KEY in .env}
@@ -17,36 +19,25 @@ x-api-environment: &api-environment
   # Marker needs a Docker daemon; the API container parses PDFs in process.
   NEWS_RESEARCH_PARSER_BACKENDS: pymupdf
   NEWSROOM_PDF_PARSER_CASCADE: pymupdf
-  NEWS_RERANKER_DEVICE: cpu
-  HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+  # The hosted reader never reranks and the image has no model runtime, so
+  # there is nothing to warm.
+  NEWS_PRELOAD_RERANKER: "0"
 
 services:
   api:
-    build:
-      context: ../..
-      dockerfile: deploy/hosted/api.Dockerfile
-      args:
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
-    image: agora-api:${AGORA_IMAGE_TAG:-latest}
+    image: ${AGORA_IMAGE_REGISTRY:-ghcr.io/devin333}/agora-api:${AGORA_IMAGE_TAG:-edge}
     restart: unless-stopped
     environment: *api-environment
     volumes:
       - newsroom-data:/app/.newsroom
-      - hf-cache:/home/agora/.cache/huggingface
     networks:
       app:
-        ipv4_address: 172.30.10.10
+        ipv4_address: ${AGORA_API_IP:-172.30.10.10}
     # Lets in-flight research requests finish before the process is stopped.
     stop_grace_period: 60s
 
   web:
-    build:
-      context: ../..
-      dockerfile: deploy/hosted/web.Dockerfile
-      args:
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
-    image: agora-web:${AGORA_IMAGE_TAG:-latest}
+    image: ${AGORA_IMAGE_REGISTRY:-ghcr.io/devin333}/agora-web:${AGORA_IMAGE_TAG:-edge}
     restart: unless-stopped
     environment:
       NEWSROOM_PUBLIC_ORIGIN: https://${NEWSROOM_DOMAIN:?set NEWSROOM_DOMAIN in .env}
@@ -56,7 +47,7 @@ services:
         condition: service_healthy
     networks:
       app:
-        ipv4_address: 172.30.10.20
+        ipv4_address: ${AGORA_WEB_IP:-172.30.10.20}
       edge: {}
     stop_grace_period: 30s
 
@@ -81,16 +72,16 @@ services:
 
 networks:
   # api and web only. Nothing here is published, so the API is never reachable
-  # from outside; the web address is the trusted proxy above.
+  # from outside; the web address is the trusted proxy above. Change the subnet
+  # and both addresses together when 172.30.10.0/24 is already in use.
   app:
     ipam:
       config:
-        - subnet: 172.30.10.0/24
+        - subnet: ${AGORA_APP_SUBNET:-172.30.10.0/24}
   # web and caddy only, so the web server is reachable solely through Caddy.
   edge: {}
 
 volumes:
   newsroom-data:
-  hf-cache:
   caddy-data:
   caddy-config:

@@ -7,24 +7,21 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HF_HOME=/home/agora/.cache/huggingface
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN groupadd --system --gid 10001 agora \
     && useradd --system --uid 10001 --gid agora --home-dir /home/agora --create-home --shell /usr/sbin/nologin agora
 
 WORKDIR /app
 
-# Dependencies first, so a source change does not reinstall them. torch comes
-# from the CPU wheel index: the PyPI wheel pulls several GB of CUDA libraries
-# the reranker never uses on a CPU server.
-# Both indexes can point at mirrors where the public ones are blocked.
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+# Dependencies first, so a source change does not reinstall them. The hosted
+# reader never reranks, so the image carries no model runtime (torch,
+# sentence-transformers) and downloads no model weights.
+# The index can point at a mirror where the public one is blocked.
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ENV PIP_INDEX_URL=$PIP_INDEX_URL
 COPY deploy/hosted/api-constraints.txt /tmp/api-constraints.txt
-RUN pip install --index-url "$TORCH_INDEX_URL" "torch==2.13.0" \
-    && pip install -r /tmp/api-constraints.txt
+RUN pip install -r /tmp/api-constraints.txt
 
 COPY pyproject.toml README.md LICENSE ./
 COPY framework ./framework
@@ -37,14 +34,14 @@ COPY frontend/data/papers/arxiv-papers.json ./frontend/data/papers/arxiv-papers.
 
 # Editable, so the code runs from /app where configs/ and .newsroom/ resolve;
 # the constraints keep every already-installed version as tested.
-RUN pip install -c /tmp/api-constraints.txt -e ".[api,rerank]" \
-    && mkdir -p /app/.newsroom /home/agora/.cache/huggingface \
+RUN pip install -c /tmp/api-constraints.txt -e ".[api]" \
+    && mkdir -p /app/.newsroom \
     && chown -R agora:agora /app/.newsroom /home/agora
 
 USER agora
 
 EXPOSE 8000
-VOLUME ["/app/.newsroom", "/home/agora/.cache/huggingface"]
+VOLUME ["/app/.newsroom"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD ["python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status == 200 else 1)"]
