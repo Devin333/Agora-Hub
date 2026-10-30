@@ -20,6 +20,14 @@ COMPILE_PATHS = [
     "scripts",
 ]
 
+TOOL_STABILITY_TESTS = "tests/tools"
+TOOL_STABILITY_LAYER_MARKERS = {
+    "fault": "not tool_stress and not tool_live",
+    "stress": "tool_stress",
+    # A later -m replaces the addopts filter, so "all" names every offline layer.
+    "all": "not tool_live",
+}
+
 SMOKE_TOPIC = "AI agents"
 AGENT_LOOP_SMOKE_ARTIFACT_ROOT = ".newsroom/smoke"
 RAG_EVAL_CONTRACT_ARTIFACT_ROOT = ".newsroom/eval/protocol-contracts"
@@ -154,6 +162,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(_news_command("diagnose"), env=env)
     if args.command == "smoke-test-agent-loop":
         return _run(_agent_loop_smoke_command(args), env=env)
+    if args.command == "tool-stability":
+        return _run(_tool_stability_command(args.layer), env=env)
     if args.command == "smoke":
         commands = [
             _compile_command(),
@@ -164,6 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "tests/interfaces/services/test_research_service.py",
                 "tests/interfaces/composition/test_research_recorded_transport.py",
                 "tests/architecture",
+                TOOL_STABILITY_TESTS,
                 "-q",
             ),
             _agent_loop_smoke_command(),
@@ -248,6 +259,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("export-openapi", help="Export docs/api/openapi.json")
     subparsers.add_parser("test-api-contracts", help="Run API contract tests")
     subparsers.add_parser("web-check", help="Check Web Console skeleton files")
+    tool_stability_parser = subparsers.add_parser(
+        "tool-stability",
+        help="Run the tool stability suite: fault layer (default), stress layer, or all offline layers",
+    )
+    tool_stability_parser.add_argument(
+        "--layer",
+        choices=sorted(TOOL_STABILITY_LAYER_MARKERS),
+        default="fault",
+    )
     subparsers.add_parser("sources-validate", help="Validate configured source registry")
     subparsers.add_parser("diagnose", help="Run local diagnostics")
     agent_loop_smoke_parser = subparsers.add_parser(
@@ -392,6 +412,15 @@ def _rag_ingest_golden_set_papers_command(args: argparse.Namespace | None = None
     if args.no_merge_pdf_visuals:
         command.append("--no-merge-pdf-visuals")
     return command
+
+
+def _tool_stability_command(layer: str) -> list[str]:
+    return _pytest_command(
+        TOOL_STABILITY_TESTS,
+        "-m",
+        TOOL_STABILITY_LAYER_MARKERS[layer],
+        "-q",
+    )
 
 
 def _rag_live_e2e_command() -> list[str]:

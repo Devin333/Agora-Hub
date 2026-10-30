@@ -54,7 +54,9 @@ def test_ordinary_pytest_excludes_every_live_research_module() -> None:
     markers = config["tool"]["pytest"]["ini_options"]["markers"]
 
     assert "-m" in addopts
-    assert "not live_research_e2e" in addopts
+    marker_expression = addopts[addopts.index("-m") + 1]
+    excluded = {term.strip() for term in marker_expression.split(" and ")}
+    assert "not live_research_e2e" in excluded
     assert any(
         marker.partition(":")[0].strip() == "live_research_e2e"
         for marker in markers

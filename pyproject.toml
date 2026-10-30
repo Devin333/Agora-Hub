@@ -132,10 +132,14 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "sdk/python"]
-addopts = ["--import-mode=importlib", "-m", "not live_research_e2e"]
+addopts = ["--import-mode=importlib", "-m", "not live_research_e2e and not tool_stress and not tool_live"]
 markers = [
   "live_research_e2e: opt-in live arXiv and LLM production-composition coverage; select explicitly with valid credentials",
   "redis_integration: opt-in isolated Redis integration coverage; select explicitly with a dedicated test URL",
+  "tool_scenario(tool, *dimensions): claims tool stability coverage; checked by tests/tools/test_tool_contracts.py",
+  "leak_grace(seconds): extend how long the tool resource-leak guard waits for stragglers",
+  "tool_stress: opt-in tool concurrency and soak runs; select with python -m scripts.dev tool-stability",
+  "tool_live: opt-in tool runs against real external services; needs NEWS_TOOL_LIVE_TESTS=1 and credentials",
 ]
 
 [tool.pyright]

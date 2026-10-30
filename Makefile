@@ -1,6 +1,6 @@
 PYTHON ?= python
 
-.PHONY: install compile test test-workflows test-services smoke smoke-test-no-llm smoke-test-agent-loop smoke-live-offline smoke-live diagnose sources-validate
+.PHONY: install compile test test-workflows test-services smoke smoke-test-no-llm smoke-test-agent-loop smoke-live-offline smoke-live diagnose sources-validate tool-stability
 
 install:
 	$(PYTHON) -m pip install -U pip
@@ -38,3 +38,6 @@ diagnose:
 
 sources-validate:
 	$(PYTHON) -m scripts.dev sources-validate
+
+tool-stability:
+	$(PYTHON) -m scripts.dev tool-stability --layer $(or $(LAYER),fault)
