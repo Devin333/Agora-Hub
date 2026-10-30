@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from framework.shared.errors import BoundaryViolationError
 from infrastructure.external.sources.models import SourceDefinition
 
 
@@ -182,6 +183,9 @@ def decide_source_fetch_retry(
     status_code = exc.code if isinstance(exc, HTTPError) else None
     if isinstance(exc, HTTPError):
         retryable = exc.code in policy.retry_on_status_codes
+    elif isinstance(exc, BoundaryViolationError) or isinstance(exc.__cause__, BoundaryViolationError):
+        # A target the outbound policy refused stays refused on every attempt.
+        retryable = False
     elif _is_timeout_exception(exc):
         retryable = True
     elif isinstance(exc, URLError):

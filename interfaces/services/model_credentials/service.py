@@ -22,6 +22,8 @@ from framework.llm.clients.openai_compatible import (
     LLMRetryPolicy,
     Transport,
 )
+from infrastructure.security.outbound_address import OutboundAddressPolicy
+from infrastructure.security.pinned_https import PinnedUrllibTransport
 from interfaces.services.model_credentials.catalog import ModelProviderCatalog
 from interfaces.services.model_credentials.cipher import (
     CredentialCipher,
@@ -31,6 +33,7 @@ from interfaces.services.model_credentials.cipher import (
 from interfaces.services.model_credentials.errors import (
     ModelCredentialError,
     credential_key_rotated,
+    endpoint_not_allowed,
     credential_rejected,
     credential_required,
     model_unavailable,
@@ -92,12 +95,17 @@ class ModelCredentialService:
         cipher: CredentialCipher,
         repository: ModelCredentialRepository,
         verification_transport: Transport | None = None,
+        outbound_policy: OutboundAddressPolicy | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.catalog = catalog
         self._cipher = cipher
         self._repository = repository
-        self._verification_transport = verification_transport
+        # Verification calls the account's endpoint like a model call does,
+        # so it goes through the same outbound policy and address pinning.
+        self._verification_transport = verification_transport or PinnedUrllibTransport.for_policy(
+            outbound_policy if outbound_policy is not None else OutboundAddressPolicy.from_environment()
+        )
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def view(self, user_id: str) -> ModelCredentialView:
@@ -206,6 +214,8 @@ class ModelCredentialService:
         try:
             available = client.list_models()
         except LLMProviderError as exc:
+            if exc.error_type == "endpoint_not_allowed":
+                raise endpoint_not_allowed() from None
             if exc.status_code in _REJECTED_STATUS_CODES:
                 self._record_verification(record, verified_at=None)
                 raise credential_rejected() from None

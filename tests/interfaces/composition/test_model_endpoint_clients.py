@@ -5,6 +5,7 @@ import pytest
 from framework.llm.clients import LLMEndpoint, LLMWireProtocol
 from framework.llm.clients.anthropic_messages import AnthropicMessagesClient
 from framework.llm.clients.openai_compatible import OpenAICompatibleClient
+from framework.llm.models import LLMRequest
 from interfaces.composition.model_endpoint_clients import (
     EndpointClientFactory,
     EndpointClientPolicy,
@@ -45,3 +46,31 @@ def test_invocation_client_keeps_its_purpose():
 def test_policy_rejects_unusable_limits(timeout, attempts):
     with pytest.raises(ValueError):
         EndpointClientPolicy(timeout_seconds=timeout, max_attempts=attempts)
+
+
+def test_factory_clients_send_through_the_outbound_policy():
+    from framework.llm.clients.openai_compatible import LLMProviderError
+    from infrastructure.security.outbound_address import OutboundAddressPolicy
+
+    # The endpoint's host resolves only to a private address; nothing is sent.
+    outbound = OutboundAddressPolicy(resolver=lambda _host, _port: ["10.0.0.3"])
+    factory = EndpointClientFactory(EndpointClientPolicy(timeout_seconds=5, max_attempts=3), outbound=outbound)
+    request = LLMRequest(messages=[{"role": "user", "content": "hi"}])
+
+    for protocol in LLMWireProtocol:
+        client = factory(_endpoint(protocol))
+        with pytest.raises(LLMProviderError) as raised:
+            client.complete(request)
+        assert raised.value.error_type == "endpoint_not_allowed"
+        assert raised.value.retryable is False
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+
+
+def test_factory_reads_the_allowlist_from_the_environment(monkeypatch):
+    monkeypatch.setenv("NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS", "host.docker.internal")
+
+    factory = EndpointClientFactory(EndpointClientPolicy(timeout_seconds=5))
+
+    assert factory.outbound.allowed_hosts == frozenset({"host.docker.internal"})

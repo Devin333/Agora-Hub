@@ -251,3 +251,39 @@ def test_answer_model_and_judge_receive_provider_diagnostic_fields(
     assert verdict.error_detail["provider_error_type"] == "gateway_error"
     assert verdict.error_detail["provider_error_code"] == "upstream_busy"
     assert verdict.error_detail["provider_message"] == "provider unavailable"
+
+
+def test_refused_endpoint_is_final_and_never_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    from framework.llm.clients.openai_compatible import LLMRetryPolicy
+    from framework.shared.errors import BoundaryViolationError
+
+    monkeypatch.setenv("TEST_DIAGNOSTIC_API_KEY", "request-secret")
+    calls: list[object] = []
+
+    def transport(request, _timeout):  # type: ignore[no-untyped-def]
+        calls.append(request)
+        raise BoundaryViolationError("outbound target rejected: non_public_address", code="non_public_address")
+
+    def stream_transport(request, _timeout):  # type: ignore[no-untyped-def]
+        calls.append(request)
+        raise BoundaryViolationError("outbound target rejected: unresolvable", code="unresolvable")
+
+    client = OpenAICompatibleClient(
+        _config(),
+        transport=transport,
+        stream_transport=stream_transport,
+        retry_policy=LLMRetryPolicy(max_attempts=3),
+        sleep=lambda _seconds: None,
+    )
+    with pytest.raises(LLMProviderError) as raised:
+        client.complete(_request())
+
+    assert raised.value.error_type == "endpoint_not_allowed"
+    assert raised.value.retryable is False
+    assert raised.value.diagnostics[0] == {"stage": "outbound_policy", "reason": "non_public_address"}
+    assert len(calls) == 1
+
+    with pytest.raises(LLMProviderError) as streamed:
+        list(client.stream(_request()))
+    assert streamed.value.error_type == "endpoint_not_allowed"
+    assert "provider.example" not in str(streamed.value)

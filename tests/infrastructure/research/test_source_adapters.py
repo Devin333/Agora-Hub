@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 import socket
 
 import pytest
@@ -885,3 +886,52 @@ def test_catalog_bound_source_rejects_document_from_another_actor_scope() -> Non
             source_revision="sha256:" + "d" * 64,
             actor_scope={"user_id": "bob"},
         )
+
+
+def test_remote_fetch_refuses_an_unresolvable_host_before_transport(monkeypatch) -> None:
+    def unresolvable(*_args, **_kwargs):
+        raise socket.gaierror("name not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", unresolvable)
+    calls: list[str] = []
+
+    def fetch(url, _policy):
+        calls.append(url)
+        return b"body", "text/plain", url
+
+    result = ResearchSourceResolverAdapter(fetch_bytes=fetch).resolve(
+        ParsePaperRequest(source="https://nowhere.example/paper", source_type="publisher")
+    )
+
+    assert result.access_status == "failed"
+    assert calls == []
+    assert result.diagnostics[0]["error_type"] == "ResearchSourceError"
+
+
+def test_remote_fetch_refuses_a_redirect_to_a_private_address(monkeypatch) -> None:
+    import infrastructure.research.source_resolver as source_resolver
+    from infrastructure.external.sources.fetch_policy import SourceFetchPolicy
+    from infrastructure.security.outbound_address import OutboundAddressRejected
+
+    opened: list[str] = []
+
+    class _Opener:
+        def open(self, request, *, timeout_seconds, max_redirects):
+            opened.append(request.full_url)
+            # The pinned opener checks every hop; a hop to an internal
+            # address raises before any socket opens.
+            raise OutboundAddressRejected("non_public_address")
+
+    monkeypatch.setattr(source_resolver, "_REMOTE_SOURCE_OPENER", _Opener())
+    resolver = ResearchSourceResolverAdapter(
+        fetch_policy=SourceFetchPolicy(respect_robots=True, retry_times=2),
+    )
+
+    result = resolver.resolve(ParsePaperRequest(source="https://publisher.example/paper", source_type="publisher"))
+
+    assert result.access_status == "failed"
+    # robots.txt is fetched through the pinned opener too, and the refusal is
+    # final: no retry of a configuration problem.
+    assert opened == ["https://publisher.example/robots.txt"]
+    assert result.diagnostics[0]["error_type"] == "ResearchSourceError"
+    assert "publisher.example" not in json.dumps(result.diagnostics[0].get("message", ""))

@@ -183,6 +183,7 @@ const ACCOUNT_ERROR_MESSAGES: Record<string, string> = {
   model_credential_rejected: "模型服务拒绝了这个 API Key，请检查后重试。",
   model_credential_model_unavailable: "这个 API Key 有效，但模型服务没有向它开放所选模型，请换一个模型或检查 Key 的权限。",
   model_provider_unreachable: "暂时无法连接模型服务，请稍后重试。",
+  model_endpoint_not_allowed: "这个模型地址不被允许：只能用公网 HTTPS 地址，内网地址需要管理员加入白名单。",
   model_credential_conflict: "配置已在其他地方被修改，已为你刷新，请确认后再保存。",
   model_provider_unsupported: "不支持所选的模型服务商或模型。",
   http_403: "没有权限执行该操作。",

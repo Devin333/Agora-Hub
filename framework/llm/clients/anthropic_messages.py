@@ -27,6 +27,7 @@ from framework.llm.clients.tool_adapters import LLMToolSchemaError, openai_tool_
 from framework.llm.context.anthropic import AnthropicRequestError, build_anthropic_messages_payload
 from framework.llm.models import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall, TokenUsage
 from framework.llm.models.reasoning import ReasoningSetting
+from framework.shared.errors import BoundaryViolationError
 from framework.llm.structured_output import (
     LLMStructuredOutputParseError,
     LLMStructuredOutputProjectionError,
@@ -513,6 +514,19 @@ class AnthropicMessagesClient:
         # provider messages can echo request content.
         if isinstance(exc, anthropic.APITimeoutError):
             return self._timeout_error(exc, attempts=attempts)
+        refused = exc.__cause__
+        if isinstance(exc, anthropic.APIConnectionError) and isinstance(refused, BoundaryViolationError):
+            # The network policy refused the endpoint before any socket
+            # opened: a configuration problem no retry can fix.
+            return LLMProviderError(
+                f"{self.provider} endpoint is not allowed: {refused.code}",
+                provider=self.provider,
+                model=self.model,
+                error_type="endpoint_not_allowed",
+                retryable=False,
+                attempts=attempts,
+                diagnostics=({"stage": "outbound_policy", "reason": refused.code},),
+            )
         if isinstance(exc, anthropic.APIConnectionError):
             return LLMProviderError(
                 f"{self.provider} request failed: transient_network",

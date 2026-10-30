@@ -282,6 +282,13 @@ def test_hosted_startup_refuses_unsafe_configuration(tmp_path) -> None:
         build_hosted_runtime(hosted_env(tmp_path), research_request_tokens=5_000_000)
     assert too_large.value.variable == "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH"
 
+    with pytest.raises(DeploymentConfigurationError) as allowlist:
+        build_hosted_runtime(
+            hosted_env(tmp_path, NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS="http://gateway:8080"),
+            research_request_tokens=1000,
+        )
+    assert allowlist.value.variable == "NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS"
+
 
 def test_hosted_startup_derives_the_request_budget_from_the_configured_input_window(tmp_path) -> None:
     # Accounts bring their own models, so the budget cannot come from an

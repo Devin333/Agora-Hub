@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from framework.llm.clients import CREDENTIAL_MODE_ENV, LLMCredentialMode, llm_credential_mode
+from infrastructure.security.outbound_address import LLM_ALLOWED_PRIVATE_HOSTS_ENV, OutboundAddressPolicy
 from infrastructure.storage.events.activity_store import validate_activity_encryption_key
 from infrastructure.storage.events.factory import ACTIVITY_ENCRYPTION_KEY_ENV
 from interfaces.services.account_administration import AccountAdministrationService
@@ -108,6 +109,7 @@ def build_hosted_runtime(
         catalog.require_context_window(tokens)
     except ModelCredentialConfigurationError as exc:
         raise DeploymentConfigurationError(PROVIDER_CATALOG_ENV, str(exc)) from exc
+    outbound = _outbound_policy(values)
     auth = build_hosted_auth_service(settings)
     return HostedRuntime(
         settings=settings,
@@ -117,8 +119,18 @@ def build_hosted_runtime(
             catalog=catalog,
             cipher=cipher,
             repository=LocalJsonModelCredentialRepository.under(settings.account_data_root),
+            outbound_policy=outbound,
         ),
     )
+
+
+def _outbound_policy(values: Mapping[str, str]) -> OutboundAddressPolicy:
+    # Parsed at startup so a malformed allowlist entry stops the deployment
+    # instead of surfacing as a refused model call.
+    try:
+        return OutboundAddressPolicy.from_environment(values)
+    except ValueError as exc:
+        raise DeploymentConfigurationError(LLM_ALLOWED_PRIVATE_HOSTS_ENV, str(exc)) from exc
 
 
 # Features that call a model with the process-wide key instead of the

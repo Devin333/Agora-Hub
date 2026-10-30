@@ -323,3 +323,24 @@ def test_catalog_requires_a_reviewed_structured_output_declaration(structured_ou
 
     with pytest.raises(ModelCredentialConfigurationError):
         parse_model_provider_catalog(_catalog_with_model(model))
+
+
+def test_verify_sends_through_the_outbound_policy_and_reports_a_refused_address(tmp_path) -> None:
+    from infrastructure.security.outbound_address import OutboundAddressPolicy
+
+    # No transport injected: the service's own pinned transport is used, and
+    # the provider host resolves only to a private address.
+    service = ModelCredentialService(
+        catalog=load_model_provider_catalog(CATALOG_PATH),
+        cipher=CredentialCipher(_master(1)),
+        repository=LocalJsonModelCredentialRepository.under(tmp_path),
+        outbound_policy=OutboundAddressPolicy(resolver=lambda _host, _port: ["192.168.0.10"]),
+    )
+    service.save("user-a", provider_id="deepseek", model="deepseek-flash", api_key=KEY_A, expected_revision=None)
+
+    with pytest.raises(ModelCredentialError) as raised:
+        service.verify("user-a")
+
+    assert raised.value.code == "model_endpoint_not_allowed"
+    assert raised.value.status_code == 400
+    assert service.view("user-a").status == "unverified"

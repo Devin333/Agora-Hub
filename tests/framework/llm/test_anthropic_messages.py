@@ -323,3 +323,23 @@ def test_client_refuses_an_openai_endpoint():
     endpoint = LLMEndpoint(base_url="https://a.example/v1", model="m", api_key=KEY, provider="p")
     with pytest.raises(ValueError):
         AnthropicMessagesClient.for_endpoint(endpoint, timeout_seconds=10)
+
+
+def test_refused_endpoint_is_a_final_configuration_failure():
+    from framework.shared.errors import BoundaryViolationError
+
+    attempts: list[httpx2.Request] = []
+
+    def refuse(request: httpx2.Request) -> httpx2.Response:
+        attempts.append(request)
+        raise BoundaryViolationError("outbound target rejected: non_public_address", code="non_public_address")
+
+    client = _client(_Recorder(httpx2.Response(200, json=_message())), retry_policy=LLMRetryPolicy(max_attempts=3))
+    client._sdk._client = httpx2.Client(transport=httpx2.MockTransport(refuse))
+
+    with pytest.raises(LLMProviderError) as raised:
+        client.complete(_request())
+
+    assert raised.value.error_type == "endpoint_not_allowed"
+    assert raised.value.retryable is False
+    assert len(attempts) == 1

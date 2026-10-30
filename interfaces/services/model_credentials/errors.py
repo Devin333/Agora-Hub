@@ -71,6 +71,14 @@ def provider_unreachable() -> ModelCredentialError:
     )
 
 
+def endpoint_not_allowed() -> ModelCredentialError:
+    return ModelCredentialError(
+        "model_endpoint_not_allowed",
+        "This model address is not allowed: it must be public HTTPS, or an administrator must allowlist it",
+        status_code=400,
+    )
+
+
 def revision_conflict() -> ModelCredentialError:
     return ModelCredentialError(
         "model_credential_conflict",
