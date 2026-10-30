@@ -12,7 +12,8 @@ x-api-environment: &api-environment
   # trusted, nothing else's.
   NEWSROOM_TRUSTED_PROXY_CIDRS: ${AGORA_WEB_IP:-172.30.10.20}/32
   NEWSROOM_LLM_CREDENTIAL_MODE: invocation
-  # Input budget every account model connection must hold (tokens).
+  # Input budget of one research request (tokens); the window each model
+  # purpose requires is derived from it at startup.
   NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS: ${NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS:-64000}
   # Private model endpoints accounts may call (hostnames, IPs, CIDRs); empty = public HTTPS only.
   NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS: ${NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS:-}
@@ -20,6 +21,8 @@ x-api-environment: &api-environment
   NEWS_ACTIVITY_ENCRYPTION_KEY: ${NEWS_ACTIVITY_ENCRYPTION_KEY:?set NEWS_ACTIVITY_ENCRYPTION_KEY in .env}
   NEWSROOM_HOSTED_LOGIN_RATE_LIMIT_PER_MINUTE: ${NEWSROOM_HOSTED_LOGIN_RATE_LIMIT_PER_MINUTE:-10}
   NEWSROOM_HOSTED_RESEARCH_RATE_LIMIT_PER_MINUTE: ${NEWSROOM_HOSTED_RESEARCH_RATE_LIMIT_PER_MINUTE:-30}
+  # Key verifications and model listings, which call the provider with the user's key.
+  NEWSROOM_HOSTED_MODEL_PROBE_RATE_LIMIT_PER_MINUTE: ${NEWSROOM_HOSTED_MODEL_PROBE_RATE_LIMIT_PER_MINUTE:-10}
   # Marker needs a Docker daemon; the API container parses PDFs in process.
   NEWS_RESEARCH_PARSER_BACKENDS: pymupdf
   NEWSROOM_PDF_PARSER_CASCADE: pymupdf
