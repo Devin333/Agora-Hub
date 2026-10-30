@@ -31,6 +31,8 @@ Issues = "https://github.com/Devin333/Agora-Hub/issues"
 
 [project.optional-dependencies]
 api = [
+  # Native client for account connections that speak the Anthropic Messages API.
+  "anthropic>=2.3,<3",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
 ]

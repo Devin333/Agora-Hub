@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from framework.llm.clients.anthropic_messages import (
+    ANTHROPIC_RETRYABLE_STATUS_CODES,
+    AnthropicMessagesClient,
+)
 from framework.llm.clients.endpoint import LLMEndpoint, LLMWireProtocol
 from framework.llm.clients.invocation import InvocationLLMClient
 from framework.llm.clients.openai_compatible import LLMRetryPolicy, OpenAICompatibleClient
@@ -34,12 +38,20 @@ class EndpointClientFactory:
         self._policy = policy
 
     def __call__(self, endpoint: LLMEndpoint) -> LLMClient:
-        retry_policy = LLMRetryPolicy(max_attempts=self._policy.max_attempts)
         if endpoint.protocol is LLMWireProtocol.OPENAI_CHAT:
             return OpenAICompatibleClient.for_endpoint(
                 endpoint,
                 timeout_seconds=self._policy.timeout_seconds,
-                retry_policy=retry_policy,
+                retry_policy=LLMRetryPolicy(max_attempts=self._policy.max_attempts),
+            )
+        if endpoint.protocol is LLMWireProtocol.ANTHROPIC_MESSAGES:
+            return AnthropicMessagesClient.for_endpoint(
+                endpoint,
+                timeout_seconds=self._policy.timeout_seconds,
+                retry_policy=LLMRetryPolicy(
+                    max_attempts=self._policy.max_attempts,
+                    retryable_status_codes=ANTHROPIC_RETRYABLE_STATUS_CODES,
+                ),
             )
         raise ValueError(f"no client speaks the {endpoint.protocol.value} protocol")
 
