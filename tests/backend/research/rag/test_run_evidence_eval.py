@@ -369,6 +369,73 @@ def test_run_evidence_eval_rejects_conflicting_answer_eval_modes(tmp_path) -> No
         ])
 
 
+def test_run_evidence_eval_checks_flags_before_resolving_the_answer_model(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from backend.research.application import llm_client
+
+    def unexpected_model_resolution(**_kwargs):
+        raise AssertionError("answer model must not be resolved for unusable flags")
+
+    monkeypatch.setattr(
+        llm_client,
+        "build_unity_paper_answer_model",
+        unexpected_model_resolution,
+    )
+    golden = tmp_path / "golden.json"
+    save_evidence_golden_set([
+        EvidenceQAPair.negative(
+            question="Does the paper discuss unrelated weather data?",
+            paper_id="p1",
+        )
+    ], golden)
+
+    with pytest.raises(ValueError, match="requires --papers-dir"):
+        main(["--golden-set", str(golden), "--live-answer-eval"])
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        main([
+            "--golden-set",
+            str(golden),
+            "--deterministic-answer-eval",
+            "--live-answer-eval",
+        ])
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (
+            EvidenceEvalOptions(
+                golden_set="golden.json",
+                deterministic_answer_eval=True,
+                live_answer_eval=True,
+            ),
+            "mutually exclusive",
+        ),
+        (EvidenceEvalOptions(build_golden_set=True), "--build-golden-set requires --papers-dir"),
+        (EvidenceEvalOptions(), "--golden-set is required"),
+        (
+            EvidenceEvalOptions(golden_set="golden.json", live_retrieval=True),
+            "--live-retrieval requires --papers-dir",
+        ),
+        (
+            EvidenceEvalOptions(golden_set="golden.json", live_answer_eval=True),
+            "--live-answer-eval requires --papers-dir",
+        ),
+    ],
+)
+def test_evidence_eval_options_reject_unusable_combinations(options, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        options.validate()
+
+
+def test_evidence_eval_options_accept_injected_live_answer_without_papers() -> None:
+    EvidenceEvalOptions(golden_set="golden.json", live_answer_eval=True).validate(
+        live_answer_injected=True,
+    )
+
+
 def test_run_evidence_eval_returns_failure_for_unavailable_threshold(tmp_path) -> None:
     golden = tmp_path / "golden.json"
     output = tmp_path / "report"

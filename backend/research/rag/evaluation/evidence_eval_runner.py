@@ -56,6 +56,41 @@ class EvidenceEvalOptions:
     live_answer_eval: bool = False
     answer_eval_limit: int = 8
 
+    def validate(self, *, live_answer_injected: bool = False) -> None:
+        """Reject option combinations that can never run.
+
+        Only option values are checked, so callers can validate before they
+        build expensive collaborators such as the live answer model. Checks
+        that need the loaded corpus stay with the steps that use it.
+        """
+
+        if self.deterministic_answer_eval and self.live_answer_eval:
+            raise ValueError(_ANSWER_EVAL_MODES_EXCLUSIVE)
+        if self.build_golden_set and not self.papers_dir:
+            raise ValueError(_BUILD_GOLDEN_SET_REQUIRES_PAPERS)
+        if not self.golden_set and not self.build_golden_set:
+            raise ValueError(_GOLDEN_SET_REQUIRED)
+        if self.live_retrieval and not self.papers_dir:
+            raise ValueError(_LIVE_RETRIEVAL_REQUIRES_PAPERS)
+        if self.live_answer_eval and not live_answer_injected and not self.papers_dir:
+            raise ValueError(_LIVE_ANSWER_REQUIRES_PAPERS)
+
+
+_ANSWER_EVAL_MODES_EXCLUSIVE = (
+    "--deterministic-answer-eval and --live-answer-eval are mutually exclusive"
+)
+_BUILD_GOLDEN_SET_REQUIRES_PAPERS = "--build-golden-set requires --papers-dir"
+_GOLDEN_SET_REQUIRED = (
+    "--golden-set is required unless --papers-dir --build-golden-set produces pairs"
+)
+_LIVE_RETRIEVAL_REQUIRES_PAPERS = (
+    "--live-retrieval requires --papers-dir with parsed research_document.json files"
+)
+_LIVE_ANSWER_REQUIRES_PAPERS = (
+    "--live-answer-eval requires --papers-dir with parsed research_document.json files "
+    "or an injected live_answer_ask callable from an outer interface/script layer"
+)
+
 
 def run_evidence_eval_core(
     options: EvidenceEvalOptions,
@@ -63,8 +98,7 @@ def run_evidence_eval_core(
     live_answer_ask: Callable[[EvidenceQAPair], dict[str, Any]] | None = None,
     answer_model: PaperAnswerModelPort | None = None,
 ) -> int:
-    if options.deterministic_answer_eval and options.live_answer_eval:
-        raise ValueError("--deterministic-answer-eval and --live-answer-eval are mutually exclusive")
+    options.validate(live_answer_injected=live_answer_ask is not None)
     pairs = []
     chunks = []
     visual_store = None
@@ -86,7 +120,7 @@ def run_evidence_eval_core(
             )
     if options.build_golden_set:
         if not chunks:
-            raise ValueError("--build-golden-set requires --papers-dir")
+            raise ValueError(_BUILD_GOLDEN_SET_REQUIRES_PAPERS)
         pairs = EvidenceGoldenSetBuilder(
             max_pairs_per_type=options.max_pairs_per_type,
             include_negative=not options.no_negative,
@@ -96,7 +130,7 @@ def run_evidence_eval_core(
     elif options.golden_set:
         pairs = load_evidence_golden_set(options.golden_set)
     if not pairs:
-        raise ValueError("--golden-set is required unless --papers-dir --build-golden-set produces pairs")
+        raise ValueError(_GOLDEN_SET_REQUIRED)
     golden_set_hydration: dict[str, Any] = {}
     if pairs and chunks and options.golden_set and not options.build_golden_set:
         pairs, golden_set_hydration = hydrate_evidence_pairs_from_chunks(pairs, chunks)
@@ -132,7 +166,7 @@ def run_evidence_eval_core(
     retrieval = None
     if options.live_retrieval:
         if not chunks:
-            raise ValueError("--live-retrieval requires --papers-dir with parsed research_document.json files")
+            raise ValueError(_LIVE_RETRIEVAL_REQUIRES_PAPERS)
         retriever, visual_store = _build_live_retriever(
             chunks,
             visual_enabled=options.visual,
@@ -379,10 +413,7 @@ def _build_live_answer_ask(
     answer_model: PaperAnswerModelPort | None = None,
 ) -> Callable[[EvidenceQAPair], dict[str, Any]]:
     if not chunks:
-        raise ValueError(
-            "--live-answer-eval requires --papers-dir with parsed research_document.json files "
-            "or an injected live_answer_ask callable from an outer interface/script layer"
-        )
+        raise ValueError(_LIVE_ANSWER_REQUIRES_PAPERS)
     return build_in_memory_live_answer_ask(
         chunks,
         retrieval_policy=retrieval_policy,
