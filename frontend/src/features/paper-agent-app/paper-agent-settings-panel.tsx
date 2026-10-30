@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { AlertTriangle, CheckCircle2, CircleDot, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, UserRound, Users, Wifi, X, type LucideIcon } from "lucide-react"
 import { usePortalAccount } from "@/components/auth/portal-account-provider"
-import type { ModelCredentialStatus } from "@/lib/account/client"
 import type { SettingsSection } from "@/lib/account/settings-navigation"
 import { fetchDesktopCapabilities, type DesktopCapabilities } from "@/lib/research/desktop/client"
 import { getPersonalMemoryPolicy, type PersonalMemoryPolicy } from "./personal-memory-client"
 import { AccountAdminSection } from "./settings/account-admin-section"
 import { AccountPasswordSection } from "./settings/account-password-section"
-import { credentialStatusView, ModelCredentialSection } from "./settings/model-credential-section"
+import { ModelConnectionsSection, type ModelConnectionsSummary } from "./settings/model-connections-section"
 import { cx, formatTime, InlineError, LoadingLine, SectionHeading, StatusBadge, SummaryCard, type Tone } from "./settings/settings-ui"
 import styles from "./paper-agent-settings-panel.module.css"
 
@@ -21,7 +20,7 @@ const sectionId = (section: SettingsSection) => `settings-${section}`
 
 const navigation: ReadonlyArray<NavigationEntry & { adminOnly?: boolean }> = [
   { section: "account", label: "账号与密码", icon: UserRound },
-  { section: "model", label: "模型 API", icon: KeyRound },
+  { section: "model", label: "模型连接", icon: KeyRound },
   { section: "capabilities", label: "能力状态", icon: CircleDot },
   { section: "network", label: "联网与记忆授权", icon: Wifi },
   { section: "admin", label: "账号管理", icon: Users, adminOnly: true },
@@ -72,7 +71,8 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, initialSection
   const requestRef = useRef(0)
   const [capabilities, setCapabilities] = useState<LoadState<DesktopCapabilities>>(empty)
   const [memoryPolicy, setMemoryPolicy] = useState<LoadState<PersonalMemoryPolicy>>(empty)
-  const [credentialStatus, setCredentialStatus] = useState<ModelCredentialStatus | null | undefined>(undefined)
+  // undefined while loading, null when the connections could not be read.
+  const [modelSummary, setModelSummary] = useState<ModelConnectionsSummary | null | undefined>(undefined)
   const [loading, setLoading] = useState(true)
   const reportDraft = useSectionDrafts(onDraftChange)
   const reportPasswordDraft = useCallback((dirty: boolean) => reportDraft("account", dirty), [reportDraft])
@@ -101,7 +101,6 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, initialSection
   }, [initialSection])
 
   const memoryRemoteAllowed = memoryPolicy.value?.allow_remote_processing === true
-  const credentialView = credentialStatus ? credentialStatusView[credentialStatus] : null
   return (
     <section ref={panelRef} className={cx(styles.panel, styles.navigable, className)} role={modal ? "dialog" : undefined} aria-modal={modal || undefined} aria-labelledby="paper-agent-settings-title" tabIndex={modal ? -1 : undefined}>
       <SettingsNavigation contentRef={contentRef} sections={sections} initialSection={initialSection} />
@@ -116,7 +115,7 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, initialSection
 
       <div className={styles.summaryGrid}>
         <SummaryCard icon={<UserRound size={18} />} label="当前账号" value={user ? `${user.username} · ${isAdmin ? "管理员" : "普通用户"}` : "未登录"} tone={user ? "success" : "warning"} />
-        <SummaryCard icon={<KeyRound size={18} />} label="模型 API" value={credentialStatus === undefined ? "正在检查" : credentialView?.label ?? "状态读取失败"} tone={credentialStatus === undefined ? "neutral" : credentialView?.tone ?? "danger"} />
+        <SummaryCard icon={<KeyRound size={18} />} label="模型连接" value={modelSummary === undefined ? "正在检查" : modelSummary?.label ?? "状态读取失败"} tone={modelSummary === undefined ? "neutral" : modelSummary?.tone ?? "danger"} />
         <SummaryCard icon={<ShieldCheck size={18} />} label="记忆远程处理" value={memoryPolicy.error ? "策略读取失败" : memoryRemoteAllowed ? "已由你授权" : memoryPolicy.value ? "未授权（关闭）" : "正在检查"} tone={memoryPolicy.error ? "danger" : memoryRemoteAllowed ? "warning" : memoryPolicy.value ? "success" : "neutral"} />
       </div>
 
@@ -133,9 +132,9 @@ export function PaperAgentSettingsPanel({ onClose, onDraftChange, initialSection
         </section>
 
         <section className={styles.card} id={sectionId("model")} aria-labelledby="settings-model-title">
-          <SectionHeading icon={<KeyRound size={18} />} title="模型 API" id="settings-model-title" />
-          <p className={styles.sectionLead}>分析、问答等需要大模型的功能使用你自己的 API Key 调用，费用计入你的模型服务账户。</p>
-          <ModelCredentialSection onDraftChange={reportModelDraft} onStatusChange={setCredentialStatus} />
+          <SectionHeading icon={<KeyRound size={18} />} title="模型连接" id="settings-model-title" />
+          <p className={styles.sectionLead}>分析、问答等需要大模型的功能使用你自己的 API Key 调用，费用计入你的模型服务账户。你可以添加多个连接，按用途分别选择：回答用强模型，摘要和导航用便宜的模型。</p>
+          <ModelConnectionsSection onDraftChange={reportModelDraft} onSummaryChange={setModelSummary} />
         </section>
 
         <section className={styles.card} id={sectionId("capabilities")} aria-labelledby="settings-capabilities-title">

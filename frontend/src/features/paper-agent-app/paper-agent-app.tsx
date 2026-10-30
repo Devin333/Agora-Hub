@@ -6,7 +6,7 @@ import { usePortalAccount } from "@/components/auth/portal-account-provider"
 import { BrandMark } from "@/components/brand/brand-mark"
 import { useAppearanceOptions } from "@/components/theme/appearance-menu"
 import { ResearchSourceEntry } from "@/features/portal/components/research-source-entry"
-import { modelCredentialChangedEvent } from "@/lib/account/model-credential-events"
+import { modelConnectionsChangedEvent } from "@/lib/account/model-connection-events"
 import { openSettingsEvent, parseSettingsSection, settingsQueryKey, settingsSectionFrom, type SettingsSection } from "@/lib/account/settings-navigation"
 import { fetchDesktopCapabilities, fetchDesktopIdentity, fetchResearchOperation } from "@/lib/research/desktop/client"
 import type { DesktopCapabilities, DesktopIdentity } from "@/lib/research/desktop/contracts"
@@ -144,12 +144,12 @@ export function PaperAgentApp() {
     return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update) }
   }, [])
 
-  // Bumped when the account's model key changes, so the capability summary re-reads.
+  // Bumped when the account's model connections change, so the capability summary re-reads.
   const [capabilityRevision, setCapabilityRevision] = useState(0)
   useEffect(() => {
     const onChanged = () => setCapabilityRevision(value => value + 1)
-    window.addEventListener(modelCredentialChangedEvent, onChanged)
-    return () => window.removeEventListener(modelCredentialChangedEvent, onChanged)
+    window.addEventListener(modelConnectionsChangedEvent, onChanged)
+    return () => window.removeEventListener(modelConnectionsChangedEvent, onChanged)
   }, [])
 
   useEffect(() => {

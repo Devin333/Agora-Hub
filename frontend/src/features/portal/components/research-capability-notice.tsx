@@ -9,10 +9,10 @@ import {
   RefreshCw,
   WifiOff,
 } from "lucide-react"
-import { ModelCredentialAction } from "@/components/account/model-credential-action"
+import { ModelConnectionAction } from "@/components/account/model-connection-action"
 import { Button } from "@/components/ui/button"
-import { modelCredentialChangedEvent } from "@/lib/account/model-credential-events"
-import { isModelCredentialFailure } from "@/lib/account/settings-navigation"
+import { modelConnectionsChangedEvent } from "@/lib/account/model-connection-events"
+import { isModelConnectionFailure } from "@/lib/account/settings-navigation"
 import { isHostedProfile } from "@/lib/deployment-profile"
 import { fetchDesktopCapabilities } from "@/lib/research/desktop/client"
 import type { DesktopCapabilities } from "@/lib/research/desktop/contracts"
@@ -37,8 +37,8 @@ function HostedResearchCapabilityNotice({ compact }: { compact: boolean }) {
   const { refetch } = query
   useEffect(() => {
     const onChanged = () => { void refetch() }
-    window.addEventListener(modelCredentialChangedEvent, onChanged)
-    return () => window.removeEventListener(modelCredentialChangedEvent, onChanged)
+    window.addEventListener(modelConnectionsChangedEvent, onChanged)
+    return () => window.removeEventListener(modelConnectionsChangedEvent, onChanged)
   }, [refetch])
 
   if (!workspace.ready || query.isLoading) {
@@ -76,8 +76,11 @@ function HostedResearchCapabilityNotice({ compact }: { compact: boolean }) {
   }
 
   const affected = query.data.capabilities.filter(item => item.required && !item.verified)
-  // Every model-backed capability reports the same account-level gap; offer one fix for all of them.
-  const credentialGap = query.data.capabilities.find(item => isModelCredentialFailure(item.reasonCode))?.reasonCode ?? null
+  // Model-backed capabilities report which purpose lacks a usable connection;
+  // the settings section fixes every one of them, so one action is offered.
+  const connectionGaps = query.data.capabilities.filter(item => isModelConnectionFailure(item.reasonCode))
+  const connectionGap = connectionGaps[0]?.reasonCode ?? null
+  const gapMessages = [...new Set(connectionGaps.map(item => item.message).filter((text): text is string => Boolean(text)))]
   if (affected.length === 0 && compact) {
     return (
       <div role="status" className="mb-3 inline-flex items-center gap-2 text-body2 text-success-text">
@@ -96,10 +99,10 @@ function HostedResearchCapabilityNotice({ compact }: { compact: boolean }) {
         <strong className="font-medium text-foreground">研究服务能力</strong>
         <span>{affected.length ? `${affected.length} 项必需能力尚未验证` : "所需能力已经验证"}</span>
       </div>
-      {credentialGap && (
+      {connectionGap && (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-warning/15 px-3 py-2 text-warning-text">
-          <span>{credentialGap === "model_credential_required" ? "分析与问答需要你自己的模型 API Key。" : "保存的模型 API Key 需要重新填写。"}</span>
-          <ModelCredentialAction code={credentialGap} className="text-foreground" />
+          <span>{gapMessages.length ? gapMessages.join(" ") : "分析与问答需要你自己的模型连接。"}</span>
+          <ModelConnectionAction code={connectionGap} className="text-foreground" />
         </div>
       )}
       {!compact && (

@@ -4,16 +4,13 @@ import {
   changeAccountRole,
   changeOwnPassword,
   createAccount,
-  deleteModelCredential,
-  fetchModelCredential,
+  fetchOwnAccount,
+  formatTokens,
   listAccounts,
   resetAccountPassword,
-  saveModelCredential,
   setAccountEnabled,
 } from "./client"
 
-const credential = { configured: true, status: "unverified", providerId: "deepseek", model: "deepseek-chat", keyHint: "a1b2", revision: 1, updatedAt: null, verifiedAt: null }
-const catalog = { providers: [{ id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat", models: [{ id: "deepseek-chat", label: "DeepSeek Chat" }] }] }
 const account = { userId: "user-bob", username: "bob", role: "user", enabled: true }
 
 function respond(body: unknown, status = 200) {
@@ -30,28 +27,14 @@ function lastCall(fetch: ReturnType<typeof respond>) {
 describe("account client", () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it("reads the credential through the same-origin BFF without caching", async () => {
-    const fetch = respond({ success: true, data: { credential, catalog } })
-    await expect(fetchModelCredential()).resolves.toEqual({ credential, catalog })
+  it("reads the account through the same-origin BFF without caching and strips unknown fields", async () => {
+    const fetch = respond({ success: true, data: { account: { ...account, passwordHash: "secret" } } })
+    const read = await fetchOwnAccount()
+    expect(read).toEqual(account)
+    expect(read).not.toHaveProperty("passwordHash")
     const { path, init } = lastCall(fetch)
-    expect(path).toBe("/api/v1/account/model-credential")
+    expect(path).toBe("/api/v1/account")
     expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" })
-  })
-
-  it("strips fields the contract does not know", async () => {
-    respond({ success: true, data: { credential: { ...credential, encryptedKey: "ciphertext" }, catalog } })
-    const payload = await fetchModelCredential()
-    expect(payload.credential).not.toHaveProperty("encryptedKey")
-  })
-
-  it("sends the key only when one was typed and the revision only for a stored key", async () => {
-    const fetch = respond({ success: true, data: { credential, catalog } })
-    await saveModelCredential({ providerId: "deepseek", model: "deepseek-chat", apiKey: "sk-new", expectedRevision: null })
-    expect(lastCall(fetch)).toMatchObject({ path: "/api/v1/account/model-credential", init: { method: "PUT" }, body: { providerId: "deepseek", model: "deepseek-chat", apiKey: "sk-new" } })
-    await saveModelCredential({ providerId: "deepseek", model: "deepseek-chat", expectedRevision: 3 })
-    expect(lastCall(fetch).body).toEqual({ providerId: "deepseek", model: "deepseek-chat", expectedRevision: 3 })
-    await deleteModelCredential()
-    expect(lastCall(fetch)).toMatchObject({ init: { method: "DELETE" }, body: undefined })
   })
 
   it("changes the password through the cookie-rotating auth route", async () => {
@@ -97,5 +80,28 @@ describe("account client", () => {
 
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>", { status: 502 })))
     await expect(listAccounts()).rejects.toMatchObject({ code: "http_502", status: 502 })
+  })
+
+  it("keeps error details and names the purpose and window a connection lacks", async () => {
+    const details = { purpose: "answer", purposeLabel: "回答", requiredWindow: 343_539, contextWindow: 128_000 }
+    respond({ success: false, error: { code: "model_connection_window_too_small", message: "upstream", details } }, 400)
+    const error = await listAccounts().catch(cause => cause)
+    expect(error).toMatchObject({ code: "model_connection_window_too_small", details })
+    expect(error.message).toBe("“回答”需要至少 34.4 万 token 的上下文窗口，这个模型只有 12.8 万 token。请换一个窗口更大的模型。")
+
+    respond({ success: false, error: { code: "model_connection_invalid", details: { field: "baseUrl" } } }, 400)
+    await expect(listAccounts()).rejects.toMatchObject({ message: expect.stringContaining("https://api.example.com/v1") })
+
+    // Without the numbers the generic sentence stays truthful.
+    respond({ success: false, error: { code: "model_connection_window_too_small" } }, 400)
+    await expect(listAccounts()).rejects.toMatchObject({ message: "这个模型的上下文窗口不够大，不能用于这个用途。" })
+  })
+
+  it("formats token counts the way the settings show them", () => {
+    expect(formatTokens(1_000_000)).toBe("100 万 token")
+    expect(formatTokens(343_539)).toBe("34.4 万 token")
+    expect(formatTokens(8_000)).toBe("8,000 token")
+    expect(formatTokens(0)).toBeNull()
+    expect(formatTokens("1000")).toBeNull()
   })
 })

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { ArrowUpRight, ChartNoAxesColumn, LoaderCircle, RefreshCw, Square } from "lucide-react"
-import { ModelCredentialAction } from "@/components/account/model-credential-action"
+import { ModelConnectionAction } from "@/components/account/model-connection-action"
 import { Button } from "@/components/ui/button"
 import type { Paper } from "@/lib/papers/types"
 import { ReaderTaskCard, ReaderTaskStatus } from "./reader-task-card"
@@ -453,7 +453,7 @@ export function ReaderAnalysisControl({
       description="报告只来自通过质量门的真实分析运行。"
       warning={exactSource ? undefined : "来源修订身份尚未确认，当前不能开始分析。"}
       error={error}
-      errorAction={<ModelCredentialAction code={failureCode} />}
+      errorAction={<ModelConnectionAction code={failureCode} />}
     >
       {runId ? (
         <a

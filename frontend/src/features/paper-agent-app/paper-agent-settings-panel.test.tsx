@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { modelCredentialChangedEvent } from "@/lib/account/model-credential-events"
+import { modelConnectionsChangedEvent } from "@/lib/account/model-connection-events"
 import type { AuthSession } from "@/lib/papers/types"
 import { PaperAgentSettingsModal, PaperAgentSettingsPanel } from "./paper-agent-settings-panel"
 
@@ -20,15 +20,37 @@ const member: AuthSession = { user: { userId: "user-member", username: "bob", ro
 
 const capabilities = { generation: `gen_${"1".repeat(32)}`, capabilities: [
   { id: "source", label: "论文来源", required: true, configured: true, reachable: true, verified: true, verifiedAt: "2026-10-14T08:00:00Z", reasonCode: "business_operation_verified", message: "已由受控业务操作验证。", provenance: { verificationKind: "business_operation", operation: "source.search" } },
-  { id: "paper-question-answering", label: "论文问答", required: true, configured: false, reachable: false, verified: false, verifiedAt: null, reasonCode: "model_credential_required", message: "", provenance: null },
+  { id: "paper-question-answering", label: "论文问答", required: true, configured: false, reachable: false, verified: false, verifiedAt: null, reasonCode: "model_connection_required", message: "请先在设置里为“回答”配置可用的模型连接。", provenance: null },
 ] }
 const policy = { allow_remote_processing: false, revision: 4, created_at: "2026-10-14T07:00:00Z", updated_at: "2026-10-14T07:00:00Z" }
+const reasoning = { parameter: "deepseek_thinking", efforts: ["off", "low", "high", "max"], default: "high" }
+// The same shape the API's account_view returns (interfaces/services/model_connections/views.py).
 const catalog = { providers: [
-  { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat", models: [{ id: "deepseek-chat", label: "DeepSeek Chat" }, { id: "deepseek-reasoner", label: "DeepSeek Reasoner" }] },
-  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-5.5", models: [{ id: "gpt-5.5", label: "GPT-5.5" }] },
+  { id: "deepseek", label: "DeepSeek 官方", kind: "catalog", protocol: "openai_chat", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-flash", models: [
+    { id: "deepseek-flash", label: "DeepSeek V4.1 Flash", contextWindowTokens: 1_000_000, maxOutputTokens: 384_000, reasoning, structuredOutput: true },
+    { id: "deepseek-small", label: "DeepSeek Small", contextWindowTokens: 16_000, maxOutputTokens: null, reasoning: { parameter: "none", efforts: [], default: null }, structuredOutput: false },
+  ] },
+  { id: "custom-openai-compatible", label: "自定义（OpenAI 兼容）", kind: "custom", protocol: "openai_chat", reasoningParameters: ["none", "openai_reasoning_effort"], reasoningEfforts: { none: [], openai_reasoning_effort: ["off", "low", "medium", "high"] }, structuredOutputModes: ["json_object", "none"] },
 ] }
-const notConfigured = { configured: false, status: "not_configured", providerId: null, model: null, keyHint: null, revision: null, updatedAt: null, verifiedAt: null }
-const unverified = { configured: true, status: "unverified", providerId: "deepseek", model: "deepseek-chat", keyHint: "a1b2", revision: 1, updatedAt: "2026-10-20T08:00:00Z", verifiedAt: null }
+const purposes = [
+  { id: "answer", label: "回答", requirement: { inputTokens: 342_639, outputTokens: 900, structuredOutput: false } },
+  { id: "evidence_summary", label: "证据摘要", requirement: { inputTokens: 41_500, outputTokens: 3_000, structuredOutput: false } },
+  { id: "section_navigation", label: "章节导航", requirement: { inputTokens: 40_906, outputTokens: 1_500, structuredOutput: false } },
+  { id: "candidate_generation", label: "候选生成", requirement: { inputTokens: 64_000, outputTokens: 2_048, structuredOutput: true } },
+]
+const allowance = { default: 8192, off: 0, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 65536 }
+const allFit = Object.fromEntries(purposes.map(purpose => [purpose.id, { fits: true, requiredWindow: 400_000, reason: null }]))
+const flash = {
+  id: "mc-0123456789abcdef", label: "DeepSeek 官方 · DeepSeek V4.1 Flash", providerId: "deepseek", providerLabel: "DeepSeek 官方", custom: false,
+  protocol: "openai_chat", baseUrl: "https://api.deepseek.com", model: "deepseek-flash", modelLabel: "DeepSeek V4.1 Flash", reasoningEffort: null,
+  reasoningParameter: "deepseek_thinking", contextWindowTokens: 1_000_000, maxOutputTokens: 384_000, structuredOutput: "json_object",
+  status: "unverified", credentialConfigured: true, keyHint: "a1b2", revision: 1, createdAt: "2026-10-20T08:00:00Z",
+  updatedAt: "2026-10-20T08:00:00Z", verifiedAt: null, purposes: [], fits: allFit,
+}
+type View = { revision: number; connections: Array<Record<string, unknown>>; assignments: Record<string, string | null> }
+const viewOf = (state: View) => ({ ...state, purposes, reasoningOutputAllowance: allowance, catalog })
+const emptyView: View = { revision: 0, connections: [], assignments: { answer: null, evidence_summary: null, section_navigation: null, candidate_generation: null } }
+const withFlash = (overrides: Record<string, unknown> = {}): View => ({ revision: 1, connections: [{ ...flash, ...overrides }], assignments: emptyView.assignments })
 const accounts = [
   { userId: "user-admin", username: "alice", role: "admin", enabled: true, createdAt: "2026-10-01T08:00:00Z" },
   { userId: "user-member", username: "bob", role: "user", enabled: true, createdAt: "2026-10-02T08:00:00Z" },
@@ -38,15 +60,15 @@ const ok = (data: unknown) => new Response(JSON.stringify({ success: true, data 
 const fail = (code: string, status: number) => new Response(JSON.stringify({ success: false, error: { code, message: "upstream detail" } }), { status, headers: { "Content-Type": "application/json" } })
 
 type Handler = (init: RequestInit | undefined) => Response | Promise<Response>
-type Server = { credential: Record<string, unknown>; routes: Map<string, Handler>; fetch: ReturnType<typeof vi.fn> }
+type Server = { view: View; routes: Map<string, Handler>; fetch: ReturnType<typeof vi.fn> }
 
 /** A fake BFF: each "METHOD path" answers with the account service envelope. */
-function installServer(options: { credential?: Record<string, unknown> } = {}): Server {
-  const server: Server = { credential: options.credential ?? notConfigured, routes: new Map(), fetch: vi.fn() }
+function installServer(options: { view?: View } = {}): Server {
+  const server: Server = { view: options.view ?? emptyView, routes: new Map(), fetch: vi.fn() }
   const routes = server.routes
   routes.set("GET /api/research/desktop/capabilities", () => ok(capabilities))
   routes.set("GET /api/research/personal-memory/policy", () => ok({ policy }))
-  routes.set("GET /api/v1/account/model-credential", () => ok({ credential: server.credential, catalog }))
+  routes.set("GET /api/v1/account/model-connections", () => ok(viewOf(server.view)))
   routes.set("GET /api/v1/admin/accounts", () => ok({ accounts }))
   server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${String(input)}`
@@ -112,7 +134,8 @@ describe("PaperAgentSettingsPanel CSS", () => {
       "src/features/paper-agent-app/paper-agent-settings-panel.tsx",
       "src/features/paper-agent-app/settings/account-admin-section.tsx",
       "src/features/paper-agent-app/settings/account-password-section.tsx",
-      "src/features/paper-agent-app/settings/model-credential-section.tsx",
+      "src/features/paper-agent-app/settings/model-connections-section.tsx",
+      "src/features/paper-agent-app/settings/model-connection-form.tsx",
       "src/features/paper-agent-app/settings/settings-ui.tsx",
     ].map(path => readFileSync(resolve(process.cwd(), path), "utf8")).join("\n")
     const used = new Set(Array.from(sources.matchAll(/styles\.([A-Za-z]+)/g), match => match[1]))
@@ -132,7 +155,7 @@ describe("PaperAgentSettingsPanel navigation", () => {
     render(<PaperAgentSettingsPanel />)
     const nav = screen.getByRole("navigation", { name: "设置分区" })
     const items = within(nav).getAllByRole("button")
-    expect(items.map(item => item.textContent)).toEqual(["账号与密码", "模型 API", "能力状态", "联网与记忆授权"])
+    expect(items.map(item => item.textContent)).toEqual(["账号与密码", "模型连接", "能力状态", "联网与记忆授权"])
     expect(items[0]).toHaveAttribute("aria-current", "true")
     expect(document.getElementById("settings-admin")).toBeNull()
 
@@ -155,14 +178,14 @@ describe("PaperAgentSettingsPanel navigation", () => {
   it("never asks a member's browser for the account list", async () => {
     const server = installServer()
     render(<PaperAgentSettingsPanel />)
-    await screen.findByText("尚未填写。需要模型的分析、问答等功能会提示你先配置。")
+    await screen.findByText("还没有模型连接")
     expect(calledWith(server, "GET /api/v1/admin/accounts")).toBe(false)
   })
 
-  it("opens at the section a model credential failure asked for", () => withScroll(async scrollIntoView => {
+  it("opens at the section a model connection failure asked for", () => withScroll(async scrollIntoView => {
     installServer()
     render(<PaperAgentSettingsPanel initialSection="model" />)
-    expect(within(screen.getByRole("navigation", { name: "设置分区" })).getByRole("button", { name: "模型 API" })).toHaveAttribute("aria-current", "true")
+    expect(within(screen.getByRole("navigation", { name: "设置分区" })).getByRole("button", { name: "模型连接" })).toHaveAttribute("aria-current", "true")
     expect(scrollIntoView.mock.contexts[0]).toBe(document.getElementById("settings-model"))
   }))
 })
@@ -180,7 +203,7 @@ describe("PaperAgentSettingsPanel overview", () => {
     expect(within(list).getByText("待配置")).toBeInTheDocument()
     expect(await screen.findByText("个人记忆远程处理未授权")).toBeInTheDocument()
     expect(screen.getByText("未授权（关闭）")).toBeInTheDocument()
-    // The summary reflects the stored credential state, not an assumption.
+    // The summary reflects the stored connections, not an assumption.
     expect(screen.getAllByText("未配置").length).toBeGreaterThan(0)
     expect(screen.queryByText(/F:\//)).not.toBeInTheDocument()
   })
@@ -204,118 +227,203 @@ describe("PaperAgentSettingsPanel overview", () => {
   })
 })
 
-describe("PaperAgentSettingsPanel model credential", () => {
+describe("PaperAgentSettingsPanel model connections", () => {
+  async function openNewForm() {
+    fireEvent.click(await screen.findByRole("button", { name: "添加模型连接" }))
+    return screen.getByLabelText("API Key")
+  }
+
   it("requires the key on first save, sends it once and never shows it again", async () => {
     const server = installServer()
-    server.routes.set("PUT /api/v1/account/model-credential", () => {
-      server.credential = unverified
-      return ok({ credential: server.credential, catalog })
+    server.routes.set("POST /api/v1/account/model-connections", () => {
+      server.view = withFlash()
+      return ok(viewOf(server.view))
     })
     const changed = vi.fn()
-    window.addEventListener(modelCredentialChangedEvent, changed)
+    window.addEventListener(modelConnectionsChangedEvent, changed)
     const onDraftChange = vi.fn()
     try {
       render(<PaperAgentSettingsPanel onDraftChange={onDraftChange} />)
-      const key = await screen.findByLabelText("API Key")
+      const key = await openNewForm()
       expect(screen.getByLabelText("服务商")).toHaveValue("deepseek")
-      expect(screen.getByLabelText("模型")).toHaveValue("deepseek-chat")
+      expect(screen.getByLabelText("模型")).toHaveValue("deepseek-flash")
       expect(screen.getByText("https://api.deepseek.com")).toBeInTheDocument()
 
-      fireEvent.change(screen.getByLabelText("模型"), { target: { value: "deepseek-reasoner" } })
+      fireEvent.change(screen.getByLabelText("思考强度"), { target: { value: "max" } })
       await waitFor(() => expect(onDraftChange).toHaveBeenLastCalledWith(true))
       fireEvent.click(screen.getByRole("button", { name: "保存" }))
       expect(await screen.findByText("请填写 API Key。")).toBeInTheDocument()
-      expect(calledWith(server, "PUT /api/v1/account/model-credential")).toBe(false)
+      expect(calledWith(server, "POST /api/v1/account/model-connections")).toBe(false)
 
       fireEvent.change(key, { target: { value: "  sk-test-secret-value  " } })
       fireEvent.click(screen.getByRole("button", { name: "保存" }))
 
-      expect(await screen.findByText("API Key 已加密保存。建议点击“验证”确认可用。")).toBeInTheDocument()
-      expect(bodyOf(server, "PUT /api/v1/account/model-credential")).toEqual({ providerId: "deepseek", model: "deepseek-reasoner", apiKey: "sk-test-secret-value" })
-      expect(screen.getByLabelText("API Key")).toHaveValue("")
+      expect(await screen.findByText("模型连接已保存。建议点击“验证”确认可用。")).toBeInTheDocument()
+      expect(bodyOf(server, "POST /api/v1/account/model-connections")).toEqual({
+        providerId: "deepseek", model: "deepseek-flash", reasoningEffort: "max", apiKey: "sk-test-secret-value", expectedRevision: 0,
+      })
+      expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument()
       expect(document.body.textContent).not.toContain("sk-test-secret-value")
       expect(screen.getByText(/Key 尾号 a1b2/)).toBeInTheDocument()
       expect(screen.getAllByText("已保存 · 未验证").length).toBeGreaterThan(0)
       expect(changed).toHaveBeenCalledOnce()
       await waitFor(() => expect(onDraftChange).toHaveBeenLastCalledWith(false))
     } finally {
-      window.removeEventListener(modelCredentialChangedEvent, changed)
+      window.removeEventListener(modelConnectionsChangedEvent, changed)
     }
   })
 
-  it("changes only the model of a stored key with its revision and keeps the key", async () => {
-    const server = installServer({ credential: unverified })
-    server.routes.set("PUT /api/v1/account/model-credential", () => ok({ credential: { ...unverified, model: "deepseek-reasoner", revision: 2 }, catalog }))
+  it("previews which purposes a draft fits before it is saved", async () => {
+    installServer()
     render(<PaperAgentSettingsPanel />)
-    await screen.findByText(/Key 尾号 a1b2/)
-    expect(screen.getByLabelText("API Key")).toHaveAttribute("placeholder", "已保存（尾号 a1b2），留空则保持不变")
+    await openNewForm()
+    const preview = screen.getByRole("list", { name: "可用于哪些用途" })
+    expect(within(preview).getAllByText("可用")).toHaveLength(4)
 
-    fireEvent.change(screen.getByLabelText("模型"), { target: { value: "deepseek-reasoner" } })
-    expect(screen.getByRole("button", { name: "验证" })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText("模型"), { target: { value: "deepseek-small" } })
+    expect(within(preview).getAllByText("不可用")).toHaveLength(4)
+    expect(within(preview).getByText("需要能返回 JSON 对象的模型。")).toBeInTheDocument()
+    expect(within(preview).getByText("需要至少 34.4 万 token 窗口，这个模型只有 1.6 万 token。")).toBeInTheDocument()
+  })
+
+  it("asks a custom provider for its address, window and reasoning style", async () => {
+    const server = installServer()
+    server.routes.set("POST /api/v1/account/model-connections/discover", () => ok({ models: ["qwen3-coder", "qwen3-max"] }))
+    server.routes.set("POST /api/v1/account/model-connections", () => fail("model_endpoint_not_allowed", 400))
+    render(<PaperAgentSettingsPanel />)
+    const key = await openNewForm()
+    fireEvent.change(screen.getByLabelText("服务商"), { target: { value: "custom-openai-compatible" } })
+    fireEvent.change(screen.getByLabelText("服务地址（Base URL）"), { target: { value: "https://gateway.example.com/v1" } })
+    fireEvent.change(key, { target: { value: "sk-gateway-key" } })
+    fireEvent.click(screen.getByRole("button", { name: "获取模型列表" }))
+    await waitFor(() => expect(bodyOf(server, "POST /api/v1/account/model-connections/discover")).toEqual({
+      providerId: "custom-openai-compatible", baseUrl: "https://gateway.example.com/v1", apiKey: "sk-gateway-key",
+    }))
+
+    fireEvent.change(screen.getByLabelText("模型 ID"), { target: { value: "qwen3-max" } })
+    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+    expect(await screen.findByText("请填写上下文窗口大小（正整数）。")).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText("上下文窗口（token）"), { target: { value: "128,000" } })
+    fireEvent.change(screen.getByLabelText("思考参数格式"), { target: { value: "openai_reasoning_effort" } })
+    fireEvent.change(screen.getByLabelText("思考强度"), { target: { value: "low" } })
     fireEvent.click(screen.getByRole("button", { name: "保存" }))
 
-    expect(await screen.findByText("模型已更新。")).toBeInTheDocument()
-    expect(bodyOf(server, "PUT /api/v1/account/model-credential")).toEqual({ providerId: "deepseek", model: "deepseek-reasoner", expectedRevision: 1 })
+    expect(await screen.findByText("这个模型地址不被允许：只能用公网 HTTPS 地址，内网地址需要管理员加入白名单。")).toBeInTheDocument()
+    expect(bodyOf(server, "POST /api/v1/account/model-connections")).toEqual({
+      providerId: "custom-openai-compatible", model: "qwen3-max", reasoningEffort: "low", apiKey: "sk-gateway-key",
+      baseUrl: "https://gateway.example.com/v1", contextWindowTokens: 128000, reasoningParameter: "openai_reasoning_effort",
+      structuredOutput: "json_object", expectedRevision: 0,
+    })
+    // A refused save keeps the form and its key so the user can fix the address.
+    expect(screen.getByLabelText("API Key")).toHaveValue("sk-gateway-key")
+  })
+
+  it("edits a stored connection without resending its key", async () => {
+    const server = installServer({ view: withFlash() })
+    server.routes.set(`PATCH /api/v1/account/model-connections/${flash.id}`, () => ok(viewOf(withFlash({ reasoningEffort: "low", revision: 2 }))))
+    render(<PaperAgentSettingsPanel />)
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }))
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("placeholder", "已保存（尾号 a1b2），留空则保持不变")
+    fireEvent.change(screen.getByLabelText("思考强度"), { target: { value: "low" } })
+    fireEvent.click(screen.getByRole("button", { name: "保存" }))
+
+    expect(await screen.findByText("模型连接已更新。")).toBeInTheDocument()
+    expect(bodyOf(server, `PATCH /api/v1/account/model-connections/${flash.id}`)).toEqual({
+      providerId: "deepseek", model: "deepseek-flash", label: flash.label, reasoningEffort: "low", expectedRevision: 1,
+    })
   })
 
   it("asks for the key again when the provider changes", async () => {
-    installServer({ credential: unverified })
+    installServer({ view: withFlash() })
     render(<PaperAgentSettingsPanel />)
-    await screen.findByText(/Key 尾号 a1b2/)
-    fireEvent.change(screen.getByLabelText("服务商"), { target: { value: "openai" } })
-    expect(screen.getByLabelText("模型")).toHaveValue("gpt-5.5")
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }))
+    fireEvent.change(screen.getByLabelText("服务商"), { target: { value: "custom-openai-compatible" } })
     expect(screen.getByLabelText("API Key")).toHaveAttribute("placeholder", "粘贴你的 API Key")
-    fireEvent.click(screen.getByRole("button", { name: "保存" }))
-    expect(await screen.findByText("请填写 API Key。")).toBeInTheDocument()
   })
 
-  it("explains a rotated server key and blocks verification until the key is pasted again", async () => {
-    installServer({ credential: { ...unverified, status: "key_rotated" } })
+  it("assigns a purpose and offers only connections whose window holds it", async () => {
+    const small = {
+      ...flash, id: "mc-fedcba9876543210", label: "小模型", model: "deepseek-small", modelLabel: "DeepSeek Small", contextWindowTokens: 16_000,
+      fits: { ...allFit, answer: { fits: false, requiredWindow: 343_539, reason: "model_connection_window_too_small" } },
+    }
+    const server = installServer({ view: { ...withFlash(), connections: [flash, small] } })
+    server.routes.set("PUT /api/v1/account/model-connections/assignments", () => ok(viewOf({ ...withFlash(), revision: 2, assignments: { ...emptyView.assignments, answer: flash.id } })))
     render(<PaperAgentSettingsPanel />)
-    expect(await screen.findByText("需要重新填写 API Key")).toBeInTheDocument()
+    const answer = await screen.findByLabelText("回答")
+    expect(within(answer).getByRole("option", { name: "小模型（需要 34.4 万 token 窗口）" })).toBeDisabled()
+
+    fireEvent.change(answer, { target: { value: flash.id } })
+
+    expect(await screen.findByText("用途分配已保存。")).toBeInTheDocument()
+    expect(bodyOf(server, "PUT /api/v1/account/model-connections/assignments")).toEqual({ assignments: { answer: flash.id }, expectedRevision: 1 })
+  })
+
+  it("explains a window too small for a purpose with the numbers", async () => {
+    const server = installServer({ view: withFlash() })
+    server.routes.set("PUT /api/v1/account/model-connections/assignments", () => new Response(JSON.stringify({
+      success: false,
+      error: {
+        code: "model_connection_window_too_small",
+        message: "upstream",
+        details: { purpose: "answer", purposeLabel: "回答", requiredWindow: 343_539, contextWindow: 128_000 },
+      },
+    }), { status: 400, headers: { "Content-Type": "application/json" } }))
+    render(<PaperAgentSettingsPanel />)
+    fireEvent.change(await screen.findByLabelText("回答"), { target: { value: flash.id } })
+    expect(await screen.findByText("“回答”需要至少 34.4 万 token 的上下文窗口，这个模型只有 12.8 万 token。请换一个窗口更大的模型。")).toBeInTheDocument()
+  })
+
+  it("explains a key that must be entered again and blocks verification", async () => {
+    installServer({ view: withFlash({ status: "key_rotated", credentialConfigured: false, keyHint: null }) })
+    render(<PaperAgentSettingsPanel />)
+    expect(await screen.findByText("服务器的加密密钥已更换，原来保存的 Key 无法再解开，请重新填写一次。")).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "验证" })).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: "重新填写" }))
     expect(screen.getByLabelText("API Key")).toHaveAttribute("placeholder", "粘贴你的 API Key")
   })
 
   it("verifies through the provider and shows its rejection as a fixable error", async () => {
-    const server = installServer({ credential: unverified })
-    server.routes.set("POST /api/v1/account/model-credential/verify", () => fail("model_credential_rejected", 400))
+    const server = installServer({ view: withFlash() })
+    server.routes.set(`POST /api/v1/account/model-connections/${flash.id}/verify`, () => fail("model_connection_rejected", 400))
     render(<PaperAgentSettingsPanel />)
     fireEvent.click(await screen.findByRole("button", { name: "验证" }))
     expect(await screen.findByText("模型服务拒绝了这个 API Key，请检查后重试。")).toBeInTheDocument()
     expect(screen.queryByText("upstream detail")).not.toBeInTheDocument()
 
-    server.routes.set("POST /api/v1/account/model-credential/verify", () => ok({ credential: { ...unverified, status: "verified", verifiedAt: "2026-10-27T08:00:00Z" }, catalog }))
+    server.routes.set(`POST /api/v1/account/model-connections/${flash.id}/verify`, () => ok(viewOf(withFlash({ status: "verified", verifiedAt: "2026-10-27T08:00:00Z" }))))
     fireEvent.click(screen.getByRole("button", { name: "验证" }))
     expect(await screen.findByText("验证通过，模型服务可以正常使用这个 Key。")).toBeInTheDocument()
     expect(screen.getAllByText("已验证可用").length).toBeGreaterThan(0)
   })
 
-  it("refreshes to the stored state when another tab changed the key first", async () => {
-    const server = installServer({ credential: unverified })
-    server.routes.set("PUT /api/v1/account/model-credential", () => {
-      server.credential = { ...unverified, providerId: "openai", model: "gpt-5.5", keyHint: "z9y8", revision: 3 }
-      return fail("model_credential_conflict", 409)
+  it("refreshes to the stored state when another tab changed the settings first", async () => {
+    const server = installServer({ view: withFlash() })
+    server.routes.set(`PATCH /api/v1/account/model-connections/${flash.id}`, () => {
+      server.view = withFlash({ keyHint: "z9y8", revision: 3 })
+      return fail("model_connection_conflict", 409)
     })
     render(<PaperAgentSettingsPanel />)
-    await screen.findByText(/Key 尾号 a1b2/)
-    fireEvent.change(screen.getByLabelText("模型"), { target: { value: "deepseek-reasoner" } })
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }))
+    fireEvent.change(screen.getByLabelText("思考强度"), { target: { value: "low" } })
     fireEvent.click(screen.getByRole("button", { name: "保存" }))
 
-    expect(await screen.findByText("配置已在其他地方被修改，已为你刷新，请确认后再保存。")).toBeInTheDocument()
+    expect(await screen.findByText("模型设置已在其他窗口被修改，已为你刷新，请确认后再保存。")).toBeInTheDocument()
     expect(await screen.findByText(/Key 尾号 z9y8/)).toBeInTheDocument()
-    expect(screen.getByLabelText("服务商")).toHaveValue("openai")
   })
 
-  it("deletes the stored key only after confirmation", async () => {
-    const server = installServer({ credential: unverified })
-    server.routes.set("DELETE /api/v1/account/model-credential", () => ok({ credential: notConfigured, catalog }))
+  it("deletes a connection only after confirmation", async () => {
+    // The API fills both from one document: the assignment and the connection's purposes agree.
+    const server = installServer({ view: { ...withFlash({ purposes: ["answer"] }), assignments: { ...emptyView.assignments, answer: flash.id } } })
+    const deletion = `DELETE /api/v1/account/model-connections/${flash.id}?expectedRevision=1`
+    server.routes.set(deletion, () => ok(viewOf({ ...emptyView, revision: 2 })))
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true)
     render(<PaperAgentSettingsPanel />)
     fireEvent.click(await screen.findByRole("button", { name: "删除" }))
-    expect(calledWith(server, "DELETE /api/v1/account/model-credential")).toBe(false)
+    expect(confirm.mock.calls[0][0]).toContain("“回答”将没有可用的模型")
+    expect(calledWith(server, deletion)).toBe(false)
     fireEvent.click(screen.getByRole("button", { name: "删除" }))
-    expect(await screen.findByText("API Key 已删除。")).toBeInTheDocument()
+    expect(await screen.findByText("模型连接已删除。")).toBeInTheDocument()
     expect(confirm).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument()
   })
@@ -432,7 +540,7 @@ describe("PaperAgentSettingsPanel draft aggregation", () => {
     installServer()
     const onDraftChange = vi.fn()
     render(<PaperAgentSettingsPanel onDraftChange={onDraftChange} />)
-    await screen.findByLabelText("API Key")
+    fireEvent.click(await screen.findByRole("button", { name: "添加模型连接" }))
     fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "typed" } })
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-typed" } })
     await waitFor(() => expect(onDraftChange).toHaveBeenLastCalledWith(true))
@@ -458,7 +566,7 @@ describe("PaperAgentSettingsModal", () => {
     await waitFor(() => expect(close).toHaveFocus())
     expect(outside).toHaveAttribute("inert")
     expect(outside).toHaveAttribute("aria-hidden", "true")
-    await screen.findByLabelText("API Key")
+    await screen.findByRole("button", { name: "添加模型连接" })
 
     const enabled = Array.from(dialog.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], summary, [tabindex]"))
       .filter(element => element.tabIndex >= 0 && !element.matches(":disabled"))
@@ -512,7 +620,7 @@ describe("PaperAgentSettingsModal", () => {
     const server = installServer()
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
-    server.routes.set("GET /api/v1/account/model-credential", async () => { await gate; return ok({ credential: notConfigured, catalog }) })
+    server.routes.set("GET /api/v1/account/model-connections", async () => { await gate; return ok(viewOf(emptyView)) })
     const outside = document.createElement("button")
     document.body.append(outside)
     render(<PaperAgentSettingsModal open onRequestClose={vi.fn()} />)
@@ -521,8 +629,8 @@ describe("PaperAgentSettingsModal", () => {
     expect(dialog).toContainElement(document.activeElement as HTMLElement)
 
     release()
-    const key = await screen.findByLabelText("API Key")
-    key.focus()
+    const add = await screen.findByRole("button", { name: "添加模型连接" })
+    add.focus()
     fireEvent.keyDown(document, { key: "Tab" })
     expect(dialog).toContainElement(document.activeElement as HTMLElement)
     expect(document.activeElement).not.toBe(outside)
