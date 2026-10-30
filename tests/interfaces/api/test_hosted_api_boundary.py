@@ -8,6 +8,7 @@ from interfaces.api import create_app
 from interfaces.composition.hosted import build_hosted_runtime
 from interfaces.services.deployment_profile import DeploymentConfigurationError
 from interfaces.services.hosted_boundary import HostedRouteAccess, classify_hosted_route
+from interfaces.services.model_connections import ModelPurpose
 from tests.interfaces.api.hosted_support import (
     HOSTED_ORIGIN,
     build_test_hosted_runtime,
@@ -83,7 +84,8 @@ def test_classification_keeps_research_writes_to_durable_operations() -> None:
     assert classify_hosted_route("GET", "/api/v1/research/papers/p-1/document") is HostedRouteAccess.RESEARCH
     assert classify_hosted_route("POST", "/api/v1/research/papers/p-1/ask") is HostedRouteAccess.UNAVAILABLE
     assert classify_hosted_route("GET", "/api/v1/admin/accounts") is HostedRouteAccess.ADMIN
-    assert classify_hosted_route("PUT", "/api/v1/account/model-credential") is HostedRouteAccess.ACCOUNT
+    assert classify_hosted_route("PATCH", "/api/v1/account/model-connections/mc-1") is HostedRouteAccess.ACCOUNT
+    assert classify_hosted_route("PUT", "/api/v1/account/model-connections/assignments") is HostedRouteAccess.ACCOUNT
     assert classify_hosted_route("GET", "/api/v1/research//history") is HostedRouteAccess.UNAVAILABLE
 
 
@@ -108,10 +110,10 @@ def test_mutations_from_another_origin_are_refused(monkeypatch, tmp_path) -> Non
 
     for origin in (None, "https://evil.example", "http://127.0.0.1:3001"):
         extra = {} if origin is None else {"Origin": origin}
-        response = client.put(
-            "/api/v1/account/model-credential",
+        response = client.post(
+            "/api/v1/account/model-connections",
             headers={**headers, **extra},
-            json={"providerId": "deepseek", "model": "deepseek-flash", "apiKey": KEY_A},
+            json={"providerId": "deepseek", "model": "deepseek-flash", "apiKey": KEY_A, "expectedRevision": 0},
         )
         assert response.status_code == 403, origin
         assert response.json()["error"]["code"] == "origin_forbidden"
@@ -131,27 +133,92 @@ def test_administration_requires_the_admin_role(monkeypatch, tmp_path) -> None:
     assert sorted(item["username"] for item in allowed.json()["data"]["accounts"]) == ["alice", "root"]
 
 
-def test_each_request_is_bound_to_the_signed_in_accounts_credential(monkeypatch, tmp_path) -> None:
+def test_each_request_is_bound_to_the_signed_in_accounts_connections(monkeypatch, tmp_path) -> None:
     client, runtime = _client(monkeypatch, tmp_path)
     alice = sign_in(runtime, "alice", USER_PASSWORD)
     bob = sign_in(runtime, "bob", USER_PASSWORD)
 
-    saved = client.put(
-        "/api/v1/account/model-credential",
+    created = client.post(
+        "/api/v1/account/model-connections",
         headers=mutation_headers(alice),
-        json={"providerId": "deepseek", "model": "deepseek-v4-pro", "apiKey": KEY_A},
+        json={"providerId": "deepseek", "model": "deepseek-v4-pro", "apiKey": KEY_A, "expectedRevision": 0},
     )
-    assert saved.status_code == 200
-    credential = saved.json()["data"]["credential"]
-    assert credential["status"] == "unverified"
-    assert KEY_A not in saved.text
+    assert created.status_code == 200
+    view = created.json()["data"]
+    connection = view["connections"][0]
+    assert connection["status"] == "unverified"
+    assert connection["keyHint"] == KEY_A[-4:]
+    assert KEY_A not in created.text
+
+    unassigned = client.get("/api/v1/research/desktop/identity", headers=alice).json()["data"]
+    assert unassigned["endpoint"] == {"error": "model_connection_required"}
+
+    assigned = client.put(
+        "/api/v1/account/model-connections/assignments",
+        headers=mutation_headers(alice),
+        json={"assignments": {"answer": connection["id"]}, "expectedRevision": view["revision"]},
+    )
+    assert assigned.status_code == 200
+    assert assigned.json()["data"]["assignments"]["answer"] == connection["id"]
 
     alice_identity = client.get("/api/v1/research/desktop/identity", headers=alice).json()["data"]
     bob_identity = client.get("/api/v1/research/desktop/identity", headers=bob).json()["data"]
 
     assert alice_identity["endpoint"] == {"keyTail": KEY_A[-4:], "model": "deepseek-v4-pro"}
-    assert bob_identity["endpoint"] == {"error": "model_credential_required"}
+    assert bob_identity["endpoint"] == {"error": "model_connection_required"}
     assert alice_identity["owner"]["userId"] != bob_identity["owner"]["userId"]
+
+
+def test_model_connection_routes_report_errors_with_their_details(monkeypatch, tmp_path) -> None:
+    client, runtime = _client(monkeypatch, tmp_path)
+    alice = sign_in(runtime, "alice", USER_PASSWORD)
+    created = client.post(
+        "/api/v1/account/model-connections",
+        headers=mutation_headers(alice),
+        json={"providerId": "deepseek", "model": "deepseek-flash", "apiKey": KEY_A, "expectedRevision": 0},
+    ).json()["data"]
+    connection_id = created["connections"][0]["id"]
+
+    stale = client.patch(
+        f"/api/v1/account/model-connections/{connection_id}",
+        headers=mutation_headers(alice),
+        json={"providerId": "deepseek", "model": "deepseek-v4-pro", "expectedRevision": 0},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "model_connection_conflict"
+
+    custom_too_small = client.post(
+        "/api/v1/account/model-connections",
+        headers=mutation_headers(alice),
+        json={
+            "providerId": "custom-openai-compatible",
+            "model": "gateway-model",
+            "apiKey": KEY_A,
+            "baseUrl": "https://gateway.example.com/v1",
+            "contextWindowTokens": 128_000,
+            "expectedRevision": created["revision"],
+        },
+    ).json()["data"]
+    small_id = next(item["id"] for item in custom_too_small["connections"] if item["custom"])
+    refused = client.put(
+        "/api/v1/account/model-connections/assignments",
+        headers=mutation_headers(alice),
+        json={"assignments": {"answer": small_id}, "expectedRevision": custom_too_small["revision"]},
+    )
+    assert refused.status_code == 400
+    error = refused.json()["error"]
+    assert error["code"] == "model_connection_window_too_small"
+    assert error["details"]["purpose"] == "answer"
+    assert error["details"]["contextWindow"] == 128_000
+
+    deleted = client.delete(
+        f"/api/v1/account/model-connections/{connection_id}",
+        headers=mutation_headers(alice),
+        params={"expectedRevision": custom_too_small["revision"]},
+    )
+    assert deleted.status_code == 200
+    assert [item["id"] for item in deleted.json()["data"]["connections"]] == [small_id]
+    assert KEY_A not in deleted.text
 
 
 def test_sign_in_is_rate_limited_per_client_address(monkeypatch, tmp_path) -> None:
@@ -239,72 +306,81 @@ def test_session_status_has_no_bootstrap_or_desktop_identity(monkeypatch, tmp_pa
 
 def test_hosted_startup_refuses_unsafe_configuration(tmp_path) -> None:
     with pytest.raises(DeploymentConfigurationError) as missing_key:
-        build_hosted_runtime(
-            hosted_env(tmp_path, NEWSROOM_CREDENTIAL_ENCRYPTION_KEY=""), research_request_tokens=1000
-        )
+        build_hosted_runtime(hosted_env(tmp_path, NEWSROOM_CREDENTIAL_ENCRYPTION_KEY=""))
     assert missing_key.value.variable == "NEWSROOM_CREDENTIAL_ENCRYPTION_KEY"
 
     for activity_key in ("", "not-a-fernet-key"):
         with pytest.raises(DeploymentConfigurationError) as activity:
-            build_hosted_runtime(
-                hosted_env(tmp_path, NEWS_ACTIVITY_ENCRYPTION_KEY=activity_key),
-                research_request_tokens=1000,
-            )
+            build_hosted_runtime(hosted_env(tmp_path, NEWS_ACTIVITY_ENCRYPTION_KEY=activity_key))
         assert activity.value.variable == "NEWS_ACTIVITY_ENCRYPTION_KEY"
 
     with pytest.raises(DeploymentConfigurationError) as environment_mode:
-        build_hosted_runtime(
-            hosted_env(tmp_path, NEWSROOM_LLM_CREDENTIAL_MODE="environment"), research_request_tokens=1000
-        )
+        build_hosted_runtime(hosted_env(tmp_path, NEWSROOM_LLM_CREDENTIAL_MODE="environment"))
     assert environment_mode.value.variable == "NEWSROOM_LLM_CREDENTIAL_MODE"
 
     with pytest.raises(DeploymentConfigurationError) as insecure:
-        build_hosted_runtime(
-            hosted_env(tmp_path, NEWSROOM_ALLOW_INSECURE_ORIGIN="0"), research_request_tokens=1000
-        )
+        build_hosted_runtime(hosted_env(tmp_path, NEWSROOM_ALLOW_INSECURE_ORIGIN="0"))
     assert insecure.value.variable == "NEWSROOM_PUBLIC_ORIGIN"
 
     with pytest.raises(DeploymentConfigurationError) as process_key_feature:
-        build_hosted_runtime(
-            hosted_env(tmp_path, NEWS_VISUAL_DESCRIPTION_ENABLED="1"), research_request_tokens=1000
-        )
+        build_hosted_runtime(hosted_env(tmp_path, NEWS_VISUAL_DESCRIPTION_ENABLED="1"))
     assert process_key_feature.value.variable == "NEWS_VISUAL_DESCRIPTION_ENABLED"
 
     for variable in ("NEWS_RESEARCH_PARSER_BACKENDS", "NEWSROOM_PDF_PARSER_CASCADE"):
         for backends in ("", "marker", "pymupdf,marker"):
             with pytest.raises(DeploymentConfigurationError) as docker_parser:
-                build_hosted_runtime(
-                    hosted_env(tmp_path, **{variable: backends}), research_request_tokens=1000
-                )
+                build_hosted_runtime(hosted_env(tmp_path, **{variable: backends}))
             assert docker_parser.value.variable == variable
-
-    with pytest.raises(DeploymentConfigurationError) as too_large:
-        build_hosted_runtime(hosted_env(tmp_path), research_request_tokens=5_000_000)
-    assert too_large.value.variable == "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH"
 
     with pytest.raises(DeploymentConfigurationError) as allowlist:
         build_hosted_runtime(
-            hosted_env(tmp_path, NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS="http://gateway:8080"),
-            research_request_tokens=1000,
+            hosted_env(tmp_path, NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS="http://gateway:8080")
         )
     assert allowlist.value.variable == "NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS"
 
 
-def test_hosted_startup_derives_the_request_budget_from_the_configured_input_window(tmp_path) -> None:
+_SMALL_ONLY_CATALOG = """\
+schema_version: hosted-llm-providers.v2
+providers:
+  - id: tiny
+    label: Tiny
+    protocol: openai_chat
+    base_url: https://tiny.example.com/v1
+    default_model: tiny-8k
+    models:
+      - id: tiny-8k
+        label: Tiny 8K
+        context_window_tokens: 8000
+        reasoning:
+          parameter: none
+        structured_output:
+          mode: json_object
+          revision: tiny-json-object
+          source: https://tiny.example.com
+"""
+
+
+def test_hosted_startup_refuses_a_catalog_that_cannot_serve_every_purpose(tmp_path) -> None:
+    catalog = tmp_path / "small-catalog.yaml"
+    catalog.write_text(_SMALL_ONLY_CATALOG, encoding="utf-8")
+
+    with pytest.raises(DeploymentConfigurationError) as too_small:
+        build_hosted_runtime(hosted_env(tmp_path, NEWSROOM_HOSTED_LLM_PROVIDERS_PATH=str(catalog)))
+
+    assert too_small.value.variable == "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH"
+    assert "answer" in str(too_small.value)
+
+
+def test_hosted_startup_requires_the_configured_input_window(tmp_path) -> None:
     # Accounts bring their own models, so the budget cannot come from an
     # operator deployment: an unset input window is a configuration error.
     with pytest.raises(DeploymentConfigurationError) as unset:
         build_hosted_runtime(hosted_env(tmp_path, NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS=""))
     assert unset.value.variable == "NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS"
 
-    runtime = build_hosted_runtime(
-        hosted_env(
-            tmp_path,
-            NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS="64000",
-            NEWS_RESEARCH_LLM_MAX_OUTPUT_TOKENS="2048",
-        )
-    )
-    assert runtime.model_credentials is not None
+    runtime = build_hosted_runtime(hosted_env(tmp_path))
+    candidate = runtime.model_connections.requirements[ModelPurpose.CANDIDATE_GENERATION]
+    assert (candidate.input_tokens, candidate.output_tokens, candidate.structured_output) == (64000, 2048, True)
 
 
 def test_hosted_app_refuses_static_api_keys(monkeypatch, tmp_path) -> None:

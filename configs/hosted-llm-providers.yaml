@@ -1,88 +1,185 @@
-# Model providers a hosted account may choose for its own API key.
+# Model providers a hosted account may connect its own models from.
 #
-# Users pick a provider and one of its models; they never submit a base URL,
-# so keys are only ever sent to the endpoints listed here. Every model must
-# fit the research request budget (NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS plus
-# NEWS_RESEARCH_LLM_MAX_OUTPUT_TOKENS); the API refuses to start otherwise.
+# A connection picks one provider and one of its models and brings its own key.
+# Catalog providers fix the address and the models; users never submit a base
+# URL for them, so keys only ever go to the endpoints listed here. Custom
+# providers (``custom: true``) take their address, model id and limits from the
+# user; the address still has to pass the outbound policy (public HTTPS, or an
+# administrator's NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS allowlist).
 #
-# Sources (checked 2026-10-28):
-#   DashScope: the live model list (GET /compatible-mode/v1/models) serves
-#   deepseek-v4.1-flash and deepseek-v4-pro; deepseek-v4-flash answers
-#   model_not_found.
-#   DeepSeek: https://api-docs.deepseek.com/quick_start/pricing names the
-#   models deepseek-flash (DeepSeek-V4.1-Flash-1017) and deepseek-v4-pro, both
-#   with a 1M-token context; deepseek-v4-flash is a retired legacy alias.
+# Every catalog model must hold the research request budget, which is checked
+# at startup against NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS plus MAX_OUTPUT_TOKENS.
 #
-# structured_output declares what each model's API can enforce. Only
-# json_object and none are accepted here: native schema enforcement needs a
-# reviewed release record. With json_object the schema is sent as an
-# instruction and every reply is validated locally against the contract.
-#   DashScope: https://help.aliyun.com/zh/model-studio/json-mode lists
-#   deepseek-v4-pro and deepseek-v4.1-flash under JSON Object and not under
-#   JSON Schema. Live probes (2026-10-28) confirmed json_schema strict is not
-#   enforced for deepseek-v4.1-flash (missing and extra fields came back).
-#   DeepSeek: https://api-docs.deepseek.com/guides/json_mode documents
-#   response_format json_object; json_schema is not offered.
+# reasoning.parameter names how the provider takes reasoning settings; the
+# efforts are the tiers the model offers, and default is the tier sent when a
+# connection leaves its effort unset (null sends nothing).
+#   openai_reasoning_effort  reasoning_effort: none/minimal/low/medium/high/xhigh/max
+#   openrouter_reasoning     reasoning: {effort}
+#   deepseek_thinking        thinking: {type}, reasoning_effort low/high/max
+#   dashscope_enable_thinking enable_thinking: true/false (off or medium)
+#   anthropic_effort         output_config: {effort}; thinking disabled for off
+#   none                     nothing is sent
+#
+# structured_output declares what a model's API can enforce. Only json_object
+# and none are accepted: native schema enforcement needs a reviewed release
+# record. With json_object the schema is sent as an instruction and every reply
+# is validated locally against the contract.
+#
+# Sources (checked 2026-10-30):
+#   DeepSeek: https://api-docs.deepseek.com/quick_start/pricing names
+#   deepseek-flash (DeepSeek-V4.1-Flash-1017) and deepseek-v4-pro, 1M context,
+#   maximum output 384K. https://api-docs.deepseek.com/guides/thinking_mode/
+#   documents thinking as enabled by default with effort high by default, and
+#   the thinking, reasoning_effort (low/high/max) and temperature behaviour.
+#   https://api-docs.deepseek.com/guides/json_mode documents json_object only.
+#   DashScope: https://help.aliyun.com/zh/model-studio/qwq lists deepseek-v4.1-flash
+#   and deepseek-v4-pro as hybrid models with thinking on by default, switched
+#   by enable_thinking. https://help.aliyun.com/zh/model-studio/json-mode lists
+#   them under JSON Object only. The live model list (GET /compatible-mode/v1/models)
+#   serves deepseek-v4.1-flash and deepseek-v4-pro (checked 2026-10-28).
 #   deedee: the relay's live model list (GET /v1/models) serves gpt-5.6-sol.
-#   Live probes (2026-10-28) of its json_schema strict mode: schemas with an
-#   optional property, without additionalProperties or with oneOf answer
-#   HTTP 400, and accepted schemas are not enforced (two concatenated objects
-#   came back). json_object returns a single valid object, and every research
-#   candidate schema passed through the JSON-object adapter and local gate.
-#   OpenAI publishes a 1.1M-token context for gpt-5.6-sol; the relay does not
-#   document its own limit, so the catalog declares a 1M lower bound.
+#   Live probes (2026-10-28) showed json_schema strict is not enforced there, so
+#   json_object is declared. OpenAI's model page for gpt-5.6-sol gives a
+#   1,050,000-token context, 128,000 max output, effort none/low/medium (default)/
+#   high/xhigh/max, and Chat Completions support. https://developers.openai.com/api/docs/models/gpt-5.6-sol
+#   Anthropic: https://platform.claude.com/docs/en/about-claude/models/overview
+#   lists claude-opus-5-5, claude-sonnet-5-5 and claude-haiku-5-5 with 1M context
+#   and 128K max output; the Messages API takes effort via output_config.
+#   Opus 5.5 cannot disable thinking, so its effort list omits off.
 #
-# Key verification calls GET {base_url}/models, so every provider listed here
-# must serve an OpenAI-style model list that names its catalog models.
-schema_version: hosted-llm-providers.v1
+# Key verification calls GET {base_url}/models (OpenAI style) or GET /v1/models
+# (Anthropic), so every catalog provider must serve a model list naming its models.
+schema_version: hosted-llm-providers.v2
 providers:
   - id: dashscope
     label: 阿里云百炼（DashScope）
+    protocol: openai_chat
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     default_model: deepseek-v4.1-flash
     models:
       - id: deepseek-v4.1-flash
         label: DeepSeek V4.1 Flash
         context_window_tokens: 1000000
+        max_output_tokens: 384000
+        reasoning:
+          parameter: dashscope_enable_thinking
+          efforts: ["off", medium]
+          default: medium
         structured_output:
           mode: json_object
-          revision: dashscope-deepseek-v4.1-flash-json-object-2026-10-28
+          revision: dashscope-deepseek-v4.1-flash-json-object-2026-10-30
           source: https://help.aliyun.com/zh/model-studio/json-mode
       - id: deepseek-v4-pro
         label: DeepSeek V4 Pro
         context_window_tokens: 1000000
+        max_output_tokens: 384000
+        reasoning:
+          parameter: dashscope_enable_thinking
+          efforts: ["off", medium]
+          default: medium
         structured_output:
           mode: json_object
-          revision: dashscope-deepseek-v4-pro-json-object-2026-10-28
+          revision: dashscope-deepseek-v4-pro-json-object-2026-10-30
           source: https://help.aliyun.com/zh/model-studio/json-mode
   - id: deepseek
     label: DeepSeek 官方
+    protocol: openai_chat
     base_url: https://api.deepseek.com
     default_model: deepseek-flash
     models:
       - id: deepseek-flash
         label: DeepSeek V4.1 Flash
         context_window_tokens: 1000000
+        max_output_tokens: 384000
+        reasoning:
+          parameter: deepseek_thinking
+          efforts: ["off", low, high, max]
+          default: high
         structured_output:
           mode: json_object
-          revision: deepseek-deepseek-flash-json-object-2026-10-28
+          revision: deepseek-deepseek-flash-json-object-2026-10-30
           source: https://api-docs.deepseek.com/guides/json_mode
       - id: deepseek-v4-pro
         label: DeepSeek V4 Pro
         context_window_tokens: 1000000
+        max_output_tokens: 384000
+        reasoning:
+          parameter: deepseek_thinking
+          efforts: ["off", low, high, max]
+          default: high
         structured_output:
           mode: json_object
-          revision: deepseek-deepseek-v4-pro-json-object-2026-10-28
+          revision: deepseek-deepseek-v4-pro-json-object-2026-10-30
           source: https://api-docs.deepseek.com/guides/json_mode
   - id: deedee
     label: deedee（OpenAI 兼容中转）
+    protocol: openai_chat
     base_url: https://deedee.tech/v1
     default_model: gpt-5.6-sol
     models:
       - id: gpt-5.6-sol
         label: GPT-5.6 Sol
-        context_window_tokens: 1000000
+        context_window_tokens: 1050000
+        max_output_tokens: 128000
+        reasoning:
+          parameter: openai_reasoning_effort
+          efforts: ["off", low, medium, high, xhigh, max]
+          default: medium
         structured_output:
           mode: json_object
-          revision: deedee-gpt-5.6-sol-json-object-2026-10-28
+          revision: deedee-gpt-5.6-sol-json-object-2026-10-30
           source: https://deedee.tech/v1/models
+  - id: anthropic
+    label: Anthropic
+    protocol: anthropic_messages
+    base_url: https://api.anthropic.com
+    default_model: claude-sonnet-5-5
+    models:
+      - id: claude-opus-5-5
+        label: Claude Opus 5.5
+        context_window_tokens: 1000000
+        max_output_tokens: 128000
+        reasoning:
+          parameter: anthropic_effort
+          efforts: [low, medium, high, xhigh, max]
+          default: medium
+        structured_output:
+          mode: json_object
+          revision: anthropic-claude-opus-5-5-json-object-2026-10-30
+          source: https://platform.claude.com/docs/en/about-claude/models/overview
+      - id: claude-sonnet-5-5
+        label: Claude Sonnet 5.5
+        context_window_tokens: 1000000
+        max_output_tokens: 128000
+        reasoning:
+          parameter: anthropic_effort
+          efforts: [low, medium, high, xhigh, max]
+          default: high
+        structured_output:
+          mode: json_object
+          revision: anthropic-claude-sonnet-5-5-json-object-2026-10-30
+          source: https://platform.claude.com/docs/en/about-claude/models/overview
+      - id: claude-haiku-5-5
+        label: Claude Haiku 5.5
+        context_window_tokens: 1000000
+        max_output_tokens: 128000
+        reasoning:
+          parameter: anthropic_effort
+          efforts: [low, medium, high, xhigh, max]
+          default: medium
+        structured_output:
+          mode: json_object
+          revision: anthropic-claude-haiku-5-5-json-object-2026-10-30
+          source: https://platform.claude.com/docs/en/about-claude/models/overview
+  - id: custom-openai-compatible
+    label: 自定义（OpenAI 兼容）
+    protocol: openai_chat
+    custom: true
+    reasoning_parameters: [none, openai_reasoning_effort, openrouter_reasoning, deepseek_thinking, dashscope_enable_thinking]
+    structured_output_modes: [json_object, none]
+  - id: custom-anthropic
+    label: 自定义（Anthropic 兼容）
+    protocol: anthropic_messages
+    custom: true
+    reasoning_parameters: [none, anthropic_effort]
+    structured_output_modes: [json_object, none]

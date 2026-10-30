@@ -66,6 +66,16 @@ _SYSTEM_PROMPT = (
 )
 
 
+# Longest prompt one batch call sends: system prompt, question and the full text of
+# every passage in a batch (each already capped at SUMMARY_PASSAGE_MAX_CHARS).
+# Model connections must hold this plus the reply room, so a batch always fits.
+SUMMARY_BATCH_MAX_INPUT_CHARS = (
+    len(_SYSTEM_PROMPT)
+    + DEFAULT_SUMMARY_BATCH_SIZE * (SUMMARY_PASSAGE_MAX_CHARS + 16)
+    + 4_000  # question, capped at 4000 characters by the desktop research route
+)
+
+
 class LLMEvidenceSummarizer:
     """Evidence summarizer backed by a paper answer model transport."""
 

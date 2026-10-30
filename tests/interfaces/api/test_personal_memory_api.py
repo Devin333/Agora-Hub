@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from interfaces.api import create_app
 from interfaces.composition.personal_memory import build_personal_memory_runtime
 from interfaces.services.auth_service import AuthSessionInvalidError
+from interfaces.services.model_connections import ConnectionDraft, ModelPurpose
 from interfaces.services.research_desktop_control import canonical_request_fingerprint
 from interfaces.services.research_service import ResearchApplicationService
 from tests.interfaces.api.hosted_support import (
@@ -390,13 +391,19 @@ def test_default_factories_share_real_personal_memory_core_with_desktop_task_con
     )
     research = _CapturingResearchService()
     hosted_runtime = _hosted_runtime(tmp_path)
-    # Hosted research is admitted only for an account with a model key.
-    hosted_runtime.model_credentials.save(
+    # Hosted research is admitted only for an account whose purposes each have
+    # a connection; one large-window connection serves all of them.
+    connections = hosted_runtime.model_connections
+    created = connections.create(
         "user-a",
-        provider_id="deepseek",
-        model="deepseek-flash",
-        api_key="sk-personal-memory-test",
-        expected_revision=None,
+        ConnectionDraft(provider_id="deepseek", model="deepseek-flash", api_key="sk-personal-memory-test"),
+        expected_revision=0,
+    )
+    connection_id = created["connections"][0]["id"]
+    connections.assign(
+        "user-a",
+        {purpose.value: connection_id for purpose in ModelPurpose},
+        expected_revision=created["revision"],
     )
     app = create_app(
         hosted_runtime=hosted_runtime,

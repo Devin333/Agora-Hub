@@ -104,9 +104,10 @@ def install_hosted_boundary(
         request.state.actor_context = signed_in.actor
         request.state.hosted_session = signed_in
         # Bound before the downstream task starts, so the endpoint, its
-        # thread pool hop and any streamed body all see this account's key.
+        # thread pool hop and any streamed body all resolve this account's
+        # connections, each purpose to the connection assigned to it.
         with bind_llm_endpoint_source(
-            runtime.model_credentials.endpoint_source(signed_in.user_id)
+            runtime.model_connections.endpoint_source(signed_in.user_id)
         ):
             return await call_next(request)
 

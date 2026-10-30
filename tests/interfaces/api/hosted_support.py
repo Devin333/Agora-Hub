@@ -15,7 +15,10 @@ HOSTED_ORIGIN = "http://127.0.0.1:3000"
 # A fixed, test-only master key; real deployments generate their own.
 TEST_ENCRYPTION_KEY = base64.b64encode(bytes(range(32))).decode("ascii")
 TEST_ACTIVITY_ENCRYPTION_KEY = base64.urlsafe_b64encode(bytes(range(32, 64))).decode("ascii")
-TEST_RESEARCH_REQUEST_TOKENS = 64_000
+# The research input budget a hosted deployment configures; the hosted profile
+# requires it because accounts bring their own models.
+TEST_RESEARCH_MAX_INPUT_TOKENS = "64000"
+TEST_RESEARCH_MAX_OUTPUT_TOKENS = "2048"
 
 
 def hosted_env(data_root: Path, **overrides: str) -> dict[str, str]:
@@ -30,6 +33,8 @@ def hosted_env(data_root: Path, **overrides: str) -> dict[str, str]:
         "NEWS_RESEARCH_PARSER_BACKENDS": "pymupdf",
         "NEWSROOM_PDF_PARSER_CASCADE": "pymupdf",
         "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH": str(REPO_ROOT / "configs" / "hosted-llm-providers.yaml"),
+        "NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS": TEST_RESEARCH_MAX_INPUT_TOKENS,
+        "NEWS_RESEARCH_LLM_MAX_OUTPUT_TOKENS": TEST_RESEARCH_MAX_OUTPUT_TOKENS,
     }
     values.update(overrides)
     return values
@@ -52,10 +57,7 @@ def build_test_hosted_runtime(
 ) -> HostedRuntime:
     """Build the real hosted runtime; ``auth`` swaps in a session double."""
 
-    runtime = build_hosted_runtime(
-        hosted_env(data_root, **overrides),
-        research_request_tokens=TEST_RESEARCH_REQUEST_TOKENS,
-    )
+    runtime = build_hosted_runtime(hosted_env(data_root, **overrides))
     if auth is None:
         return runtime
     return replace(runtime, auth=auth, accounts=AccountAdministrationService(auth))

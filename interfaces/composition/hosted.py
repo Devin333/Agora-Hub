@@ -2,8 +2,8 @@
 
 Everything the hosted boundary needs is assembled and validated here once, at
 startup: a missing master key, a non-invocation credential mode or a provider
-catalog that cannot hold one research request stops the process instead of
-surfacing later as a confusing request failure.
+catalog that offers no model able to serve a research purpose stops the
+process instead of surfacing later as a confusing request failure.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from framework.llm.clients import CREDENTIAL_MODE_ENV, LLMCredentialMode, llm_cr
 from infrastructure.security.outbound_address import LLM_ALLOWED_PRIVATE_HOSTS_ENV, OutboundAddressPolicy
 from infrastructure.storage.events.activity_store import validate_activity_encryption_key
 from infrastructure.storage.events.factory import ACTIVITY_ENCRYPTION_KEY_ENV
+from interfaces.composition.model_endpoint_clients import EndpointClientFactory, EndpointClientPolicy
 from interfaces.services.account_administration import AccountAdministrationService
 from interfaces.services.auth_service import AuthApplicationService
 from interfaces.services.deployment_profile import (
@@ -24,20 +25,27 @@ from interfaces.services.deployment_profile import (
     HostedSettings,
     load_hosted_settings,
 )
-from interfaces.services.model_credentials import (
+from interfaces.services.model_connections import (
     ENCRYPTION_KEY_ENV,
+    SINGLE_KEY_STORE_FILE_NAME,
     CredentialCipher,
-    LocalJsonModelCredentialRepository,
-    ModelCredentialConfigurationError,
-    ModelCredentialService,
+    LocalJsonModelConnectionRepository,
+    ModelConnectionConfigurationError,
+    ModelConnectionService,
     ModelProviderCatalog,
+    ModelPurpose,
+    PurposeRequirement,
     load_model_provider_catalog,
+    migrate_single_key_credentials,
 )
+from interfaces.services.model_connections.admission import unservable_purposes
 
 PROVIDER_CATALOG_ENV = "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH"
 DEFAULT_PROVIDER_CATALOG = "configs/hosted-llm-providers.yaml"
 USERS_FILE_NAME = "users.json"
 SESSIONS_FILE_NAME = "sessions.json"
+# One listing (or one tiny completion) per verification; never retried.
+VERIFY_TIMEOUT_SECONDS = 20.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +62,7 @@ class HostedRuntime:
     settings: HostedSettings
     auth: AuthApplicationService
     accounts: AccountAdministrationService
-    model_credentials: ModelCredentialService
+    model_connections: ModelConnectionService
 
 
 def build_hosted_auth_service(settings: HostedSettings) -> AuthApplicationService:
@@ -68,7 +76,7 @@ def build_hosted_auth_service(settings: HostedSettings) -> AuthApplicationServic
 
 
 def build_hosted_account_runtime(env: Mapping[str, str] | None = None) -> HostedAccountRuntime:
-    """Account administration without the model-credential master key.
+    """Account administration without the model-connection master key.
 
     The operator managing accounts on the server does not need to hold the
     credential encryption key, so it is not required here.
@@ -81,11 +89,7 @@ def build_hosted_account_runtime(env: Mapping[str, str] | None = None) -> Hosted
     )
 
 
-def build_hosted_runtime(
-    env: Mapping[str, str] | None = None,
-    *,
-    research_request_tokens: int | None = None,
-) -> HostedRuntime:
+def build_hosted_runtime(env: Mapping[str, str] | None = None) -> HostedRuntime:
     values = env if env is not None else os.environ
     settings = load_hosted_settings(values)
     if llm_credential_mode(values) is not LLMCredentialMode.INVOCATION:
@@ -97,28 +101,44 @@ def build_hosted_runtime(
     _require_activity_encryption_key(values)
     try:
         cipher = CredentialCipher.from_env(values)
-    except ModelCredentialConfigurationError as exc:
+    except ModelConnectionConfigurationError as exc:
         raise DeploymentConfigurationError(ENCRYPTION_KEY_ENV, str(exc)) from exc
     catalog = _catalog(values)
-    tokens = (
-        research_request_tokens
-        if research_request_tokens is not None
-        else _research_request_tokens(values)
-    )
-    try:
-        catalog.require_context_window(tokens)
-    except ModelCredentialConfigurationError as exc:
-        raise DeploymentConfigurationError(PROVIDER_CATALOG_ENV, str(exc)) from exc
+    requirements = _purpose_requirements(values)
+    unservable = unservable_purposes(catalog, requirements)
+    if unservable:
+        raise DeploymentConfigurationError(
+            PROVIDER_CATALOG_ENV,
+            "no catalog model has a window large enough for "
+            + ", ".join(purpose.value for purpose in unservable),
+        )
     outbound = _outbound_policy(values)
+    repository = LocalJsonModelConnectionRepository.under(settings.account_data_root)
+    try:
+        migrate_single_key_credentials(
+            single_key_path=settings.account_data_root / SINGLE_KEY_STORE_FILE_NAME,
+            repository=repository,
+            cipher=cipher,
+            catalog=catalog,
+        )
+    except ModelConnectionConfigurationError as exc:
+        raise DeploymentConfigurationError("NEWSROOM_ACCOUNT_DATA_ROOT", str(exc)) from exc
     auth = build_hosted_auth_service(settings)
     return HostedRuntime(
         settings=settings,
         auth=auth,
         accounts=AccountAdministrationService(auth),
-        model_credentials=ModelCredentialService(
+        model_connections=ModelConnectionService(
             catalog=catalog,
             cipher=cipher,
-            repository=LocalJsonModelCredentialRepository.under(settings.account_data_root),
+            repository=repository,
+            requirements=requirements,
+            # Verification goes through the same client factory, transports
+            # and outbound policy as model calls, but sends one request only.
+            probe_client_factory=EndpointClientFactory(
+                EndpointClientPolicy(timeout_seconds=VERIFY_TIMEOUT_SECONDS, max_attempts=1),
+                outbound=outbound,
+            ),
             outbound_policy=outbound,
         ),
     )
@@ -184,29 +204,30 @@ def _catalog(values: Mapping[str, str]) -> ModelProviderCatalog:
     path = Path(str(values.get(PROVIDER_CATALOG_ENV) or DEFAULT_PROVIDER_CATALOG).strip())
     try:
         return load_model_provider_catalog(path)
-    except ModelCredentialConfigurationError as exc:
+    except ModelConnectionConfigurationError as exc:
         raise DeploymentConfigurationError(PROVIDER_CATALOG_ENV, str(exc)) from exc
 
 
-def _research_request_tokens(values: Mapping[str, str]) -> int:
+def _purpose_requirements(values: Mapping[str, str]) -> dict[ModelPurpose, PurposeRequirement]:
     # Imported here: research settings pull in the research runtime package,
     # which the account CLI does not need.
+    from interfaces.composition.model_purpose_requirements import model_purpose_requirements
     from interfaces.composition.research_errors import ResearchCompositionError
     from interfaces.composition.research_settings import ResearchRuntimeSettings
 
     try:
-        llm = ResearchRuntimeSettings.from_env(values).llm
+        research = ResearchRuntimeSettings.from_env(values)
     except ResearchCompositionError as exc:
         raise DeploymentConfigurationError(
             "NEWS_RESEARCH_LLM_*", f"research model settings are invalid: {exc}"
         ) from exc
     # Accounts bring their own models, so no operator deployment implies a
-    # window: the research input budget is what every connection must hold.
-    if llm.max_input_tokens is None:
+    # window: the configured input budget is what candidate generation plans for.
+    if research.llm.max_input_tokens is None:
         raise DeploymentConfigurationError(
             "NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS", "is required in the hosted profile"
         )
-    return llm.max_input_tokens + llm.max_output_tokens
+    return model_purpose_requirements(research)
 
 
 __all__ = [

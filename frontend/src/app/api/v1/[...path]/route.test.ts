@@ -342,9 +342,13 @@ describe("hosted raw API server route", () => {
 
   it.each([
     ["GET", ["account"]],
-    ["PUT", ["account", "model-credential"]],
-    ["DELETE", ["account", "model-credential"]],
-    ["POST", ["account", "model-credential", "verify"]],
+    ["GET", ["account", "model-connections"]],
+    ["POST", ["account", "model-connections"]],
+    ["PUT", ["account", "model-connections", "assignments"]],
+    ["POST", ["account", "model-connections", "discover"]],
+    ["PATCH", ["account", "model-connections", "mc-0123456789abcdef"]],
+    ["DELETE", ["account", "model-connections", "mc-0123456789abcdef"]],
+    ["POST", ["account", "model-connections", "mc-0123456789abcdef", "verify"]],
     ["GET", ["admin", "accounts"]],
     ["POST", ["admin", "accounts"]],
     ["POST", ["admin", "accounts", "user_0123456789abcdef", "disable"]],
@@ -353,7 +357,7 @@ describe("hosted raw API server route", () => {
   ] as const)("forwards the reviewed account route %s %j with the session and public Origin", async (method, path) => {
     const upstream = vi.fn().mockResolvedValue(jsonResponse({ success: true, data: {} }))
     vi.stubGlobal("fetch", upstream)
-    const handler = { GET, POST, PUT, DELETE }[method]
+    const handler = { GET, POST, PUT, PATCH, DELETE }[method]
     const response = await handler(rawRequest(`/api/v1/${path.join("/")}`, {
       method,
       body: method === "GET" || method === "DELETE" ? undefined : "{}",
@@ -372,14 +376,17 @@ describe("hosted raw API server route", () => {
     ["POST", ["account", "password"]],
     ["DELETE", ["admin", "accounts", "user_0123456789abcdef"]],
     ["POST", ["admin", "accounts", "not-an-account-id", "disable"]],
-    ["GET", ["account", "model-credential", "verify"]],
+    ["PUT", ["account", "model-credential"]],
+    ["GET", ["account", "model-connections", "mc-0123456789abcdef", "verify"]],
+    ["PATCH", ["account", "model-connections", "not-a-connection-id"]],
+    ["DELETE", ["account", "model-connections", "assignments"]],
   ] as const)("refuses the unreviewed account route %s %j", async (method, path) => {
     const upstream = vi.fn()
     vi.stubGlobal("fetch", upstream)
-    const handler = { GET, POST, DELETE }[method]
+    const handler = { GET, POST, PUT, PATCH, DELETE }[method]
     const response = await handler(rawRequest(`/api/v1/${path.join("/")}`, {
       method,
-      body: method === "POST" ? "{}" : undefined,
+      body: method === "GET" || method === "DELETE" ? undefined : "{}",
       headers: { Origin: "http://127.0.0.1:3124", "Sec-Fetch-Site": "same-origin" },
     }), context(...path))
 

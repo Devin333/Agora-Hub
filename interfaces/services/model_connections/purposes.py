@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
+
+from framework.llm.models.reasoning import ReasoningSetting
 
 
 class ModelPurpose(StrEnum):
@@ -34,6 +37,38 @@ _LABELS: dict[ModelPurpose, str] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class PurposeRequirement:
+    """What a connection must offer before it may serve a purpose.
+
+    ``input_tokens`` and ``output_tokens`` are the largest prompt and visible
+    answer one call of this purpose sends; a connection's window must hold
+    both plus the output it reserves for reasoning, so every call fits
+    without narrowing the request at call time.
+    """
+
+    input_tokens: int
+    output_tokens: int
+    structured_output: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("input_tokens", "output_tokens"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+
+    def required_window(self, reasoning: ReasoningSetting, *, max_output_tokens: int | None) -> int:
+        output = reasoning.output_tokens(self.output_tokens, ceiling=max_output_tokens)
+        return self.input_tokens + (output if output is not None else self.output_tokens)
+
+    def to_dict(self) -> dict[str, int | bool]:
+        return {
+            "inputTokens": self.input_tokens,
+            "outputTokens": self.output_tokens,
+            "structuredOutput": self.structured_output,
+        }
+
+
 def purpose_label(value: object) -> str:
     """Chinese label of a purpose, or the raw value when it is not one."""
     try:
@@ -42,4 +77,4 @@ def purpose_label(value: object) -> str:
         return str(value or "")
 
 
-__all__ = ["ModelPurpose", "purpose_label"]
+__all__ = ["ModelPurpose", "PurposeRequirement", "purpose_label"]
