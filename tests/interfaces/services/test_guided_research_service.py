@@ -271,7 +271,7 @@ def _invocation_service(candidate) -> GuidedResearchService:
     )
 
 
-def test_intent_without_an_account_model_credential_is_refused_before_the_model(monkeypatch) -> None:
+def test_intent_without_an_account_model_connection_is_refused_before_the_model(monkeypatch) -> None:
     monkeypatch.setenv(CREDENTIAL_MODE_ENV, LLMCredentialMode.INVOCATION.value)
     candidate = _CredentialFailingCandidate()
 
@@ -300,7 +300,7 @@ def test_credential_failure_inside_the_model_call_keeps_its_public_code(monkeypa
             return LLMEndpoint(
                 base_url="https://api.example.test", model="m", api_key="sk-test", provider="test"
             )
-        raise LLMCredentialUnavailableError("model_credential_key_rotated", "key rotated", purpose=purpose)
+        raise LLMCredentialUnavailableError("model_connection_key_rotated", "key rotated", purpose=purpose)
 
     with bind_llm_endpoint_source(bound_once), pytest.raises(GuidedResearchError) as raised:
         _invocation_service(candidate).interpret(
@@ -308,6 +308,7 @@ def test_credential_failure_inside_the_model_call_keeps_its_public_code(monkeypa
             user_id="user-1",
         )
 
-    assert raised.value.code == "model_credential_key_rotated"
+    assert raised.value.code == "model_connection_key_rotated"
     assert raised.value.status_code == 409
+    assert "重新填写" in raised.value.message
     assert candidate.calls == 1

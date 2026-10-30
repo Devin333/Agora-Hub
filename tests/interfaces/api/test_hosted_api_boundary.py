@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -7,10 +10,12 @@ from framework.llm.clients import LLMCredentialUnavailableError, resolve_invocat
 from interfaces.api import create_app
 from interfaces.composition.hosted import build_hosted_runtime
 from interfaces.services.deployment_profile import DeploymentConfigurationError
-from interfaces.services.hosted_boundary import HostedRouteAccess, classify_hosted_route
-from interfaces.services.model_connections import ModelPurpose
+from interfaces.services.hosted_boundary import HostedRouteAccess, classify_hosted_route, is_model_probe_route
+from interfaces.services.model_connections import CredentialCipher, ModelPurpose
+from interfaces.services.model_connections.cipher import single_key_credential_binding
 from tests.interfaces.api.hosted_support import (
     HOSTED_ORIGIN,
+    TEST_ENCRYPTION_KEY,
     build_test_hosted_runtime,
     configure_hosted_env,
     hosted_env,
@@ -254,6 +259,39 @@ def test_research_writes_are_rate_limited_per_account(monkeypatch, tmp_path) -> 
     assert alice_read.status_code == 200
 
 
+def test_model_probes_are_rate_limited_per_account(monkeypatch, tmp_path) -> None:
+    client, runtime = _client(
+        monkeypatch, tmp_path, NEWSROOM_HOSTED_MODEL_PROBE_RATE_LIMIT_PER_MINUTE="2"
+    )
+    alice = mutation_headers(sign_in(runtime, "alice", USER_PASSWORD))
+    bob = mutation_headers(sign_in(runtime, "bob", USER_PASSWORD))
+    # Discovery for a catalog provider answers from the catalog, so the
+    # limiter is exercised without reaching any provider.
+    path = "/api/v1/account/model-connections/discover"
+    body = {"providerId": "deepseek"}
+
+    alice_statuses = [client.post(path, headers=alice, json=body).status_code for _ in range(3)]
+    bob_status = client.post(path, headers=bob, json=body).status_code
+    # Saving settings is not a probe and spends no probe budget.
+    saved = client.post(
+        "/api/v1/account/model-connections",
+        headers=alice,
+        json={"providerId": "deepseek", "model": "deepseek-flash", "apiKey": KEY_A, "expectedRevision": 0},
+    )
+
+    assert alice_statuses == [200, 200, 429]
+    assert bob_status == 200
+    assert saved.status_code == 200
+
+
+def test_probe_routes_are_classified_exactly() -> None:
+    assert is_model_probe_route("POST", "/api/v1/account/model-connections/discover")
+    assert is_model_probe_route("POST", "/api/v1/account/model-connections/mc-0123456789abcdef/verify")
+    assert not is_model_probe_route("GET", "/api/v1/account/model-connections/discover")
+    assert not is_model_probe_route("POST", "/api/v1/account/model-connections")
+    assert not is_model_probe_route("PUT", "/api/v1/account/model-connections/assignments")
+
+
 def test_forwarded_address_is_trusted_only_from_configured_proxies(monkeypatch, tmp_path) -> None:
     client, runtime = _client(
         monkeypatch,
@@ -369,6 +407,30 @@ def test_hosted_startup_refuses_a_catalog_that_cannot_serve_every_purpose(tmp_pa
 
     assert too_small.value.variable == "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH"
     assert "answer" in str(too_small.value)
+
+
+def test_hosted_startup_moves_the_single_key_store_into_a_connection(tmp_path) -> None:
+    # A deployment upgraded from the one-key-per-account release still has
+    # model-credentials.json; the first start turns it into a connection.
+    accounts = tmp_path / "accounts"
+    accounts.mkdir()
+    cipher = CredentialCipher(base64.b64decode(TEST_ENCRYPTION_KEY))
+    sealed = cipher.seal(KEY_A, single_key_credential_binding("user-a", "deepseek"))
+    (accounts / "model-credentials.json").write_text(json.dumps({
+        "schemaVersion": "agora_model_credentials.v1",
+        "credentials": [{
+            "userId": "user-a", "providerId": "deepseek", "model": "deepseek-flash",
+            "keyId": sealed.key_id, "nonce": sealed.nonce, "ciphertext": sealed.ciphertext,
+            "keyHint": KEY_A[-4:], "revision": 1, "updatedAt": "2026-10-20T08:00:00Z",
+        }],
+    }), encoding="utf-8")
+
+    runtime = build_hosted_runtime(hosted_env(tmp_path))
+
+    assert (accounts / "model-credentials.json.migrated").exists()
+    assert not (accounts / "model-credentials.json").exists()
+    endpoint = runtime.model_connections.endpoint_for("user-a", ModelPurpose.ANSWER)
+    assert (endpoint.provider, endpoint.model, endpoint.api_key) == ("deepseek", "deepseek-flash", KEY_A)
 
 
 def test_hosted_startup_requires_the_configured_input_window(tmp_path) -> None:

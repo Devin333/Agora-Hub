@@ -1,8 +1,9 @@
 """HTTP wiring of the hosted request boundary.
 
 The order is fixed and every step fails closed: route allow-list, origin,
-sign-in throttle, session, administrator role, per-account write throttle,
-then the request runs with the account's model credential bound.
+sign-in throttle, session, administrator role, per-account research write and
+model probe throttles, then the request runs with the account's model
+connections bound.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from interfaces.services.hosted_boundary import (
     authenticate_session,
     classify_hosted_route,
     client_address,
+    is_model_probe_route,
     require_trusted_origin,
 )
 
@@ -46,6 +48,11 @@ def install_hosted_boundary(
     )
     research_limiter = InMemoryRateLimiter(
         limit=settings.research_rate_limit_per_minute,
+        window_seconds=RATE_WINDOW_SECONDS,
+        clock=clock,
+    )
+    model_probe_limiter = InMemoryRateLimiter(
+        limit=settings.model_probe_rate_limit_per_minute,
         window_seconds=RATE_WINDOW_SECONDS,
         clock=clock,
     )
@@ -84,6 +91,13 @@ def install_hosted_boundary(
                     f"research:{signed_in.user_id}",
                     code="research_rate_limited",
                     message="Too many research requests; wait and try again",
+                )
+            if access is HostedRouteAccess.ACCOUNT and is_model_probe_route(method, path):
+                _throttle(
+                    model_probe_limiter,
+                    f"model-probe:{signed_in.user_id}",
+                    code="model_probe_rate_limited",
+                    message="Too many model checks; wait and try again",
                 )
         except HostedBoundaryError as exc:
             return _boundary_error(error, exc)
