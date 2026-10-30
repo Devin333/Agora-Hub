@@ -6,6 +6,7 @@ from framework.agent.loop import AgentLoop
 from framework.agent.skill_call import SkillCall
 from framework.agent.skill_context import AgentSkillRuntime, _build_skill_run_context
 from framework.shared.graph_identity import GraphExecutionIdentity, GraphStageIdentity
+from framework.tool import ToolExecutor, ToolRegistry
 
 
 IDENTITY = GraphExecutionIdentity(
@@ -108,7 +109,7 @@ def test_agent_loop_skill_handler_forwards_execution_identity() -> None:
     runtime = AgentSkillRuntime(_Registry(), runner)
     loop = AgentLoop(
         llm_client=object(),
-        tool_executor=object(),
+        tool_executor=ToolExecutor(ToolRegistry()),
         agent_skill_runtime=runtime,
     )
     observations = []

@@ -427,6 +427,7 @@ class OpenAICompatibleClient:
         last_finish_reason: str | None = None
         response_id: str | None = None
         text_parts: list[str] = []
+        tool_call_turn = False
 
         try:
             source_lines = lines if first_line is None else chain((first_line,), lines)
@@ -463,6 +464,8 @@ class OpenAICompatibleClient:
                         continue
                     if event.event_type == "text_delta" and event.text_delta:
                         text_parts.append(event.text_delta)
+                    if event.event_type == "tool_call_complete":
+                        tool_call_turn = True
                     yield _with_provisional_metadata(
                         event,
                         provisional=expects_structured_output,
@@ -500,7 +503,8 @@ class OpenAICompatibleClient:
                 attempts=1,
             )
         structured_output = None
-        if expects_structured_output:
+        # A tool-call turn is not terminal: its structured answer comes later.
+        if expects_structured_output and not tool_call_turn:
             structured_output = self._parse_structured_output(
                 "".join(text_parts),
                 request=execution_request,
@@ -878,7 +882,8 @@ class OpenAICompatibleClient:
                 diagnostics=failure_diagnostics(),
             )
         structured_output = None
-        if _expects_structured_output(request):
+        # A tool-call turn is not terminal: its structured answer comes later.
+        if _expects_structured_output(request) and not tool_calls:
             structured_output = self._parse_structured_output(
                 content,
                 request=request,

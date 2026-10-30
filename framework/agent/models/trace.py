@@ -219,15 +219,21 @@ class ParsedActionTrace:
     tool_name: str | None = None
     skill_name: str | None = None
     output_keys: list[str] = field(default_factory=list)
+    tool_names: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> ParsedActionTrace:
+        tool_name = _optional_text(payload.get("tool_name"))
         return cls(
             iteration=int(payload.get("iteration") or 0),
             action_type=str(payload.get("action_type") or ""),
-            tool_name=_optional_text(payload.get("tool_name")),
+            tool_name=tool_name,
             skill_name=_optional_text(payload.get("skill_name")),
             output_keys=[str(item) for item in payload.get("output_keys", [])],
+            tool_names=[
+                str(item)
+                for item in payload.get("tool_names") or ([tool_name] if tool_name else [])
+            ],
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -235,6 +241,7 @@ class ParsedActionTrace:
             "iteration": self.iteration,
             "action_type": self.action_type,
             "tool_name": self.tool_name,
+            "tool_names": list(self.tool_names),
             "skill_name": self.skill_name,
             "output_keys": list(self.output_keys),
         }
@@ -421,7 +428,7 @@ class IterationTrace:
     llm_error: LLMErrorTrace | None = None
     parser_error: ParserErrorTrace | None = None
     parsed_action: ParsedActionTrace | None = None
-    tool_call: ToolCallTrace | None = None
+    tool_calls: list[ToolCallTrace] = field(default_factory=list)
     judge: JudgeTrace | None = None
     stop_candidate: str | None = None
     duration_ms: float | None = None
@@ -453,7 +460,7 @@ class IterationTrace:
                 payload.get("parsed_action"),
                 ParsedActionTrace.from_dict,
             ),
-            tool_call=_optional_trace(payload.get("tool_call"), ToolCallTrace.from_dict),
+            tool_calls=_iteration_tool_call_traces(payload),
             judge=_optional_trace(
                 payload.get("judge") or payload.get("judge_result"),
                 JudgeTrace.from_dict,
@@ -481,8 +488,7 @@ class IterationTrace:
             "llm_error": self.llm_error.to_dict() if self.llm_error else None,
             "parser_error": self.parser_error.to_dict() if self.parser_error else None,
             "parsed_action": self.parsed_action.to_dict() if self.parsed_action else None,
-            "tool_call": self.tool_call.to_dict() if self.tool_call else None,
-            "tool_calls": [self.tool_call.to_dict()] if self.tool_call else [],
+            "tool_calls": [item.to_dict() for item in self.tool_calls],
             "judge": self.judge.to_dict() if self.judge else None,
             "judge_result": self.judge.to_dict() if self.judge else None,
             "stop_candidate": self.stop_candidate,
@@ -595,6 +601,7 @@ class AgentLoopTrace:
         *,
         action_type: str,
         tool_name: str | None = None,
+        tool_names: list[str] | None = None,
         output: dict[str, Any] | None = None,
     ) -> ParsedActionTrace:
         trace = ParsedActionTrace(
@@ -603,6 +610,7 @@ class AgentLoopTrace:
             tool_name=tool_name,
             skill_name=tool_name if action_type == "skill_call" else None,
             output_keys=sorted((output or {}).keys()),
+            tool_names=list(tool_names or ([tool_name] if tool_name else [])),
         )
         iteration.parsed_action = trace
         self.actions.append(trace)
@@ -620,7 +628,7 @@ class AgentLoopTrace:
             observation=observation,
             max_preview_chars=max_preview_chars,
         )
-        iteration.tool_call = trace
+        iteration.tool_calls.append(trace)
         self.tool_calls.append(trace)
         return trace
 
@@ -786,7 +794,7 @@ class AgentLoopTrace:
             if item.parsed_action is not None
         ]
         trace.tool_calls = [
-            item.tool_call for item in trace.iterations if item.tool_call is not None
+            call for item in trace.iterations for call in item.tool_calls
         ]
         trace.judges = [item.judge for item in trace.iterations if item.judge is not None]
         return trace
@@ -810,12 +818,8 @@ class AgentIterationTrace:
 
     @classmethod
     def from_iteration(cls, iteration: IterationTrace) -> "AgentIterationTrace":
-        tool_calls = [iteration.tool_call.to_dict()] if iteration.tool_call else []
-        observations = (
-            [_tool_observation_summary(iteration.tool_call)]
-            if iteration.tool_call is not None
-            else []
-        )
+        tool_calls = [item.to_dict() for item in iteration.tool_calls]
+        observations = [_tool_observation_summary(item) for item in iteration.tool_calls]
         return cls(
             iteration=iteration.iteration,
             trace_id=iteration.trace_id,
@@ -1011,13 +1015,32 @@ def _iteration_error(iteration: IterationTrace) -> dict[str, Any] | None:
         return iteration.llm_error.to_dict()
     if iteration.parser_error is not None:
         return iteration.parser_error.to_dict()
-    if iteration.tool_call is not None and iteration.tool_call.error_type:
-        return {
+    failed_calls = [item for item in iteration.tool_calls if item.error_type]
+    if failed_calls:
+        error: dict[str, Any] = {
             "iteration": iteration.iteration,
-            "error_type": iteration.tool_call.error_type,
-            "error_message": iteration.tool_call.error_message,
+            "error_type": failed_calls[0].error_type,
+            "error_message": failed_calls[0].error_message,
         }
+        if len(iteration.tool_calls) > 1:
+            error["failed_tool_calls"] = [
+                {
+                    "tool_call_id": item.tool_call_id,
+                    "tool_name": item.tool_name,
+                    "error_type": item.error_type,
+                    "error_message": item.error_message,
+                }
+                for item in failed_calls
+            ]
+        return error
     return None
+
+
+def _iteration_tool_call_traces(payload: dict[str, Any]) -> list[ToolCallTrace]:
+    raw_calls = payload.get("tool_calls")
+    if not isinstance(raw_calls, list):
+        return []
+    return [ToolCallTrace.from_dict(item) for item in raw_calls if isinstance(item, dict)]
 
 
 def _diagnostic_identity(

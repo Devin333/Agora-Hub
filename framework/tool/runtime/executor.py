@@ -7,6 +7,7 @@ from datetime import datetime, timezone as _tz
 UTC = _tz.utc
 from hashlib import sha256
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from framework.shared.attempts import (
@@ -254,19 +255,29 @@ class ToolExecutor:
                 "ToolExecutionEvidencePort"
             )
         self._execution_evidence = execution_evidence
+        # One executor may serve concurrent calls of a tool batch; the shared
+        # inspection state is guarded so counts and records stay exact.
+        self._inspection_lock = RLock()
         self._events: list[ToolEvent] = []
         self._metrics = ToolMetrics()
         self._records: list[ToolExecutionRecord] = []
 
     @property
+    def registry(self) -> ToolRegistry:
+        return self._registry
+
+    @property
     def metrics(self) -> ToolMetrics:
-        return self._metrics.snapshot()
+        with self._inspection_lock:
+            return self._metrics.snapshot()
 
     def list_events(self) -> list[ToolEvent]:
-        return list(self._events)
+        with self._inspection_lock:
+            return list(self._events)
 
     def list_records(self) -> list[ToolExecutionRecord]:
-        return list(self._records)
+        with self._inspection_lock:
+            return list(self._records)
 
     @property
     def defers_result_persistence(self) -> bool:
@@ -780,14 +791,15 @@ class ToolExecutor:
                 elapsed_ms=observation.elapsed_ms,
             )
         self._record_observation(observation)
-        self._records.append(
-            _execution_record(
-                observation,
-                self._events,
-                started_at,
-                trace_context=event_trace_context,
+        with self._inspection_lock:
+            self._records.append(
+                _execution_record(
+                    observation,
+                    self._events,
+                    started_at,
+                    trace_context=event_trace_context,
+                )
             )
-        )
         return observation
 
     def _resolve_executor(
@@ -1236,7 +1248,8 @@ class ToolExecutor:
         )
 
     def _record_observation(self, observation: ToolObservation) -> None:
-        self._metrics.record(observation)
+        with self._inspection_lock:
+            self._metrics.record(observation)
         if observation.status == ToolStatus.SUCCEEDED:
             self._emit("tool_succeeded", observation.call, _result_event_payload(observation))
             if observation.result.artifact_refs:
@@ -1269,7 +1282,8 @@ class ToolExecutor:
             ),
             graph_identity=call.graph_identity,
         )
-        self._events.append(event)
+        with self._inspection_lock:
+            self._events.append(event)
         self._emit_runtime_event(event_type, call, payload or {})
         return event
 

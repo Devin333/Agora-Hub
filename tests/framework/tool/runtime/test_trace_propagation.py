@@ -134,7 +134,7 @@ def test_parallel_tool_batch_copies_trace_scope_into_worker_threads() -> None:
     ]
 
     with trace_context_scope(parent):
-        results = ToolBatchExecutor(registry, max_workers=2).execute_batch(
+        results = ToolBatchExecutor.from_registry(registry, max_workers=2).execute_batch(
             calls,
             ToolPolicy(allowed_tools=["sample.one", "sample.two"]),
         )
@@ -147,20 +147,24 @@ def test_parallel_tool_batch_copies_trace_scope_into_worker_threads() -> None:
     assert len({context.span_id for context in observed}) == 2
 
 
-def test_tool_batch_executor_passes_execution_environment_to_each_executor(
+def test_tool_batch_executor_runs_every_call_on_one_environment_bound_executor(
     monkeypatch,
 ) -> None:
     import framework.tool.runtime.batch_executor as batch_module
 
-    captured: list[object] = []
+    constructed: list[object] = []
+    executed: list[tuple[object, str]] = []
 
     class _CapturingToolExecutor:
-        def __init__(self, *_args, **kwargs) -> None:
-            captured.append(kwargs["execution_environment"])
+        def __init__(self, registry, **kwargs) -> None:
+            self.registry = registry
+            self.execution_evidence = kwargs["execution_evidence"]
+            constructed.append(kwargs["execution_environment"])
 
         def execute(self, call, _policy):
             from framework.tool.models import ToolObservation, ToolResult
 
+            executed.append((self, call.call_id))
             return ToolObservation(
                 call=call,
                 result=ToolResult(
@@ -172,20 +176,28 @@ def test_tool_batch_executor_passes_execution_environment_to_each_executor(
                 elapsed_ms=0.0,
             )
 
+        def record_pre_execution_rejection(self, observation):
+            return observation
+
     monkeypatch.setattr(batch_module, "ToolExecutor", _CapturingToolExecutor)
     registry = ToolRegistry()
     registry.register(ToolDefinition(name="sample.echo"), lambda _args: {"ok": True})
     environment = object()
-    result = ToolBatchExecutor(
+    batch = ToolBatchExecutor.from_registry(
         registry,
         execution_environment=environment,
-    ).execute_batch(
-        [ToolCall(tool_name="sample.echo")],
+    )
+    result = batch.execute_batch(
+        [
+            ToolCall(tool_name="sample.echo", call_id="echo-1"),
+            ToolCall(tool_name="sample.echo", call_id="echo-2"),
+        ],
         ToolPolicy(allowed_tools=["sample.echo"]),
     )
 
-    assert result[0].status is ToolStatus.SUCCEEDED
-    assert captured == [environment]
+    assert [item.status for item in result] == [ToolStatus.SUCCEEDED] * 2
+    assert constructed == [environment]
+    assert executed == [(batch.executor, "echo-1"), (batch.executor, "echo-2")]
 
 
 def test_tool_executor_preserves_transport_only_w3c_context_in_all_outputs() -> None:

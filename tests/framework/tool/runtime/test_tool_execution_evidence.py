@@ -279,7 +279,7 @@ def test_batch_budget_rejection_records_every_call_without_execution() -> None:
         return {"ok": True}
 
     evidence = _RecordingEvidence()
-    observations = ToolBatchExecutor(
+    observations = ToolBatchExecutor.from_registry(
         _registry(handler),
         execution_evidence=evidence,
     ).execute_batch(
@@ -304,7 +304,7 @@ def test_batch_budget_rejection_records_every_call_without_execution() -> None:
 
 def test_parallel_batch_uses_one_capability_with_distinct_physical_calls() -> None:
     evidence = _RecordingEvidence()
-    observations = ToolBatchExecutor(
+    observations = ToolBatchExecutor.from_registry(
         _registry(lambda arguments: {"value": arguments["value"]}),
         execution_evidence=evidence,
         max_workers=2,
@@ -345,7 +345,7 @@ def test_quorum_failure_preserves_batch_semantics_and_source_receipts() -> None:
         return {"value": arguments["value"]}
 
     evidence = _RecordingEvidence()
-    observations = ToolBatchExecutor(
+    observations = ToolBatchExecutor.from_registry(
         _registry(handler),
         execution_evidence=evidence,
     ).execute_batch(
@@ -402,7 +402,7 @@ def test_strict_batch_closes_unexecuted_requests_without_invoking_them() -> None
         return {"value": value}
 
     evidence = _RecordingEvidence()
-    observations = ToolBatchExecutor(
+    observations = ToolBatchExecutor.from_registry(
         _registry(handler),
         execution_evidence=evidence,
     ).execute_batch(
@@ -449,7 +449,7 @@ def test_controlled_batch_rejects_untracked_compensating_effects() -> None:
     evidence = _RecordingEvidence()
 
     with pytest.raises(ValueError, match="compensating effects"):
-        ToolBatchExecutor(
+        ToolBatchExecutor.from_registry(
             _registry(lambda _arguments: {"ok": True}),
             execution_evidence=evidence,
             compensating_actions={"sample.read": lambda _observation: None},

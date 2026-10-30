@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import json
 from typing import Any
 
@@ -30,6 +30,7 @@ from framework.agent.models import (
     AgentLoopStatus,
     AgentLoopStopReason,
     AgentSpec,
+    AgentToolRequest,
     DelegateBatchCandidate,
     DelegateBatchProposal,
     JudgeDecision,
@@ -89,7 +90,7 @@ from framework.memory import (
     MemoryRuntime,
 )
 from framework.memory.recall_port import ExecutionMemoryRecallPort
-from framework.tool import ToolExecutor
+from framework.tool import ToolBatchExecutor, ToolExecutor
 from framework.tool import (
     ArtifactRef,
     ToolCall,
@@ -106,6 +107,7 @@ from framework.tool.runtime.evidence import (
 )
 
 APPROVAL_REPLAY_TURN_SCHEMA = "newsroom.agent-loop-approval-replay-turn/v1"
+DEFAULT_TOOL_BATCH_MAX_WORKERS = 4
 
 
 class AgentLoop:
@@ -132,9 +134,23 @@ class AgentLoop:
         agent_skill_runtime: AgentSkillRuntime | None = None,
         runtime_event_sink: Any | None = None,
         tool_execution_evidence: ToolExecutionEvidencePort | None = None,
+        tool_batch_max_workers: int = DEFAULT_TOOL_BATCH_MAX_WORKERS,
     ) -> None:
         self._llm_client = llm_client
         self._tool_executor = tool_executor
+        if (
+            isinstance(tool_batch_max_workers, bool)
+            or not isinstance(tool_batch_max_workers, int)
+            or tool_batch_max_workers < 1
+        ):
+            raise ValueError("tool_batch_max_workers must be a positive integer")
+        self._tool_batch_max_workers = tool_batch_max_workers
+        # Every tool call of a model turn, single or batched, runs through this
+        # batch over the loop's own executor and evidence capability.
+        self._tool_batch_executor = ToolBatchExecutor(
+            tool_executor,
+            max_workers=tool_batch_max_workers,
+        )
         executor_evidence = getattr(tool_executor, "execution_evidence", None)
         if executor_evidence is not tool_execution_evidence:
             raise ValueError(
@@ -309,10 +325,10 @@ class AgentLoop:
                     ),
                 },
             )
-            replay_result = self._process_tool_call(
+            replay_result = self._process_tool_calls(
                 agent=agent,
                 inputs=inputs,
-                tool_call=replay_call,
+                planned=[_PlannedToolCall(call=replay_call)],
                 run_id=effective_run_id,
                 metrics=metrics,
                 events=events,
@@ -556,7 +572,11 @@ class AgentLoop:
 
             response_content = response.content or ""
             try:
-                if response.structured_output is not None:
+                if response.tool_calls:
+                    # Native tool calls are the model's action for this turn;
+                    # any accompanying text is commentary, not a terminal answer.
+                    action = _native_tool_call_action(response)
+                elif response.structured_output is not None:
                     managed_contract = compile_structured_output_contract(
                         request.structured_output_schema_source(),
                         schema_name=request.output_schema_name,
@@ -638,12 +658,14 @@ class AgentLoop:
                 iteration_trace,
                 action_type=_parsed_action_type(action),
                 tool_name=_parsed_tool_name(action),
+                tool_names=_parsed_tool_names(action),
                 output=_parsed_output(action),
             )
             events.action_parsed(
                 iteration=iteration,
                 action_type=action_trace.action_type,
                 tool_name=action_trace.tool_name,
+                tool_names=action_trace.tool_names,
                 output_keys=action_trace.output_keys,
             )
 
@@ -857,30 +879,26 @@ class AgentLoop:
         llm_call_artifacts: list[LLMCallArtifact],
     ) -> str | AgentLoopResult | None:
         iteration = iteration_trace.iteration
+        turn_metadata = _runner_turn_metadata(
+            self._tool_execution_evidence,
+            llm_call_artifacts,
+            iteration=iteration,
+        )
         # Model-produced calls never carry approval_id: approval redemption is
         # reserved for the trusted replay path in ``run``.
-        tool_call = ToolCall(
-            tool_name=action.tool_name or "",
-            arguments=action.tool_args,
-            requested_by_agent_id=agent.agent_id,
-            metadata={
-                **_runner_turn_metadata(
-                    self._tool_execution_evidence,
-                    llm_call_artifacts,
-                    iteration=iteration,
-                    call_ordinal=0,
-                ),
-                **(
-                    {"model_tool_call_id": str(action.metadata["tool_call_id"])}
-                    if action.metadata.get("tool_call_id")
-                    else {}
-                ),
-            },
-        )
-        return self._process_tool_call(
+        planned = [
+            _planned_tool_call(
+                request,
+                agent=agent,
+                ordinal=ordinal,
+                turn_metadata=turn_metadata,
+            )
+            for ordinal, request in enumerate(action.tool_requests())
+        ]
+        return self._process_tool_calls(
             agent=agent,
             inputs=inputs,
-            tool_call=tool_call,
+            planned=planned,
             run_id=run_id,
             metrics=metrics,
             events=events,
@@ -893,12 +911,12 @@ class AgentLoop:
             llm_call_artifacts=llm_call_artifacts,
         )
 
-    def _process_tool_call(
+    def _process_tool_calls(
         self,
         *,
         agent: AgentSpec,
         inputs: dict[str, Any],
-        tool_call: ToolCall,
+        planned: list[_PlannedToolCall],
         run_id: str | None,
         metrics: AgentLoopMetrics,
         events: AgentLoopEventRecorder,
@@ -910,65 +928,68 @@ class AgentLoop:
         called_tools: list[str],
         llm_call_artifacts: list[LLMCallArtifact],
     ) -> str | AgentLoopResult | None:
+        """Run every tool call of one model turn and settle the turn.
+
+        All calls are executed and recorded before the turn is judged, so one
+        failing call never hides the observations of its siblings: failures
+        reach the model as observations plus feedback. The turn ends the run
+        only for stalls, pending approvals and control tools.
+        """
+
         iteration = iteration_trace.iteration
-        tool_policy = agent.resolved_tool_policy()
-        if not agent.memory_enabled:
-            tool_policy = replace(tool_policy, blocked_tools=[
-                *tool_policy.blocked_tools, "memory.recall", "memory.explain",
-            ])
-        budget_blocked = metrics.tool_calls >= _max_tool_calls_per_agent(tool_policy)
-        if budget_blocked:
-            observation = _blocked_tool_budget_observation(tool_call, tool_policy)
-            if self._tool_execution_evidence is not None:
-                observation = self._tool_executor.record_pre_execution_rejection(
-                    observation
-                )
-            events.tool_budget_blocked(
-                iteration=iteration,
-                tool_name=tool_call.tool_name,
-                max_tool_calls=_max_tool_calls_per_agent(tool_policy),
-            )
-        else:
-            observation = self._execute_tool(tool_call, _execution_tool_policy(tool_policy))
-        observation = _prompt_safe_observation(observation, tool_policy)
-        self._record_tool_observation_memory_candidate(
+        tool_policy = _agent_tool_policy(agent)
+        observations = self._execute_tool_calls(
             agent=agent,
-            observation=observation,
-            trace=trace,
-        )
-
-        tool_observations.append(observation)
-        called_tools.append(observation.call.tool_name)
-        metrics.tool_calls += 1
-        metrics.record_tool_status(observation.status, elapsed_ms=observation.elapsed_ms)
-        events.tool_call(
+            planned=planned,
+            tool_policy=tool_policy,
+            metrics=metrics,
+            events=events,
             iteration=iteration,
-            tool_name=observation.call.tool_name,
-            call_id=observation.call.call_id,
         )
-        events.tool_observation(iteration=iteration, observation=observation.to_dict())
-        tool_trace = trace.record_tool_call(
-            iteration_trace,
-            observation,
-            max_preview_chars=agent.loop_policy.max_trace_preview_chars,
-        )
-
-        repeated_count = trace.count_tool_signature(tool_trace.signature.key)
-        if repeated_count > 1:
-            metrics.repeated_tool_calls += 1
-            events.repeated_tool_call_detected(
-                iteration=iteration,
-                tool_name=tool_trace.tool_name,
-                signature=tool_trace.signature.key,
-                count=repeated_count,
-                limit=agent.loop_policy.max_repeated_tool_calls,
+        recorded: list[ToolObservation] = []
+        stall: StallDetection | None = None
+        for executed in observations:
+            observation = _prompt_safe_observation(executed, tool_policy)
+            self._record_tool_observation_memory_candidate(
+                agent=agent,
+                observation=observation,
+                trace=trace,
             )
-        detection = stall_detector.after_tool_call(trace, tool_trace)
-        if detection.stalled:
+            tool_observations.append(observation)
+            called_tools.append(observation.call.tool_name)
+            metrics.tool_calls += 1
+            metrics.record_tool_status(observation.status, elapsed_ms=observation.elapsed_ms)
+            events.tool_call(
+                iteration=iteration,
+                tool_name=observation.call.tool_name,
+                call_id=observation.call.call_id,
+            )
+            events.tool_observation(iteration=iteration, observation=observation.to_dict())
+            tool_trace = trace.record_tool_call(
+                iteration_trace,
+                observation,
+                max_preview_chars=agent.loop_policy.max_trace_preview_chars,
+            )
+            repeated_count = trace.count_tool_signature(tool_trace.signature.key)
+            if repeated_count > 1:
+                metrics.repeated_tool_calls += 1
+                events.repeated_tool_call_detected(
+                    iteration=iteration,
+                    tool_name=tool_trace.tool_name,
+                    signature=tool_trace.signature.key,
+                    count=repeated_count,
+                    limit=agent.loop_policy.max_repeated_tool_calls,
+                )
+            detection = stall_detector.after_tool_call(trace, tool_trace)
+            if detection.stalled and stall is None:
+                stall = detection
+            recorded.append(observation)
+
+        if stall is not None:
             metrics.stalled_iterations += 1
             trace.mark_stop_candidate(
                 iteration_trace,
-                detection.stop_reason.value if detection.stop_reason else "stalled",
+                stall.stop_reason.value if stall.stop_reason else "stalled",
             )
             return self._stalled_result(
                 agent=agent,
@@ -978,10 +999,98 @@ class AgentLoop:
                 diagnostics=diagnostics,
                 iterations=iteration,
                 verdict=None,
-                detection=detection,
+                detection=stall,
                 llm_call_artifacts=llm_call_artifacts,
             )
 
+        for observation in recorded:
+            if _is_turn_terminal_observation(observation):
+                return self._handle_turn_terminal_observation(
+                    agent=agent,
+                    inputs=inputs,
+                    observation=observation,
+                    run_id=run_id,
+                    metrics=metrics,
+                    events=events,
+                    trace=trace,
+                    diagnostics=diagnostics,
+                    stall_detector=stall_detector,
+                    iteration_trace=iteration_trace,
+                    called_tools=called_tools,
+                    llm_call_artifacts=llm_call_artifacts,
+                )
+        return _tool_turn_feedback(recorded)
+
+    def _execute_tool_calls(
+        self,
+        *,
+        agent: AgentSpec,
+        planned: list[_PlannedToolCall],
+        tool_policy: ToolPolicy,
+        metrics: AgentLoopMetrics,
+        events: AgentLoopEventRecorder,
+        iteration: int,
+    ) -> list[ToolObservation]:
+        """Return one observation per planned call, in request order."""
+
+        max_tool_calls = _max_tool_calls_per_agent(tool_policy)
+        observations: list[ToolObservation | None] = [None] * len(planned)
+        executable: list[tuple[int, ToolCall]] = []
+        for index, item in enumerate(planned):
+            # Every planned call takes one slot of the agent budget, in order.
+            if metrics.tool_calls + index >= max_tool_calls:
+                observations[index] = self._record_tool_rejection(
+                    _blocked_tool_budget_observation(item.call, tool_policy)
+                )
+                events.tool_budget_blocked(
+                    iteration=iteration,
+                    tool_name=item.call.tool_name,
+                    max_tool_calls=max_tool_calls,
+                )
+            elif item.rejection is not None:
+                observations[index] = self._record_tool_rejection(item.rejection)
+            else:
+                executable.append((index, item.call))
+        if executable:
+            executed = self._tool_batch_executor.execute_batch(
+                [call for _, call in executable],
+                _execution_tool_policy(tool_policy),
+                max_workers=(
+                    self._tool_batch_max_workers
+                    if agent.loop_policy.allow_parallel_tool_calls
+                    else 1
+                ),
+            )
+            if [observation.call.call_id for observation in executed] != [
+                call.call_id for _, call in executable
+            ]:
+                raise RuntimeError("tool batch did not return one observation per call")
+            for (index, _), observation in zip(executable, executed):
+                observations[index] = observation
+        return [observation for observation in observations if observation is not None]
+
+    def _record_tool_rejection(self, observation: ToolObservation) -> ToolObservation:
+        if self._tool_execution_evidence is None:
+            return observation
+        return self._tool_executor.record_pre_execution_rejection(observation)
+
+    def _handle_turn_terminal_observation(
+        self,
+        *,
+        agent: AgentSpec,
+        inputs: dict[str, Any],
+        observation: ToolObservation,
+        run_id: str | None,
+        metrics: AgentLoopMetrics,
+        events: AgentLoopEventRecorder,
+        trace: AgentLoopTrace,
+        diagnostics: AgentLoopDiagnosticsBuilder,
+        stall_detector: AgentLoopStallDetector,
+        iteration_trace: IterationTrace,
+        called_tools: list[str],
+        llm_call_artifacts: list[LLMCallArtifact],
+    ) -> str | AgentLoopResult | None:
+        iteration = iteration_trace.iteration
         if observation.status == ToolStatus.APPROVAL_REQUIRED:
             events.tool_approval_required(
                 iteration=iteration,
@@ -1102,15 +1211,7 @@ class AgentLoop:
                 return result
             return result[2]
 
-        if observation.status == ToolStatus.BLOCKED:
-            return observation.result.error_message or "tool call blocked"
-        if observation.status == ToolStatus.DENIED:
-            return observation.result.error_message or "tool call denied"
-        if observation.status == ToolStatus.FAILED:
-            return observation.result.error_message or "tool call failed"
-        if observation.status == ToolStatus.TIMEOUT:
-            return observation.result.error_message or "tool call timed out"
-        return None
+        raise ValueError("tool observation does not end the tool turn")
 
     def _handle_skill_action(
         self,
@@ -1763,9 +1864,6 @@ class AgentLoop:
                 max_repairs=agent.loop_policy.max_judge_retries,
             )
         return next_judge_retries, next_empty_output_retries, feedback
-
-    def _execute_tool(self, tool_call: ToolCall, tool_policy: ToolPolicy) -> ToolObservation:
-        return self._tool_executor.execute(tool_call, tool_policy)
 
     def _complete_llm_request(
         self,
@@ -2546,8 +2644,9 @@ def _runner_turn_metadata(
     artifacts: list[LLMCallArtifact],
     *,
     iteration: int,
-    call_ordinal: int,
 ) -> dict[str, Any]:
+    """Commit the model turn once; each of its calls adds its own ordinal."""
+
     if evidence is None:
         return {}
     matches = [item for item in artifacts if item.iteration == iteration]
@@ -2559,8 +2658,111 @@ def _runner_turn_metadata(
     return {
         "runner_turn_ref": committed.ref,
         "runner_turn_checksum": committed.checksum,
-        "call_ordinal": call_ordinal,
     }
+
+
+@dataclass(frozen=True)
+class _PlannedToolCall:
+    """A tool call of the current turn and its pre-execution rejection, if any."""
+
+    call: ToolCall
+    rejection: ToolObservation | None = None
+
+
+def _planned_tool_call(
+    request: AgentToolRequest,
+    *,
+    agent: AgentSpec,
+    ordinal: int,
+    turn_metadata: Mapping[str, Any],
+) -> _PlannedToolCall:
+    metadata: dict[str, Any] = dict(turn_metadata)
+    if turn_metadata:
+        metadata["call_ordinal"] = ordinal
+    if request.tool_call_id:
+        metadata["model_tool_call_id"] = request.tool_call_id
+    call = ToolCall(
+        tool_name=request.tool_name,
+        arguments=request.tool_args,
+        requested_by_agent_id=agent.agent_id,
+        metadata=metadata,
+    )
+    if request.argument_error is None:
+        return _PlannedToolCall(call=call)
+    return _PlannedToolCall(
+        call=call,
+        rejection=_invalid_tool_arguments_observation(call, request.argument_error),
+    )
+
+
+def _invalid_tool_arguments_observation(call: ToolCall, error: str) -> ToolObservation:
+    return ToolObservation(
+        call=call,
+        result=ToolResult(
+            status=ToolStatus.BLOCKED,
+            error_type="ToolArgumentsInvalid",
+            error_message=f"tool call was not invoked: {error}",
+            call_id=call.call_id,
+            tool_name=call.tool_name,
+            metadata={"execution_disposition": "not_invoked"},
+        ),
+        elapsed_ms=0.0,
+    )
+
+
+def _agent_tool_policy(agent: AgentSpec) -> ToolPolicy:
+    tool_policy = agent.resolved_tool_policy()
+    if agent.memory_enabled:
+        return tool_policy
+    return replace(
+        tool_policy,
+        blocked_tools=[*tool_policy.blocked_tools, "memory.recall", "memory.explain"],
+    )
+
+
+def _is_turn_terminal_observation(observation: ToolObservation) -> bool:
+    if observation.status == ToolStatus.APPROVAL_REQUIRED:
+        return True
+    return observation.status == ToolStatus.SUCCEEDED and (
+        _is_control_approval_request(observation) or _is_control_set_output(observation)
+    )
+
+
+def _tool_failure_feedback(observation: ToolObservation) -> str | None:
+    if observation.status == ToolStatus.BLOCKED:
+        return observation.result.error_message or "tool call blocked"
+    if observation.status == ToolStatus.DENIED:
+        return observation.result.error_message or "tool call denied"
+    if observation.status == ToolStatus.FAILED:
+        return observation.result.error_message or "tool call failed"
+    if observation.status == ToolStatus.TIMEOUT:
+        return observation.result.error_message or "tool call timed out"
+    return None
+
+
+def _tool_turn_feedback(observations: list[ToolObservation]) -> str | None:
+    """Feedback for the next model turn naming every call which did not succeed."""
+
+    failures = [
+        (observation, message)
+        for observation in observations
+        if (message := _tool_failure_feedback(observation)) is not None
+    ]
+    if not failures:
+        return None
+    if len(observations) == 1:
+        return failures[0][1]
+    lines = [
+        f"{len(failures)} of {len(observations)} tool calls did not succeed; "
+        "the other calls returned observations:"
+    ]
+    for observation, message in failures:
+        call_ref = observation.call.metadata.get("model_tool_call_id") or observation.call.call_id
+        lines.append(
+            f"- {observation.call.tool_name} [{call_ref}] "
+            f"{observation.status.value}: {message}"
+        )
+    return "\n".join(lines)
 
 
 def _approval_replay_turn_metadata(
@@ -3058,7 +3260,30 @@ def _parsed_action_type(action: AgentAction | SkillCall) -> str:
 def _parsed_tool_name(action: AgentAction | SkillCall) -> str | None:
     if isinstance(action, SkillCall):
         return action.skill_name
+    requests = action.tool_requests()
+    if len(requests) == 1:
+        return requests[0].tool_name
     return action.tool_name
+
+
+def _parsed_tool_names(action: AgentAction | SkillCall) -> list[str]:
+    if isinstance(action, SkillCall):
+        return []
+    return [request.tool_name for request in action.tool_requests()]
+
+
+def _native_tool_call_action(response: LLMResponse) -> AgentAction:
+    return AgentAction.tool_batch(
+        [
+            AgentToolRequest(
+                tool_name=tool_call.tool_name,
+                tool_args=tool_call.arguments,
+                tool_call_id=tool_call.tool_call_id,
+                argument_error=tool_call.argument_error,
+            )
+            for tool_call in response.tool_calls
+        ]
+    )
 
 
 def _parsed_output(action: AgentAction | SkillCall) -> dict[str, Any] | None:

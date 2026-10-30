@@ -8,6 +8,9 @@ from typing import Any
 from framework.llm.redaction.redactor import redact_sensitive_values
 
 
+TOOL_CALL_ARGUMENT_ERROR_KEY = "argument_error"
+
+
 @dataclass(frozen=True)
 class LLMToolCall:
     tool_call_id: str
@@ -16,6 +19,36 @@ class LLMToolCall:
     raw_arguments: str | None = None
     provider_tool_call_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def with_invalid_arguments(
+        cls,
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        raw_arguments: str | None,
+        error: str,
+        provider_tool_call_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> LLMToolCall:
+        """A requested call whose arguments could not be decoded.
+
+        The call stays in the response so that one malformed request rejects
+        only itself; the sibling calls of the same model turn remain usable.
+        """
+
+        return cls(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            raw_arguments=raw_arguments,
+            provider_tool_call_id=provider_tool_call_id,
+            metadata={**dict(metadata or {}), TOOL_CALL_ARGUMENT_ERROR_KEY: error},
+        )
+
+    @property
+    def argument_error(self) -> str | None:
+        error = self.metadata.get(TOOL_CALL_ARGUMENT_ERROR_KEY)
+        return str(error) if error else None
 
     def arguments_dict(self) -> dict[str, Any]:
         if self.arguments:

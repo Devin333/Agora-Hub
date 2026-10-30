@@ -10,8 +10,12 @@ PRODUCTION_ROOTS = ("backend", "framework", "infrastructure", "interfaces")
 
 _EXECUTION_CONSTRUCTORS = {
     "ToolExecutor",
-    "ToolBatchExecutor",
     "ResearchParserExecutionAdapter",
+}
+# ToolBatchExecutor owns no execution path of its own: it schedules the calls
+# of one model turn over an executor its caller already built.
+_BATCH_EXECUTOR_CALLERS = {
+    "framework/agent/loop/loop.py",
 }
 _EXECUTION_CONSTRUCTOR_CALLERS = {
     ("framework/agent/loop/runner.py", "ToolExecutor"),
@@ -87,6 +91,21 @@ def test_every_production_execution_constructor_is_inventory_bound() -> None:
     }
 
     assert discovered == _EXECUTION_CONSTRUCTOR_CALLERS
+
+
+def test_tool_batches_only_wrap_an_executor_built_by_their_caller() -> None:
+    discovered: set[str] = set()
+    violations: list[str] = []
+    for path, call in _production_calls():
+        if _call_name(call.func) != "ToolBatchExecutor":
+            continue
+        discovered.add(path)
+        keywords = {keyword.arg for keyword in call.keywords}
+        if len(call.args) != 1 or keywords - {"max_workers", "compensating_actions"}:
+            violations.append(f"{path}:{call.lineno} must wrap exactly one executor")
+
+    assert violations == []
+    assert discovered == _BATCH_EXECUTOR_CALLERS
 
 
 def test_every_harness_managed_executor_receives_the_execution_port() -> None:

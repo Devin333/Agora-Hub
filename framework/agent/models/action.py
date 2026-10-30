@@ -153,6 +153,40 @@ def _validate_delegate_batch_dag(tasks: tuple[DelegateBatchProposal, ...]) -> No
 
 
 
+@dataclass(frozen=True)
+class AgentToolRequest:
+    """One tool invocation requested by the model in a single turn.
+
+    ``argument_error`` marks a request whose arguments could not be decoded;
+    it is rejected on its own without invoking the tool, so the remaining
+    requests of the same turn still run.
+    """
+
+    tool_name: str
+    tool_args: dict[str, Any] = field(default_factory=dict)
+    tool_call_id: str | None = None
+    argument_error: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tool_name, str):
+            raise TypeError("tool request tool_name must be a string")
+        if not isinstance(self.tool_args, Mapping):
+            raise TypeError("tool request tool_args must be an object")
+        object.__setattr__(self, "tool_args", dict(self.tool_args))
+        if self.tool_call_id is not None:
+            object.__setattr__(self, "tool_call_id", str(self.tool_call_id) or None)
+        if self.argument_error is not None:
+            object.__setattr__(self, "argument_error", str(self.argument_error) or None)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "tool_args": dict(self.tool_args),
+            "tool_call_id": self.tool_call_id,
+            "argument_error": self.argument_error,
+        }
+
+
 class AgentActionType(str, Enum):
     FINAL = "final"
     TOOL_CALL = "tool_call"
@@ -175,12 +209,37 @@ class AgentAction:
     handoff_reason: str | None = None
     delegate_batch: DelegateBatchCandidate | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    tool_calls: tuple[AgentToolRequest, ...] = ()
+
+    def __post_init__(self) -> None:
+        tool_calls = tuple(self.tool_calls)
+        if any(not isinstance(item, AgentToolRequest) for item in tool_calls):
+            raise TypeError("tool_calls must contain AgentToolRequest values")
+        if tool_calls and (self.tool_name is not None or self.tool_args):
+            raise ValueError("tool_call action uses either tool_calls or tool_name, not both")
+        object.__setattr__(self, "tool_calls", tool_calls)
 
     def is_final(self) -> bool:
         return _action_type_value(self.action_type) in {"final", "final_output"}
 
     def is_tool_call(self) -> bool:
         return _action_type_value(self.action_type) == "tool_call"
+
+    def tool_requests(self) -> tuple[AgentToolRequest, ...]:
+        """Every tool invocation of this action, in the order the model requested."""
+
+        if not self.is_tool_call():
+            return ()
+        if self.tool_calls:
+            return self.tool_calls
+        tool_call_id = self.metadata.get("tool_call_id")
+        return (
+            AgentToolRequest(
+                tool_name=self.tool_name or "",
+                tool_args=self.tool_args,
+                tool_call_id=str(tool_call_id) if tool_call_id else None,
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -193,6 +252,7 @@ class AgentAction:
             "subagent_task": self.subagent_task,
             "handoff_reason": self.handoff_reason,
             "delegate_batch": self.delegate_batch.to_dict() if self.delegate_batch is not None else None,
+            "tool_calls": [item.to_dict() for item in self.tool_calls],
             "metadata": dict(self.metadata),
         }
 
@@ -203,6 +263,12 @@ class AgentAction:
     @classmethod
     def tool_call(cls, tool_name: str, tool_args: dict[str, Any]) -> "AgentAction":
         return cls(action_type=AgentActionType.TOOL_CALL, tool_name=tool_name, tool_args=dict(tool_args))
+
+    @classmethod
+    def tool_batch(cls, requests: list[AgentToolRequest] | tuple[AgentToolRequest, ...]) -> "AgentAction":
+        if not requests:
+            raise ValueError("tool batch requires at least one tool request")
+        return cls(action_type=AgentActionType.TOOL_CALL, tool_calls=tuple(requests))
 
 
 def _action_type_value(action_type: AgentActionType | str) -> str:
