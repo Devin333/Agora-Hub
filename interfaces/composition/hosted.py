@@ -188,6 +188,12 @@ def _research_request_tokens(values: Mapping[str, str]) -> int:
         raise DeploymentConfigurationError(
             "NEWS_RESEARCH_LLM_*", f"research model settings are invalid: {exc}"
         ) from exc
+    # Accounts bring their own models, so no operator deployment implies a
+    # window: the research input budget is what every connection must hold.
+    if llm.max_input_tokens is None:
+        raise DeploymentConfigurationError(
+            "NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS", "is required in the hosted profile"
+        )
     return llm.max_input_tokens + llm.max_output_tokens
 
 

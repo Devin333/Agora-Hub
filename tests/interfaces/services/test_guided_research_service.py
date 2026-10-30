@@ -256,7 +256,7 @@ class _CredentialFailingCandidate:
         del payload
         self.calls += 1
         try:
-            resolve_invocation_endpoint()
+            resolve_invocation_endpoint("candidate_generation")
         except LLMCredentialUnavailableError as exc:
             raise RuntimeError("provider call failed") from exc
         raise AssertionError("no endpoint is bound in this test")
@@ -281,9 +281,11 @@ def test_intent_without_an_account_model_credential_is_refused_before_the_model(
             user_id="user-1",
         )
 
-    assert raised.value.code == "model_credential_required"
+    assert raised.value.code == "model_connection_required"
     assert raised.value.status_code == 409
     assert raised.value.user_action_required is True
+    assert raised.value.details == {"purpose": "candidate_generation", "purposeLabel": "候选生成"}
+    assert "候选生成" in raised.value.message
     assert candidate.calls == 0
 
 
@@ -292,11 +294,13 @@ def test_credential_failure_inside_the_model_call_keeps_its_public_code(monkeypa
     candidate = _CredentialFailingCandidate()
     calls = iter((None,))
 
-    def bound_once():
+    def bound_once(purpose):
         # The admission check sees a key; the key is gone by the model call.
         if next(calls, "gone") is None:
-            return LLMEndpoint(base_url="https://api.example.test", model="m", api_key="sk-test")
-        raise LLMCredentialUnavailableError("model_credential_key_rotated", "key rotated")
+            return LLMEndpoint(
+                base_url="https://api.example.test", model="m", api_key="sk-test", provider="test"
+            )
+        raise LLMCredentialUnavailableError("model_credential_key_rotated", "key rotated", purpose=purpose)
 
     with bind_llm_endpoint_source(bound_once), pytest.raises(GuidedResearchError) as raised:
         _invocation_service(candidate).interpret(

@@ -25,10 +25,9 @@ from framework.agent.loop.prompt import PreparedInputProjection
 from framework.llm.clients.openai_compatible import (
     LLMConfigurationError,
     LLMProviderError,
-    OpenAICompatibleClient,
 )
 from framework.llm.context.estimator import estimate_request_tokens
-from framework.llm.models import LLMRequest, LLMResponse
+from framework.llm.models import LLMClient, LLMRequest, LLMResponse
 from framework.llm.redaction import redact_sensitive_values
 from framework.llm.structured_output import (
     ManagedStructuredOutputError,
@@ -581,7 +580,7 @@ class StructuredResearchCandidateWorker:
 
     def __init__(
         self,
-        client: OpenAICompatibleClient,
+        client: LLMClient,
         *,
         max_input_tokens: int = 8_192,
         max_output_tokens: int = 2_048,

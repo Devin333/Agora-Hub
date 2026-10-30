@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 from urllib.request import Request, urlopen
 
@@ -22,7 +21,7 @@ from backend.research.application.llm_selectors import (
     RESEARCH_EVIDENCE_MODEL_KEYS,
     first_configured,
 )
-from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
+from backend.research.application.paper_answer_model import LLMPaperAnswerModel, client_endpoint_identity
 from backend.research.rag.retrieval.paper_evidence_summarizer import DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS
 from framework.llm.models.request import LLMRequest
 from framework.shared.env import load_root_env
@@ -96,7 +95,7 @@ def _build_generic_unity_client() -> OpenAICompatibleClient:
     )
 
 
-def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatiblePaperAnswerModel:
+def build_unity_paper_answer_model(*, max_tokens: int = 600) -> LLMPaperAnswerModel:
     """Paper answer model resolved with the same selectors as the desktop Research route.
 
     Evaluation must generate with the production answer model, so this reads
@@ -108,7 +107,7 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
         model_keys=RESEARCH_ANSWER_MODEL_KEYS,
         api_key_env_keys=RESEARCH_ANSWER_API_KEY_ENV_KEYS,
     )
-    return OpenAICompatiblePaperAnswerModel(
+    return LLMPaperAnswerModel(
         client,
         max_output_tokens=max_tokens,
         temperature=0.0,
@@ -117,7 +116,7 @@ def build_unity_paper_answer_model(*, max_tokens: int = 600) -> OpenAICompatible
 
 def build_unity_evidence_model(
     *, max_tokens: int = DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
-) -> OpenAICompatiblePaperAnswerModel:
+) -> LLMPaperAnswerModel:
     """Retrieval-side helper model (``NEWS_RESEARCH_EVIDENCE_LLM_*``, else the answer model keys).
 
     Serves the evidence summarizer and the section navigator; callers size the
@@ -129,7 +128,7 @@ def build_unity_evidence_model(
         model_keys=RESEARCH_EVIDENCE_MODEL_KEYS,
         api_key_env_keys=RESEARCH_EVIDENCE_API_KEY_ENV_KEYS,
     )
-    return OpenAICompatiblePaperAnswerModel(
+    return LLMPaperAnswerModel(
         client,
         max_output_tokens=max_tokens,
         temperature=0.0,
@@ -188,14 +187,10 @@ def _measurement_identity(
     temperature: float | None,
 ) -> dict[str, object]:
     """Return only reproducibility fields; credentials and their env names stay private."""
-    config = client.config
-    endpoint = str(config.base_url or "").rstrip("/")
     return {
-        "provider": str(config.provider or ""),
-        "model": str(config.model or ""),
+        **client_endpoint_identity(client),
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "endpoint_sha256": hashlib.sha256(endpoint.encode("utf-8")).hexdigest(),
     }
 
 

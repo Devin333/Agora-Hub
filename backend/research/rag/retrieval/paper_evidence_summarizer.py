@@ -85,11 +85,14 @@ class LLMEvidenceSummarizer:
         self._model = model
         self._batch_size = batch_size
         self._max_concurrency = max_concurrency
-        self._model_identity = dict(
-            model_identity
-            if model_identity is not None
-            else getattr(model, "measurement_identity", None) or {}
-        )
+        # Read per use: a model whose endpoint is chosen per call only knows it
+        # inside that call.
+        self._model_identity_override = dict(model_identity) if model_identity is not None else None
+
+    def _model_identity(self) -> dict[str, Any]:
+        if self._model_identity_override is not None:
+            return dict(self._model_identity_override)
+        return dict(getattr(self._model, "measurement_identity", None) or {})
 
     @property
     def measurement_identity(self) -> dict[str, Any]:
@@ -99,7 +102,7 @@ class LLMEvidenceSummarizer:
             "batch_size": self._batch_size,
             "passage_max_chars": SUMMARY_PASSAGE_MAX_CHARS,
             "max_quotes": MAX_SUMMARY_QUOTES,
-            "model": dict(self._model_identity),
+            "model": self._model_identity(),
         }
 
     async def summarize(self, request: EvidenceSummaryRequest) -> EvidenceSummaryResult:

@@ -35,6 +35,10 @@ class _ResearchFacade(ResearchApplicationService):
     def capability_runtime_identity(self):
         return "sha256:" + "f" * 64
 
+    def model_purposes(self, operation):
+        # Process credentials: no account connection is checked before admission.
+        return ()
+
     def capability_projection(self):
         return {"catalog": True, "parse": True, "analyze": True, "ask": True, "ragAsk": True, "artifactRead": True}
 

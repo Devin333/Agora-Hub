@@ -5,7 +5,7 @@ import re
 import base64
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, is_dataclass, replace
 from threading import RLock
 from typing import Any, Protocol
@@ -57,6 +57,7 @@ from backend.research.ports.run_store import (
 from backend.research.rag import ResearchRetrievalGoal
 from framework.harness.context.models import ContextGraphIdentity
 from framework.llm.clients import LLMCredentialUnavailableError, credential_unavailable_cause
+from interfaces.services.model_connections.messages import connection_gap_details, connection_gap_message
 from interfaces.models import ActorContext
 
 
@@ -156,6 +157,14 @@ class ResearchServiceError(Exception):
 
 class ResearchActorAuthorizationError(ResearchServiceError):
     pass
+
+
+class ResearchModelConnectionError(ResearchServiceError):
+    """The account must configure a model connection; its message is written for the user."""
+
+    @property
+    def public_message(self) -> str:
+        return self.message
 
 
 class ResearchAnalyzeUseCase(Protocol):
@@ -286,8 +295,13 @@ class ResearchApplicationService:
         parse_use_case: ParsePaperUseCase | None = None,
         catalog_service: ResearchPaperCatalogService | None = None,
         runtime_config_identity: str | None = None,
+        operation_model_purposes: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         self._analyze_use_case = analyze_use_case or _UnconfiguredAnalyzeUseCase()
+        self._operation_model_purposes = {
+            str(operation): tuple(str(purpose) for purpose in purposes)
+            for operation, purposes in (operation_model_purposes or {}).items()
+        }
         self._ask_use_case = ask_use_case or AskPaperUseCase()
         self._rag_ask_use_case = rag_ask_use_case or _UnconfiguredRagAskUseCase()
         self._run_store = run_store or _DEFAULT_RESEARCH_RUN_STORE
@@ -324,6 +338,10 @@ class ResearchApplicationService:
             "artifactRead": self._artifact_reader is not None,
             "catalog": self._catalog_service is not None,
         }
+
+    def model_purposes(self, operation: str) -> tuple[str, ...]:
+        """Model purposes an operation (``analyze``, ``ask``) calls; empty when it calls none."""
+        return self._operation_model_purposes.get(operation, ())
 
     def capability_runtime_identity(self) -> str:
         components = {
@@ -392,7 +410,7 @@ class ResearchApplicationService:
         except Exception as exc:
             credential_failure = credential_unavailable_cause(exc)
             if credential_failure is not None:
-                raise model_credential_service_error(credential_failure) from exc
+                raise model_connection_service_error(credential_failure) from exc
             raise ResearchServiceError(
                 "research_parse_failed",
                 "Research paper parse request failed",
@@ -1327,7 +1345,7 @@ class ResearchApplicationService:
         except Exception as exc:
             credential_failure = credential_unavailable_cause(exc)
             if credential_failure is not None:
-                raise model_credential_service_error(credential_failure) from exc
+                raise model_connection_service_error(credential_failure) from exc
             raise ResearchServiceError(
                 "research_run_failed",
                 "research RAG request failed",
@@ -2464,15 +2482,16 @@ def _run_store_service_error(
     )
 
 
-def model_credential_service_error(error: LLMCredentialUnavailableError) -> ResearchServiceError:
-    """The account's model credential is missing or unusable; the user fixes it."""
+def model_connection_service_error(error: LLMCredentialUnavailableError) -> ResearchServiceError:
+    """The account has no usable connection for a purpose; the user fixes it in settings."""
 
-    return ResearchServiceError(
+    return ResearchModelConnectionError(
         error.code,
-        str(error),
+        connection_gap_message(error),
         status_code=409,
         retryable=False,
         user_action_required=True,
+        details=connection_gap_details(error),
     )
 
 
@@ -2481,7 +2500,7 @@ def _research_runtime_service_error(error: Exception) -> ResearchServiceError:
 
     credential_failure = credential_unavailable_cause(error)
     if credential_failure is not None:
-        return model_credential_service_error(credential_failure)
+        return model_connection_service_error(credential_failure)
     if isinstance(error, ResearchCompositionError):
         public = error.to_public_dict()
         return ResearchServiceError(
@@ -2574,5 +2593,6 @@ __all__ = [
     "ResearchRunStore",
     "ResearchServiceError",
     "bind_research_actor_input",
-    "model_credential_service_error",
+    "ResearchModelConnectionError",
+    "model_connection_service_error",
 ]

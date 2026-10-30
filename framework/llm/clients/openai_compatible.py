@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import os
 import re
@@ -12,14 +11,10 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from framework.llm.clients.endpoint import (
-    LLMCredentialMode,
-    LLMCredentialUnavailableError,
-    llm_credential_mode,
-    resolve_invocation_endpoint,
-)
+from framework.llm.clients.endpoint import LLMEndpoint, LLMWireProtocol
 from framework.llm.context.openai import build_openai_chat_payload, openai_response_format
 from framework.llm.models import LLMRequest, LLMResponse, TokenUsage
+from framework.llm.models.reasoning import ReasoningSetting
 from framework.llm.redaction import REDACTED_VALUE, redact_sensitive_values
 from framework.llm.models import LLMStreamEvent
 from framework.llm.structured_output import (
@@ -210,7 +205,8 @@ class OpenAICompatibleClient:
         retry_policy: LLMRetryPolicy | None = None,
         structured_output_capability: ProviderStructuredOutputCapability | None = None,
         sleep: Sleep | None = None,
-        credential_mode: LLMCredentialMode | None = None,
+        reasoning: ReasoningSetting | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         self.config = config
         self._transport = transport or _urlopen_transport
@@ -218,16 +214,53 @@ class OpenAICompatibleClient:
         self._retry_policy = retry_policy or LLMRetryPolicy()
         self._structured_output_capability = structured_output_capability
         self._sleep = sleep or time.sleep
-        self._credential_mode = (
-            LLMCredentialMode(credential_mode)
-            if credential_mode is not None
-            else llm_credential_mode()
+        self._reasoning = reasoning
+        self._max_output_tokens = max_output_tokens
+        # Set only by ``for_endpoint``: the key the endpoint carries, and the
+        # promise that its model is the only one this client may call.
+        self._endpoint_api_key: str | None = None
+
+    @classmethod
+    def for_endpoint(
+        cls,
+        endpoint: LLMEndpoint,
+        *,
+        timeout_seconds: float,
+        transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
+        retry_policy: LLMRetryPolicy | None = None,
+        sleep: Sleep | None = None,
+    ) -> OpenAICompatibleClient:
+        """Client for one account endpoint: its URL, model, key and reasoning only.
+
+        The process environment is never read. The endpoint's model is the
+        only model it agreed to pay for, so a request model never overrides
+        it, and structured output uses the endpoint's own capability.
+        """
+        if endpoint.protocol is not LLMWireProtocol.OPENAI_CHAT:
+            raise ValueError("endpoint does not speak the OpenAI Chat Completions protocol")
+        client = cls(
+            OpenAICompatibleConfig(
+                provider=endpoint.provider,
+                base_url=endpoint.base_url,
+                model=endpoint.model,
+                api_key_env="",
+                timeout_seconds=timeout_seconds,
+            ),
+            transport=transport,
+            stream_transport=stream_transport,
+            retry_policy=retry_policy,
+            structured_output_capability=endpoint.structured_output_capability,
+            sleep=sleep,
+            reasoning=endpoint.reasoning,
+            max_output_tokens=endpoint.max_output_tokens,
         )
-        self._invocation_api_key: str | None = None
+        client._endpoint_api_key = endpoint.api_key
+        return client
 
     @property
-    def credential_mode(self) -> LLMCredentialMode:
-        return self._credential_mode
+    def endpoint_bound(self) -> bool:
+        return self._endpoint_api_key is not None
 
     @staticmethod
     def supports_structured_output_projection(
@@ -236,12 +269,10 @@ class OpenAICompatibleClient:
         return _adapter_supports_projection(projection)
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        return self._for_invocation()._complete(request)
+        return self._complete(request)
 
     def stream(self, request: LLMRequest) -> Iterator[LLMStreamEvent]:
-        # Bind eagerly so the endpoint is taken from the caller's context, not
-        # from whichever context first advances the returned iterator.
-        return self._for_invocation()._stream(request)
+        return self._stream(request)
 
     def list_models(self) -> tuple[str, ...]:
         """Return the model ids the provider lists for this credential.
@@ -252,45 +283,12 @@ class OpenAICompatibleClient:
         ``LLMProviderError`` like a completion would.
         """
 
-        return self._for_invocation()._list_models()
-
-    def _for_invocation(self) -> OpenAICompatibleClient:
-        """Return the client that serves exactly one provider call.
-
-        In invocation mode the shared client is never mutated: the endpoint
-        bound to the current context is applied to a shallow copy, so every
-        ``self.config`` reference inside the call (URL, model, diagnostics)
-        names the caller's endpoint while transports and policies are shared.
-        """
-
-        if self._credential_mode is LLMCredentialMode.ENVIRONMENT:
-            return self
-        if self._invocation_api_key is not None:
-            return self
-        endpoint = resolve_invocation_endpoint()
-        bound = copy.copy(self)
-        bound.config = replace(
-            self.config,
-            provider=endpoint.provider or self.config.provider,
-            base_url=endpoint.base_url,
-            model=endpoint.model,
-        )
-        # The operator deployment's structured-output capability describes a
-        # different provider and model; the account endpoint carries its own,
-        # and an endpoint that declares none cannot serve structured output.
-        bound._structured_output_capability = endpoint.structured_output_capability
-        bound._invocation_api_key = endpoint.api_key
-        return bound
+        return self._list_models()
 
     def _resolve_api_key(self) -> str:
-        if self._credential_mode is LLMCredentialMode.ENVIRONMENT:
-            return self.config.resolve_api_key()
-        if self._invocation_api_key is None:
-            raise LLMCredentialUnavailableError(
-                "model_credential_required",
-                "No model credential is bound to this request",
-            )
-        return self._invocation_api_key
+        if self._endpoint_api_key is not None:
+            return self._endpoint_api_key
+        return self.config.resolve_api_key()
 
     def _complete(self, request: LLMRequest) -> LLMResponse:
         try:
@@ -542,11 +540,16 @@ class OpenAICompatibleClient:
     ) -> dict[str, Any]:
         # An account-bound endpoint names the only model the account agreed
         # to pay for, so a route-level request model never overrides it.
-        if self._credential_mode is LLMCredentialMode.INVOCATION:
+        if self.endpoint_bound:
             model = self.config.model
         else:
             model = request.model or self.config.model
-        return build_openai_chat_payload(request, model=model)
+        return build_openai_chat_payload(
+            request,
+            model=model,
+            reasoning=self._reasoning,
+            max_output_tokens=self._max_output_tokens,
+        )
 
     @staticmethod
     def _compile_structured_output_contract(
@@ -608,7 +611,7 @@ class OpenAICompatibleClient:
                 "provider projection does not match client provider",
                 reason="provider_projection_identity_mismatch",
             )
-        if self._credential_mode is LLMCredentialMode.INVOCATION and not _projection_matches_capability(
+        if self.endpoint_bound and not _projection_matches_capability(
             projection, self._structured_output_capability
         ):
             # A projection made upstream (by a router) from the operator

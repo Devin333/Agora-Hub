@@ -12,13 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from framework.llm.clients import (
-    LLMCredentialMode,
     LLMCredentialUnavailableError,
     LLMEndpoint,
     LLMEndpointSource,
     OpenAICompatibleClient,
-    OpenAICompatibleConfig,
-    bind_llm_endpoint_source,
 )
 from framework.llm.clients.openai_compatible import (
     LLMProviderError,
@@ -177,11 +174,12 @@ class ModelCredentialService:
         so research code reports them without knowing about this service.
         """
 
-        def resolve() -> LLMEndpoint:
+        def resolve(purpose: str) -> LLMEndpoint:
+            # One credential serves every purpose of the account.
             try:
                 return self.endpoint_for(user_id)
             except ModelCredentialError as exc:
-                raise LLMCredentialUnavailableError(exc.code, str(exc)) from None
+                raise LLMCredentialUnavailableError(exc.code, str(exc), purpose=purpose) from None
 
         return resolve
 
@@ -199,22 +197,14 @@ class ModelCredentialService:
         if record is None:
             raise credential_required()
         endpoint = self._endpoint(record)
-        client = OpenAICompatibleClient(
-            OpenAICompatibleConfig(
-                provider=record.provider_id,
-                base_url=endpoint.base_url,
-                model=endpoint.model,
-                # Never read: invocation mode takes the key from the binding.
-                api_key_env="NEWSROOM_UNUSED_INVOCATION_KEY",
-                timeout_seconds=VERIFY_TIMEOUT_SECONDS,
-            ),
+        client = OpenAICompatibleClient.for_endpoint(
+            endpoint,
+            timeout_seconds=VERIFY_TIMEOUT_SECONDS,
             transport=self._verification_transport,
             retry_policy=LLMRetryPolicy(max_attempts=1),
-            credential_mode=LLMCredentialMode.INVOCATION,
         )
         try:
-            with bind_llm_endpoint_source(lambda: endpoint):
-                available = client.list_models()
+            available = client.list_models()
         except LLMProviderError as exc:
             if exc.status_code in _REJECTED_STATUS_CODES:
                 self._record_verification(record, verified_at=None)

@@ -11,10 +11,9 @@ import pytest
 
 from framework.llm import LLMRequest
 from framework.llm.clients import (
-    LLMCredentialMode,
+    InvocationLLMClient,
     LLMCredentialUnavailableError,
     OpenAICompatibleClient,
-    OpenAICompatibleConfig,
     bind_llm_endpoint_source,
 )
 from interfaces.services.model_credentials import (
@@ -139,8 +138,9 @@ def test_missing_credential_fails_closed_through_the_framework_error(tmp_path) -
     resolve = _service(tmp_path).endpoint_source("user-without-key")
 
     with pytest.raises(LLMCredentialUnavailableError) as raised:
-        resolve()
+        resolve("answer")
     assert raised.value.code == "model_credential_required"
+    assert raised.value.purpose == "answer"
 
 
 def _model_list(*model_ids: str) -> bytes:
@@ -225,15 +225,11 @@ def test_concurrent_requests_of_two_accounts_each_use_their_own_key(tmp_path) ->
             {"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]}
         ).encode("utf-8")
 
-    shared_client = OpenAICompatibleClient(
-        OpenAICompatibleConfig(
-            provider="hosted",
-            base_url="https://api.deepseek.com",
-            model="deepseek-flash",
-            api_key_env="NEWSROOM_TEST_KEY_THAT_MUST_NOT_BE_READ",
+    shared_client = InvocationLLMClient(
+        "answer",
+        lambda endpoint: OpenAICompatibleClient.for_endpoint(
+            endpoint, timeout_seconds=10, transport=transport
         ),
-        transport=transport,
-        credential_mode=LLMCredentialMode.INVOCATION,
     )
 
     def call(user_id: str) -> None:

@@ -59,18 +59,21 @@ class LLMSectionNavigator:
         if not isinstance(model, PaperAnswerModelPort):
             raise TypeError("model must implement PaperAnswerModelPort")
         self._model = model
-        self._model_identity = dict(
-            model_identity
-            if model_identity is not None
-            else getattr(model, "measurement_identity", None) or {}
-        )
+        # Read per use: a model whose endpoint is chosen per call only knows it
+        # inside that call.
+        self._model_identity_override = dict(model_identity) if model_identity is not None else None
+
+    def _model_identity(self) -> dict[str, Any]:
+        if self._model_identity_override is not None:
+            return dict(self._model_identity_override)
+        return dict(getattr(self._model, "measurement_identity", None) or {})
 
     @property
     def measurement_identity(self) -> dict[str, Any]:
         return {
             "component": type(self).__name__,
             "prompt_version": SECTION_NAVIGATION_PROMPT_VERSION,
-            "model": dict(self._model_identity),
+            "model": self._model_identity(),
         }
 
     async def choose(self, request: SectionNavigationRequest) -> SectionNavigationDecision:

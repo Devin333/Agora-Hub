@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
+from backend.research.application.paper_answer_model import LLMPaperAnswerModel
 from backend.research.ports.paper_answer_model import PaperAnswerModelError, PaperAnswerModelRequest
 from framework.llm.clients.openai_compatible import (
     LLMProviderError,
@@ -52,7 +52,7 @@ def test_provider_errors_preserve_redacted_diagnostics(
         status_code=503,
         attempts=2,
     )
-    model = OpenAICompatiblePaperAnswerModel(_Client(provider_error), max_output_tokens=64)
+    model = LLMPaperAnswerModel(_Client(provider_error), max_output_tokens=64)
 
     with pytest.raises(PaperAnswerModelError) as raised:
         asyncio.run(model.complete(PaperAnswerModelRequest(system_prompt="system", user_prompt="user")))
@@ -69,7 +69,7 @@ def test_provider_errors_preserve_redacted_diagnostics(
 
 
 def test_unexpected_client_error_keeps_sanitized_type_and_message() -> None:
-    model = OpenAICompatiblePaperAnswerModel(
+    model = LLMPaperAnswerModel(
         _Client(RuntimeError("unexpected failure; Bearer abcdefghijklmnop")),
         max_output_tokens=64,
     )

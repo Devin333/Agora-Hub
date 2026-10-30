@@ -1609,7 +1609,7 @@ def test_disabled_desktop_builds_local_only_composition_without_remote_clients(
     monkeypatch.setenv("NEWS_RESEARCH_PARSER_BACKENDS", "pymupdf")
     monkeypatch.setattr(
         research_composition,
-        "OpenAICompatibleClient",
+        "build_research_model_clients",
         lambda *_args, **_kwargs: pytest.fail("local-only composition created an LLM client"),
     )
     provider = research_composition.SourceRuntimeProvider(

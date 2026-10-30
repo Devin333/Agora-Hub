@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
-from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
+from backend.research.application.paper_answer_model import LLMPaperAnswerModel
 from backend.research.rag.adapters import PaperAnswerWorker
 from backend.research.rag.retrieval.answer_evidence_selection import RelevanceEvidenceSelector
 from backend.research.rag.retrieval.expanders.section_navigation import SectionNavigationConfig
@@ -28,8 +28,16 @@ from backend.research.rag.retrieval.paper_section_navigator import (
     LLMSectionNavigator,
 )
 from framework.harness import RAGBudget
-from framework.llm.clients.openai_compatible import OpenAICompatibleClient
-from interfaces.composition.research_settings import ResearchRAGSettings
+from framework.llm.models import LLMClient
+from interfaces.composition.research_settings import ResearchLLMSettings, ResearchRAGSettings
+
+# Reader answers are a few paragraphs; a larger visible budget only lets a
+# runaway reply spend the account's tokens.
+READER_ANSWER_MAX_OUTPUT_TOKENS = 900
+
+
+def reader_answer_max_output_tokens(llm: ResearchLLMSettings) -> int:
+    return min(llm.max_output_tokens, READER_ANSWER_MAX_OUTPUT_TOKENS)
 
 
 def reader_rag_budget(settings: ResearchRAGSettings) -> RAGBudget:
@@ -48,13 +56,13 @@ def reader_rag_budget(settings: ResearchRAGSettings) -> RAGBudget:
 
 
 def reader_evidence_selector(
-    llm_client: OpenAICompatibleClient,
+    llm_client: LLMClient,
     settings: ResearchRAGSettings,
 ) -> RelevanceEvidenceSelector | None:
-    """Evidence selector on the configured Research LLM, or None when disabled."""
+    """Evidence selector on the evidence-summary model, or None when disabled."""
     if not settings.evidence_selection_enabled:
         return None
-    evidence_model = OpenAICompatiblePaperAnswerModel(
+    evidence_model = LLMPaperAnswerModel(
         llm_client,
         max_output_tokens=DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
         temperature=0.0,
@@ -69,13 +77,13 @@ def reader_evidence_selector(
 
 
 def reader_section_navigation(
-    llm_client: OpenAICompatibleClient,
+    llm_client: LLMClient,
     settings: ResearchRAGSettings,
 ) -> tuple[LLMSectionNavigator, SectionNavigationConfig] | tuple[None, None]:
-    """Section navigator and its config on the configured Research LLM, or (None, None)."""
+    """Section navigator and its config on the section-navigation model, or (None, None)."""
     if not settings.section_navigation_enabled:
         return None, None
-    navigation_model = OpenAICompatiblePaperAnswerModel(
+    navigation_model = LLMPaperAnswerModel(
         llm_client,
         max_output_tokens=DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS,
         temperature=0.0,
@@ -88,17 +96,22 @@ def reader_section_navigation(
 
 
 def reader_answer_worker_factory(
-    llm_client: OpenAICompatibleClient,
+    llm_client: LLMClient,
     settings: ResearchRAGSettings,
     *,
     max_output_tokens: int,
+    evidence_client: LLMClient | None = None,
 ) -> Callable[[], PaperAnswerWorker]:
-    answer_model = OpenAICompatiblePaperAnswerModel(
+    """Answer worker on ``llm_client``; evidence selection uses ``evidence_client``.
+
+    Both default to the same client for compositions with one shared model.
+    """
+    answer_model = LLMPaperAnswerModel(
         llm_client,
         max_output_tokens=max_output_tokens,
         temperature=0.0,
     )
-    evidence_selector = reader_evidence_selector(llm_client, settings)
+    evidence_selector = reader_evidence_selector(evidence_client or llm_client, settings)
     max_context_chunks = settings.max_context_items
     return lambda: PaperAnswerWorker(AnswerGenerator(
         answer_model,
@@ -109,6 +122,8 @@ def reader_answer_worker_factory(
 
 
 __all__ = [
+    "READER_ANSWER_MAX_OUTPUT_TOKENS",
+    "reader_answer_max_output_tokens",
     "reader_answer_worker_factory",
     "reader_evidence_selector",
     "reader_rag_budget",

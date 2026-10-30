@@ -7,7 +7,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from backend.research.application.paper_answer_model import OpenAICompatiblePaperAnswerModel
+from backend.research.application.paper_answer_model import LLMPaperAnswerModel
 from backend.research.ports.paper_answer_model import PaperAnswerModelError, PaperAnswerModelRequest
 from backend.research.rag.evaluation.qasper_answer_judge import JudgeRequest, judge_answer
 from framework.llm.clients.openai_compatible import (
@@ -221,7 +221,7 @@ def test_answer_model_and_judge_receive_provider_diagnostic_fields(
         )
 
     client = OpenAICompatibleClient(_config(), transport=failing_transport)
-    answer_model = OpenAICompatiblePaperAnswerModel(client, max_output_tokens=64)
+    answer_model = LLMPaperAnswerModel(client, max_output_tokens=64)
     with pytest.raises(PaperAnswerModelError) as answer_error:
         asyncio.run(
             answer_model.complete(

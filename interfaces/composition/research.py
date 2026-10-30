@@ -91,11 +91,6 @@ from backend.research.ports.artifact_publication import (
 )
 from backend.research.ports.chunk_store import ChunkStorePort
 from backend.research.ports.artifact_store import ResearchArtifactStorePort
-from framework.llm.clients.openai_compatible import (
-    LLMRetryPolicy,
-    OpenAICompatibleClient,
-    OpenAICompatibleConfig,
-)
 from framework.events.canonical import checksum_for
 from framework.events.application import DurableGraphEventProjectionAdapter
 from framework.events.runtime.projection import CanonicalRuntimeEventPublisher
@@ -247,11 +242,16 @@ from interfaces.composition.research_errors import (
     ResearchRuntimeUnavailableError,
 )
 from interfaces.composition.research_reader_answer import (
+    reader_answer_max_output_tokens,
     reader_answer_worker_factory,
     reader_rag_budget,
     reader_section_navigation,
 )
 from interfaces.composition.research_llm_deployment import resolve_research_llm_runtime
+from interfaces.composition.research_model_clients import (
+    build_research_model_clients,
+    research_operation_purposes,
+)
 from interfaces.composition.research_settings import (
     ResearchLocalRuntimeSettings,
     ResearchParserSettings,
@@ -1954,25 +1954,12 @@ def _build_configured_composition(
         # selected deployment.
         llm_deployment, runtime_settings = resolve_research_llm_runtime(settings)
         llm_settings = runtime_settings.llm
-        llm_client = OpenAICompatibleClient(
-            OpenAICompatibleConfig(
-                provider=llm_deployment.config.provider,
-                base_url=llm_settings.base_url,
-                model=llm_settings.model,
-                api_key_env=llm_settings.api_key_env,
-                timeout_seconds=llm_settings.timeout_seconds,
-            ),
-            retry_policy=LLMRetryPolicy(
-                max_attempts=llm_settings.max_attempts,
-            ),
-            structured_output_capability=(
-                llm_deployment.structured_output_capability
-            ),
-        )
+        model_clients = build_research_model_clients(runtime_settings, llm_deployment)
+        owned_resources.append(model_clients)
         candidate_worker = _compose_component(
             ResearchCapability.CANDIDATE_WORKER,
             lambda: StructuredResearchCandidateWorker(
-                llm_client,
+                model_clients.candidate_generation,
                 max_input_tokens=llm_settings.max_input_tokens,
                 max_output_tokens=llm_settings.max_output_tokens,
             ),
@@ -2600,11 +2587,14 @@ def _build_configured_composition(
         )
         ask_use_case = AskPaperUseCase()
         paper_answer_worker_factory = reader_answer_worker_factory(
-            llm_client,
+            model_clients.answer,
             settings.rag,
-            max_output_tokens=min(llm_settings.max_output_tokens, 900),
+            max_output_tokens=reader_answer_max_output_tokens(llm_settings),
+            evidence_client=model_clients.evidence_summary,
         )
-        reader_navigator, reader_navigation = reader_section_navigation(llm_client, settings.rag)
+        reader_navigator, reader_navigation = reader_section_navigation(
+            model_clients.section_navigation, settings.rag
+        )
         # Reader Q&A is asked against a terminal Research run whose artifact manifest
         # is already committed, so its context snapshots go to a dedicated store that
         # is bound to the parent run id for the duration of each session.
@@ -2662,6 +2652,7 @@ def _build_configured_composition(
             parse_use_case=parse_use_case,
             catalog_service=catalog_service,
             runtime_config_identity=_research_runtime_config_identity(settings),
+            operation_model_purposes=research_operation_purposes(settings.rag),
         )
         return ResearchRuntimeComposition(
             settings=settings,

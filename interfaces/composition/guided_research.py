@@ -9,9 +9,8 @@ from typing import Any
 from backend.research.application.guided_research import GuidedResearchApplication
 from backend.research.ports.guided_research import GuidedIntentCandidatePort, GuidedResearchError
 from framework.llm.clients.config import load_openai_compatible_deployment
-from framework.llm.clients.endpoint import LLMCredentialMode
+from framework.llm.clients.endpoint import LLMCredentialMode, llm_credential_mode
 from framework.llm.clients.openai_compatible import LLMConfigurationError, LLMRetryPolicy, OpenAICompatibleClient
-from framework.llm.structured_output import ProviderStructuredOutputCapability
 from infrastructure.research.guided_intent_candidate import StructuredGuidedIntentCandidateWorker
 from infrastructure.research.github_guided_search import GithubGuidedSearch
 from infrastructure.external.sources.github import GithubConnector
@@ -20,6 +19,7 @@ from infrastructure.research.public_paper_cache import (
     PublicPaperCacheGuidedSearch,
     PublicPaperCacheRepository,
 )
+from interfaces.composition.model_endpoint_clients import EndpointClientPolicy, invocation_client
 from interfaces.composition.research import build_research_application_service
 from interfaces.composition.research_errors import ResearchCompositionError, ResearchConfigurationError
 from interfaces.composition.research_settings import (
@@ -27,6 +27,7 @@ from interfaces.composition.research_settings import (
     ResearchRuntimeSettings,
     desktop_research_llm_enabled,
 )
+from interfaces.services.model_connections.purposes import ModelPurpose
 from interfaces.services.guided_research_service import (
     GuidedResearchService,
     ProjectGuidedSearch,
@@ -52,7 +53,20 @@ class _UnavailableGuidedIntentCandidate:
         )
 
 
+# Intent interpretation sits in front of an interactive search: a slow model
+# must fail fast rather than hold the request open.
+_INTENT_TIMEOUT_SECONDS = 45.0
+
+
 def _build_intent_candidate() -> GuidedIntentCandidatePort:
+    if llm_credential_mode() is LLMCredentialMode.INVOCATION:
+        # Each call carries the signed-in account's candidate-generation
+        # connection and that connection's own structured-output capability.
+        client = invocation_client(
+            ModelPurpose.CANDIDATE_GENERATION.value,
+            EndpointClientPolicy(timeout_seconds=_INTENT_TIMEOUT_SECONDS, max_attempts=1),
+        )
+        return StructuredGuidedIntentCandidateWorker(client, managed_output=True)
     if os.environ.get(DESKTOP_RESEARCH_LLM_ENABLED_ENV) is None:
         # Unmarked profiles retain the existing shared-model loader contract.
         deployment = load_openai_compatible_deployment()
@@ -87,25 +101,15 @@ def _build_intent_candidate() -> GuidedIntentCandidatePort:
         except LLMConfigurationError:
             return _UnavailableGuidedIntentCandidate(ResearchConfigurationError(("research.llm.route",)))
     client = OpenAICompatibleClient(
-        replace(deployment.config, timeout_seconds=min(deployment.config.timeout_seconds, 45.0)),
+        replace(deployment.config, timeout_seconds=min(deployment.config.timeout_seconds, _INTENT_TIMEOUT_SECONDS)),
         retry_policy=LLMRetryPolicy(max_attempts=1),
         structured_output_capability=deployment.structured_output_capability,
     )
+    capability = deployment.structured_output_capability
     return StructuredGuidedIntentCandidateWorker(
         client,
-        managed_output=_managed_output_available(client, deployment.structured_output_capability),
+        managed_output=capability is not None and capability.mode != "none",
     )
-
-
-def _managed_output_available(
-    client: OpenAICompatibleClient,
-    capability: ProviderStructuredOutputCapability | None,
-) -> bool:
-    # In invocation mode every call carries the account endpoint's own
-    # capability, so the operator deployment's declaration does not apply.
-    if client.credential_mode is LLMCredentialMode.INVOCATION:
-        return True
-    return capability is not None and capability.mode != "none"
 
 
 @lru_cache(maxsize=1)

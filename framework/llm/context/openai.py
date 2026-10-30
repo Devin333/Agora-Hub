@@ -10,6 +10,7 @@ from framework.llm.context.normalization import (
     structured_output_projection_format,
 )
 from framework.llm.clients.tool_adapters import to_openai_tools
+from framework.llm.models.reasoning import ReasoningSetting
 from framework.llm.models.request import LLMRequest
 
 
@@ -19,6 +20,8 @@ OPENAI_CHAT_NORMALIZER_REVISION = "openai-chat-completions-v1"
 @dataclass(frozen=True)
 class OpenAICompatibleRequestNormalizer:
     revision: str = OPENAI_CHAT_NORMALIZER_REVISION
+    reasoning: ReasoningSetting | None = None
+    max_output_tokens: int | None = None
 
     def normalize(
         self,
@@ -30,7 +33,12 @@ class OpenAICompatibleRequestNormalizer:
         normalized_request = request.clone(model=model)
         return NormalizedLLMRequest(
             request=normalized_request,
-            payload=build_openai_chat_payload(normalized_request, model=model),
+            payload=build_openai_chat_payload(
+                normalized_request,
+                model=model,
+                reasoning=self.reasoning,
+                max_output_tokens=self.max_output_tokens,
+            ),
             provider=provider,
             normalizer_revision=self.revision,
         )
@@ -40,7 +48,15 @@ def build_openai_chat_payload(
     request: LLMRequest,
     *,
     model: str,
+    reasoning: ReasoningSetting | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
+    """Chat Completions body for ``request``.
+
+    ``reasoning`` adds the provider's reasoning fields and widens the output
+    limit by the tier's reasoning allowance; ``max_output_tokens`` is the
+    model's output ceiling, which the widened limit never exceeds.
+    """
     if not isinstance(model, str) or not model.strip():
         raise ValueError("model must be a non-empty string")
     payload: dict[str, Any] = {
@@ -49,13 +65,20 @@ def build_openai_chat_payload(
     }
     if request.temperature is not None:
         payload["temperature"] = request.temperature
-    if request.max_tokens is not None:
-        payload["max_tokens"] = request.max_tokens
+    max_tokens = (
+        reasoning.output_tokens(request.max_tokens, ceiling=max_output_tokens)
+        if reasoning is not None
+        else request.max_tokens
+    )
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     if request.tools:
         payload["tools"] = to_openai_tools(request.tools)
     response_format = openai_response_format(request)
     if response_format is not None:
         payload["response_format"] = response_format
+    if reasoning is not None:
+        reasoning.apply_to_chat_payload(payload)
     return payload
 
 

@@ -27,7 +27,7 @@ class _EndpointProbeDesktopService:
 
     def identity(self, owner):
         try:
-            endpoint = resolve_invocation_endpoint()
+            endpoint = resolve_invocation_endpoint("answer")
         except LLMCredentialUnavailableError as exc:
             bound = {"error": exc.code}
         else:
@@ -281,6 +281,23 @@ def test_hosted_startup_refuses_unsafe_configuration(tmp_path) -> None:
     with pytest.raises(DeploymentConfigurationError) as too_large:
         build_hosted_runtime(hosted_env(tmp_path), research_request_tokens=5_000_000)
     assert too_large.value.variable == "NEWSROOM_HOSTED_LLM_PROVIDERS_PATH"
+
+
+def test_hosted_startup_derives_the_request_budget_from_the_configured_input_window(tmp_path) -> None:
+    # Accounts bring their own models, so the budget cannot come from an
+    # operator deployment: an unset input window is a configuration error.
+    with pytest.raises(DeploymentConfigurationError) as unset:
+        build_hosted_runtime(hosted_env(tmp_path, NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS=""))
+    assert unset.value.variable == "NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS"
+
+    runtime = build_hosted_runtime(
+        hosted_env(
+            tmp_path,
+            NEWS_RESEARCH_LLM_MAX_INPUT_TOKENS="64000",
+            NEWS_RESEARCH_LLM_MAX_OUTPUT_TOKENS="2048",
+        )
+    )
+    assert runtime.model_credentials is not None
 
 
 def test_hosted_app_refuses_static_api_keys(monkeypatch, tmp_path) -> None:

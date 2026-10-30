@@ -16,11 +16,7 @@ from framework.llm import (
     compile_structured_output_contract,
     project_structured_output_contract,
 )
-from framework.llm.clients import (
-    LLMCredentialMode,
-    LLMEndpoint,
-    bind_llm_endpoint_source,
-)
+from framework.llm.clients import LLMEndpoint
 from framework.llm.context.openai import build_openai_chat_payload
 from framework.llm.structured_output.request_adapters import (
     JSON_OBJECT_SCHEMA_INSTRUCTION,
@@ -150,7 +146,6 @@ def test_local_gate_reply_is_validated_against_the_contract() -> None:
         _config(),
         transport=transport,
         structured_output_capability=_json_object_capability(),
-        credential_mode=LLMCredentialMode.ENVIRONMENT,
     )
 
     with pytest.MonkeyPatch.context() as patch:
@@ -170,7 +165,6 @@ def test_empty_local_gate_reply_is_retried_then_accepted(monkeypatch) -> None:
         retry_policy=LLMRetryPolicy(max_attempts=2),
         structured_output_capability=_json_object_capability(),
         sleep=lambda _seconds: None,
-        credential_mode=LLMCredentialMode.ENVIRONMENT,
     )
 
     response = client.complete(_request())
@@ -190,7 +184,6 @@ def test_empty_reply_is_not_retried_past_the_attempt_budget(monkeypatch) -> None
         transport=transport,
         retry_policy=LLMRetryPolicy(max_attempts=3),
         structured_output_capability=_json_object_capability(),
-        credential_mode=LLMCredentialMode.ENVIRONMENT,
     )
 
     with pytest.raises(LLMProviderError) as raised:
@@ -200,20 +193,8 @@ def test_empty_reply_is_not_retried_past_the_attempt_budget(monkeypatch) -> None
     assert len(transport.payloads) == 1
 
 
-def test_invocation_uses_the_account_endpoint_capability_not_the_operator_one() -> None:
+def test_endpoint_client_uses_the_account_endpoint_capability() -> None:
     transport = _Transport('{"answer": "ok"}')
-    operator_capability = ProviderStructuredOutputCapability(
-        provider="test-provider",
-        deployment="operator",
-        mode="none",
-        revision="operator-none-v1",
-    )
-    client = OpenAICompatibleClient(
-        _config(),
-        transport=transport,
-        structured_output_capability=operator_capability,
-        credential_mode=LLMCredentialMode.INVOCATION,
-    )
     endpoint = LLMEndpoint(
         base_url="https://dashscope.example/v1",
         model="deepseek-v4.1-flash",
@@ -221,29 +202,24 @@ def test_invocation_uses_the_account_endpoint_capability_not_the_operator_one() 
         provider="dashscope",
         structured_output_capability=_json_object_capability("dashscope"),
     )
+    client = OpenAICompatibleClient.for_endpoint(endpoint, timeout_seconds=30, transport=transport)
 
-    with bind_llm_endpoint_source(lambda: endpoint):
-        response = client.complete(_request())
+    response = client.complete(_request())
 
     assert response.structured_output == {"answer": "ok"}
     assert transport.payloads[0]["response_format"] == {"type": "json_object"}
     assert response.metadata["provider"] == "dashscope"
-    assert client.config == _config()
 
 
-def test_invocation_endpoint_without_capability_refuses_structured_output() -> None:
+def test_endpoint_without_capability_refuses_structured_output() -> None:
     transport = _Transport('{"answer": "ok"}')
-    client = OpenAICompatibleClient(
-        _config(),
-        transport=transport,
-        structured_output_capability=_json_object_capability(),
-        credential_mode=LLMCredentialMode.INVOCATION,
+    endpoint = LLMEndpoint(
+        base_url="https://a.example/v1", model="m", api_key="sk-alice-secret", provider="a"
     )
-    endpoint = LLMEndpoint(base_url="https://a.example/v1", model="m", api_key="sk-alice-secret")
+    client = OpenAICompatibleClient.for_endpoint(endpoint, timeout_seconds=30, transport=transport)
 
-    with bind_llm_endpoint_source(lambda: endpoint):
-        with pytest.raises(LLMProviderError) as raised:
-            client.complete(_request())
+    with pytest.raises(LLMProviderError) as raised:
+        client.complete(_request())
 
     assert raised.value.error_type == "provider_schema_ineligible"
     assert transport.payloads == []
@@ -258,22 +234,10 @@ def test_endpoint_capability_must_belong_to_its_provider() -> None:
             provider="deepseek",
             structured_output_capability=_json_object_capability("dashscope"),
         )
-    with pytest.raises(ValueError):
-        LLMEndpoint(
-            base_url="https://a.example/v1",
-            model="m",
-            api_key="sk-alice-secret",
-            structured_output_capability=_json_object_capability("dashscope"),
-        )
 
 
-def test_invocation_refuses_a_projection_made_for_the_operator_deployment() -> None:
+def test_endpoint_client_refuses_a_projection_made_for_another_deployment() -> None:
     transport = _Transport('{"answer": "ok"}')
-    client = OpenAICompatibleClient(
-        _config("dashscope"),
-        transport=transport,
-        credential_mode=LLMCredentialMode.INVOCATION,
-    )
     operator = ProviderStructuredOutputCapability(
         provider="dashscope",
         deployment="operator",
@@ -287,10 +251,10 @@ def test_invocation_refuses_a_projection_made_for_the_operator_deployment() -> N
         provider="dashscope",
         structured_output_capability=_json_object_capability("dashscope"),
     )
+    client = OpenAICompatibleClient.for_endpoint(endpoint, timeout_seconds=30, transport=transport)
 
-    with bind_llm_endpoint_source(lambda: endpoint):
-        with pytest.raises(LLMProviderError) as raised:
-            client.complete(_projected(_request(), operator))
+    with pytest.raises(LLMProviderError) as raised:
+        client.complete(_projected(_request(), operator))
 
     assert raised.value.diagnostics[0]["validator"] == "provider_projection_endpoint_mismatch"
     assert transport.payloads == []

@@ -32,7 +32,7 @@ from backend.research.ports.request_admission import ResearchDesktopRequestStore
 from framework.llm.clients import (
     LLMCredentialUnavailableError,
     credential_unavailable_cause,
-    require_invocation_credential,
+    require_invocation_endpoints,
 )
 from interfaces.services.research_desktop_background import (
     ResearchDesktopExecutorUnavailableError,
@@ -44,10 +44,11 @@ from interfaces.services.research_desktop_control import (
     canonical_request_fingerprint,
     research_desktop_request_store_from_env,
 )
+from interfaces.services.model_connections.messages import connection_gap_message
 from interfaces.services.research_import_application import ResearchImportApplication
 from interfaces.services.research_import_service import ResearchImportError, ResearchImportService
 from interfaces.services.research_service import (
-    model_credential_service_error,
+    model_connection_service_error,
     ResearchActorInput,
     ResearchAnalyzeInput,
     ResearchApplicationService,
@@ -278,21 +279,23 @@ class ResearchDesktopApplicationService:
     def capabilities(self, owner: ResearchDesktopOwner) -> dict[str, Any]:
         _owner(owner)
         available = self._research.capability_projection()
-        # Model-backed capabilities also depend on this account's credential.
-        credential_gap = _model_credential_gap()
+        # Model-backed capabilities also depend on this account's connections
+        # for the purposes the operation calls.
+        analyze_gap = _model_connection_gap(self._research.model_purposes("analyze"))
+        ask_gap = _model_connection_gap(self._research.model_purposes("ask"))
         definitions = (
-            ("source", "论文来源", True, available["catalog"], False),
-            ("pdf-import", "PDF 导入", True, available["parse"], False),
-            ("single-paper-analysis", "单论文分析", True, available["analyze"], True),
-            ("paper-question-answering", "论文问答", True, available["ask"] and available["ragAsk"], True),
-            ("accepted-report", "核验报告", True, available["artifactRead"], False),
-            ("rag-question-answering", "检索增强问答", False, available["ragAsk"], True),
+            ("source", "论文来源", True, available["catalog"], None),
+            ("pdf-import", "PDF 导入", True, available["parse"], None),
+            ("single-paper-analysis", "单论文分析", True, available["analyze"], analyze_gap),
+            ("paper-question-answering", "论文问答", True, available["ask"] and available["ragAsk"], ask_gap),
+            ("accepted-report", "核验报告", True, available["artifactRead"], None),
+            ("rag-question-answering", "检索增强问答", False, available["ragAsk"], ask_gap),
         )
         runtime_identity = self._research.capability_runtime_identity()
         verifications = self._requests.capability_verifications(runtime_identity=runtime_identity)
         capabilities = []
-        for capability_id, label, required, configured, uses_model in definitions:
-            if uses_model and credential_gap is not None and configured:
+        for capability_id, label, required, configured, connection_gap in definitions:
+            if connection_gap is not None and configured:
                 capabilities.append({
                     "id": capability_id,
                     "label": label,
@@ -302,8 +305,9 @@ class ResearchDesktopApplicationService:
                     "verified": False,
                     "verifiedAt": None,
                     "provenance": None,
-                    "reasonCode": credential_gap.code,
-                    "message": "请先在设置中填写并保存模型 API Key。",
+                    "reasonCode": connection_gap.code,
+                    "message": connection_gap_message(connection_gap),
+                    **({"purpose": connection_gap.purpose} if connection_gap.purpose else {}),
                 })
                 continue
             verification = verifications.get(capability_id) if isinstance(verifications, Mapping) else None
@@ -604,7 +608,7 @@ class ResearchDesktopApplicationService:
             **({"personalMemory": memory_request} if memory_request is not None else {}),
         }
         self._validate_request_fingerprint(semantic, request_fingerprint)
-        _require_model_credential()
+        _require_model_connections(self._research.model_purposes("analyze"))
         decision = self._requests.admit(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -834,7 +838,7 @@ class ResearchDesktopApplicationService:
             source_revision=revision,
             source_fingerprint=source_digest,
         )
-        _require_model_credential()
+        _require_model_connections(self._research.model_purposes("ask"))
         decision = self._requests.admit(
             owner_id=actual.user_id,
             request_id=request_id,
@@ -2603,25 +2607,24 @@ def _citation_page(value: Any) -> int | None:
     return page if 1 <= page <= 10_000 else None
 
 
-def _model_credential_gap() -> LLMCredentialUnavailableError | None:
+def _model_connection_gap(purposes: Sequence[str]) -> LLMCredentialUnavailableError | None:
     try:
-        require_invocation_credential()
+        require_invocation_endpoints(purposes)
     except LLMCredentialUnavailableError as exc:
         return exc
     return None
 
 
-def _require_model_credential() -> None:
-    """Refuse model-backed work before admission when no credential is bound.
+def _require_model_connections(purposes: Sequence[str]) -> None:
+    """Refuse model-backed work before admission when a purpose it calls has no connection.
 
-    Checked before ``admit`` so a missing key never leaves an admitted
+    Checked before ``admit`` so a missing connection never leaves an admitted
     request behind that can only fail.
     """
 
-    try:
-        require_invocation_credential()
-    except LLMCredentialUnavailableError as exc:
-        raise _service_error(model_credential_service_error(exc)) from exc
+    gap = _model_connection_gap(purposes)
+    if gap is not None:
+        raise _service_error(model_connection_service_error(gap)) from gap
 
 
 def _service_error(exc: Exception) -> ResearchDesktopServiceError:
@@ -2629,7 +2632,7 @@ def _service_error(exc: Exception) -> ResearchDesktopServiceError:
         return exc
     credential_failure = credential_unavailable_cause(exc)
     if credential_failure is not None:
-        return _service_error(model_credential_service_error(credential_failure))
+        return _service_error(model_connection_service_error(credential_failure))
     if isinstance(exc, ResearchDesktopExecutorUnavailableError):
         return ResearchDesktopServiceError(
             exc.code,

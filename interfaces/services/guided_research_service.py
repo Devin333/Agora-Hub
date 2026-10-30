@@ -10,7 +10,7 @@ from backend.projects.dto import ProjectListQuery
 from framework.llm.clients import (
     LLMCredentialUnavailableError,
     credential_unavailable_cause,
-    require_invocation_credential,
+    require_invocation_endpoints,
 )
 from backend.research.application.guided_research import GuidedResearchApplication
 from backend.research.ports.guided_research import (
@@ -25,6 +25,8 @@ from backend.research.ports.guided_research import (
     GuidedSearchCommand,
     GuidedSearchResponse,
 )
+from interfaces.services.model_connections.messages import connection_gap_details, connection_gap_message
+from interfaces.services.model_connections.purposes import ModelPurpose
 from interfaces.services.project_service import ProjectApplicationService
 from interfaces.services.research_conversation_model import ConversationTurn
 from interfaces.services.research_history_service import ResearchHistoryService
@@ -43,12 +45,17 @@ class GuidedIntentRequest(Protocol):
 
 
 
-def _model_credential_error(error: LLMCredentialUnavailableError) -> GuidedResearchError:
+# Intent interpretation is a structured research candidate.
+_INTENT_PURPOSE = ModelPurpose.CANDIDATE_GENERATION.value
+
+
+def _model_connection_error(error: LLMCredentialUnavailableError) -> GuidedResearchError:
     return GuidedResearchError(
         error.code,
-        "请先在设置中填写可用的模型 API key，再使用问题理解。",
+        connection_gap_message(error),
         status_code=409,
         user_action_required=True,
+        details=connection_gap_details(error),
     )
 
 class GuidedResearchService:
@@ -75,17 +82,17 @@ class GuidedResearchService:
             constraints=request.constraints,
         )
         # Intent interpretation always calls the model: refuse up front when
-        # the signed-in account has no usable model credential bound.
+        # the signed-in account has no usable connection for it.
         try:
-            require_invocation_credential()
+            require_invocation_endpoints((_INTENT_PURPOSE,))
         except LLMCredentialUnavailableError as exc:
-            raise _model_credential_error(exc) from exc
+            raise _model_connection_error(exc) from exc
         try:
             result = self._application.interpret(command)
         except Exception as exc:
             credential_failure = credential_unavailable_cause(exc)
             if credential_failure is not None:
-                raise _model_credential_error(credential_failure) from exc
+                raise _model_connection_error(credential_failure) from exc
             raise
         payload = result.model_dump(mode="json", exclude_none=True)
         payload["clarification"] = (
