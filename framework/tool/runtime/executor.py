@@ -1835,10 +1835,6 @@ def _copy_tool_result(result: ToolResult, **overrides: Any) -> ToolResult:
     return ToolResult(**values)
 
 
-def _has_side_effects(side_effect: str) -> bool:
-    return side_effect not in {"", "none", "read_only"}
-
-
 def _side_effect_value(definition: Any) -> str:
     value = getattr(definition, "side_effect_value", None)
     if value is not None:
@@ -2160,45 +2156,6 @@ def _invoke_with_retry(
         ):
             raise timeout_error
     raise RuntimeError(f"tool {tool_name} retry loop exited unexpectedly")
-
-
-def _invoke_with_timeout(
-    executor: Any,
-    arguments: dict[str, Any],
-    timeout_seconds: float | None,
-    tool_name: str,
-) -> Any:
-    local_budget = LocalRetryBudget(max_attempts=1)
-    execution_limits = ExecutionLimits(
-        execution_id=f"standalone-tool:{tool_name}",
-        retry_credits=RetryCreditLedger(max_total_retries=0),
-    )
-    supervised = AttemptSupervisor().run(
-        lambda: executor(arguments),
-        timeout_seconds=timeout_seconds,
-        idempotency_key=f"tool:{tool_name}",
-        operation_id=f"tool:{tool_name}",
-        operation_kind="tool_call",
-        local_budget=local_budget,
-        execution_limits=execution_limits,
-    )
-    if supervised.state is AttemptState.REJECTED:
-        if supervised.error is None:
-            raise ToolRuntimeError("tool attempt admission was rejected without an error")
-        raise supervised.error
-    if supervised.state is AttemptState.SUCCEEDED:
-        return supervised.value
-    if supervised.state is AttemptState.FAILED:
-        if supervised.error is None:
-            raise ToolRuntimeError("tool attempt failed without an error")
-        raise supervised.error
-    raise _tool_timeout_error(
-        tool_name=tool_name,
-        timeout_seconds=timeout_seconds,
-        context=supervised.context,
-        termination_confirmed=supervised.termination_confirmed,
-        indeterminate=supervised.indeterminate,
-    )
 
 
 def _tool_idempotency_key(call: ToolCall) -> str:

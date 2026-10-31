@@ -282,13 +282,6 @@ def _optional_int(value: Any) -> int | None:
     return number
 
 
-def _optional_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
 def _to_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)

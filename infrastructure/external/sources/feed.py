@@ -5,11 +5,11 @@ from datetime import datetime, timezone as _tz
 UTC = _tz.utc
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
-from html import unescape
 from typing import Callable
 from urllib.request import Request
 from xml.etree import ElementTree
 
+from infrastructure.external.sources.html_text import html_fragment_text
 from infrastructure.external.sources.models import RawSourceItem, SourceDefinition, SourceError
 from infrastructure.external.sources.diagnostics import (
     SourceFetchResponseMetadataContext,
@@ -291,7 +291,7 @@ def _json_feed_item(
     summary = (
         _json_text(entry.get("summary"))
         or _json_text(entry.get("content_text"))
-        or _plain_text(_json_text(entry.get("content_html")))
+        or html_fragment_text(_json_text(entry.get("content_html")))
     )
     title = _json_text(entry.get("title")) or _title_from_summary(summary)
     if not title or not url:
@@ -363,12 +363,6 @@ def _title_from_summary(summary: str | None) -> str | None:
     if not summary:
         return None
     return summary[:117].rstrip() + "..." if len(summary) > 120 else summary
-
-
-def _plain_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return " ".join(unescape(value).split())
 
 
 def _text(parent: ElementTree.Element, tag: str) -> str | None:

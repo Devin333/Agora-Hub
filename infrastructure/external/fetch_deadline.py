@@ -80,12 +80,6 @@ def remaining_seconds() -> float | None:
     return current.expires_at - time.monotonic()
 
 
-def ensure_time_remaining() -> None:
-    remaining = remaining_seconds()
-    if remaining is not None and remaining <= 0:
-        raise FetchDeadlineExceeded(deadline_budget_seconds())
-
-
 def bounded_timeout(timeout_seconds: float | None) -> float | None:
     """The socket timeout for the next operation: never past the deadline."""
 

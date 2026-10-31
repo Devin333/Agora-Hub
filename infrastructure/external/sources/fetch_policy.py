@@ -277,10 +277,6 @@ def decide_source_fetch_retry(
     )
 
 
-def is_retryable_fetch_exception(exc: Exception, policy: SourceFetchPolicy) -> bool:
-    return decide_source_fetch_retry(exc, policy).retryable
-
-
 def fetch_attempts(exc: Exception) -> int | None:
     attempts = getattr(exc, "source_fetch_attempts", None)
     return attempts if isinstance(attempts, int) else None

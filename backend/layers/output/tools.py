@@ -226,9 +226,7 @@ def _publish_report(
     if not isinstance(execution_identity, GraphExecutionIdentity):
         raise TypeError("execution_identity must be GraphExecutionIdentity")
     with effect_not_applied_on():
-        supplied_run_id = args.get("run_id")
-        if supplied_run_id is not None and _required_text(supplied_run_id, "run_id") != execution_identity.run_id:
-            raise ValueError("run_id must match execution_identity.run_id")
+        # The run is the execution's own: the schema has no run_id argument.
         run_id = execution_identity.run_id
         report = _final_report(args["report"])
         status = _optional_text(args.get("status")) or "final"
@@ -313,13 +311,6 @@ def _final_report(payload: Any) -> OutputReport:
     )
     ensure_storable_json(report.to_dict(), "report")
     return report
-
-
-def _required_text(value: Any, field_name: str) -> str:
-    text = _optional_text(value)
-    if text is None:
-        raise ValueError(f"{field_name} is required")
-    return text
 
 
 def _optional_text(value: Any) -> str | None:

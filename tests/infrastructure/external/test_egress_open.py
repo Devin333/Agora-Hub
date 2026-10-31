@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import socket
 import threading
 import time
 from collections.abc import Iterator
+from http.client import IncompleteRead
 from urllib.error import HTTPError
 from urllib.request import Request
 
@@ -19,7 +21,7 @@ from infrastructure.external.sources.fetch_policy import (
     open_request_with_fetch_policy,
     run_with_fetch_retries,
 )
-from tests.tools.harness.fault_http import Delay, FaultHTTPServer, Hang, Redirect, Respond, Trickle
+from tests.tools.harness.fault_http import Delay, FaultHTTPServer, Hang, Redirect, Respond, Trickle, Truncate
 
 LOOPBACK = ("127.0.0.0/8", "::1/128")
 
@@ -165,6 +167,44 @@ def test_slow_drip_that_beats_every_socket_timeout_still_ends_at_the_budget(serv
         with _open(server.url("/drip"), EgressPolicy(allowed_private_networks=LOOPBACK), timeout=1.0) as response:
             response.read()
     assert 0.8 <= time.monotonic() - started < 1.8
+
+
+def _read_all(response, reader: str) -> bytes:
+    if reader == "read":
+        return response.read()
+    if reader == "read-chunks":
+        return b"".join(iter(lambda: response.read(64), b""))
+    if reader == "readinto":
+        received = bytearray()
+        buffer = bytearray(64)
+        while count := response.readinto(buffer):
+            received += buffer[:count]
+        return bytes(received)
+    # io.BufferedReader reads the raw response through readinto.
+    return io.BufferedReader(response, buffer_size=64).read()
+
+
+READERS = ["read", "read-chunks", "readinto", "buffered-reader"]
+
+
+@pytest.mark.parametrize("reader", READERS)
+def test_a_body_cut_short_of_its_content_length_is_never_returned_as_complete(server: FaultHTTPServer, reader: str) -> None:
+    # http.client returns a short read when the peer closes early; every read
+    # path must report the truncation instead of a shorter body.
+    server.route("/cut", Truncate("x" * 1000, sent_bytes=100))
+
+    with pytest.raises(IncompleteRead):
+        with _open(server.url("/cut"), EgressPolicy(allowed_private_networks=LOOPBACK)) as response:
+            _read_all(response, reader)
+
+
+@pytest.mark.parametrize("reader", READERS)
+def test_a_complete_body_reads_the_same_through_every_read_path(server: FaultHTTPServer, reader: str) -> None:
+    body = "y" * 1000
+    server.route("/whole", Respond(200, body))
+
+    with _open(server.url("/whole"), EgressPolicy(allowed_private_networks=LOOPBACK)) as response:
+        assert _read_all(response, reader) == body.encode()
 
 
 def _watchdogs() -> int:

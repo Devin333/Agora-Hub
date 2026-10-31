@@ -166,7 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "smoke-test-agent-loop":
         return _run(_agent_loop_smoke_command(args), env=env)
     if args.command == "tool-stability":
-        return _run(_tool_stability_command(args.layer), env=env)
+        return _run(_tool_stability_command(args.layer, function_coverage=args.function_coverage), env=env)
     if args.command == "smoke":
         commands = [
             _compile_command(),
@@ -270,6 +270,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--layer",
         choices=sorted(TOOL_STABILITY_LAYER_MARKERS),
         default="fault",
+    )
+    tool_stability_parser.add_argument(
+        "--function-coverage",
+        metavar="REPORT",
+        default=None,
+        help="also write the tool-implementation functions no test ran to this JSON report",
     )
     subparsers.add_parser("sources-validate", help="Validate configured source registry")
     subparsers.add_parser("diagnose", help="Run local diagnostics")
@@ -417,11 +423,13 @@ def _rag_ingest_golden_set_papers_command(args: argparse.Namespace | None = None
     return command
 
 
-def _tool_stability_command(layer: str) -> list[str]:
+def _tool_stability_command(layer: str, *, function_coverage: str | None = None) -> list[str]:
     options = ["-m", TOOL_STABILITY_LAYER_MARKERS[layer], "-q"]
     if layer == "live":
         # Name every skip: a live run that silently skips everything proves nothing.
         options.append("-rs")
+    if function_coverage:
+        options.extend(["-p", "tests.tools.harness.function_coverage", f"--tool-function-coverage={function_coverage}"])
     return _pytest_command(TOOL_STABILITY_TESTS, *options)
 
 
