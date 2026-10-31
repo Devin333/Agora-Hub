@@ -15,6 +15,9 @@ from framework.tool import ToolObservation
 from framework.agent.runtime.redaction import redact_sensitive_values
 
 
+_FAILED_TOOL_STATUSES = frozenset({"failed", "timeout", "blocked"})
+_NOT_RUN_TOOL_STATUSES = frozenset({"blocked", "denied", "approval_required"})
+
 @dataclass(frozen=True)
 class ToolCallSignature:
     tool_name: str
@@ -647,7 +650,19 @@ class AgentLoopTrace:
         iteration.stop_candidate = reason
 
     def count_tool_signature(self, signature_key: str) -> int:
-        return sum(1 for call in self.tool_calls if call.signature.key == signature_key)
+        """How often a call with this signature actually ran.
+
+        A call refused before it ran (blocked by the batch budget or policy,
+        or held for approval) did no work, so resending it is the expected
+        recovery, not a repeat. Refusals still count toward the failed-turn
+        streak, which bounds a model that keeps resending them.
+        """
+
+        return sum(
+            1
+            for call in self.tool_calls
+            if call.signature.key == signature_key and call.status not in _NOT_RUN_TOOL_STATUSES
+        )
 
     def consecutive_parser_errors(self) -> int:
         count = 0
@@ -658,9 +673,20 @@ class AgentLoopTrace:
         return count
 
     def consecutive_tool_failures(self) -> int:
+        """Model turns in a row whose every tool call failed.
+
+        A turn is the unit the model reacts to: it sees all of one turn's
+        observations together and can only change course in the next turn,
+        so one batch of parallel failures counts once, not once per call.
+        """
+
         count = 0
-        for call in reversed(self.tool_calls):
-            if call.status not in {"failed", "timeout", "blocked"}:
+        turn_failed: dict[int, bool] = {}
+        for call in self.tool_calls:
+            failed = call.status in _FAILED_TOOL_STATUSES
+            turn_failed[call.iteration] = turn_failed.get(call.iteration, True) and failed
+        for iteration in sorted(turn_failed, reverse=True):
+            if not turn_failed[iteration]:
                 break
             count += 1
         return count

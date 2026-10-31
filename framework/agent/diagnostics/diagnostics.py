@@ -68,29 +68,35 @@ class AgentLoopStallDetector:
                     },
                 ),
             )
-        if (
-            self.policy.max_consecutive_tool_failures > 0
-            and trace.consecutive_tool_failures() > self.policy.max_consecutive_tool_failures
-        ):
-            count = trace.consecutive_tool_failures()
-            summary = f"tool failures repeated for {count} consecutive call(s)"
-            return StallDetection(
-                stalled=True,
-                stop_reason=AgentLoopStopReason.TOOL_FAILED,
-                summary=summary,
-                issue=AgentLoopIssue(
-                    code="consecutive_tool_failures",
-                    message=summary,
-                    severity=AgentLoopDiagnosticSeverity.ERROR,
-                    iteration=call.iteration,
-                    tool_name=call.tool_name,
-                    metadata={
-                        "limit": self.policy.max_consecutive_tool_failures,
-                        "count": count,
-                    },
-                ),
-            )
         return StallDetection(stalled=False)
+
+    def after_tool_turn(self, trace: AgentLoopTrace, iteration: int) -> StallDetection:
+        """Check failure streaks once a turn's whole batch is recorded.
+
+        Checked per call, a batch whose first calls fail would stop the run
+        before its later calls (which may succeed) are even counted.
+        """
+
+        if not self.policy.stall_detection_enabled:
+            return StallDetection(stalled=False)
+        count = trace.consecutive_tool_failures()
+        limit = self.policy.max_consecutive_tool_failures
+        if limit <= 0 or count <= limit:
+            return StallDetection(stalled=False)
+        summary = f"every tool call failed for {count} consecutive turn(s)"
+        return StallDetection(
+            stalled=True,
+            stop_reason=AgentLoopStopReason.TOOL_FAILED,
+            summary=summary,
+            repeated_count=count,
+            issue=AgentLoopIssue(
+                code="consecutive_tool_failures",
+                message=summary,
+                severity=AgentLoopDiagnosticSeverity.ERROR,
+                iteration=iteration,
+                metadata={"limit": limit, "count": count},
+            ),
+        )
 
     def after_parser_error(
         self,
@@ -187,19 +193,6 @@ class AgentLoopStallDetector:
                         "consecutive_judge_retries": trace.consecutive_judge_retries(),
                     },
                 ),
-            )
-        return StallDetection(stalled=False)
-
-    def detect(self, trace: AgentLoopTrace) -> StallDetection:
-        if not self.policy.stall_detection_enabled:
-            return StallDetection(stalled=False)
-        if trace.consecutive_tool_failures() > self.policy.max_consecutive_tool_failures:
-            count = trace.consecutive_tool_failures()
-            return StallDetection(
-                stalled=True,
-                stop_reason=AgentLoopStopReason.TOOL_FAILED,
-                summary=f"tool failures repeated for {count} consecutive call(s)",
-                repeated_count=count,
             )
         return StallDetection(stalled=False)
 

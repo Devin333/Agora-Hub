@@ -99,14 +99,22 @@ class FaultPlan:
         if isinstance(fault, Pass):
             return operation()
         if isinstance(fault, Raise):
-            raise fault.error
+            raise _fresh(fault.error)
         if isinstance(fault, RaiseAfter):
             operation()
-            raise fault.error
+            raise _fresh(fault.error)
         if isinstance(fault, Stall):
             self._released.wait(min(fault.seconds, MAX_STALL_SECONDS))
             return self._apply(fault.then, operation)
         raise TypeError(f"unknown fault: {fault!r}")  # pragma: no cover
+
+
+def _fresh(error: BaseException) -> BaseException:
+    """One scripted error may be raised hundreds of times; re-raising an
+    instance prepends to its old traceback, so each raise starts clean, the way
+    a real client raises a new error every time."""
+
+    return error.with_traceback(None)
 
 
 class FaultyReportRepository:

@@ -1888,7 +1888,8 @@ class _ToolPolicyTraceBuilder:
                 dimension=dimension,
                 passed=passed,
                 severity=severity or ("info" if passed else "error"),
-                reason=reason,
+                # Reasons are often str(exc) from an upstream client.
+                reason=redact_sensitive_values(str(reason)),
                 metadata=dict(metadata or {}),
             )
         )

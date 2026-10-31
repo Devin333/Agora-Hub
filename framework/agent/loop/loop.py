@@ -985,6 +985,10 @@ class AgentLoop:
                 stall = detection
             recorded.append(observation)
 
+        if stall is None and recorded:
+            detection = stall_detector.after_tool_turn(trace, iteration)
+            if detection.stalled:
+                stall = detection
         if stall is not None:
             metrics.stalled_iterations += 1
             trace.mark_stop_candidate(
@@ -2556,8 +2560,12 @@ def _prompt_safe_observation(
             or f"Tool result stored as artifact pointer: {artifact_refs[0].relative_path}"
         ),
         artifact_refs=artifact_refs,
+        artifacts=artifact_refs,
         output_bytes=output_bytes,
         redacted=True,
+        # The prompt carries the whole result record; the redacted copy of the
+        # full output must go too, or the pointer bounds nothing.
+        redacted_output=None,
     )
     return ToolObservation(
         call=observation.call,
