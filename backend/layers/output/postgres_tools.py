@@ -12,9 +12,11 @@ from backend.layers.output.validation import ensure_storable_json, optional_fini
 # Database writes get their own bound instead of the 30s policy default the
 # executor would otherwise apply silently.
 POSTGRES_TOOL_TIMEOUT_SECONDS = 30.0
-# A connection that never opened cannot have written anything. Named, not
-# imported: the backend layer only sees the repository protocol.
-_NO_EFFECT_ERROR_TYPES = ["PostgresConnectionError"]
+# Repository failures known to have written nothing: a connection that never
+# opened, and a write Postgres rejected before its commit (the transaction
+# rolled back). Named, not imported: the backend layer only sees the
+# repository protocol. report.publish writes through the same repository.
+REPOSITORY_NO_EFFECT_ERROR_TYPES = ("PostgresConnectionError", "PostgresWriteRejectedError")
 
 
 class PostgresReportRepository(Protocol):
@@ -42,7 +44,7 @@ def register_postgres_tools(
                 concurrency_safe=False,
                 timeout_seconds=POSTGRES_TOOL_TIMEOUT_SECONDS,
                 max_result_bytes=100_000,
-                metadata={"writes_postgres_report": True, "no_effect_error_types": _NO_EFFECT_ERROR_TYPES},
+                metadata={"writes_postgres_report": True, "no_effect_error_types": list(REPOSITORY_NO_EFFECT_ERROR_TYPES)},
             ),
             lambda args, tool_name=tool_name: _save_report(
                 args,
@@ -84,7 +86,7 @@ def register_postgres_tools(
                 concurrency_safe=False,
                 timeout_seconds=POSTGRES_TOOL_TIMEOUT_SECONDS,
                 max_result_bytes=100_000,
-                metadata={"writes_postgres_source_health": True, "no_effect_error_types": _NO_EFFECT_ERROR_TYPES},
+                metadata={"writes_postgres_source_health": True, "no_effect_error_types": list(REPOSITORY_NO_EFFECT_ERROR_TYPES)},
             ),
             lambda args: _update_source_health(
                 args,

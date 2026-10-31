@@ -8,6 +8,7 @@ from framework.tool.models import ToolDefinition
 from framework.tool.registry import ToolRegistry
 from framework.tool.runtime.errors import effect_not_applied_on
 from framework.shared.graph_identity import GraphExecutionIdentity
+from backend.layers.output.postgres_tools import REPOSITORY_NO_EFFECT_ERROR_TYPES
 from backend.layers.output.records import OutputReport, OutputReportRecord, render_output_report_markdown
 from backend.layers.output.validation import ensure_storable_json, optional_score
 
@@ -147,7 +148,10 @@ def register_report_tools(
                 concurrency_safe=False,
                 timeout_seconds=REPORT_STORE_TIMEOUT_SECONDS,
                 max_result_bytes=100_000,
-                metadata={"writes_report_repository": True},
+                metadata={
+                    "writes_report_repository": True,
+                    "no_effect_error_types": list(REPOSITORY_NO_EFFECT_ERROR_TYPES),
+                },
             ),
             lambda args: _publish_report(
                 args,

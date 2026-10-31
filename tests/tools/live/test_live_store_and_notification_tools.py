@@ -16,6 +16,7 @@ import pytest
 
 from framework.tool import ToolStatus
 from infrastructure.storage.postgres import PostgresRepository
+from infrastructure.storage.persistence import GraphRunRecord
 from infrastructure.storage.postgres.connect import connect_postgres
 from infrastructure.storage.vector.embeddings import DeterministicEmbeddingModel
 from infrastructure.storage.vector.qdrant_store import QdrantVectorStore
@@ -28,6 +29,7 @@ from tests.tools.test_notification_webhook_tools import outcome
 pytestmark = pytest.mark.tool_live
 
 VECTOR_SIZE = 64
+LIVE_RUN_ID = "run-tool-live"
 REPORT = {"title": "Tool live weekly", "sections": [{"title": "Findings", "content": "Live persistence works."}]}
 
 
@@ -45,13 +47,19 @@ def _postgres_env(tool_env_factory, dsn: str, schema: str) -> tuple[ToolEnvironm
         persistence_repository=repository,
         report_service=ReportApplicationService(repository=repository),
     )
+    # reports.run_id references graph_runs: a report belongs to a recorded run,
+    # so the runs the tools write under exist first, as they do in production.
+    for run_id in (LIVE_RUN_ID, environment.identity.run_id):
+        repository.save_graph_run(
+            GraphRunRecord(run_id=run_id, graph_id="tool-live.graph", graph_version="1", status="running", profile="tool-live")
+        )
     return environment, repository
 
 
 def _report(report_id: str, **overrides: Any) -> dict[str, Any]:
     args: dict[str, Any] = {
         "report_id": report_id,
-        "run_id": "run-tool-live",
+        "run_id": LIVE_RUN_ID,
         "status": "completed",
         "title": "Tool live weekly",
         "report_json": {"sections": [{"title": "Findings", "body": "Live persistence works."}]},
@@ -104,6 +112,18 @@ def test_concurrent_saves_of_one_report_converge_on_one_row(tool_env_factory, li
     [(count,)] = repository.fetch_all("SELECT count(*) FROM reports WHERE report_id = %s", ("live-race",))
     assert count == 1
     assert repository.get_report("live-race").title in {f"writer {index}" for index in range(8)}
+
+
+@pytest.mark.live_service("postgres")
+def test_report_for_an_unrecorded_run_is_rejected_and_reported_as_not_written(tool_env_factory, live_postgres_schema) -> None:
+    environment, repository = _postgres_env(tool_env_factory, *live_postgres_schema)
+
+    run = environment.run("postgres.save_report", _report("live-orphan", run_id="run-never-recorded"))
+
+    assert outcome(run) == "not_applied", run.describe()
+    assert "reports_run_id_fkey" in run.error_message and "nothing was committed" in run.error_message
+    [(count,)] = repository.fetch_all("SELECT count(*) FROM reports WHERE report_id = %s", ("live-orphan",))
+    assert count == 0
 
 
 @pytest.mark.live_service("postgres")
