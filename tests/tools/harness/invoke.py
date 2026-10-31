@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool import (
     ToolBatchExecutor,
     ToolCall,
@@ -74,6 +75,21 @@ class ToolRun:
         )
 
 
+def _executor(registry: ToolRegistry, graph_identity: GraphExecutionIdentity | None) -> ToolExecutor:
+    """Compose the executor the way production does for the call's context.
+
+    A Graph activity executor defers result persistence: the Harness
+    materializer stores large results, so the executor must not refuse them
+    for lack of a legacy artifact writer.
+    """
+
+    return ToolExecutor(
+        registry,
+        graph_identity=graph_identity,
+        defer_result_persistence=graph_identity is not None,
+    )
+
+
 def run_tool(
     registry: ToolRegistry,
     tool_name: str,
@@ -81,8 +97,11 @@ def run_tool(
     *,
     policy: ToolPolicy | None = None,
     executor: ToolExecutor | None = None,
+    graph_identity: GraphExecutionIdentity | None = None,
 ) -> ToolRun:
-    tool_executor = executor or ToolExecutor(registry)
+    """Run one call; ``graph_identity`` binds the executor like a Graph activity does."""
+
+    tool_executor = executor or _executor(registry, graph_identity)
     started = time.monotonic()
     observation = tool_executor.execute(
         ToolCall(tool_name=tool_name, arguments=dict(arguments or {})),
@@ -98,8 +117,12 @@ def run_batch(
     policy: ToolPolicy | None = None,
     max_workers: int | None = None,
     mode: str = "best_effort",
+    graph_identity: GraphExecutionIdentity | None = None,
 ) -> tuple[list[ToolObservation], float]:
-    batch = ToolBatchExecutor(ToolExecutor(registry), max_workers=max_workers or len(calls) or 1)
+    batch = ToolBatchExecutor(
+        _executor(registry, graph_identity),
+        max_workers=max_workers or len(calls) or 1,
+    )
     started = time.monotonic()
     observations = batch.execute_batch(
         [ToolCall(tool_name=name, arguments=dict(arguments)) for name, arguments in calls],

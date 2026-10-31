@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
-import math
 from typing import Any, Protocol, cast
 
 from framework.tool.models import ToolDefinition
 from framework.tool.registry import ToolRegistry
 from framework.tool.runtime.errors import effect_not_applied_on
 from backend.layers.output.records import OutputReportRecord, OutputSourceError, OutputSourceHealth, OutputSourceHealthStatus
+from backend.layers.output.validation import ensure_storable_json, optional_finite, optional_score
 
 
 # Database writes get their own bound instead of the 30s policy default the
@@ -125,7 +124,7 @@ def _save_report(
         report_json = args["report_json"]
         if not isinstance(report_json, dict):
             raise ValueError("report_json must be an object")
-        _ensure_storable_json(report_json, "report_json")
+        ensure_storable_json(report_json, "report_json")
         record = OutputReportRecord(
             report_id=report_id,
             run_id=run_id,
@@ -133,8 +132,8 @@ def _save_report(
             title=_optional_text(args.get("title")),
             report_json=dict(report_json),
             report_markdown=_optional_text(args.get("report_markdown")),
-            quality_score=_optional_score(args.get("quality_score"), "quality_score"),
-            citation_coverage_score=_optional_score(
+            quality_score=optional_score(args.get("quality_score"), "quality_score"),
+            citation_coverage_score=optional_score(
                 args.get("citation_coverage_score"),
                 "citation_coverage_score",
             ),
@@ -198,40 +197,11 @@ def _optional_text(value: Any) -> str | None:
     return text or None
 
 
-def _optional_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError("numeric fields must be finite")
-    return number
-
-
-def _optional_score(value: Any, field_name: str) -> float | None:
-    """Report scores are fractions in [0, 1]; NaN would poison every average."""
-
-    score = _optional_float(value)
-    if score is not None and not 0.0 <= score <= 1.0:
-        raise ValueError(f"{field_name} must be between 0 and 1")
-    return score
-
-
 def _optional_latency(value: Any) -> float | None:
-    latency = _optional_float(value)
+    latency = optional_finite(value, "avg_latency_ms_24h")
     if latency is not None and latency < 0:
         raise ValueError("avg_latency_ms_24h must not be negative")
     return latency
-
-
-def _ensure_storable_json(value: Any, field_name: str) -> None:
-    """Postgres JSONB rejects NaN and Infinity; refuse them before the write."""
-
-    try:
-        json.dumps(value, allow_nan=False)
-    except ValueError as exc:
-        raise ValueError(f"{field_name} must not contain NaN or Infinity") from exc
-    except TypeError as exc:
-        raise ValueError(f"{field_name} must contain only JSON values") from exc
 
 
 def _source_error(value: Any, *, source_id: str) -> OutputSourceError | None:

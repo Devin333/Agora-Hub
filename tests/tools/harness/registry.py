@@ -18,6 +18,7 @@ from framework.agent.artifacts import ArtifactManager
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool import ToolRegistry
 from interfaces.services.report_service import ReportApplicationService
+from tests.tools.harness.invoke import ToolRun, run_batch, run_tool
 from tests.tools.harness.fault_stores import (
     FaultyApprovalStore,
     FaultyMemoryRecall,
@@ -60,6 +61,18 @@ class ToolEnvironment:
     local_json_root: Path
     rss_feed_path: Path
     registry: ToolRegistry
+
+    def run(self, tool_name: str, arguments: dict[str, Any] | None = None, **options: Any) -> ToolRun:
+        """Run a tool as the Graph activity this environment is bound to.
+
+        Artifact, report, memory and control tools are registered for one
+        execution identity and refuse calls from any other.
+        """
+
+        return run_tool(self.registry, tool_name, arguments, graph_identity=self.identity, **options)
+
+    def run_batch(self, calls: list[tuple[str, dict[str, Any]]], **options: Any) -> tuple[list[Any], float]:
+        return run_batch(self.registry, calls, graph_identity=self.identity, **options)
 
     def release(self) -> None:
         """Unblock every stalled stand-in so its worker thread can finish."""

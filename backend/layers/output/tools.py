@@ -6,8 +6,14 @@ from typing import Any
 from framework.agent.artifacts import ArtifactManager
 from framework.tool.models import ToolDefinition
 from framework.tool.registry import ToolRegistry
+from framework.tool.runtime.errors import effect_not_applied_on
 from framework.shared.graph_identity import GraphExecutionIdentity
 from backend.layers.output.records import OutputReport, OutputReportRecord, render_output_report_markdown
+from backend.layers.output.validation import ensure_storable_json, optional_score
+
+# Report search and publish go through the report repository (Postgres in
+# hosted deployments); they declare their own bound.
+REPORT_STORE_TIMEOUT_SECONDS = 30.0
 
 
 def register_report_tools(
@@ -67,6 +73,7 @@ def register_report_tools(
                 },
                 side_effect="read_only",
                 concurrency_safe=True,
+                timeout_seconds=REPORT_STORE_TIMEOUT_SECONDS,
                 max_result_bytes=500_000,
             ),
             lambda args: _search_reports(args, report_service=report_service),
@@ -106,6 +113,7 @@ def register_report_tools(
                     "additionalProperties": False,
                 },
                 side_effect="writes_local_state",
+                metadata={"no_effect_error_types": ["ArtifactPathError"]},
             ),
             lambda args: _export_report(
                 args,
@@ -137,6 +145,7 @@ def register_report_tools(
                 side_effect="publishing",
                 requires_approval=True,
                 concurrency_safe=False,
+                timeout_seconds=REPORT_STORE_TIMEOUT_SECONDS,
                 max_result_bytes=100_000,
                 metadata={"writes_report_repository": True},
             ),
@@ -183,17 +192,18 @@ def _export_report(
     artifact_manager: ArtifactManager,
     run_id: str,
 ) -> dict[str, Any]:
-    report = _final_report(args["report"])
-    export_format = str(args.get("format") or "markdown")
-    relative_path = str(args.get("path") or _default_export_path(report, export_format))
+    with effect_not_applied_on():
+        report = _final_report(args["report"])
+        export_format = str(args.get("format") or "markdown")
+        if export_format not in {"json", "markdown"}:
+            raise ValueError(f"unsupported report export format: {export_format}")
+        relative_path = str(args.get("path") or _default_export_path(report, export_format))
     if export_format == "json":
         target = artifact_manager.write_json(run_id, relative_path, report.to_dict())
         content_type = "application/json"
-    elif export_format == "markdown":
+    else:
         target = artifact_manager.write_text(run_id, relative_path, render_output_report_markdown(report))
         content_type = "text/markdown"
-    else:
-        raise ValueError(f"unsupported report export format: {export_format}")
     return {
         "artifact_id": f"report:{relative_path}",
         "relative_path": relative_path,
@@ -211,27 +221,31 @@ def _publish_report(
 ) -> dict[str, Any]:
     if not isinstance(execution_identity, GraphExecutionIdentity):
         raise TypeError("execution_identity must be GraphExecutionIdentity")
-    supplied_run_id = args.get("run_id")
-    if supplied_run_id is not None and _required_text(supplied_run_id, "run_id") != execution_identity.run_id:
-        raise ValueError("run_id must match execution_identity.run_id")
-    run_id = execution_identity.run_id
-    report = _final_report(args["report"])
-    status = _optional_text(args.get("status")) or "final"
-    report_id = _optional_text(args.get("report_id")) or f"{run_id}:{status}"
-    report_markdown = args.get("report_markdown")
-    if report_markdown is None:
-        report_markdown = render_output_report_markdown(report)
-    record = OutputReportRecord(
-        report_id=report_id,
-        run_id=run_id,
-        status=status,
-        title=report.title,
-        report_json=report.to_dict(),
-        report_markdown=str(report_markdown),
-        quality_score=_optional_float(args.get("quality_score")),
-        citation_coverage_score=_optional_float(args.get("citation_coverage_score")),
-        manifest_path=_optional_text(args.get("manifest_path")),
-    )
+    with effect_not_applied_on():
+        supplied_run_id = args.get("run_id")
+        if supplied_run_id is not None and _required_text(supplied_run_id, "run_id") != execution_identity.run_id:
+            raise ValueError("run_id must match execution_identity.run_id")
+        run_id = execution_identity.run_id
+        report = _final_report(args["report"])
+        status = _optional_text(args.get("status")) or "final"
+        report_id = _optional_text(args.get("report_id")) or f"{run_id}:{status}"
+        report_markdown = args.get("report_markdown")
+        if report_markdown is None:
+            report_markdown = render_output_report_markdown(report)
+        record = OutputReportRecord(
+            report_id=report_id,
+            run_id=run_id,
+            status=status,
+            title=report.title,
+            report_json=report.to_dict(),
+            report_markdown=str(report_markdown),
+            quality_score=optional_score(args.get("quality_score"), "quality_score"),
+            citation_coverage_score=optional_score(
+                args.get("citation_coverage_score"),
+                "citation_coverage_score",
+            ),
+            manifest_path=_optional_text(args.get("manifest_path")),
+        )
     migrate = getattr(persistence_repository, "migrate", None)
     if callable(migrate):
         migrate()
@@ -255,26 +269,46 @@ def _default_export_path(report: OutputReport, export_format: str) -> str:
 
 
 def _final_report(payload: Any) -> OutputReport:
+    """The one report rule shared by render, validate, export and publish.
+
+    A payload that renders must also be storable, so ``report.validate`` and
+    the writers can never disagree about the same report.
+    """
+
     if not isinstance(payload, dict):
         raise ValueError("report must be an object")
-    title = str(payload.get("title") or "")
-    if not title:
+    title = payload.get("title")
+    if not isinstance(title, str) or not title.strip():
         raise ValueError("report.title is required")
     sections = payload.get("sections") or []
     if not isinstance(sections, list):
         raise ValueError("report.sections must be a list")
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict):
+            raise ValueError(f"report.sections[{index}] must be an object")
+        section_title = section.get("title")
+        if not isinstance(section_title, str) or not section_title.strip():
+            raise ValueError(f"report.sections[{index}].title is required")
+        content = section.get("content")
+        if content is not None and not isinstance(content, str):
+            raise ValueError(f"report.sections[{index}].content must be text")
     source_urls = payload.get("source_urls") or []
     if not isinstance(source_urls, list):
         raise ValueError("report.source_urls must be a list")
+    for index, url in enumerate(source_urls):
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError(f"report.source_urls[{index}] must be a non-empty string")
     metadata = payload.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise ValueError("report.metadata must be an object")
-    return OutputReport(
-        title=title,
+    report = OutputReport(
+        title=title.strip(),
         sections=[dict(section) for section in sections],
-        source_urls=[str(url) for url in source_urls],
+        source_urls=[url.strip() for url in source_urls],
         metadata=dict(metadata),
     )
+    ensure_storable_json(report.to_dict(), "report")
+    return report
 
 
 def _required_text(value: Any, field_name: str) -> str:
@@ -289,12 +323,6 @@ def _optional_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _optional_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    return float(value)
 
 
 def _limit(value: Any) -> int:

@@ -87,7 +87,7 @@ def register_quality_tools(registry: ToolRegistry) -> None:
 
 def _citation_check(args: dict[str, Any]) -> dict[str, Any]:
     return citation_check(
-        dict(args["report"]),
+        _report_payload(args["report"]),
         _evidence_bundle(args["evidence_bundle"]),
     ).to_dict()
 
@@ -133,11 +133,21 @@ def _editor_score(args: dict[str, Any]) -> dict[str, Any]:
         "passed": review.decision.value == "pass",
         "decision": review.decision.value,
         "quality_score": quality_summary.quality_score,
-        "citation_check": check.to_dict(),
+        "citation_check": _without_embedded_support_matrix(check.to_dict()),
         "support_matrix": support_matrix.to_dict(),
         "quality_summary": quality_summary.to_dict(),
         "editor_review": review.to_dict(),
     }
+
+
+def _without_embedded_support_matrix(citation: dict[str, Any]) -> dict[str, Any]:
+    """The citation check carries the support matrix in its metadata; the
+    editor score returns it once at the top level, since it holds every claim's
+    text and doubling it pushes large reports past the result size limit."""
+
+    metadata = dict(citation.get("metadata") or {})
+    metadata.pop("support_matrix", None)
+    return {**citation, "metadata": metadata}
 
 
 def _duplicate_groups(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -198,10 +208,21 @@ def _item_signatures(item: dict[str, Any]) -> list[tuple[str, str]]:
     url = str(item.get("url") or item.get("source_url") or "").strip()
     title = str(item.get("title") or "").strip()
     if url:
-        signatures.append(("canonical_url", canonicalize_url(url)))
+        signatures.append(_url_signature(url))
     if title:
         signatures.append(("normalized_title", normalize_text(title)))
     return signatures
+
+
+def _url_signature(url: str) -> tuple[str, str]:
+    """Canonical form when the URL parses; one malformed URL from a scraped
+    source must not abort the whole duplicate check, so it falls back to an
+    exact match on the raw text."""
+
+    try:
+        return ("canonical_url", canonicalize_url(url))
+    except ValueError:
+        return ("raw_url", url)
 
 
 def _item_id(item: dict[str, Any], index: int) -> str:
@@ -225,6 +246,13 @@ def _report_payload(payload: Any) -> dict[str, Any]:
     sections = payload.get("sections") or []
     if not isinstance(sections, list):
         raise ValueError("report.sections must be a list")
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict):
+            raise ValueError(f"report.sections[{index}] must be an object")
+        content = section.get("content")
+        if content is not None and not isinstance(content, str):
+            # Claims are split from the text; a dict's repr would be scored as prose.
+            raise ValueError(f"report.sections[{index}].content must be text")
     return dict(payload)
 
 
@@ -234,13 +262,17 @@ def _evidence_bundle(payload: Any) -> AnalysisEvidenceBundle:
     items = payload.get("items") or []
     if not isinstance(items, list):
         raise ValueError("evidence_bundle.items must be a list")
+    source_map = payload.get("source_map") or {}
+    if not isinstance(source_map, dict) or not all(isinstance(value, list) for value in source_map.values()):
+        # A string value would be split into single characters by list().
+        raise ValueError("evidence_bundle.source_map must map keys to lists")
     return AnalysisEvidenceBundle(
         bundle_id=str(payload.get("bundle_id") or "tool-evidence-bundle"),
         items=[_evidence_item(item) for item in items],
-        source_map={key: list(value) for key, value in dict(payload.get("source_map") or {}).items()},
-        missing_information=list(payload.get("missing_information") or []),
-        coverage_notes=list(payload.get("coverage_notes") or []),
-        metadata=dict(payload.get("metadata") or {}),
+        source_map={key: list(value) for key, value in source_map.items()},
+        missing_information=_text_list(payload.get("missing_information"), "evidence_bundle.missing_information"),
+        coverage_notes=_text_list(payload.get("coverage_notes"), "evidence_bundle.coverage_notes"),
+        metadata=_object(payload.get("metadata"), "evidence_bundle.metadata"),
     )
 
 
@@ -250,15 +282,38 @@ def _evidence_item(payload: Any) -> AnalysisEvidenceItem:
     source_id = str(payload.get("source_id") or "")
     source_item_id = str(payload.get("source_item_id") or f"{source_id or 'source'}-item")
     source_url = str(payload.get("source_url") or "")
+    raw_confidence = payload.get("confidence", 0.0)
+    if isinstance(raw_confidence, bool) or not isinstance(raw_confidence, (int, float)):
+        raise ValueError("evidence confidence must be a number between 0 and 1")
+    confidence = float(raw_confidence)
+    if not 0.0 <= confidence <= 1.0:  # also rejects NaN
+        raise ValueError("evidence confidence must be between 0 and 1")
     return AnalysisEvidenceItem(
         evidence_id=str(payload.get("evidence_id") or ""),
         source_url=source_url,
         title=str(payload.get("title") or ""),
         summary=str(payload.get("summary") or ""),
-        confidence=float(payload.get("confidence", 0.0)),
+        confidence=confidence,
         source_id=source_id,
         source_item_id=source_item_id,
         source_urls=[source_url] if source_url else [],
         lineage=AnalysisLineage(source_id=source_id or "source", source_item_id=source_item_id),
-        metadata=dict(payload.get("metadata") or {}),
+        metadata=_object(payload.get("metadata"), "evidence item metadata"),
     )
+
+
+def _text_list(value: Any, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    # A string would be split into single characters by list().
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be a list of strings")
+    return list(value)
+
+
+def _object(value: Any, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return dict(value)

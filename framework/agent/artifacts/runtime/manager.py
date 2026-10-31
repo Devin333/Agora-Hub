@@ -17,6 +17,7 @@ from framework.agent.artifacts.stores.errors import (
 )
 from framework.agent.artifacts.stores.fs_safety import (
     verified_atomic_write,
+    verified_exclusive_file_lock,
 )
 from framework.governance import CompositeAndGate, GateCheckResult
 from framework.shared.json import to_jsonable
@@ -78,12 +79,16 @@ class ArtifactManager:
     def write_bytes(self, run_id: str, name: str, data: bytes) -> Path:
         self._gate_write(run_id, name, data)
         target = self._raw_target(run_id, name)
-        verified_atomic_write(
-            target,
-            data,
+        identity = f"{run_id}/{name}"
+        # verified_atomic_write refuses when the target changes under it, so
+        # concurrent writers to one artifact must take turns: the last whole
+        # write wins instead of every racer failing.
+        with verified_exclusive_file_lock(
+            _artifact_lock_path(target),
             root=self.root,
-            identity=f"{run_id}/{name}",
-        )
+            identity=identity,
+        ):
+            verified_atomic_write(target, data, root=self.root, identity=identity)
         return target
 
     def _raw_target(self, run_id: str, name: str) -> Path:
@@ -139,3 +144,12 @@ class ArtifactManager:
         gate = CompositeAndGate(f"artifact:{run_id}:{name}:gate").evaluate(checks)
         if gate.decision == "block":
             raise ValueError(f"artifact gate blocked: {gate.reason}; gate_result={gate.to_dict()}")
+
+
+# Lock files sit beside the artifact with a dotted, suffixed name so artifact
+# listings and searches (which skip dotfiles) never return them as content.
+ARTIFACT_LOCK_SUFFIX = ".write.lock"
+
+
+def _artifact_lock_path(target: Path) -> Path:
+    return target.with_name(f".{target.name}{ARTIFACT_LOCK_SUFFIX}")

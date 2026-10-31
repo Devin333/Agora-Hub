@@ -20,6 +20,22 @@ def stable_json_dumps(value: Any) -> str:
     )
 
 
+def ensure_strict_json(value: Any, field_name: str) -> None:
+    """Refuse NaN, Infinity and non-JSON values.
+
+    Python's encoder writes NaN as a bare token that strict readers (Postgres
+    JSONB, browsers, other languages' parsers) reject, so anything that is
+    persisted or handed to another process is checked before it leaves.
+    """
+
+    try:
+        json.dumps(value, allow_nan=False)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must not contain NaN or Infinity") from exc
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain only JSON values") from exc
+
+
 def json_loads(text: str) -> Any:
     return json.loads(text)
 
