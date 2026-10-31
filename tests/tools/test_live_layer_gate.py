@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.tools.harness.live import LIVE_SWITCH, LiveSettings
+from tests.tools.harness.live import LIVE_SWITCH, LiveSettings, skip_if_upstream_unavailable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_TESTS = "tests/tools/live"
@@ -124,3 +124,31 @@ def test_complete_smtp_settings_derive_port_and_allowed_domains() -> None:
 def test_plain_http_webhook_target_is_not_accepted() -> None:
     settings = LiveSettings.from_env({LIVE_SWITCH: "1", "NEWS_TEST_WEBHOOK_URL": "http://hooks.example.com/x"})
     assert settings.missing("webhook") is not None
+
+
+def _source_error(error_type: str, retryable: bool) -> dict[str, object]:
+    return {"error_type": error_type, "error_message": f"{error_type} happened", "retryable": retryable}
+
+
+def test_only_retryable_upstream_errors_skip_with_each_error_named() -> None:
+    errors = [_source_error("fetch_timeout", True), _source_error("fetch_http_5xx", True)]
+
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        skip_if_upstream_unavailable(errors)
+
+    assert "fetch_timeout: fetch_timeout happened" in str(skipped.value)
+    assert "fetch_http_5xx: fetch_http_5xx happened" in str(skipped.value)
+
+
+@pytest.mark.parametrize(
+    "errors",
+    [
+        [],
+        [_source_error("robots_disallowed", False)],
+        [_source_error("fetch_timeout", True), _source_error("parse_error", False)],
+        [{"error_type": "fetch_timeout", "error_message": "no retryable flag"}],
+    ],
+    ids=["no-errors", "non-retryable", "mixed", "retryable-unknown"],
+)
+def test_any_non_retryable_or_unclassified_error_is_left_to_fail(errors: list[dict[str, object]]) -> None:
+    skip_if_upstream_unavailable(errors)

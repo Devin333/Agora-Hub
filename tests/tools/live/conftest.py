@@ -57,9 +57,9 @@ def live_postgres_schema(live_settings: LiveSettings) -> Iterator[tuple[str, str
 def live_qdrant_collection(live_settings: LiveSettings) -> Iterator[tuple[object, str]]:
     """``(client, collection)`` for one test; the collection is deleted afterwards."""
 
-    from qdrant_client import QdrantClient
+    from infrastructure.storage.vector.connection import connect_qdrant
 
-    client = QdrantClient(url=live_settings.qdrant_url, api_key=live_settings.qdrant_api_key, timeout=10)
+    client = connect_qdrant(live_settings.qdrant_url, api_key=live_settings.qdrant_api_key, timeout=10)
     collection = f"{LIVE_RUN_TAG}-{uuid.uuid4().hex[:6]}"
     try:
         yield client, collection

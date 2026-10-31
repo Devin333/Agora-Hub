@@ -19,7 +19,7 @@ from infrastructure.external.sources.github import GithubConnector
 from interfaces.services.source_tool_runtime import default_source_tool_runtime
 from backend.foundation.models.source import SourceFetchPolicy as BusinessFetchPolicy
 from tests.tools.harness.invoke import ToolRun, assert_message_is_safe, expect_succeeded
-from tests.tools.harness.live import LiveSettings
+from tests.tools.harness.live import LiveSettings, skip_if_upstream_unavailable
 from tests.tools.harness.registry import ToolEnvironment
 from tests.tools.harness.scripted_llm import final_turn, observations_in_prompt, run_graph_agent, tool_agent, tool_turn
 
@@ -51,6 +51,7 @@ def _source_env(tool_env_factory, **policy: Any) -> ToolEnvironment:
 
 def _clean_payload(run: ToolRun) -> dict[str, Any]:
     output = expect_succeeded(run)
+    skip_if_upstream_unavailable(output["errors"])
     assert output["error_count"] == 0, output["errors"]
     return output
 
@@ -76,6 +77,7 @@ def test_arxiv_query_with_no_matches_reports_an_empty_feed(tool_env_factory, liv
     run = environment.run("arxiv.search_papers", {"query": "ti:zzqxjvkwplmnbq8471", "limit": 3})
 
     output = expect_succeeded(run)
+    skip_if_upstream_unavailable(output["errors"])
     assert output["item_count"] == 0 and output["items"] == []
     [error] = output["errors"]
     assert error["error_type"] == "empty_arxiv_feed"

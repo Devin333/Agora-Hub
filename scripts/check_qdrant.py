@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import sys
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import proxy_bypass
 
 
 DEFAULT_COLLECTIONS = [
@@ -47,7 +50,14 @@ def main() -> int:
         return 0
 
     try:
-        client = QdrantClient(url=url, timeout=int(_timeout_seconds()))
+        direct = _bypasses_proxy(url)
+        # The library's version check ignores trust_env and would go through the proxy.
+        client = QdrantClient(
+            url=url,
+            timeout=int(_timeout_seconds()),
+            trust_env=not direct,
+            check_compatibility=not direct,
+        )
         collections = _collections_from_env()
         collection_statuses = [
             {
@@ -93,6 +103,24 @@ def main() -> int:
         missing_payload_indexes=missing_payload_indexes,
     )
     return 0
+
+
+def _bypasses_proxy(url: str) -> bool:
+    # This script runs standalone, without the project on sys.path, so it repeats
+    # infrastructure.storage.vector.connection.qdrant_bypasses_proxy; a test keeps
+    # the two in step. httpx ignores the Windows proxy bypass list, so a local
+    # Qdrant must be reached with trust_env=False or a local proxy answers 502.
+    host = urlsplit(url).hostname
+    if not host:
+        return False
+    if host.casefold() == "localhost":
+        return True
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return True
+    except ValueError:
+        pass
+    return bool(proxy_bypass(host))
 
 
 def _collections_from_env() -> list[str]:

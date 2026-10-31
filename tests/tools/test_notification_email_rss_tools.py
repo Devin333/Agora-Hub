@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -125,6 +126,36 @@ def test_stalls_end_on_the_timeout_and_say_whether_mail_may_be_queued(
     assert run.elapsed_seconds < 1.5
     # data_end: the server holds the message without acknowledging it.
     assert len(server.messages) == (1 if stall_at == "data_end" else 0)
+
+
+@pytest.mark.tool_scenario("notification.email", "C")
+def test_slow_local_hostname_lookup_never_spends_the_send_budget(
+    tool_env_factory: Build, fault_smtp: StartSMTP, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On Windows with Docker or VPN adapters socket.getfqdn() can take about a
+    # second; smtplib would run it inside every send's budget.
+    lookups: list[float] = []
+
+    def slow_getfqdn(name: str = "") -> str:
+        lookups.append(time.monotonic())
+        time.sleep(0.8)
+        return "mailer.example.com"
+
+    monkeypatch.setattr(socket, "getfqdn", slow_getfqdn)
+    notification_tools.smtp_local_hostname.cache_clear()
+    try:
+        server = fault_smtp(SMTPScript())
+        environment = _mail_env(tool_env_factory, server)
+
+        runs = [_send(environment, timeout_seconds=0.5) for _ in range(2)]
+    finally:
+        notification_tools.smtp_local_hostname.cache_clear()
+
+    for run in runs:
+        assert outcome(run) == "applied", run.describe()
+        assert run.elapsed_seconds < 0.5
+    assert len(lookups) == 1
+    assert "EHLO MAILER.EXAMPLE.COM" in [command.upper() for command in server.commands]
 
 
 @pytest.mark.tool_scenario("notification.email", "C")

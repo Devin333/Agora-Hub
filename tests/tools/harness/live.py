@@ -24,7 +24,10 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
+
+import pytest
 
 LIVE_SWITCH = "NEWS_TOOL_LIVE_TESTS"
 SMTP_SECURITY_MODES = ("starttls", "tls", "none")
@@ -126,3 +129,18 @@ def _smtp_target(values: Mapping[str, str]) -> tuple[SmtpTarget | None, str | No
         ),
         None,
     )
+
+
+def skip_if_upstream_unavailable(errors: list[dict[str, Any]]) -> None:
+    """Skip, not fail, when every reported error says the real service was briefly unavailable.
+
+    A tool that reports a retryable error (timeout, connection failure, 5xx,
+    a retryable 4xx such as 429) did its job: it stayed inside its budget and
+    said what happened. What it could not do is show the live contract, so the
+    test is skipped with the errors as its reason. Any non-retryable error, or
+    a mix, falls through to the test's own assertions and fails there.
+    """
+
+    if errors and all(error.get("retryable") is True for error in errors):
+        summary = "; ".join(f"{error.get('error_type')}: {error.get('error_message')}" for error in errors)
+        pytest.skip(f"upstream unavailable, retryable errors only: {summary}")

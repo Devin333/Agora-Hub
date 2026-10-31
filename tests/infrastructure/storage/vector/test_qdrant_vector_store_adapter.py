@@ -185,7 +185,7 @@ def test_qdrant_store_ensures_payload_indexes() -> None:
 
 def test_qdrant_store_from_env_uses_configured_dashscope_embeddings(monkeypatch) -> None:
     client = _FakeQdrantClient()
-    monkeypatch.setattr("infrastructure.storage.vector.qdrant_store.QdrantClient", lambda url: client)
+    monkeypatch.setattr("infrastructure.storage.vector.qdrant_store.connect_qdrant", lambda url: client)
 
     store = qdrant_store_from_env(
         env={

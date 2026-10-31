@@ -4,8 +4,10 @@ import json
 import math
 import re
 import smtplib
+import socket
 import ssl
 from collections.abc import Callable
+from functools import lru_cache
 from datetime import datetime, timezone as _tz
 from email.message import EmailMessage
 from email.utils import format_datetime, getaddresses, make_msgid, parsedate_to_datetime
@@ -407,6 +409,28 @@ _SMTP_NOT_SENT_ERRORS = (
 )
 
 
+@lru_cache(maxsize=1)
+def smtp_local_hostname() -> str:
+    """The name this host gives in EHLO/HELO, resolved once per process.
+
+    smtplib works this out in ``SMTP.__init__`` with ``socket.getfqdn()``, a
+    reverse lookup that on Windows with virtual adapters (Docker, VPNs) takes
+    close to a second. Resolved there it ran inside every send's time budget
+    and could spend it before the server was even contacted. The rule is
+    smtplib's own (RFC 5321 4.1.4): the FQDN when there is one, otherwise the
+    host's address as a domain literal.
+    """
+
+    fqdn = socket.getfqdn()
+    if "." in fqdn:
+        return fqdn
+    try:
+        address = socket.gethostbyname(socket.gethostname())
+    except OSError:
+        address = "127.0.0.1"
+    return f"[{address}]"
+
+
 class SmtpEmailSender:
     """Send one message within one time budget.
 
@@ -440,12 +464,16 @@ class SmtpEmailSender:
         self.use_tls = use_tls
         self.use_starttls = use_starttls
         self._ssl_context = ssl_context
+        # Before any budget starts: see smtp_local_hostname.
+        self._local_hostname = smtp_local_hostname()
 
     def __call__(self, message: EmailMessage, recipients: list[str], timeout_seconds: float) -> dict[str, Any]:
         context = self._ssl_context or ssl.create_default_context()
         with fetch_deadline(timeout_seconds):
             session: _GuardedSMTP | _GuardedSMTPSSL = (
-                _GuardedSMTPSSL(context=context) if self.use_tls else _GuardedSMTP()
+                _GuardedSMTPSSL(local_hostname=self._local_hostname, context=context)
+                if self.use_tls
+                else _GuardedSMTP(local_hostname=self._local_hostname)
             )
             session.timeout = bounded_timeout(timeout_seconds)
             try:
