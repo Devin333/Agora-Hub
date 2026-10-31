@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 
 class ToolRuntimeError(RuntimeError):
     """Base exception for ToolRuntime failures."""
@@ -69,6 +72,35 @@ class ToolIndeterminateError(ToolRuntimeError):
         self.cause_type = cause_type
         self.termination_confirmed = True
         self.indeterminate = True
+
+
+class ToolEffectNotAppliedError(ToolRuntimeError):
+    """A side-effecting tool failed and its effect is known not to have happened.
+
+    Raise this when the request was refused before anything was sent, or the
+    receiver answered with a definite rejection. The executor reports it as a
+    plain failure instead of an indeterminate effect, so callers know a new,
+    corrected attempt cannot duplicate anything.
+    """
+
+
+@contextmanager
+def effect_not_applied_on(
+    *error_types: type[BaseException],
+) -> Iterator[None]:
+    """Report ``error_types`` raised inside the block as ``ToolEffectNotAppliedError``.
+
+    Wrap the validation a write tool does before it touches anything external,
+    so a rejected argument is not reported as a possibly-applied effect.
+    """
+
+    caught = error_types or (ValueError, TypeError, KeyError)
+    try:
+        yield
+    except ToolEffectNotAppliedError:
+        raise
+    except caught as exc:
+        raise ToolEffectNotAppliedError(str(exc)) from exc
 
 
 class ToolSecretError(ToolRuntimeError):

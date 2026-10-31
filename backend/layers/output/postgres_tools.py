@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import json
+import math
 from typing import Any, Protocol, cast
 
 from framework.tool.models import ToolDefinition
 from framework.tool.registry import ToolRegistry
+from framework.tool.runtime.errors import effect_not_applied_on
 from backend.layers.output.records import OutputReportRecord, OutputSourceError, OutputSourceHealth, OutputSourceHealthStatus
+
+
+# Database writes get their own bound instead of the 30s policy default the
+# executor would otherwise apply silently.
+POSTGRES_TOOL_TIMEOUT_SECONDS = 30.0
+# A connection that never opened cannot have written anything. Named, not
+# imported: the backend layer only sees the repository protocol.
+_NO_EFFECT_ERROR_TYPES = ["PostgresConnectionError"]
 
 
 class PostgresReportRepository(Protocol):
@@ -30,8 +41,9 @@ def register_postgres_tools(
                 side_effect="writes_external_state",
                 requires_approval=True,
                 concurrency_safe=False,
+                timeout_seconds=POSTGRES_TOOL_TIMEOUT_SECONDS,
                 max_result_bytes=100_000,
-                metadata={"writes_postgres_report": True},
+                metadata={"writes_postgres_report": True, "no_effect_error_types": _NO_EFFECT_ERROR_TYPES},
             ),
             lambda args, tool_name=tool_name: _save_report(
                 args,
@@ -71,8 +83,9 @@ def register_postgres_tools(
                 side_effect="writes_external_state",
                 requires_approval=True,
                 concurrency_safe=False,
+                timeout_seconds=POSTGRES_TOOL_TIMEOUT_SECONDS,
                 max_result_bytes=100_000,
-                metadata={"writes_postgres_source_health": True},
+                metadata={"writes_postgres_source_health": True, "no_effect_error_types": _NO_EFFECT_ERROR_TYPES},
             ),
             lambda args: _update_source_health(
                 args,
@@ -105,23 +118,28 @@ def _save_report(
     repository: PostgresReportRepository,
     tool_name: str,
 ) -> dict[str, Any]:
-    report_id = _required_text(args.get("report_id"), "report_id")
-    run_id = _required_text(args.get("run_id"), "run_id")
-    status = _required_text(args.get("status"), "status")
-    report_json = args["report_json"]
-    if not isinstance(report_json, dict):
-        raise ValueError("report_json must be an object")
-    record = OutputReportRecord(
-        report_id=report_id,
-        run_id=run_id,
-        status=status,
-        title=_optional_text(args.get("title")),
-        report_json=dict(report_json),
-        report_markdown=_optional_text(args.get("report_markdown")),
-        quality_score=_optional_float(args.get("quality_score")),
-        citation_coverage_score=_optional_float(args.get("citation_coverage_score")),
-        manifest_path=_optional_text(args.get("manifest_path")),
-    )
+    with effect_not_applied_on():
+        report_id = _required_text(args.get("report_id"), "report_id")
+        run_id = _required_text(args.get("run_id"), "run_id")
+        status = _required_text(args.get("status"), "status")
+        report_json = args["report_json"]
+        if not isinstance(report_json, dict):
+            raise ValueError("report_json must be an object")
+        _ensure_storable_json(report_json, "report_json")
+        record = OutputReportRecord(
+            report_id=report_id,
+            run_id=run_id,
+            status=status,
+            title=_optional_text(args.get("title")),
+            report_json=dict(report_json),
+            report_markdown=_optional_text(args.get("report_markdown")),
+            quality_score=_optional_score(args.get("quality_score"), "quality_score"),
+            citation_coverage_score=_optional_score(
+                args.get("citation_coverage_score"),
+                "citation_coverage_score",
+            ),
+            manifest_path=_optional_text(args.get("manifest_path")),
+        )
     repository.save_report(record)
     return {
         "saved": True,
@@ -138,20 +156,21 @@ def _update_source_health(
     *,
     repository: PostgresSourceHealthRepository,
 ) -> dict[str, Any]:
-    source_id = _required_text(args.get("source_id"), "source_id")
-    last_error = _source_error(args.get("last_error"), source_id=source_id)
-    health = OutputSourceHealth(
-        source_id=source_id,
-        status=OutputSourceHealthStatus(_required_text(args.get("status"), "status")),
-        consecutive_failures=max(0, int(args.get("consecutive_failures") or 0)),
-        success_count_24h=max(0, int(args.get("success_count_24h") or 0)),
-        failure_count_24h=max(0, int(args.get("failure_count_24h") or 0)),
-        avg_latency_ms_24h=_optional_float(args.get("avg_latency_ms_24h")),
-        last_success_at=_optional_datetime(args.get("last_success_at")),
-        last_failure_at=_optional_datetime(args.get("last_failure_at")),
-        cooldown_until=_optional_datetime(args.get("cooldown_until")),
-        last_error=last_error,
-    )
+    with effect_not_applied_on():
+        source_id = _required_text(args.get("source_id"), "source_id")
+        last_error = _source_error(args.get("last_error"), source_id=source_id)
+        health = OutputSourceHealth(
+            source_id=source_id,
+            status=OutputSourceHealthStatus(_required_text(args.get("status"), "status")),
+            consecutive_failures=max(0, int(args.get("consecutive_failures") or 0)),
+            success_count_24h=max(0, int(args.get("success_count_24h") or 0)),
+            failure_count_24h=max(0, int(args.get("failure_count_24h") or 0)),
+            avg_latency_ms_24h=_optional_latency(args.get("avg_latency_ms_24h")),
+            last_success_at=_optional_datetime(args.get("last_success_at")),
+            last_failure_at=_optional_datetime(args.get("last_failure_at")),
+            cooldown_until=_optional_datetime(args.get("cooldown_until")),
+            last_error=last_error,
+        )
     repository.update_source_health(health)
     return {
         "updated": True,
@@ -182,7 +201,37 @@ def _optional_text(value: Any) -> str | None:
 def _optional_float(value: Any) -> float | None:
     if value is None:
         return None
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("numeric fields must be finite")
+    return number
+
+
+def _optional_score(value: Any, field_name: str) -> float | None:
+    """Report scores are fractions in [0, 1]; NaN would poison every average."""
+
+    score = _optional_float(value)
+    if score is not None and not 0.0 <= score <= 1.0:
+        raise ValueError(f"{field_name} must be between 0 and 1")
+    return score
+
+
+def _optional_latency(value: Any) -> float | None:
+    latency = _optional_float(value)
+    if latency is not None and latency < 0:
+        raise ValueError("avg_latency_ms_24h must not be negative")
+    return latency
+
+
+def _ensure_storable_json(value: Any, field_name: str) -> None:
+    """Postgres JSONB rejects NaN and Infinity; refuse them before the write."""
+
+    try:
+        json.dumps(value, allow_nan=False)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must not contain NaN or Infinity") from exc
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must contain only JSON values") from exc
 
 
 def _source_error(value: Any, *, source_id: str) -> OutputSourceError | None:

@@ -49,6 +49,7 @@ from infrastructure.external.fetch_deadline import (
     deadline_passed,
     fetch_deadline,
     spent_by_timeout,
+    SocketWatchdog,
 )
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -71,7 +72,7 @@ class EgressDenied(ValueError):
         self.reason = reason
         self.url = url
         self.host = host
-        target = _display_url(url) if url else host
+        target = display_origin(url) if url else host
         super().__init__(f"outbound fetch refused: {reason}" + (f" ({target})" if target else ""))
 
 
@@ -79,7 +80,17 @@ class TooManyRedirectsError(ValueError):
     def __init__(self, url: str, max_redirects: int) -> None:
         self.url = url
         self.max_redirects = max_redirects
-        super().__init__(f"source fetch exceeded max_redirects={max_redirects}: {url}")
+        super().__init__(
+            f"fetch exceeded max_redirects={max_redirects} at a redirect to {display_origin(url)}"
+        )
+
+
+class EgressConnectError(URLError):
+    """No connection was established, so nothing was sent.
+
+    Raised for DNS failures and refused or unreachable addresses. A URLError
+    so retry and error classification treat it like any connect failure.
+    """
 
 
 @dataclass(frozen=True)
@@ -218,8 +229,12 @@ def _parse_network(value: Any) -> IPNetwork:
         raise ValueError(f"allowed_private_networks entry is not a network: {value!r}") from exc
 
 
-def _display_url(url: str) -> str:
-    """Scheme, host and path only: query strings and userinfo can carry tokens."""
+def display_origin(url: str) -> str:
+    """Scheme, host and port only.
+
+    Paths, query strings and userinfo can all carry secrets (incoming-webhook
+    URLs keep their token in the path), so error text never includes them.
+    """
 
     parts = urlsplit(url)
     host = parts.hostname or ""
@@ -229,72 +244,13 @@ def _display_url(url: str) -> str:
         port = None
     if port is not None:
         host = f"{host}:{port}"
-    return urlunsplit((parts.scheme, host, parts.path, "", ""))
-
-
-class _Watchdog:
-    """Shut the socket down when the fetch budget ends.
-
-    Socket timeouts bound one recv; the watchdog bounds the whole exchange,
-    including slow-dripping headers and bodies. Shutting the raw descriptor
-    wakes any thread blocked in recv on it, plain or TLS.
-    """
-
-    def __init__(self, expires_at: float, budget_seconds: float | None) -> None:
-        self.expires_at = expires_at
-        self.budget_seconds = budget_seconds
-        self.fired = False
-        self._cancelled = False
-        self._sock: socket.socket | None = None
-        self._lock = threading.Lock()
-        self._timer: threading.Timer | None = None
-
-    def watch(self, sock: socket.socket) -> None:
-        with self._lock:
-            self._sock = sock
-            if self._timer is not None or self._cancelled:
-                return
-            delay = max(0.0, self.expires_at - time.monotonic())
-            self._timer = threading.Timer(delay, self._fire)
-            self._timer.daemon = True
-            self._timer.name = "egress-deadline-watchdog"
-            self._timer.start()
-
-    def cancel(self) -> None:
-        with self._lock:
-            self._cancelled = True
-            timer, self._timer = self._timer, None
-        if timer is not None:
-            timer.cancel()
-
-    def raise_if_spent(self, error: BaseException | None = None) -> None:
-        """Raise ``FetchDeadlineExceeded`` when the budget ended this exchange.
-
-        Either the watchdog fired, or ``error`` is the socket timeout (set to
-        the remaining budget) that fired just before it.
-        """
-
-        if self.fired or (error is not None and spent_by_timeout(error, self.expires_at)):
-            raise FetchDeadlineExceeded(self.budget_seconds) from error
-
-    def _fire(self) -> None:
-        with self._lock:
-            if self._cancelled:
-                return
-            self.fired = True
-            sock = self._sock
-        if sock is None:
-            return
-        try:
-            socket.socket.shutdown(sock, socket.SHUT_RDWR)
-        except OSError:
-            pass
+    return urlunsplit((parts.scheme, host, "", "", ""))
 
 
 class GuardedHTTPResponse(HTTPResponse):
     """Reads past the fetch budget fail as ``FetchDeadlineExceeded``."""
 
-    _watchdog: _Watchdog | None = None
+    _watchdog: SocketWatchdog | None = None
 
     # http.client returns a short read(amt)/readinto when the peer closes
     # before the declared Content-Length, so a cut connection would look like
@@ -354,7 +310,7 @@ class GuardedHTTPResponse(HTTPResponse):
 class _GuardedConnectionMixin:
     response_class = GuardedHTTPResponse
     _egress: "_Egress"
-    _watchdog: _Watchdog | None = None
+    _watchdog: SocketWatchdog | None = None
     _response_owns_watchdog = False
 
     def _guarded_connect(self) -> None:
@@ -412,7 +368,15 @@ class _GuardedHTTPSConnection(_GuardedConnectionMixin, HTTPSConnection):
         # Same steps as HTTPSConnection.connect, with the raw socket opened by
         # the guard. The certificate is checked against the requested host name.
         self._guarded_connect()
-        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+        try:
+            self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+        except OSError as exc:
+            # A failed handshake (untrusted certificate, wrong host, timeout)
+            # happens before any request byte is sent.
+            self.sock.close()
+            if deadline_passed() or spent_by_timeout(exc, deadline_expires_at()):
+                raise FetchDeadlineExceeded(deadline_budget_seconds(), before_send=True) from exc
+            raise EgressConnectError(exc) from exc
         if self._watchdog is not None:
             self._watchdog.watch(self.sock)
 
@@ -425,15 +389,20 @@ class _Egress:
         self.resolver = resolver
         self.socket_timeout = socket_timeout
 
-    def new_watchdog(self) -> _Watchdog | None:
-        expires_at = deadline_expires_at()
-        if expires_at is None:
-            return None
-        return _Watchdog(expires_at, deadline_budget_seconds())
+    def new_watchdog(self) -> SocketWatchdog | None:
+        return SocketWatchdog.for_current_deadline()
 
     def open_connection(self, host: str, port: int, source_address: Any = None) -> socket.socket:
+        """Connect to a vetted address. Every failure here happens before a byte is sent."""
+
         normalized = self.policy.check_host(host)
-        candidates = _interleave_families(self.policy.resolve(normalized, port, self.resolver))
+        try:
+            resolved = self.policy.resolve(normalized, port, self.resolver)
+        except OSError as exc:
+            if deadline_passed():
+                raise FetchDeadlineExceeded(deadline_budget_seconds(), before_send=True) from exc
+            raise EgressConnectError(exc) from exc
+        candidates = _interleave_families(resolved)
         last_error: OSError | None = None
         for index, (family, socktype, proto, sockaddr) in enumerate(candidates):
             sock = socket.socket(family, socktype, proto)
@@ -454,12 +423,12 @@ class _Egress:
                 sock.close()
                 last_error = exc
                 if deadline_passed() or spent_by_timeout(exc, deadline_expires_at()):
-                    raise FetchDeadlineExceeded(deadline_budget_seconds()) from exc
+                    raise FetchDeadlineExceeded(deadline_budget_seconds(), before_send=True) from exc
             except BaseException:
                 sock.close()
                 raise
         assert last_error is not None
-        raise last_error
+        raise EgressConnectError(last_error) from last_error
 
     def http_connection(self, host: str, **kwargs: Any) -> HTTPConnection:
         connection = _GuardedHTTPConnection(host, **kwargs)
@@ -548,8 +517,13 @@ def open_guarded(
             if isinstance(exc.fp, GuardedHTTPResponse):
                 exc.fp.release_watchdog()
             raise
+        except EgressConnectError:
+            raise
         except URLError as exc:
-            if isinstance(exc.reason, (EgressDenied, FetchDeadlineExceeded, TooManyRedirectsError)):
+            if isinstance(
+                exc.reason,
+                (EgressDenied, EgressConnectError, FetchDeadlineExceeded, TooManyRedirectsError),
+            ):
                 raise exc.reason from exc
             reason = exc.reason if isinstance(exc.reason, BaseException) else exc
             if deadline_passed() or spent_by_timeout(reason, deadline_expires_at()):

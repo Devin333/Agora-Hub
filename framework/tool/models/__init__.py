@@ -18,6 +18,7 @@ from framework.tool.models.result_persistence import ToolResultPersistenceContra
 from framework.tool.models.status import ToolSideEffect, ToolStatus
 from framework.tool.runtime.errors import (
     ToolDefinitionError,
+    ToolEffectNotAppliedError,
     ToolIndeterminateError,
     ToolPermissionError,
     ToolRuntimeError,
@@ -40,6 +41,7 @@ __all__ = [
     "ToolDefinition",
     "ToolDefinitionError",
     "ToolExecutorFn",
+    "ToolEffectNotAppliedError",
     "ToolIndeterminateError",
     "ToolObservation",
     "ToolPermissionError",

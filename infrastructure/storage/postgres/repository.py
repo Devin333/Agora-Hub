@@ -10,7 +10,7 @@ import psycopg
 from backend.foundation.models.source_error_normalization import (
     normalize_source_errors,
 )
-from infrastructure.storage.postgres.dsn import normalize_dsn
+from infrastructure.storage.postgres.connect import connect_postgres
 
 from infrastructure.external.sources.models import SourceError, SourceHealth, SourceHealthStatus
 from infrastructure.storage.local_json import ReportNotFoundError
@@ -25,7 +25,7 @@ ConnectionFactory = Callable[[], Any]
 class PostgresRepository:
     def __init__(self, dsn: str, *, connection_factory: ConnectionFactory | None = None) -> None:
         self.dsn = dsn
-        self._connection_factory = connection_factory or (lambda: psycopg.connect(normalize_dsn(dsn)))
+        self._connection_factory = connection_factory or (lambda: connect_postgres(dsn))
 
     def migrate(self) -> None:
         sql = load_migration_sql()

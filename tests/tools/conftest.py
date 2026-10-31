@@ -9,6 +9,7 @@ from tests.tools.harness.fault_http import FaultHTTPServer
 from tests.tools.harness.fault_smtp import FaultSMTPServer, SMTPScript
 from tests.tools.harness.leaks import DEFAULT_GRACE_SECONDS, assert_no_leaks, snapshot_resources
 from tests.tools.harness.registry import ToolEnvironment, build_tool_environment
+from tests.tools.harness.tls import LoopbackTLS, create_loopback_tls
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +30,17 @@ def resource_leak_guard(request: pytest.FixtureRequest) -> Iterator[None]:
 @pytest.fixture
 def fault_http() -> Iterator[FaultHTTPServer]:
     with FaultHTTPServer() as server:
+        yield server
+
+
+@pytest.fixture(scope="session")
+def loopback_tls(tmp_path_factory: pytest.TempPathFactory) -> LoopbackTLS:
+    return create_loopback_tls(tmp_path_factory.mktemp("loopback-tls"))
+
+
+@pytest.fixture
+def fault_https(loopback_tls: LoopbackTLS) -> Iterator[FaultHTTPServer]:
+    with FaultHTTPServer(ssl_context=loopback_tls.server_context()) as server:
         yield server
 
 

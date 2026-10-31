@@ -51,6 +51,7 @@ def build_builtin_tool_registry(
     memory_policy: MemoryPolicy | None = None,
     qdrant_vector_store: Any | None = None,
     qdrant_document_store: Any | None = None,
+    qdrant_collections: list[str] | None = None,
     approval_store: Any | None = None,
     task_queue: Any | None = None,
     notification_options: dict[str, Any] | None = None,
@@ -69,6 +70,7 @@ def build_builtin_tool_registry(
         memory_policy=memory_policy,
         qdrant_vector_store=qdrant_vector_store,
         qdrant_document_store=qdrant_document_store,
+        qdrant_collections=qdrant_collections,
         approval_store=approval_store,
         task_queue=task_queue,
         notification_options=notification_options,
@@ -118,6 +120,7 @@ def _build_unfiltered_builtin_tool_registry(
     memory_policy: MemoryPolicy | None = None,
     qdrant_vector_store: Any | None = None,
     qdrant_document_store: Any | None = None,
+    qdrant_collections: list[str] | None = None,
     approval_store: Any | None = None,
     task_queue: Any | None = None,
     notification_options: dict[str, Any] | None = None,
@@ -155,6 +158,7 @@ def _build_unfiltered_builtin_tool_registry(
             registry,
             vector_store=qdrant_vector_store,
             document_store=qdrant_document_store,
+            allowed_collections=tuple(qdrant_collections or ()),
         )
     if notification_options is not None:
         register_notification_tools(registry, **dict(notification_options))

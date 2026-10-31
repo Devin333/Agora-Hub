@@ -27,6 +27,7 @@ from tests.tools.harness.fault_stores import (
 )
 
 WEBHOOK_DOMAIN = "hooks.example.com"
+QDRANT_COLLECTIONS = ("research_documents", "news_items")
 SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/T0000/B0000/fault-harness"
 EMAIL_FROM = "newsroom-bot@example.com"
 EMAIL_DOMAIN = "example.com"
@@ -84,7 +85,9 @@ def build_tool_environment(root: Path, **overrides: Any) -> ToolEnvironment:
     local_json_root = root / "local_json"
     rss_feed_path = root / "feeds" / "updates.xml"
     notification_options: dict[str, Any] = {
-        "allowed_webhook_domains": [WEBHOOK_DOMAIN],
+        "allowed_webhook_domains": [WEBHOOK_DOMAIN, "127.0.0.1"],
+        # Fault servers listen on loopback; an operator would list an intranet range.
+        "allowed_private_networks": ["127.0.0.0/8"],
         "slack_webhook_url": SLACK_WEBHOOK_URL,
         "allowed_slack_domains": ["hooks.slack.com"],
         # Construction does not connect; email tests point this at a FaultSMTPServer.
@@ -106,6 +109,7 @@ def build_tool_environment(root: Path, **overrides: Any) -> ToolEnvironment:
         "memory_recall": memory,
         "qdrant_vector_store": vectors,
         "qdrant_document_store": vectors,
+        "qdrant_collections": list(QDRANT_COLLECTIONS),
         "postgres_repository": reports,
         "postgres_source_health_repository": reports,
         "persistence_repository": reports,

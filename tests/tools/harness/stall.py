@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import select
 import socket
+import ssl
 import threading
 import time
 from typing import Literal
@@ -18,12 +19,20 @@ StallOutcome = Literal["elapsed", "released", "peer_closed"]
 
 
 def peer_closed(connection: socket.socket) -> bool:
-    """True once the client has closed or reset its end of ``connection``."""
+    """True once the client has closed or reset its end of ``connection``.
+
+    Called only after the request has been read; the client sends nothing
+    more until it gives up, so new readable data means it is closing. TLS
+    sockets cannot peek, so for them readability itself is the signal (a
+    close_notify or TCP FIN).
+    """
 
     try:
         readable, _, _ = select.select([connection], [], [], 0)
         if not readable:
             return False
+        if isinstance(connection, ssl.SSLSocket):
+            return True
         return connection.recv(1, socket.MSG_PEEK) == b""
     except (OSError, ValueError):
         return True

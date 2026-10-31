@@ -73,6 +73,7 @@ from framework.tool.models import (
     ToolPolicyTrace,
     ToolResult,
     ToolRuntimeError,
+    ToolEffectNotAppliedError,
     ToolIndeterminateError,
     ToolSecretError,
     ToolStatus,
@@ -2123,7 +2124,7 @@ def _invoke_with_retry(
                 parent_context.mark_descendant_indeterminate()
             error = supervised.error
             raise ToolIndeterminateError(
-                f"tool {tool_name} has an indeterminate descendant effect",
+                _indeterminate_message(tool_name, error),
                 attempt_id=context.attempt_id,
                 idempotency_key=context.idempotency_key,
                 operation_id=context.operation_id or context.idempotency_key,
@@ -2271,6 +2272,8 @@ def _failure_is_known_to_have_no_effect(
     definition: Any | None,
     error: BaseException,
 ) -> bool:
+    if isinstance(error, ToolEffectNotAppliedError):
+        return True
     if definition is None:
         return False
     metadata = dict(getattr(definition, "metadata", {}) or {})
@@ -2279,6 +2282,25 @@ def _failure_is_known_to_have_no_effect(
         return False
     error_types = {base.__name__ for base in type(error).__mro__}
     return bool(error_types.intersection(str(value) for value in configured))
+
+
+_INDETERMINATE_CAUSE_MAX_CHARS = 300
+
+
+def _indeterminate_message(tool_name: str, error: BaseException | None) -> str:
+    """Say what failed, not only that the effect is unknown.
+
+    The cause text is the tool's own error message, the same text a plain
+    failure reports; without it the model cannot tell a dropped connection
+    from a receiver error.
+    """
+
+    message = f"tool {tool_name} has an indeterminate descendant effect"
+    if error is None:
+        return message
+    cause = " ".join(str(error).split())[:_INDETERMINATE_CAUSE_MAX_CHARS]
+    detail = f"{type(error).__name__}: {cause}" if cause else type(error).__name__
+    return f"{message}; it may have taken effect before failing ({detail})"
 
 
 def _tool_timeout_error(

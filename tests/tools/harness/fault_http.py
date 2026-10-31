@@ -9,6 +9,7 @@ assert retries, duplicate sends and header leakage.
 from __future__ import annotations
 
 import socket
+import ssl
 import struct
 import sys
 import threading
@@ -111,13 +112,23 @@ def _as_bytes(value: bytes | str) -> bytes:
 class FaultHTTPServer:
     """Threaded HTTP server whose shutdown joins every handler thread."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, ssl_context: ssl.SSLContext | None = None) -> None:
         self._routes: dict[str, deque[Step]] = {}
         self._lock = threading.Lock()
         self._released = threading.Event()
         self._requests: list[RecordedRequest] = []
         self._server = _Server(("127.0.0.1", 0), _Handler)
         self._server.fault = self
+        self._scheme = "http"
+        if ssl_context is not None:
+            # Handshakes happen in the handler thread; a client that rejects
+            # the certificate only fails its own connection.
+            self._server.socket = ssl_context.wrap_socket(
+                self._server.socket,
+                server_side=True,
+                do_handshake_on_connect=False,
+            )
+            self._scheme = "https"
         self._thread: threading.Thread | None = None
 
     @property
@@ -125,7 +136,7 @@ class FaultHTTPServer:
         return int(self._server.server_address[1])
 
     def url(self, path: str = "/", *, host: str = "127.0.0.1") -> str:
-        return f"http://{host}:{self.port}{path if path.startswith('/') else '/' + path}"
+        return f"{self._scheme}://{host}:{self.port}{path if path.startswith('/') else '/' + path}"
 
     def route(self, path: str, *steps: Step) -> None:
         if not steps:
@@ -197,6 +208,22 @@ class _Server(ThreadingHTTPServer):
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
     server: _Server
+    _tls_failed = False
+
+    def setup(self) -> None:
+        if isinstance(self.request, ssl.SSLSocket):
+            self.request.settimeout(5.0)
+            try:
+                self.request.do_handshake()
+            except (ssl.SSLError, OSError):
+                self._tls_failed = True
+            self.request.settimeout(None)
+        super().setup()
+
+    def handle(self) -> None:
+        if self._tls_failed:
+            return
+        super().handle()
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         return None

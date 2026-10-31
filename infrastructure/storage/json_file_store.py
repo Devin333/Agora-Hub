@@ -4,7 +4,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -23,6 +23,18 @@ _PATH_LOCKS_GUARD = threading.Lock()
 
 @contextmanager
 def locked_json_file(path: str | Path) -> Iterator[Path]:
+    with locked_file(path) as resolved:
+        yield resolved
+
+
+@contextmanager
+def locked_file(path: str | Path) -> Iterator[Path]:
+    """Hold ``path`` exclusively across threads and processes.
+
+    A sibling ``<name>.lock`` file carries the OS lock, so the guarded file
+    itself can be replaced atomically while the lock is held.
+    """
+
     resolved = resolve_storage_path(path)
     storage_io_path(resolved.parent).mkdir(parents=True, exist_ok=True)
     lock = _path_lock(resolved)
@@ -60,6 +72,28 @@ def read_json_object_unlocked(
 
 
 def write_json_object_unlocked(path: str | Path, payload: Mapping[str, Any]) -> None:
+    text = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True)
+    _replace_atomically(path, lambda handle: handle.write(text), mode="x", encoding="utf-8", label="JSON file")
+
+
+def write_bytes_atomically_unlocked(path: str | Path, content: bytes) -> None:
+    """Replace ``path`` with ``content`` so readers see the old or the new file, never a mix.
+
+    Writes a temporary sibling, fsyncs it, then renames it over the target.
+    Callers that read-modify-write must hold ``locked_file`` around both steps.
+    """
+
+    _replace_atomically(path, lambda handle: handle.write(content), mode="xb", encoding=None, label="file")
+
+
+def _replace_atomically(
+    path: str | Path,
+    write: Callable[[Any], object],
+    *,
+    mode: str,
+    encoding: str | None,
+    label: str,
+) -> None:
     resolved = Path(path)
     storage_io_path(resolved.parent).mkdir(parents=True, exist_ok=True)
     temporary = resolved.with_name(
@@ -69,10 +103,10 @@ def write_json_object_unlocked(path: str | Path, payload: Mapping[str, Any]) -> 
     resolved_io = storage_io_path(resolved)
     temporary_created = False
     try:
-        handle = temporary_io.open("x", encoding="utf-8")
+        handle = temporary_io.open(mode, encoding=encoding)
         temporary_created = True
         with handle:
-            handle.write(json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True))
+            write(handle)
             handle.flush()
             os.fsync(handle.fileno())
         _replace_with_retry(temporary_io, resolved_io)
@@ -81,7 +115,7 @@ def write_json_object_unlocked(path: str | Path, payload: Mapping[str, Any]) -> 
             try:
                 _cleanup_temporary_file(temporary_io)
             except BaseException as cleanup_error:
-                exc.add_note(f"Could not remove temporary JSON file {temporary}: {cleanup_error!r}")
+                exc.add_note(f"Could not remove temporary {label} {temporary}: {cleanup_error!r}")
         raise
 
 
@@ -146,7 +180,9 @@ def _unlock_handle(handle: Any) -> None:
 
 __all__ = [
     "JsonFileInvalidError",
+    "locked_file",
     "locked_json_file",
     "read_json_object_unlocked",
+    "write_bytes_atomically_unlocked",
     "write_json_object_unlocked",
 ]
