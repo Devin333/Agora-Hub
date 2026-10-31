@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone as _tz
-from threading import RLock
+from threading import Lock, RLock
 UTC = _tz.utc
 from typing import Protocol
 
@@ -67,7 +67,18 @@ class BasicSourceHealthManager:
         self._health_store = health_store
         self._health: dict[str, SourceHealth] = {}
         self._events: dict[str, list[_HealthEvent]] = {}
-        self._lock = RLock()
+        # One lock per source: health store reads and writes happen under the
+        # lock, and one slow or stalled store call must not block every other
+        # source's fetches behind it.
+        self._source_locks: dict[str, RLock] = {}
+        self._source_locks_guard = Lock()
+
+    def _lock_for(self, source_id: str) -> RLock:
+        with self._source_locks_guard:
+            lock = self._source_locks.get(source_id)
+            if lock is None:
+                lock = self._source_locks[source_id] = RLock()
+            return lock
 
     def get(
         self,
@@ -76,7 +87,7 @@ class BasicSourceHealthManager:
         source_name: str | None = None,
         url: str | None = None,
     ) -> SourceHealth:
-        with self._lock:
+        with self._lock_for(source_id):
             health = self._health.get(source_id)
             if health is None and self._health_store is not None:
                 health = self._health_store.get_source_health(source_id)
@@ -101,7 +112,7 @@ class BasicSourceHealthManager:
         min_interval_seconds: int | None = None,
         now: datetime | None = None,
     ) -> SourceFetchDecision:
-        with self._lock:
+        with self._lock_for(source_id):
             health = self.get(source_id, source_name=source_name, url=url)
             current_time = _as_utc(now or self._now())
             if health.status == SourceHealthStatus.DISABLED:
@@ -157,7 +168,7 @@ class BasicSourceHealthManager:
         ).should_fetch
 
     def should_probe(self, source_id: str) -> bool:
-        with self._lock:
+        with self._lock_for(source_id):
             health = self.get(source_id)
             return (
                 health.status == SourceHealthStatus.DOWN
@@ -173,7 +184,7 @@ class BasicSourceHealthManager:
         source_name: str | None = None,
         url: str | None = None,
     ) -> SourceHealth:
-        with self._lock:
+        with self._lock_for(source_id):
             previous = self.get(source_id)
             now = self._now()
             had_events = bool(self._events.get(source_id))
@@ -205,7 +216,7 @@ class BasicSourceHealthManager:
         source_name: str | None = None,
         url: str | None = None,
     ) -> SourceHealth:
-        with self._lock:
+        with self._lock_for(source_id):
             previous = self.get(source_id)
             error = SourceError(
                 source_id=source_id,
@@ -249,7 +260,7 @@ class BasicSourceHealthManager:
         source_name: str | None = None,
         url: str | None = None,
     ) -> SourceHealth:
-        with self._lock:
+        with self._lock_for(source_id):
             previous = self.get(source_id)
             failures = previous.consecutive_failures + 1
             now = self._now()

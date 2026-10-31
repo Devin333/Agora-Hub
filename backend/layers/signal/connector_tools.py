@@ -10,6 +10,11 @@ from framework.tool.registry import ToolRegistry
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 GITHUB_API_URL = "https://api.github.com"
+# The connector bounds each fetch by its policy's whole-fetch budget; the
+# margin covers rate limiting and parsing. Fakes without a policy get the
+# default source budget.
+CONNECTOR_TOOL_TIMEOUT_MARGIN_SECONDS = 1.0
+DEFAULT_CONNECTOR_FETCH_BUDGET_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ def register_arxiv_tools(registry: ToolRegistry, *, connector: Any | None = None
             side_effect="read_only",
             concurrency_safe=True,
             max_result_bytes=500_000,
+            timeout_seconds=_connector_tool_timeout(connector),
         ),
         lambda args: _search_arxiv_papers(args, connector=connector),
     )
@@ -74,6 +80,7 @@ def register_github_tools(registry: ToolRegistry, *, connector: Any | None = Non
             side_effect="read_only",
             concurrency_safe=True,
             max_result_bytes=500_000,
+            timeout_seconds=_connector_tool_timeout(connector),
         ),
         lambda args: _fetch_github_releases(args, connector=connector),
     )
@@ -98,6 +105,7 @@ def register_github_tools(registry: ToolRegistry, *, connector: Any | None = Non
             side_effect="read_only",
             concurrency_safe=True,
             max_result_bytes=500_000,
+            timeout_seconds=_connector_tool_timeout(connector),
         ),
         lambda args: _search_github_repositories(args, connector=connector),
     )
@@ -181,6 +189,14 @@ def _source_definition(payload: Any, *, default_source_type: SourceType) -> Conn
         region=payload.get("region"),
         metadata=dict(payload.get("metadata") or {}),
     )
+
+
+def _connector_tool_timeout(connector: Any) -> float:
+    policy = getattr(connector, "fetch_policy", None)
+    budget = getattr(policy, "timeout_seconds", None)
+    if not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0:
+        budget = DEFAULT_CONNECTOR_FETCH_BUDGET_SECONDS
+    return float(budget) + CONNECTOR_TOOL_TIMEOUT_MARGIN_SECONDS
 
 
 def _required_text(value: Any, field_name: str) -> str:

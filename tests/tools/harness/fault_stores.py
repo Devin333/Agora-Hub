@@ -81,10 +81,14 @@ class FaultPlan:
     def release(self) -> None:
         self._released.set()
 
-    def run(self, method: str, operation: Callable[[], T]) -> T:
+    def run(self, method: str, operation: Callable[[], T], *, key: str | None = None) -> T:
+        """Apply the script for ``method:key`` if one exists, else for ``method``."""
+
         with self._lock:
             self._calls[method] += 1
-            script = self._scripts.get(method)
+            script = self._scripts.get(f"{method}:{key}") if key is not None else None
+            if not script:
+                script = self._scripts.get(method)
             if not script:
                 fault: Fault = Pass()
             else:
@@ -159,6 +163,29 @@ class FaultyReportRepository:
             )
             for record in matches[:limit]
         ]
+
+
+class FaultySourceHealthStore:
+    """``SourceHealthStore`` behind ``BasicSourceHealthManager`` (Postgres in production)."""
+
+    def __init__(self, plan: FaultPlan | None = None) -> None:
+        self.plan = plan or FaultPlan()
+        self._lock = threading.Lock()
+        self.records: dict[str, Any] = {}
+
+    def get_source_health(self, source_id: str) -> Any:
+        return self.plan.run("get_source_health", lambda: self._get(source_id), key=source_id)
+
+    def update_source_health(self, health: Any) -> None:
+        self.plan.run("update_source_health", lambda: self._put(health), key=str(health.source_id))
+
+    def _get(self, source_id: str) -> Any:
+        with self._lock:
+            return self.records.get(source_id)
+
+    def _put(self, health: Any) -> None:
+        with self._lock:
+            self.records[str(health.source_id)] = health
 
 
 class FaultyVectorStore:

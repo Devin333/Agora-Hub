@@ -117,22 +117,24 @@ def _entry(
 
 P = ToolProfile
 LEDGER: tuple[ToolLedgerEntry, ...] = (
-    # Phase 2: network reads.
-    _entry("source.fetch_url", P.NETWORK_READ, 2),
-    _entry("source.fetch_official_blog", P.NETWORK_READ, 2),
-    _entry("source.probe", P.NETWORK_READ, 2),
-    _entry("source.check_health", P.NETWORK_READ, 2),
-    _entry("source.parse_rss", P.PURE, 2, D.SECURITY),
-    _entry("source.parse_atom", P.PURE, 2, D.SECURITY),
-    _entry("source.extract_html", P.PURE, 2),
-    _entry("source.extract_items", P.PURE, 2),
-    _entry("source.extract_manual", P.PURE, 2),
-    _entry("source.normalize_url", P.PURE, 2),
-    _entry("source.search", P.PURE, 2),
-    _entry("web.search", P.NETWORK_READ, 2),
-    _entry("arxiv.search_papers", P.NETWORK_READ, 2),
-    _entry("github.fetch_releases", P.NETWORK_READ, 2),
-    _entry("github.search_repositories", P.NETWORK_READ, 2),
+    # Phase 2: network reads (delivered).
+    _entry("source.fetch_url", P.NETWORK_READ, 2, delivered=True),
+    _entry("source.fetch_official_blog", P.NETWORK_READ, 2, delivered=True),
+    _entry("source.probe", P.NETWORK_READ, 2, delivered=True),
+    # Reads BasicSourceHealthManager, whose store is Postgres in production.
+    _entry("source.check_health", P.STORE_READ, 2, delivered=True),
+    _entry("source.parse_rss", P.PURE, 2, D.SECURITY, delivered=True),
+    _entry("source.parse_atom", P.PURE, 2, D.SECURITY, delivered=True),
+    _entry("source.extract_html", P.PURE, 2, delivered=True),
+    _entry("source.extract_items", P.PURE, 2, delivered=True),
+    _entry("source.extract_manual", P.PURE, 2, delivered=True),
+    _entry("source.normalize_url", P.PURE, 2, delivered=True),
+    _entry("source.search", P.PURE, 2, delivered=True),
+    # Known gaps are pinned as strict xfails in test_web_search.py.
+    _entry("web.search", P.NETWORK_READ, 2, delivered=True),
+    _entry("arxiv.search_papers", P.NETWORK_READ, 2, delivered=True),
+    _entry("github.fetch_releases", P.NETWORK_READ, 2, delivered=True),
+    _entry("github.search_repositories", P.NETWORK_READ, 2, delivered=True),
     # Phase 3: external writes and stores.
     _entry("notification.webhook", P.NETWORK_WRITE, 3),
     _entry("notification.slack", P.NETWORK_WRITE, 3),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone as _tz
@@ -200,6 +201,9 @@ class SourceFetchPolicy:
     allowed_domains: tuple[str, ...] = ()
     retry_times: int = 2
     retry_on_status_codes: tuple[int, ...] = DEFAULT_SOURCE_FETCH_RETRY_STATUS_CODES
+    # Non-public networks (CIDR) a fetch may reach, e.g. an intranet source.
+    # Everything non-public is refused by the egress guard unless listed here.
+    allowed_private_networks: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -227,6 +231,11 @@ class SourceFetchPolicy:
             if status_code < 100 or status_code > 599:
                 raise ValueError("retry_on_status_codes must contain valid HTTP status codes")
         object.__setattr__(self, "retry_on_status_codes", retry_on_status_codes)
+        object.__setattr__(
+            self,
+            "allowed_private_networks",
+            _normalize_private_networks(self.allowed_private_networks),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -239,6 +248,7 @@ class SourceFetchPolicy:
             "allowed_domains": list(self.allowed_domains),
             "retry_times": self.retry_times,
             "retry_on_status_codes": list(self.retry_on_status_codes),
+            "allowed_private_networks": list(self.allowed_private_networks),
         }
 
 
@@ -1384,6 +1394,22 @@ def _parse_datetime_required(value: Any, label: str) -> datetime:
     if parsed is None:
         raise ValueError(f"{label} is required")
     return parsed
+
+
+def _normalize_private_networks(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple, set)):
+        raise ValueError("allowed_private_networks must be a list")
+    networks: list[str] = []
+    for item in value:
+        try:
+            network = str(ipaddress.ip_network(str(item).strip(), strict=True))
+        except ValueError as exc:
+            raise ValueError(f"allowed_private_networks entry is not a network: {item!r}") from exc
+        if network not in networks:
+            networks.append(network)
+    return tuple(networks)
 
 
 def _normalize_allowed_domains(value: Any) -> tuple[str, ...]:

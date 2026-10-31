@@ -10,6 +10,9 @@ import pytest
 from backend.foundation.models.source import SourceDefinition
 from infrastructure.external.sources import DomainRateLimiter, FeedConnector, SourceFetchPolicy, TooManyRedirectsError
 
+# The egress guard refuses loopback by default; these tests serve feeds locally.
+LOOPBACK = ("127.0.0.0/8", "::1/128")
+
 
 RSS_FIXTURE = """<?xml version="1.0"?>
 <rss version="2.0">
@@ -578,7 +581,7 @@ def test_feed_connector_default_fetch_respects_robots_txt() -> None:
             url=f"http://127.0.0.1:{server.server_port}/blocked/rss.xml",
         )
 
-        items, errors = FeedConnector().fetch(source)
+        items, errors = FeedConnector(fetch_policy=SourceFetchPolicy(allowed_private_networks=LOOPBACK)).fetch(source)
     finally:
         server.shutdown()
         server.server_close()
@@ -624,7 +627,7 @@ def test_feed_connector_skips_robots_when_source_disables_it() -> None:
             respect_robots=False,
         )
 
-        items, errors = FeedConnector().fetch(source)
+        items, errors = FeedConnector(fetch_policy=SourceFetchPolicy(allowed_private_networks=LOOPBACK)).fetch(source)
     finally:
         server.shutdown()
         server.server_close()

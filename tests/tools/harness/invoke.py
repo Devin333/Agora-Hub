@@ -144,9 +144,15 @@ def expect_failed(
 def assert_error_is_safe(run: ToolRun, *, secrets: Iterable[str] = ()) -> None:
     """The model sees error text verbatim, so it must not expose internals."""
 
-    message = run.error_message
-    assert _TRACEBACK_MARKER not in message, run.describe()
-    assert _REPO_ROOT.casefold() not in message.casefold(), run.describe()
+    assert_message_is_safe(run.error_message, secrets=secrets, context=run.describe())
+
+
+def assert_message_is_safe(message: str, *, secrets: Iterable[str] = (), context: str = "") -> None:
+    """Shared by failed calls and by failures a tool reports inside its payload."""
+
+    detail = context or message
+    assert _TRACEBACK_MARKER not in message, detail
+    assert _REPO_ROOT.casefold() not in message.casefold(), detail
     for secret in secrets:
         if secret:
-            assert secret not in message, f"secret leaked into error: {run.describe()}"
+            assert secret not in message, f"secret leaked into error: {detail}"
