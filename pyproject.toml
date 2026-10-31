@@ -140,6 +140,7 @@ markers = [
   "leak_grace(seconds): extend how long the tool resource-leak guard waits for stragglers",
   "tool_stress: opt-in tool concurrency and soak runs; select with python -m scripts.dev tool-stability",
   "tool_live: opt-in tool runs against real external services; needs NEWS_TOOL_LIVE_TESTS=1 and credentials",
+  "live_service(*names): the real services a tool_live test needs; it is skipped unless each is configured",
 ]
 
 [tool.pyright]

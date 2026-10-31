@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import threading
+import time
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone as _tz
 UTC = _tz.utc
 from hashlib import sha256
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.parse import urlencode
 from urllib.request import Request
 from xml.etree import ElementTree
 
+from infrastructure.external.fetch_deadline import remaining_seconds
 from infrastructure.external.sources.models import RawSourceItem, SourceDefinition, SourceError
 from infrastructure.external.sources.diagnostics import (
     SourceFetchResponseMetadataContext,
@@ -22,6 +25,7 @@ from infrastructure.external.sources.diagnostics import (
 )
 from infrastructure.external.sources.fetch_policy import (
     DomainRateLimiter,
+    RateLimitDecision,
     SourceRateLimitExceededError,
     SourceFetchPolicy,
     effective_fetch_policy,
@@ -42,6 +46,71 @@ from infrastructure.external.sources.errors import (
 
 FetchText = Callable[[str], str]
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
+# arXiv's API terms ask clients for at most one request every three seconds.
+# Its robots.txt disallows every path for crawlers; the API is governed by
+# those terms instead (https://info.arxiv.org/help/api/tou.html).
+ARXIV_API_HOSTS = frozenset({"export.arxiv.org", "arxiv.org"})
+ARXIV_MIN_REQUEST_INTERVAL_SECONDS = 3.0
+# A call queued behind more than this many slots fails as rate-limited
+# instead of spending its whole time budget waiting.
+ARXIV_MAX_PACING_WAIT_SECONDS = 9.0
+
+
+class ArxivRequestPacer:
+    """Spaces requests to one arXiv host ``min_interval`` seconds apart, in arrival order.
+
+    Each caller reserves the next free slot, then sleeps until it. The wait
+    is spent inside the caller's fetch budget, so a slot further off than
+    ``max_wait_seconds`` or than the budget left is refused (and not
+    reserved): a burst of calls turns into rate-limited errors rather than
+    calls that time out queued.
+    """
+
+    def __init__(
+        self,
+        *,
+        min_interval_seconds: float = ARXIV_MIN_REQUEST_INTERVAL_SECONDS,
+        max_wait_seconds: float = ARXIV_MAX_PACING_WAIT_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.min_interval_seconds = float(min_interval_seconds)
+        self.max_wait_seconds = float(max_wait_seconds)
+        self._clock = clock
+        self._sleep = sleep
+        self._next_slot: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def wait_turn(self, url: str) -> None:
+        host = (urlsplit(url).hostname or "").casefold()
+        with self._lock:
+            now = self._clock()
+            slot = max(now, self._next_slot.get(host, now))
+            wait = slot - now
+            remaining = remaining_seconds()
+            if wait > self.max_wait_seconds or (remaining is not None and wait >= remaining):
+                raise SourceRateLimitExceededError(
+                    url,
+                    RateLimitDecision(
+                        allowed=False,
+                        domain=host,
+                        limit_per_minute=int(60 / self.min_interval_seconds),
+                        retry_after_seconds=max(1, int(wait + 0.999)),
+                    ),
+                )
+            self._next_slot[host] = slot + self.min_interval_seconds
+        if wait > 0:
+            self._sleep(wait)
+
+
+# One pacer per process: every connector instance talks to the same arXiv.
+DEFAULT_ARXIV_PACER = ArxivRequestPacer()
+
+
+def is_arxiv_api_url(url: str) -> bool:
+    return (urlsplit(url).hostname or "").casefold() in ARXIV_API_HOSTS
+
+
 ARXIV_NAMESPACE = "http://arxiv.org/schemas/atom"
 ARXIV_CONTENT_TYPES = (
     "application/atom+xml",
@@ -105,9 +174,11 @@ class ArxivConnector:
         *,
         fetch_policy: SourceFetchPolicy | None = None,
         rate_limiter: DomainRateLimiter | None = None,
+        pacer: ArxivRequestPacer | None = None,
     ) -> None:
         self.fetch_policy = fetch_policy or SourceFetchPolicy()
         self._rate_limiter = rate_limiter or DomainRateLimiter()
+        self.pacer = pacer or DEFAULT_ARXIV_PACER
         self._uses_default_fetch = fetch_text is None
         self._fetch_text = fetch_text or self._default_fetch_text
         self._response_metadata_context = SourceFetchResponseMetadataContext()
@@ -206,10 +277,15 @@ class ArxivConnector:
         return body.decode("utf-8", errors="replace")
 
     def _fetch_source_text(self, url: str, policy: SourceFetchPolicy) -> str:
-        if self._uses_default_fetch:
-            ensure_robots_allowed(url, policy)
-            return self._default_fetch_text(url, policy)
-        return self._fetch_text(url)
+        if not self._uses_default_fetch:
+            # An injected transport owns its own pacing and access rules.
+            return self._fetch_text(url)
+        if is_arxiv_api_url(url):
+            # Every attempt, retries included, takes its own paced slot.
+            self.pacer.wait_turn(url)
+            policy = replace(policy, respect_robots=False)
+        ensure_robots_allowed(url, policy)
+        return self._default_fetch_text(url, policy)
 
 
 class ArxivSourceConnector:

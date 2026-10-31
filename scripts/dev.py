@@ -24,6 +24,9 @@ TOOL_STABILITY_TESTS = "tests/tools"
 TOOL_STABILITY_LAYER_MARKERS = {
     "fault": "not tool_stress and not tool_live",
     "stress": "tool_stress",
+    # Real services; each test skips unless NEWS_TOOL_LIVE_TESTS=1 and its
+    # service's variables are set (tests/tools/harness/live.py lists them).
+    "live": "tool_live",
     # A later -m replaces the addopts filter, so "all" names every offline layer.
     "all": "not tool_live",
 }
@@ -415,12 +418,11 @@ def _rag_ingest_golden_set_papers_command(args: argparse.Namespace | None = None
 
 
 def _tool_stability_command(layer: str) -> list[str]:
-    return _pytest_command(
-        TOOL_STABILITY_TESTS,
-        "-m",
-        TOOL_STABILITY_LAYER_MARKERS[layer],
-        "-q",
-    )
+    options = ["-m", TOOL_STABILITY_LAYER_MARKERS[layer], "-q"]
+    if layer == "live":
+        # Name every skip: a live run that silently skips everything proves nothing.
+        options.append("-rs")
+    return _pytest_command(TOOL_STABILITY_TESTS, *options)
 
 
 def _rag_live_e2e_command() -> list[str]:
