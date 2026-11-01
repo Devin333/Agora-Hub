@@ -2,7 +2,7 @@
 
 状态：待评审 · 日期：2026-10-30（复核版，初稿 2026-10-29）· 基线：`main` @ 696d593b（初稿基线 ca299c6f）
 
-> 复核说明：初稿之后合入了模型连接（BYOK）第 1–8 步。本版重新统计了第 4 节，逐条核对了 5.1–5.6 的候选和拆分方案（每条结论都附了代码位置），新增 5.8 跨端一致性、5.9 仓库配置两节，第 10 节列出需要拍板的决定。
+> 复核说明：初稿之后合入了模型连接（BYOK）第 1–8 步，以及 PR #3（工具稳定性测试与覆盖检查，47bc606c7）。实施每一步前都要按当前代码重新确认候选，PR #3 就已经让 `ToolBatchExecutor` 从“删除”变成了“保留”。本版重新统计了第 4 节，逐条核对了 5.1–5.6 的候选和拆分方案（每条结论都附了代码位置），新增 5.8 跨端一致性、5.9 仓库配置两节，第 10 节列出需要拍板的决定。
 
 ## 1. 背景
 
@@ -129,7 +129,7 @@ backend 下需要归类的较大符号：
 | `PostgresConversationStore`（`infrastructure/storage/postgres/conversation.py`，868 行） | 删除，或补装配入口 | 只有 `storage/postgres/__init__.py:11,28` 的懒加载导出和它自己的测试；生产只用 `LocalJsonConversationStore`（`composition/research.py:2275`）。迁移 `001_initial.sql`、`013_*.sql` 建的表按“迁移只增不改”保留，在 docs 写明 |
 | `InactiveGraphStorageIndexAdapter`（`infrastructure/storage/indexing/inactive.py`，348 行）及 `LocalGraphIndexCandidateStore` | 删除，连同两个测试；`tests/architecture/test_graph_storage_index_boundary.py` 相应删减 | 类文档写明 “deliberately absent from live composition”（inactive.py:30）；indexing 包外没有生产引用。**如果 Gate B 还在计划里，改为保留并在模块文档写明由哪个门禁启用——需要你拍板** |
 | `infrastructure/storage/redis_runtime.py`（217 行，初稿漏列） | 删除，或补装配入口 | `RedisRuntimeStore`、`InMemoryRuntimeStore`、`redis_runtime_store_from_env` 生产无调用方，只有 `tests/infrastructure/storage/test_redis_runtime_store.py` |
-| `ToolBatchExecutor`（`framework/tool/runtime/batch_executor.py`） | 删除，连同测试 | 搜 `execute_batch\|batch_executor` 只命中定义、`tool/runtime/__init__.py:15,34` 和两个测试 |
+| `ToolBatchExecutor`（`framework/tool/runtime/batch_executor.py`） | **保留**（复核后合入的 PR #3 已把它接进生产） | `framework/agent/loop/loop.py:93,150,1059` 用它执行一批工具调用（提交 2baadfcea） |
 | `InMemoryHarnessSignalInbox`、`HarnessSignalInboxPort`（`framework/harness/waits/`） | 删除，连同测试 | 文档写明只给测试用、生产要换持久实现（inbox.py:21-25），但不存在持久实现，生产也不消费这个端口 |
 | `ContextCompactionReplayReader`（`framework/harness/runtime/context_replay.py:50`） | 删除，连同测试用例 | 是只读校验器而非替身，不挪 `tests/support`；没有生产入口 |
 | `FakeSkillEvolutionPort`（`framework/harness/skills/evolution/fake.py`） | 删除，连同测试 | `SkillEvolutionPort` 没有生产实现。整个 `skills/evolution` 子系统是否都只剩测试在用，实施时另行核实 |
@@ -328,7 +328,7 @@ evaluation/
 
 `tests/architecture/` 有 77 个架构测试，其中不少按文件路径登记（`fixtures/graph_only_freeze_baseline.json` 112 个路径，`fixtures/harness_graph_caller_inventory.json` 144 个路径）。拆分和移动文件后，这些清单要用各自的生成脚本重新生成，不能手改；生成后检查差异只有路径变化，没有新增调用方。
 
-复核时确认要同步更新的登记：删 `framework/tool/inspection/testing.py` 和 `ToolBatchExecutor` 时改 `test_harness_execution_and_child_caller_boundaries.py:13-28` 的白名单；挪 `harness/workers/fake.py` 时改 `test_harness_durable_event_boundary.py:32`；删 `InactiveGraphStorageIndexAdapter` 时改 `test_graph_storage_index_boundary.py:20-60`。
+复核时确认要同步更新的登记：删 `framework/tool/inspection/testing.py` 时改 `test_harness_execution_and_child_caller_boundaries.py:13-28` 的白名单；挪 `harness/workers/fake.py` 时改 `test_harness_durable_event_boundary.py:32`；删 `InactiveGraphStorageIndexAdapter` 时改 `test_graph_storage_index_boundary.py:20-60`。
 
 另外，`graph_only_freeze` 测试会拒绝新出现的 `LEGACY_*` 标识符（这个前缀在仓库里专指已退役的 workflow 运行时）。拆分和改名时不要用 `legacy` 命名别的东西；模型连接的迁移就因此把旧单 Key 存储命名为 `single_key`。
 
