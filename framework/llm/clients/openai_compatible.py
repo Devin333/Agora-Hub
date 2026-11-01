@@ -17,6 +17,7 @@ from framework.llm.models import LLMRequest, LLMResponse, TokenUsage
 from framework.llm.models.reasoning import ReasoningSetting
 from framework.llm.redaction import REDACTED_VALUE, redact_sensitive_values
 from framework.llm.models import LLMStreamEvent
+from framework.shared.errors import BoundaryViolationError
 from framework.llm.structured_output import (
     LLMStructuredOutputParseError,
     LLMStructuredOutputProjectionError,
@@ -334,6 +335,8 @@ class OpenAICompatibleClient:
                     raise TimeoutError("LLM response arrived after request deadline")
             except HTTPError as exc:
                 error = self._error_from_http(exc, attempts=attempt)
+            except BoundaryViolationError as exc:
+                error = self._error_from_refused_target(exc, attempts=attempt)
             except (TimeoutError, URLError, OSError) as exc:
                 error = self._error_from_network(exc, attempts=attempt)
             else:
@@ -409,6 +412,8 @@ class OpenAICompatibleClient:
             first_line = None
         except HTTPError as exc:
             raise self._error_from_http(exc, attempts=1) from exc
+        except BoundaryViolationError as exc:
+            raise self._error_from_refused_target(exc, attempts=1) from exc
         except (TimeoutError, URLError, OSError) as exc:
             raise self._error_from_network(exc, attempts=1) from exc
 
@@ -490,6 +495,8 @@ class OpenAICompatibleClient:
             ) from exc
         except HTTPError as exc:
             raise self._error_from_http(exc, attempts=1) from exc
+        except BoundaryViolationError as exc:
+            raise self._error_from_refused_target(exc, attempts=1) from exc
         except (TimeoutError, URLError, OSError) as exc:
             raise self._error_from_network(exc, attempts=1) from exc
 
@@ -692,6 +699,8 @@ class OpenAICompatibleClient:
             raw_body = self._transport(http_request, self.config.timeout_seconds)
         except HTTPError as exc:
             raise self._error_from_http(exc, attempts=1) from exc
+        except BoundaryViolationError as exc:
+            raise self._error_from_refused_target(exc, attempts=1) from exc
         except (TimeoutError, URLError, OSError) as exc:
             raise self._error_from_network(exc, attempts=1) from exc
         payload, _raw_body = self._parse_response_payload(raw_body, attempts=1)
@@ -1110,6 +1119,20 @@ class OpenAICompatibleClient:
             status_code=status_code,
             attempts=attempts,
             diagnostics=(diagnostic,),
+        )
+
+    def _error_from_refused_target(self, exc: BoundaryViolationError, *, attempts: int) -> LLMProviderError:
+        # The network policy refused the endpoint before any socket opened: a
+        # configuration problem that no retry can fix. Only the reason code
+        # travels on; the URL is never echoed.
+        return LLMProviderError(
+            f"{self.config.provider} endpoint is not allowed: {exc.code}",
+            provider=self.config.provider,
+            model=self.config.model,
+            error_type="endpoint_not_allowed",
+            retryable=False,
+            attempts=attempts,
+            diagnostics=({"stage": "outbound_policy", "reason": exc.code},),
         )
 
     def _error_from_network(self, exc: TimeoutError | URLError | OSError, *, attempts: int) -> LLMProviderError:

@@ -138,6 +138,8 @@ function safePathSegment(value: string): boolean {
 
 const READ_METHODS = new Set(["GET", "HEAD"])
 const ACCOUNT_ID = "user_[0-9a-f]{16}"
+// Ids the API mints for model connections (interfaces/services/model_connections/migration.py).
+const CONNECTION_ID = "mc-[0-9a-f]{16}"
 // Every route the browser may reach through this proxy. The API applies its
 // own hosted allow-list and authorization; this list keeps the BFF from ever
 // forwarding to a route it has not been reviewed for. Password changes are
@@ -149,8 +151,11 @@ const FORWARDED_ROUTES: ReadonlyArray<{ pattern: RegExp; methods: ReadonlySet<st
   { pattern: /^\/api\/v1\/research\/history$/, methods: new Set(["PUT"]) },
   { pattern: /^\/api\/v1\/research\/guided\/(?:intent|search)$/, methods: new Set(["POST"]) },
   { pattern: /^\/api\/v1\/account$/, methods: READ_METHODS },
-  { pattern: /^\/api\/v1\/account\/model-credential$/, methods: new Set([...READ_METHODS, "PUT", "DELETE"]) },
-  { pattern: /^\/api\/v1\/account\/model-credential\/verify$/, methods: new Set(["POST"]) },
+  { pattern: /^\/api\/v1\/account\/model-connections$/, methods: new Set([...READ_METHODS, "POST"]) },
+  { pattern: /^\/api\/v1\/account\/model-connections\/assignments$/, methods: new Set(["PUT"]) },
+  { pattern: /^\/api\/v1\/account\/model-connections\/discover$/, methods: new Set(["POST"]) },
+  { pattern: new RegExp(`^/api/v1/account/model-connections/${CONNECTION_ID}$`), methods: new Set(["PATCH", "DELETE"]) },
+  { pattern: new RegExp(`^/api/v1/account/model-connections/${CONNECTION_ID}/verify$`), methods: new Set(["POST"]) },
   { pattern: /^\/api\/v1\/admin\/accounts$/, methods: new Set([...READ_METHODS, "POST"]) },
   { pattern: new RegExp(`^/api/v1/admin/accounts/${ACCOUNT_ID}/(?:disable|enable|password)$`), methods: new Set(["POST"]) },
   { pattern: new RegExp(`^/api/v1/admin/accounts/${ACCOUNT_ID}/role$`), methods: new Set(["PUT"]) },

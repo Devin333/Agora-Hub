@@ -26,7 +26,7 @@ import socket
 import ssl
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.client import HTTPConnection, HTTPException, HTTPResponse, HTTPSConnection, IncompleteRead
 from typing import Any
@@ -41,6 +41,7 @@ from urllib.request import (
     build_opener,
 )
 
+from framework.shared.errors import BoundaryViolationError
 from infrastructure.external.fetch_deadline import (
     FetchDeadlineExceeded,
     bounded_timeout,
@@ -51,6 +52,7 @@ from infrastructure.external.fetch_deadline import (
     spent_by_timeout,
     SocketWatchdog,
 )
+from infrastructure.security.outbound_address import address_views, is_public_address
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -58,22 +60,26 @@ Resolver = Callable[[str, int], list[tuple[Any, ...]]]
 
 ALLOWED_SCHEMES = frozenset({"http", "https"})
 _CREDENTIAL_HEADERS = ("Authorization", "Proxy-authorization", "Cookie")
-_NAT64_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
 
 
 def system_resolver(host: str, port: int) -> list[tuple[Any, ...]]:
     return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
 
 
-class EgressDenied(ValueError):
-    """The destination is not allowed. Policy refusals are never retried."""
+class EgressDenied(BoundaryViolationError, ValueError):
+    """The destination is not allowed. Policy refusals are never retried.
+
+    A ``BoundaryViolationError`` like the model-endpoint guard's
+    ``OutboundAddressRejected``, so retry policies and clients recognise a
+    refused target from either guard the same way.
+    """
 
     def __init__(self, reason: str, *, url: str | None = None, host: str | None = None) -> None:
         self.reason = reason
         self.url = url
         self.host = host
         target = display_origin(url) if url else host
-        super().__init__(f"outbound fetch refused: {reason}" + (f" ({target})" if target else ""))
+        super().__init__(f"outbound fetch refused: {reason}" + (f" ({target})" if target else ""), code="egress_denied")
 
 
 class TooManyRedirectsError(ValueError):
@@ -174,13 +180,7 @@ class EgressPolicy:
         return candidates
 
     def _allows_private(self, address: IPAddress) -> bool:
-        return any(view in network for view in _address_views(address) for network in self._networks)
-
-
-def is_public_address(address: IPAddress) -> bool:
-    """Globally routable unicast, including every IPv4 address embedded in IPv6."""
-
-    return all(view.is_global and not view.is_multicast for view in _address_views(address))
+        return any(view in network for view in address_views(address) for network in self._networks)
 
 
 def normalize_host(host: str) -> str:
@@ -207,19 +207,6 @@ def _ip_literal(text: str) -> IPAddress | None:
         return ipaddress.ip_address(text.split("%", 1)[0])
     except ValueError:
         return None
-
-
-def _address_views(address: IPAddress) -> Iterator[IPAddress]:
-    yield address
-    if isinstance(address, ipaddress.IPv6Address):
-        if address.ipv4_mapped is not None:
-            yield address.ipv4_mapped
-        if address.sixtofour is not None:
-            yield address.sixtofour
-        if address.teredo is not None:
-            yield address.teredo[1]
-        if address in _NAT64_PREFIX:
-            yield ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
 
 
 def _parse_network(value: Any) -> IPNetwork:

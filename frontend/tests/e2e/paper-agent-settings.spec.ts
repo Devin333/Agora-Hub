@@ -1,9 +1,30 @@
 import { expect, test, type Page } from "@playwright/test"
 
 const generation = `gen_${"a".repeat(32)}`
-const modelCredential = {
-  credential: { configured: true, status: "verified", providerId: "deepseek", model: "deepseek-chat", keyHint: "a1b2", revision: 2, updatedAt: "2026-10-14T08:00:00Z", verifiedAt: "2026-10-14T08:05:00Z" },
-  catalog: { providers: [{ id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat", models: [{ id: "deepseek-chat", label: "DeepSeek Chat" }] }] },
+const purposeIds = ["answer", "evidence_summary", "section_navigation", "candidate_generation"] as const
+// The shape the API's account_view returns (interfaces/services/model_connections/views.py).
+const modelConnections = {
+  revision: 2,
+  connections: [{
+    id: "mc-0123456789abcdef", label: "DeepSeek 官方 · DeepSeek V4.1 Flash", providerId: "deepseek", providerLabel: "DeepSeek 官方", custom: false,
+    protocol: "openai_chat", baseUrl: "https://api.deepseek.com", model: "deepseek-flash", modelLabel: "DeepSeek V4.1 Flash", reasoningEffort: null,
+    reasoningParameter: "deepseek_thinking", contextWindowTokens: 1_000_000, maxOutputTokens: 384_000, structuredOutput: "json_object",
+    status: "verified", credentialConfigured: true, keyHint: "a1b2", revision: 1, createdAt: "2026-10-14T08:00:00Z", updatedAt: "2026-10-14T08:00:00Z",
+    verifiedAt: "2026-10-14T08:05:00Z", purposes: [...purposeIds],
+    fits: Object.fromEntries(purposeIds.map(id => [id, { fits: true, requiredWindow: 400_000, reason: null }])),
+  }],
+  assignments: Object.fromEntries(purposeIds.map(id => [id, "mc-0123456789abcdef"])),
+  purposes: [
+    { id: "answer", label: "回答", requirement: { inputTokens: 342_639, outputTokens: 900, structuredOutput: false } },
+    { id: "evidence_summary", label: "证据摘要", requirement: { inputTokens: 41_500, outputTokens: 3_000, structuredOutput: false } },
+    { id: "section_navigation", label: "章节导航", requirement: { inputTokens: 40_906, outputTokens: 1_500, structuredOutput: false } },
+    { id: "candidate_generation", label: "候选生成", requirement: { inputTokens: 64_000, outputTokens: 2_048, structuredOutput: true } },
+  ],
+  reasoningOutputAllowance: { default: 8192, off: 0, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 65536 },
+  catalog: { providers: [{
+    id: "deepseek", label: "DeepSeek 官方", kind: "catalog", protocol: "openai_chat", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-flash",
+    models: [{ id: "deepseek-flash", label: "DeepSeek V4.1 Flash", contextWindowTokens: 1_000_000, maxOutputTokens: 384_000, reasoning: { parameter: "deepseek_thinking", efforts: ["off", "low", "high", "max"], default: "high" }, structuredOutput: true }],
+  }] },
 }
 const settingsDialog = "账号、模型与数据授权"
 
@@ -24,7 +45,7 @@ async function installSettingsFixture(page: Page) {
     { id: "source", label: "论文来源", required: true, configured: true, reachable: true, verified: true, verifiedAt: "2026-10-14T08:00:00Z", reasonCode: "business_operation_verified", message: "已由受控业务操作验证。", provenance: { verificationKind: "business_operation", operation: "source.search" } },
     { id: "paper-question-answering", label: "论文问答", required: true, configured: true, reachable: false, verified: false, verifiedAt: null, reasonCode: "verification_unknown", message: "已配置，尚无本 generation 的业务验证记录。", provenance: null },
   ] } } }))
-  await page.route("**/api/v1/account/model-credential", route => route.fulfill({ json: { success: true, data: modelCredential } }))
+  await page.route("**/api/v1/account/model-connections", route => route.fulfill({ json: { success: true, data: modelConnections } }))
   await page.route("**/api/research/personal-memory/info", route => route.fulfill({ json: { info: { storage: "server_sqlite", status: "available", remote_processing_default: false, remote_processing_auto_enabled: false } } }))
   await page.route("**/api/research/personal-memory/policy", route => route.fulfill({ json: { policy: { allow_remote_processing: false, revision: 1, created_at: "2026-10-14T00:00:00Z", updated_at: "2026-10-14T00:00:00Z" } } }))
 }
@@ -82,6 +103,7 @@ test("settings dialog follows the Rakazo light and dark surfaces and every close
   await expectDialogAppearance(page, "dark")
 
   // A typed but unsaved API key is the dialog's draft; every close path must ask once.
+  await page.getByRole("button", { name: "编辑" }).click()
   const model = page.getByLabel("API Key")
   await model.fill("sk-unsaved-draft")
   await page.keyboard.press("Escape")

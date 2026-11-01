@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react"
 import { ArrowUp, BookOpen, Download, FilePenLine, Sparkles, Square } from "lucide-react"
 import ReactMarkdown from "react-markdown"
-import { ModelCredentialAction } from "@/components/account/model-credential-action"
+import { ModelConnectionAction } from "@/components/account/model-connection-action"
 import { Button } from "@/components/ui/button"
 import type {
   ReaderSelectionAskAnswer,
@@ -711,7 +711,7 @@ export function ReaderAssistant({
             )}
           </div>
           {error && <p role="alert" className={styles.error}>{error}</p>}
-          {error && <ModelCredentialAction code={failure.code} className="mt-3 w-full" />}
+          {error && <ModelConnectionAction code={failure.code} className="mt-3 w-full" />}
           {requestId && ["failed", "rejected", "needs_action"].includes(operationStatus) && (
             <Button
               type="button"

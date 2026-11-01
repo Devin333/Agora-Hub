@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import mimetypes
 import os
-import socket
 import base64
 from datetime import UTC, datetime
 from collections.abc import Mapping
@@ -28,12 +26,18 @@ from infrastructure.external.sources.fetch_policy import (
     SourceRateLimitExceededError,
     UnsupportedContentTypeError,
     ensure_robots_allowed,
+    TooManyRedirectsError,
     ensure_supported_content_type,
-    open_request_with_fetch_policy,
     run_with_fetch_retries,
 )
 from infrastructure.external.sources.html import extract_html
 from infrastructure.research.errors import ResearchSourceError
+from infrastructure.security.outbound_address import OutboundAddressPolicy, OutboundAddressRejected
+from infrastructure.security.pinned_https import (
+    PinnedConnector,
+    PinnedRedirectingOpener,
+    RedirectLimitExceeded,
+)
 
 
 _SUPPORTED_REMOTE_CONTENT_TYPES = (
@@ -433,9 +437,9 @@ class ResearchSourceResolverAdapter:
             raise ResearchSourceError("source rate limit exceeded", retryable=True)
 
         def operation() -> tuple[bytes, str | None, str]:
-            ensure_robots_allowed(url, policy)
+            ensure_robots_allowed(url, policy, open_request=_open_pinned)
             request = Request(url, headers={"User-Agent": policy.user_agent, "Accept": "application/pdf,text/html,application/xhtml+xml,application/json,*/*"})
-            with open_request_with_fetch_policy(request, policy) as response:
+            with _open_pinned(request, policy) as response:
                 final_url = str(getattr(response, "url", None) or url)
                 _ensure_remote_target_allowed(final_url)
                 content_type = str(response.headers.get("Content-Type") or "") if response.headers is not None else None
@@ -668,33 +672,34 @@ def _remote_fetch_url(source: str, source_type: str) -> str | None:
     return None
 
 
-def _ensure_remote_target_allowed(url: str) -> None:
-    """Reject non-HTTPS and non-public targets before any transport is invoked."""
+# Remote paper sources are public documents: no allowlist ever admits a
+# private address here, whatever the model-connection allowlist says.
+_REMOTE_SOURCE_POLICY = OutboundAddressPolicy()
+_REMOTE_SOURCE_OPENER = PinnedRedirectingOpener(PinnedConnector(_REMOTE_SOURCE_POLICY))
 
-    parsed = urlsplit(str(url or "").strip())
-    if parsed.scheme.casefold() != "https" or not parsed.hostname:
-        raise ResearchSourceError("remote source must use HTTPS with a hostname")
-    addresses: set[str] = {parsed.hostname}
+
+def _ensure_remote_target_allowed(url: str) -> None:
+    """Reject non-HTTPS, unresolvable and non-public targets before any transport is invoked."""
+
     try:
-        address = ipaddress.ip_address(parsed.hostname)
-        addresses = {str(address)}
-    except ValueError:
-        try:
-            addresses.update(
-                str(item[4][0])
-                for item in socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme.casefold() == "https" else 80), type=socket.SOCK_STREAM)
-            )
-        except OSError:
-            # An unresolved hostname will be handled by the fetch policy; do
-            # not turn DNS availability into an identity or parsing failure.
-            return
-    for value in addresses:
-        try:
-            address = ipaddress.ip_address(value)
-        except ValueError:
-            continue
-        if address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified or address.is_reserved or address.is_multicast:
-            raise ResearchSourceError("remote source target is not publicly routable")
+        _REMOTE_SOURCE_POLICY.check_url(url)
+    except OutboundAddressRejected as exc:
+        raise ResearchSourceError(f"remote source target rejected: {exc.reason.value}") from exc
+
+
+def _open_pinned(request: Request, policy: SourceFetchPolicy) -> Any:
+    """Open ``request`` on a checked address, re-checking every redirect hop."""
+
+    try:
+        return _REMOTE_SOURCE_OPENER.open(
+            request,
+            timeout_seconds=policy.timeout_seconds,
+            max_redirects=policy.max_redirects,
+        )
+    except OutboundAddressRejected as exc:
+        raise ResearchSourceError(f"remote source target rejected: {exc.reason.value}") from exc
+    except RedirectLimitExceeded as exc:
+        raise TooManyRedirectsError(exc.url, exc.max_redirects) from None
 
 
 def _is_descendant(path: Path, root: Path) -> bool:

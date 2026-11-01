@@ -9,6 +9,8 @@ from backend.research.document.section_outline import PaperSectionOutline
 from backend.research.ports.paper_answer_model import PaperAnswerModelError
 from backend.research.ports.section_navigator import SectionNavigationRequest, SectionNavigatorPort
 from backend.research.rag.retrieval.paper_section_navigator import (
+    MAX_NAVIGATION_INPUT_CHARS,
+    MAX_NAVIGATION_USER_PROMPT_CHARS,
     SECTION_NAVIGATION_PROMPT_VERSION,
     LLMSectionNavigator,
     build_section_navigation_user_prompt,
@@ -79,6 +81,30 @@ def test_navigator_skips_the_model_when_every_section_is_read() -> None:
     assert decision.section_indexes == ()
     assert decision.diagnostics == {"model_calls": 0, "skipped": "all_read"}
     assert model.requests == []
+
+
+def test_navigator_skips_an_outline_longer_than_its_prompt_limit_without_calling_the_model() -> None:
+    # Long headings make the outline exceed the limit; a truncated table of
+    # contents would hide sections, so navigation is skipped instead.
+    titles = [f"Section {index} " + "x" * 400 for index in range(MAX_NAVIGATION_USER_PROMPT_CHARS // 400)]
+    model = FakePaperAnswerModel('{"sections": [2]}')
+
+    decision = asyncio.run(LLMSectionNavigator(model).choose(_request(_outline(*titles), read=(1,))))
+
+    assert decision.section_indexes == ()
+    assert decision.diagnostics["skipped"] == "outline_too_long"
+    assert decision.diagnostics["model_calls"] == 0
+    assert model.requests == []
+
+
+def test_navigation_input_limit_covers_the_longest_prompt_it_sends() -> None:
+    model = FakePaperAnswerModel('{"sections": [2]}')
+    outline = _outline("Introduction", "Method")
+
+    asyncio.run(LLMSectionNavigator(model).choose(_request(outline, read=(1,))))
+
+    sent = model.last_request
+    assert len(sent.system_prompt) + MAX_NAVIGATION_USER_PROMPT_CHARS == MAX_NAVIGATION_INPUT_CHARS
 
 
 def test_navigator_retries_once_then_reports_a_malformed_reply() -> None:

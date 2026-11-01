@@ -1,6 +1,6 @@
 # 托管版部署（服务器）
 
-托管版把论文工作台部署在一台服务器上，用户用浏览器或桌面客户端打开同一个地址即可使用，本机不需要安装 Python、Node 或数据库。账号由管理员创建，每个用户在“账号设置”里填写自己的模型 API key，调用费用计入用户自己的账号。
+托管版把论文工作台部署在一台服务器上，用户用浏览器或桌面客户端打开同一个地址即可使用，本机不需要安装 Python、Node 或数据库。账号由管理员创建，每个用户在“账号设置”里添加自己的模型连接（模型和 API key），调用费用计入用户自己的账号。
 
 ## 架构
 
@@ -86,7 +86,7 @@ docker compose exec api news accounts create-admin admin
 printf '%s\n' "$ADMIN_PASSWORD" | docker compose exec -T api news accounts create-admin admin --password-stdin
 ```
 
-最后用浏览器打开 `https://<你的域名>/paper-agent`，用管理员登录，在“账号设置”里填写模型 key 后即可使用。
+最后用浏览器打开 `https://<你的域名>/paper-agent`，用管理员登录，在“账号设置 → 模型连接”里添加一个模型连接并分配给各个用途后即可使用。
 
 ### 内部网络
 
@@ -116,10 +116,18 @@ docker compose exec api news accounts reset-password alice --generate-password
 
 `--generate-password` 会生成一次性密码并只显示一次，请通过安全渠道交给用户，由用户登录后自行修改。停用账号和重置密码会立即结束该账号的所有会话。
 
-## 模型 key 与可选模型
+## 模型连接与可选模型
 
-- 用户只能从 `configs/hosted-llm-providers.yaml` 列出的服务商和模型中选择，不能填写自定义地址，因此 key 只会发往列表中的地址。
-- key 用主密钥加密后保存，网页和接口都不会再返回明文。
+每个用户在“账号设置 → 模型连接”里添加自己的模型连接。一个连接包括服务商、模型、思考强度和用户自己的 API key。研究功能分四个用途：回答、证据摘要、章节导航、候选生成。用户为每个用途分配一个连接，比如回答用强模型，摘要和导航用便宜的模型；一个窗口足够大的模型也可以同时服务所有用途。
+
+- 服务商分两类，都在 `configs/hosted-llm-providers.yaml` 里定义：
+  - 目录服务商（DeepSeek、百炼、Anthropic 等）：地址、模型、上下文窗口和思考档位由这个文件固定，用户只选模型、填 key。
+  - 自定义服务商（`custom: true`）：用户自己填写地址、模型 ID、上下文窗口和思考参数格式，用于接入其他 OpenAI 兼容或 Anthropic 兼容的服务。不想开放时，从文件里删掉这两项即可。
+- 用户填写的地址只能是公网 HTTPS。api 解析地址后只连接检查过的 IP，并且不跟随重定向，避免借连接访问服务器内网。要允许内网模型服务（自建网关、本机 Ollama），在 `.env` 的 `NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS` 里列出主机名、IP 或网段；列出的地址也可以用 HTTP。
+- key 用主密钥加密后保存，并与账号和连接绑定，复制到别的账号或连接都无法解密。网页和接口都不会再返回明文。一个已保存的 key 只会发往它填写时的服务商和地址；改了服务商或地址，用户必须重新填写 key。
+- 窗口准入：每个用途一次调用最多发送多少内容是固定的，api 启动时按研究设置算出每个用途需要的上下文窗口，分配时只允许窗口足够的连接。回答用途要容纳个人记忆的最大长度（20 条 × 每条 8000 字），所以需要约 34 万 token 的窗口，目前只有 100 万窗口的模型能用于回答。候选生成还要求模型能返回 JSON 对象。
+- “验证”和“获取模型列表”会用用户的 key 访问一次服务商，每个账号每分钟最多 `NEWSROOM_HOSTED_MODEL_PROBE_RATE_LIMIT_PER_MINUTE` 次（默认 10）。
+- 从只能保存一个 key 的旧版本升级时，api 首次启动会把每个账号原来的 key 迁移为一个连接，并分配给所有用途；原文件 `model-credentials.json` 改名为 `model-credentials.json.migrated`。确认无误后可以删除这个文件。
 - 可选模型列表打包在 api 镜像里。要换成自己的列表，不必重新构建镜像：把修改后的文件放在 `compose.yaml` 旁边，新建 `compose.override.yaml`（compose 会自动叠加它）：
 
   ```yaml
@@ -131,13 +139,13 @@ docker compose exec api news accounts reset-password alice --generate-password
         - ./hosted-llm-providers.yaml:/etc/agora/hosted-llm-providers.yaml:ro
   ```
 
-  然后执行 `docker compose up -d api`。每个模型的上下文长度必须能容纳一次研究请求，否则 api 拒绝启动。
+  然后执行 `docker compose up -d api`。列表里每个模型都要写明上下文窗口、思考参数和结构化输出能力，并注明资料来源。如果列表里没有自定义服务商，并且没有任何模型的窗口能满足某个用途，api 会拒绝启动并在日志里写明是哪个用途。
 
 ## 主密钥
 
 托管版有两个密钥，都只生成一次，并在服务器之外另存一份（例如团队的密码管理器）：
 
-- `NEWSROOM_CREDENTIAL_ENCRYPTION_KEY` 加密所有用户的模型 key。丢失或更换后，已保存的 key 都无法解密，所有用户需要重新填写。账号、论文和笔记不受影响。
+- `NEWSROOM_CREDENTIAL_ENCRYPTION_KEY` 加密所有用户的模型 key。丢失或更换后，已保存的 key 都无法解密，用户需要逐个连接重新填写 key；连接的服务商、模型和用途分配会保留。账号、论文和笔记不受影响。
 - `NEWS_ACTIVITY_ENCRYPTION_KEY` 加密每次研究运行记录下来的输入和结果。丢失或更换后，以前的研究运行记录无法再读取，新的研究不受影响。
 
 两个密钥缺失或格式不对时，api 拒绝启动，日志会给出出错的变量名。
@@ -210,3 +218,6 @@ npm --prefix desktop run dist
 - 拉取镜像很慢或超时：中国大陆服务器把 `AGORA_IMAGE_REGISTRY` 改为 `registry.cn-hangzhou.aliyuncs.com/agora-hub`（或重新执行 `bash install.sh --local --mirror-cn`）。
 - 启动时提示网段冲突（`Pool overlaps with other one on this address space`）：按“内部网络”修改三项网段配置。
 - 登录提示过于频繁：同一客户端地址每分钟最多尝试 `NEWSROOM_HOSTED_LOGIN_RATE_LIMIT_PER_MINUTE` 次，等一分钟再试。
+- 用户提示“这个模型地址不被允许”：用户填写的地址不是公网 HTTPS，或解析到了内网地址。确实要用内网模型服务时，把它加入 `NEWSROOM_LLM_ALLOWED_PRIVATE_HOSTS` 后执行 `docker compose up -d api`。
+- 用户提示“上下文窗口不够大”：这个模型不能用于提示里的用途，换一个窗口更大的模型，或给这个用途单独分配一个连接。
+- 用户提示需要重新填写 key：主密钥更换过，或迁移时旧 key 已经无法解密。让用户在“模型连接”里点“重新填写”。

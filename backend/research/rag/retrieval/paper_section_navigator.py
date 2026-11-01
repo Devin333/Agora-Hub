@@ -28,6 +28,10 @@ from framework.llm.models.usage import TokenUsage
 SECTION_NAVIGATION_PROMPT_VERSION = "outline_section_navigation_v1"
 # Output room for a short JSON list plus the reasoning tokens reasoning models spend first.
 DEFAULT_NAVIGATION_MAX_OUTPUT_TOKENS = 1500
+# Longest user prompt (outline, read marks and question) sent to the navigation model.
+# A paper whose outline is longer is not navigated for the question: the reader
+# keeps its flat retrieval rather than sending a truncated table of contents.
+MAX_NAVIGATION_USER_PROMPT_CHARS = 40_000
 # A malformed reply is asked again once before navigation is skipped for the question.
 _MALFORMED_REPLY_ATTEMPTS = 2
 
@@ -45,6 +49,10 @@ _SYSTEM_PROMPT = (
     'Reply with one JSON object and nothing else: {"sections": [<section number>, ...]}, '
     "most promising first."
 )
+
+
+# Longest prompt one navigation call sends, system prompt included.
+MAX_NAVIGATION_INPUT_CHARS = MAX_NAVIGATION_USER_PROMPT_CHARS + len(_SYSTEM_PROMPT)
 
 
 class LLMSectionNavigator:
@@ -81,11 +89,21 @@ class LLMSectionNavigator:
         unread = {entry.section_index for entry in request.outline.entries} - read
         if not unread:
             return SectionNavigationDecision((), diagnostics={"model_calls": 0, "skipped": "all_read"})
+        user_prompt = build_section_navigation_user_prompt(
+            request.question, request.outline, read, max_sections=request.max_sections,
+        )
+        if len(user_prompt) > MAX_NAVIGATION_USER_PROMPT_CHARS:
+            return SectionNavigationDecision(
+                (),
+                diagnostics={
+                    "prompt_version": SECTION_NAVIGATION_PROMPT_VERSION,
+                    "model_calls": 0,
+                    "skipped": "outline_too_long",
+                },
+            )
         model_request = PaperAnswerModelRequest(
             system_prompt=_SYSTEM_PROMPT,
-            user_prompt=build_section_navigation_user_prompt(
-                request.question, request.outline, read, max_sections=request.max_sections,
-            ),
+            user_prompt=user_prompt,
             execution_identity=request.execution_identity,
         )
         usages: list[TokenUsage] = []

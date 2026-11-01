@@ -1,20 +1,23 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { openSettingsEvent, settingsSectionFrom } from "@/lib/account/settings-navigation"
-import { ModelCredentialAction } from "./model-credential-action"
+import { ModelConnectionAction } from "./model-connection-action"
 
-describe("ModelCredentialAction", () => {
+describe("ModelConnectionAction", () => {
   afterEach(cleanup)
 
-  it("renders nothing for failures a model key does not fix", () => {
-    const { container } = render(<><ModelCredentialAction code="model_provider_unreachable" /><ModelCredentialAction code={null} /></>)
+  it("renders nothing for failures the connection settings do not fix", () => {
+    const { container } = render(<><ModelConnectionAction code="model_provider_unreachable" /><ModelConnectionAction code={null} /></>)
     expect(container).toBeEmptyDOMElement()
   })
 
   it.each([
-    ["model_credential_required", "填写模型 API Key"],
-    ["model_credential_key_rotated", "重新填写模型 API Key"],
-    ["model_credential_rejected", "重新填写模型 API Key"],
+    ["model_connection_required", "设置模型连接"],
+    ["model_connection_window_too_small", "设置模型连接"],
+    ["model_connection_withdrawn", "设置模型连接"],
+    ["model_connection_key_missing", "重新填写 API Key"],
+    ["model_connection_key_rotated", "重新填写 API Key"],
+    ["model_connection_rejected", "重新填写 API Key"],
   ])("opens the model settings section for %s", (code, label) => {
     const claim = vi.fn((event: Event) => {
       event.preventDefault()
@@ -22,7 +25,7 @@ describe("ModelCredentialAction", () => {
     })
     window.addEventListener(openSettingsEvent, claim)
     try {
-      render(<ModelCredentialAction code={code} />)
+      render(<ModelConnectionAction code={code} />)
       fireEvent.click(screen.getByRole("button", { name: label }))
     } finally {
       window.removeEventListener(openSettingsEvent, claim)

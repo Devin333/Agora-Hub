@@ -13,8 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from urllib.request import Request
 
+from framework.shared.errors import BoundaryViolationError
 from infrastructure.external.egress import (
-    EgressDenied,
     EgressPolicy,
     TooManyRedirectsError,
     open_guarded,
@@ -257,8 +257,9 @@ def decide_source_fetch_retry(
     status_code = exc.code if isinstance(exc, HTTPError) else None
     if isinstance(exc, HTTPError):
         retryable = exc.code in policy.retry_on_status_codes
-    elif isinstance(exc, (FetchDeadlineExceeded, EgressDenied)):
-        # The budget is spent, or the destination is refused by policy.
+    elif isinstance(exc, FetchDeadlineExceeded) or _is_refused_target(exc):
+        # The budget is spent, or the outbound policy refused the target: a
+        # refused target stays refused on every attempt.
         retryable = False
     elif _is_timeout_exception(exc):
         retryable = True
@@ -275,6 +276,13 @@ def decide_source_fetch_retry(
         should_retry=retryable and attempts < max_attempts,
         status_code=status_code,
     )
+
+
+def _is_refused_target(exc: BaseException) -> bool:
+    # Both outbound guards (egress for source fetches, the pinned transport for
+    # model and research endpoints) raise a BoundaryViolationError subclass,
+    # sometimes wrapped (URLError) by the caller.
+    return isinstance(exc, BoundaryViolationError) or isinstance(exc.__cause__, BoundaryViolationError)
 
 
 def fetch_attempts(exc: Exception) -> int | None:

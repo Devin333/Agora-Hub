@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
-  isModelCredentialFailure,
+  isModelConnectionFailure,
   openSettings,
   openSettingsEvent,
   parseSettingsSection,
@@ -42,12 +42,27 @@ describe("settings navigation", () => {
     expect(settingsSectionFrom(new Event(openSettingsEvent))).toBe("account")
   })
 
-  it("recognizes exactly the failures fixed by the account's own model key", () => {
-    for (const code of ["model_credential_required", "model_credential_key_rotated", "model_credential_rejected"]) {
-      expect(isModelCredentialFailure(code)).toBe(true)
+  it("recognizes exactly the failures fixed in the model connection settings", () => {
+    for (const code of [
+      "model_connection_required",
+      "model_connection_key_missing",
+      "model_connection_key_rotated",
+      "model_connection_rejected",
+      "model_connection_withdrawn",
+      "model_connection_window_too_small",
+      "model_connection_structured_output_required",
+    ]) {
+      expect(isModelConnectionFailure(code)).toBe(true)
     }
-    for (const code of ["model_provider_unreachable", "research_parse_unavailable", "", null, undefined]) {
-      expect(isModelCredentialFailure(code)).toBe(false)
+    for (const code of [
+      "model_provider_unreachable",
+      "model_credential_required",
+      "research_parse_unavailable",
+      "",
+      null,
+      undefined,
+    ]) {
+      expect(isModelConnectionFailure(code)).toBe(false)
     }
   })
 })

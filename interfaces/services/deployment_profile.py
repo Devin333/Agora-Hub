@@ -16,11 +16,15 @@ ALLOW_INSECURE_ORIGIN_ENV = "NEWSROOM_ALLOW_INSECURE_ORIGIN"
 TRUSTED_PROXY_CIDRS_ENV = "NEWSROOM_TRUSTED_PROXY_CIDRS"
 LOGIN_RATE_LIMIT_ENV = "NEWSROOM_HOSTED_LOGIN_RATE_LIMIT_PER_MINUTE"
 RESEARCH_RATE_LIMIT_ENV = "NEWSROOM_HOSTED_RESEARCH_RATE_LIMIT_PER_MINUTE"
+MODEL_PROBE_RATE_LIMIT_ENV = "NEWSROOM_HOSTED_MODEL_PROBE_RATE_LIMIT_PER_MINUTE"
 ACCOUNT_DATA_ROOT_ENV = "NEWSROOM_ACCOUNT_DATA_ROOT"
 
 DEFAULT_ACCOUNT_DATA_ROOT = ".newsroom/accounts"
 DEFAULT_LOGIN_RATE_LIMIT = 10
 DEFAULT_RESEARCH_RATE_LIMIT = 30
+# Key verification and model discovery send a request to the provider on the
+# user's behalf; a low limit bounds both the bill and address probing.
+DEFAULT_MODEL_PROBE_RATE_LIMIT = 10
 
 ProxyNetwork = IPv4Network | IPv6Network
 
@@ -45,6 +49,7 @@ class HostedSettings:
     trusted_proxies: tuple[ProxyNetwork, ...]
     login_rate_limit_per_minute: int
     research_rate_limit_per_minute: int
+    model_probe_rate_limit_per_minute: int
     account_data_root: Path
 
     @property
@@ -82,6 +87,9 @@ def load_hosted_settings(env: Mapping[str, str] | None = None) -> HostedSettings
         ),
         research_rate_limit_per_minute=_bounded_int(
             values, RESEARCH_RATE_LIMIT_ENV, default=DEFAULT_RESEARCH_RATE_LIMIT, maximum=6000
+        ),
+        model_probe_rate_limit_per_minute=_bounded_int(
+            values, MODEL_PROBE_RATE_LIMIT_ENV, default=DEFAULT_MODEL_PROBE_RATE_LIMIT, maximum=600
         ),
         account_data_root=Path(
             str(values.get(ACCOUNT_DATA_ROOT_ENV) or DEFAULT_ACCOUNT_DATA_ROOT).strip()
@@ -157,6 +165,7 @@ __all__ = [
     "DeploymentProfile",
     "HostedSettings",
     "LOGIN_RATE_LIMIT_ENV",
+    "MODEL_PROBE_RATE_LIMIT_ENV",
     "PROFILE_ENV",
     "PUBLIC_ORIGIN_ENV",
     "RESEARCH_RATE_LIMIT_ENV",

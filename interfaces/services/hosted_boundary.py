@@ -50,6 +50,10 @@ _RESEARCH_MUTATIONS = frozenset(
 )
 _ACCOUNT_ROOT = "/api/v1/account"
 _ADMIN_ACCOUNTS_ROOT = "/api/v1/admin/accounts"
+# Account routes that send a request to a model provider on the user's behalf.
+_MODEL_PROBE_ROUTE = re.compile(
+    r"^/api/v1/account/model-connections/(?:discover|[A-Za-z0-9._-]+/verify)$"
+)
 _SAFE_PATH = re.compile(r"^/[A-Za-z0-9._~:@!$&'()*+,;=%/-]*$")
 
 
@@ -103,6 +107,12 @@ def classify_hosted_route(method: str, path: str) -> HostedRouteAccess:
         if verb in READ_METHODS or (verb, path) in _RESEARCH_MUTATIONS:
             return HostedRouteAccess.RESEARCH
     return HostedRouteAccess.UNAVAILABLE
+
+
+def is_model_probe_route(method: str, path: str) -> bool:
+    """Key verification and model discovery: each reaches out to a provider."""
+
+    return method.upper() == "POST" and _MODEL_PROBE_ROUTE.fullmatch(path) is not None
 
 
 def require_trusted_origin(request: Request, settings: HostedSettings) -> None:

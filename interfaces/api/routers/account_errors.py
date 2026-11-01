@@ -1,4 +1,4 @@
-"""Shared mapping of account and model-credential failures to API errors."""
+"""Shared mapping of account and model-connection failures to API errors."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from interfaces.services.auth_service import (
     AuthSessionInvalidError,
 )
 from interfaces.services.hosted_boundary import HostedSessionActor
-from interfaces.services.model_credentials import ModelCredentialError
+from interfaces.services.model_connections import ModelConnectionError
 
 
 def signed_in(request: Request) -> HostedSessionActor:
@@ -33,11 +33,12 @@ def run_account_call(helpers: ApiRouteHelpers, call: Callable[[], dict[str, Any]
         return helpers.success(call())
     except AccountAdministrationError as exc:
         return _error(helpers, exc.status_code, exc.code, str(exc))
-    except ModelCredentialError as exc:
+    except ModelConnectionError as exc:
         return helpers.error(
             status_code=exc.status_code,
             code=exc.code,
             message=str(exc),
+            details=exc.details or None,
             retryable=exc.retryable,
             user_action_required=True,
         )

@@ -84,7 +84,7 @@ class ReasoningWire(StrEnum):
 # Visible-answer budgets in this codebase are small (hundreds to a few thousand
 # tokens). Providers count reasoning tokens against the same output limit, so
 # an active tier adds room for it instead of starving the answer.
-_REASONING_OUTPUT_ALLOWANCE: dict[ReasoningEffort, int] = {
+_REASONING_OUTPUT_ALLOWANCE: dict[ReasoningEffort | None, int] = {
     ReasoningEffort.OFF: 0,
     ReasoningEffort.MINIMAL: 1024,
     ReasoningEffort.LOW: 2048,
@@ -93,6 +93,13 @@ _REASONING_OUTPUT_ALLOWANCE: dict[ReasoningEffort, int] = {
     ReasoningEffort.XHIGH: 32768,
     ReasoningEffort.MAX: 65536,
 }
+# The provider default tier is treated as medium for budgeting.
+_REASONING_OUTPUT_ALLOWANCE[None] = _REASONING_OUTPUT_ALLOWANCE[ReasoningEffort.MEDIUM]
+
+
+def reasoning_output_allowance(effort: ReasoningEffort | None) -> int:
+    """Output tokens an active reasoning tier reserves; ``None`` is the provider default."""
+    return _REASONING_OUTPUT_ALLOWANCE[effort]
 
 _DEEPSEEK_EFFORT = {
     ReasoningEffort.MINIMAL: "low",
@@ -130,8 +137,7 @@ class ReasoningSetting:
         """Extra output tokens reserved for reasoning on top of the visible answer."""
         if not self.active:
             return 0
-        # The provider default tier is treated as medium for budgeting.
-        return _REASONING_OUTPUT_ALLOWANCE[self.effort or ReasoningEffort.MEDIUM]
+        return reasoning_output_allowance(self.effort)
 
     def output_tokens(self, requested: int | None, *, ceiling: int | None) -> int | None:
         """The output limit to send for a caller that asked for ``requested`` visible tokens."""
@@ -191,4 +197,5 @@ __all__ = [
     "ReasoningSetting",
     "ReasoningWire",
     "ordered_efforts",
+    "reasoning_output_allowance",
 ]
