@@ -33,6 +33,8 @@ Issues = "https://github.com/Devin333/Agora-Hub/issues"
 api = [
   # Native client for account connections that speak the Anthropic Messages API.
   "anthropic>=2.3,<3",
+  # Imported directly by the pinned transport the Anthropic client sends through.
+  "httpx2>=2.0,<3",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
 ]
@@ -74,9 +76,11 @@ rag-eval-judge = [
   "openai==1.109.1",
 ]
 dev = [
+  "anthropic>=2.3,<3",
   "cryptography>=42.0",
   "fastapi>=0.110",
   "httpx>=0.27",
+  "httpx2>=2.0,<3",
   "psycopg[binary]>=3.1",
   "psycopg-pool>=3.2",
   "pytest>=8.0",
@@ -87,9 +91,11 @@ dev = [
   "uvicorn[standard]>=0.27",
 ]
 all = [
+  "anthropic>=2.3,<3",
   "cryptography>=42.0",
   "fastapi>=0.110",
   "httpx>=0.27",
+  "httpx2>=2.0,<3",
   "psycopg[binary]>=3.1",
   "psycopg-pool>=3.2",
   "pytest>=8.0",

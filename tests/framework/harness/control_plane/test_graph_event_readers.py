@@ -168,5 +168,7 @@ def test_live_event_contract_rejects_flat_worker_event() -> None:
             payload={"status": "succeeded"},
         )
 
-    assert "worker_called" not in HarnessEventType
-    assert "worker_result_recorded" not in HarnessEventType
+    # Compare values: `"text" in EnumClass` raises TypeError on Python 3.11.
+    event_types = {member.value for member in HarnessEventType}
+    assert "worker_called" not in event_types
+    assert "worker_result_recorded" not in event_types

@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from tests.tools.harness.function_coverage import (
+    MONITORING_AVAILABLE,
+    MONITORING_UNAVAILABLE_REASON,
     REPO_ROOT,
     TOOL_HANDLER_SOURCES,
     FunctionCoverage,
@@ -14,6 +16,8 @@ from tests.tools.harness.function_coverage import (
     watched_files,
 )
 from tests.tools.harness.registry import ToolEnvironment
+
+needs_monitoring = pytest.mark.skipif(not MONITORING_AVAILABLE, reason=MONITORING_UNAVAILABLE_REASON)
 
 
 def _executor_file(executor: object) -> str:
@@ -76,6 +80,7 @@ def test_defined_functions_are_the_bodies_that_can_run(tmp_path: Path) -> None:
     assert names == {"outer", "outer.<locals>.inner", "Box.method", "Box.decorated"}
 
 
+@needs_monitoring
 def test_only_functions_that_started_are_counted_as_run(tmp_path: Path) -> None:
     path = _module(
         tmp_path,
@@ -104,6 +109,7 @@ def test_only_functions_that_started_are_counted_as_run(tmp_path: Path) -> None:
     assert [item["function"] for item in entry] == ["never_called"]
 
 
+@needs_monitoring
 def test_coverage_releases_its_monitoring_tool_id(tmp_path: Path) -> None:
     import sys
 
@@ -114,6 +120,14 @@ def test_coverage_releases_its_monitoring_tool_id(tmp_path: Path) -> None:
     coverage.stop()
 
     assert [sys.monitoring.get_tool(tool_id) for tool_id in range(6)] == before
+
+
+@pytest.mark.skipif(MONITORING_AVAILABLE, reason="only meaningful where sys.monitoring is missing")
+def test_without_monitoring_coverage_refuses_to_start_instead_of_reporting_nothing(tmp_path: Path) -> None:
+    coverage = FunctionCoverage([_module(tmp_path, "def f():\n    return 1\n")], root=tmp_path)
+
+    with pytest.raises(RuntimeError, match=r"Python 3\.12\+"):
+        coverage.start()
 
 
 def test_missing_watched_source_is_an_error(tmp_path: Path) -> None:

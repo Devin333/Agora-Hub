@@ -70,6 +70,9 @@ TOOL_RUNTIME_SOURCES = (
 WATCHED_SOURCES = TOOL_HANDLER_SOURCES + TOOL_RUNTIME_SOURCES
 
 _TOOL_ID_NAME = "newsroom-tool-function-coverage"
+# sys.monitoring (PEP 669) arrived in Python 3.12; the project also runs on 3.11.
+MONITORING_AVAILABLE = hasattr(sys, "monitoring")
+MONITORING_UNAVAILABLE_REASON = "tool function coverage needs sys.monitoring (Python 3.12+)"
 
 
 @dataclass(frozen=True, order=True)
@@ -155,6 +158,8 @@ class FunctionCoverage:
         self._tool_id: int | None = None
 
     def start(self) -> None:
+        if not MONITORING_AVAILABLE:
+            raise RuntimeError(f"{MONITORING_UNAVAILABLE_REASON}; running Python {sys.version.split()[0]}")
         monitoring = sys.monitoring
         for tool_id in range(monitoring.DEBUGGER_ID + 1, 6):
             if monitoring.get_tool(tool_id) is None:
@@ -212,6 +217,8 @@ def pytest_load_initial_conftests(early_config: pytest.Config, parser: pytest.Pa
     report_path = getattr(early_config.known_args_namespace, "tool_function_coverage", None)
     if not report_path:
         return
+    if not MONITORING_AVAILABLE:
+        raise pytest.UsageError(f"--tool-function-coverage: {MONITORING_UNAVAILABLE_REASON}")
     coverage = FunctionCoverage(watched_files())
     coverage.start()
     early_config.stash[_COVERAGE_KEY] = (coverage, Path(report_path))
