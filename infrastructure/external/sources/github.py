@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone as _tz
 UTC = _tz.utc
@@ -11,6 +12,7 @@ from typing import Callable, Any
 from urllib.parse import quote, urlencode
 from urllib.request import Request
 
+from infrastructure.external.egress import url_origin
 from infrastructure.external.sources.models import RawSourceItem, SourceDefinition, SourceError
 from infrastructure.external.sources.diagnostics import (
     SourceFetchResponseMetadataContext,
@@ -41,6 +43,10 @@ from infrastructure.external.sources.errors import (
 FetchText = Callable[[str], str]
 FetchGraphQL = Callable[[str, dict[str, Any]], str]
 GITHUB_API_URL = "https://api.github.com"
+# GitHub logins: alphanumerics and single inner hyphens, at most 39 characters.
+_GITHUB_OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}")
+# Repository names: letters, digits, '.', '_', '-', at most 100 characters.
+_GITHUB_REPOSITORY_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
 GITHUB_CONTENT_TYPES = (
     "application/json",
     "application/vnd.github+json",
@@ -86,6 +92,12 @@ class GithubRepository:
             raise ValueError("github repository owner is required")
         if not self.name.strip():
             raise ValueError("github repository name is required")
+        # Owner and name are spliced into API paths next to the token, so
+        # "..", "/", "?" or "#" would retarget the authenticated request.
+        if _GITHUB_OWNER_RE.fullmatch(self.owner) is None:
+            raise ValueError(f"github repository owner is not a valid GitHub login: {self.owner!r}")
+        if _GITHUB_REPOSITORY_NAME_RE.fullmatch(self.name) is None or self.name in {".", ".."}:
+            raise ValueError(f"github repository name is not a valid repository name: {self.name!r}")
 
     @classmethod
     def parse(cls, value: str) -> GithubRepository:
@@ -210,6 +222,7 @@ class GithubConnector:
         fetch_graphql: FetchGraphQL | None = None,
         fetch_policy: SourceFetchPolicy | None = None,
         rate_limiter: DomainRateLimiter | None = None,
+        api_base_url: str = GITHUB_API_URL,
     ) -> None:
         self.fetch_policy = fetch_policy or SourceFetchPolicy()
         self._rate_limiter = rate_limiter or DomainRateLimiter()
@@ -217,6 +230,12 @@ class GithubConnector:
         self._fetch_text = fetch_text or self._default_fetch_text
         self._fetch_graphql = fetch_graphql
         self._response_metadata_context = SourceFetchResponseMetadataContext()
+        # The GitHub token is sent only to this origin. A source URL can be
+        # chosen by a model; anything else is fetched without credentials.
+        self._credential_origin = url_origin(str(api_base_url).strip() or GITHUB_API_URL)
+
+    def _sends_credentials_to(self, url: str) -> bool:
+        return url_origin(url) == self._credential_origin
 
     @source_fetch_response_scope
     def fetch_releases(
@@ -883,7 +902,7 @@ class GithubConnector:
             "X-GitHub-Api-Version": "2022-11-28",
         }
         token = os.getenv("GITHUB_TOKEN")
-        if token:
+        if token and self._sends_credentials_to(url):
             headers["Authorization"] = f"Bearer {token}"
         request = Request(
             url,
@@ -919,6 +938,8 @@ class GithubConnector:
         token = os.getenv(token_env)
         if not token:
             raise ValueError(f"github discussions require token env {token_env}")
+        if not self._sends_credentials_to(url):
+            raise ValueError("github discussions only query the configured GitHub API origin")
         request = Request(
             url,
             data=json.dumps(payload).encode("utf-8"),

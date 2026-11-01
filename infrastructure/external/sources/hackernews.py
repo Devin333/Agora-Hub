@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone as _tz
 UTC = _tz.utc
 from hashlib import sha256
-from html import unescape
 from typing import Any, Callable
 from urllib.request import Request
 
+from infrastructure.external.sources.html_text import html_fragment_text
 from infrastructure.external.sources.models import RawSourceItem, SourceDefinition, SourceError
 from infrastructure.external.sources.diagnostics import (
     SourceFetchResponseMetadataContext,
@@ -214,7 +213,7 @@ class HackerNewsConnector:
             return None
         discussion_url = f"{HACKERNEWS_WEB_URL}/item?id={actual_item_id}"
         external_url = _optional_text(payload.get("url"))
-        summary = _plain_text(_optional_text(payload.get("text")))
+        summary = html_fragment_text(_optional_text(payload.get("text")))
         item_hash = sha256(f"{source.source_id}|{actual_item_id}".encode("utf-8")).hexdigest()
         hn_type = _optional_text(payload.get("type"))
         return RawSourceItem(
@@ -305,12 +304,6 @@ def _candidate_limit(limit: int | None) -> int | None:
     if limit is None:
         return None
     return max(1, int(limit)) * 3
-
-
-def _plain_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return " ".join(re.sub(r"<[^>]+>", " ", unescape(value)).split()) or None
 
 
 def _unix_datetime(value: Any) -> datetime | None:

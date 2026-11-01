@@ -83,6 +83,10 @@ HTML_FIXTURE = """<!doctype html>
 """
 
 
+# The egress guard refuses loopback by default; these tests serve feeds locally.
+LOOPBACK = ("127.0.0.0/8", "::1/128")
+
+
 def register_test_source_tools(registry: ToolRegistry, **kwargs) -> None:
     fetch_text = kwargs.pop("fetch_text", None)
     open_request = kwargs.pop("open_request", None)
@@ -1311,7 +1315,7 @@ def test_source_fetch_url_tool_enforces_redirect_limit() -> None:
         registry = ToolRegistry()
         register_test_source_tools(
             registry,
-            fetch_policy=SourceFetchPolicy(max_redirects=1),
+            fetch_policy=SourceFetchPolicy(max_redirects=1, allowed_private_networks=LOOPBACK),
         )
         executor = ToolExecutor(registry)
         url = f"http://127.0.0.1:{server.server_port}/start"
@@ -1363,7 +1367,10 @@ def test_source_fetch_url_tool_respects_robots_txt() -> None:
     thread.start()
     try:
         registry = ToolRegistry()
-        register_test_source_tools(registry)
+        register_test_source_tools(
+            registry,
+            fetch_policy=SourceFetchPolicy(allowed_private_networks=LOOPBACK),
+        )
         executor = ToolExecutor(registry)
         url = f"http://127.0.0.1:{server.server_port}/blocked/feed.xml"
 

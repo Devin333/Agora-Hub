@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 def normalize_dsn(dsn: str) -> str:
     """Normalize a Postgres DSN to the libpq/psycopg URI form.
@@ -14,4 +16,15 @@ def normalize_dsn(dsn: str) -> str:
     return dsn.strip().removeprefix("jdbc:")
 
 
-__all__ = ["normalize_dsn"]
+_URI_PASSWORD = re.compile(r"(?P<scheme>postgres(?:ql)?://)(?P<user>[^:@/\s]*):[^@/\s]*@", re.IGNORECASE)
+_KEYWORD_PASSWORD = re.compile(r"(?P<key>\bpassword\s*=\s*)(?:'(?:[^'\\]|\\.)*'|\S+)", re.IGNORECASE)
+
+
+def redact_dsn(text: str) -> str:
+    """Remove passwords from anything that may quote a DSN (URI or keyword form)."""
+
+    text = _URI_PASSWORD.sub(lambda match: f"{match['scheme']}{match['user']}:***@", text)
+    return _KEYWORD_PASSWORD.sub(lambda match: f"{match['key']}***", text)
+
+
+__all__ = ["normalize_dsn", "redact_dsn"]

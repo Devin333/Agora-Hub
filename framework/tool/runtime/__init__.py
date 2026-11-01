@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from framework.tool.runtime.errors import (
     ToolDefinitionError,
+    ToolEffectNotAppliedError,
     ToolIndeterminateError,
     ToolPermissionError,
     ToolRuntimeError,
@@ -65,6 +66,7 @@ __all__ = [
     "ToolExecutor",
     "ToolEvidencePersistenceError",
     "ToolExecutionEvidencePort",
+    "ToolEffectNotAppliedError",
     "ToolIndeterminateError",
     "ToolPermissionError",
     "ToolRetryController",

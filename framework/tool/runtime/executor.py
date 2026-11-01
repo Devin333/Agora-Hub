@@ -7,6 +7,7 @@ from datetime import datetime, timezone as _tz
 UTC = _tz.utc
 from hashlib import sha256
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from framework.shared.attempts import (
@@ -72,6 +73,7 @@ from framework.tool.models import (
     ToolPolicyTrace,
     ToolResult,
     ToolRuntimeError,
+    ToolEffectNotAppliedError,
     ToolIndeterminateError,
     ToolSecretError,
     ToolStatus,
@@ -254,19 +256,29 @@ class ToolExecutor:
                 "ToolExecutionEvidencePort"
             )
         self._execution_evidence = execution_evidence
+        # One executor may serve concurrent calls of a tool batch; the shared
+        # inspection state is guarded so counts and records stay exact.
+        self._inspection_lock = RLock()
         self._events: list[ToolEvent] = []
         self._metrics = ToolMetrics()
         self._records: list[ToolExecutionRecord] = []
 
     @property
+    def registry(self) -> ToolRegistry:
+        return self._registry
+
+    @property
     def metrics(self) -> ToolMetrics:
-        return self._metrics.snapshot()
+        with self._inspection_lock:
+            return self._metrics.snapshot()
 
     def list_events(self) -> list[ToolEvent]:
-        return list(self._events)
+        with self._inspection_lock:
+            return list(self._events)
 
     def list_records(self) -> list[ToolExecutionRecord]:
-        return list(self._records)
+        with self._inspection_lock:
+            return list(self._records)
 
     @property
     def defers_result_persistence(self) -> bool:
@@ -780,14 +792,15 @@ class ToolExecutor:
                 elapsed_ms=observation.elapsed_ms,
             )
         self._record_observation(observation)
-        self._records.append(
-            _execution_record(
-                observation,
-                self._events,
-                started_at,
-                trace_context=event_trace_context,
+        with self._inspection_lock:
+            self._records.append(
+                _execution_record(
+                    observation,
+                    self._events,
+                    started_at,
+                    trace_context=event_trace_context,
+                )
             )
-        )
         return observation
 
     def _resolve_executor(
@@ -1236,7 +1249,8 @@ class ToolExecutor:
         )
 
     def _record_observation(self, observation: ToolObservation) -> None:
-        self._metrics.record(observation)
+        with self._inspection_lock:
+            self._metrics.record(observation)
         if observation.status == ToolStatus.SUCCEEDED:
             self._emit("tool_succeeded", observation.call, _result_event_payload(observation))
             if observation.result.artifact_refs:
@@ -1269,7 +1283,8 @@ class ToolExecutor:
             ),
             graph_identity=call.graph_identity,
         )
-        self._events.append(event)
+        with self._inspection_lock:
+            self._events.append(event)
         self._emit_runtime_event(event_type, call, payload or {})
         return event
 
@@ -1820,10 +1835,6 @@ def _copy_tool_result(result: ToolResult, **overrides: Any) -> ToolResult:
     return ToolResult(**values)
 
 
-def _has_side_effects(side_effect: str) -> bool:
-    return side_effect not in {"", "none", "read_only"}
-
-
 def _side_effect_value(definition: Any) -> str:
     value = getattr(definition, "side_effect_value", None)
     if value is not None:
@@ -1873,7 +1884,8 @@ class _ToolPolicyTraceBuilder:
                 dimension=dimension,
                 passed=passed,
                 severity=severity or ("info" if passed else "error"),
-                reason=reason,
+                # Reasons are often str(exc) from an upstream client.
+                reason=redact_sensitive_values(str(reason)),
                 metadata=dict(metadata or {}),
             )
         )
@@ -2109,7 +2121,7 @@ def _invoke_with_retry(
                 parent_context.mark_descendant_indeterminate()
             error = supervised.error
             raise ToolIndeterminateError(
-                f"tool {tool_name} has an indeterminate descendant effect",
+                _indeterminate_message(tool_name, error),
                 attempt_id=context.attempt_id,
                 idempotency_key=context.idempotency_key,
                 operation_id=context.operation_id or context.idempotency_key,
@@ -2144,45 +2156,6 @@ def _invoke_with_retry(
         ):
             raise timeout_error
     raise RuntimeError(f"tool {tool_name} retry loop exited unexpectedly")
-
-
-def _invoke_with_timeout(
-    executor: Any,
-    arguments: dict[str, Any],
-    timeout_seconds: float | None,
-    tool_name: str,
-) -> Any:
-    local_budget = LocalRetryBudget(max_attempts=1)
-    execution_limits = ExecutionLimits(
-        execution_id=f"standalone-tool:{tool_name}",
-        retry_credits=RetryCreditLedger(max_total_retries=0),
-    )
-    supervised = AttemptSupervisor().run(
-        lambda: executor(arguments),
-        timeout_seconds=timeout_seconds,
-        idempotency_key=f"tool:{tool_name}",
-        operation_id=f"tool:{tool_name}",
-        operation_kind="tool_call",
-        local_budget=local_budget,
-        execution_limits=execution_limits,
-    )
-    if supervised.state is AttemptState.REJECTED:
-        if supervised.error is None:
-            raise ToolRuntimeError("tool attempt admission was rejected without an error")
-        raise supervised.error
-    if supervised.state is AttemptState.SUCCEEDED:
-        return supervised.value
-    if supervised.state is AttemptState.FAILED:
-        if supervised.error is None:
-            raise ToolRuntimeError("tool attempt failed without an error")
-        raise supervised.error
-    raise _tool_timeout_error(
-        tool_name=tool_name,
-        timeout_seconds=timeout_seconds,
-        context=supervised.context,
-        termination_confirmed=supervised.termination_confirmed,
-        indeterminate=supervised.indeterminate,
-    )
 
 
 def _tool_idempotency_key(call: ToolCall) -> str:
@@ -2257,6 +2230,8 @@ def _failure_is_known_to_have_no_effect(
     definition: Any | None,
     error: BaseException,
 ) -> bool:
+    if isinstance(error, ToolEffectNotAppliedError):
+        return True
     if definition is None:
         return False
     metadata = dict(getattr(definition, "metadata", {}) or {})
@@ -2265,6 +2240,25 @@ def _failure_is_known_to_have_no_effect(
         return False
     error_types = {base.__name__ for base in type(error).__mro__}
     return bool(error_types.intersection(str(value) for value in configured))
+
+
+_INDETERMINATE_CAUSE_MAX_CHARS = 300
+
+
+def _indeterminate_message(tool_name: str, error: BaseException | None) -> str:
+    """Say what failed, not only that the effect is unknown.
+
+    The cause text is the tool's own error message, the same text a plain
+    failure reports; without it the model cannot tell a dropped connection
+    from a receiver error.
+    """
+
+    message = f"tool {tool_name} has an indeterminate descendant effect"
+    if error is None:
+        return message
+    cause = " ".join(str(error).split())[:_INDETERMINATE_CAUSE_MAX_CHARS]
+    detail = f"{type(error).__name__}: {cause}" if cause else type(error).__name__
+    return f"{message}; it may have taken effect before failing ({detail})"
 
 
 def _tool_timeout_error(

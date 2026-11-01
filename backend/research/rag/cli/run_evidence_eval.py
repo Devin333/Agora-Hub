@@ -19,12 +19,16 @@ def main(
     live_answer_ask: Callable[[EvidenceQAPair], dict[str, Any]] | None = None,
 ) -> int:
     args = _build_parser().parse_args(argv)
+    options = evidence_eval_options_from_args(args)
+    # Reject unusable flags before resolving the live answer model, so a bad
+    # invocation reports the flag problem instead of missing model settings.
+    options.validate(live_answer_injected=live_answer_ask is not None)
     answer_model = None
-    if args.live_answer_eval and live_answer_ask is None:
+    if options.live_answer_eval and live_answer_ask is None:
         from backend.research.application.llm_client import build_unity_paper_answer_model
         answer_model = build_unity_paper_answer_model(max_tokens=600)
     return run_evidence_eval_core(
-        evidence_eval_options_from_args(args),
+        options,
         live_answer_ask=live_answer_ask,
         answer_model=answer_model,
     )

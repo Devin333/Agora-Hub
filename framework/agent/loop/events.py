@@ -215,6 +215,7 @@ class AgentLoopEventRecorder:
         iteration: int,
         action_type: str,
         tool_name: str | None = None,
+        tool_names: list[str] | None = None,
         output_keys: list[str] | None = None,
     ) -> None:
         payload: dict[str, Any] = {
@@ -223,6 +224,8 @@ class AgentLoopEventRecorder:
         }
         if tool_name:
             payload["tool_name"] = tool_name
+        if tool_names and len(tool_names) > 1:
+            payload["tool_names"] = list(tool_names)
         self.emit(AgentLoopEventType.ACTION_PARSED, iteration=iteration, payload=payload)
 
     def parser_error(

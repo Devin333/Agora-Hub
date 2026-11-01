@@ -232,6 +232,16 @@ def test_reparse_fixture_covers_os_no_follow_boundaries(
     assert not marker_assets.is_link_or_reparse_point(unrelated.lstat())
 
 
+# Simulated reparse attributes exist only on Windows: the POSIX I/O path opens
+# every component with O_NOFOLLOW under a pinned dir_fd and never consults
+# st_file_attributes. The real POSIX threat, a symlink, is exercised below with
+# real links (test_real_posix_symlinks_are_rejected).
+windows_reparse_only = pytest.mark.skipif(
+    os.name != "nt", reason="reparse points are a Windows concept; POSIX uses real symlinks below"
+)
+
+
+@windows_reparse_only
 def test_source_reparse_file_is_rejected_before_read(
     asset_paths, png_bytes, monkeypatch
 ):
@@ -249,6 +259,7 @@ def test_output_root_reparse_point_is_rejected(asset_paths, png_bytes, monkeypat
     assert _copy("figure.png", asset_paths) is None
 
 
+@windows_reparse_only
 @pytest.mark.parametrize("linked_component", ["root", "paper", "figures", "file"])
 def test_target_reparse_points_are_never_written(
     asset_paths, png_bytes, linked_component, monkeypatch
@@ -272,6 +283,38 @@ def test_target_reparse_points_are_never_written(
         assert link.read_bytes() == b"unchanged"
     else:
         assert list(link.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows; junctions are covered above")
+@pytest.mark.parametrize("linked_component", ["source-file", "root", "paper", "figures", "file"])
+def test_real_posix_symlinks_are_rejected(asset_paths, png_bytes, linked_component):
+    output, target, root = asset_paths
+    elsewhere = output.parent / "elsewhere"
+    elsewhere.mkdir()
+    if linked_component == "source-file":
+        secret = elsewhere / "secret.png"
+        secret.write_bytes(png_bytes)
+        (output / "link.png").symlink_to(secret)
+        assert _copy("link.png", asset_paths) is None
+        assert secret.read_bytes() == png_bytes
+        return
+    final = target / (marker_assets.sha256(png_bytes).hexdigest() + ".png")
+    links = {"root": root, "paper": root / "paper", "figures": target, "file": final}
+    link = links[linked_component]
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if linked_component == "file":
+        decoy = elsewhere / "decoy.png"
+        decoy.write_bytes(b"unchanged")
+        link.symlink_to(decoy)
+    else:
+        link.symlink_to(elsewhere, target_is_directory=True)
+
+    assert _embed(base64.b64encode(png_bytes).decode(), asset_paths) is None
+
+    if linked_component == "file":
+        assert decoy.read_bytes() == b"unchanged"
+    # Nothing was written through the link into the place it points to.
+    assert sorted(item.name for item in elsewhere.iterdir()) == (["decoy.png"] if linked_component == "file" else [])
 
 
 def _directory_link(link: Path, destination: Path):

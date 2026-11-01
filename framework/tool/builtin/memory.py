@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,6 +11,8 @@ from framework.tool.models.definition import ToolDefinition
 from framework.tool.registry.registry import ToolRegistry
 
 
+# Recall runs against the memory store (Qdrant/Postgres in hosted deployments).
+MEMORY_RECALL_TIMEOUT_SECONDS = 30.0
 DEFAULT_MEMORY_COLLECTION = "memories"
 
 
@@ -74,6 +77,7 @@ def register_memory_tools(
             },
             side_effect="read_only",
             concurrency_safe=True,
+            timeout_seconds=MEMORY_RECALL_TIMEOUT_SECONDS,
             max_result_bytes=500_000,
         ),
         lambda args: _recall_memory(
@@ -133,6 +137,8 @@ def _recall_memory(
                 raise ValueError("collection cannot select namespace authority")
     limit = _limit(args.get("limit"))
     min_score = args.get("min_score", args.get("score_threshold"))
+    if min_score is not None and not math.isfinite(float(min_score)):
+        raise ValueError("min_score must be a finite number")
     recall = runtime.recall(
         {
             "query": query_text,
@@ -270,14 +276,10 @@ def _limit(value: Any) -> int:
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
-    return int(value)
-
-
-def _optional_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
+    number = int(value)
+    if number < 1:
+        raise ValueError("max_context_tokens must be positive")
+    return number
 
 
 def _to_dict(value: Any) -> dict[str, Any]:

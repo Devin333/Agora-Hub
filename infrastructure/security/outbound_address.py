@@ -182,14 +182,25 @@ class OutboundAddressPolicy:
         return tuple(addresses)
 
 
+# Well-known NAT64 prefix (RFC 6052): the low 32 bits are an IPv4 address.
+_NAT64_PREFIX = ipaddress.IPv6Network("64:ff9b::/96")
+
+
 def is_public_address(address: IPAddress) -> bool:
-    """True only for globally routable unicast addresses, including embedded IPv4."""
+    """True only for globally routable unicast addresses.
+
+    The one predicate for every outbound guard (model and research endpoints
+    here, source fetches in ``infrastructure.external.egress``). An IPv6
+    address that carries an IPv4 address (IPv4-mapped, 6to4, NAT64) is public
+    only if that IPv4 address is too; Teredo tunnels are never public.
+    """
+
     if isinstance(address, ipaddress.IPv6Address):
-        embedded = address.ipv4_mapped or address.sixtofour
-        if embedded is not None:
-            return is_public_address(embedded)
         if address.teredo is not None:
             return False
+        embedded = [view for view in address_views(address) if view is not address]
+        if embedded:
+            return all(is_public_address(view) for view in embedded)
     return not (
         address.is_private
         or address.is_loopback
@@ -199,6 +210,27 @@ def is_public_address(address: IPAddress) -> bool:
         or address.is_multicast
         or not address.is_global
     )
+
+
+def address_views(address: IPAddress) -> list[IPAddress]:
+    """The address itself and every IPv4 address an IPv6 address carries.
+
+    IPv4-mapped (``::ffff:a.b.c.d``), 6to4 (``2002::/16``), Teredo's client
+    address and NAT64 (``64:ff9b::/96``). Allowlists match on any view, so an
+    administrator who admits ``10.0.0.0/8`` also admits its mapped forms.
+    """
+
+    views: list[IPAddress] = [address]
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            views.append(address.ipv4_mapped)
+        if address.sixtofour is not None:
+            views.append(address.sixtofour)
+        if address.teredo is not None:
+            views.append(address.teredo[1])
+        if address in _NAT64_PREFIX:
+            views.append(ipaddress.IPv4Address(int(address) & 0xFFFFFFFF))
+    return views
 
 
 def _normalized_host(host: str) -> str:
@@ -232,5 +264,6 @@ __all__ = [
     "OutboundAddressRejected",
     "OutboundRejection",
     "OutboundTarget",
+    "address_views",
     "is_public_address",
 ]

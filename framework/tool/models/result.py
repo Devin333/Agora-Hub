@@ -124,6 +124,11 @@ class ToolResult:
         object.__setattr__(self, "artifact_refs", [ArtifactRef.from_any(ref) for ref in artifact_refs])
         object.__setattr__(self, "artifacts", [ArtifactRef.from_any(ref) for ref in artifacts])
         object.__setattr__(self, "metadata", dict(self.metadata or {}))
+        if self.error_message is not None:
+            # Failure text is usually an upstream exception's str(); a driver
+            # that echoes its DSN or a client that echoes a bearer header would
+            # otherwise carry the secret into prompts, traces and events.
+            object.__setattr__(self, "error_message", redact_sensitive_values(str(self.error_message)))
         identity = self.graph_identity
         if identity is not None and not isinstance(identity, GraphExecutionIdentity):
             identity = GraphExecutionIdentity.from_dict(identity)

@@ -175,11 +175,11 @@ def paper_visual_chunk_store_from_env(
     if visual_model is None:
         return None
 
-    from qdrant_client import QdrantClient
+    from infrastructure.storage.vector.connection import connect_qdrant
 
     url = values.get("NEWS_VISUAL_QDRANT_URL") or values.get("NEWS_QDRANT_URL") or DEFAULT_QDRANT_URL
     vector_store = QdrantVectorStore(
-        QdrantClient(url=url),
+        connect_qdrant(url),
         embedding_model=DeterministicEmbeddingModel(dimension=visual_model.dimension),
         vector_size=visual_model.dimension,
     )

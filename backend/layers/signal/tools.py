@@ -38,6 +38,11 @@ from backend.layers.signal.source_tool_runtime import (
 
 
 UTC = _tz.utc
+# The fetch itself is bounded by fetch_policy.timeout_seconds (the whole-fetch
+# budget, retries included); the margin covers rate limiting and parsing.
+FETCH_TOOL_TIMEOUT_MARGIN_SECONDS = 1.0
+# Health is read from the configured health store, which may be remote.
+SOURCE_HEALTH_READ_TIMEOUT_SECONDS = 10.0
 
 
 def register_source_tools(
@@ -72,7 +77,7 @@ def register_source_tools(
             },
             side_effect="read_only",
             concurrency_safe=True,
-            timeout_seconds=fetch_policy.timeout_seconds + 1.0,
+            timeout_seconds=fetch_policy.timeout_seconds + FETCH_TOOL_TIMEOUT_MARGIN_SECONDS,
             max_result_bytes=1_100_000,
         ),
         lambda args: _fetch_url(
@@ -140,7 +145,7 @@ def register_source_tools(
             },
             side_effect="read_only",
             concurrency_safe=True,
-            timeout_seconds=fetch_policy.timeout_seconds + 1.0,
+            timeout_seconds=fetch_policy.timeout_seconds + FETCH_TOOL_TIMEOUT_MARGIN_SECONDS,
             max_result_bytes=1_000_000,
             metadata={"source_kind": "official_blog"},
         ),
@@ -169,6 +174,7 @@ def register_source_tools(
             },
             side_effect="read_only",
             concurrency_safe=True,
+            timeout_seconds=SOURCE_HEALTH_READ_TIMEOUT_SECONDS,
         ),
         lambda args: {"health": _source_health(args, health_manager=health_manager).to_dict()},
     )
@@ -190,7 +196,7 @@ def register_source_tools(
             },
             side_effect="read_only",
             concurrency_safe=False,
-            timeout_seconds=fetch_policy.timeout_seconds + 1.0,
+            timeout_seconds=fetch_policy.timeout_seconds + FETCH_TOOL_TIMEOUT_MARGIN_SECONDS,
             max_result_bytes=100_000,
             metadata={"updates_source_health": True},
         ),
@@ -293,13 +299,27 @@ def register_source_tools(
             side_effect="read_only",
             concurrency_safe=True,
         ),
-        lambda args: {
-            "canonical_url": canonicalize_source_url(
-                str(args["url"]),
-                base_url=str(args["base_url"]) if args.get("base_url") is not None else None,
-            )
-        },
+        _normalize_url,
     )
+
+
+def _normalize_url(args: dict[str, Any]) -> dict[str, str]:
+    """Canonical form of an absolute http(s) URL.
+
+    The shared canonicalizer passes relative or empty input through unchanged
+    (stored identities may be relative); as a tool answer that would hand the
+    model "" or "/path" as a canonical URL, so anything that does not resolve
+    to an absolute http(s) URL is refused here.
+    """
+
+    raw_url = str(args["url"])
+    base_url = str(args["base_url"]) if args.get("base_url") is not None else None
+    canonical = canonicalize_source_url(raw_url, base_url=base_url)
+    parts = urlsplit(canonical)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        hint = "" if base_url else "; pass base_url to resolve a relative URL"
+        raise ValueError(f"url does not resolve to an absolute http(s) URL{hint}")
+    return {"canonical_url": canonical}
 
 
 def _parse_feed_schema() -> dict[str, Any]:
@@ -593,15 +613,28 @@ def _search_sources(
 
 
 def _fetch_policy(args: dict[str, Any], default_policy: SourceFetchPolicy) -> SourceFetchPolicy:
-    timeout_seconds = float(args.get("timeout_seconds", default_policy.timeout_seconds))
+    """The operator policy, tightened (never loosened) by the model's arguments.
+
+    The tool's declared timeout is derived from the operator timeout, so a
+    longer model-requested budget would only get the attempt killed from
+    outside; it is capped instead.
+    """
+
+    timeout_seconds = min(
+        float(args.get("timeout_seconds", default_policy.timeout_seconds)),
+        default_policy.timeout_seconds,
+    )
     max_bytes = int(args.get("max_bytes", default_policy.max_bytes))
-    max_redirects = int(args.get("max_redirects", default_policy.max_redirects))
+    max_redirects = min(
+        int(args.get("max_redirects", default_policy.max_redirects)),
+        default_policy.max_redirects,
+    )
     respect_robots = _optional_bool(args.get("respect_robots"), default_policy.respect_robots)
     if max_bytes > 1_000_000:
         raise ValueError("max_bytes must not exceed 1000000 for source.fetch_url")
     return SourceFetchPolicy(
         timeout_seconds=timeout_seconds,
-        max_bytes=max_bytes,
+        max_bytes=min(max_bytes, default_policy.max_bytes),
         max_redirects=max_redirects,
         respect_robots=respect_robots,
         user_agent=str(args.get("user_agent") or default_policy.user_agent),
@@ -609,6 +642,7 @@ def _fetch_policy(args: dict[str, Any], default_policy: SourceFetchPolicy) -> So
         allowed_domains=default_policy.allowed_domains,
         retry_times=default_policy.retry_times,
         retry_on_status_codes=default_policy.retry_on_status_codes,
+        allowed_private_networks=default_policy.allowed_private_networks,
     )
 
 
@@ -627,6 +661,7 @@ def _coerce_fetch_policy(policy: Any | None) -> SourceFetchPolicy:
         allowed_domains=tuple(getattr(policy, "allowed_domains", ()) or ()),
         retry_times=int(getattr(policy, "retry_times")),
         retry_on_status_codes=tuple(getattr(policy, "retry_on_status_codes")),
+        allowed_private_networks=tuple(getattr(policy, "allowed_private_networks", ()) or ()),
     )
 
 

@@ -106,6 +106,7 @@ _FETCH_POLICY_FIELDS = {
     "rate_limit_per_domain_per_minute",
     "allowed_domains",
     "allowed_source_domains",
+    "allowed_private_networks",
     "retry_times",
     "retry_on_status_codes",
 }
@@ -389,6 +390,11 @@ def _source_fetch_policy(payload: dict[str, Any]) -> SourceFetchPolicy:
         values["allowed_domains"] = _list_value(
             allowed_domains,
             field_name="fetch.allowed_domains",
+        )
+    if "allowed_private_networks" in payload:
+        values["allowed_private_networks"] = _list_value(
+            payload["allowed_private_networks"],
+            field_name="fetch.allowed_private_networks",
         )
     if "retry_times" in payload:
         values["retry_times"] = _int_value(payload["retry_times"], field_name="fetch.retry_times")

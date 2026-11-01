@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import BytesIO
@@ -9,6 +10,9 @@ import pytest
 
 from backend.foundation.models.source import SourceDefinition
 from infrastructure.external.sources import DomainRateLimiter, FeedConnector, SourceFetchPolicy, TooManyRedirectsError
+
+# The egress guard refuses loopback by default; these tests serve feeds locally.
+LOOPBACK = ("127.0.0.0/8", "::1/128")
 
 
 RSS_FIXTURE = """<?xml version="1.0"?>
@@ -578,7 +582,7 @@ def test_feed_connector_default_fetch_respects_robots_txt() -> None:
             url=f"http://127.0.0.1:{server.server_port}/blocked/rss.xml",
         )
 
-        items, errors = FeedConnector().fetch(source)
+        items, errors = FeedConnector(fetch_policy=SourceFetchPolicy(allowed_private_networks=LOOPBACK)).fetch(source)
     finally:
         server.shutdown()
         server.server_close()
@@ -624,7 +628,7 @@ def test_feed_connector_skips_robots_when_source_disables_it() -> None:
             respect_robots=False,
         )
 
-        items, errors = FeedConnector().fetch(source)
+        items, errors = FeedConnector(fetch_policy=SourceFetchPolicy(allowed_private_networks=LOOPBACK)).fetch(source)
     finally:
         server.shutdown()
         server.server_close()
@@ -829,3 +833,29 @@ def test_source_fetch_policy_rejects_invalid_values() -> None:
         SourceFetchPolicy(retry_times=-1)
     with pytest.raises(ValueError, match="retry_on_status_codes"):
         SourceFetchPolicy(retry_on_status_codes=(99,))
+
+
+def test_json_feed_item_without_title_or_text_takes_both_from_its_html() -> None:
+    long_html = "<p>Agents &amp; tools</p><p>" + "word " * 40 + "</p>"
+    feed = {
+        "version": "https://jsonfeed.org/version/1.1",
+        "title": "Fallbacks",
+        "items": [
+            {"id": "short", "url": "https://example.com/short", "content_html": "<b>Short</b>   note &lt;b&gt; kept"},
+            {"id": "long", "url": "https://example.com/long", "content_html": long_html},
+            {"id": "empty", "url": "https://example.com/empty", "content_html": "<script>x()</script>"},
+        ],
+    }
+    source = SourceDefinition(source_id="json-fallbacks", name="JSON", source_type="rss", url="https://example.com/feed.json")
+
+    items = FeedConnector().parse(source, json.dumps(feed))
+
+    by_url = {item.url: item for item in items}
+    # An item with neither a title nor any text to take one from is dropped.
+    assert set(by_url) == {"https://example.com/short", "https://example.com/long"}
+    short = by_url["https://example.com/short"]
+    assert short.summary == "Short note <b> kept" and short.title == short.summary
+    long = by_url["https://example.com/long"]
+    assert long.summary.startswith("Agents & tools word word")
+    assert len(long.title) == 120 and long.title.endswith("...")
+    assert long.summary.startswith(long.title[:-3])

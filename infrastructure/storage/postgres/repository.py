@@ -10,7 +10,8 @@ import psycopg
 from backend.foundation.models.source_error_normalization import (
     normalize_source_errors,
 )
-from infrastructure.storage.postgres.dsn import normalize_dsn
+from infrastructure.storage.postgres.connect import connect_postgres
+from infrastructure.storage.postgres.transaction import uncommitted_write
 
 from infrastructure.external.sources.models import SourceError, SourceHealth, SourceHealthStatus
 from infrastructure.storage.local_json import ReportNotFoundError
@@ -25,7 +26,7 @@ ConnectionFactory = Callable[[], Any]
 class PostgresRepository:
     def __init__(self, dsn: str, *, connection_factory: ConnectionFactory | None = None) -> None:
         self.dsn = dsn
-        self._connection_factory = connection_factory or (lambda: psycopg.connect(normalize_dsn(dsn)))
+        self._connection_factory = connection_factory or (lambda: connect_postgres(dsn))
 
     def migrate(self) -> None:
         sql = load_migration_sql()
@@ -54,7 +55,7 @@ class PostgresRepository:
 
     def save_run_records(self, batch: RunPersistenceBatch) -> None:
         with self._connection_factory() as connection:
-            with connection.cursor() as cursor:
+            with uncommitted_write(), connection.cursor() as cursor:
                 self._insert_graph_run(cursor, batch.graph_run)
                 if batch.report is not None:
                     self._insert_report(cursor, batch.report)
@@ -506,7 +507,7 @@ class PostgresRepository:
 
     def _execute_with_cursor(self, operation: Callable[[Any, Any], None], record: Any) -> None:
         with self._connection_factory() as connection:
-            with connection.cursor() as cursor:
+            with uncommitted_write(), connection.cursor() as cursor:
                 operation(cursor, record)
             connection.commit()
 
@@ -515,7 +516,7 @@ class PostgresRepository:
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> None:
         with self._connection_factory() as connection:
-            with connection.cursor() as cursor:
+            with uncommitted_write(), connection.cursor() as cursor:
                 _cursor_execute(cursor, sql, params)
             connection.commit()
 

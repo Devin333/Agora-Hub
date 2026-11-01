@@ -5,6 +5,7 @@ import pytest
 from framework.shared.graph_identity import GraphExecutionIdentity
 from framework.tool.governance.approval import ToolApprovalRequest
 from framework.tool.models.call import ToolCall
+from framework.workers.approval.store import InMemoryApprovalStore
 from framework.tool import (
     MappingSecretProvider,
     ToolDefinition,
@@ -36,7 +37,7 @@ def test_secret_provider_and_control_tool_success() -> None:
     registry = ToolRegistry()
     register_control_tools(
         registry,
-        approval_store=_ApprovalStore(),
+        approval_store=InMemoryApprovalStore(),
         execution_identity=_identity(),
     )
     result = registry.get("control.request_human_review").executor(
@@ -54,7 +55,7 @@ def test_control_tool_rejects_sensitive_payload_keys() -> None:
     registry = ToolRegistry()
     register_control_tools(
         registry,
-        approval_store=_ApprovalStore(),
+        approval_store=InMemoryApprovalStore(),
         execution_identity=_identity(),
     )
 
@@ -88,11 +89,6 @@ def test_tool_approval_wire_rejects_and_omits_step_id() -> None:
             graph_identity=_identity(),
             step_id="publish",
         )
-
-
-class _ApprovalStore:
-    def upsert_approval(self, request):
-        return request
 
 
 def _identity() -> GraphExecutionIdentity:

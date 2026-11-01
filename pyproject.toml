@@ -33,6 +33,8 @@ Issues = "https://github.com/Devin333/Agora-Hub/issues"
 api = [
   # Native client for account connections that speak the Anthropic Messages API.
   "anthropic>=2.3,<3",
+  # Imported directly by the pinned transport the Anthropic client sends through.
+  "httpx2>=2.0,<3",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
 ]
@@ -74,9 +76,11 @@ rag-eval-judge = [
   "openai==1.109.1",
 ]
 dev = [
+  "anthropic>=2.3,<3",
   "cryptography>=42.0",
   "fastapi>=0.110",
   "httpx>=0.27",
+  "httpx2>=2.0,<3",
   "psycopg[binary]>=3.1",
   "psycopg-pool>=3.2",
   "pytest>=8.0",
@@ -87,9 +91,11 @@ dev = [
   "uvicorn[standard]>=0.27",
 ]
 all = [
+  "anthropic>=2.3,<3",
   "cryptography>=42.0",
   "fastapi>=0.110",
   "httpx>=0.27",
+  "httpx2>=2.0,<3",
   "psycopg[binary]>=3.1",
   "psycopg-pool>=3.2",
   "pytest>=8.0",
@@ -132,10 +138,15 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "sdk/python"]
-addopts = ["--import-mode=importlib", "-m", "not live_research_e2e"]
+addopts = ["--import-mode=importlib", "-m", "not live_research_e2e and not tool_stress and not tool_live"]
 markers = [
   "live_research_e2e: opt-in live arXiv and LLM production-composition coverage; select explicitly with valid credentials",
   "redis_integration: opt-in isolated Redis integration coverage; select explicitly with a dedicated test URL",
+  "tool_scenario(tool, *dimensions): claims tool stability coverage; checked by tests/tools/test_tool_contracts.py",
+  "leak_grace(seconds): extend how long the tool resource-leak guard waits for stragglers",
+  "tool_stress: opt-in tool concurrency and soak runs; select with python -m scripts.dev tool-stability",
+  "tool_live: opt-in tool runs against real external services; needs NEWS_TOOL_LIVE_TESTS=1 and credentials",
+  "live_service(*names): the real services a tool_live test needs; it is skipped unless each is configured",
 ]
 
 [tool.pyright]

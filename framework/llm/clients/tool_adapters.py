@@ -99,26 +99,49 @@ def parse_openai_tool_calls(
         raw_arguments = function.get("arguments") or "{}"
         if not isinstance(raw_arguments, str):
             raise LLMToolCallParseError("provider tool_call arguments must be a JSON string")
-        try:
-            arguments = json.loads(raw_arguments)
-        except json.JSONDecodeError as exc:
-            raise LLMToolCallParseError("provider tool_call arguments are not valid JSON") from exc
-        if not isinstance(arguments, dict):
-            raise LLMToolCallParseError("provider tool_call arguments must be a JSON object")
 
         provider_tool_call_id = raw_tool_call.get("id")
         tool_call_id = str(provider_tool_call_id or f"tool_call_{index + 1}")
+        tool_name = provider_to_internal.get(provider_name, provider_name)
+        provider_id = str(provider_tool_call_id) if provider_tool_call_id else None
+        metadata = {"provider_tool_name": provider_name}
+        # Malformed arguments reject only this call; its siblings stay usable.
+        arguments, argument_error = decode_tool_call_arguments(raw_arguments)
+        if argument_error is not None:
+            parsed_calls.append(
+                LLMToolCall.with_invalid_arguments(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    raw_arguments=raw_arguments,
+                    error=argument_error,
+                    provider_tool_call_id=provider_id,
+                    metadata=metadata,
+                )
+            )
+            continue
         parsed_calls.append(
             LLMToolCall(
                 tool_call_id=tool_call_id,
-                tool_name=provider_to_internal.get(provider_name, provider_name),
+                tool_name=tool_name,
                 arguments=arguments,
                 raw_arguments=raw_arguments,
-                provider_tool_call_id=str(provider_tool_call_id) if provider_tool_call_id else None,
-                metadata={"provider_tool_name": provider_name},
+                provider_tool_call_id=provider_id,
+                metadata=metadata,
             )
         )
     return parsed_calls
+
+
+def decode_tool_call_arguments(raw_arguments: str) -> tuple[dict[str, Any], str | None]:
+    """Decode provider tool arguments, returning a per-call error on failure."""
+
+    try:
+        arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError as exc:
+        return {}, f"tool call arguments are not valid JSON: {exc.msg}"
+    if not isinstance(arguments, dict):
+        return {}, "tool call arguments must be a JSON object"
+    return arguments, None
 
 
 def _is_openai_tool(tool: dict[str, Any]) -> bool:

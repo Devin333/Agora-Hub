@@ -9,6 +9,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from qdrant_client import QdrantClient, models
 
+from infrastructure.storage.vector.connection import connect_qdrant
 from infrastructure.storage.vector.embeddings import EmbeddingModel, embedding_model_from_env
 from infrastructure.storage.vector.models import (
     VectorCollectionStatus,
@@ -222,7 +223,7 @@ def qdrant_store_from_env(
     values = env if env is not None else os.environ
     vector_size = _vector_size_from_env(values)
     url = values.get("NEWS_QDRANT_URL", DEFAULT_QDRANT_URL)
-    client = QdrantClient(url=url)
+    client = connect_qdrant(url)
     resolved_embedding_model = embedding_model or embedding_model_from_env(env=values, vector_size=vector_size)
     return QdrantVectorStore(client, embedding_model=resolved_embedding_model, vector_size=vector_size)
 

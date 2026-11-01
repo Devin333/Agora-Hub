@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from urllib.error import HTTPError
 
@@ -7,10 +8,12 @@ from backend.foundation.models.source import SourceDefinition
 from infrastructure.external.sources import (
     ARXIV_API_URL,
     ArxivConnector,
+    ArxivRequestPacer,
     ArxivSourceConnector,
     DomainRateLimiter,
     RobotsDisallowedError,
     SourceFetchPolicy,
+    SourceRateLimitExceededError,
 )
 from infrastructure.external.sources.fetch_policy import fetch_attempts
 
@@ -309,3 +312,114 @@ def _source(*, metadata: dict[str, object] | None = None) -> SourceDefinition:
         language="en",
         metadata=metadata or {},
     )
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def test_arxiv_pacer_spaces_requests_to_one_host_in_arrival_order() -> None:
+    clock = _ManualClock()
+    pacer = ArxivRequestPacer(min_interval_seconds=3.0, max_wait_seconds=9.0, clock=clock, sleep=clock.sleep)
+
+    for _ in range(3):
+        pacer.wait_turn(ARXIV_API_URL)
+    pacer.wait_turn("https://arxiv.org/abs/2601.00001")
+
+    assert clock.sleeps == [3.0, 3.0]  # the other host has its own schedule
+
+
+def test_arxiv_pacer_refuses_a_slot_past_its_max_wait_without_reserving_it() -> None:
+    clock = _ManualClock()
+    pacer = ArxivRequestPacer(min_interval_seconds=3.0, max_wait_seconds=5.0, clock=clock, sleep=lambda _: None)
+    pacer.wait_turn(ARXIV_API_URL)
+    pacer.wait_turn(ARXIV_API_URL)  # slot at +3s
+
+    with pytest.raises(SourceRateLimitExceededError) as raised:
+        pacer.wait_turn(ARXIV_API_URL)  # slot at +6s > 5s
+    assert raised.value.retry_after_seconds == 6
+
+    clock.now += 6.0
+    pacer.wait_turn(ARXIV_API_URL)  # the refused slot was not kept
+
+
+def test_arxiv_pacer_refuses_a_wait_longer_than_the_fetch_budget_left() -> None:
+    from infrastructure.external.fetch_deadline import fetch_deadline
+
+    clock = _ManualClock()
+    pacer = ArxivRequestPacer(min_interval_seconds=3.0, max_wait_seconds=9.0, clock=clock, sleep=clock.sleep)
+    pacer.wait_turn(ARXIV_API_URL)
+
+    with fetch_deadline(1.0), pytest.raises(SourceRateLimitExceededError):
+        pacer.wait_turn(ARXIV_API_URL)
+
+
+def test_arxiv_api_fetch_is_paced_and_not_gated_by_robots(monkeypatch) -> None:
+    """arxiv.org's robots.txt disallows every path; the API follows its own terms instead."""
+
+    class Headers:
+        def get_content_type(self):
+            return "application/atom+xml"
+
+    class Response:
+        headers = Headers()
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, size):
+            return ARXIV_FIXTURE.encode("utf-8")
+
+    opened: list[str] = []
+
+    def fake_open_request(request, policy):
+        opened.append(request.full_url)
+        return Response()
+
+    def refuse_robots(url, policy):
+        if policy.respect_robots:
+            raise AssertionError(f"robots.txt consulted for the arXiv API: {url}")
+
+    waits: list[str] = []
+
+    class RecordingPacer:
+        max_wait_seconds = 9.0
+
+        def wait_turn(self, url: str) -> None:
+            waits.append(url)
+
+    monkeypatch.setattr("infrastructure.external.sources.arxiv.open_request_with_fetch_policy", fake_open_request)
+    monkeypatch.setattr("infrastructure.external.sources.arxiv.ensure_robots_allowed", refuse_robots)
+
+    items, errors = ArxivConnector(pacer=RecordingPacer()).fetch(_source(), query="cat:cs.AI", limit=1)
+
+    assert errors == [] and len(items) == 1
+    assert waits == opened and len(opened) == 1
+
+
+def test_non_arxiv_host_through_the_arxiv_connector_still_honors_robots(monkeypatch) -> None:
+    checked: list[bool] = []
+
+    def record_robots(url, policy):
+        checked.append(policy.respect_robots)
+        raise ValueError("robots.txt disallows")
+
+    monkeypatch.setattr("infrastructure.external.sources.arxiv.ensure_robots_allowed", record_robots)
+    mirror = replace(_source(), url="https://arxiv-mirror.example.org/api/query")
+
+    ArxivConnector().fetch(mirror, query="cat:cs.AI", limit=1)
+
+    assert checked == [True]

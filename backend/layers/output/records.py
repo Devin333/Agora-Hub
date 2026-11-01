@@ -140,7 +140,7 @@ class OutputSourceHealth:
 def render_output_report_markdown(report: OutputReport) -> str:
     lines = [f"# {report.title}", ""]
     for section in report.sections:
-        lines.extend([f"## {section['title']}", str(section["content"]), ""])
+        lines.extend([f"## {section['title']}", str(section.get("content") or ""), ""])
     if report.source_urls:
         lines.extend(["## Sources", *[f"- {url}" for url in report.source_urls], ""])
     return "\n".join(lines)

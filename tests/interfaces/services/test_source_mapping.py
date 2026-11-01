@@ -105,12 +105,14 @@ def test_source_mapping_projects_definition_and_policy_without_shared_dto() -> N
     assert mapped_policy.retry_times == 1
     assert mapped_policy.retry_on_status_codes == (429, 503)
 
+    # The egress guard enforces allowed_domains and allowed_private_networks on
+    # every hop, so both directions of the mapping must carry them unchanged.
     business_policy_fields = {field.name for field in fields(policy)}
-    infrastructure_policy_fields = {field.name for field in fields(infra_policy)}
-    assert business_policy_fields - infrastructure_policy_fields == {"allowed_domains"}
-    assert infrastructure_policy_fields - business_policy_fields == set()
-    assert policy.allowed_domains == ("example.com",)
-    assert mapped_policy.allowed_domains == ()
+    infrastructure_policy_fields = {field.name for field in fields(infra_policy) if field.init}
+    assert business_policy_fields == infrastructure_policy_fields
+    assert infra_policy.allowed_domains == ("example.com",)
+    assert mapped_policy.allowed_domains == ("example.com",)
+    assert mapped_policy == policy
 
 
 def test_source_mapping_projects_raw_items_without_losing_lineage() -> None:

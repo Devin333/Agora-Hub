@@ -285,23 +285,38 @@ class LLMStreamAccumulator:
             if not tool_name:
                 continue
             raw_arguments = str(raw.get("arguments") or "{}")
+            provider_tool_call_id = (
+                str(raw["provider_tool_call_id"])
+                if raw.get("provider_tool_call_id")
+                else None
+            )
+            argument_error: str | None = None
             try:
                 arguments = json.loads(raw_arguments)
-            except Exception as exc:
-                raise ValueError("streaming tool call arguments are not valid JSON") from exc
-            if not isinstance(arguments, dict):
-                raise ValueError("streaming tool call arguments must be a JSON object")
+            except json.JSONDecodeError as exc:
+                argument_error = f"tool call arguments are not valid JSON: {exc.msg}"
+            else:
+                if not isinstance(arguments, dict):
+                    argument_error = "tool call arguments must be a JSON object"
+            if argument_error is not None:
+                # Malformed arguments reject only this call; its siblings stay usable.
+                self._tool_calls.append(
+                    LLMToolCall.with_invalid_arguments(
+                        tool_call_id=str(raw["tool_call_id"]),
+                        tool_name=tool_name,
+                        raw_arguments=raw_arguments,
+                        error=argument_error,
+                        provider_tool_call_id=provider_tool_call_id,
+                    )
+                )
+                continue
             self._tool_calls.append(
                 LLMToolCall(
                     tool_call_id=str(raw["tool_call_id"]),
                     tool_name=tool_name,
                     arguments=arguments,
                     raw_arguments=raw_arguments,
-                    provider_tool_call_id=(
-                        str(raw["provider_tool_call_id"])
-                        if raw.get("provider_tool_call_id")
-                        else None
-                    ),
+                    provider_tool_call_id=provider_tool_call_id,
                 )
             )
         self._tool_call_deltas.clear()

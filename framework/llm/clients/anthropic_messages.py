@@ -23,7 +23,11 @@ from framework.llm.clients.openai_compatible import (
     LLMRetryPolicy,
     Sleep,
 )
-from framework.llm.clients.tool_adapters import LLMToolSchemaError, openai_tool_name_map
+from framework.llm.clients.tool_adapters import (
+    LLMToolSchemaError,
+    decode_tool_call_arguments,
+    openai_tool_name_map,
+)
 from framework.llm.context.anthropic import AnthropicRequestError, build_anthropic_messages_payload
 from framework.llm.models import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall, TokenUsage
 from framework.llm.models.reasoning import ReasoningSetting
@@ -291,7 +295,8 @@ class AnthropicMessagesClient:
         self._raise_for_stop_reason(stop_reason, attempts=attempts)
         text, tool_calls = _content(message.get("content") or [], request)
         structured_output = None
-        if contract is not None:
+        # A tool-call turn is not terminal: its structured answer comes later.
+        if contract is not None and not tool_calls:
             structured_output = self._structured_output(text, contract=contract, attempts=attempts, projection=projection)
         return LLMResponse(
             content=text,
@@ -378,20 +383,16 @@ class AnthropicMessagesClient:
             block = dict(blocks[index])
             partial = block.pop("_partial_json", None)
             if block.get("type") == "tool_use" and partial:
-                try:
-                    block["input"] = json.loads(partial)
-                except json.JSONDecodeError as exc:
-                    raise LLMProviderError(
-                        f"{self.provider} streaming tool call arguments are not valid JSON",
-                        provider=self.provider,
-                        model=self.model,
-                        error_type="schema_error",
-                        retryable=False,
-                    ) from exc
+                arguments, argument_error = decode_tool_call_arguments(partial)
+                block["input"] = arguments
+                if argument_error is not None:
+                    block[_RAW_ARGUMENTS_KEY] = partial
+                    block[_ARGUMENT_ERROR_KEY] = argument_error
             content.append(block)
         text, tool_calls = _content(content, request)
         structured_output = None
-        if contract is not None:
+        # A tool-call turn is not terminal: its structured answer comes later.
+        if contract is not None and not tool_calls:
             structured_output = self._structured_output(text, contract=contract, attempts=1, projection=projection)
         for tool_call in tool_calls:
             yield LLMStreamEvent(
@@ -590,6 +591,10 @@ def _ineligible(contract: StructuredOutputContract, message: str, reason: str) -
     )
 
 
+_RAW_ARGUMENTS_KEY = "_raw_arguments"
+_ARGUMENT_ERROR_KEY = "_argument_error"
+
+
 def _content(blocks: list[Any], request: LLMRequest) -> tuple[str, list[LLMToolCall]]:
     reverse_names = {safe: original for original, safe in openai_tool_name_map(request.tools).items()} if request.tools else {}
     text_parts: list[str] = []
@@ -603,12 +608,33 @@ def _content(blocks: list[Any], request: LLMRequest) -> tuple[str, list[LLMToolC
         elif kind == "tool_use":
             name = str(block.get("name") or "")
             arguments = block.get("input")
+            tool_call_id = str(block.get("id") or "")
+            argument_error = block.get(_ARGUMENT_ERROR_KEY)
+            if argument_error is None and not isinstance(arguments, dict):
+                argument_error = "tool call arguments must be a JSON object"
+            if argument_error is not None:
+                # Malformed arguments reject only this call; its siblings stay usable.
+                raw_arguments = block.get(_RAW_ARGUMENTS_KEY)
+                tool_calls.append(
+                    LLMToolCall.with_invalid_arguments(
+                        tool_call_id=tool_call_id,
+                        tool_name=reverse_names.get(name, name),
+                        raw_arguments=(
+                            str(raw_arguments)
+                            if raw_arguments is not None
+                            else json.dumps(arguments, ensure_ascii=False, default=str)
+                        ),
+                        error=str(argument_error),
+                        provider_tool_call_id=tool_call_id or None,
+                    )
+                )
+                continue
             tool_calls.append(
                 LLMToolCall(
-                    tool_call_id=str(block.get("id") or ""),
+                    tool_call_id=tool_call_id,
                     tool_name=reverse_names.get(name, name),
-                    arguments=dict(arguments) if isinstance(arguments, dict) else {},
-                    provider_tool_call_id=str(block.get("id") or "") or None,
+                    arguments=dict(arguments),
+                    provider_tool_call_id=tool_call_id or None,
                 )
             )
     return "".join(text_parts), tool_calls

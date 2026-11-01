@@ -56,6 +56,8 @@ def to_infrastructure_fetch_policy(
         rate_limit_per_domain_per_minute=policy.rate_limit_per_domain_per_minute,
         retry_times=policy.retry_times,
         retry_on_status_codes=tuple(policy.retry_on_status_codes),
+        allowed_domains=tuple(policy.allowed_domains),
+        allowed_private_networks=tuple(policy.allowed_private_networks),
     )
 
 
@@ -73,6 +75,8 @@ def to_business_fetch_policy(
         rate_limit_per_domain_per_minute=policy.rate_limit_per_domain_per_minute,
         retry_times=policy.retry_times,
         retry_on_status_codes=tuple(policy.retry_on_status_codes),
+        allowed_domains=tuple(policy.allowed_domains),
+        allowed_private_networks=tuple(policy.allowed_private_networks),
     )
 
 

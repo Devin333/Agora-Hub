@@ -1,17 +1,30 @@
 from __future__ import annotations
 
+import time
 from collections import defaultdict, deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone as _tz
+from email.utils import parsedate_to_datetime
 from math import ceil
 from threading import Lock
 from typing import Any, Callable, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 
 from framework.shared.errors import BoundaryViolationError
+from infrastructure.external.egress import (
+    EgressPolicy,
+    TooManyRedirectsError,
+    open_guarded,
+)
+from infrastructure.external.fetch_deadline import (
+    FetchDeadlineExceeded,
+    deadline_passed,
+    fetch_deadline,
+    remaining_seconds,
+)
 from infrastructure.external.sources.models import SourceDefinition
 
 
@@ -34,13 +47,6 @@ class UnsupportedContentTypeError(ValueError):
         super().__init__(f"unsupported content type: {content_type}; supported: {supported}")
 
 
-class TooManyRedirectsError(ValueError):
-    def __init__(self, url: str, max_redirects: int) -> None:
-        self.url = url
-        self.max_redirects = max_redirects
-        super().__init__(f"source fetch exceeded max_redirects={max_redirects}: {url}")
-
-
 class RobotsDisallowedError(ValueError):
     def __init__(self, url: str, robots_url: str, user_agent: str) -> None:
         self.url = url
@@ -59,6 +65,12 @@ class SourceFetchPolicy:
     rate_limit_per_domain_per_minute: int | None = None
     retry_times: int = 2
     retry_on_status_codes: tuple[int, ...] = DEFAULT_RETRY_ON_STATUS_CODES
+    # timeout_seconds is the budget for the whole fetch: robots.txt, every
+    # redirect hop and every retry. Empty allowed_domains means any public host;
+    # non-public addresses need an explicit allowed_private_networks entry.
+    allowed_domains: tuple[str, ...] = ()
+    allowed_private_networks: tuple[str, ...] = ()
+    _egress_policy: EgressPolicy = field(init=False, repr=False, compare=False, default=EgressPolicy())
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -81,6 +93,18 @@ class SourceFetchPolicy:
             if status_code < 100 or status_code > 599:
                 raise ValueError("retry_on_status_codes must contain valid HTTP status codes")
         object.__setattr__(self, "retry_on_status_codes", retry_on_status_codes)
+        egress_policy = EgressPolicy(
+            allowed_domains=tuple(self.allowed_domains),
+            allowed_private_networks=tuple(self.allowed_private_networks),
+            max_redirects=int(self.max_redirects),
+        )
+        object.__setattr__(self, "_egress_policy", egress_policy)
+        object.__setattr__(self, "allowed_domains", egress_policy.allowed_domains)
+        object.__setattr__(self, "allowed_private_networks", egress_policy.allowed_private_networks)
+
+    @property
+    def egress_policy(self) -> EgressPolicy:
+        return self._egress_policy
 
 
 @dataclass(frozen=True)
@@ -159,16 +183,66 @@ class DomainRateLimiter:
 
 
 def run_with_fetch_retries(operation: Callable[[], T], policy: SourceFetchPolicy) -> T:
+    """Run ``operation`` with paced retries, all inside one ``timeout_seconds`` budget.
+
+    Before each retry the loop waits: the upstream's ``Retry-After`` when it
+    sent one, otherwise a short exponential backoff. A wait that does not fit
+    in the remaining budget ends the retries, since retrying early would only
+    hit the same rate limit or overload again.
+    """
+
     attempts = 0
-    while True:
-        attempts += 1
-        try:
-            return operation()
-        except Exception as exc:
-            decision = decide_source_fetch_retry(exc, policy, attempts=attempts)
-            _set_retry_state(exc, decision)
-            if not decision.should_retry:
-                raise
+    with fetch_deadline(policy.timeout_seconds):
+        while True:
+            attempts += 1
+            try:
+                return operation()
+            except Exception as exc:
+                decision = decide_source_fetch_retry(exc, policy, attempts=attempts)
+                wait_seconds = retry_wait_seconds(exc, attempts) if decision.should_retry else 0.0
+                remaining = remaining_seconds()
+                if decision.should_retry and (deadline_passed() or (remaining is not None and wait_seconds >= remaining)):
+                    decision = replace(decision, should_retry=False)
+                _set_retry_state(exc, decision)
+                if not decision.should_retry:
+                    raise
+                if wait_seconds > 0:
+                    time.sleep(wait_seconds)
+
+
+RETRY_BACKOFF_BASE_SECONDS = 0.1
+RETRY_BACKOFF_MAX_SECONDS = 1.0
+_RETRY_AFTER_STATUS_CODES = frozenset({429, 503})
+
+
+def retry_wait_seconds(exc: Exception, attempts: int) -> float:
+    """Seconds to wait before retry number ``attempts`` (1 = the first retry)."""
+
+    retry_after = retry_after_seconds(exc)
+    if retry_after is not None:
+        return retry_after
+    return min(RETRY_BACKOFF_MAX_SECONDS, RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempts - 1)))
+
+
+def retry_after_seconds(exc: Exception) -> float | None:
+    """The ``Retry-After`` of a 429/503 response, in seconds (delta or HTTP date)."""
+
+    if not isinstance(exc, HTTPError) or exc.code not in _RETRY_AFTER_STATUS_CODES:
+        return None
+    headers = getattr(exc, "headers", None)
+    value = headers.get("Retry-After") if headers is not None else None
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.isdigit():
+        return float(text)
+    try:
+        retry_at = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
 
 
 def decide_source_fetch_retry(
@@ -183,8 +257,9 @@ def decide_source_fetch_retry(
     status_code = exc.code if isinstance(exc, HTTPError) else None
     if isinstance(exc, HTTPError):
         retryable = exc.code in policy.retry_on_status_codes
-    elif isinstance(exc, BoundaryViolationError) or isinstance(exc.__cause__, BoundaryViolationError):
-        # A target the outbound policy refused stays refused on every attempt.
+    elif isinstance(exc, FetchDeadlineExceeded) or _is_refused_target(exc):
+        # The budget is spent, or the outbound policy refused the target: a
+        # refused target stays refused on every attempt.
         retryable = False
     elif _is_timeout_exception(exc):
         retryable = True
@@ -203,8 +278,11 @@ def decide_source_fetch_retry(
     )
 
 
-def is_retryable_fetch_exception(exc: Exception, policy: SourceFetchPolicy) -> bool:
-    return decide_source_fetch_retry(exc, policy).retryable
+def _is_refused_target(exc: BaseException) -> bool:
+    # Both outbound guards (egress for source fetches, the pinned transport for
+    # model and research endpoints) raise a BoundaryViolationError subclass,
+    # sometimes wrapped (URLError) by the caller.
+    return isinstance(exc, BoundaryViolationError) or isinstance(exc.__cause__, BoundaryViolationError)
 
 
 def fetch_attempts(exc: Exception) -> int | None:
@@ -230,8 +308,9 @@ def ensure_supported_content_type(
 
 
 def open_request_with_fetch_policy(request: Request, policy: SourceFetchPolicy) -> Any:
-    opener = build_opener(_RedirectLimitHandler(policy.max_redirects))
-    return opener.open(request, timeout=policy.timeout_seconds)
+    """Every source fetch, robots.txt check and redirect goes through the egress guard."""
+
+    return open_guarded(request, policy.egress_policy, timeout_seconds=policy.timeout_seconds)
 
 
 def effective_fetch_policy(policy: SourceFetchPolicy, source: SourceDefinition) -> SourceFetchPolicy:
@@ -274,19 +353,6 @@ def ensure_robots_allowed(
     parser.parse(body.decode("utf-8", errors="replace").splitlines())
     if not parser.can_fetch(policy.user_agent, url):
         raise RobotsDisallowedError(url, robots_url, policy.user_agent)
-
-
-class _RedirectLimitHandler(HTTPRedirectHandler):
-    def __init__(self, max_redirects: int) -> None:
-        super().__init__()
-        self._max_redirects = max_redirects
-        self._redirect_count = 0
-
-    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
-        self._redirect_count += 1
-        if self._redirect_count > self._max_redirects:
-            raise TooManyRedirectsError(newurl, self._max_redirects)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _set_retry_state(exc: Exception, decision: SourceFetchRetryDecision) -> None:

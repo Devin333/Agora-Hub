@@ -4,6 +4,7 @@ from framework.agent.models.action import (
     MAX_DELEGATE_BATCH_TASKS,
     AgentAction,
     AgentActionType,
+    AgentToolRequest,
     DelegateBatchCandidate,
     DelegateBatchProposal,
 )

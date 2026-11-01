@@ -29,6 +29,9 @@ from infrastructure.external.sources.fetch_policy import (
 )
 from infrastructure.external.sources.models import SourceDefinition
 
+# The egress guard refuses loopback by default; these tests serve locally.
+LOOPBACK = ("127.0.0.0/8", "::1/128")
+
 
 UTC = timezone.utc
 RSS_FIXTURE = """<?xml version="1.0"?>
@@ -82,14 +85,14 @@ def test_open_request_with_fetch_policy_enforces_redirect_limit() -> None:
         request = Request(f"http://127.0.0.1:{server.server_port}/start")
 
         with pytest.raises(TooManyRedirectsError) as exc_info:
-            open_request_with_fetch_policy(request, SourceFetchPolicy(max_redirects=1))
+            open_request_with_fetch_policy(request, SourceFetchPolicy(max_redirects=1, allowed_private_networks=LOOPBACK))
 
         assert exc_info.value.max_redirects == 1
         assert exc_info.value.url.endswith("/done")
 
         with open_request_with_fetch_policy(
             Request(f"http://127.0.0.1:{server.server_port}/start"),
-            SourceFetchPolicy(max_redirects=2),
+            SourceFetchPolicy(max_redirects=2, allowed_private_networks=LOOPBACK),
         ) as response:
             assert response.read() == b"done"
     finally:

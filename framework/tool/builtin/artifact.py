@@ -11,7 +11,13 @@ from framework.agent.artifacts.paths import (
 )
 from framework.tool.models.definition import ToolDefinition
 from framework.tool.registry.registry import ToolRegistry
+from framework.tool.runtime.errors import effect_not_applied_on
 from framework.shared.graph_identity import GraphExecutionIdentity
+
+# Loads are read whole into memory and returned to the model, so a file
+# bigger than the tool's result limit is refused before it is read.
+MAX_LOAD_BYTES = 1_000_000
+SEARCH_PREVIEW_BYTES = 200_000
 
 
 def register_artifact_tools(
@@ -82,13 +88,21 @@ def register_artifact_tools(
 
 
 def _write_artifact(artifact_manager: Any, run_id: str, args: dict[str, Any]) -> dict[str, Any]:
+    # Path errors keep their ArtifactPathError type (callers and MCP envelopes
+    # key on it); the definition lists it in no_effect_error_types.
     validate_artifact_path_segment(run_id, field="run_id")
     relative_path = validate_relative_artifact_path(
         str(args["path"]),
         field="artifact path",
     )
-    content = args["content"]
-    content_type = str(args.get("content_type") or _content_type_for(content))
+    with effect_not_applied_on():
+        content = args["content"]
+        content_type = str(args.get("content_type") or _content_type_for(content))
+        if content_type == "application/json":
+            try:
+                json.dumps(content, allow_nan=False)
+            except ValueError as exc:
+                raise ValueError("JSON artifact content must not contain NaN or Infinity") from exc
     if content_type == "text/plain":
         target = artifact_manager.write_text(run_id, relative_path, str(content))
     else:
@@ -103,8 +117,11 @@ def _load_artifact(artifact_manager: Any, run_id: str, args: dict[str, Any]) -> 
     )
     target = _artifact_path(artifact_manager, run_id, relative_path)
     content_type = str(args.get("content_type") or _content_type_for_path(target))
-    text = target.read_text(encoding="utf-8")
-    content = json.loads(text) if content_type == "application/json" else text
+    text = _read_artifact_text(target, relative_path)
+    try:
+        content = json.loads(text) if content_type == "application/json" else text
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"artifact {relative_path} is not valid JSON: {exc.msg} at line {exc.lineno}") from exc
     payload = _artifact_payload(relative_path, content_type, target)
     payload["content"] = content
     return payload
@@ -129,7 +146,12 @@ def _search_artifacts(artifact_manager: Any, run_id: str, args: dict[str, Any]) 
     matches = []
     if not root.exists():
         return {"match_count": 0, "artifacts": []}
-    paths = [root] if root.is_file() else sorted(path for path in root.rglob("*") if path.is_file())
+    paths = [root] if root.is_file() else sorted(
+        path
+        for path in root.rglob("*")
+        # Dot entries are runtime bookkeeping (write locks, staging files), not artifacts.
+        if path.is_file() and not any(part.startswith(".") for part in path.relative_to(run_dir).parts)
+    )
     for candidate in paths:
         relative_path = candidate.relative_to(run_dir).as_posix()
         path = resolve_artifact_descendant(
@@ -168,8 +190,24 @@ def _artifact_match_reason(path: Path, relative_path: str, query: str) -> str | 
         return "path"
     if not _is_text_artifact(path):
         return None
-    text = path.read_text(encoding="utf-8", errors="replace")[:200_000]
+    with path.open("rb") as handle:
+        preview = handle.read(SEARCH_PREVIEW_BYTES)
+    text = preview.decode("utf-8", errors="replace")
     return "content" if query in text.casefold() else None
+
+
+def _read_artifact_text(target: Path, relative_path: str) -> str:
+    """Read a loadable artifact, naming it by its run-relative path in errors."""
+
+    if not target.is_file():
+        raise FileNotFoundError(f"artifact not found: {relative_path}")
+    size = target.stat().st_size
+    if size > MAX_LOAD_BYTES:
+        raise ValueError(f"artifact {relative_path} is {size} bytes; artifact.load reads at most {MAX_LOAD_BYTES}")
+    try:
+        return target.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"artifact {relative_path} is not UTF-8 text") from exc
 
 
 def _is_text_artifact(path: Path) -> bool:
