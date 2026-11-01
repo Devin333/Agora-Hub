@@ -454,7 +454,10 @@ class LegacySourceDescriptor:
 
     @property
     def source_ref(self) -> str:
-        return f"{self.source_store}:{self.relative_path.replace('\\', '/')}"
+        # Built outside the f-string: a backslash in an f-string expression
+        # is Python 3.12+ syntax, and the project supports 3.11.
+        relative_path = self.relative_path.replace("\\", "/")
+        return f"{self.source_store}:{relative_path}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
