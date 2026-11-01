@@ -4,11 +4,14 @@ Catalog connections take their address, window, output limit, reasoning
 style and structured-output capability from the operator catalog; custom
 connections take them from the record. Both end up as one ``ConnectionSpec``,
 which is what window admission checks and what an endpoint is built from.
+Unsaved drafts resolve through the same functions, so a preview matches what
+the saved connection will be admitted with.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from framework.llm.clients import LLMEndpoint, LLMWireProtocol
 from framework.llm.models.reasoning import ReasoningEffort, ReasoningSetting, ReasoningWire
@@ -17,6 +20,7 @@ from interfaces.services.model_connections.catalog import (
     CatalogProvider,
     CustomProvider,
     ModelProviderCatalog,
+    Provider,
 )
 from interfaces.services.model_connections.errors import (
     ModelConnectionError,
@@ -75,22 +79,51 @@ class ConnectionSpec:
         )
 
 
+class ConnectionSettings(Protocol):
+    """The fields that decide what a connection calls, shared by records and drafts."""
+
+    @property
+    def model(self) -> str: ...
+    @property
+    def reasoning_effort(self) -> ReasoningEffort | None: ...
+    @property
+    def base_url(self) -> str | None: ...
+    @property
+    def context_window_tokens(self) -> int | None: ...
+    @property
+    def max_output_tokens(self) -> int | None: ...
+    @property
+    def reasoning_parameter(self) -> ReasoningWire | None: ...
+    @property
+    def structured_output(self) -> str | None: ...
+
+
 def resolve_connection_spec(record: ModelConnectionRecord, catalog: ModelProviderCatalog) -> ConnectionSpec:
     """Apply the catalog to ``record``; raise ``model_connection_withdrawn`` if it no longer can be."""
 
     provider = catalog.provider(record.provider_id)
+    if provider is None:
+        raise connection_withdrawn()
+    return spec_for(provider, record)
+
+
+def spec_for(provider: Provider, settings: ConnectionSettings) -> ConnectionSpec:
+    """The spec ``settings`` resolve to under ``provider``.
+
+    Stored connections and unsaved drafts both go through here, so a preview
+    of a draft is exactly what the saved connection will be admitted with.
+    """
+
     if isinstance(provider, CatalogProvider):
-        return _catalog_spec(record, provider)
-    if isinstance(provider, CustomProvider):
-        return _custom_spec(record, provider)
-    raise connection_withdrawn()
+        return _catalog_spec(settings, provider)
+    return _custom_spec(settings, provider)
 
 
-def _catalog_spec(record: ModelConnectionRecord, provider: CatalogProvider) -> ConnectionSpec:
-    model = provider.model(record.model)
+def _catalog_spec(settings: ConnectionSettings, provider: CatalogProvider) -> ConnectionSpec:
+    model = provider.model(settings.model)
     if model is None:
         raise connection_withdrawn()
-    effort = record.reasoning_effort
+    effort = settings.reasoning_effort
     if not model.reasoning.offers(effort):
         # The operator withdrew this tier; the model's own default replaces it.
         effort = model.reasoning.default
@@ -109,17 +142,17 @@ def _catalog_spec(record: ModelConnectionRecord, provider: CatalogProvider) -> C
     )
 
 
-def _custom_spec(record: ModelConnectionRecord, provider: CustomProvider) -> ConnectionSpec:
-    wire = record.reasoning_parameter or ReasoningWire.NONE
-    mode = record.structured_output or "none"
+def _custom_spec(settings: ConnectionSettings, provider: CustomProvider) -> ConnectionSpec:
+    wire = settings.reasoning_parameter or ReasoningWire.NONE
+    mode = settings.structured_output or "none"
     if (
-        record.base_url is None
-        or record.context_window_tokens is None
+        settings.base_url is None
+        or settings.context_window_tokens is None
         or (wire is not ReasoningWire.NONE and not provider.offers_reasoning_parameter(wire))
         or not provider.offers_structured_output(mode)
     ):
         raise connection_withdrawn()
-    effort: ReasoningEffort | None = record.reasoning_effort
+    effort: ReasoningEffort | None = settings.reasoning_effort
     if effort is not None and effort not in wire.offered_efforts():
         effort = None
     return ConnectionSpec(
@@ -127,14 +160,15 @@ def _custom_spec(record: ModelConnectionRecord, provider: CustomProvider) -> Con
         provider_label=provider.label,
         custom=True,
         protocol=provider.protocol,
-        base_url=record.base_url,
-        model=record.model,
-        model_label=record.model,
-        context_window_tokens=record.context_window_tokens,
-        max_output_tokens=record.max_output_tokens,
+        base_url=settings.base_url,
+        model=settings.model,
+        model_label=settings.model,
+        context_window_tokens=settings.context_window_tokens,
+        max_output_tokens=settings.max_output_tokens,
+        # A custom endpoint's default tier is not known; it is budgeted as medium.
         reasoning=ReasoningSetting(wire=wire, effort=effort),
         structured_output=provider.structured_output_capability(mode),
     )
 
 
-__all__ = ["ConnectionSpec", "resolve_connection_spec"]
+__all__ = ["ConnectionSettings", "ConnectionSpec", "resolve_connection_spec", "spec_for"]

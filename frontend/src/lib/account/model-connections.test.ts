@@ -5,6 +5,7 @@ import {
   deleteModelConnection,
   discoverModels,
   fetchModelConnections,
+  previewModelConnection,
   updateModelConnection,
   verifyModelConnection,
 } from "./model-connections"
@@ -14,7 +15,6 @@ const view = {
   connections: [],
   assignments: { answer: null, evidence_summary: null, section_navigation: null, candidate_generation: null },
   purposes: [{ id: "answer", label: "回答", requirement: { inputTokens: 100, outputTokens: 10, structuredOutput: false } }],
-  reasoningOutputAllowance: { default: 8192, off: 0 },
   catalog: { providers: [] },
 }
 
@@ -62,6 +62,21 @@ describe("model connections client", () => {
     expect(lastCall(fetch)).toEqual({ path: "/api/v1/account/model-connections/mc%2F..%2Fx?expectedRevision=4", method: "DELETE", body: undefined })
     await verifyModelConnection("mc-0123456789abcdef")
     expect(lastCall(fetch)).toEqual({ path: "/api/v1/account/model-connections/mc-0123456789abcdef/verify", method: "POST", body: {} })
+  })
+
+  it("previews a draft with its settings only, never the key", async () => {
+    const preview = {
+      contextWindowTokens: 1_000_000, maxOutputTokens: 384_000, effectiveReasoningEffort: "high", structuredOutput: "json_object",
+      fits: { answer: { fits: true, requiredWindow: 359_923, reason: null } },
+    }
+    const fetch = respond({ success: true, data: preview })
+
+    await expect(previewModelConnection({ providerId: "deepseek", model: "deepseek-flash", apiKey: "sk-secret" })).resolves.toEqual(preview)
+    expect(lastCall(fetch)).toEqual({
+      path: "/api/v1/account/model-connections/preview",
+      method: "POST",
+      body: { providerId: "deepseek", model: "deepseek-flash" },
+    })
   })
 
   it("assigns purposes and clears one with null", async () => {

@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from framework.llm.models.reasoning import ReasoningEffort, reasoning_output_allowance
 from interfaces.services.model_connections.catalog import ModelProviderCatalog
 from interfaces.services.model_connections.cipher import CredentialCipher
 from interfaces.services.model_connections.errors import ModelConnectionError
@@ -64,13 +63,6 @@ def account_view(
             {"id": purpose.value, "label": purpose.label, "requirement": requirements[purpose].to_dict()}
             for purpose in ModelPurpose
         ],
-        # Output each tier reserves for reasoning, so a form can show whether
-        # a draft fits a purpose before it is saved; "default" is the
-        # provider's own tier, used when no effort is chosen.
-        "reasoningOutputAllowance": {
-            "default": reasoning_output_allowance(None),
-            **{effort.value: reasoning_output_allowance(effort) for effort in ReasoningEffort},
-        },
         "catalog": catalog.to_dict(),
     }
 
@@ -117,10 +109,29 @@ def _connection_view(
         "updatedAt": format_timestamp(record.updated_at),
         "verifiedAt": format_timestamp(record.verified_at) if record.verified_at and key_usable else None,
         "purposes": [purpose.value for purpose in account.purposes_of(record.connection_id)],
-        "fits": {
-            purpose.value: _fit(spec, purpose, requirements[purpose]) for purpose in ModelPurpose
-        },
+        "fits": purpose_fits(spec, requirements),
     }
+
+
+def draft_preview_view(spec: ConnectionSpec, requirements: Mapping[ModelPurpose, PurposeRequirement]) -> dict[str, Any]:
+    """What an unsaved draft would be admitted with: its limits and each purpose's fit."""
+    return {
+        "contextWindowTokens": spec.context_window_tokens,
+        "maxOutputTokens": spec.max_output_tokens,
+        # The tier the provider will apply, including its own default when
+        # none is chosen; this is what the reasoning budget is sized for.
+        "effectiveReasoningEffort": (
+            spec.reasoning.effective_effort.value if spec.reasoning.effective_effort is not None else None
+        ),
+        "structuredOutput": spec.structured_output.mode,
+        "fits": purpose_fits(spec, requirements),
+    }
+
+
+def purpose_fits(
+    spec: ConnectionSpec | None, requirements: Mapping[ModelPurpose, PurposeRequirement]
+) -> dict[str, dict[str, Any]]:
+    return {purpose.value: _fit(spec, purpose, requirements[purpose]) for purpose in ModelPurpose}
 
 
 def _fit(spec: ConnectionSpec | None, purpose: ModelPurpose, requirement: PurposeRequirement) -> dict[str, Any]:
@@ -134,4 +145,4 @@ def _fit(spec: ConnectionSpec | None, purpose: ModelPurpose, requirement: Purpos
     }
 
 
-__all__ = ["ModelConnectionStatus", "account_view", "connection_status"]
+__all__ = ["ModelConnectionStatus", "account_view", "connection_status", "draft_preview_view", "purpose_fits"]

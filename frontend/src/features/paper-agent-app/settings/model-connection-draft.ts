@@ -6,13 +6,13 @@ import type {
   ModelConnectionInput,
   ModelConnectionsView,
   ModelProvider,
-  ModelPurpose,
   ReasoningEffort,
 } from "@/lib/account/model-connections"
 
 // Form state of one model connection and the rules the form shares with the
-// API: which fields a provider takes, when the key must be typed again, and
-// whether a draft would fit a purpose before it is saved.
+// API: which fields a provider takes and when the key must be typed again.
+// Whether a draft fits a purpose is asked of the API (usePurposeFitPreview),
+// never computed here.
 
 export type ConnectionDraft = {
   providerId: string
@@ -148,59 +148,9 @@ export function draftInput(provider: ModelProvider, draft: ConnectionDraft): Mod
   return input
 }
 
-export type DraftLimits = {
-  contextWindowTokens: number | null
-  maxOutputTokens: number | null
-  effort: ReasoningEffort | null
-  reasoningActive: boolean
-  structuredOutput: boolean
-}
-
-/** The window, output ceiling and reasoning tier a draft would be served with. */
-export function draftLimits(provider: ModelProvider | null, draft: ConnectionDraft): DraftLimits {
-  if (!provider) return { contextWindowTokens: null, maxOutputTokens: null, effort: null, reasoningActive: false, structuredOutput: false }
-  if (provider.kind === "catalog") {
-    const model = catalogModel(provider, draft.model)
-    const effort = draft.reasoningEffort || model?.reasoning.default || null
-    return {
-      contextWindowTokens: model?.contextWindowTokens ?? null,
-      maxOutputTokens: model?.maxOutputTokens ?? null,
-      effort,
-      reasoningActive: model ? model.reasoning.parameter !== "none" && effort !== "off" : false,
-      structuredOutput: model?.structuredOutput ?? false,
-    }
-  }
-  const effort = draft.reasoningEffort || null
-  return {
-    contextWindowTokens: positiveInteger(draft.contextWindowTokens),
-    maxOutputTokens: positiveInteger(draft.maxOutputTokens),
-    effort,
-    reasoningActive: draft.reasoningParameter !== "none" && effort !== "off",
-    structuredOutput: draft.structuredOutput === "json_object",
-  }
-}
-
-export type DraftFit = { fits: boolean; requiredWindow: number | null; reason: "structured_output" | "window" | "unknown" | null }
-
-/**
- * Whether a draft would pass the API's admission for a purpose. The same
- * arithmetic as PurposeRequirement.required_window: the prompt, the visible
- * answer, and the output an active reasoning tier reserves, capped by the
- * model's output ceiling.
- */
-export function draftFit(view: ModelConnectionsView, purpose: ModelPurpose, limits: DraftLimits): DraftFit {
-  const requirement = purpose.requirement
-  if (requirement.structuredOutput && !limits.structuredOutput) return { fits: false, requiredWindow: null, reason: "structured_output" }
-  if (limits.contextWindowTokens === null) return { fits: false, requiredWindow: null, reason: "unknown" }
-  const allowance = limits.reasoningActive
-    ? view.reasoningOutputAllowance[limits.effort ?? "default"] ?? view.reasoningOutputAllowance.default ?? 0
-    : 0
-  const requested = requirement.outputTokens + allowance
-  const output = limits.maxOutputTokens !== null ? Math.min(requested, limits.maxOutputTokens) : requested
-  const requiredWindow = requirement.inputTokens + output
-  return requiredWindow <= limits.contextWindowTokens
-    ? { fits: true, requiredWindow, reason: null }
-    : { fits: false, requiredWindow, reason: "window" }
+/** The context window a custom draft states, or null until it is a positive integer. */
+export function draftWindow(draft: ConnectionDraft): number | null {
+  return positiveInteger(draft.contextWindowTokens)
 }
 
 export function isCustom(provider: ModelProvider | null): provider is CustomProvider {

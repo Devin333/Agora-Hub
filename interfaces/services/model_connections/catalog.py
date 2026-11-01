@@ -74,7 +74,9 @@ class CatalogReasoning:
     default: ReasoningEffort | None
 
     def setting(self, effort: ReasoningEffort | None) -> ReasoningSetting:
-        return ReasoningSetting(wire=self.parameter, effort=effort)
+        # The declared default sizes the reasoning budget when no tier is
+        # chosen; it is not sent, the provider applies it on its own.
+        return ReasoningSetting(wire=self.parameter, effort=effort, provider_default=self.default)
 
     def offers(self, effort: ReasoningEffort | None) -> bool:
         return effort is None or effort in self.efforts

@@ -20,7 +20,6 @@ const modelConnections = {
     { id: "section_navigation", label: "章节导航", requirement: { inputTokens: 40_906, outputTokens: 1_500, structuredOutput: false } },
     { id: "candidate_generation", label: "候选生成", requirement: { inputTokens: 64_000, outputTokens: 2_048, structuredOutput: true } },
   ],
-  reasoningOutputAllowance: { default: 8192, off: 0, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 65536 },
   catalog: { providers: [{
     id: "deepseek", label: "DeepSeek 官方", kind: "catalog", protocol: "openai_chat", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-flash",
     models: [{ id: "deepseek-flash", label: "DeepSeek V4.1 Flash", contextWindowTokens: 1_000_000, maxOutputTokens: 384_000, reasoning: { parameter: "deepseek_thinking", efforts: ["off", "low", "high", "max"], default: "high" }, structuredOutput: true }],

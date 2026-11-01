@@ -16,7 +16,7 @@ from typing import Protocol
 from framework.llm.clients import LLMEndpoint
 from framework.llm.clients.openai_compatible import LLMProviderError
 from framework.llm.models import LLMRequest
-from framework.llm.models.reasoning import ReasoningEffort, ReasoningSetting
+from framework.llm.models.reasoning import ReasoningEffort
 from interfaces.services.model_connections.errors import (
     ModelConnectionError,
     credential_rejected,
@@ -106,9 +106,9 @@ def _probe_endpoint(endpoint: LLMEndpoint) -> LLMEndpoint:
     # The probe completion only checks that the model answers; it switches
     # reasoning off where the provider allows so it costs a few tokens and
     # returns within the verification timeout.
-    wire = endpoint.reasoning.wire
-    effort = ReasoningEffort.OFF if ReasoningEffort.OFF in wire.offered_efforts() else None
-    return replace(endpoint, reasoning=ReasoningSetting(wire=wire, effort=effort), connection_ref=None)
+    reasoning = endpoint.reasoning
+    effort = ReasoningEffort.OFF if ReasoningEffort.OFF in reasoning.wire.offered_efforts() else None
+    return replace(endpoint, reasoning=replace(reasoning, effort=effort), connection_ref=None)
 
 
 @contextmanager

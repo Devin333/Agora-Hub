@@ -113,31 +113,47 @@ _DEEPSEEK_EFFORT = {
 
 @dataclass(frozen=True, slots=True)
 class ReasoningSetting:
-    """One connection's reasoning choice; ``effort=None`` sends the provider default."""
+    """One connection's reasoning choice; ``effort=None`` sends the provider default.
+
+    ``provider_default`` is the tier the provider applies when nothing is sent,
+    when that is known (a reviewed catalog entry declares it). It never changes
+    what is sent; it only sizes the output reserved for reasoning, so a model
+    that thinks at ``high`` by default is budgeted as ``high``. Unknown
+    defaults are budgeted as medium.
+    """
 
     wire: ReasoningWire = ReasoningWire.NONE
     effort: ReasoningEffort | None = None
+    provider_default: ReasoningEffort | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "wire", ReasoningWire.parse(self.wire))
-        if self.effort is not None:
-            effort = ReasoningEffort.parse(self.effort)
+        for name in ("effort", "provider_default"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            effort = ReasoningEffort.parse(value)
             if effort not in self.wire.offered_efforts():
                 raise ValueError(f"{self.wire.value} cannot express reasoning effort {effort.value}")
-            object.__setattr__(self, "effort", effort)
+            object.__setattr__(self, name, effort)
+
+    @property
+    def effective_effort(self) -> ReasoningEffort | None:
+        """The tier the provider will actually apply; ``None`` when unknown."""
+        return self.effort if self.effort is not None else self.provider_default
 
     @property
     def active(self) -> bool:
         """Whether the call may spend output tokens on reasoning."""
         if self.wire is ReasoningWire.NONE:
             return False
-        return self.effort is not ReasoningEffort.OFF
+        return self.effective_effort is not ReasoningEffort.OFF
 
     def output_allowance(self) -> int:
         """Extra output tokens reserved for reasoning on top of the visible answer."""
         if not self.active:
             return 0
-        return reasoning_output_allowance(self.effort)
+        return reasoning_output_allowance(self.effective_effort)
 
     def output_tokens(self, requested: int | None, *, ceiling: int | None) -> int | None:
         """The output limit to send for a caller that asked for ``requested`` visible tokens."""

@@ -450,6 +450,62 @@ def test_reasoning_reserves_output_in_the_required_window(tmp_path) -> None:
     assert fits == {"fits": False, "requiredWindow": 49_284, "reason": "model_connection_window_too_small"}
 
 
+def test_an_unchosen_tier_is_budgeted_at_the_models_declared_default(tmp_path) -> None:
+    # deepseek-flash declares default: high. With no effort chosen, nothing is
+    # sent and DeepSeek thinks at high, so the window must hold high's 16384.
+    service = _service(tmp_path)
+    service.create("user-a", _deepseek(), expected_revision=0)
+    service.assign("user-a", {"answer": "mc-0001"}, expected_revision=1)
+
+    fits = _connection(service.view("user-a"), "mc-0001")["fits"]["answer"]
+    endpoint = service.endpoint_for("user-a", ModelPurpose.ANSWER)
+
+    assert fits["requiredWindow"] == 32_000 + 900 + 16_384
+    assert endpoint.reasoning.effort is None
+    assert endpoint.reasoning.effective_effort is ReasoningEffort.HIGH
+    assert endpoint.reasoning.chat_fields() == {}
+
+
+def test_preview_admits_a_draft_exactly_as_saving_would(tmp_path) -> None:
+    service = _service(tmp_path)
+
+    preview = service.preview(_deepseek(api_key=None))
+    service.create("user-a", _deepseek(), expected_revision=0)
+    saved = _connection(service.view("user-a"), "mc-0001")["fits"]
+
+    assert preview["fits"] == saved
+    assert preview["effectiveReasoningEffort"] == "high"
+    assert preview["contextWindowTokens"] == 1_000_000
+    assert preview["structuredOutput"] == "json_object"
+
+
+def test_preview_of_a_custom_draft_reports_each_purpose_without_storing_or_calling(tmp_path) -> None:
+    service = _service(tmp_path, transport=lambda request, timeout: (_ for _ in ()).throw(AssertionError("no call")))
+
+    preview = service.preview(_custom(api_key=None, context_window_tokens=40_000, max_output_tokens=None, reasoning_effort="high"))
+
+    assert preview["fits"]["answer"] == {"fits": False, "requiredWindow": 49_284, "reason": "model_connection_window_too_small"}
+    assert preview["fits"]["section_navigation"]["fits"] is True
+    assert preview["effectiveReasoningEffort"] == "high"
+    assert not (tmp_path / "model-connections.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("draft", "field"),
+    (
+        (_custom(api_key=None, context_window_tokens=None), "contextWindowTokens"),
+        (_custom(api_key=None, base_url=None), "baseUrl"),
+        (_deepseek(api_key=None, reasoning_effort="medium"), "reasoningEffort"),
+    ),
+)
+def test_preview_reports_the_field_a_draft_still_needs(tmp_path, draft, field) -> None:
+    with pytest.raises(ModelConnectionError) as raised:
+        _service(tmp_path).preview(draft)
+
+    assert raised.value.code == "model_connection_invalid"
+    assert raised.value.details == {"field": field}
+
+
 def test_unknown_purpose_is_rejected(tmp_path) -> None:
     service = _service(tmp_path)
     service.create("user-a", _deepseek(), expected_revision=0)

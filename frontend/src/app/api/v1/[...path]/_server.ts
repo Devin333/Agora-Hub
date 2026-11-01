@@ -153,7 +153,7 @@ const FORWARDED_ROUTES: ReadonlyArray<{ pattern: RegExp; methods: ReadonlySet<st
   { pattern: /^\/api\/v1\/account$/, methods: READ_METHODS },
   { pattern: /^\/api\/v1\/account\/model-connections$/, methods: new Set([...READ_METHODS, "POST"]) },
   { pattern: /^\/api\/v1\/account\/model-connections\/assignments$/, methods: new Set(["PUT"]) },
-  { pattern: /^\/api\/v1\/account\/model-connections\/discover$/, methods: new Set(["POST"]) },
+  { pattern: /^\/api\/v1\/account\/model-connections\/(?:discover|preview)$/, methods: new Set(["POST"]) },
   { pattern: new RegExp(`^/api/v1/account/model-connections/${CONNECTION_ID}$`), methods: new Set(["PATCH", "DELETE"]) },
   { pattern: new RegExp(`^/api/v1/account/model-connections/${CONNECTION_ID}/verify$`), methods: new Set(["POST"]) },
   { pattern: /^\/api\/v1\/admin\/accounts$/, methods: new Set([...READ_METHODS, "POST"]) },

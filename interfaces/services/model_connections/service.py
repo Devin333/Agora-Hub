@@ -45,9 +45,9 @@ from interfaces.services.model_connections.migration import new_connection_id
 from interfaces.services.model_connections.probe import ProbeClientFactory, discover_models, verify_endpoint
 from interfaces.services.model_connections.purposes import ModelPurpose, PurposeRequirement
 from interfaces.services.model_connections.records import AccountModelConnections, ModelConnectionRecord
-from interfaces.services.model_connections.resolution import resolve_connection_spec
+from interfaces.services.model_connections.resolution import resolve_connection_spec, spec_for
 from interfaces.services.model_connections.store import ModelConnectionRepository
-from interfaces.services.model_connections.views import account_view
+from interfaces.services.model_connections.views import account_view, draft_preview_view
 
 UTC = timezone.utc
 MAX_CONNECTIONS_PER_ACCOUNT = 16
@@ -212,6 +212,18 @@ class ModelConnectionService:
             self._admit(purpose, record)
             merged[purpose] = record.connection_id
         return self._write(account, account.with_assignments(merged))
+
+    def preview(self, draft: ConnectionDraft) -> dict[str, Any]:
+        """Which purposes a draft would serve, computed exactly as saving admits it.
+
+        Nothing is stored and no provider is called; the draft goes through
+        the same validation and resolution as ``create``. The browser asks
+        while the form is being filled, so it never keeps its own copy of the
+        window arithmetic.
+        """
+
+        validated = validate_draft(draft, catalog=self.catalog, outbound=self._outbound)
+        return draft_preview_view(spec_for(validated.provider, validated), self._requirements)
 
     # -- provider checks -------------------------------------------------
 

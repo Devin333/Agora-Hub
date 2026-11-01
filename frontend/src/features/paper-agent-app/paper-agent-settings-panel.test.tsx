@@ -38,7 +38,21 @@ const purposes = [
   { id: "section_navigation", label: "章节导航", requirement: { inputTokens: 40_906, outputTokens: 1_500, structuredOutput: false } },
   { id: "candidate_generation", label: "候选生成", requirement: { inputTokens: 64_000, outputTokens: 2_048, structuredOutput: true } },
 ]
-const allowance = { default: 8192, off: 0, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 65536 }
+// What POST /preview answers per draft model (interfaces/services/model_connections/views.py).
+const previewFor = (model: string) => model === "deepseek-small"
+  ? {
+    contextWindowTokens: 16_000, maxOutputTokens: null, effectiveReasoningEffort: null, structuredOutput: "none",
+    fits: {
+      answer: { fits: false, requiredWindow: 343_539, reason: "model_connection_window_too_small" },
+      evidence_summary: { fits: false, requiredWindow: 44_500, reason: "model_connection_window_too_small" },
+      section_navigation: { fits: false, requiredWindow: 42_406, reason: "model_connection_window_too_small" },
+      candidate_generation: { fits: false, requiredWindow: null, reason: "model_connection_structured_output_required" },
+    },
+  }
+  : {
+    contextWindowTokens: 1_000_000, maxOutputTokens: 384_000, effectiveReasoningEffort: "high", structuredOutput: "json_object",
+    fits: Object.fromEntries(["answer", "evidence_summary", "section_navigation", "candidate_generation"].map(id => [id, { fits: true, requiredWindow: 400_000, reason: null }])),
+  }
 const allFit = Object.fromEntries(purposes.map(purpose => [purpose.id, { fits: true, requiredWindow: 400_000, reason: null }]))
 const flash = {
   id: "mc-0123456789abcdef", label: "DeepSeek 官方 · DeepSeek V4.1 Flash", providerId: "deepseek", providerLabel: "DeepSeek 官方", custom: false,
@@ -48,7 +62,7 @@ const flash = {
   updatedAt: "2026-10-20T08:00:00Z", verifiedAt: null, purposes: [], fits: allFit,
 }
 type View = { revision: number; connections: Array<Record<string, unknown>>; assignments: Record<string, string | null> }
-const viewOf = (state: View) => ({ ...state, purposes, reasoningOutputAllowance: allowance, catalog })
+const viewOf = (state: View) => ({ ...state, purposes, catalog })
 const emptyView: View = { revision: 0, connections: [], assignments: { answer: null, evidence_summary: null, section_navigation: null, candidate_generation: null } }
 const withFlash = (overrides: Record<string, unknown> = {}): View => ({ revision: 1, connections: [{ ...flash, ...overrides }], assignments: emptyView.assignments })
 const accounts = [
@@ -69,6 +83,7 @@ function installServer(options: { view?: View } = {}): Server {
   routes.set("GET /api/research/desktop/capabilities", () => ok(capabilities))
   routes.set("GET /api/research/personal-memory/policy", () => ok({ policy }))
   routes.set("GET /api/v1/account/model-connections", () => ok(viewOf(server.view)))
+  routes.set("POST /api/v1/account/model-connections/preview", init => ok(previewFor(String(JSON.parse(String(init?.body)).model))))
   routes.set("GET /api/v1/admin/accounts", () => ok({ accounts }))
   server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${String(input)}`
@@ -273,17 +288,45 @@ describe("PaperAgentSettingsPanel model connections", () => {
     }
   })
 
-  it("previews which purposes a draft fits before it is saved", async () => {
-    installServer()
+  it("asks the API which purposes a draft fits, without ever sending the key", async () => {
+    const server = installServer()
     render(<PaperAgentSettingsPanel />)
-    await openNewForm()
+    const key = await openNewForm()
     const preview = screen.getByRole("list", { name: "可用于哪些用途" })
-    expect(within(preview).getAllByText("可用")).toHaveLength(4)
+    expect(await within(preview).findAllByText("可用")).toHaveLength(4)
+    expect(bodyOf(server, "POST /api/v1/account/model-connections/preview")).toEqual({ providerId: "deepseek", model: "deepseek-flash" })
 
+    fireEvent.change(key, { target: { value: "sk-typed-into-the-form" } })
     fireEvent.change(screen.getByLabelText("模型"), { target: { value: "deepseek-small" } })
-    expect(within(preview).getAllByText("不可用")).toHaveLength(4)
+    expect(await within(preview).findAllByText("不可用")).toHaveLength(4)
     expect(within(preview).getByText("需要能返回 JSON 对象的模型。")).toBeInTheDocument()
     expect(within(preview).getByText("需要至少 34.4 万 token 窗口，这个模型只有 1.6 万 token。")).toBeInTheDocument()
+    const previewBodies = server.fetch.mock.calls
+      .filter(([input, init]) => String(input).endsWith("/preview") && (init as RequestInit).method === "POST")
+      .map(([, init]) => String((init as RequestInit).body))
+    expect(previewBodies.length).toBeGreaterThan(0)
+    for (const body of previewBodies) expect(body).not.toContain("sk-typed-into-the-form")
+  })
+
+  it("waits for a custom draft's address and window before asking", async () => {
+    const server = installServer()
+    render(<PaperAgentSettingsPanel />)
+    await openNewForm()
+    fireEvent.change(screen.getByLabelText("服务商"), { target: { value: "custom-openai-compatible" } })
+    fireEvent.change(screen.getByLabelText("模型 ID"), { target: { value: "qwen3-max" } })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    const customPreviews = () => server.fetch.mock.calls.filter(([input, init]) =>
+      String(input).endsWith("/preview") && String((init as RequestInit).body).includes("custom-openai-compatible"))
+    expect(customPreviews()).toHaveLength(0)
+    expect(screen.getAllByText("填好模型信息后自动判断。")).toHaveLength(4)
+
+    fireEvent.change(screen.getByLabelText("服务地址（Base URL）"), { target: { value: "https://gateway.example.com/v1" } })
+    fireEvent.change(screen.getByLabelText("上下文窗口（token）"), { target: { value: "128000" } })
+    await waitFor(() => expect(customPreviews()).toHaveLength(1))
+    expect(JSON.parse(String((customPreviews()[0][1] as RequestInit).body))).toEqual({
+      providerId: "custom-openai-compatible", model: "qwen3-max", baseUrl: "https://gateway.example.com/v1",
+      contextWindowTokens: 128000, reasoningParameter: "none", structuredOutput: "json_object",
+    })
   })
 
   it("asks a custom provider for its address, window and reasoning style", async () => {

@@ -284,6 +284,28 @@ def test_model_probes_are_rate_limited_per_account(monkeypatch, tmp_path) -> Non
     assert saved.status_code == 200
 
 
+def test_preview_never_takes_a_key_and_spends_no_probe_budget(monkeypatch, tmp_path) -> None:
+    client, runtime = _client(
+        monkeypatch, tmp_path, NEWSROOM_HOSTED_MODEL_PROBE_RATE_LIMIT_PER_MINUTE="1"
+    )
+    alice = mutation_headers(sign_in(runtime, "alice", USER_PASSWORD))
+    path = "/api/v1/account/model-connections/preview"
+    draft = {"providerId": "deepseek", "model": "deepseek-flash"}
+
+    previews = [client.post(path, headers=alice, json=draft) for _ in range(3)]
+    with_key = client.post(path, headers=alice, json={**draft, "apiKey": KEY_A})
+
+    assert [response.status_code for response in previews] == [200, 200, 200]
+    data = previews[0].json()["data"]
+    assert data["effectiveReasoningEffort"] == "high"
+    assert data["fits"]["answer"]["fits"] is True
+    assert set(data["fits"]) == {purpose.value for purpose in ModelPurpose}
+    # The form sends settings while typing; a key in the body is refused, not ignored.
+    assert with_key.status_code == 422
+    assert KEY_A not in with_key.text
+    assert not is_model_probe_route("POST", path)
+
+
 def test_probe_routes_are_classified_exactly() -> None:
     assert is_model_probe_route("POST", "/api/v1/account/model-connections/discover")
     assert is_model_probe_route("POST", "/api/v1/account/model-connections/mc-0123456789abcdef/verify")

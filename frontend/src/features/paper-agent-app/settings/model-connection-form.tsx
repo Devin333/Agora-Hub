@@ -8,16 +8,17 @@ import {
   type ModelConnection,
   type ModelConnectionInput,
   type ModelConnectionsView,
+  type ModelProvider,
+  type PurposeFit,
   type ReasoningEffort,
 } from "@/lib/account/model-connections"
 import {
   catalogModel,
   defaultEffort,
-  draftFit,
   draftForProvider,
   draftFromConnection,
   draftInput,
-  draftLimits,
+  draftWindow,
   EFFORT_LABELS,
   isCustom,
   isDirty,
@@ -29,6 +30,7 @@ import {
   type ConnectionDraft,
 } from "./model-connection-draft"
 import { cx, InlineError } from "./settings-ui"
+import { usePurposeFitPreview, type PurposeFitPreviewState } from "./use-purpose-fit-preview"
 import styles from "../paper-agent-settings-panel.module.css"
 
 /** Create or edit one connection; the key is entered here and never shown again. */
@@ -61,7 +63,7 @@ export function ModelConnectionForm({
   const needsKey = keyRequired(connection, draft)
   const efforts = offeredEfforts(provider, draft)
   const providerDefault = defaultEffort(provider, draft)
-  const limits = draftLimits(provider, draft)
+  const preview = usePurposeFitPreview(previewInput(provider, draft))
 
   function update(patch: Partial<ConnectionDraft>) {
     setDraft(previous => {
@@ -116,7 +118,7 @@ export function ModelConnectionForm({
     if (!provider) { setError("请选择模型服务商。"); return }
     if (!draft.model.trim()) { setError(custom ? "请填写模型 ID。" : "请选择模型。"); return }
     if (custom && !draft.baseUrl.trim()) { setError("请填写服务地址。"); return }
-    if (custom && limits.contextWindowTokens === null) { setError("请填写上下文窗口大小（正整数）。"); return }
+    if (custom && draftWindow(draft) === null) { setError("请填写上下文窗口大小（正整数）。"); return }
     if (needsKey && !draft.apiKey.trim()) { setError("请填写 API Key。"); keyInputRef.current?.focus(); return }
     onSubmit(draftInput(provider, draft))
   }
@@ -217,7 +219,7 @@ export function ModelConnectionForm({
         </button>
       </div>}
     </fieldset>
-    <PurposeFitPreview view={view} limits={limits} />
+    <PurposeFitPreview view={view} state={preview} />
     {error && <InlineError>{error}</InlineError>}
     <div className={styles.configActions}>
       <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onCancel}>取消</button>
@@ -228,29 +230,42 @@ export function ModelConnectionForm({
   </form>
 }
 
-function PurposeFitPreview({ view, limits }: { view: ModelConnectionsView; limits: ReturnType<typeof draftLimits> }) {
-  return <ul className={styles.capabilityList} aria-label="可用于哪些用途">
-    {view.purposes.map(purpose => {
-      const fit = draftFit(view, purpose, limits)
-      return <li key={purpose.id}>
-        <div className={styles.capabilityMain}>
-          <span className={styles.capabilityName}>{purpose.label}</span>
-          <span className={cx(styles.badge, fit.fits ? styles.badgeSuccess : fit.reason === "unknown" ? styles.badgeNeutral : styles.badgeWarning)}>
-            {fit.fits ? "可用" : fit.reason === "unknown" ? "待填写窗口" : "不可用"}
-          </span>
-        </div>
-        <p>{fitText(fit, limits.contextWindowTokens)}</p>
-      </li>
-    })}
-  </ul>
+function PurposeFitPreview({ view, state }: { view: ModelConnectionsView; state: PurposeFitPreviewState }) {
+  const preview = state.kind === "ready" ? state.preview : state.kind === "loading" ? state.last : null
+  return <div aria-busy={state.kind === "loading"}>
+    {state.kind === "incomplete" && <p className={styles.footnote}>{state.message}</p>}
+    {state.kind === "failed" && <InlineError>{state.message}</InlineError>}
+    <ul className={styles.capabilityList} aria-label="可用于哪些用途">
+      {view.purposes.map(purpose => {
+        const fit = preview?.fits[purpose.id] ?? null
+        const tone = fit === null ? styles.badgeNeutral : fit.fits ? styles.badgeSuccess : styles.badgeWarning
+        return <li key={purpose.id}>
+          <div className={styles.capabilityMain}>
+            <span className={styles.capabilityName}>{purpose.label}</span>
+            <span className={cx(styles.badge, tone)}>{fit === null ? "待判断" : fit.fits ? "可用" : "不可用"}</span>
+          </div>
+          <p>{fit === null || preview === null ? "填好模型信息后自动判断。" : fitText(fit, preview.contextWindowTokens)}</p>
+        </li>
+      })}
+    </ul>
+  </div>
 }
 
-function fitText(fit: ReturnType<typeof draftFit>, window: number | null): string {
-  if (fit.reason === "structured_output") return "需要能返回 JSON 对象的模型。"
-  if (fit.reason === "unknown") return "填写上下文窗口后可以判断。"
+function fitText(fit: PurposeFit, window: number): string {
+  if (fit.reason === "model_connection_structured_output_required") return "需要能返回 JSON 对象的模型。"
   const required = formatTokens(fit.requiredWindow) ?? "—"
   if (fit.fits) return `需要 ${required} 窗口，这个模型有 ${formatTokens(window) ?? "—"}。`
   return `需要至少 ${required} 窗口，这个模型只有 ${formatTokens(window) ?? "—"}。`
+}
+
+/** The settings the preview judges: everything that decides admission, without the name or the key. */
+function previewInput(provider: ModelProvider | null, draft: ConnectionDraft): ModelConnectionInput | null {
+  if (!provider || !draft.model.trim()) return null
+  // A custom draft is judged once its address and window are typed; the API
+  // would only answer "fill this in" until then.
+  if (provider.kind === "custom" && (!draft.baseUrl.trim() || draftWindow(draft) === null)) return null
+  const input = draftInput(provider, draft)
+  return { ...input, label: undefined, apiKey: undefined }
 }
 
 function defaultLabel(view: ModelConnectionsView, draft: ConnectionDraft): string {

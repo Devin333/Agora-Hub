@@ -110,10 +110,20 @@ export const modelConnectionsViewSchema = z.object({
   connections: z.array(modelConnectionSchema),
   assignments: z.record(purposeIdSchema, z.string().nullable()),
   purposes: z.array(purposeSchema),
-  reasoningOutputAllowance: z.record(z.string(), z.number().int().nonnegative()),
   catalog: z.object({ providers: z.array(providerSchema) }).strip(),
 }).strip()
 export type ModelConnectionsView = z.infer<typeof modelConnectionsViewSchema>
+
+// The backend admits a draft with the same code it saves it with, so the form
+// asks it instead of keeping its own copy of the window arithmetic.
+export const modelConnectionPreviewSchema = z.object({
+  contextWindowTokens: z.number().int().positive(),
+  maxOutputTokens: z.number().int().positive().nullable(),
+  effectiveReasoningEffort: effortSchema.nullable(),
+  structuredOutput: z.string().min(1),
+  fits: z.record(purposeIdSchema, fitSchema),
+}).strip()
+export type ModelConnectionPreview = z.infer<typeof modelConnectionPreviewSchema>
 
 /** What the connection form submits; omitted fields are not sent. */
 export type ModelConnectionInput = {
@@ -135,16 +145,23 @@ function connectionPath(connectionId: string, action?: "verify") {
   return `${PATH}/${encodeURIComponent(connectionId)}${action ? `/${action}` : ""}`
 }
 
-function inputBody(input: ModelConnectionInput, expectedRevision: number): Record<string, unknown> {
-  const body: Record<string, unknown> = { providerId: input.providerId, model: input.model, expectedRevision }
-  for (const key of [
-    "label", "reasoningEffort", "apiKey", "baseUrl", "contextWindowTokens",
-    "maxOutputTokens", "reasoningParameter", "structuredOutput",
-  ] as const) {
+const SETTING_KEYS = [
+  "label", "reasoningEffort", "baseUrl", "contextWindowTokens",
+  "maxOutputTokens", "reasoningParameter", "structuredOutput",
+] as const
+
+function settingsBody(input: ModelConnectionInput): Record<string, unknown> {
+  const body: Record<string, unknown> = { providerId: input.providerId, model: input.model }
+  for (const key of SETTING_KEYS) {
     const value = input[key]
     if (value !== undefined && value !== null && value !== "") body[key] = value
   }
   return body
+}
+
+function inputBody(input: ModelConnectionInput, expectedRevision: number): Record<string, unknown> {
+  const body = { ...settingsBody(input), expectedRevision }
+  return input.apiKey ? { ...body, apiKey: input.apiKey } : body
 }
 
 export function fetchModelConnections(signal?: AbortSignal): Promise<ModelConnectionsView> {
@@ -166,6 +183,11 @@ export function updateModelConnection(
 export function deleteModelConnection(connectionId: string, expectedRevision: number): Promise<ModelConnectionsView> {
   const query = new URLSearchParams({ expectedRevision: String(expectedRevision) })
   return accountRequest(modelConnectionsViewSchema, `${connectionPath(connectionId)}?${query}`, { method: "DELETE" })
+}
+
+/** Which purposes a draft would serve; the key is never part of the request. */
+export function previewModelConnection(input: ModelConnectionInput, signal?: AbortSignal): Promise<ModelConnectionPreview> {
+  return accountRequest(modelConnectionPreviewSchema, `${PATH}/preview`, jsonBody("POST", settingsBody(input), signal))
 }
 
 export function verifyModelConnection(connectionId: string): Promise<ModelConnectionsView> {

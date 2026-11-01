@@ -346,6 +346,7 @@ describe("hosted raw API server route", () => {
     ["POST", ["account", "model-connections"]],
     ["PUT", ["account", "model-connections", "assignments"]],
     ["POST", ["account", "model-connections", "discover"]],
+    ["POST", ["account", "model-connections", "preview"]],
     ["PATCH", ["account", "model-connections", "mc-0123456789abcdef"]],
     ["DELETE", ["account", "model-connections", "mc-0123456789abcdef"]],
     ["POST", ["account", "model-connections", "mc-0123456789abcdef", "verify"]],

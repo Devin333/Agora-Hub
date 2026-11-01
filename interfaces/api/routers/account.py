@@ -20,13 +20,13 @@ class PasswordChangeRequest(_Strict):
     newPassword: str = Field(..., min_length=8, max_length=256)
 
 
-class ModelConnectionFields(_Strict):
+class ModelConnectionSettings(_Strict):
+    """What a connection calls; no key, so it can be sent on every keystroke."""
+
     providerId: str = Field(..., min_length=1, max_length=64)
     model: str = Field(..., min_length=1, max_length=128)
     label: str | None = Field(default=None, max_length=64)
     reasoningEffort: str | None = Field(default=None, max_length=16)
-    # Omitted on update to keep the stored key; required on create.
-    apiKey: str | None = Field(default=None, min_length=1, max_length=512)
     # Custom providers only; catalog providers take these from the catalog.
     baseUrl: str | None = Field(default=None, max_length=2048)
     contextWindowTokens: int | None = None
@@ -34,13 +34,13 @@ class ModelConnectionFields(_Strict):
     reasoningParameter: str | None = Field(default=None, max_length=64)
     structuredOutput: str | None = Field(default=None, max_length=32)
 
-    def draft(self) -> ConnectionDraft:
+    def draft(self, *, api_key: str | None = None) -> ConnectionDraft:
         return ConnectionDraft(
             provider_id=self.providerId,
             model=self.model,
             label=self.label,
             reasoning_effort=self.reasoningEffort,
-            api_key=self.apiKey,
+            api_key=api_key,
             base_url=self.baseUrl,
             context_window_tokens=self.contextWindowTokens,
             max_output_tokens=self.maxOutputTokens,
@@ -49,9 +49,14 @@ class ModelConnectionFields(_Strict):
         )
 
 
-class ModelConnectionWriteRequest(ModelConnectionFields):
+class ModelConnectionWriteRequest(ModelConnectionSettings):
+    # Omitted on update to keep the stored key; required on create.
+    apiKey: str | None = Field(default=None, min_length=1, max_length=512)
     # The account revision the browser last saw; a stale one is a conflict.
     expectedRevision: int = Field(..., ge=0)
+
+    def write_draft(self) -> ConnectionDraft:
+        return self.draft(api_key=self.apiKey)
 
 
 class ModelAssignmentRequest(_Strict):
@@ -106,7 +111,7 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
         return run_account_call(
             helpers,
             lambda: connections.create(
-                signed_in(request).user_id, payload.draft(), expected_revision=payload.expectedRevision
+                signed_in(request).user_id, payload.write_draft(), expected_revision=payload.expectedRevision
             ),
         )
 
@@ -117,7 +122,7 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
             lambda: connections.update(
                 signed_in(request).user_id,
                 connection_id,
-                payload.draft(),
+                payload.write_draft(),
                 expected_revision=payload.expectedRevision,
             ),
         )
@@ -147,6 +152,16 @@ def create_router(services: ApiServices, helpers: ApiRouteHelpers) -> APIRouter:
                 signed_in(request).user_id, payload.assignments, expected_revision=payload.expectedRevision
             ),
         )
+
+    @router.post("/api/v1/account/model-connections/preview")
+    def preview_model_connection(payload: ModelConnectionSettings, request: Request):
+        # Settings only: the strict model refuses an apiKey, so typing in the
+        # form never sends the key. Nothing is stored and no provider is called.
+        def call():
+            signed_in(request)
+            return connections.preview(payload.draft())
+
+        return run_account_call(helpers, call)
 
     @router.post("/api/v1/account/model-connections/discover")
     def discover_models(payload: ModelDiscoveryRequest, request: Request):
